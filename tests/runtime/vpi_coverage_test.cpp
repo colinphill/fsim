@@ -26,6 +26,28 @@ SystemVerilogVpiStoredValue state_value(const std::string_view bits)
 
 void test_properties_controls_and_failures()
 {
+    static_assert(static_cast<std::int32_t>(
+                      SystemVerilogVpiCoverageControl::Start)
+            == 750
+        && static_cast<std::int32_t>(
+               SystemVerilogVpiCoverageControl::Save)
+            == 755
+        && static_cast<std::int32_t>(
+               SystemVerilogVpiCoverageType::Assertion)
+            == static_cast<std::int32_t>(
+                SystemVerilogVpiCoverageProperty::AssertCoverage)
+        && static_cast<std::int32_t>(
+               SystemVerilogVpiCoverageType::FsmState)
+            == static_cast<std::int32_t>(
+                SystemVerilogVpiCoverageProperty::FsmStateCoverage)
+        && static_cast<std::int32_t>(
+               SystemVerilogVpiCoverageType::Statement)
+            == static_cast<std::int32_t>(
+                SystemVerilogVpiCoverageProperty::StatementCoverage)
+        && static_cast<std::int32_t>(
+               SystemVerilogVpiCoverageType::Toggle)
+            == static_cast<std::int32_t>(
+                SystemVerilogVpiCoverageProperty::ToggleCoverage));
     SystemVerilogVpiObjectRegistry objects { 101U };
     const auto root = objects.create(
         SystemVerilogVpiObjectKind::Root, 0U, "top");
@@ -131,23 +153,34 @@ void test_properties_controls_and_failures()
             == 3,
         "assertion-specific properties preserve independent counters");
 
-    const auto start = service.control({
-        SystemVerilogVpiCoverageControl::Start,
-        SystemVerilogVpiCoverageType::Statement,
-        module.value,
-        { },
-    });
-    const auto save = service.control({
-        SystemVerilogVpiCoverageControl::Save,
-        SystemVerilogVpiCoverageType::Statement,
-        std::nullopt,
-        "run.fsimcov",
-    });
-    require(start && save && start.value == 1 && save.value == 1
-            && controls.size() == 2U
+    for (const auto control : {
+             SystemVerilogVpiCoverageControl::Start,
+             SystemVerilogVpiCoverageControl::Stop,
+             SystemVerilogVpiCoverageControl::Reset,
+             SystemVerilogVpiCoverageControl::Check }) {
+        const auto result = service.control({ control,
+            SystemVerilogVpiCoverageType::Statement, module.value, { } });
+        require(result && result.value == 1,
+            "every non-file coverage control reaches the provider");
+    }
+    for (const auto control : {
+             SystemVerilogVpiCoverageControl::Merge,
+             SystemVerilogVpiCoverageControl::Save }) {
+        for (const auto type : {
+                 SystemVerilogVpiCoverageType::Assertion,
+                 SystemVerilogVpiCoverageType::FsmState,
+                 SystemVerilogVpiCoverageType::Statement,
+                 SystemVerilogVpiCoverageType::Toggle }) {
+            const auto result = service.control(
+                { control, type, std::nullopt, "run.fsimcov" });
+            require(result && result.value == 1,
+                "every standardized metric type reaches file controls");
+        }
+    }
+    require(controls.size() == 12U
             && controls.front().object == module.value
             && controls.back().filename == "run.fsimcov",
-        "coverage controls preserve target and filename arguments");
+        "coverage controls preserve every control, type, and argument");
     require(service.control({
                 SystemVerilogVpiCoverageControl::Save,
                 SystemVerilogVpiCoverageType::Statement,
@@ -166,6 +199,23 @@ void test_properties_controls_and_failures()
                 .error
             == SystemVerilogVpiCoverageError::NotFound,
         "control rejects an unavailable metric family");
+    require(service.control({
+                static_cast<SystemVerilogVpiCoverageControl>(749),
+                SystemVerilogVpiCoverageType::Statement,
+                module.value,
+                { },
+            })
+                .error
+            == SystemVerilogVpiCoverageError::InvalidControl
+        && service.control({
+               SystemVerilogVpiCoverageControl::Check,
+               static_cast<SystemVerilogVpiCoverageType>(759),
+               module.value,
+               { },
+           })
+               .error
+            == SystemVerilogVpiCoverageError::InvalidCoverageType,
+        "unknown control and coverage-type identities are rejected");
     require(service.publish_target(module.value, statement)
             == SystemVerilogVpiCoverageError::DuplicateObject,
         "duplicate target publication is rejected");
@@ -185,6 +235,40 @@ void test_properties_controls_and_failures()
                 .error
             == SystemVerilogVpiCoverageError::Overflow,
         "VPI integer property overflow is explicit");
+}
+
+void test_provider_failure_containment()
+{
+    SystemVerilogVpiObjectRegistry objects { 404U };
+    const auto root = objects.create(
+        SystemVerilogVpiObjectKind::Root, 0U, "top");
+    require(static_cast<bool>(root),
+        "provider containment fixture publishes a root");
+    SystemVerilogVpiCoverageService service(objects,
+        [](const auto)
+            -> std::optional<SystemVerilogVpiCoverageStatistics> {
+            throw std::runtime_error { "statistics failure" };
+        },
+        [](const auto&) -> std::int32_t {
+            throw std::runtime_error { "control failure" };
+        });
+    const std::array types {
+        SystemVerilogVpiCoverageType::Assertion,
+        SystemVerilogVpiCoverageType::FsmState,
+        SystemVerilogVpiCoverageType::Statement,
+        SystemVerilogVpiCoverageType::Toggle,
+    };
+    require(service.publish_target(root.value, types)
+            == SystemVerilogVpiCoverageError::None
+        && service.property(SystemVerilogVpiCoverageProperty::CoveredMax,
+               root.value)
+               .error
+            == SystemVerilogVpiCoverageError::ProviderFailure
+        && service.control({ SystemVerilogVpiCoverageControl::Check,
+               SystemVerilogVpiCoverageType::Statement, root.value, { } })
+               .error
+            == SystemVerilogVpiCoverageError::ProviderFailure,
+        "statistics and control exceptions are contained at the API boundary");
 }
 
 void test_fsm_relations_values_and_iterators()
@@ -393,4 +477,5 @@ int main()
 {
     test_properties_controls_and_failures();
     test_fsm_relations_values_and_iterators();
+    test_provider_failure_containment();
 }

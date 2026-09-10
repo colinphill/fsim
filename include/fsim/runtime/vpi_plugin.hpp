@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/vpi_abi.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -39,6 +40,13 @@ enum class SystemVerilogVpiPluginError {
   StartupException,
   ShutdownFailure,
   ShutdownException,
+  StartupTableLimit,
+  ContextFailure,
+};
+
+enum class SystemVerilogVpiPluginEntryKind {
+  DirectV3,
+  StandardStartupTable,
 };
 
 struct SystemVerilogVpiShutdownResult {
@@ -64,6 +72,8 @@ class SystemVerilogVpiLoadedPlugin final {
 
   [[nodiscard]] const std::filesystem::path& path() const noexcept;
   [[nodiscard]] const std::string& name() const noexcept;
+  [[nodiscard]] SystemVerilogVpiPluginEntryKind entry_kind() const noexcept;
+  [[nodiscard]] std::size_t startup_routine_count() const noexcept;
   [[nodiscard]] SystemVerilogVpiShutdownResult shutdown() noexcept;
 
   explicit SystemVerilogVpiLoadedPlugin(std::unique_ptr<Impl> impl) noexcept;

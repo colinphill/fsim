@@ -509,6 +509,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_annex.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_standard_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core_part2.cpp"
@@ -540,6 +541,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_generate_names.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/systemverilog_scalar_folding.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/systemverilog_standard_package.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_udp.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_conditional_analysis.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
@@ -674,6 +676,7 @@ add_library(
     src/runtime/vpi_io.cpp
     src/runtime/vpi_system.cpp
     src/runtime/vpi_value.cpp
+    src/runtime/vpi_data_read.cpp
     src/runtime/vpi_value_control.cpp
     src/runtime/vpi_time.cpp
     src/runtime/packed_value.cpp
@@ -1263,6 +1266,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_systemc_trace.cpp
       src/app/application_run.cpp
       src/app/application_run_commands.cpp
+      src/app/application_standard_package.cpp
       src/app/application_semantic.cpp
       src/app/application_constraint_lowering.cpp
       src/app/application_class_randomization.cpp
@@ -1399,6 +1403,13 @@ fsim_systemc_write_runtime_target_manifest(
 
 install(
   FILES
+    include/svdpi.h
+    include/vpi_user.h
+    include/sv_vpi_user.h
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+install(
+  FILES
     include/fsim/api.h
     include/fsim/systemc.hpp
     include/fsim/systemc_abi.h
@@ -1411,6 +1422,8 @@ install(
     include/fsim/runtime/tf_plugin_abi.h
     include/fsim/runtime/veriuser.h
     include/fsim/runtime/acc_user.h
+    include/fsim/runtime/vpi_abi.h
+    include/fsim/runtime/vpi_bridge.h
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/runtime"
 )
 install(

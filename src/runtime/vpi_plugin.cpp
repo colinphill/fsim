@@ -2,6 +2,8 @@
 #include "fsim/runtime/vpi_plugin.hpp"
 
 #include "fsim/platform/dynamic_library.hpp"
+#include "fsim/runtime/vpi_bridge.h"
+#include "fsim/runtime/vpi_system.hpp"
 
 #include <cstddef>
 #include <string_view>
@@ -19,12 +21,67 @@ constexpr std::uint32_t required_plugin_size = static_cast<std::uint32_t>(
     offsetof(fsim_vpi_plugin_v1, shutdown)
     + sizeof(fsim_vpi_plugin_v1::shutdown));
 constexpr std::uint32_t maximum_plugin_name_size = 4096;
+constexpr std::size_t maximum_startup_routines = 4096U;
+
+fsim_vpi_status_v1 FSIM_VPI_BRIDGE_CALL invoke_standard_vpi(
+    void* const user_data,
+    const std::uint32_t routine,
+    const fsim_vpi_service_request_v1* const request,
+    fsim_vpi_service_result_v1* const result) {
+  if (user_data == nullptr || request == nullptr || result == nullptr
+      || routine >= systemverilog_vpi_2023_routines().size()) {
+    return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+  }
+  const auto* const host = static_cast<const fsim_vpi_host_v2*>(user_data);
+  const auto invoked = invoke_systemverilog_vpi_2023_routine(
+      *host, static_cast<SystemVerilogVpiRoutineKind>(routine), *request);
+  *result = invoked.value;
+  return invoked ? FSIM_VPI_STATUS_OK : FSIM_VPI_STATUS_INTERNAL_ERROR;
+}
+
+class StandardVpiContextGuard final {
+ public:
+  explicit StandardVpiContextGuard(const fsim_vpi_host_v1& host) noexcept {
+    if (host.abi_version != FSIM_VPI_HOST_ABI_VERSION_V2
+        || host.struct_size < sizeof(fsim_vpi_host_v2)) {
+      return;
+    }
+    required_ = true;
+    context_ = {
+        FSIM_VPI_CONTEXT_ABI_VERSION,
+        static_cast<std::uint32_t>(sizeof(fsim_vpi_call_context_v1)),
+        const_cast<fsim_vpi_host_v2*>(
+            reinterpret_cast<const fsim_vpi_host_v2*>(&host)),
+        invoke_standard_vpi,
+    };
+    entered_ = fsim_vpi_call_context_enter_v1(&context_) == 0;
+  }
+
+  ~StandardVpiContextGuard() {
+    if (entered_) (void)fsim_vpi_call_context_leave_v1(&context_);
+  }
+
+  StandardVpiContextGuard(const StandardVpiContextGuard&) = delete;
+  StandardVpiContextGuard& operator=(const StandardVpiContextGuard&) = delete;
+
+  [[nodiscard]] bool ready() const noexcept {
+    return !required_ || entered_;
+  }
+
+ private:
+  fsim_vpi_call_context_v1 context_{};
+  bool required_{};
+  bool entered_{};
+};
 
 }  // namespace
 
 struct SystemVerilogVpiLoadedPlugin::Impl {
   std::filesystem::path path;
   std::string name;
+  SystemVerilogVpiPluginEntryKind entry_kind{
+      SystemVerilogVpiPluginEntryKind::DirectV3};
+  std::size_t startup_routine_count{};
   void* context{};
   fsim_vpi_plugin_lifecycle_v1 shutdown_callback{};
   bool shutdown_attempted{};
@@ -75,6 +132,16 @@ const std::filesystem::path& SystemVerilogVpiLoadedPlugin::path()
 
 const std::string& SystemVerilogVpiLoadedPlugin::name() const noexcept {
   return impl_->name;
+}
+
+SystemVerilogVpiPluginEntryKind
+SystemVerilogVpiLoadedPlugin::entry_kind() const noexcept {
+  return impl_->entry_kind;
+}
+
+std::size_t SystemVerilogVpiLoadedPlugin::startup_routine_count()
+    const noexcept {
+  return impl_->startup_routine_count;
 }
 
 SystemVerilogVpiShutdownResult SystemVerilogVpiLoadedPlugin::shutdown()
@@ -192,13 +259,54 @@ SystemVerilogVpiPluginLoadResult load_systemverilog_vpi_plugin(
   }
   auto* raw_bind = library->symbol(FSIM_VPI_PLUGIN_BIND_SYMBOL, error);
   if (raw_bind == nullptr) {
-    return {{}, SystemVerilogVpiPluginError::MissingBindSymbol,
-        "VPI plug-in is missing its bind symbol: " + error};
+    auto* raw_startup = library->symbol(
+        FSIM_VPI_STARTUP_ROUTINES_SYMBOL, error);
+    if (raw_startup == nullptr) {
+      return {{}, SystemVerilogVpiPluginError::MissingBindSymbol,
+          "VPI plug-in provides neither the direct v3 bind symbol nor the standard startup table: "
+              + error};
+    }
+    auto* const routines = static_cast<fsim_vpi_startup_routine_v1*>(
+        raw_startup);
+    StandardVpiContextGuard context{host};
+    if (!context.ready()) {
+      return {{}, SystemVerilogVpiPluginError::ContextFailure,
+          "standard VPI call-context depth exceeded"};
+    }
+    std::size_t count{};
+    try {
+      while (count < maximum_startup_routines
+          && routines[count] != nullptr) {
+        routines[count]();
+        ++count;
+      }
+    } catch (...) {
+      return {{}, SystemVerilogVpiPluginError::StartupException,
+          "standard VPI startup routine threw an exception"};
+    }
+    if (count == maximum_startup_routines) {
+      return {{}, SystemVerilogVpiPluginError::StartupTableLimit,
+          "standard VPI startup table lacks a bounded null terminator"};
+    }
+    auto impl = std::make_unique<SystemVerilogVpiLoadedPlugin::Impl>();
+    impl->path = artifact.lexically_normal();
+    impl->name = impl->path.stem().string();
+    impl->entry_kind =
+        SystemVerilogVpiPluginEntryKind::StandardStartupTable;
+    impl->startup_routine_count = count;
+    impl->library = std::move(library);
+    return {std::make_unique<SystemVerilogVpiLoadedPlugin>(std::move(impl)),
+        {}, {}};
   }
 
   const auto bind =
       reinterpret_cast<fsim_vpi_plugin_bind_v1_fn>(raw_bind);
   fsim_vpi_plugin_v1 plugin{};
+  StandardVpiContextGuard context{host};
+  if (!context.ready()) {
+    return {{}, SystemVerilogVpiPluginError::ContextFailure,
+        "standard VPI call-context depth exceeded"};
+  }
   try {
     if (bind(&host, &plugin) != FSIM_VPI_STATUS_OK) {
       return {{}, SystemVerilogVpiPluginError::BindFailure,
@@ -228,6 +336,8 @@ SystemVerilogVpiPluginLoadResult load_systemverilog_vpi_plugin(
   auto impl = std::make_unique<SystemVerilogVpiLoadedPlugin::Impl>();
   impl->path = artifact.lexically_normal();
   impl->name.assign(plugin.name, plugin.name_size);
+  impl->entry_kind = SystemVerilogVpiPluginEntryKind::DirectV3;
+  impl->startup_routine_count = 1U;
   impl->context = plugin.context;
   impl->shutdown_callback = plugin.shutdown;
   impl->library = std::move(library);

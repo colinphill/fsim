@@ -5,6 +5,7 @@
 #include "fsim/runtime/dpi_scope.hpp"
 #include "fsim/runtime/dpi_task.hpp"
 #include "runtime_test_support.hpp"
+#include "svdpi.h"
 
 #include <bit>
 #include <cstddef>
@@ -34,6 +35,40 @@ void test_systemverilog_dpi_scalar_marshalling()
     using namespace fsim::runtime;
     using Domain = SystemVerilogDpiScalarDomain;
     using Error = SystemVerilogDpiMarshallingError;
+
+    require(
+        std::string_view { svDpiVersion() } == "1800-2023",
+        "public DPI C layer reports the governed standard revision");
+    svBitVecVal bit_words[] { UINT32_C(0x80000001), UINT32_C(0x00000002) };
+    require(
+        svGetBitselBit(bit_words, 0) == sv_1
+            && svGetBitselBit(bit_words, 31) == sv_1
+            && svGetBitselBit(bit_words, 33) == sv_1,
+        "public DPI bit-select utility crosses canonical words");
+    svPutBitselBit(bit_words, 31, sv_0);
+    svBitVecVal bit_part {};
+    svGetPartselBit(&bit_part, bit_words, 29, 5);
+    require(
+        bit_words[0] == UINT32_C(0x00000001)
+            && bit_part == UINT32_C(0x10),
+        "public DPI bit update and part-select use normalized indexing");
+
+    svLogicVecVal logic_words[] {
+        { UINT32_C(0x00000002), UINT32_C(0x00000001) },
+        { UINT32_C(0x00000001), UINT32_C(0x00000001) }
+    };
+    require(
+        svGetBitselLogic(logic_words, 0) == sv_z
+            && svGetBitselLogic(logic_words, 1) == sv_1
+            && svGetBitselLogic(logic_words, 32) == sv_x,
+        "public DPI logic select retains four-state encoding");
+    svPutBitselLogic(logic_words, 1, sv_x);
+    svLogicVecVal logic_part {};
+    svGetPartselLogic(&logic_part, logic_words, 0, 3);
+    require(
+        logic_part.aval == UINT32_C(0x2)
+            && logic_part.bval == UINT32_C(0x3),
+        "public DPI logic update and part-select retain aval/bval planes");
 
     const auto logic = PackedLogic4::from_msb_string(
         "1XZ00101101001011010010110100101101001011010010110100101101001010");
@@ -465,6 +500,8 @@ void test_systemverilog_dpi_callbacks()
             == Error::None,
         "DPI exported callback registration");
     SystemVerilogDpiCallbackContext context { scopes };
+    context.set_call_site("dpi-context.sv", 73);
+    context.set_simulation_time(UINT64_C(0x100000002), -9, -12);
     const auto original = context.current_scope();
     const auto result = callbacks.dispatch(
         "exported_add",
@@ -475,6 +512,45 @@ void test_systemverilog_dpi_callbacks()
         result && observed_scope == child.value && context.current_scope() == original
             && result.values[1].front().to_msb_string() == "1010",
         "DPI callbacks install exact scope, publish outputs, and restore context");
+
+    bool standard_context_observed{};
+    int user_key{};
+    int user_value{42};
+    require(
+        callbacks.register_callback(
+            "standard_context", child.value, { },
+            [&](SystemVerilogDpiCallbackFrame&) {
+                auto* const active = svGetScope();
+                auto* const root = svGetScopeFromName("top");
+                const char* caller_file{};
+                int caller_line{};
+                svTimeVal time { sv_sim_time, 0U, 0U, 0.0 };
+                std::int32_t unit{};
+                std::int32_t precision{};
+                const auto previous = svSetScope(root);
+                const bool root_selected = svGetScope() == root;
+                static_cast<void>(svSetScope(previous));
+                standard_context_observed = active != nullptr
+                    && root != nullptr && previous == active
+                    && std::string_view { svGetNameFromScope(active) }
+                        == "top.u_dpi"
+                    && root_selected
+                    && svPutUserData(active, &user_key, &user_value) == 0
+                    && svGetUserData(active, &user_key) == &user_value
+                    && svGetCallerInfo(&caller_file, &caller_line) == 1
+                    && std::string_view { caller_file } == "dpi-context.sv"
+                    && caller_line == 73
+                    && svGetTime(active, &time) == 0
+                    && time.high == 1U && time.low == 2U
+                    && svGetTimeUnit(active, &unit) == 0 && unit == -9
+                    && svGetTimePrecision(active, &precision) == 0
+                    && precision == -12 && svIsDisabledState() == 0;
+            }) == Error::None
+            && callbacks.dispatch("standard_context", { }, context)
+            && standard_context_observed
+            && svGetScope() == nullptr
+            && svGetCallerInfo(nullptr, nullptr) == 0,
+        "standard DPI context calls are scoped to one foreign invocation");
 
     require(
         callbacks.register_callback(
@@ -500,9 +576,9 @@ void test_systemverilog_dpi_callbacks()
     require(
         callbacks.register_callback(
             "ack_disable", child.value, { },
-            [](SystemVerilogDpiCallbackFrame& frame) {
-                if (frame.is_disabled_state()) {
-                    static_cast<void>(frame.acknowledge_disabled_state());
+            [](SystemVerilogDpiCallbackFrame&) {
+                if (svIsDisabledState() != 0) {
+                    svAckDisabledState();
                 }
             }) == Error::None
             && callbacks.dispatch("ack_disable", { }, context)
@@ -525,7 +601,8 @@ void test_systemverilog_dpi_callbacks()
     require(
         failure.error == Error::Exception && failure.values.empty()
             && failure.message == "callback failed"
-            && context.current_scope() == original,
+            && context.current_scope() == original
+            && fsim_svdpi_current_call_context_v3() == nullptr,
         "DPI callback exceptions reject output and restore scope");
     require(
         callbacks.dispatch("missing", { }, context).error == Error::UnknownName
@@ -536,6 +613,16 @@ void test_systemverilog_dpi_callbacks()
                    [](SystemVerilogDpiCallbackFrame&) { })
                 == Error::DuplicateName,
         "DPI callbacks reject unknown names, arity mismatch, and duplicates");
+    require(
+        callbacks.register_callback(
+            SystemVerilogDpiRuntimeDeclaration {
+                "bad_context_export",
+                SystemVerilogDpiRuntimeCallableKind::Function,
+                SystemVerilogDpiRuntimeQualifier::Context,
+                { Mode::Input } },
+            child.value, [](SystemVerilogDpiCallbackFrame&) { })
+            == Error::DeclarationMismatch,
+        "DPI exports reject import-only runtime qualifiers before publication");
 }
 
 void test_systemverilog_dpi_tasks()
@@ -566,7 +653,12 @@ void test_systemverilog_dpi_tasks()
     bool task_scope_restored { };
     require(
         tasks.register_task(
-            "wait_and_call", task_scope.value, { Mode::Input, Mode::Output },
+            SystemVerilogDpiRuntimeDeclaration {
+                "wait_and_call",
+                SystemVerilogDpiRuntimeCallableKind::Task,
+                SystemVerilogDpiRuntimeQualifier::Context,
+                { Mode::Input, Mode::Output } },
+            task_scope.value,
             [&](SystemVerilogDpiCallbackFrame& frame, const std::size_t resume) {
                 if (resume == 0) {
                     const auto* input = frame.read(0);
@@ -585,7 +677,19 @@ void test_systemverilog_dpi_tasks()
                 return SystemVerilogDpiTaskAction { };
             })
             == Error::None,
-        "DPI suspending imported task registration");
+        "DPI suspending imported task registration uses its declaration contract");
+    require(
+        tasks.register_task(
+            SystemVerilogDpiRuntimeDeclaration {
+                "not_a_task",
+                SystemVerilogDpiRuntimeCallableKind::Function,
+                SystemVerilogDpiRuntimeQualifier::Pure,
+                { } },
+            task_scope.value,
+            [](SystemVerilogDpiCallbackFrame&, std::size_t) {
+                return SystemVerilogDpiTaskAction { };
+            }) == Error::DeclarationMismatch,
+        "DPI task registration rejects function and pure declaration contracts");
     const auto started = tasks.start(
         "wait_and_call",
         { { PackedLogic4::from_msb_string("0011") },
@@ -668,7 +772,8 @@ void test_systemverilog_dpi_plugin_planning()
     manifest.sources = { "src/arith.cpp", "src/helpers.c" };
     manifest.include_directories = { "include" };
     manifest.libraries = { "m" };
-    manifest.imported_symbols = { "dpi_add", "dpi_c_mix" };
+    manifest.imported_symbols = {
+        "dpi_add", "dpi_c_mix", "dpi_c_context_probe" };
     manifest.exported_symbols = { "sv_report" };
     const auto posix = plan_systemverilog_dpi_plugin(
         manifest, "/project", "/build", { "/plugins", "/cache" },
@@ -684,12 +789,17 @@ void test_systemverilog_dpi_plugin_planning()
             && posix.value.compile_commands.size() == 2
             && posix.value.compile_commands.front().arguments.front()
                 == "clang++"
-            && posix.value.compile_commands.front().arguments[5]
-                == "/project/include"
+            && posix.value.compile_commands.front().arguments[1] == "-x"
+            && posix.value.compile_commands.front().arguments[2] == "c++"
             && posix.value.compile_commands.front().arguments[7]
-                == "/project/src/arith.cpp"
+                == "/project/include"
             && posix.value.compile_commands.front().arguments[9]
+                == "/project/src/arith.cpp"
+            && posix.value.compile_commands.front().arguments[11]
                 == "/build/arith_dpi/0-arith.cpp.o"
+            && posix.value.compile_commands[1].arguments[1] == "-x"
+            && posix.value.compile_commands[1].arguments[2] == "c"
+            && posix.value.compile_commands[1].arguments[3] == "-std=c11"
             && posix.value.link_command.arguments[2]
                 == "/build/arith_dpi/0-arith.cpp.o"
             && posix.value.link_command.arguments[3]
@@ -703,9 +813,12 @@ void test_systemverilog_dpi_plugin_planning()
     require(
         msvc && msvc.value.artifact.filename() == "plugin.dll"
             && msvc.value.compile_commands.front().arguments[1] == "/nologo"
-            && msvc.value.compile_commands.front().arguments[4] == "/Gd"
+            && msvc.value.compile_commands.front().arguments[2] == "/TP"
+            && msvc.value.compile_commands.front().arguments[5] == "/Gd"
+            && msvc.value.compile_commands[1].arguments[2] == "/TC"
+            && msvc.value.compile_commands[1].arguments[3] == "/std:c11"
             && msvc.value.link_command.arguments[1] == "/LD",
-        "DPI MSVC planning uses argv-safe compiler and linker contracts");
+        "DPI C11/C++20 planning uses argv-safe compiler and linker contracts");
 
     auto invalid = manifest;
     invalid.sources = { "../escape.cpp" };
@@ -743,16 +856,39 @@ void test_systemverilog_dpi_plugin_planning()
         "DPI plug-in artifacts resolve complete exact symbol inventories");
     auto add_symbol = loaded.value->imported_symbol("dpi_add");
     auto c_symbol = loaded.value->imported_symbol("dpi_c_mix");
+    auto context_symbol = loaded.value->imported_symbol("dpi_c_context_probe");
     using AddFunction = int(FSIM_DPI_PLUGIN_CALL*)(int, int);
+    using ContextFunction = int(FSIM_DPI_PLUGIN_CALL*)();
     const auto add = reinterpret_cast<AddFunction>(add_symbol->address());
     const auto c_mix = reinterpret_cast<AddFunction>(c_symbol->address());
+    const auto probe = reinterpret_cast<ContextFunction>(
+        context_symbol->address());
+    SystemVerilogDpiScopeRegistry probe_scopes { 71 };
+    const auto probe_top = probe_scopes.define("top");
+    const auto probe_child = probe_scopes.define("top.u_dpi", probe_top.value);
+    SystemVerilogDpiCallbackRegistry probe_callbacks { probe_scopes };
+    SystemVerilogDpiCallbackContext probe_context { probe_scopes };
+    probe_context.set_call_site("dpi-plugin-context.sv", 81);
+    probe_context.set_simulation_time(UINT64_C(0x100000002), -9, -12);
+    require(
+        probe_top && probe_child
+            && probe_callbacks.register_callback(
+                   "probe", probe_child.value, { },
+                   [&](SystemVerilogDpiCallbackFrame&) {
+                       require(probe() == 1,
+                           "foreign C code observes its DPI call context");
+                   }) == SystemVerilogDpiCallbackError::None
+            && probe_callbacks.dispatch("probe", { }, probe_context),
+        "loaded foreign C code uses the standard DPI context surface");
     loaded.value.reset();
     require(
-        add_symbol && c_symbol && systemverilog_dpi_plugin_artifact_loaded(FSIM_DPI_TEST_PLUGIN_PATH) && add(7, 5) == 12
+        add_symbol && c_symbol && context_symbol
+            && systemverilog_dpi_plugin_artifact_loaded(FSIM_DPI_TEST_PLUGIN_PATH) && add(7, 5) == 12
             && c_mix(7, 5) == 26,
         "DPI C and C++ symbol leases retain one module and calling convention");
     add_symbol.reset();
     c_symbol.reset();
+    context_symbol.reset();
     require(
         !systemverilog_dpi_plugin_artifact_loaded(FSIM_DPI_TEST_PLUGIN_PATH),
         "DPI modules unload normally after the final symbol lease");

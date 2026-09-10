@@ -30,6 +30,7 @@ int main() {
       StandardRevision::SystemVerilog2009,
       StandardRevision::SystemVerilog2012,
       StandardRevision::SystemVerilog2017,
+      StandardRevision::SystemVerilog2023,
   };
   const std::array vhdl_profiles{
       StandardRevision::Vhdl1987,
@@ -93,10 +94,10 @@ int main() {
                             "$fsim_tf_link_probe");
   require(task && task.binding.value->invoke(),
           "registered TF task binds and executes in a Verilog profile");
-  auto function = registry.bind(StandardRevision::SystemVerilog2017,
+  auto function = registry.bind(StandardRevision::SystemVerilog2023,
                                 "$fsim_tf_function_probe");
   require(static_cast<bool>(function),
-          "registered TF function binds in a SystemVerilog profile");
+          "registered TF function binds in the exact 2023 profile");
   const auto function_result = function.binding.value->invoke();
   require(function.binding.value->result_width() == 17 &&
               function_result && function_result.function_result.has_value() &&

@@ -1113,6 +1113,105 @@ endprogram
         "retained anonymous-program callable and class items must preserve "
         "their compilation-unit ownership");
 
+    const auto sampled_clock = parse_verilog(
+        SourceText { "removed-sampled-clock-2023.sv",
+            R"(module removed_sampled_clock(input logic clock, value);
+  logic observed;
+  initial observed = $sampled(value, @(posedge clock));
+endmodule
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto ended_method = parse_verilog(
+        SourceText { "removed-ended-method-2023.sv",
+            R"(module removed_ended_method(input logic clock, value);
+  sequence observed_sequence; value; endsequence
+  property observed_property;
+    @(posedge clock) observed_sequence.ended;
+  endproperty
+endmodule
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto checker_always = parse_verilog(
+        SourceText { "removed-checker-always-2023.sv",
+            R"(checker removed_checker_always(input logic clock);
+  always @(posedge clock);
+endchecker
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto retained_checker_procedures = parse_verilog(
+        SourceText { "retained-checker-procedures-2023.sv",
+            R"(checker retained_checker_procedures(input logic clock);
+  always_comb;
+  always_latch;
+  always_ff @(posedge clock);
+endchecker
+)" },
+        StandardRevision::SystemVerilog2023);
+    const auto operator_overload = parse_verilog(
+        SourceText { "removed-operator-overload-2023.sv",
+            R"(typedef struct packed { logic value; } item_t;
+function item_t add_items(item_t left, item_t right);
+  return item_t'(left.value + right.value);
+endfunction
+bind + function item_t add_items(item_t, item_t);
+)" },
+        StandardRevision::SystemVerilog2023);
+    for (const auto* removed : {
+             &sampled_clock, &ended_method, &checker_always,
+             &operator_overload }) {
+        require(
+            !removed->ok()
+                && std::ranges::count_if(
+                       removed->diagnostics,
+                       [](const Diagnostic& diagnostic) {
+                           return diagnostic.code == "FSIM-SV-DEPR-001"
+                               && diagnostic.severity
+                                   == DiagnosticSeverity::Error;
+                       })
+                    == 1,
+            "each removed annex construct must receive one stable 2023 error");
+    }
+    require(
+        retained_checker_procedures.ok()
+            && !has_code(retained_checker_procedures, "FSIM-SV-DEPR-001"),
+        "the 2023 checker restriction must retain specialized always forms");
+
+    constexpr std::string_view deprecation_source = R"(
+module annex_child #(parameter int VALUE = 1) (output logic result);
+  assign result = VALUE;
+endmodule
+module annex_candidates(output logic result);
+  annex_child child(result);
+  defparam child.VALUE = 2;
+  initial begin
+    assign result = 1'b1;
+    deassign result;
+  end
+endmodule
+)";
+    const auto deprecation_candidates = parse_verilog(
+        SourceText { "annex-candidates-2023.sv",
+            std::string { deprecation_source } },
+        StandardRevision::SystemVerilog2023);
+    const auto retained_candidates = parse_verilog(
+        SourceText { "annex-candidates-2017.sv",
+            std::string { deprecation_source } },
+        StandardRevision::SystemVerilog2017);
+    require(
+        deprecation_candidates.ok()
+            && std::ranges::count_if(
+                   deprecation_candidates.diagnostics,
+                   [](const Diagnostic& diagnostic) {
+                       return diagnostic.code == "FSIM-SV-DEPR-002"
+                           && diagnostic.severity
+                               == DiagnosticSeverity::Warning;
+                   })
+                == 3
+            && retained_candidates.ok()
+            && !has_code(retained_candidates, "FSIM-SV-DEPR-002"),
+        "2023 deprecation candidates remain executable with source-located "
+        "warnings and do not alter the retained 2017 profile");
+
     const auto retained_baseline = parse_verilog(
         SourceText {
             "retained-2017-baseline.sv",
@@ -1271,6 +1370,37 @@ void test_verilog_systemverilog_compatibility_defaults()
                     .verilog_compatibility_profile
                 == "keyword-profile",
         "keyword-profile selects the legacy SystemVerilog-2005 keyword set only");
+
+    const auto keyword_2023_compatibility = parse_verilog(
+        SourceText { "keyword-2023-compatibility.sv",
+            "module checker; endmodule\n" },
+        StandardRevision::SystemVerilog2023,
+        "keyword-profile");
+    const auto removed_2023_compatibility = parse_verilog(
+        SourceText { "removed-2023-compatibility.sv",
+            R"(module removed_2023_compatibility(input logic clock, value);
+  logic observed;
+  initial observed = $sampled(value, @(posedge clock));
+endmodule
+)" },
+        StandardRevision::SystemVerilog2023,
+        "keyword-profile");
+    std::string annex_compatibility_diagnostics;
+    for (const auto& diagnostic : keyword_2023_compatibility.diagnostics) {
+        annex_compatibility_diagnostics += " keyword=" + diagnostic.code;
+    }
+    for (const auto& diagnostic : removed_2023_compatibility.diagnostics) {
+        annex_compatibility_diagnostics += " removed=" + diagnostic.code;
+    }
+    require(
+        keyword_2023_compatibility.ok()
+            && keyword_2023_compatibility.design.units.front()
+                   .verilog_compatibility_profile == "keyword-profile"
+            && !removed_2023_compatibility.ok()
+            && has_code(
+                removed_2023_compatibility, "FSIM-SV-DEPR-001"),
+        "legacy keyword selection must not restore syntax removed from the "
+        "2023 source grammar" + annex_compatibility_diagnostics);
 
     const auto configuration_source = SourceText {
         "configuration-compatibility.v",

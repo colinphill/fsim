@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_system.hpp"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cstdint>
@@ -41,6 +43,139 @@ namespace {
     constexpr std::size_t maximum_diagnostic_size = 4'096;
     constexpr std::size_t maximum_argument_count = 65'536;
     std::atomic<std::uint64_t> next_system_registry_owner { 1 };
+
+    using Routine = SystemVerilogVpiRoutineDescriptor;
+    using RoutineKind = SystemVerilogVpiRoutineKind;
+    using HandlePolicy = SystemVerilogVpiRoutineHandlePolicy;
+    constexpr auto hierarchy_service = FSIM_VPI_SERVICE_HIERARCHY;
+    constexpr auto value_service = FSIM_VPI_SERVICE_VALUE;
+    constexpr auto time_service = FSIM_VPI_SERVICE_TIME;
+    constexpr auto callback_service = FSIM_VPI_SERVICE_CALLBACK;
+    constexpr auto control_service = FSIM_VPI_SERVICE_CONTROL;
+    constexpr auto system_task_service = FSIM_VPI_SERVICE_SYSTEM_TASK;
+    constexpr auto io_service = FSIM_VPI_SERVICE_IO;
+    constexpr auto user_data_service = FSIM_VPI_SERVICE_USER_DATA;
+    constexpr auto lifecycle_service = FSIM_VPI_SERVICE_LIFECYCLE;
+    constexpr std::array<Routine, 42> standard_routines { {
+        { RoutineKind::RegisterCallback, "vpi_register_cb", callback_service,
+            HandlePolicy::Optional, true, true },
+        { RoutineKind::RemoveCallback, "vpi_remove_cb", callback_service,
+            HandlePolicy::Required, false, true },
+        { RoutineKind::GetCallbackInfo, "vpi_get_cb_info", callback_service,
+            HandlePolicy::Required, false, true },
+        { RoutineKind::RegisterSystemTaskFunction, "vpi_register_systf",
+            system_task_service, HandlePolicy::None, true, true },
+        { RoutineKind::GetSystemTaskFunctionInfo, "vpi_get_systf_info",
+            system_task_service, HandlePolicy::Required, false, true },
+        { RoutineKind::Handle, "vpi_handle", hierarchy_service,
+            HandlePolicy::Optional, true, false },
+        { RoutineKind::HandleByName, "vpi_handle_by_name", hierarchy_service,
+            HandlePolicy::Optional, true, false },
+        { RoutineKind::HandleByIndex, "vpi_handle_by_index", hierarchy_service,
+            HandlePolicy::Required, true, false },
+        { RoutineKind::HandleByMultiIndex, "vpi_handle_by_multi_index",
+            hierarchy_service, HandlePolicy::Required, true, false },
+        { RoutineKind::HandleMulti, "vpi_handle_multi", hierarchy_service,
+            HandlePolicy::Optional, true, false },
+        { RoutineKind::Iterate, "vpi_iterate", hierarchy_service,
+            HandlePolicy::Optional, true, false },
+        { RoutineKind::Scan, "vpi_scan", hierarchy_service,
+            HandlePolicy::Required, true, false },
+        { RoutineKind::GetProperty, "vpi_get", hierarchy_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetProperty64, "vpi_get64", hierarchy_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetStringProperty, "vpi_get_str", hierarchy_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetDelays, "vpi_get_delays", value_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::PutDelays, "vpi_put_delays", value_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetValue, "vpi_get_value", value_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::PutValue, "vpi_put_value", value_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetTime, "vpi_get_time", time_service,
+            HandlePolicy::Optional, false, false },
+        { RoutineKind::GetVlogInfo, "vpi_get_vlog_info", lifecycle_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::CheckError, "vpi_chk_error", lifecycle_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::FreeObject, "vpi_free_object", hierarchy_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::ReleaseHandle, "vpi_release_handle", hierarchy_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::CompareObjects, "vpi_compare_objects", hierarchy_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetData, "vpi_get_data", value_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::PutData, "vpi_put_data", value_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::GetUserData, "vpi_get_userdata", user_data_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::PutUserData, "vpi_put_userdata", user_data_service,
+            HandlePolicy::Required, false, false },
+        { RoutineKind::Control, "vpi_control", control_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::VariableControl, "vpi_vcontrol", control_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::Print, "vpi_printf", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::VariablePrint, "vpi_vprintf", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::Flush, "vpi_flush", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::McdOpen, "vpi_mcd_open", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::McdClose, "vpi_mcd_close", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::McdName, "vpi_mcd_name", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::McdPrint, "vpi_mcd_printf", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::McdVariablePrint, "vpi_mcd_vprintf", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::McdFlush, "vpi_mcd_flush", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::FileOpen, "vpi_fopen", io_service,
+            HandlePolicy::None, false, false },
+        { RoutineKind::GetFile, "vpi_get_file", io_service,
+            HandlePolicy::None, false, false },
+    } };
+    constexpr std::size_t maximum_routine_text_size = 1U << 20U;
+
+    constexpr bool valid_status(const fsim_vpi_status_v1 status) noexcept
+    {
+        return status >= FSIM_VPI_STATUS_OK
+            && status <= FSIM_VPI_STATUS_INTERNAL_ERROR;
+    }
+
+    void report_routine_error(
+        const fsim_vpi_host_v2& host,
+        const char* const code,
+        const char* const message) noexcept
+    {
+        const auto expected_pointer_bits
+            = static_cast<std::uint32_t>(sizeof(void*) * 8U);
+        if (host.v1.abi_version != FSIM_VPI_HOST_ABI_VERSION_V2
+            || host.v1.struct_size < sizeof(fsim_vpi_host_v2)
+            || host.v1.pointer_bits != expected_pointer_bits
+            || host.v1.flags != 0U || host.v1.context == nullptr
+            || host.v1.report == nullptr) {
+            return;
+        }
+        const fsim_vpi_error_view_v1 error {
+            FSIM_VPI_ERROR_ERROR,
+            static_cast<std::uint32_t>(std::char_traits<char>::length(code)),
+            code,
+            static_cast<std::uint32_t>(std::char_traits<char>::length(message)),
+            message,
+        };
+        try {
+            host.v1.report(host.v1.context, &error);
+        } catch (...) {
+        }
+    }
 
     bool valid_kind(const SystemVerilogVpiSystemCallableKind kind) noexcept
     {
@@ -122,8 +257,9 @@ namespace {
         case SystemVerilogVpiObjectKind::Operation:
         case SystemVerilogVpiObjectKind::MinTypMax:
             return false;
+        default:
+            return false;
         }
-        return false;
     }
 
     std::string bounded_diagnostic(std::string diagnostic) noexcept
@@ -189,6 +325,104 @@ namespace {
     }
 
 } // namespace
+
+std::span<const SystemVerilogVpiRoutineDescriptor>
+systemverilog_vpi_2023_routines() noexcept
+{
+    return standard_routines;
+}
+
+const SystemVerilogVpiRoutineDescriptor*
+find_systemverilog_vpi_2023_routine(
+    const SystemVerilogVpiRoutineKind kind) noexcept
+{
+    const auto index = static_cast<std::size_t>(kind);
+    return index < standard_routines.size()
+        && standard_routines[index].kind == kind
+        ? &standard_routines[index] : nullptr;
+}
+
+const SystemVerilogVpiRoutineDescriptor*
+find_systemverilog_vpi_2023_routine(const std::string_view name) noexcept
+{
+    const auto found = std::ranges::find(
+        standard_routines, name, &SystemVerilogVpiRoutineDescriptor::name);
+    return found == standard_routines.end() ? nullptr : &*found;
+}
+
+SystemVerilogVpiRoutineResult invoke_systemverilog_vpi_2023_routine(
+    const fsim_vpi_host_v2& host,
+    const SystemVerilogVpiRoutineKind routine,
+    const fsim_vpi_service_request_v1& request) noexcept
+{
+    const auto* descriptor = find_systemverilog_vpi_2023_routine(routine);
+    if (descriptor == nullptr) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-001",
+            "unknown SystemVerilog-2023 VPI routine");
+        return { { }, SystemVerilogVpiRoutineError::InvalidRoutine };
+    }
+    const auto expected_pointer_bits
+        = static_cast<std::uint32_t>(sizeof(void*) * 8U);
+    if (host.v1.abi_version != FSIM_VPI_HOST_ABI_VERSION_V2
+        || host.v1.struct_size < sizeof(fsim_vpi_host_v2)
+        || host.v1.pointer_bits != expected_pointer_bits
+        || host.v1.flags != 0U || host.v1.simulation_identity == 0U
+        || host.service_context == nullptr || host.invoke_service == nullptr) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-002",
+            "invalid VPI host service boundary");
+        return { { }, SystemVerilogVpiRoutineError::InvalidHost };
+    }
+    if (request.struct_size < sizeof(fsim_vpi_service_request_v1)
+        || request.operation != descriptor->service
+        || request.text_size > maximum_routine_text_size
+        || (request.text_size != 0U && request.text == nullptr)
+        || (descriptor->handle_policy
+                == SystemVerilogVpiRoutineHandlePolicy::None
+            && request.handle != 0U)) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-003",
+            "invalid VPI routine request");
+        return { { }, SystemVerilogVpiRoutineError::InvalidRequest };
+    }
+    if (descriptor->handle_policy
+            == SystemVerilogVpiRoutineHandlePolicy::Required
+        && request.handle == 0U) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-004",
+            "required VPI routine handle is missing");
+        return { { }, SystemVerilogVpiRoutineError::InvalidHandle };
+    }
+
+    fsim_vpi_service_result_v1 result {
+        static_cast<std::uint32_t>(sizeof(fsim_vpi_service_result_v1)),
+        FSIM_VPI_STATUS_INTERNAL_ERROR,
+        0U,
+        0U,
+        0U,
+        0U,
+        0U,
+    };
+    fsim_vpi_status_v1 status { FSIM_VPI_STATUS_INTERNAL_ERROR };
+    try {
+        status = host.invoke_service(host.service_context, &request, &result);
+    } catch (...) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-005",
+            "VPI service callback raised an exception");
+        return { { }, SystemVerilogVpiRoutineError::CallbackException };
+    }
+    if (!valid_status(status) || status != FSIM_VPI_STATUS_OK) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-006",
+            "VPI service callback rejected the request");
+        return { result, SystemVerilogVpiRoutineError::CallbackFailure };
+    }
+    if (result.struct_size < sizeof(fsim_vpi_service_result_v1)
+        || !valid_status(result.status) || result.reserved != 0U
+        || result.status != FSIM_VPI_STATUS_OK
+        || (descriptor->returns_handle && result.handle == 0U)) {
+        report_routine_error(host, "FSIM-VPI-ROUTINE-007",
+            "VPI service callback returned a malformed result");
+        return { result, SystemVerilogVpiRoutineError::MalformedResult };
+    }
+    return { result, SystemVerilogVpiRoutineError::None };
+}
 
 SystemVerilogVpiSystemRegistry::SystemVerilogVpiSystemRegistry(
     const SystemVerilogVpiObjectRegistry& objects) noexcept

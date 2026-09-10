@@ -35,6 +35,32 @@ constexpr std::string_view kSystemVerilogSource = R"(module sv_leaf;
 endmodule
 )";
 
+constexpr std::string_view kSystemVerilog2023ToleranceSource = R"(module sv_2023_tolerance;
+  logic value;
+  initial value = (107 inside {[100 +/- 7]});
+endmodule
+)";
+
+constexpr std::string_view kSystemVerilog2023StreamingSource = R"(module sv_2023_streaming;
+  logic [7:0] left;
+  logic [7:0] right;
+  initial {<<8{left, right}} = 16'h1234;
+endmodule
+)";
+
+constexpr std::string_view kSystemVerilog2023PatternSource = R"(module sv_2023_pattern;
+  logic [7:0] upper;
+  logic [7:0] lower;
+  initial '{upper, lower} = 16'habcd;
+endmodule
+)";
+
+constexpr std::string_view kSystemVerilog2023ForeachSource = R"(module sv_2023_foreach;
+  string text;
+  initial foreach (text[index]) ;
+endmodule
+)";
+
 constexpr std::string_view kVhdlSource = R"(entity vhdl_leaf is end vhdl_leaf;
 architecture rtl of vhdl_leaf is
 begin
@@ -72,14 +98,20 @@ struct DiscoveredSourcePoint {
 
 DiscoveredSourcePoint discover_verilog(
     const std::string_view logical_name, const std::string_view contents,
-    const frontend::Language language, std::string standard)
+    const frontend::Language language, std::string standard,
+    const std::optional<frontend::StandardRevision> standard_revision
+        = std::nullopt)
 {
     auto identity = source_identity(logical_name, contents);
     elaboration::VerilogCoverageSource source {
         std::string { logical_name }, identity
     };
-    const auto parsed = frontend::parse_text(
-        source.source_name, contents, language);
+    const auto parsed = standard_revision
+        ? frontend::parse_verilog(
+              frontend::SourceText {
+                  source.source_name, std::string { contents } },
+              *standard_revision)
+        : frontend::parse_text(source.source_name, contents, language);
     assert(parsed.ok() && parsed.design.units.size() == 1U
         && parsed.design.units.front().processes.size() == 1U);
     const auto discovered = elaboration::discover_verilog_statement_points(
@@ -139,6 +171,22 @@ Corpus make_corpus()
             frontend::Language::Verilog2005, "2005"),
         discover_verilog("rtl/sv_leaf.sv", kSystemVerilogSource,
             frontend::Language::SystemVerilog2017, "2017"),
+        discover_verilog("rtl/sv_2023_tolerance.sv",
+            kSystemVerilog2023ToleranceSource,
+            frontend::Language::SystemVerilog2017, "2023",
+            frontend::StandardRevision::SystemVerilog2023),
+        discover_verilog("rtl/sv_2023_streaming.sv",
+            kSystemVerilog2023StreamingSource,
+            frontend::Language::SystemVerilog2017, "2023",
+            frontend::StandardRevision::SystemVerilog2023),
+        discover_verilog("rtl/sv_2023_pattern.sv",
+            kSystemVerilog2023PatternSource,
+            frontend::Language::SystemVerilog2017, "2023",
+            frontend::StandardRevision::SystemVerilog2023),
+        discover_verilog("rtl/sv_2023_foreach.sv",
+            kSystemVerilog2023ForeachSource,
+            frontend::Language::SystemVerilog2017, "2023",
+            frontend::StandardRevision::SystemVerilog2023),
         discover_vhdl(),
     };
     for (const auto& source : corpus.discovered) {
@@ -148,11 +196,19 @@ Corpus make_corpus()
     constexpr std::array instances {
         "top.verilog_a", "top.verilog_b",
         "top.sv_a", "top.sv_b",
+        "top.sv_2023_tolerance_a", "top.sv_2023_tolerance_b",
+        "top.sv_2023_streaming_a", "top.sv_2023_streaming_b",
+        "top.sv_2023_pattern_a", "top.sv_2023_pattern_b",
+        "top.sv_2023_foreach_a", "top.sv_2023_foreach_b",
         "top.vhdl_a", "top.vhdl_b",
     };
     constexpr std::array units {
         "verilog_leaf", "verilog_leaf",
         "sv_leaf", "sv_leaf",
+        "sv_2023_tolerance", "sv_2023_tolerance",
+        "sv_2023_streaming", "sv_2023_streaming",
+        "sv_2023_pattern", "sv_2023_pattern",
+        "sv_2023_foreach", "sv_2023_foreach",
         "vhdl_leaf", "vhdl_leaf",
     };
     corpus.owners.reserve(instances.size());
@@ -252,10 +308,16 @@ Snapshot capture(
         jit = std::make_unique<compiler::LlvmJit>(std::move(options));
     }
 
-    constexpr std::array executed_instances { 0U, 2U, 4U };
+    constexpr std::array executed_instances {
+        0U, 2U, 4U, 6U, 8U, 10U, 12U
+    };
     constexpr std::array symbols {
         "coverage_equivalence_verilog",
         "coverage_equivalence_systemverilog",
+        "coverage_equivalence_systemverilog_2023_tolerance",
+        "coverage_equivalence_systemverilog_2023_streaming",
+        "coverage_equivalence_systemverilog_2023_pattern",
+        "coverage_equivalence_systemverilog_2023_foreach",
         "coverage_equivalence_vhdl",
     };
     const std::array<std::uint32_t, 0U> no_signal_widths { };
@@ -372,7 +434,9 @@ int main()
     const auto corpus = make_corpus();
     const auto reference = capture(corpus, std::nullopt);
     assert((reference.counters
-        == std::vector<std::uint64_t> { 1U, 0U, 1U, 0U, 1U, 0U }));
+        == std::vector<std::uint64_t> {
+            1U, 0U, 1U, 0U, 1U, 0U, 1U, 0U,
+            1U, 0U, 1U, 0U, 1U, 0U }));
     for (const auto optimization : {
              project::Optimization::o0,
              project::Optimization::o1,

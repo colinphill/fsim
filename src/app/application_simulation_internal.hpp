@@ -537,12 +537,15 @@ struct Simulation::Impl {
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
 
     std::unique_ptr<runtime::SystemVerilogVpiTimeService> vpi_time;
+    std::unique_ptr<runtime::SystemVerilogVpiDataReadService> vpi_data_read;
 
     std::unique_ptr<runtime::SystemVerilogVpiCallbackManager> vpi_callbacks;
 
     std::unique_ptr<runtime::SystemVerilogVpiValueControl> vpi_values;
 
     std::unique_ptr<runtime::SystemVerilogVpiControlService> vpi_control;
+
+    std::unique_ptr<runtime::SystemVerilogVpiAssertionApi> vpi_assertions;
 
     std::unique_ptr<runtime::SystemVerilogVpiCoverageService> vpi_coverage;
 
@@ -566,6 +569,9 @@ struct Simulation::Impl {
 
     std::map<std::string, fsim_vpi_handle_v1, std::less<>>
         vpi_assertion_handles;
+
+    std::map<fsim_vpi_handle_v1, std::set<runtime::simir::ProcessId>>
+        vpi_assertion_processes;
 
     std::map<SignalId, runtime::SystemVerilogScalarKind> vpi_scalar_kinds;
 
@@ -663,6 +669,12 @@ struct Simulation::Impl {
 
     std::set<runtime::simir::ProcessId>
         concurrent_assertion_design_processes;
+
+    std::set<runtime::simir::ProcessId>
+        disabled_vpi_assertion_processes;
+
+    std::set<runtime::simir::ProcessId>
+        enabled_vpi_assertion_processes;
 
     std::map<std::uint32_t, bool>
         concurrent_assertion_actions_suppressed;

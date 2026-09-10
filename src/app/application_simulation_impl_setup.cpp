@@ -559,9 +559,27 @@ Simulation::Impl::Impl(
         vpi_container_categories
             = std::move(published_vpi.container_categories);
     }
+    for (const auto& process : built.design_ir.processes()) {
+        if (const auto assertion = vpi_assertion_handles.find(process.name);
+            assertion != vpi_assertion_handles.end()) {
+            vpi_assertion_processes[assertion->second].insert(
+                static_cast<runtime::simir::ProcessId>(process.runtime_index));
+        }
+    }
     vpi_time = std::make_unique<runtime::SystemVerilogVpiTimeService>(
         interpreter->scheduler(),
         systemverilog_vpi_time_profile(built.time_resolution));
+    vpi_data_read
+        = std::make_unique<runtime::SystemVerilogVpiDataReadService>(
+            *vpi_registry,
+            runtime::SystemVerilogVpiDataReadAccess::LimitedInteractive,
+            std::string { },
+            [this] {
+                return runtime::SystemVerilogVpiDataReadPosition {
+                    interpreter->scheduler().now(),
+                    interpreter->scheduler().delta()
+                };
+            });
     constexpr runtime::StableOrder vpi_callback_order
         = runtime::StableOrder { 1 } << 60U;
     constexpr runtime::StableOrder vpi_value_order
@@ -584,6 +602,77 @@ Simulation::Impl::Impl(
             vpi_control_order,
             false,
             false);
+    vpi_assertions
+        = std::make_unique<runtime::SystemVerilogVpiAssertionApi>(
+            *vpi_registry,
+            *vpi_callbacks,
+            [this](
+                const runtime::SystemVerilogVpiAssertionControlOperation operation,
+                const std::optional<fsim_vpi_handle_v1> object) {
+                std::set<runtime::simir::ProcessId> selected;
+                if (object) {
+                    const auto processes = vpi_assertion_processes.find(*object);
+                    if (processes == vpi_assertion_processes.end()) {
+                        return false;
+                    }
+                    selected = processes->second;
+                } else {
+                    selected = concurrent_assertion_design_processes;
+                }
+                switch (operation) {
+                case runtime::SystemVerilogVpiAssertionControlOperation::Reset:
+                    return true;
+                case runtime::SystemVerilogVpiAssertionControlOperation::Enable:
+                    if (!object) {
+                        concurrent_assertions_enabled = true;
+                        disabled_vpi_assertion_processes.clear();
+                        enabled_vpi_assertion_processes.clear();
+                    } else {
+                        for (const auto process : selected) {
+                            disabled_vpi_assertion_processes.erase(process);
+                        }
+                        enabled_vpi_assertion_processes.insert(
+                            selected.begin(), selected.end());
+                    }
+                    return true;
+                case runtime::SystemVerilogVpiAssertionControlOperation::Disable:
+                    if (!object) {
+                        concurrent_assertions_enabled = false;
+                        disabled_vpi_assertion_processes.clear();
+                        enabled_vpi_assertion_processes.clear();
+                    } else {
+                        for (const auto process : selected) {
+                            enabled_vpi_assertion_processes.erase(process);
+                        }
+                        disabled_vpi_assertion_processes.insert(
+                            selected.begin(), selected.end());
+                    }
+                    return true;
+                case runtime::SystemVerilogVpiAssertionControlOperation::Kill:
+                    if (!object) {
+                        concurrent_assertions_enabled = false;
+                        disabled_vpi_assertion_processes.clear();
+                        enabled_vpi_assertion_processes.clear();
+                    } else {
+                        for (const auto process : selected) {
+                            enabled_vpi_assertion_processes.erase(process);
+                        }
+                        disabled_vpi_assertion_processes.insert(
+                            selected.begin(), selected.end());
+                    }
+                    const std::vector<runtime::simir::ProcessId>
+                        selected_processes { selected.begin(), selected.end() };
+                    interpreter->kill_dynamic_processes(selected_processes);
+                    std::erase_if(
+                        pending_concurrent_assertions,
+                        [&](const auto& item) {
+                            return selected.contains(
+                                item.second.design_process);
+                        });
+                    return true;
+                }
+                return false;
+            });
     configure_standard_vpi_coverage();
     vpi_systems
         = std::make_unique<runtime::SystemVerilogVpiSystemRegistry>(
@@ -775,7 +864,9 @@ Simulation::Impl::Impl(
     interpreter->set_fork_spawn_filter(
         [this](const runtime::simir::ProcessId process) {
             return !concurrent_assertion_design_processes.contains(process)
-                || concurrent_assertions_enabled;
+                || enabled_vpi_assertion_processes.contains(process)
+                || (concurrent_assertions_enabled
+                    && !disabled_vpi_assertion_processes.contains(process));
         });
     interpreter->set_output_hook(
         [this](
@@ -1066,9 +1157,13 @@ Simulation::Impl::Impl(
                 }
                 if (control == "asserton") {
                     concurrent_assertions_enabled = true;
+                    disabled_vpi_assertion_processes.clear();
+                    enabled_vpi_assertion_processes.clear();
                 } else if (control == "assertoff"
                     || control == "assertkill") {
                     concurrent_assertions_enabled = false;
+                    disabled_vpi_assertion_processes.clear();
+                    enabled_vpi_assertion_processes.clear();
                     if (control == "assertkill") {
                         const std::vector<runtime::simir::ProcessId>
                             processes {
@@ -1188,6 +1283,8 @@ Simulation::Impl::Impl(
                     event.process = coverage.process;
                     event.kind = coverage.kind;
                     event.slot = coverage.slot;
+                    event.instance_identity = coverage.instance_identity;
+                    event.source_span = coverage.source_span;
                     event.time = time;
                     event.delta = delta;
                     event.action_suppressed
@@ -1307,6 +1404,21 @@ Simulation::Impl::Impl(
     coverage.process = occurrence != built.design_ir.processes().end()
         ? occurrence->name
         : coverage.name;
+    if (occurrence != built.design_ir.processes().end()) {
+        coverage.source_span
+            = occurrence->source ? occurrence->source->value() : 0U;
+        const auto specialization_index
+            = occurrence->specialization.value();
+        const auto& specializations = built.design_ir.specializations();
+        const auto& instances = built.design_ir.instances();
+        if (specialization_index < specializations.size()) {
+            const auto instance_index
+                = specializations[specialization_index].instance.value();
+            if (instance_index < instances.size()) {
+                coverage.instance_identity = instances[instance_index].path;
+            }
+        }
+    }
     concurrent_assertion_coverage.push_back(std::move(coverage));
     const auto inserted = concurrent_assertion_coverage.size() - 1U;
     concurrent_assertion_indices.emplace(process, inserted);
@@ -1331,6 +1443,8 @@ void Simulation::Impl::finish_concurrent_assertions(
         event.process = coverage.process;
         event.kind = coverage.kind;
         event.slot = coverage.slot;
+        event.instance_identity = coverage.instance_identity;
+        event.source_span = coverage.source_span;
         event.time = time;
         event.delta = delta;
         event.outcome = pending.vacuous

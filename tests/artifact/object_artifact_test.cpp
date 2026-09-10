@@ -57,7 +57,7 @@ void make_tree_writable(const std::filesystem::path& root) {
 int main() {
     static_assert(fsim::artifact::kObjectFormatVersion == 7U);
     static_assert(fsim::library::kPortableSchemaVersion == 14U);
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 31U);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 32U);
     const std::string source_bytes = "module child; endmodule\n";
     const std::string unit_bytes = "portable-unit";
     fsim::artifact::ObjectMetadata metadata;

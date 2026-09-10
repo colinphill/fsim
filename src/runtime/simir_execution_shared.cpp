@@ -154,6 +154,7 @@ namespace fsim::runtime::simir {
         || operation_holds<VhdlEnvironmentGetCallPath>(operation)
         || operation_holds<StochasticQueueOperation>(operation)
         || operation_holds<PlaEvaluate>(operation)
+        || operation_holds<RandomDistribution>(operation)
         || operation_holds<TimeFormatControl>(operation)
         || operation_holds<EventTriggered>(operation)
         || operation_holds<EventAlias>(operation)

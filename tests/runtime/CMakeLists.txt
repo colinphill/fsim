@@ -102,10 +102,17 @@ add_library(
 fsim_configure_library(fsim_dpi_test_plugin)
 target_include_directories(
   fsim_dpi_test_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(fsim_dpi_test_plugin PRIVATE fsim_tf)
 add_library(fsim_vpi_test_plugin SHARED vpi_test_plugin.cpp)
 fsim_configure_library(fsim_vpi_test_plugin)
 target_include_directories(
   fsim_vpi_test_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+add_library(
+  fsim_vpi_standard_startup_plugin SHARED vpi_standard_startup_plugin.c)
+fsim_configure_library(fsim_vpi_standard_startup_plugin)
+target_link_libraries(fsim_vpi_standard_startup_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_vpi_standard_startup_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
 add_library(fsim_vhpi_test_plugin SHARED vhpi_test_plugin.cpp)
 fsim_configure_library(fsim_vhpi_test_plugin)
 target_include_directories(
@@ -141,12 +148,14 @@ target_compile_definitions(
           FSIM_VHPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_c_plugin>"
           FSIM_VHPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_cpp_plugin>"
           FSIM_VPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_test_plugin>"
+          FSIM_VPI_STANDARD_STARTUP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_standard_startup_plugin>"
           FSIM_VPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_c_plugin>"
           FSIM_VPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_cpp_plugin>"
 )
 add_dependencies(
   fsim_runtime_tests fsim_dpi_test_plugin fsim_dpi_bad_abi_plugin
-  fsim_vhpi_test_plugin fsim_vpi_test_plugin)
+  fsim_vhpi_test_plugin fsim_vpi_test_plugin
+  fsim_vpi_standard_startup_plugin)
 add_dependencies(
   fsim_runtime_tests fsim_vhpi_reference_c_plugin
   fsim_vhpi_reference_cpp_plugin)
@@ -155,14 +164,25 @@ add_dependencies(
   fsim_vpi_reference_cpp_plugin)
 fsim_configure_test(fsim_runtime_tests)
 add_test(NAME fsim.runtime COMMAND fsim_runtime_tests)
+add_test(
+  NAME fsim.runtime.vpi_reference_plugins
+  COMMAND fsim_runtime_tests vpi_reference_plugins)
+set_tests_properties(
+  fsim.runtime.vpi_reference_plugins
+  PROPERTIES
+    LABELS
+      "fast;runtime;systemverilog2023;vpi;foreign;c;cxx;plugin;linux;windows;interpreter;llvm;o0;o2;artifact;relocation;negative"
+    RESOURCE_LOCK fsim_vpi_reference_plugins)
 # These recursive closure drivers are registered by the parent test directory,
 # but their runtime witness is registered here. Attach the setup ownership in
 # the creating directory so selecting any driver executes this witness exactly
 # once before the driver's de-duplicated completion check.
 set_tests_properties(
   fsim.runtime
-  PROPERTIES FIXTURES_SETUP
-    "fsim_compatibility_smoke_closure_witnesses;fsim_verilog_systemverilog_standard_mode_closure_witnesses;fsim_systemverilog_closure_witnesses;fsim_verilog_closure_witnesses"
+  PROPERTIES
+    FIXTURES_SETUP
+      "fsim_compatibility_smoke_closure_witnesses;fsim_verilog_systemverilog_standard_mode_closure_witnesses;fsim_systemverilog_closure_witnesses;fsim_verilog_closure_witnesses"
+    RESOURCE_LOCK fsim_vpi_reference_plugins
 )
 
 add_executable(
@@ -175,6 +195,19 @@ add_test(NAME fsim.runtime.vpi_coverage COMMAND fsim_vpi_coverage_tests)
 set_tests_properties(
   fsim.runtime.vpi_coverage
   PROPERTIES LABELS "fast;runtime;vpi;coverage;control;property;fsm;traversal;positive;negative;resource"
+)
+
+add_executable(
+  fsim_vpi_data_read_tests
+  vpi_data_read_test.cpp
+)
+target_link_libraries(fsim_vpi_data_read_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_vpi_data_read_tests)
+add_test(NAME fsim.runtime.vpi_data_read COMMAND fsim_vpi_data_read_tests)
+set_tests_properties(
+  fsim.runtime.vpi_data_read
+  PROPERTIES LABELS
+    "fast;runtime;vpi;data-read;collection;traversal;positive;negative;resource"
 )
 
 add_executable(
@@ -355,7 +388,7 @@ add_test(NAME fsim.runtime.acc_tf_coherence COMMAND fsim_acc_tf_coherence_tests)
 set_tests_properties(
   fsim.runtime.acc_tf_coherence
   PROPERTIES LABELS
-    "fast;runtime;acc;tf;vpi;coherence;argument;scope;work-area;transactional;positive;negative;resource;portability"
+    "fast;runtime;acc;tf;dpi;vpi;systemverilog2023;coherence;argument;scope;work-area;transactional;positive;negative;resource;portability"
 )
 
 add_executable(fsim_acc_vpi_coherence_tests acc_vpi_coherence_test.cpp)

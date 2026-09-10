@@ -1151,6 +1151,9 @@ std::optional<Statement> VerilogParser::parse_statement()
 
     if (keyword("assign")) {
         const auto start = advance();
+        diagnose_systemverilog_2023_annex(
+            SystemVerilogAnnexConstruct::procedural_assign_deassign,
+            start);
         Statement statement;
         statement.kind = StatementKind::ProceduralAssign;
         statement.target = parse_lvalue();
@@ -1169,6 +1172,9 @@ std::optional<Statement> VerilogParser::parse_statement()
 
     if (keyword("deassign")) {
         const auto start = advance();
+        diagnose_systemverilog_2023_annex(
+            SystemVerilogAnnexConstruct::procedural_assign_deassign,
+            start);
         Statement statement;
         statement.kind = StatementKind::Deassign;
         statement.target = parse_lvalue();

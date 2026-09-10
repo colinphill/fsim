@@ -35,8 +35,9 @@ are therefore excluded.
 The governed VPI boundary reports ABI, object, iterator, value, callback,
 control, system-callable, I/O, plug-in, and checkpoint failures through the
 typed status enums in `include/fsim/runtime/vpi_*.hpp` and the bounded
-`fsim_vpi_error_view_v1` C view. Those runtime statuses are not production
-`FSIM-*` diagnostic codes and therefore do not add catalog rows.
+`fsim_vpi_error_view_v1` C view. Those typed statuses are not production
+diagnostic codes. The common 2023 routine dispatcher additionally publishes
+the stable boundary failures below through that C view.
 
 The governed VHPI boundary likewise reports ABI, hierarchy, iterator, type,
 value, driver/write, time/callback, foreign, association, I/O, plug-in, and
@@ -77,6 +78,18 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ACC-NAME-004` | error | An ACC configuration, edge, delay-mode, update, value-format, VCL-reason, time-type, or product-type behavior selector is outside the standardized set. |
 | `FSIM-ACC-NAME-005` | error | The host rejected dispatch of a validated standardized ACC request. |
 | `FSIM-ACC-NAME-006` | error | An exception escaped the host dispatch callback and was contained at the ACC boundary. |
+
+## SystemVerilog VPI routine bridge
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-VPI-ROUTINE-001` | error | A routine selector is outside the complete standardized 2023 inventory. |
+| `FSIM-VPI-ROUTINE-002` | error | The v2 host service boundary has an invalid version, size, pointer width, reserved flag, simulation identity, context, or callback. |
+| `FSIM-VPI-ROUTINE-003` | error | A routine request has a truncated record, wrong service family, incoherent or excessive text, or a forbidden handle. |
+| `FSIM-VPI-ROUTINE-004` | error | A routine requiring a generation-qualified handle received the null handle. |
+| `FSIM-VPI-ROUTINE-005` | error | An exception escaped the host service callback and was contained at the VPI boundary. |
+| `FSIM-VPI-ROUTINE-006` | error | The host service callback rejected the validated routine request. |
+| `FSIM-VPI-ROUTINE-007` | error | The host service callback returned a truncated, reserved, invalid-status, failed, or missing-handle result. |
 
 ## Code coverage model
 
@@ -994,6 +1007,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 
 | Code | Severity | Meaning |
 |---|---|---|
+| `FSIM-SV-DEPR-001` | error | The SystemVerilog-2023 source profile uses syntax removed from the current grammar, such as the clocked `$sampled` form, the `ended` sequence endpoint, a general `always` procedure in a checker, or an operator-overload bind declaration. |
+| `FSIM-SV-DEPR-002` | warning | A SystemVerilog-2023 source uses `defparam` or procedural `assign/deassign`; the construct remains supported but is identified for possible removal. |
 | `FSIM-SV-PARSE-001` | error | Expected a Verilog/SystemVerilog identifier. |
 | `FSIM-SV-PARSE-002` | error | Expected `)` after module ports. |
 | `FSIM-SV-PARSE-003` | error | Expected `;` after a module header. |
@@ -1526,7 +1541,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-224` | error | An imported DPI task is incorrectly declared `pure`. |
 | `FSIM-SV-SEM-225` | error | A pure imported DPI function has a non-input formal. |
 | `FSIM-SV-SEM-226` | error | A DPI C linkage alias is not a portable C identifier. |
-| `FSIM-SV-SEM-227` | error | A DPI formal incorrectly declares a default value. |
+| `FSIM-SV-SEM-227` | error | A DPI import formal uses reference passing, or a default is not attached to a named input formal with an expression. |
 | `FSIM-SV-SEM-228` | error | A compilation-unit callable or owner-local DPI SystemVerilog/C export name is duplicated. |
 | `FSIM-SV-SEM-229` | error | A DPI import conflicts with a native callable in the same owner scope. |
 | `FSIM-SV-SEM-230` | error | A DPI export does not resolve to a native callable of the declared kind in the same owner scope. |
@@ -1568,6 +1583,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-266` | error | A real-valued coverpoint or bin has an unsupported, implicit, wildcard, transition, or type-incompatible bin form. |
 | `FSIM-SV-SEM-267` | error | An anonymous program repeats a compilation-unit task or function name. |
 | `FSIM-SV-SEM-268` | error | An anonymous program supplies a forbidden end label. |
+| `FSIM-SV-SEM-270` | error | Source attempts to redeclare the compiler-owned SystemVerilog `std` package. |
 | `FSIM-SV-SEM-217` | error | A coverpoint or cross `weight`, `goal`, or `at_least` option is not a bounded integer in its permitted range. |
 | `FSIM-SV-SEM-218` | error | A covergroup-level weight, goal, `per_instance`, or `merge_instances` literal is outside its permitted bounded range. |
 | `FSIM-SV-SEM-219` | error | A covergroup constructor or sample formal uses a real, string, chandle, event, void, or other type outside the bounded integral coverage model. |
@@ -1595,6 +1611,14 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-020` | error | A randomization mode call has invalid arity or selects no random property or constraint block. |
 | `FSIM-SV-CLASS-021` | error | A randomization mode call violates local or protected class-member access. |
 | `FSIM-SV-CLASS-022` | error | The special `null` object-randomize checker selection is mixed with another variable-list item. |
+
+The standardized `$dist_*` callables use source-located simulation warnings
+rather than compile diagnostics for runtime-domain failures. Nonpositive
+exponential/Poisson means, chi-square/Student-t degrees, or Erlang stage counts
+return zero and preserve the input seed. An X/Z argument or exhaustion of the
+bounded one-million-draw transaction also returns zero and preserves the seed;
+the latter prevents an unbounded distribution loop from monopolizing the
+scheduler.
 | `FSIM-SV-CLASS-INHERIT-001` | error | The class inheritance graph contains a cycle. |
 | `FSIM-SV-CLASS-INHERIT-002` | error | A class contains duplicate method names. |
 | `FSIM-SV-CLASS-INHERIT-003` | error | A concrete class contains a pure method declaration. |
@@ -1734,6 +1758,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-390` | error | A program block contains a built-in or user-defined primitive instance. |
 | `FSIM-SV-SEM-391` | error | A specify module path has misplaced polarity or a parallel path has more than one source or destination terminal. |
 | `FSIM-SV-SEM-392` | error | A specify module path mixes simple-path and edge-sensitive topology, or an edge-sensitive path follows `ifnone`. |
+| `FSIM-SV-SEM-393` | error | SystemVerilog DPI imports sharing one C linkage name have incompatible callable profiles. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1922,6 +1947,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-ELAB-SVPKG-007` | error | A package export has invalid wildcard shape or is not backed by a matching import. |
 | `FSIM-ELAB-SVPKG-008` | error | A selective package export does not select an imported declaration. |
 | `FSIM-ELAB-SVPKG-009` | error | An explicit package import conflicts with a declaration in the same scope. |
+| `FSIM-ELAB-SVPKG-011` | error | A selected `std` package member is unknown or unavailable in the source profile. |
 | `FSIM-ELAB-SVNETTYPE-001` | error | A SystemVerilog nettype resolution function is not visible with an executable body. |
 | `FSIM-ELAB-SVNETTYPE-002` | error | A SystemVerilog nettype resolution function is ambiguous or has conflicting visible bodies. |
 | `FSIM-ELAB-SVNETTYPE-003` | error | A SystemVerilog nettype resolution function does not accept one dynamic array of the net base type and return that base type. |

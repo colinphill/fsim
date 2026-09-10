@@ -563,7 +563,15 @@ bool ObjectCache::store(
     }
     std::filesystem::create_directories(path.parent_path(), error);
     if (error) {
-        return false;
+        // Concurrent first-time publishers can race while creating the same
+        // shard on Windows. Some filesystem implementations retain an
+        // already-exists error even though another publisher completed the
+        // directory. Accept only the exact postcondition we require.
+        std::error_code status_error;
+        if (!std::filesystem::is_directory(path.parent_path(), status_error)) {
+            return false;
+        }
+        error.clear();
     }
 
     detail::CacheDirectoryLock lock{path.string() + ".lock", error};

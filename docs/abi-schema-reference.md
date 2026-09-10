@@ -162,8 +162,8 @@ model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
 rejected directly; there is no compatibility reader or migration.
 
-The portable owning-unit and class codecs are schema 31; UDP declarations are
-schema 1. The standalone design's current state schemas are runtime 61,
+The portable owning-unit and class codecs are schema 32; UDP declarations are
+schema 1. The standalone design's current state schemas are runtime 62,
 semantic 4, DesignIR 4, class 12, SystemVerilog constraint HIR 7, coverage 7,
 UVM 3, and VHDL HIR 4. Checkpoint envelopes are schema 1 or 2 according to the
 typed checkpoint family. SDF application records use explicit schema 1, 2, or

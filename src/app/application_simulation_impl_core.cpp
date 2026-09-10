@@ -931,7 +931,7 @@ void Simulation::Impl::publish_vpi_assertion(
         return;
     }
     const auto object = vpi_assertion_handles.find(event.process);
-    if (object == vpi_assertion_handles.end() || !vpi_callbacks) {
+    if (object == vpi_assertion_handles.end() || !vpi_assertions) {
         return;
     }
     runtime::SystemVerilogVpiAssertionEvent published;
@@ -959,9 +959,9 @@ void Simulation::Impl::publish_vpi_assertion(
     published.slot = event.slot;
     published.source_span = event.source_span;
     published.action_suppressed = event.action_suppressed;
-    const auto error = vpi_callbacks->dispatch_assertion(
+    const auto error = vpi_assertions->observe(
         object->second, std::move(published));
-    if (error != runtime::SystemVerilogVpiCallbackError::None) {
+    if (error != runtime::SystemVerilogVpiAssertionApiError::None) {
         throw std::logic_error {
             "live VPI assertion callback dispatch failed with error "
             + std::to_string(static_cast<unsigned>(error))

@@ -4,6 +4,8 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -922,6 +925,8 @@ endmodule
 struct ArtifactRoundTripCapture {
     fsim::runtime::RunResult result;
     std::string value;
+    std::string checkpoint;
+    std::string debugger_observation;
     std::vector<std::string> cache_keys;
     fsim::app::NativeCacheStatistics cache;
 };
@@ -935,6 +940,7 @@ void test_2023_artifact_and_cache_round_trip(
     const auto object = root / "round-trip.fsimobj";
     auto design = root / "round-trip.fsimdesign";
     const auto cache = root / "native-cache";
+    const auto trace = root / "round-trip.vcd";
     write_text(
         source,
         R"(interface class RootContract;
@@ -1148,27 +1154,83 @@ endmodule
         capture.cache = simulation.native_cache_statistics();
         capture.result = simulation.run();
         capture.value = simulation.read_signal(*result_signal).to_msb_string();
+        const auto checkpoint = simulation.capture_uvm_checkpoint();
+        const auto checkpoint_bytes = checkpoint
+            ? fsim::app::serialize_systemverilog_uvm_state(
+                checkpoint.artifact, diagnostics)
+            : std::nullopt;
+        const auto restored_checkpoint = checkpoint_bytes
+            ? fsim::app::deserialize_systemverilog_uvm_state(
+                *checkpoint_bytes, "systemverilog-2023-checkpoint",
+                diagnostics)
+            : std::nullopt;
+        assert(checkpoint && checkpoint_bytes && restored_checkpoint
+            && *restored_checkpoint == checkpoint.artifact
+            && !diagnostics.has_error());
+        capture.checkpoint = *checkpoint_bytes;
+        if (engine == fsim::app::SimulationEngine::debug) {
+            std::ostringstream output;
+            std::ostringstream error;
+            fsim::app::DebuggerControl debugger {
+                simulation, output, error
+            };
+            debugger.execute({ "show", "dut.result" });
+            assert(error.str().empty());
+            capture.debugger_observation = output.str();
+        }
         return capture;
     };
     const auto interpreted = run_artifact(
         fsim::app::SimulationEngine::interpreter);
     const auto cold = run_artifact(fsim::app::SimulationEngine::compiled);
     const auto warm = run_artifact(fsim::app::SimulationEngine::compiled);
+    const auto debug = run_artifact(fsim::app::SimulationEngine::debug);
     assert(
         interpreted.result.status == fsim::runtime::RunStatus::stopped
         && interpreted.result.time == 2
         && interpreted.value == "00110100000100101010101100010111"
         && cold.result.status == interpreted.result.status
         && warm.result.status == interpreted.result.status
+        && debug.result.status == interpreted.result.status
         && cold.result.time == interpreted.result.time
         && warm.result.time == interpreted.result.time
+        && debug.result.time == interpreted.result.time
         && cold.value == interpreted.value && warm.value == interpreted.value
+        && debug.value == interpreted.value
+        && cold.checkpoint == interpreted.checkpoint
+        && warm.checkpoint == interpreted.checkpoint
+        && debug.checkpoint == interpreted.checkpoint
         && cold.cache_keys == interpreted.cache_keys
-        && warm.cache_keys == interpreted.cache_keys);
+        && warm.cache_keys == interpreted.cache_keys
+        && debug.cache_keys == interpreted.cache_keys
+        && debug.debugger_observation.find(interpreted.value)
+            != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
     assert(cold.cache.misses != 0 && cold.cache.stores == cold.cache.misses);
     assert(warm.cache.hits == cold.cache.misses && warm.cache.misses == 0);
 #endif
+    const auto design_text = fsim::support::path_to_utf8(design);
+    const auto trace_path = fsim::support::path_to_utf8(trace);
+    const std::vector<const char*> trace_arguments {
+        "fsim", "simulate", "--design", design_text.c_str(), "--engine",
+        "compiled", "--trace", trace_path.c_str(), "--trace-filter",
+        "dut.*"
+    };
+    auto services = fsim::app::make_cli_services();
+    std::ostringstream trace_output;
+    std::ostringstream trace_error;
+    assert(fsim::cli::run(
+               static_cast<int>(trace_arguments.size()),
+               trace_arguments.data(), services, trace_output, trace_error)
+            == 0
+        && trace_error.str().empty());
+    const auto trace_text = read_text(trace);
+    assert(
+        trace_text.find("dut") != std::string::npos
+        && trace_text.find("result") != std::string::npos
+        && trace_text.find("standard=systemverilog-2023")
+            != std::string::npos
+        && trace_text.find(interpreted.value) != std::string::npos);
 
     const auto relocated_root = root / "relocated";
     std::filesystem::create_directories(relocated_root);
@@ -1307,6 +1369,77 @@ endprogram
         }));
 }
 
+void test_systemverilog_2023_annex_diagnostics(
+    const std::filesystem::path& root)
+{
+    const auto candidates = root / "annex-deprecation-candidates.sv";
+    write_text(candidates, R"(
+module annex_leaf #(parameter int VALUE = 1) (output logic result);
+  assign result = VALUE;
+endmodule
+module annex_deprecation_candidates(output logic result);
+  annex_leaf leaf(result);
+  defparam leaf.VALUE = 2;
+  initial begin
+    assign result = 1'b1;
+    deassign result;
+  end
+endmodule
+)" );
+
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "systemverilog-2023-annex-candidates";
+    config.project.top = "annex_deprecation_candidates";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2023";
+    sources.library = "work";
+    sources.files = { candidates };
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine candidate_diagnostics;
+    assert(fsim::app::check_project(config, candidate_diagnostics));
+    assert(!candidate_diagnostics.has_error());
+    assert(std::ranges::count_if(
+        candidate_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-DEPR-002"
+                && diagnostic.severity
+                    == fsim::diagnostic::Severity::warning
+                && diagnostic.span.begin.line != 0U
+                && diagnostic.span.begin.column != 0U;
+        }) == 3);
+
+    config.project.name = "systemverilog-2017-annex-candidates";
+    config.source_sets.front().standard = "2017";
+    fsim::diagnostic::Engine retained_diagnostics;
+    assert(fsim::app::check_project(config, retained_diagnostics));
+    assert(std::ranges::none_of(
+        retained_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code.starts_with("FSIM-SV-DEPR-");
+        }));
+
+    const auto removed = root / "annex-removed-sampled-clock.sv";
+    write_text(removed, R"(
+module annex_removed_sampled_clock(input logic clock, value);
+  logic observed;
+  initial observed = $sampled(value, @(posedge clock));
+endmodule
+)" );
+    config.project.name = "systemverilog-2023-annex-removed";
+    config.source_sets.front().standard = "2023";
+    config.source_sets.front().files = { removed };
+    fsim::diagnostic::Engine removed_diagnostics;
+    assert(!fsim::app::check_project(config, removed_diagnostics));
+    assert(std::ranges::any_of(
+        removed_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-DEPR-001"
+                && diagnostic.severity == fsim::diagnostic::Severity::error
+                && diagnostic.message.find("$sampled")
+                    != std::string::npos;
+        }));
+}
+
 void test_package_lookup_revision_rules(
     const std::filesystem::path& directory)
 {
@@ -1439,6 +1572,110 @@ endmodule
         conflict_diagnostics, "FSIM-ELAB-SVPKG-009"));
 }
 
+void test_standard_package_revision_rules(
+    const std::filesystem::path& directory)
+{
+    using MemberKind
+        = fsim::frontend::SystemVerilogStandardPackageMemberKind;
+    const auto package_2017 = fsim::frontend::systemverilog_standard_package(
+        fsim::frontend::StandardRevision::SystemVerilog2017);
+    const auto package_2023 = fsim::frontend::systemverilog_standard_package(
+        fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(package_2017 && package_2023);
+    assert(package_2017->declarations.size() == 4U);
+    assert(package_2023->declarations.size() == 5U);
+    assert(package_2017->revision == "ieee-1800-2017:std:fsim-v3");
+    assert(package_2023->revision == "ieee-1800-2023:std:fsim-v3");
+    assert(package_2017->declaration_identity
+        != package_2023->declaration_identity);
+    const auto* process
+        = fsim::frontend::find_systemverilog_standard_package_declaration(
+            fsim::frontend::StandardRevision::SystemVerilog2023,
+            "process");
+    const auto* weak
+        = fsim::frontend::find_systemverilog_standard_package_declaration(
+            fsim::frontend::StandardRevision::SystemVerilog2023,
+            "weak_reference");
+    assert(process && process->kind == MemberKind::class_type
+        && process->abstract_class && process->final_in_2023);
+    assert(weak && weak->kind == MemberKind::class_type
+        && weak->parameterized);
+    assert(fsim::frontend::find_systemverilog_standard_package_declaration(
+               fsim::frontend::StandardRevision::SystemVerilog2017,
+               "weak_reference") == nullptr);
+    assert(!fsim::frontend::systemverilog_standard_package(
+        fsim::frontend::StandardRevision::Verilog2005));
+
+    const auto root = directory / "standard-package-revision";
+    std::filesystem::create_directories(root);
+    const auto source = root / "standard-package.sv";
+    write_text(source, R"(
+module assignment_revision(output logic [31:0] result);
+  std::mailbox #(int) qualified_box;
+  mailbox #(int) imported_box;
+  std::semaphore qualified_gate;
+  std::process current;
+  weak_reference #(process) weak_handle;
+  initial begin
+    current = std::process::self();
+    result = current != null;
+  end
+endmodule
+)");
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "sv-2023-standard-package";
+    config.project.top = "sv:work.assignment_revision";
+    config.run.max_deltas = 1000;
+    config.source_sets = { identity_source_set(
+        fsim::project::Language::system_verilog, "2023", source) };
+    fsim::diagnostic::Engine diagnostics;
+    const auto checked = fsim::app::check_project(config, diagnostics);
+    if (!checked || diagnostics.has_error()) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(checked && !diagnostics.has_error());
+    assert(checked->parsed.units.size() == 1U);
+    const auto& provenance
+        = checked->parsed.units.front().systemverilog_standard_package;
+    assert(provenance);
+    assert(provenance->revision == package_2023->revision);
+    assert(provenance->declaration_identity
+        == package_2023->declaration_identity);
+    assert(run_assignment_result(
+               config, fsim::app::SimulationEngine::interpreter)
+        == 1U);
+
+    config.source_sets.front().standard = "2017";
+    config.project.name = "sv-2017-standard-package-isolation";
+    fsim::diagnostic::Engine old_diagnostics;
+    assert(!fsim::app::check_project(config, old_diagnostics));
+    assert(has_diagnostic(old_diagnostics, "FSIM-SV-PARSE-349"));
+
+    const auto unknown = root / "standard-package-unknown.sv";
+    write_text(unknown, R"(
+module assignment_revision(output logic [31:0] result);
+  initial result = std::missing();
+endmodule
+)");
+    config.source_sets.front().standard = "2023";
+    config.source_sets.front().files = { unknown };
+    config.project.name = "sv-2023-standard-package-unknown";
+    fsim::diagnostic::Engine unknown_diagnostics;
+    assert(!fsim::app::build_project(config, unknown_diagnostics));
+    assert(has_diagnostic(
+        unknown_diagnostics, "FSIM-ELAB-SVPKG-011"));
+
+    const auto redeclared = root / "standard-package-redeclared.sv";
+    write_text(redeclared, "package std; endpackage\n");
+    config.source_sets.front().files = { redeclared };
+    config.project.name = "sv-2023-standard-package-redeclared";
+    fsim::diagnostic::Engine redeclared_diagnostics;
+    assert(!fsim::app::check_project(config, redeclared_diagnostics));
+    assert(has_diagnostic(
+        redeclared_diagnostics, "FSIM-SV-SEM-270"));
+}
+
 } // namespace
 
 int main()
@@ -1460,7 +1697,9 @@ int main()
     test_callable_argument_revision_rules(directory.path);
     test_constant_function_severity_messages(directory.path);
     test_program_elaboration_severity_messages(directory.path);
+    test_systemverilog_2023_annex_diagnostics(directory.path);
     test_package_lookup_revision_rules(directory.path);
+    test_standard_package_revision_rules(directory.path);
     test_2023_artifact_and_cache_round_trip(directory.path);
     const auto source = directory.path / "conformance.sv";
 

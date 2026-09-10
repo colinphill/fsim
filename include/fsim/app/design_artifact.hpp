@@ -15,7 +15,7 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 61;
+inline constexpr std::uint32_t kRuntimeStateSchema = 62;
 inline constexpr std::uint32_t kSemanticStateSchema = 4;
 inline constexpr std::uint32_t kDesignIrStateSchema = 4;
 inline constexpr std::uint32_t kClassStateSchema = 12;

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -138,6 +139,97 @@ public:
     /// Mark natural kernel completion without scheduling another stop request.
     void mark_finished() noexcept;
     [[nodiscard]] std::size_t operations() const;
+
+    struct Impl;
+
+private:
+    std::shared_ptr<Impl> impl_;
+};
+
+/// Standardized assertion controls are applied by the simulator's common
+/// assertion engine. This VPI layer owns only selection, observable counters,
+/// and callback publication; the hook prevents it from becoming a second
+/// assertion scheduler.
+enum class SystemVerilogVpiAssertionControlOperation : std::uint32_t {
+    Reset = 0,
+    Enable,
+    Disable,
+    Kill,
+};
+
+enum class SystemVerilogVpiAssertionApiError : std::uint32_t {
+    None = 0,
+    InvalidService,
+    InvalidOperation,
+    InvalidRequest,
+    InvalidObject,
+    CrossSimulation,
+    ResourceLimit,
+    ControlFailure,
+    CallbackFailure,
+};
+
+struct SystemVerilogVpiAssertionStatistics {
+    std::uint64_t attempts { };
+    std::uint64_t successes { };
+    std::uint64_t failures { };
+    std::uint64_t vacuous { };
+    std::uint64_t disabled { };
+    std::uint64_t aborted { };
+    bool saturated { };
+
+    friend bool operator==(
+        const SystemVerilogVpiAssertionStatistics&,
+        const SystemVerilogVpiAssertionStatistics&) = default;
+};
+
+struct SystemVerilogVpiAssertionStatusResult {
+    bool enabled { true };
+    std::optional<SystemVerilogVpiAssertionKind> kind;
+    SystemVerilogVpiAssertionStatistics statistics;
+    SystemVerilogVpiAssertionApiError error {
+        SystemVerilogVpiAssertionApiError::None
+    };
+    SystemVerilogVpiObjectError object_error {
+        SystemVerilogVpiObjectError::None
+    };
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return error == SystemVerilogVpiAssertionApiError::None;
+    }
+};
+
+using SystemVerilogVpiAssertionControlHook = std::function<bool(
+    SystemVerilogVpiAssertionControlOperation,
+    std::optional<fsim_vpi_handle_v1>)>;
+
+class SystemVerilogVpiAssertionApi final {
+public:
+    SystemVerilogVpiAssertionApi(
+        SystemVerilogVpiObjectRegistry& registry,
+        SystemVerilogVpiCallbackManager& callbacks,
+        SystemVerilogVpiAssertionControlHook control_hook);
+
+    SystemVerilogVpiAssertionApi(const SystemVerilogVpiAssertionApi&) = delete;
+    SystemVerilogVpiAssertionApi& operator=(
+        const SystemVerilogVpiAssertionApi&) = delete;
+    SystemVerilogVpiAssertionApi(SystemVerilogVpiAssertionApi&&) = delete;
+    SystemVerilogVpiAssertionApi& operator=(
+        SystemVerilogVpiAssertionApi&&) = delete;
+
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] std::uint64_t simulation_identity() const noexcept;
+    [[nodiscard]] SystemVerilogVpiAssertionApiError control(
+        SystemVerilogVpiAssertionControlOperation operation,
+        std::optional<fsim_vpi_handle_v1> object = std::nullopt);
+    /// Publish one outcome produced by the common assertion execution model.
+    [[nodiscard]] SystemVerilogVpiAssertionApiError observe(
+        fsim_vpi_handle_v1 object,
+        SystemVerilogVpiAssertionEvent event);
+    [[nodiscard]] SystemVerilogVpiAssertionStatusResult status(
+        fsim_vpi_handle_v1 object) const;
+    [[nodiscard]] std::size_t observed_assertions() const;
 
     struct Impl;
 

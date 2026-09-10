@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/artifact/coverage_database_codec.hpp"
+#include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
@@ -245,6 +247,7 @@ void collect_hierarchy(
     config.project.time_resolution = "1ns";
     config.build.optimization = fsim::project::Optimization::o2;
     config.build.cache_path = directory / "cache-systemverilog-metadata";
+    config.coverage.enabled = true;
     config.run.max_deltas = 1'000;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
@@ -317,8 +320,10 @@ Capture execute(
     auto& values = simulation.systemverilog_vpi_values();
     auto& control = simulation.systemverilog_vpi_control();
     auto& time = simulation.systemverilog_vpi_time();
+    auto& data_read = simulation.systemverilog_vpi_data_read();
     const auto identity = registry.simulation_identity();
-    assert(identity != 0 && control.simulation_identity() == identity);
+    assert(identity != 0 && control.simulation_identity() == identity
+        && data_read.valid());
     constexpr fsim::runtime::SystemVerilogVpiTimeProfile expected_profile {
         -12, -12, 2
     };
@@ -375,6 +380,11 @@ Capture execute(
         && default_signed && overridden_state && default_state && memory
         && memory_word_three && memory_word_two && memory_probe
         && strength_net);
+    assert(data_read.load(target.value->handle)
+        == fsim::runtime::SystemVerilogVpiDataReadError::None);
+    const auto target_traverse
+        = data_read.create_traverse(target.value->handle);
+    assert(target_traverse);
     const auto root_provenance = registry.type_info(root.value->handle);
     const auto target_provenance = registry.type_info(target.value->handle);
     assert(root_provenance && target_provenance);
@@ -798,6 +808,15 @@ Capture execute(
             != capture.unresolved_drivers_at_five.end()
         && capture.unresolved_drivers_at_zero
             != capture.unresolved_drivers_at_five);
+    const auto target_reader_maximum = data_read.go_to(
+        target_traverse.value,
+        fsim::runtime::SystemVerilogVpiDataReadControl::MaximumTime);
+    assert(target_reader_maximum
+        && data_read.property(
+               fsim::runtime::SystemVerilogVpiDataReadProperty::HasDataValueChange,
+               target_reader_maximum.value).value
+        && packed_bits(*data_read.value(target_reader_maximum.value).value)
+            == forced);
 
     assert(values.apply(target.value->handle,
                fsim::runtime::SystemVerilogVpiWriteKind::Deposit,
@@ -995,10 +1014,44 @@ void test_systemverilog_metadata(
 {
     const auto config = make_systemverilog_metadata_config(directory, source);
     auto project = build_project(config);
+    std::ifstream source_input(source, std::ios::binary);
+    const std::string source_text(
+        std::istreambuf_iterator<char> { source_input },
+        std::istreambuf_iterator<char> { });
+    const auto source_identity
+        = fsim::frontend::make_code_coverage_source_identity(
+            directory, source,
+            std::as_bytes(std::span { source_text.data(), source_text.size() }));
+    assert(project.code_coverage_enabled && source_identity.ok()
+        && !project.design.specializations().empty());
+    const std::array inventory_sources {
+        fsim::elaboration::CoverageInventorySource {
+            project.design.specializations().front().source,
+            *source_identity.identity }
+    };
+    const auto point_identity
+        = fsim::frontend::make_code_coverage_point_identity(
+            inventory_sources.front().identity,
+            fsim::frontend::CodeCoverageLanguage::SystemVerilog,
+            fsim::frontend::CodeCoverageConstructKind::Statement,
+            { 1U, 2U });
+    assert(point_identity.ok());
+    std::vector<fsim::elaboration::CoverageInstanceInventoryDraft> drafts;
+    for (const auto& specialization : project.design.specializations()) {
+        drafts.push_back({ specialization.id,
+            { { *point_identity.identity,
+                fsim::runtime::CodeCoverageMetric::Statement,
+                0U, { 1U, 2U }, 1U } } });
+    }
+    assert(project.design
+            .attach_code_coverage_inventory(inventory_sources, drafts)
+            .ok());
     fsim::app::Simulation simulation { std::move(project),
         config.run.max_deltas, fsim::app::SimulationEngine::interpreter };
     auto& registry = simulation.systemverilog_vpi_objects();
     auto& callbacks = simulation.systemverilog_vpi_callbacks();
+    auto& assertions = simulation.systemverilog_vpi_assertions();
+    auto& coverage = simulation.systemverilog_vpi_coverage();
 
     const auto root = registry.find("vpi_metadata");
     const auto interface_instance = registry.find("vpi_metadata.bus");
@@ -1071,7 +1124,25 @@ void test_systemverilog_metadata(
     const auto failure = callbacks.register_callback(
         { SystemVerilogVpiCallbackKind::AssertionFailure, assertion->handle,
             std::nullopt, 102, collect });
-    assert(success && failure);
+    using CoverageControl
+        = fsim::runtime::SystemVerilogVpiCoverageControl;
+    using CoverageType = fsim::runtime::SystemVerilogVpiCoverageType;
+    using CoverageProperty
+        = fsim::runtime::SystemVerilogVpiCoverageProperty;
+    using CoverageStatus
+        = fsim::runtime::simir::SystemVerilogCoverageStatus;
+    const auto stopped = coverage.control({ CoverageControl::Stop,
+        CoverageType::Assertion, assertion->handle, { } });
+    const auto started = coverage.control({ CoverageControl::Start,
+        CoverageType::Assertion, assertion->handle, { } });
+    assert(success && failure && stopped && started
+        && stopped.value == static_cast<std::int32_t>(CoverageStatus::ok)
+        && started.value == static_cast<std::int32_t>(CoverageStatus::ok)
+        && assertions.status(assertion->handle).enabled
+        && coverage.property(CoverageProperty::AssertCoverage,
+               assertion->handle)
+                   .value
+            == 1);
 
     const auto run = simulation.run();
     assert(run.status == fsim::runtime::RunStatus::stopped
@@ -1092,6 +1163,79 @@ void test_systemverilog_metadata(
             == fsim::runtime::SystemVerilogVpiCallbackStatus::Active
         && callbacks.status(failure.value).status
             == fsim::runtime::SystemVerilogVpiCallbackStatus::Active);
+    const auto assertion_status = assertions.status(assertion->handle);
+    assert(assertion_status
+        && assertion_status.kind
+            == fsim::runtime::SystemVerilogVpiAssertionKind::Assertion
+        && assertion_status.statistics.attempts == events.size()
+        && assertion_status.statistics.successes > 0
+        && assertion_status.statistics.failures > 0);
+    const auto coverage_check = coverage.control({ CoverageControl::Check,
+        CoverageType::Assertion, assertion->handle, { } });
+    assert(coverage_check
+        && coverage_check.value
+            == static_cast<std::int32_t>(CoverageStatus::ok)
+        && coverage.property(CoverageProperty::AssertAttemptCovered,
+               assertion->handle)
+                   .value
+            == static_cast<std::int32_t>(
+                assertion_status.statistics.attempts)
+        && coverage.property(CoverageProperty::AssertSuccessCovered,
+               assertion->handle)
+                   .value
+            == static_cast<std::int32_t>(
+                assertion_status.statistics.successes)
+        && coverage.property(CoverageProperty::AssertFailureCovered,
+               assertion->handle)
+                   .value
+            == static_cast<std::int32_t>(
+                assertion_status.statistics.failures));
+
+    const auto database_name = "vpi-standard-coverage.fsimcov";
+    const auto saved = coverage.control({ CoverageControl::Save,
+        CoverageType::Statement, std::nullopt, database_name });
+    assert(saved
+        && saved.value == static_cast<std::int32_t>(CoverageStatus::ok));
+    const auto database = fsim::artifact::read_coverage_database(
+        directory / database_name);
+    assert(database.ok() && !database.contents->metrics.empty()
+        && std::ranges::all_of(
+            database.contents->metrics, [](const auto& metric) {
+                return metric.name_space
+                        == fsim::artifact::CoverageDatabaseNamespace::Code
+                    && (metric.family
+                            == fsim::artifact::CoverageDatabaseMetricFamily::Statement
+                        || metric.family
+                            == fsim::artifact::CoverageDatabaseMetricFamily::Branch
+                        || metric.family
+                            == fsim::artifact::CoverageDatabaseMetricFamily::Line);
+            }));
+    const auto duplicate_merge = coverage.control({ CoverageControl::Merge,
+        CoverageType::Statement, std::nullopt, database_name });
+    const auto unavailable_save = coverage.control({ CoverageControl::Save,
+        CoverageType::Toggle, std::nullopt, "toggle.fsimcov" });
+    assert(duplicate_merge
+        && duplicate_merge.value
+            == static_cast<std::int32_t>(CoverageStatus::error)
+        && unavailable_save
+        && unavailable_save.value
+            == static_cast<std::int32_t>(CoverageStatus::no_coverage)
+        && !std::filesystem::exists(directory / "toggle.fsimcov")
+        && fsim::artifact::read_coverage_database(
+               directory / database_name)
+               .contents
+            == database.contents);
+
+    const auto reset = coverage.control({ CoverageControl::Reset,
+        CoverageType::Assertion, assertion->handle, { } });
+    assert(reset
+        && reset.value == static_cast<std::int32_t>(CoverageStatus::ok)
+        && assertions.status(assertion->handle).statistics
+            == fsim::runtime::SystemVerilogVpiAssertionStatistics { }
+        && coverage.property(CoverageProperty::AssertAttemptCovered,
+               assertion->handle)
+                   .value
+            == 0);
 }
 
 } // namespace

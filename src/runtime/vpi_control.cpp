@@ -5,6 +5,8 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <set>
+#include <string_view>
 #include <utility>
 
 namespace fsim::runtime {
@@ -12,6 +14,8 @@ namespace fsim::runtime {
 namespace {
 
     constexpr std::size_t maximum_control_operations = 65'536;
+    constexpr std::size_t maximum_assertion_objects = 65'536;
+    constexpr std::size_t maximum_assertion_text_bytes = 1U << 20U;
     std::atomic<std::uint64_t> next_control_owner { 1 };
 
     bool valid_operation(const SystemVerilogVpiControlOperation operation)
@@ -46,6 +50,76 @@ namespace {
         return error == SystemVerilogVpiObjectError::CrossSimulation
             ? SystemVerilogVpiControlError::CrossSimulation
             : SystemVerilogVpiControlError::InvalidObject;
+    }
+
+} // namespace
+
+struct SystemVerilogVpiAssertionApi::Impl {
+    struct Record {
+        bool enabled { true };
+        std::optional<SystemVerilogVpiAssertionKind> kind;
+        SystemVerilogVpiAssertionStatistics statistics;
+    };
+
+    SystemVerilogVpiObjectRegistry* registry { };
+    SystemVerilogVpiCallbackManager* callbacks { };
+    SystemVerilogVpiAssertionControlHook control_hook;
+    mutable std::mutex mutex;
+    std::map<fsim_vpi_handle_v1, Record> records;
+    std::set<fsim_vpi_handle_v1> reserved_objects;
+};
+
+namespace {
+
+    bool valid_assertion_control_operation(
+        const SystemVerilogVpiAssertionControlOperation operation)
+    {
+        return static_cast<std::uint32_t>(operation)
+            <= static_cast<std::uint32_t>(
+                SystemVerilogVpiAssertionControlOperation::Kill);
+    }
+
+    bool valid_assertion_kind(const SystemVerilogVpiAssertionKind kind)
+    {
+        return static_cast<std::uint32_t>(kind)
+            <= static_cast<std::uint32_t>(
+                SystemVerilogVpiAssertionKind::Restriction);
+    }
+
+    bool valid_assertion_outcome(const SystemVerilogVpiAssertionOutcome outcome)
+    {
+        return static_cast<std::uint32_t>(outcome)
+            <= static_cast<std::uint32_t>(
+                SystemVerilogVpiAssertionOutcome::Aborted);
+    }
+
+    SystemVerilogVpiAssertionApiError assertion_object_error(
+        const SystemVerilogVpiObjectError error)
+    {
+        return error == SystemVerilogVpiObjectError::CrossSimulation
+            ? SystemVerilogVpiAssertionApiError::CrossSimulation
+            : SystemVerilogVpiAssertionApiError::InvalidObject;
+    }
+
+    bool assertion_text_is_bounded(const SystemVerilogVpiAssertionEvent& event)
+    {
+        const auto first = event.name.size();
+        const auto second = event.process.size();
+        const auto third = event.instance_identity.size();
+        return first <= maximum_assertion_text_bytes
+            && second <= maximum_assertion_text_bytes - first
+            && third <= maximum_assertion_text_bytes - first - second;
+    }
+
+    void saturating_increment(
+        std::uint64_t& value,
+        SystemVerilogVpiAssertionStatistics& statistics)
+    {
+        if (value == std::numeric_limits<std::uint64_t>::max()) {
+            statistics.saturated = true;
+            return;
+        }
+        ++value;
     }
 
 } // namespace
@@ -441,6 +515,215 @@ std::size_t SystemVerilogVpiControlService::operations() const
 {
     if (!impl_) {
         return 0;
+    }
+    std::scoped_lock lock { impl_->mutex };
+    return impl_->records.size();
+}
+
+SystemVerilogVpiAssertionApi::SystemVerilogVpiAssertionApi(
+    SystemVerilogVpiObjectRegistry& registry,
+    SystemVerilogVpiCallbackManager& callbacks,
+    SystemVerilogVpiAssertionControlHook control_hook)
+    : impl_(std::make_shared<Impl>())
+{
+    impl_->registry = &registry;
+    impl_->callbacks = &callbacks;
+    impl_->control_hook = std::move(control_hook);
+}
+
+bool SystemVerilogVpiAssertionApi::valid() const noexcept
+{
+    return impl_ && impl_->registry && impl_->registry->valid()
+        && impl_->callbacks && impl_->callbacks->valid()
+        && static_cast<bool>(impl_->control_hook);
+}
+
+std::uint64_t
+SystemVerilogVpiAssertionApi::simulation_identity() const noexcept
+{
+    return valid() ? impl_->registry->simulation_identity() : 0U;
+}
+
+SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::control(
+    const SystemVerilogVpiAssertionControlOperation operation,
+    const std::optional<fsim_vpi_handle_v1> object)
+{
+    if (!valid()) {
+        return SystemVerilogVpiAssertionApiError::InvalidService;
+    }
+    if (!valid_assertion_control_operation(operation)) {
+        return SystemVerilogVpiAssertionApiError::InvalidOperation;
+    }
+    if (object) {
+        const auto info = impl_->registry->lookup(*object);
+        if (!info) {
+            return assertion_object_error(info.error);
+        }
+        if (info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
+            return SystemVerilogVpiAssertionApiError::InvalidObject;
+        }
+    }
+
+    bool reserved { };
+    if (object) {
+        std::scoped_lock lock { impl_->mutex };
+        if (!impl_->records.contains(*object)
+            && !impl_->reserved_objects.contains(*object)) {
+            if (impl_->records.size() + impl_->reserved_objects.size()
+                >= maximum_assertion_objects) {
+                return SystemVerilogVpiAssertionApiError::ResourceLimit;
+            }
+            impl_->reserved_objects.insert(*object);
+            reserved = true;
+        }
+    }
+
+    bool applied { };
+    try {
+        applied = impl_->control_hook(operation, object);
+    } catch (...) {
+        if (reserved) {
+            std::scoped_lock lock { impl_->mutex };
+            impl_->reserved_objects.erase(*object);
+        }
+        return SystemVerilogVpiAssertionApiError::ControlFailure;
+    }
+    if (!applied) {
+        if (reserved) {
+            std::scoped_lock lock { impl_->mutex };
+            impl_->reserved_objects.erase(*object);
+        }
+        return SystemVerilogVpiAssertionApiError::ControlFailure;
+    }
+
+    std::scoped_lock lock { impl_->mutex };
+    if (reserved) {
+        impl_->reserved_objects.erase(*object);
+    }
+    const auto apply = [&](Impl::Record& record) {
+        switch (operation) {
+        case SystemVerilogVpiAssertionControlOperation::Reset:
+            record.statistics = { };
+            break;
+        case SystemVerilogVpiAssertionControlOperation::Enable:
+            record.enabled = true;
+            break;
+        case SystemVerilogVpiAssertionControlOperation::Disable:
+            record.enabled = false;
+            break;
+        case SystemVerilogVpiAssertionControlOperation::Kill:
+            break;
+        }
+    };
+    if (object) {
+        apply(impl_->records[*object]);
+    } else {
+        for (auto& [handle, record] : impl_->records) {
+            (void)handle;
+            apply(record);
+        }
+    }
+    return SystemVerilogVpiAssertionApiError::None;
+}
+
+SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::observe(
+    const fsim_vpi_handle_v1 object,
+    SystemVerilogVpiAssertionEvent event)
+{
+    if (!valid()) {
+        return SystemVerilogVpiAssertionApiError::InvalidService;
+    }
+    if (!valid_assertion_kind(event.kind)
+        || !valid_assertion_outcome(event.outcome)
+        || !assertion_text_is_bounded(event)) {
+        return SystemVerilogVpiAssertionApiError::InvalidRequest;
+    }
+    const auto info = impl_->registry->lookup(object);
+    if (!info) {
+        return assertion_object_error(info.error);
+    }
+    if (info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
+        return SystemVerilogVpiAssertionApiError::InvalidObject;
+    }
+
+    {
+        std::scoped_lock lock { impl_->mutex };
+        const auto found = impl_->records.find(object);
+        if (found == impl_->records.end()) {
+            if (impl_->records.size() + impl_->reserved_objects.size()
+                    >= maximum_assertion_objects
+                && !impl_->reserved_objects.contains(object)) {
+                return SystemVerilogVpiAssertionApiError::ResourceLimit;
+            }
+            impl_->records.emplace(object, Impl::Record { });
+        }
+        auto& record = impl_->records.at(object);
+        if (record.kind && *record.kind != event.kind) {
+            return SystemVerilogVpiAssertionApiError::InvalidRequest;
+        }
+        record.kind = event.kind;
+        auto& statistics = record.statistics;
+        if (event.outcome != SystemVerilogVpiAssertionOutcome::Disabled) {
+            saturating_increment(statistics.attempts, statistics);
+        }
+        switch (event.outcome) {
+        case SystemVerilogVpiAssertionOutcome::Success:
+            saturating_increment(statistics.successes, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Failure:
+            saturating_increment(statistics.failures, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Vacuous:
+            saturating_increment(statistics.vacuous, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Disabled:
+            saturating_increment(statistics.disabled, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Aborted:
+            saturating_increment(statistics.aborted, statistics);
+            break;
+        }
+    }
+
+    const auto callback = impl_->callbacks->dispatch_assertion(
+        object, std::move(event));
+    return callback == SystemVerilogVpiCallbackError::None
+        ? SystemVerilogVpiAssertionApiError::None
+        : SystemVerilogVpiAssertionApiError::CallbackFailure;
+}
+
+SystemVerilogVpiAssertionStatusResult
+SystemVerilogVpiAssertionApi::status(const fsim_vpi_handle_v1 object) const
+{
+    SystemVerilogVpiAssertionStatusResult result;
+    if (!valid()) {
+        result.error = SystemVerilogVpiAssertionApiError::InvalidService;
+        return result;
+    }
+    const auto info = impl_->registry->lookup(object);
+    if (!info) {
+        result.error = assertion_object_error(info.error);
+        result.object_error = info.error;
+        return result;
+    }
+    if (info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
+        result.error = SystemVerilogVpiAssertionApiError::InvalidObject;
+        return result;
+    }
+    std::scoped_lock lock { impl_->mutex };
+    if (const auto found = impl_->records.find(object);
+        found != impl_->records.end()) {
+        result.enabled = found->second.enabled;
+        result.kind = found->second.kind;
+        result.statistics = found->second.statistics;
+    }
+    return result;
+}
+
+std::size_t SystemVerilogVpiAssertionApi::observed_assertions() const
+{
+    if (!impl_) {
+        return 0U;
     }
     std::scoped_lock lock { impl_->mutex };
     return impl_->records.size();

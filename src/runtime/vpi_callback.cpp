@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_callback.hpp"
 
+#include <array>
 #include <atomic>
 #include <limits>
 #include <map>
@@ -137,6 +138,10 @@ struct SystemVerilogVpiCallbackManager::Impl {
     SystemVerilogVpiTimeService* time_service { };
     mutable std::mutex mutex;
     std::map<std::uint64_t, Record> records;
+    std::array<bool,
+        static_cast<std::size_t>(SystemVerilogVpiCallbackKind::EndOfRestart)
+            + 1U>
+        dispatching { };
     std::atomic_bool has_registrations { false };
 };
 
@@ -210,6 +215,38 @@ namespace {
         }
     }
 
+    bool dispatch_callbacks(
+        const std::shared_ptr<SystemVerilogVpiCallbackManager::Impl>& state,
+        const SystemVerilogVpiCallbackKind kind,
+        const std::vector<std::uint64_t>& callbacks,
+        const std::optional<SystemVerilogVpiStoredValue>& value = std::nullopt,
+        const std::optional<SystemVerilogVpiAssertionEvent>& assertion = std::nullopt)
+    {
+        const auto index = static_cast<std::size_t>(kind);
+        {
+            std::scoped_lock lock { state->mutex };
+            if (state->dispatching[index]) {
+                return false;
+            }
+            state->dispatching[index] = true;
+        }
+
+        try {
+            for (const auto id : callbacks) {
+                dispatch_callback(
+                    state, id, value, std::nullopt, assertion);
+            }
+        } catch (...) {
+            std::scoped_lock lock { state->mutex };
+            state->dispatching[index] = false;
+            throw;
+        }
+
+        std::scoped_lock lock { state->mutex };
+        state->dispatching[index] = false;
+        return true;
+    }
+
     bool checked_stable_order(
         const SystemVerilogVpiCallbackManager::Impl& state,
         const std::uint64_t id,
@@ -259,9 +296,10 @@ namespace {
                 order,
                 [weak, callbacks, value](Scheduler&) {
                     if (const auto locked = weak.lock()) {
-                        for (const auto id : callbacks) {
-                            dispatch_callback(locked, id, value);
-                        }
+                        (void)dispatch_callbacks(
+                            locked,
+                            SystemVerilogVpiCallbackKind::ValueChange,
+                            callbacks, value);
                     }
                 });
         } catch (...) {
@@ -562,11 +600,9 @@ SystemVerilogVpiCallbackManager::dispatch_lifecycle(
         impl_->scheduler->schedule(
             callback_phase(kind),
             order,
-            [weak, callbacks](Scheduler&) {
+            [weak, callbacks, kind](Scheduler&) {
                 if (const auto state = weak.lock()) {
-                    for (const auto id : callbacks) {
-                        dispatch_callback(state, id, std::nullopt);
-                    }
+                    (void)dispatch_callbacks(state, kind, callbacks);
                 }
             });
     } catch (...) {
@@ -596,10 +632,9 @@ SystemVerilogVpiCallbackManager::dispatch_lifecycle_now(
             }
         }
     }
-    for (const auto id : callbacks) {
-        dispatch_callback(impl_, id, std::nullopt);
-    }
-    return SystemVerilogVpiCallbackError::None;
+    return dispatch_callbacks(impl_, kind, callbacks)
+        ? SystemVerilogVpiCallbackError::None
+        : SystemVerilogVpiCallbackError::ReentrantDispatch;
 }
 
 SystemVerilogVpiCallbackError
@@ -650,11 +685,9 @@ SystemVerilogVpiCallbackManager::dispatch_assertion(
             }
         }
     }
-    for (const auto id : callbacks) {
-        dispatch_callback(
-            impl_, id, std::nullopt, std::nullopt, event);
-    }
-    return SystemVerilogVpiCallbackError::None;
+    return dispatch_callbacks(impl_, kind, callbacks, std::nullopt, event)
+        ? SystemVerilogVpiCallbackError::None
+        : SystemVerilogVpiCallbackError::ReentrantDispatch;
 }
 
 SystemVerilogVpiCallbackStatusResult

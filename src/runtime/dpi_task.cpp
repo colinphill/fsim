@@ -38,6 +38,21 @@ SystemVerilogDpiImportedTaskRegistry::register_task(
   return {};
 }
 
+SystemVerilogDpiTaskError
+SystemVerilogDpiImportedTaskRegistry::register_task(
+    SystemVerilogDpiRuntimeDeclaration declaration,
+    const SystemVerilogDpiScopeHandle scope,
+    SystemVerilogDpiImportedTask task) {
+  if (declaration.callable_kind
+          != SystemVerilogDpiRuntimeCallableKind::Task
+      || declaration.qualifier == SystemVerilogDpiRuntimeQualifier::Pure) {
+    return SystemVerilogDpiTaskError::DeclarationMismatch;
+  }
+  return register_task(
+      std::move(declaration.linkage_name), scope,
+      std::move(declaration.directions), std::move(task));
+}
+
 SystemVerilogDpiTaskHandle SystemVerilogDpiImportedTaskRegistry::handle(
     const std::size_t slot) const noexcept {
   return {scopes_->simulation_identity(), static_cast<std::uint32_t>(slot),
@@ -132,14 +147,37 @@ void SystemVerilogDpiImportedTaskRegistry::resume(
   SystemVerilogDpiCallbackFrame frame{
       invocation.entry.directions, invocation.values, *invocation.context};
   SystemVerilogDpiTaskAction action;
+  bool foreign_call_entered{};
   try {
+    foreign_call_entered = invocation.context->enter_foreign_call();
+    if (!foreign_call_entered) {
+      static_cast<void>(invocation.context->set_scope(changed.previous));
+      static_cast<void>(invocation.context->finish_dispatch());
+      fail(invocation, SystemVerilogDpiTaskError::Exception,
+          "DPI context stack rejected task entry");
+      return;
+    }
     action = invocation.entry.task(frame, invocation.resume_count);
+    foreign_call_entered = false;
+    if (!invocation.context->leave_foreign_call()) {
+      static_cast<void>(invocation.context->set_scope(changed.previous));
+      static_cast<void>(invocation.context->finish_dispatch());
+      fail(invocation, SystemVerilogDpiTaskError::Exception,
+          "DPI context stack rejected task exit");
+      return;
+    }
   } catch (const std::exception& exception) {
+    if (foreign_call_entered) {
+      static_cast<void>(invocation.context->leave_foreign_call());
+    }
     static_cast<void>(invocation.context->set_scope(changed.previous));
     static_cast<void>(invocation.context->finish_dispatch());
     fail(invocation, SystemVerilogDpiTaskError::Exception, exception.what());
     return;
   } catch (...) {
+    if (foreign_call_entered) {
+      static_cast<void>(invocation.context->leave_foreign_call());
+    }
     static_cast<void>(invocation.context->set_scope(changed.previous));
     static_cast<void>(invocation.context->finish_dispatch());
     fail(invocation, SystemVerilogDpiTaskError::Exception,

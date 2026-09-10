@@ -856,7 +856,9 @@ using namespace elaboration_detail;
             }
             if (!vhdl
                 && (type.named_type == "mailbox"
-                    || type.named_type == "semaphore")) {
+                    || type.named_type == "process"
+                    || type.named_type == "semaphore"
+                    || type.named_type == "weak_reference")) {
                 type.named_type.clear();
                 return true;
             }

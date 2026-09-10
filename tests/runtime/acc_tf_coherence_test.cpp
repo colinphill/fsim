@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/acc_handle_bridge.h"
+#include "fsim/runtime/svdpi_bridge.h"
 #include "fsim/runtime/tf_call.hpp"
 #include "fsim/runtime/vpi_object.hpp"
 
@@ -19,7 +20,11 @@ struct Fixture {
   Registry registry{37};
   std::uint64_t root{};
   std::uint64_t module{};
+  std::uint64_t selected_scope{};
   std::array<std::uint64_t, 3> arguments{};
+  void* dpi_user_key{};
+  void* dpi_user_value{};
+  bool dpi_disabled_acknowledged{};
 };
 
 Fixture* fixture{};
@@ -30,6 +35,106 @@ std::array<PLI_BYTE8*, 2> argv{argv0.data(), argv1.data()};
 constexpr std::array<std::uint32_t, 2> argv_sizes{5, 7};
 std::uint32_t callback_count{};
 bool callback_ok{true};
+
+[[nodiscard]] svScope scope_from_id(const std::uint64_t value) {
+  return reinterpret_cast<svScope>(static_cast<std::uintptr_t>(value));
+}
+
+[[nodiscard]] std::uint64_t id_from_scope(const svScope scope) {
+  return static_cast<std::uint64_t>(
+      reinterpret_cast<std::uintptr_t>(scope));
+}
+
+svScope FSIM_SVDPI_CALL dpi_get_scope(void* const user_data) {
+  return scope_from_id(static_cast<Fixture*>(user_data)->selected_scope);
+}
+
+svScope FSIM_SVDPI_CALL dpi_set_scope(
+    void* const user_data, const svScope scope) {
+  auto& state = *static_cast<Fixture*>(user_data);
+  const auto previous = scope_from_id(state.selected_scope);
+  const auto selected = id_from_scope(scope);
+  if (selected != state.root && selected != state.module) return nullptr;
+  state.selected_scope = selected;
+  return previous;
+}
+
+const char* FSIM_SVDPI_CALL dpi_scope_name(
+    void* const user_data, const svScope scope) {
+  const auto& state = *static_cast<Fixture*>(user_data);
+  const auto selected = id_from_scope(scope);
+  if (selected == state.root) return "top";
+  if (selected == state.module) return "top.u";
+  return nullptr;
+}
+
+svScope FSIM_SVDPI_CALL dpi_find_scope(
+    void* const user_data, const char* const name) {
+  if (name == nullptr) return nullptr;
+  const auto& state = *static_cast<Fixture*>(user_data);
+  const std::string_view selected{name};
+  if (selected == "top") return scope_from_id(state.root);
+  if (selected == "top.u") return scope_from_id(state.module);
+  return nullptr;
+}
+
+int FSIM_SVDPI_CALL dpi_put_user_data(
+    void* const user_data, const svScope scope, void* const key,
+    void* const value) {
+  auto& state = *static_cast<Fixture*>(user_data);
+  if (id_from_scope(scope) != state.module || key == nullptr) return -1;
+  state.dpi_user_key = key;
+  state.dpi_user_value = value;
+  return 0;
+}
+
+void* FSIM_SVDPI_CALL dpi_get_user_data(
+    void* const user_data, const svScope scope, void* const key) {
+  const auto& state = *static_cast<Fixture*>(user_data);
+  if (id_from_scope(scope) != state.module || key != state.dpi_user_key) {
+    return nullptr;
+  }
+  return state.dpi_user_value;
+}
+
+int FSIM_SVDPI_CALL dpi_caller_info(
+    void*, const char** const file_name, int* const line_number) {
+  if (file_name == nullptr || line_number == nullptr) return 0;
+  *file_name = "sv2023-foreign-composition.sv";
+  *line_number = 23;
+  return 1;
+}
+
+int FSIM_SVDPI_CALL dpi_is_disabled(void*) { return 0; }
+
+void FSIM_SVDPI_CALL dpi_acknowledge_disabled(void* const user_data) {
+  static_cast<Fixture*>(user_data)->dpi_disabled_acknowledged = true;
+}
+
+int FSIM_SVDPI_CALL dpi_get_time(
+    void* const user_data, const svScope scope, svTimeVal* const value) {
+  const auto& state = *static_cast<Fixture*>(user_data);
+  if (value == nullptr || id_from_scope(scope) != state.module) return -1;
+  value->type = sv_sim_time;
+  value->high = 0;
+  value->low = 73;
+  value->real = 0.0;
+  return 0;
+}
+
+int FSIM_SVDPI_CALL dpi_get_time_unit(
+    void*, const svScope, std::int32_t* const exponent) {
+  if (exponent == nullptr) return -1;
+  *exponent = -9;
+  return 0;
+}
+
+int FSIM_SVDPI_CALL dpi_get_time_precision(
+    void*, const svScope, std::int32_t* const exponent) {
+  if (exponent == nullptr) return -1;
+  *exponent = -12;
+  return 0;
+}
 
 void require(const bool condition, const char* const message) {
   if (!condition) {
@@ -141,16 +246,64 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL coherence_callback(
                 fsim_acc_handle_context_enter_v3(&acc) == 1;
   if (!callback_ok) return 1;
 
+  fsim_svdpi_call_context_v3 dpi{
+      FSIM_SVDPI_CONTEXT_ABI_VERSION,
+      sizeof(fsim_svdpi_call_context_v3),
+      fixture,
+      dpi_get_scope,
+      dpi_set_scope,
+      dpi_scope_name,
+      dpi_find_scope,
+      dpi_put_user_data,
+      dpi_get_user_data,
+      dpi_caller_info,
+      dpi_is_disabled,
+      dpi_acknowledge_disabled,
+      dpi_get_time,
+      dpi_get_time_unit,
+      dpi_get_time_precision,
+  };
+  callback_ok = callback_ok &&
+                fsim_svdpi_call_context_enter_v3(&dpi) == 0;
+  if (!callback_ok) {
+    fsim_acc_handle_context_leave_v3(&acc);
+    return 1;
+  }
+
   auto* const token = tf_getinstance();
   const auto instance = acc_handle_tfinst();
   const auto first = acc_handle_tfarg(1);
   const auto second = acc_handle_itfarg(2, token);
   const auto wrong = fsim_acc_handle_from_vpi_v3(fixture->root);
+  auto* const dpi_module = svGetScope();
+  auto* const dpi_root = svGetScopeFromName("top");
+  const auto previous_scope = svSetScope(dpi_root);
+  const auto restored_scope = svSetScope(previous_scope);
+  const char* caller_file{};
+  int caller_line{};
+  svTimeVal time{sv_sim_time, 0, 0, 0.0};
+  std::int32_t unit{};
+  std::int32_t precision{};
   callback_ok = callback_ok && acc_fetch_argc() == 2 &&
                 acc_fetch_argv() == argv.data() &&
                 std::string_view{acc_fetch_argv()[0]} == "fsim" &&
                 std::string_view{acc_fetch_argv()[1]} == "--seed" &&
                 fsim_acc_handle_to_vpi_v3(instance) == fixture->module &&
+                id_from_scope(dpi_module) == fixture->module &&
+                id_from_scope(dpi_root) == fixture->root &&
+                id_from_scope(previous_scope) == fixture->module &&
+                id_from_scope(restored_scope) == fixture->root &&
+                std::string_view{svGetNameFromScope(dpi_module)} == "top.u" &&
+                svPutUserData(dpi_module, work_area.data(), fixture) == 0 &&
+                svGetUserData(dpi_module, work_area.data()) == fixture &&
+                svGetCallerInfo(&caller_file, &caller_line) == 1 &&
+                std::string_view{caller_file} ==
+                    "sv2023-foreign-composition.sv" &&
+                caller_line == 23 && svGetTime(dpi_module, &time) == 0 &&
+                time.high == 0 && time.low == 73 &&
+                svGetTimeUnit(dpi_module, &unit) == 0 && unit == -9 &&
+                svGetTimePrecision(dpi_module, &precision) == 0 &&
+                precision == -12 && svIsDisabledState() == 0 &&
                 fsim_acc_handle_to_vpi_v3(first) == fixture->arguments[0] &&
                 fsim_acc_handle_to_vpi_v3(second) == fixture->arguments[1] &&
                 acc_fetch_tfarg_int(1) == 11 &&
@@ -171,6 +324,9 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL coherence_callback(
                 tf_setworkarea(work_area.data()) == 0 &&
                 tf_getworkarea() == work_area.data() && tf_putp(1, 29) == 0 &&
                 acc_fetch_tfarg_int(1) == 29 && acc_error_flag == 0;
+  callback_ok = callback_ok &&
+                fsim_svdpi_call_context_leave_v3(&dpi) == 0 &&
+                svGetScope() == nullptr;
   ++callback_count;
   fsim_acc_handle_context_leave_v3(&acc);
   auto mismatched = tf;
@@ -205,6 +361,7 @@ int main() {
           "coherence fixture publishes one shared VPI hierarchy");
   state.root = root.value;
   state.module = module.value;
+  state.selected_scope = module.value;
   state.arguments = {net.value, variable.value, parameter.value};
   fixture = &state;
 

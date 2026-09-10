@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
 
@@ -542,8 +543,31 @@ void VerilogParser::require_default_port_net_type(
     return !selected || at(TokenKind::Identifier, cursor);
   }
   if (at(TokenKind::Scope, offset + 1)) {
-    return at(TokenKind::Identifier, offset + 2)
-        && at(TokenKind::Identifier, offset + 3);
+    if (!at(TokenKind::Identifier, offset + 2)) {
+      return false;
+    }
+    std::size_t cursor = offset + 2U;
+    while (at(TokenKind::Scope, cursor + 1U)
+           && at(TokenKind::Identifier, cursor + 2U)) {
+      cursor += 2U;
+    }
+    if (at(TokenKind::Hash, cursor + 1U)
+        && at(TokenKind::LeftParen, cursor + 2U)) {
+      cursor += 2U;
+      std::size_t depth{};
+      do {
+        if (at(TokenKind::LeftParen, cursor)) {
+          ++depth;
+        } else if (at(TokenKind::RightParen, cursor)
+                   && --depth == 0U) {
+          ++cursor;
+          break;
+        }
+        ++cursor;
+      } while (!at(TokenKind::EndOfFile, cursor));
+      return at(TokenKind::Identifier, cursor);
+    }
+    return at(TokenKind::Identifier, cursor + 1U);
   }
   return at(TokenKind::Identifier, offset + 1)
       && !at(TokenKind::LeftParen, offset + 2)
@@ -556,8 +580,13 @@ Type VerilogParser::parse_named_type() {
   std::string name = first.text;
   auto span = first.span;
   while (match(TokenKind::Scope)) {
-    const auto selected =
-        expect_identifier("package type name");
+    const bool standard_member = name == "std"
+        && at(TokenKind::Identifier)
+        && find_systemverilog_standard_package_declaration(
+               standard_revision_, current().text) != nullptr;
+    const auto selected = standard_member
+        ? advance()
+        : expect_identifier("package type name");
     name += "::";
     name += selected.text;
     span = cover(span, selected.span);
@@ -569,15 +598,32 @@ Type VerilogParser::parse_named_type() {
       false};
   type.named_type = name;
   type.named_type_span = span;
-  if (name == "mailbox" || name == "semaphore") {
+  const auto standard_name = name.starts_with("std::")
+      && name.find("::", 5U) == std::string::npos
+      ? std::string_view { name }.substr(5U)
+      : std::string_view { name };
+  const auto* standard_declaration
+      = find_systemverilog_standard_package_declaration(
+          standard_revision_, standard_name);
+  if (standard_declaration != nullptr
+      && standard_declaration->kind
+          == SystemVerilogStandardPackageMemberKind::class_type) {
     if (require_standard(
-            "predefined type '" + name + "'",
-            StandardRevision::SystemVerilog2005,
+            "predefined type '" + std::string { standard_name } + "'",
+            standard_declaration->minimum_standard,
             first,
             "FSIM-SV-PARSE-349")) {
+      type.spelling = std::string { standard_name };
+      type.named_type = type.spelling;
       type.domain = ValueDomain::Bit2;
       type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
     }
+  } else if (standard_name == "weak_reference") {
+    (void)require_standard(
+        "predefined type 'weak_reference'",
+        StandardRevision::SystemVerilog2023,
+        first,
+        "FSIM-SV-PARSE-349");
   }
   if (match(TokenKind::Hash)) {
     const auto hash = previous();

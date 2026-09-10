@@ -55,6 +55,12 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   update_unit_time(unit);
   const auto name = expect_identifier("package name");
   unit.name = name.text;
+  if (unit.name == "std") {
+    error(
+        name,
+        "FSIM-SV-SEM-270",
+        "the compiler-owned SystemVerilog standard package 'std' cannot be redeclared");
+  }
   expect(
       TokenKind::Semicolon,
       "';' after package header",
@@ -1911,63 +1917,6 @@ std::vector<Instance> VerilogParser::parse_instances() {
       TokenKind::Semicolon, "';' after module or UDP instance",
       "FSIM-SV-PARSE-038");
   return instances;
-}
-
-void VerilogParser::parse_defparam_declaration(
-    std::vector<VerilogDefparamDeclaration>& declarations,
-    const Token& start)
-{
-    bool first = true;
-    do {
-        const auto assignment_start = current();
-        VerilogDefparamDeclaration declaration;
-        for (;;) {
-            const auto name = expect_identifier("defparam hierarchical name");
-            VerilogDefparamPathSegment segment;
-            segment.name = name.text;
-            while (match(TokenKind::LeftBracket)) {
-                segment.indices.push_back(parse_expression());
-                expect(
-                    TokenKind::RightBracket,
-                    "']' after defparam hierarchy index",
-                    "FSIM-SV-PARSE-339");
-            }
-            segment.span = span_from(name, previous());
-            declaration.path.push_back(std::move(segment));
-            if (!match(TokenKind::Dot)) {
-                break;
-            }
-        }
-        if (declaration.path.size() < 2U) {
-            error(
-                assignment_start,
-                "FSIM-SV-SEM-231",
-                "a defparam target must contain an instance path and parameter "
-                "name");
-        }
-        if (!declaration.path.empty()
-            && !declaration.path.back().indices.empty()) {
-            error(
-                assignment_start,
-                "FSIM-SV-SEM-232",
-                "the final defparam path segment must name a parameter, not an "
-                "indexed object");
-        }
-        expect(
-            TokenKind::Assign,
-            "'=' after defparam hierarchical name",
-            "FSIM-SV-PARSE-340");
-        declaration.value = parse_expression();
-        declaration.span = first
-            ? span_from(start, previous())
-            : span_from(assignment_start, previous());
-        declarations.push_back(std::move(declaration));
-        first = false;
-    } while (match(TokenKind::Comma));
-    expect(
-        TokenKind::Semicolon,
-        "';' after defparam declaration",
-        "FSIM-SV-PARSE-341");
 }
 
 }  // namespace fsim::frontend

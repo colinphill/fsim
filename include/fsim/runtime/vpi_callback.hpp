@@ -78,6 +78,7 @@ enum class SystemVerilogVpiCallbackError {
     CrossManager,
     NotFound,
     NotActive,
+    ReentrantDispatch,
 };
 
 enum class SystemVerilogVpiCallbackStatus {

@@ -334,6 +334,99 @@ and shared runtime behavior. Ordinary full CTest runs use fixture ownership so
 the same witnesses execute once rather than recursively; direct closure runs
 retain per-witness logs and a 1,200-second stage timeout.
 
+Batch 187 Change 11 makes the compiler-owned SystemVerilog `std` package an
+explicit source-profile dependency. SystemVerilog-2005/2009/2012/2017 expose
+the established `mailbox`, `process`, `semaphore`, and `randomize`
+declarations; SystemVerilog-2023 additionally exposes parameterized
+`weak_reference` and records the revised `process` class contract. Qualified
+and implicit package spellings share the same declarations, while unknown or
+profile-ineligible members and any source declaration of `package std` are
+rejected. Each parsed unit records the exact package revision and declaration
+identity; both identities survive portable libraries and participate in
+whole-design and specialization-cache keys.
+
+Batch 187 Change 13 makes the SystemVerilog-2023 annex policy explicit at the
+source boundary. The 2017 and 2023 keyword selectors have distinct identities
+but intentionally reserve the same words; a legacy `keyword-profile` region
+changes only identifier reservation and cannot restore removed syntax. The
+clocking-event argument to `$sampled`, the `ended` sequence endpoint, general
+`always` procedures in checkers, and operator-overload bind declarations are
+rejected with one stable diagnostic. `defparam` and procedural
+`assign/deassign` remain accepted as required, with source-located warnings
+that recommend the ordinary replacement forms. The legacy TF/ACC, old data-
+read, linked-list, packed-array compatibility, and renamed VPI entry points are
+classified as compatibility surfaces rather than current source-language
+features; their separately versioned ABI support does not widen the 2023
+grammar.
+
+Batch 187 Change 14 keeps legacy IEEE TF/ACC available in the exact
+SystemVerilog-2023 profile without treating those APIs as current source
+grammar. A direct-v3 native plug-in registration resolves and executes through
+the TF scheduler coordinator under the 2023 profile. During the same TF call,
+the ACC view, standardized DPI context, and VPI object registry share one
+simulation-owned module identity, scope, caller location, time, values, and
+generation lifetime. Leaving either foreign context removes its borrowed
+state, and the retained VHDL profiles still reject the TF namespace.
+
+Batch 187 Change 15 closes the coverage composition boundary for supported
+SystemVerilog-2023 additions. A 2023-only tolerance expression owns the same
+stable statement point and per-instance score across the interpreter, Debug,
+and LLVM O0-O3 paths; declarations create no synthetic code points. Exact-2023
+real coverpoints and tolerance bins retain distinct declaration, instance, and
+bin identities and score both bins after matching samples. Checker assertions
+publish their elaborated instance path and semantic source-span identity with
+every counter and event, and preserve those identities and pass/fail totals
+through interpreter and cold/warm LLVM execution. These are separate code,
+assertion, and functional-coverage namespaces rather than a synthetic combined
+score.
+
+Batch 187 Change 16 closes foreign-callback scheduler composition. DPI exports
+and immediate VPI lifecycle notifications now have direct evidence in every
+governed scheduler region: active, inactive, update, observed, reactive,
+re-inactive, re-update, and postponed. Nested DPI callbacks retain the current
+region, install their own hierarchy scope, restore the caller scope, and stop
+cleanly at the 64-frame foreign-context ceiling. A VPI notification cannot
+recursively redispatch the same callback kind while it is active; the nested
+request returns `ReentrantDispatch`, while different callback kinds and later
+notifications remain available. Callback time, user data, simulation identity,
+registration order, and one-shot status remain deterministic.
+
+Batch 187 Change 17 proves that the complete exact-2023 conformance design is
+durable after its original source and object are unavailable. The object and
+design retain the 2023 profile through relocation; interpreter, cold/warm LLVM
+O2, and Debug execution produce the same value and stable specialization keys.
+Each engine also produces byte-identical versioned checkpoint state. Debug can
+observe the completed SystemVerilog signal directly, and a compiled artifact-
+only CLI run emits a filtered VCD containing the exact value plus the
+`systemverilog-2023` provenance comment. Native-cache misses/stores on the cold
+run and exact hits on the warm and relocated runs remain independently checked.
+
+Batch 187 Change 18 gives the independent C11 and C++20 VPI reference
+applications a dedicated cross-platform test identity. Both applications use
+only the installed v3 ABI, exercise every typed host service, and retain the
+same operation/text/ordering contract through interpreter, LLVM O0, and LLVM
+O2 host identities. Relocated images behave identically; startup failures,
+malformed results, stale post-unload calls, and double shutdown are contained
+without partial publication. The same executable, shared-library targets, and
+CTest selection are owned by Linux and Windows configurations; the authorized
+hosted Windows execution remains part of the v3.0 release qualification.
+
+Batch 187 Change 19 closes the independently worded SystemVerilog-2023 delta
+inventory: all 56 rows are preserved and none remain active. The governed
+closure matrix re-executes the semantic, frontend, elaboration, library,
+runtime, LLVM, VPI, artifact, class, assertion, random, coverage, hierarchy,
+interface, timing, SDF, typed-boundary, UVM, and mixed-language witnesses. This
+closure records supported behavior and known profile boundaries; it does not
+import text from privately supplied standards.
+
+Batch 187 Change 20 completes clean Clang Release and Debug qualification of
+the full SystemVerilog-2023 surface. Both configurations pass all 408 tests
+after reconciling exact repository audit evidence and recognizing the
+standardized VPI exports in the combined legacy-plugin link surface. The
+closed 56-row inventory, independently authored foreign applications, artifact
+round trips, and interpreter/LLVM/Debug equivalence now form the frozen v3.0
+SystemVerilog-2023 implementation baseline.
+
 Verilog-2005 strength execution covers explicit zero/one drive pairs, pull and
 supply sources, implicit `tri0`/`tri1` pulls, strength-qualified gates and UDP
 outputs, MOS/resistive-MOS devices, passive `tran`/`rtran` and conditional
@@ -2018,7 +2111,15 @@ The standard 32-bit random-distribution functions `$dist_uniform`,
 `$dist_normal`, `$dist_exponential`, `$dist_poisson`, `$dist_chi_square`,
 `$dist_t`, and `$dist_erlang` are also executable. Their first argument is a
 writable packed integer seed of at least 32 bits; each call writes back the
-standard updated seed and returns the standard signed 32-bit result.
+standard updated seed and returns the standard signed 32-bit result. The
+floating sampler constructs its fraction from the low 23 bits of the updated
+seed, so equal starting seeds reproduce the same sequence across interpreter
+and LLVM execution. Invalid positive-parameter requirements return zero,
+preserve the seed, and emit a source-located warning; X/Z arguments do the
+same. Uniform calls with equal or reversed bounds return the first bound
+without consuming the seed. A distribution call may consume at most one
+million underlying draws; exceeding that work ceiling returns zero, restores
+the input seed, and warns without publishing a partial transaction.
 The standard `$system` service accepts zero or one command string and can be
 used as either a task or a function. It executes as a serialized host boundary;
 function use receives the raw signed 32-bit return from C `system()`, task use

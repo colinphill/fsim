@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -28,10 +29,21 @@ struct TemporaryDirectory {
     }
 };
 
+struct Report {
+    std::string message;
+    fsim::runtime::simir::AssertionSeverity severity { };
+    fsim::runtime::simir::SourceLocation source;
+    fsim::runtime::SimulationTick time { };
+    std::uint64_t delta { };
+
+    bool operator==(const Report&) const = default;
+};
+
 struct Capture {
     fsim::runtime::RunResult result;
-    std::array<fsim::runtime::Logic4Word, 40> values { };
+    std::array<fsim::runtime::Logic4Word, 58> values { };
     std::vector<std::string> output;
+    std::vector<Report> reports;
     std::size_t compiled_processes { };
 };
 
@@ -61,7 +73,7 @@ Capture execute(
     fsim::app::Simulation simulation {
         std::move(project), 1000, engine
     };
-    constexpr std::array<std::string_view, 40> names {
+    constexpr std::array<std::string_view, 58> names {
         "a", "b", "c", "d", "e", "f", "u", "p0", "p1",
         "scope_result", "scope_value", "scope_mode", "wide_nonzero",
         "inline_result", "inline_value", "inline_mode", "srandom_a",
@@ -72,7 +84,15 @@ Capture execute(
         "dist_t_seed", "dist_erlang_value", "dist_erlang_seed",
         "dist_invalid_value", "checker_satisfied", "checker_rejected",
         "checker_satisfied_unchanged", "checker_rejected_unchanged",
-        "unique_result", "unique_values_distinct", "unique_impossible"
+        "unique_result", "unique_values_distinct", "unique_impossible",
+        "dist_invalid_seed", "dist_invalid_poisson_value",
+        "dist_invalid_chi_square_value", "dist_invalid_t_value",
+        "dist_invalid_erlang_value", "dist_invalid_seed_final",
+        "dist_equal_value", "dist_equal_seed", "dist_reversed_value",
+        "dist_reversed_seed", "dist_unknown_value", "dist_unknown_seed",
+        "dist_resource_value", "dist_resource_seed",
+        "dist_negative_deviation_value", "dist_negative_deviation_seed",
+        "dist_zero_mean_erlang_value", "dist_zero_mean_erlang_seed"
     };
     Capture capture;
     capture.compiled_processes = simulation.compiled_process_count();
@@ -84,6 +104,17 @@ Capture execute(
             const fsim::runtime::SimulationTick,
             const std::uint64_t) {
             capture.output.emplace_back(text);
+        });
+    simulation.set_report_hook(
+        [&capture](
+            const fsim::runtime::simir::ProcessId,
+            const std::string_view message,
+            const fsim::runtime::simir::AssertionSeverity severity,
+            const fsim::runtime::simir::SourceLocation& source,
+            const fsim::runtime::SimulationTick time,
+            const std::uint64_t delta) {
+            capture.reports.push_back(
+                { std::string { message }, severity, source, time, delta });
         });
     capture.result = simulation.run();
     for (std::size_t index = 0; index < names.size(); ++index) {
@@ -159,6 +190,7 @@ void test_random(
     assert(compiled.result.status == fsim::runtime::RunStatus::completed);
     assert(reference.values == compiled.values);
     assert(reference.output == compiled.output);
+    assert(reference.reports == compiled.reports);
     assert(
         reference.output.size() == 2
         && reference.output[0].starts_with("cli=")
@@ -185,13 +217,13 @@ void test_random(
     assert(reference.values[15].aval == 2 && reference.values[15].bval == 0);
     assert(reference.values[16] == reference.values[17]);
     constexpr std::array<std::uint32_t, 15> distribution_values {
-        2U, 0x92c55619U,
-        104U, 0xcbe35dcfU,
-        34U, 0x2ea4a1c4U,
-        8U, 0x2d1914edU,
-        5U, 0x22fd7c09U,
-        0U, 0x07cdaa7bU,
-        33U, 0xfb315d4eU,
+        1U, 0x92c55619U,
+        79U, 0x57d07df5U,
+        10U, 0x664f4e32U,
+        7U, 0x7812cacaU,
+        1U, 0x6051c836U,
+        2U, 0x5bd4c380U,
+        34U, 0x0592ad77U,
         0U
     };
     for (std::size_t index = 0; index < distribution_values.size(); ++index) {
@@ -206,6 +238,44 @@ void test_random(
     assert(reference.values[37].aval == 1 && reference.values[37].bval == 0);
     assert(reference.values[38].aval == 1 && reference.values[38].bval == 0);
     assert(reference.values[39].aval == 0 && reference.values[39].bval == 0);
+    assert(reference.values[40].aval == 0x0592ad77U);
+    assert(reference.values[41].aval == 0U);
+    assert(reference.values[42].aval == 0U);
+    assert(reference.values[43].aval == 0U);
+    assert(reference.values[44].aval == 0U);
+    assert(reference.values[45].aval == 0x0592ad77U);
+    assert(reference.values[46].aval == 5U);
+    assert(reference.values[47].aval == 0x10203040U);
+    assert(reference.values[48].aval == 10U);
+    assert(reference.values[49].aval == 0x10203040U);
+    assert(reference.values[50].aval == 0U && reference.values[50].bval == 0U);
+    assert(reference.values[51].bval
+        == std::numeric_limits<std::uint32_t>::max());
+    assert(reference.values[52].aval == 0U);
+    assert(reference.values[53].aval == 0x76543210U);
+    assert(reference.values[54].bval == 0U);
+    assert(reference.values[55].aval != 0x2468ace0U);
+    assert(reference.values[56].aval == 0U);
+    assert(reference.values[57].aval != 0x11223344U);
+    constexpr std::array<std::string_view, 7> warning_messages {
+        "exponential distribution mean must be positive",
+        "Poisson distribution mean must be positive",
+        "chi-square distribution degrees of freedom must be positive",
+        "Student-t distribution degrees of freedom must be positive",
+        "Erlang distribution stage count must be positive",
+        "random distribution arguments must not contain X or Z",
+        "random distribution exceeded the bounded draw limit",
+    };
+    assert(reference.reports.size() == warning_messages.size());
+    for (std::size_t index = 0; index < warning_messages.size(); ++index) {
+        const auto& report = reference.reports[index];
+        assert(report.message == warning_messages[index]);
+        assert(report.severity
+            == fsim::runtime::simir::AssertionSeverity::warning);
+        assert(report.source.path == source.string());
+        assert(report.source.line > 0U && report.source.column > 0U);
+        assert(report.time == 0U && report.delta == 0U);
+    }
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 3);
@@ -361,6 +431,15 @@ module random_test;
   integer dist_t_value, dist_t_seed;
   integer dist_erlang_value, dist_erlang_seed;
   integer dist_invalid_value;
+  integer dist_invalid_seed, dist_invalid_poisson_value;
+  integer dist_invalid_chi_square_value, dist_invalid_t_value;
+  integer dist_invalid_erlang_value, dist_invalid_seed_final;
+  integer dist_equal_value, dist_equal_seed;
+  integer dist_reversed_value, dist_reversed_seed;
+  integer dist_unknown_value, dist_unknown_seed;
+  integer dist_resource_value, dist_resource_seed;
+  integer dist_negative_deviation_value, dist_negative_deviation_seed;
+  integer dist_zero_mean_erlang_value, dist_zero_mean_erlang_seed;
   int scope_result;
   logic [2:0] scope_value;
   mode_t scope_mode;
@@ -418,6 +497,29 @@ module random_test;
     dist_erlang_value = $dist_erlang(dist_seed, 3, 30);
     dist_erlang_seed = dist_seed;
     dist_invalid_value = $dist_exponential(dist_seed, 0);
+    dist_invalid_seed = dist_seed;
+    dist_invalid_poisson_value = $dist_poisson(dist_seed, 0);
+    dist_invalid_chi_square_value = $dist_chi_square(dist_seed, 0);
+    dist_invalid_t_value = $dist_t(dist_seed, 0);
+    dist_invalid_erlang_value = $dist_erlang(dist_seed, 0, 30);
+    dist_invalid_seed_final = dist_seed;
+    dist_seed = 32'h10203040;
+    dist_equal_value = $dist_uniform(dist_seed, 5, 5);
+    dist_equal_seed = dist_seed;
+    dist_reversed_value = $dist_uniform(dist_seed, 10, -10);
+    dist_reversed_seed = dist_seed;
+    dist_seed = 'x;
+    dist_unknown_value = $dist_poisson(dist_seed, 7);
+    dist_unknown_seed = dist_seed;
+    dist_seed = 32'h76543210;
+    dist_resource_value = $dist_erlang(dist_seed, 1000001, 1);
+    dist_resource_seed = dist_seed;
+    dist_seed = 32'h2468ace0;
+    dist_negative_deviation_value = $dist_normal(dist_seed, 100, -15);
+    dist_negative_deviation_seed = dist_seed;
+    dist_seed = 32'h11223344;
+    dist_zero_mean_erlang_value = $dist_erlang(dist_seed, 3, 0);
+    dist_zero_mean_erlang_seed = dist_seed;
     begin
       UniquePacket packet;
       packet = new;

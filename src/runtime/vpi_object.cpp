@@ -70,7 +70,98 @@ namespace {
         }
         return type;
     }
-
+    constexpr bool structural_object(
+        const SystemVerilogVpiObjectKind kind) noexcept
+    {
+        return kind >= SystemVerilogVpiObjectKind::ModuleArray;
+    }
+    constexpr bool scope_object(
+        const SystemVerilogVpiObjectKind kind) noexcept
+    {
+        switch (kind) {
+        case SystemVerilogVpiObjectKind::Root:
+        case SystemVerilogVpiObjectKind::Module:
+        case SystemVerilogVpiObjectKind::Interface:
+        case SystemVerilogVpiObjectKind::Program:
+        case SystemVerilogVpiObjectKind::Package:
+        case SystemVerilogVpiObjectKind::GenerateScope:
+        case SystemVerilogVpiObjectKind::Class:
+        case SystemVerilogVpiObjectKind::Process:
+        case SystemVerilogVpiObjectKind::Assertion:
+        case SystemVerilogVpiObjectKind::ModuleArray:
+        case SystemVerilogVpiObjectKind::InterfaceArray:
+        case SystemVerilogVpiObjectKind::ProgramArray:
+        case SystemVerilogVpiObjectKind::GenerateScopeArray:
+        case SystemVerilogVpiObjectKind::Modport:
+        case SystemVerilogVpiObjectKind::ClockingBlock:
+        case SystemVerilogVpiObjectKind::Task:
+        case SystemVerilogVpiObjectKind::Function:
+        case SystemVerilogVpiObjectKind::Method:
+        case SystemVerilogVpiObjectKind::Covergroup:
+            return true;
+        default:
+            return false;
+        }
+    }
+    constexpr bool relationship_matches(
+        const SystemVerilogVpiRelationshipKind relationship,
+        const SystemVerilogVpiObjectKind kind) noexcept
+    {
+        using Kind = SystemVerilogVpiObjectKind;
+        switch (relationship) {
+        case SystemVerilogVpiRelationshipKind::Children:
+            return true;
+        case SystemVerilogVpiRelationshipKind::Parent:
+            return false;
+        case SystemVerilogVpiRelationshipKind::InternalScopes:
+            return scope_object(kind);
+        case SystemVerilogVpiRelationshipKind::Declarations:
+            return !scope_object(kind);
+        case SystemVerilogVpiRelationshipKind::Ports:
+            return kind == Kind::Port || kind == Kind::PortBit
+                || kind == Kind::ModportPort || kind == Kind::ClockingIo;
+        case SystemVerilogVpiRelationshipKind::Nets:
+            return kind == Kind::Net || kind == Kind::NetBit;
+        case SystemVerilogVpiRelationshipKind::Variables:
+            return kind == Kind::Variable || kind == Kind::VariableBit
+                || kind == Kind::Memory || kind == Kind::MemoryWord
+                || kind == Kind::Array || kind == Kind::ArrayWord
+                || kind == Kind::ClassProperty || kind == Kind::NamedEvent;
+        case SystemVerilogVpiRelationshipKind::Parameters:
+            return kind == Kind::Parameter || kind == Kind::ParameterAssignment
+                || kind == Kind::GenVar;
+        case SystemVerilogVpiRelationshipKind::Processes:
+            return kind == Kind::Process || kind == Kind::Initial
+                || kind == Kind::Always;
+        case SystemVerilogVpiRelationshipKind::Assertions:
+            return kind == Kind::Assertion || kind == Kind::PropertyDeclaration
+                || kind == Kind::SequenceDeclaration;
+        case SystemVerilogVpiRelationshipKind::Drivers:
+            return kind == Kind::Driver || kind == Kind::ContinuousAssignment
+                || kind == Kind::Assignment || kind == Kind::Force
+                || kind == Kind::Release;
+        case SystemVerilogVpiRelationshipKind::Expressions:
+            return kind == Kind::Constant || kind == Kind::Concatenation
+                || kind == Kind::Operation || kind == Kind::MinTypMax
+                || kind == Kind::Expression || kind == Kind::Range
+                || kind == Kind::PartSelect || kind == Kind::IndexedPartSelect
+                || kind == Kind::BitSelect || kind == Kind::Call;
+        case SystemVerilogVpiRelationshipKind::Arguments:
+            return kind == Kind::Argument;
+        case SystemVerilogVpiRelationshipKind::Types:
+            return kind == Kind::TypeSpecification
+                || kind == Kind::EnumerationConstant
+                || kind == Kind::StructureMember || kind == Kind::PackedArrayType
+                || kind == Kind::UnpackedArrayType || kind == Kind::QueueType
+                || kind == Kind::AssociativeArrayType
+                || kind == Kind::DynamicArrayType || kind == Kind::StringType
+                || kind == Kind::ClassType || kind == Kind::InterfaceType;
+        case SystemVerilogVpiRelationshipKind::Coverage:
+            return kind == Kind::Covergroup || kind == Kind::CoverPoint
+                || kind == Kind::CoverageCross || kind == Kind::CoverageBin;
+        }
+        return false;
+    }
     SystemVerilogVpiValueError value_error(
         const SystemVerilogVpiObjectError error)
     {
@@ -293,15 +384,7 @@ namespace {
             return false;
         }
 
-        const bool scope = kind == SystemVerilogVpiObjectKind::Root
-            || kind == SystemVerilogVpiObjectKind::Module
-            || kind == SystemVerilogVpiObjectKind::Interface
-            || kind == SystemVerilogVpiObjectKind::Program
-            || kind == SystemVerilogVpiObjectKind::Package
-            || kind == SystemVerilogVpiObjectKind::GenerateScope
-            || kind == SystemVerilogVpiObjectKind::Class
-            || kind == SystemVerilogVpiObjectKind::Process
-            || kind == SystemVerilogVpiObjectKind::Assertion;
+        const bool scope = scope_object(kind);
         if (scope && type.category != SystemVerilogVpiValueCategory::None) {
             return false;
         }
@@ -310,7 +393,8 @@ namespace {
                 || type.descriptor)) {
             return false;
         }
-        if (!scope && kind != SystemVerilogVpiObjectKind::NamedEvent
+        if (!scope && !structural_object(kind)
+            && kind != SystemVerilogVpiObjectKind::NamedEvent
             && type.category == SystemVerilogVpiValueCategory::None
             && !type.descriptor) {
             return false;
@@ -469,7 +553,45 @@ bool SystemVerilogVpiObjectRegistry::valid() const noexcept
 {
     return simulation_identity_ != 0U && registry_identity_ != 0U;
 }
-
+SystemVerilogVpiObjectCapabilities
+SystemVerilogVpiObjectRegistry::capabilities() noexcept
+{
+    return {
+        2023U,
+        static_cast<std::uint32_t>(
+            SystemVerilogVpiObjectKind::AttributeSpecification) + 1U,
+        static_cast<std::uint32_t>(
+            SystemVerilogVpiRelationshipKind::Coverage) + 1U,
+        static_cast<std::uint32_t>(
+            SystemVerilogVpiPropertyKind::HasTypeDescriptor) + 1U,
+        static_cast<std::uint32_t>(maximum_iterator_objects),
+        true,
+        true,
+        true,
+        true,
+    };
+}
+bool SystemVerilogVpiObjectRegistry::supports(
+    const SystemVerilogVpiObjectKind kind) noexcept
+{
+    return static_cast<std::uint32_t>(kind)
+        <= static_cast<std::uint32_t>(
+            SystemVerilogVpiObjectKind::AttributeSpecification);
+}
+bool SystemVerilogVpiObjectRegistry::supports(
+    const SystemVerilogVpiRelationshipKind relationship) noexcept
+{
+    return static_cast<std::uint32_t>(relationship)
+        <= static_cast<std::uint32_t>(
+            SystemVerilogVpiRelationshipKind::Coverage);
+}
+bool SystemVerilogVpiObjectRegistry::supports(
+    const SystemVerilogVpiPropertyKind property) noexcept
+{
+    return static_cast<std::uint32_t>(property)
+        <= static_cast<std::uint32_t>(
+            SystemVerilogVpiPropertyKind::HasTypeDescriptor);
+}
 fsim_vpi_handle_v1 SystemVerilogVpiObjectRegistry::encode_object(
     const std::uint32_t slot, const std::uint16_t epoch) const noexcept
 {
@@ -613,9 +735,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     if (!valid()) {
         return { { }, SystemVerilogVpiObjectError::InvalidSimulation };
     }
-    if (static_cast<unsigned>(descriptor.kind)
-        > static_cast<unsigned>(
-            SystemVerilogVpiObjectKind::MinTypMax)) {
+    if (!supports(descriptor.kind)) {
         return { { }, SystemVerilogVpiObjectError::InvalidKind };
     }
 
@@ -785,6 +905,8 @@ SystemVerilogVpiObjectRegistry::lookup_locked(
                  handle,
                  record.parent,
                  record.kind,
+                 record.live_children,
+                 record.ordinal,
                  record.name,
                  record.full_name,
                  record.source,
@@ -852,6 +974,120 @@ SystemVerilogVpiObjectRegistry::type_info(
         return { { }, SystemVerilogVpiObjectError::InvalidType };
     }
     return { object.value->type, { } };
+}
+
+SystemVerilogVpiPropertyResult SystemVerilogVpiObjectRegistry::property(
+    const fsim_vpi_handle_v1 handle,
+    const SystemVerilogVpiPropertyKind property_kind) const
+{
+    std::scoped_lock lock { mutex_ };
+    const auto object = lookup_locked(handle);
+    if (!object) {
+        SystemVerilogVpiPropertyResult result;
+        result.error = object.error;
+        return result;
+    }
+    if (!supports(property_kind)) {
+        SystemVerilogVpiPropertyResult result;
+        result.error = SystemVerilogVpiObjectError::InvalidProperty;
+        return result;
+    }
+    const auto unsigned_result = [](const std::uint64_t value) {
+        SystemVerilogVpiPropertyResult result;
+        result.kind = SystemVerilogVpiPropertyValueKind::UnsignedInteger;
+        result.unsigned_integer = value;
+        return result;
+    };
+    const auto string_result = [](const std::string& value) {
+        SystemVerilogVpiPropertyResult result;
+        result.kind = SystemVerilogVpiPropertyValueKind::String;
+        result.string = value;
+        return result;
+    };
+    const auto boolean_result = [](const bool value) {
+        SystemVerilogVpiPropertyResult result;
+        result.kind = SystemVerilogVpiPropertyValueKind::Boolean;
+        result.boolean = value;
+        return result;
+    };
+    const auto missing = [] {
+        SystemVerilogVpiPropertyResult result;
+        result.error = SystemVerilogVpiObjectError::NotFound;
+        return result;
+    };
+    const auto& value = *object.value;
+    switch (property_kind) {
+    case SystemVerilogVpiPropertyKind::ObjectKind: {
+        SystemVerilogVpiPropertyResult result;
+        result.kind = SystemVerilogVpiPropertyValueKind::ObjectKind;
+        result.object_kind = value.kind;
+        return result;
+    }
+    case SystemVerilogVpiPropertyKind::Parent: {
+        SystemVerilogVpiPropertyResult result;
+        result.kind = SystemVerilogVpiPropertyValueKind::Handle;
+        result.handle = value.parent;
+        return result;
+    }
+    case SystemVerilogVpiPropertyKind::LiveChildren:
+        return unsigned_result(value.live_children);
+    case SystemVerilogVpiPropertyKind::Ordinal:
+        return unsigned_result(value.ordinal);
+    case SystemVerilogVpiPropertyKind::Name:
+        return string_result(value.name);
+    case SystemVerilogVpiPropertyKind::FullName:
+        return string_result(value.full_name);
+    case SystemVerilogVpiPropertyKind::SourceFile:
+        return value.source ? string_result(value.source->file) : missing();
+    case SystemVerilogVpiPropertyKind::SourceLine:
+        return value.source ? unsigned_result(value.source->line) : missing();
+    case SystemVerilogVpiPropertyKind::SourceColumn:
+        return value.source ? unsigned_result(value.source->column) : missing();
+    default:
+        break;
+    }
+    if (!value.type) {
+        return missing();
+    }
+    const auto& type = *value.type;
+    switch (property_kind) {
+    case SystemVerilogVpiPropertyKind::Language:
+        return unsigned_result(static_cast<std::uint32_t>(type.language));
+    case SystemVerilogVpiPropertyKind::SemanticUnitId:
+        return type.semantic_unit_id
+            ? unsigned_result(*type.semantic_unit_id) : missing();
+    case SystemVerilogVpiPropertyKind::SourceId:
+        return type.source_id ? unsigned_result(*type.source_id) : missing();
+    case SystemVerilogVpiPropertyKind::SemanticUnit:
+        return type.semantic_unit.empty()
+            ? missing() : string_result(type.semantic_unit);
+    case SystemVerilogVpiPropertyKind::SourcePath:
+        return type.source_path.empty()
+            ? missing() : string_result(type.source_path);
+    case SystemVerilogVpiPropertyKind::Standard:
+        return type.standard.empty() ? missing() : string_result(type.standard);
+    case SystemVerilogVpiPropertyKind::CompatibilityProfile:
+        return type.compatibility_profile.empty()
+            ? missing() : string_result(type.compatibility_profile);
+    case SystemVerilogVpiPropertyKind::ValueCategory:
+        return unsigned_result(static_cast<std::uint32_t>(type.category));
+    case SystemVerilogVpiPropertyKind::NetKind:
+        return unsigned_result(static_cast<std::uint32_t>(type.net_kind));
+    case SystemVerilogVpiPropertyKind::Direction:
+        return unsigned_result(static_cast<std::uint32_t>(type.direction));
+    case SystemVerilogVpiPropertyKind::Lifetime:
+        return unsigned_result(static_cast<std::uint32_t>(type.lifetime));
+    case SystemVerilogVpiPropertyKind::Width:
+        return unsigned_result(type.width);
+    case SystemVerilogVpiPropertyKind::IsSigned:
+        return boolean_result(type.is_signed);
+    case SystemVerilogVpiPropertyKind::IsConstant:
+        return boolean_result(type.is_constant);
+    case SystemVerilogVpiPropertyKind::HasTypeDescriptor:
+        return boolean_result(static_cast<bool>(type.descriptor));
+    default:
+        return missing();
+    }
 }
 std::optional<std::uint64_t>
 SystemVerilogVpiObjectRegistry::add_value_observer(
@@ -1569,40 +1805,15 @@ SystemVerilogVpiObjectError SystemVerilogVpiObjectRegistry::release(
     free_slots_.push_back(slot);
     return SystemVerilogVpiObjectError::None;
 }
-
 SystemVerilogVpiIteratorResult
-SystemVerilogVpiObjectRegistry::iterate_children(
-    const fsim_vpi_handle_v1 parent)
+SystemVerilogVpiObjectRegistry::create_iterator_locked(
+    std::vector<fsim_vpi_handle_v1> objects)
 {
-    std::scoped_lock lock { mutex_ };
     if (!valid()) {
         return { { }, SystemVerilogVpiIteratorError::InvalidSimulation };
     }
-    std::uint32_t parent_slot { };
-    if (resolve_object(parent, parent_slot)
-        != SystemVerilogVpiObjectError::None) {
-        return { { }, SystemVerilogVpiIteratorError::InvalidObject };
-    }
-
-    std::vector<std::pair<std::uint64_t, fsim_vpi_handle_v1>> ordered;
-    ordered.reserve(records_[parent_slot].live_children);
-    for (std::uint32_t slot = 0; slot < records_.size(); ++slot) {
-        const auto& record = records_[slot];
-        if (record.live && record.parent == parent) {
-            ordered.emplace_back(
-                record.ordinal, encode_object(slot, record.epoch));
-        }
-    }
-    if (ordered.size() > maximum_iterator_objects) {
+    if (objects.size() > maximum_iterator_objects) {
         return { { }, SystemVerilogVpiIteratorError::ResourceLimit };
-    }
-    std::ranges::sort(ordered);
-
-    std::vector<fsim_vpi_handle_v1> objects;
-    objects.reserve(ordered.size());
-    for (const auto& [ordinal, handle] : ordered) {
-        (void)ordinal;
-        objects.push_back(handle);
     }
 
     std::uint32_t slot { };
@@ -1627,10 +1838,109 @@ SystemVerilogVpiObjectRegistry::iterate_children(
             return { { }, SystemVerilogVpiIteratorError::ResourceLimit };
         }
         slot = static_cast<std::uint32_t>(iterators_.size());
-        iterators_.push_back(
-            IteratorRecord { 0, true, 0, std::move(objects) });
+        try {
+            iterators_.push_back(
+                IteratorRecord { 0, true, 0, std::move(objects) });
+        } catch (...) {
+            return { { }, SystemVerilogVpiIteratorError::ResourceLimit };
+        }
     }
     return { encode_iterator(slot, iterators_[slot].epoch), { } };
+}
+SystemVerilogVpiIteratorResult
+SystemVerilogVpiObjectRegistry::iterate_children(
+    const fsim_vpi_handle_v1 parent)
+{
+    return iterate_relationship(
+        parent, SystemVerilogVpiRelationshipKind::Children);
+}
+SystemVerilogVpiIteratorResult
+SystemVerilogVpiObjectRegistry::iterate_objects(
+    const SystemVerilogVpiObjectKind kind,
+    const fsim_vpi_handle_v1 parent)
+{
+    std::scoped_lock lock { mutex_ };
+    if (!valid()) {
+        return { { }, SystemVerilogVpiIteratorError::InvalidSimulation };
+    }
+    if (!supports(kind)) {
+        return { { }, SystemVerilogVpiIteratorError::InvalidKind };
+    }
+    if (parent != 0U) {
+        std::uint32_t parent_slot { };
+        if (resolve_object(parent, parent_slot)
+            != SystemVerilogVpiObjectError::None) {
+            return { { }, SystemVerilogVpiIteratorError::InvalidObject };
+        }
+    }
+    std::vector<std::pair<std::uint64_t, fsim_vpi_handle_v1>> ordered;
+    try {
+        for (std::uint32_t slot = 0; slot < records_.size(); ++slot) {
+            const auto& record = records_[slot];
+            if (record.live && record.kind == kind
+                && (parent == 0U || record.parent == parent)) {
+                ordered.emplace_back(
+                    record.ordinal, encode_object(slot, record.epoch));
+            }
+        }
+        std::ranges::sort(ordered);
+        std::vector<fsim_vpi_handle_v1> objects;
+        objects.reserve(ordered.size());
+        for (const auto& [ordinal, handle] : ordered) {
+            (void)ordinal;
+            objects.push_back(handle);
+        }
+        return create_iterator_locked(std::move(objects));
+    } catch (...) {
+        return { { }, SystemVerilogVpiIteratorError::ResourceLimit };
+    }
+}
+
+SystemVerilogVpiIteratorResult
+SystemVerilogVpiObjectRegistry::iterate_relationship(
+    const fsim_vpi_handle_v1 object,
+    const SystemVerilogVpiRelationshipKind relationship)
+{
+    std::scoped_lock lock { mutex_ };
+    if (!valid()) {
+        return { { }, SystemVerilogVpiIteratorError::InvalidSimulation };
+    }
+    if (!supports(relationship)) {
+        return { { }, SystemVerilogVpiIteratorError::InvalidRelationship };
+    }
+    std::uint32_t object_slot { };
+    if (resolve_object(object, object_slot)
+        != SystemVerilogVpiObjectError::None) {
+        return { { }, SystemVerilogVpiIteratorError::InvalidObject };
+    }
+    if (relationship == SystemVerilogVpiRelationshipKind::Parent) {
+        const auto parent = records_[object_slot].parent;
+        if (parent == 0U) {
+            return create_iterator_locked({ });
+        }
+        return create_iterator_locked({ parent });
+    }
+    std::vector<std::pair<std::uint64_t, fsim_vpi_handle_v1>> ordered;
+    try {
+        for (std::uint32_t slot = 0; slot < records_.size(); ++slot) {
+            const auto& record = records_[slot];
+            if (record.live && record.parent == object
+                && relationship_matches(relationship, record.kind)) {
+                ordered.emplace_back(
+                    record.ordinal, encode_object(slot, record.epoch));
+            }
+        }
+        std::ranges::sort(ordered);
+        std::vector<fsim_vpi_handle_v1> objects;
+        objects.reserve(ordered.size());
+        for (const auto& [ordinal, handle] : ordered) {
+            (void)ordinal;
+            objects.push_back(handle);
+        }
+        return create_iterator_locked(std::move(objects));
+    } catch (...) {
+        return { { }, SystemVerilogVpiIteratorError::ResourceLimit };
+    }
 }
 
 SystemVerilogVpiIteratorScanResult SystemVerilogVpiObjectRegistry::scan(
@@ -1649,7 +1959,20 @@ SystemVerilogVpiIteratorScanResult SystemVerilogVpiObjectRegistry::scan(
     if (record.cursor == record.objects.size()) {
         return { { }, SystemVerilogVpiIteratorError::End };
     }
-    return { record.objects[record.cursor++], { } };
+    const auto object = record.objects[record.cursor];
+    std::uint32_t object_slot { };
+    const auto object_error = resolve_object(object, object_slot);
+    if (object_error != SystemVerilogVpiObjectError::None) {
+        return { { }, object_error == SystemVerilogVpiObjectError::CrossSimulation
+                ? SystemVerilogVpiIteratorError::CrossSimulation
+                : object_error == SystemVerilogVpiObjectError::StaleHandle
+                    ? SystemVerilogVpiIteratorError::StaleHandle
+                    : object_error == SystemVerilogVpiObjectError::ReleasedHandle
+                        ? SystemVerilogVpiIteratorError::ReleasedHandle
+                        : SystemVerilogVpiIteratorError::InvalidObject };
+    }
+    ++record.cursor;
+    return { object, { } };
 }
 
 SystemVerilogVpiIteratorError

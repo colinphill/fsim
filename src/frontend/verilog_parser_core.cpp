@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
 
@@ -63,6 +64,7 @@ namespace {
   case StandardRevision::SystemVerilog2009:
   case StandardRevision::SystemVerilog2012:
   case StandardRevision::SystemVerilog2017:
+  case StandardRevision::SystemVerilog2023:
     return KeywordSet::SystemVerilog2005;
   default:
     return keyword_set_for_standard_revision(revision);
@@ -480,6 +482,16 @@ ParseResult VerilogParser::run() {
         design.systemverilog_dpi_declarations,
         design.functions,
         design.tasks);
+    if (const auto package = systemverilog_standard_package(
+            standard_revision_)) {
+        for (auto& unit : design.units) {
+            unit.systemverilog_standard_package
+                = SystemVerilogStandardPackageProvenance {
+                    std::string { package->revision },
+                    std::string { package->declaration_identity },
+                };
+        }
+    }
     normalize_udp_instances(design);
     return ParseResult { std::move(design), std::move(diagnostics_) };
 }

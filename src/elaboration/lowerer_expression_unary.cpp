@@ -1248,7 +1248,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         const auto destination = allocate_register(
             32U, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(RandomDistribution {
-            destination, *seed_register, kind, *first, second });
+            destination, *seed_register, kind, *first, second,
+            SourceLocation {
+                expression.span.source_name.str(),
+                static_cast<std::uint32_t>(expression.span.begin.line),
+                static_cast<std::uint32_t>(expression.span.begin.column) } });
         if (seed_width != 32U) {
             const auto widened = resize_register(
                 *seed_register, seed_width, true);

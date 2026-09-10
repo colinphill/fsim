@@ -10,7 +10,9 @@
 #include "fsim/version.hpp"
 
 #include <array>
+#include <bit>
 #include <cassert>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -25,7 +27,7 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 61);
+    static_assert(app::kRuntimeStateSchema == 62);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 4);
     static_assert(app::kClassStateSchema == 12);
@@ -144,6 +146,8 @@ module scalar_artifact;
   initialized_wide_t initialized_wide;
   tagged_wide_t tagged_wide;
   logic [5:0] checks;
+  integer distribution_seed;
+  integer distribution_value;
   class ArtifactCoverageOwner;
     covergroup artifact_coverage with function sample(
       input logic [7:0] sample_value
@@ -164,6 +168,8 @@ module scalar_artifact;
     rt = 3.75;
     ticks = 64'd9007199254740993;
     handle = null;
+    distribution_seed = 32'h13579bdf;
+    distribution_value = $dist_uniform(distribution_seed, -10, 10);
     wide_shift = WIDE_SEED >>> 136;
     checks[0] = r == 1.25;
     checks[1] = s == -2.5;
@@ -925,6 +931,31 @@ end architecture;
     assert(
         vhdl_2019_runtime_bytes
         && !vhdl_2019_runtime_diagnostics.has_error());
+    for (const auto schema : std::array {
+             app::kRuntimeStateSchema - 1U,
+             app::kRuntimeStateSchema + 1U }) {
+        auto incompatible_runtime = *vhdl_2019_runtime_bytes;
+        incompatible_runtime[8] = static_cast<char>(schema);
+        diagnostic::Engine incompatible_runtime_diagnostics;
+        assert(!app::deserialize_runtime_state(
+            incompatible_runtime,
+            schema < app::kRuntimeStateSchema
+                ? "stale-runtime.bin"
+                : "future-runtime.bin",
+            incompatible_runtime_diagnostics));
+        assert(std::ranges::any_of(
+            incompatible_runtime_diagnostics.diagnostics(),
+            [schema](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-ART-0013"
+                    && diagnostic.message.find(
+                           "schema " + std::to_string(schema))
+                        != std::string::npos
+                    && diagnostic.message.find(
+                           "schema "
+                           + std::to_string(app::kRuntimeStateSchema))
+                        != std::string::npos;
+            }));
+    }
     auto restored_vhdl_2019_runtime = app::deserialize_runtime_state(
         *vhdl_2019_runtime_bytes, "vhdl-2019-runtime.bin",
         vhdl_2019_runtime_diagnostics);
@@ -1380,6 +1411,22 @@ end architecture;
         assert(built->semantics.source_files().size() >= 2);
         assert(built->design.verilog_specify_paths().size() == 1);
         assert(built->design.verilog_timing_checks().size() == 1);
+        const auto distribution_process = std::ranges::find_if(
+            built->design.processes(), [](const auto& process) {
+                return std::ranges::any_of(
+                    process.operations, [](const auto& operation) {
+                        const auto* distribution =
+                            runtime::simir::operation_get_if<
+                                runtime::simir::RandomDistribution>(
+                                &operation);
+                        return distribution != nullptr
+                            && distribution->source.path.ends_with(
+                                "artifact_phase.sv")
+                            && distribution->source.line > 0U
+                            && distribution->source.column > 0U;
+                    });
+            });
+        assert(distribution_process != built->design.processes().end());
         assert(built->systemverilog_coverage.declarations.size() == 1);
         assert(built->systemverilog_coverage.instances.size() == 1);
         assert(built->systemverilog_coverage.reports.size() == 1);
@@ -1462,6 +1509,10 @@ end architecture;
         const auto scalar_time = simulation.find_signal("scalar.ticks");
         const auto scalar_handle = simulation.find_signal("scalar.handle");
         const auto scalar_wide = simulation.find_signal("scalar.wide_value");
+        const auto distribution_seed =
+            simulation.find_signal("scalar.distribution_seed");
+        const auto distribution_value =
+            simulation.find_signal("scalar.distribution_value");
         const auto container_observed =
             simulation.find_signal("container.observed");
         const auto virtual_selected = simulation.find_signal("virtual.selected");
@@ -1469,7 +1520,8 @@ end architecture;
         const auto clocking_sample = simulation.find_signal("virtual.leaf.bus.cb.data");
         assert(counter && watch && stable_probe && vital_probe && scalar_checks
             && scalar_real && scalar_short && scalar_realtime && scalar_time
-            && scalar_handle && scalar_wide && container_observed
+            && scalar_handle && scalar_wide && distribution_seed
+            && distribution_value && container_observed
             && virtual_selected
             && forwarded_selected && clocking_sample);
         std::size_t callbacks { };
@@ -1492,7 +1544,9 @@ end architecture;
         assert(callbacks != 0);
         assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
         assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
-        assert(simulation.read_signal(*scalar_checks).to_msb_string() == "111111");
+        const auto scalar_check_bits =
+            simulation.read_signal(*scalar_checks).to_msb_string();
+        assert(scalar_check_bits == "111111");
         auto expected_wide = runtime::PackedLogic4 {
             137, runtime::Logic4::zero
         };
@@ -1509,6 +1563,19 @@ end architecture;
         assert(simulation.read_scalar_signal(*scalar_time).as_time()
             == UINT64_C(9007199254740993));
         assert(simulation.read_scalar_signal(*scalar_handle).as_chandle() == 0);
+        const auto restored_distribution_seed =
+            simulation.read_signal(*distribution_seed).low_word();
+        const auto restored_distribution_value =
+            simulation.read_signal(*distribution_value).low_word();
+        assert(
+            restored_distribution_seed.bval == 0U
+            && restored_distribution_seed.aval != 0x13579bdfU
+            && restored_distribution_value.bval == 0U);
+        const auto signed_distribution_value = std::bit_cast<std::int32_t>(
+            static_cast<std::uint32_t>(restored_distribution_value.aval));
+        assert(
+            signed_distribution_value >= -10
+            && signed_distribution_value <= 10);
         const auto virtual_handle = simulation.read_signal(*virtual_selected).low_word();
         assert(virtual_handle.aval != 0 && virtual_handle.bval == 0);
         assert(simulation.read_signal(*forwarded_selected).low_word()

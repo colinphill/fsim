@@ -51,8 +51,8 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF VITAL inventory passed: rows=17 preserved=17 active=0 digest=3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f"
-    "diagnostic catalog covers 2746 production codes"
-    "Checked 1510 authored sources against the 2000-line hard limit"
+    "diagnostic catalog covers 2758 production codes"
+    "Checked 1525 authored sources against the 2000-line hard limit"
     "resource portability contract: five four-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned Boost headers, broad coverage-metric generate/mixed-engine equivalence, complete legacy ACC routine/object inventory, public C/C++ header ABI, bounded transactional ACC lifecycle, generation-qualified ACC/VPI handles, bounded hierarchy lookup, independently worded VHDL-2019 clause ownership and profile/artifact/cache identity, and scoped/SystemC phase traces are present")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
     FSIM_OUTPUT_INDEX)
@@ -83,18 +83,24 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1813)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1828)
   message(FATAL_ERROR
-    "authored SDF VITAL inventory changed: expected 1813 files, found ${FSIM_AUTHORED_COUNT}")
+    "authored SDF VITAL inventory changed: expected 1828 files, found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
   file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
+  file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
   string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: Apache-2.0"
     FSIM_SPDX_INDEX)
   if(FSIM_SPDX_INDEX EQUAL -1)
-    file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
-    message(FATAL_ERROR
-      "authored SDF VITAL artifact lacks Apache-2.0 SPDX notice: ${FSIM_RELATIVE}")
+    string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: LicenseRef-IEEE-1800"
+      FSIM_IEEE_SPDX_INDEX)
+    if((NOT FSIM_RELATIVE STREQUAL "include/vpi_user.h" AND
+        NOT FSIM_RELATIVE STREQUAL "include/sv_vpi_user.h") OR
+       FSIM_IEEE_SPDX_INDEX EQUAL -1)
+      message(FATAL_ERROR
+        "authored SDF VITAL artifact lacks an approved SPDX notice: ${FSIM_RELATIVE}")
+    endif()
   endif()
 endforeach()
 

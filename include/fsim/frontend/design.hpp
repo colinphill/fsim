@@ -1492,6 +1492,11 @@ struct VhdlPredefinedEnvironment {
     std::vector<std::string> attributes;
 };
 
+struct SystemVerilogStandardPackageProvenance {
+    std::string revision;
+    std::string declaration_identity;
+};
+
 struct DesignUnit {
     UnitKind kind { UnitKind::VerilogModule };
     Language language { Language::SystemVerilog2017 };
@@ -1504,6 +1509,10 @@ struct DesignUnit {
     std::string verilog_compatibility_profile { "none" };
     std::string vhdl_compatibility_profile;
     VhdlPredefinedEnvironment vhdl_predefined_environment;
+    // Exact compiler-owned `std` package selected by this unit's source
+    // profile. VHDL and Verilog units retain no value.
+    support::RareOptional<SystemVerilogStandardPackageProvenance>
+        systemverilog_standard_package;
     std::string library;
     std::string compilation_unit_identity;
     std::string name;

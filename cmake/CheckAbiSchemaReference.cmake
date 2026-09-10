@@ -93,7 +93,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "fsim-code-coverage-foundation-v3"
     "format 5, portable schema 14"
     "format 2, runtime ABI 1, SystemC ABI 4"
-    "runtime 61"
+    "runtime 62"
     "There is no supported in-place migration command"
     "intentionally provides no fallback reader")
   string(FIND "${FSIM_REFERENCE_TEXT}" "${FSIM_TOKEN}" FSIM_OFFSET)

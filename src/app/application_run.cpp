@@ -94,6 +94,7 @@ std::string make_cache_key(
     key.add("code-coverage-identity", coverage_identity.identity.digest);
     key.add("llvm", production_llvm_version);
     key.add("standard-library", standard_library_cache_version);
+    add_systemverilog_standard_package_identities(key, checked);
     key.add("vhdl-compatibility-profile", vhdl_compatibility_profile());
     key.add(
         "verilog-preprocessor",
@@ -415,6 +416,7 @@ make_specialization_cache_keys(
             "fsim-specialization-provenance-v9-standard-compatibility");
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
+        add_systemverilog_standard_package_identities(key, checked);
         key.add(
             "vhdl-compatibility-profile",
             vhdl_compatibility_profile());

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::elaboration {
 
@@ -158,8 +159,25 @@ void HierarchyBuilder::validate_systemverilog_exports(
             return class_scopes.contains(class_name);
         };
         for (const auto& identifier : ordered) {
-            if (identifier == "std::randomize"
-                || identifier == "process::self") {
+            if (identifier.starts_with("std::")) {
+                const auto selection
+                    = std::string_view { identifier }.substr(5U);
+                const auto member = selection.substr(
+                    0, selection.find("::"));
+                if (frontend::find_systemverilog_standard_package_declaration(
+                        unit.standard_revision, member) == nullptr) {
+                    report(
+                        "FSIM-ELAB-SVPKG-011",
+                        "SystemVerilog standard package revision '"
+                            + std::string { frontend::to_string(
+                                unit.standard_revision) }
+                            + "' has no member '" + std::string { member }
+                            + "'",
+                        identifiers.at(identifier));
+                }
+                continue;
+            }
+            if (identifier == "process::self") {
                 continue;
             }
             const auto& reference_span =

@@ -1563,6 +1563,7 @@ void test_random_distribution_cache_identity(
     };
     const auto materialize = [&](const RandomDistributionKind kind,
                                  const RegisterId second,
+                                 const std::uint32_t source_line,
                                  const std::uint64_t hits,
                                  const std::uint64_t misses) {
         Process process;
@@ -1574,7 +1575,9 @@ void test_random_distribution_cache_identity(
             LoadConstant { 2, PackedLogic4::from_aval_bval(32, 2, 0) },
             LoadConstant { 3, PackedLogic4::from_aval_bval(32, 3, 0) },
             LoadConstant { 4, PackedLogic4::from_aval_bval(32, 4, 0) },
-            RandomDistribution { 0, 1, kind, 2, second },
+            RandomDistribution {
+                0, 1, kind, 2, second,
+                SourceLocation { "random_distribution.sv", source_line, 9 } },
             Halt { },
         };
         LlvmJit jit { options };
@@ -1582,12 +1585,13 @@ void test_random_distribution_cache_identity(
         assert(jit.lookup(symbol));
         expect_cache_statistics(jit, hits, misses, misses);
     };
-    materialize(RandomDistributionKind::uniform, 3, 0, 1);
-    materialize(RandomDistributionKind::uniform, 3, 1, 0);
-    materialize(RandomDistributionKind::normal, 3, 0, 1);
-    materialize(RandomDistributionKind::uniform, 4, 0, 1);
-    materialize(RandomDistributionKind::erlang, 3, 0, 1);
-    assert(cached_object_paths(cache_directory).size() == 4);
+    materialize(RandomDistributionKind::uniform, 3, 17, 0, 1);
+    materialize(RandomDistributionKind::uniform, 3, 17, 1, 0);
+    materialize(RandomDistributionKind::uniform, 3, 18, 0, 1);
+    materialize(RandomDistributionKind::normal, 3, 17, 0, 1);
+    materialize(RandomDistributionKind::uniform, 4, 17, 0, 1);
+    materialize(RandomDistributionKind::erlang, 3, 17, 0, 1);
+    assert(cached_object_paths(cache_directory).size() == 5);
 }
 
 void test_system_command_cache_identity(

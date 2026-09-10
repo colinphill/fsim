@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "sv_vpi_user.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -8,6 +10,7 @@
 #define FSIM_VPI_HOST_ABI_VERSION_V2 2u
 #define FSIM_VPI_PLUGIN_ABI_VERSION 1u
 #define FSIM_VPI_PLUGIN_BIND_SYMBOL "fsim_vpi_plugin_bind_v1"
+#define FSIM_VPI_STARTUP_ROUTINES_SYMBOL "vlog_startup_routines"
 
 #if defined(_WIN32)
 #define FSIM_VPI_EXPORT __declspec(dllexport)
@@ -198,6 +201,7 @@ typedef struct fsim_vpi_host_v2 {
 
 typedef fsim_vpi_status_v1(FSIM_VPI_CALL *fsim_vpi_plugin_lifecycle_v1)(
     void* context);
+typedef void(FSIM_VPI_CALL *fsim_vpi_startup_routine_v1)(void);
 
 /*
  * A successful bind publishes one complete descriptor. The loader owns the

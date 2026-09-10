@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_bridge.h"
+#include "sv_vpi_user.h"
+#include "vpi_user.h"
 
 #include <stddef.h>
 
@@ -14,7 +17,42 @@ _Static_assert(FSIM_VPI_HOST_ABI_VERSION_V2 == 2u, "VPI host ABI v2");
 _Static_assert(FSIM_VPI_PLUGIN_ABI_VERSION == 1u, "VPI plug-in ABI v1");
 _Static_assert(sizeof(void*) == 8u, "VPI ABI requires x86-64 pointers");
 _Static_assert(sizeof(fsim_vpi_handle_v1) == 8u, "VPI handles are 64-bit");
+_Static_assert(
+    sizeof(fsim_vpi_startup_routine_v1) == sizeof(void*),
+    "VPI startup routine pointer layout");
 _Static_assert(sizeof(fsim_vpi_status_v1) == 4u, "VPI status enum width");
+_Static_assert(sizeof(PLI_BYTE8) == 1u, "VPI byte width");
+_Static_assert(sizeof(PLI_INT16) == 2u, "VPI short width");
+_Static_assert(sizeof(PLI_INT32) == 4u, "VPI integer width");
+_Static_assert(sizeof(PLI_INT64) == 8u, "VPI wide integer width");
+_Static_assert(sizeof(vpiHandle) == 8u, "VPI public handle width");
+FSIM_VPI_LAYOUT(s_vpi_time, 24u, 8u);
+FSIM_VPI_OFFSET(s_vpi_time, high, 4u);
+FSIM_VPI_OFFSET(s_vpi_time, real, 16u);
+FSIM_VPI_LAYOUT(s_vpi_vecval, 8u, 4u);
+FSIM_VPI_LAYOUT(s_vpi_strengthval, 12u, 4u);
+FSIM_VPI_LAYOUT(s_vpi_value, 16u, 8u);
+FSIM_VPI_OFFSET(s_vpi_value, value, 8u);
+FSIM_VPI_LAYOUT(s_vpi_arrayvalue, 16u, 8u);
+FSIM_VPI_LAYOUT(s_vpi_delay, 32u, 8u);
+FSIM_VPI_LAYOUT(s_vpi_systf_data, 48u, 8u);
+FSIM_VPI_LAYOUT(s_vpi_vlog_info, 32u, 8u);
+FSIM_VPI_LAYOUT(s_vpi_error_info, 48u, 8u);
+FSIM_VPI_LAYOUT(s_cb_data, 56u, 8u);
+FSIM_VPI_LAYOUT(s_vpi_assertion_step_info, 24u, 8u);
+FSIM_VPI_LAYOUT(s_vpi_attempt_info, 32u, 8u);
+FSIM_VPI_LAYOUT(fsim_vpi_call_context_v1, 24u, 8u);
+FSIM_VPI_OFFSET(fsim_vpi_call_context_v1, invoke, 16u);
+_Static_assert(FSIM_VPI_CONTEXT_ABI_VERSION == 1u,
+    "VPI call context ABI v1");
+_Static_assert(vpiPackage == 600, "SystemVerilog package identity");
+_Static_assert(vpiAssert == 686, "SystemVerilog assertion identity");
+_Static_assert(vpiCoverageStop == 751, "coverage stop spelling");
+_Static_assert(vpiCoveredMax == 766, "coverage maximum spelling");
+_Static_assert(vpiTrvsObj == 800, "data reader traverse identity");
+_Static_assert(vpiAccessPostProcess == 832,
+    "data reader post-process identity");
+_Static_assert(vpiTime == 874, "data reader time control identity");
 _Static_assert(
     sizeof(fsim_vpi_error_severity_v1) == 4u,
     "VPI severity enum width");
@@ -101,6 +139,11 @@ size_t fsim_vpi_abi_c_host_size(void) { return sizeof(fsim_vpi_host_v1); }
 const char* fsim_vpi_abi_c_bind_symbol(void)
 {
     return FSIM_VPI_PLUGIN_BIND_SYMBOL;
+}
+
+const char* fsim_vpi_abi_c_startup_symbol(void)
+{
+    return FSIM_VPI_STARTUP_ROUTINES_SYMBOL;
 }
 
 void fsim_vpi_abi_c_report(const fsim_vpi_host_v1* host)

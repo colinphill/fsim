@@ -284,10 +284,10 @@ int main() {
   Scheduler plugin_scheduler;
   TfSchedulerCoordinator plugin_coordinator{plugin_scheduler};
   const auto plugin_call = plugin_coordinator.bind(
-      registry, fsim::frontend::StandardRevision::SystemVerilog2005,
+      registry, fsim::frontend::StandardRevision::SystemVerilog2023,
       "$fsim_tf_link_probe", {}, instance(), time_profile());
   require(static_cast<bool>(plugin_call),
-          "registered HDL task lowers into one coordinated call handle");
+          "an exact-2023 TF task lowers into one coordinated call handle");
   fsim::app::TfSchedulerInvokeResult plugin_result;
   plugin_scheduler.schedule(SchedulerPhase::active, 1,
       [&](Scheduler&) {

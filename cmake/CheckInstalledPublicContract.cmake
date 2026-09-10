@@ -76,11 +76,16 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_LIBDIR}/cmake/SystemCTLM/SystemCTLMConfigVersion.cmake"
   "${FSIM_STAGE}/${FSIM_LIBDIR}/pkgconfig/systemc.pc"
   "${FSIM_STAGE}/${FSIM_LIBDIR}/pkgconfig/tlm.pc"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/svdpi.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/vpi_user.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/sv_vpi_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/api.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/native_plugin_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/tf_plugin_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/veriuser.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/acc_user.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vpi_abi.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vpi_bridge.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/accellera.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_protocol.hpp"
@@ -122,8 +127,32 @@ foreach(FSIM_PATH IN LISTS FSIM_EXPECTED_PATHS)
   endif()
 endforeach()
 
+file(SHA256
+  "${FSIM_SOURCE_DIR}/include/svdpi.h"
+  FSIM_SOURCE_DIGEST)
+file(SHA256
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/svdpi.h"
+  FSIM_INSTALLED_DIGEST)
+if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
+  message(FATAL_ERROR "installed public header changed: svdpi.h")
+endif()
+
+foreach(FSIM_VPI_HEADER IN ITEMS vpi_user.h sv_vpi_user.h)
+  file(SHA256
+    "${FSIM_SOURCE_DIR}/include/${FSIM_VPI_HEADER}"
+    FSIM_SOURCE_DIGEST)
+  file(SHA256
+    "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/${FSIM_VPI_HEADER}"
+    FSIM_INSTALLED_DIGEST)
+  if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
+    message(FATAL_ERROR
+      "installed public header changed: ${FSIM_VPI_HEADER}")
+  endif()
+endforeach()
+
 foreach(FSIM_TF_HEADER IN ITEMS
-    native_plugin_abi.h tf_plugin_abi.h veriuser.h acc_user.h)
+    native_plugin_abi.h tf_plugin_abi.h veriuser.h acc_user.h
+    vpi_abi.h vpi_bridge.h)
   file(SHA256
     "${FSIM_SOURCE_DIR}/include/fsim/runtime/${FSIM_TF_HEADER}"
     FSIM_SOURCE_DIGEST)

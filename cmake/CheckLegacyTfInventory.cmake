@@ -544,7 +544,6 @@ foreach(FSIM_TOKEN IN ITEMS
     "standard_tf_symbols[0])"
     "err_intercept"
     "veriuser_version_str"
-    "vpi_printf"
     "fsim.runtime.tf_plugin_link")
   string(FIND "${FSIM_TF_LINK_CONTRACT}" "${FSIM_TOKEN}"
     FSIM_TOKEN_OFFSET)

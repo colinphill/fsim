@@ -17,36 +17,113 @@
 
 namespace fsim::runtime {
 
-enum class SystemVerilogVpiObjectKind {
-    Root,
-    Module,
-    Interface,
-    Program,
-    Package,
-    GenerateScope,
-    Port,
-    Net,
-    Variable,
-    Parameter,
-    Memory,
-    Array,
-    Class,
-    ClassProperty,
-    NamedEvent,
+enum class SystemVerilogVpiObjectKind : std::uint32_t {
+    // Values 0-21 are the frozen v3 identities published before the complete
+    // 2023 object inventory was added. New kinds are append-only.
+    Root = 0,
+    Module = 1,
+    Interface = 2,
+    Program = 3,
+    Package = 4,
+    GenerateScope = 5,
+    Port = 6,
+    Net = 7,
+    Variable = 8,
+    Parameter = 9,
+    Memory = 10,
+    Array = 11,
+    Class = 12,
+    ClassProperty = 13,
+    NamedEvent = 14,
     /// Executable occurrence published beneath its owning hierarchy scope.
-    Process,
+    Process = 15,
     /// Concurrent assertion occurrence with stable hierarchy identity.
-    Assertion,
+    Assertion = 16,
     /// Read-only stored contribution, distinct from a signal's effective value.
-    Driver,
+    Driver = 17,
     /// Literal or parameter-folded expression value.
-    Constant,
+    Constant = 18,
     /// Concatenation expression with stable occurrence identity.
-    Concatenation,
+    Concatenation = 19,
     /// Unary, binary, or conditional operator occurrence.
-    Operation,
+    Operation = 20,
     /// Minimum/typical/maximum expression occurrence.
-    MinTypMax,
+    MinTypMax = 21,
+    ModuleArray,
+    InterfaceArray,
+    ProgramArray,
+    Primitive,
+    Udp,
+    Gate,
+    Switch,
+    Modport,
+    ClockingBlock,
+    Task,
+    Function,
+    Method,
+    SystemTaskCall,
+    SystemFunctionCall,
+    TaskCall,
+    FunctionCall,
+    Argument,
+    GenerateScopeArray,
+    GenVar,
+    ContinuousAssignment,
+    Assignment,
+    Initial,
+    Always,
+    Begin,
+    Fork,
+    If,
+    Case,
+    CaseItem,
+    For,
+    While,
+    Repeat,
+    Forever,
+    Wait,
+    EventControl,
+    DelayControl,
+    Return,
+    Disable,
+    Force,
+    Release,
+    PropertyDeclaration,
+    SequenceDeclaration,
+    LetDeclaration,
+    Covergroup,
+    CoverPoint,
+    CoverageCross,
+    CoverageBin,
+    Constraint,
+    TypeSpecification,
+    EnumerationConstant,
+    StructureMember,
+    PackedArrayType,
+    UnpackedArrayType,
+    QueueType,
+    AssociativeArrayType,
+    DynamicArrayType,
+    StringType,
+    ClassType,
+    InterfaceType,
+    ModportPort,
+    ClockingIo,
+    ParameterAssignment,
+    PortBit,
+    NetBit,
+    VariableBit,
+    MemoryWord,
+    ArrayWord,
+    Range,
+    PartSelect,
+    IndexedPartSelect,
+    BitSelect,
+    Expression,
+    Call,
+    UserSystemTaskFunction,
+    Attribute,
+    AttributeSpecification,
 };
 
 enum class SystemVerilogVpiObjectError {
@@ -64,6 +141,7 @@ enum class SystemVerilogVpiObjectError {
     InvalidType,
     NotFound,
     HasChildren,
+    InvalidProperty,
     ResourceLimit,
 };
 
@@ -71,12 +149,98 @@ enum class SystemVerilogVpiIteratorError {
     None,
     InvalidSimulation,
     InvalidObject,
+    InvalidKind,
+    InvalidRelationship,
     InvalidHandle,
     CrossSimulation,
     StaleHandle,
     ReleasedHandle,
     End,
     ResourceLimit,
+};
+
+enum class SystemVerilogVpiRelationshipKind : std::uint32_t {
+    Children = 0,
+    Parent,
+    InternalScopes,
+    Declarations,
+    Ports,
+    Nets,
+    Variables,
+    Parameters,
+    Processes,
+    Assertions,
+    Drivers,
+    Expressions,
+    Arguments,
+    Types,
+    Coverage,
+};
+
+enum class SystemVerilogVpiPropertyKind : std::uint32_t {
+    ObjectKind = 0,
+    Parent,
+    LiveChildren,
+    Ordinal,
+    Name,
+    FullName,
+    SourceFile,
+    SourceLine,
+    SourceColumn,
+    Language,
+    SemanticUnitId,
+    SourceId,
+    SemanticUnit,
+    SourcePath,
+    Standard,
+    CompatibilityProfile,
+    ValueCategory,
+    NetKind,
+    Direction,
+    Lifetime,
+    Width,
+    IsSigned,
+    IsConstant,
+    HasTypeDescriptor,
+};
+
+enum class SystemVerilogVpiPropertyValueKind : std::uint32_t {
+    ObjectKind = 0,
+    Handle,
+    UnsignedInteger,
+    Boolean,
+    String,
+};
+
+struct SystemVerilogVpiPropertyResult {
+    SystemVerilogVpiPropertyValueKind kind {
+        SystemVerilogVpiPropertyValueKind::UnsignedInteger
+    };
+    SystemVerilogVpiObjectKind object_kind {
+        SystemVerilogVpiObjectKind::Root
+    };
+    fsim_vpi_handle_v1 handle { };
+    std::uint64_t unsigned_integer { };
+    bool boolean { };
+    std::string string;
+    SystemVerilogVpiObjectError error { SystemVerilogVpiObjectError::None };
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return error == SystemVerilogVpiObjectError::None;
+    }
+};
+
+struct SystemVerilogVpiObjectCapabilities {
+    std::uint32_t systemverilog_revision { 2023U };
+    std::uint32_t object_kind_count { };
+    std::uint32_t relationship_kind_count { };
+    std::uint32_t property_kind_count { };
+    std::uint32_t maximum_iterator_objects { };
+    bool stable_numeric_identities { };
+    bool source_locations { };
+    bool type_provenance { };
+    bool snapshot_iterators { };
 };
 
 using SystemVerilogVpiValueObserver = std::function<void(
@@ -115,6 +279,8 @@ struct SystemVerilogVpiObjectInfo {
     fsim_vpi_handle_v1 handle { };
     fsim_vpi_handle_v1 parent { };
     SystemVerilogVpiObjectKind kind { SystemVerilogVpiObjectKind::Root };
+    std::uint32_t live_children { };
+    std::uint64_t ordinal { };
     std::string name;
     std::string full_name;
     std::optional<SystemVerilogVpiSourceLocation> source;
@@ -218,6 +384,16 @@ struct SystemVerilogVpiObjectStateRestoreResult {
     }
 };
 
+struct SystemVerilogVpiStoredValueLookupResult {
+    std::optional<SystemVerilogVpiStoredValue> value;
+    SystemVerilogVpiValueError error { SystemVerilogVpiValueError::None };
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return error == SystemVerilogVpiValueError::None && value.has_value();
+    }
+};
+
 class SystemVerilogVpiObjectRegistry final {
 public:
     explicit SystemVerilogVpiObjectRegistry(
@@ -239,6 +415,17 @@ public:
         fsim_vpi_handle_v1 parent, std::string_view name) const;
     [[nodiscard]] SystemVerilogVpiTypeLookupResult type_info(
         fsim_vpi_handle_v1 handle) const;
+    [[nodiscard]] static SystemVerilogVpiObjectCapabilities capabilities()
+        noexcept;
+    [[nodiscard]] static bool supports(
+        SystemVerilogVpiObjectKind kind) noexcept;
+    [[nodiscard]] static bool supports(
+        SystemVerilogVpiRelationshipKind relationship) noexcept;
+    [[nodiscard]] static bool supports(
+        SystemVerilogVpiPropertyKind property) noexcept;
+    [[nodiscard]] SystemVerilogVpiPropertyResult property(
+        fsim_vpi_handle_v1 handle,
+        SystemVerilogVpiPropertyKind property) const;
     [[nodiscard]] SystemVerilogVpiValueError bind_value(
         fsim_vpi_handle_v1 handle, SystemVerilogVpiStoredValue value);
     /// Publish a value supplied by the simulation kernel. This updates even a
@@ -262,6 +449,11 @@ public:
         fsim_vpi_handle_v1 handle,
         SystemVerilogVpiValueFormat format,
         SystemVerilogVpiValueReadBuffers buffers = { }) const;
+    /// Return one canonical value without converting through an external VPI
+    /// buffer. Reader/history services use this per-object access to avoid a
+    /// whole-registry snapshot.
+    [[nodiscard]] SystemVerilogVpiStoredValueLookupResult stored_value(
+        fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiValueError reset_values();
     [[nodiscard]] SystemVerilogVpiObjectStateSnapshot snapshot_values() const;
     [[nodiscard]] SystemVerilogVpiObjectStateRestoreResult restore_values(
@@ -282,6 +474,12 @@ public:
 
     [[nodiscard]] SystemVerilogVpiIteratorResult iterate_children(
         fsim_vpi_handle_v1 parent);
+    [[nodiscard]] SystemVerilogVpiIteratorResult iterate_objects(
+        SystemVerilogVpiObjectKind kind,
+        fsim_vpi_handle_v1 parent = 0);
+    [[nodiscard]] SystemVerilogVpiIteratorResult iterate_relationship(
+        fsim_vpi_handle_v1 object,
+        SystemVerilogVpiRelationshipKind relationship);
     [[nodiscard]] SystemVerilogVpiIteratorScanResult scan(
         fsim_vpi_handle_v1 iterator);
     [[nodiscard]] SystemVerilogVpiIteratorError release_iterator(
@@ -326,6 +524,8 @@ private:
         fsim_vpi_handle_v1 parent, std::string_view name);
     [[nodiscard]] SystemVerilogVpiObjectLookupResult lookup_locked(
         fsim_vpi_handle_v1 handle) const;
+    [[nodiscard]] SystemVerilogVpiIteratorResult create_iterator_locked(
+        std::vector<fsim_vpi_handle_v1> objects);
 
     std::uint64_t simulation_identity_ { };
     std::uint32_t registry_identity_ { };

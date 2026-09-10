@@ -719,6 +719,9 @@ void Interpreter::Impl::handle_boundary(
         execute_pla(process, *pla);
         return;
     }
+    if (const auto* distribution = operation_get_if<RandomDistribution>(&operation)) {
+        execute_random_distribution(process, *distribution); return;
+    }
     if (const auto* format
         = fsim::runtime::simir::operation_get_if<TimeFormatControl>(
             &operation)) {

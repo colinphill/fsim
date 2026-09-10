@@ -948,6 +948,9 @@ void add_secondary_operation_cache_key(
                         value.second.has_value() ? 1U : 0U);
                     if (value.second)
                         add_key_u64(builder, "second", *value.second);
+                    builder.add("source-path", value.source.path);
+                    add_key_u64(builder, "source-line", value.source.line);
+                    add_key_u64(builder, "source-column", value.source.column);
                 } else if constexpr (
                     std::is_same_v<OperationType, VhdlEnvironmentTime>) {
                     builder.add("operation", "VhdlEnvironmentTime");

@@ -202,7 +202,8 @@ void Resolver::retain_task_profile(
     }
     return std::nullopt;
   }
-  if (expression.text == "process::self") {
+  if (expression.text == "process::self"
+      || expression.text == "std::process::self") {
     for (auto& operand : expression.operands) {
       resolve_expression(operand, scope);
     }

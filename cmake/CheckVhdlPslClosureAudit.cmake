@@ -154,9 +154,9 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "33 rows split 29 supported, 0 unresolved, 4 deferred"
-    "diagnostic catalog covers 2746 production codes"
-    "Checked 1510 authored sources against the 2000-line hard limit"
-    "v1 conformance audit: 565 authored test/control files")
+    "diagnostic catalog covers 2758 production codes"
+    "Checked 1525 authored sources against the 2000-line hard limit"
+    "v1 conformance audit: 567 authored test/control files")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR

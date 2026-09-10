@@ -1047,6 +1047,7 @@ struct RandomDistribution {
     RandomDistributionKind kind { RandomDistributionKind::uniform };
     RegisterId first { };
     std::optional<RegisterId> second;
+    SourceLocation source;
 };
 
 /// One scheduler-owned VHDL-2019 STD.ENV data/time operation. REAL values use

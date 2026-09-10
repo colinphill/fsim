@@ -147,9 +147,17 @@ SystemVerilogDpiPluginPlanResult plan_systemverilog_dpi_plugin(
     objects.push_back(object);
     SystemVerilogDpiPluginCommand command;
     command.arguments.push_back(compiler);
+    const bool c_source = manifest.sources[index].extension() == ".c";
     if (platform == SystemVerilogDpiPluginPlatform::Msvc) {
-      command.arguments.insert(command.arguments.end(),
-          {"/nologo", "/std:c++20", "/EHsc", "/Gd", "/c"});
+      command.arguments.push_back("/nologo");
+      if (c_source) {
+        command.arguments.insert(
+            command.arguments.end(), {"/TC", "/std:c11"});
+      } else {
+        command.arguments.insert(
+            command.arguments.end(), {"/TP", "/std:c++20", "/EHsc"});
+      }
+      command.arguments.insert(command.arguments.end(), {"/Gd", "/c"});
       for (const auto& include : manifest.include_directories) {
         command.arguments.push_back(
             "/I" + command_path((source_root / include).lexically_normal()));
@@ -157,8 +165,15 @@ SystemVerilogDpiPluginPlanResult plan_systemverilog_dpi_plugin(
       command.arguments.push_back(command_path(source));
       command.arguments.push_back("/Fo" + command_path(object));
     } else {
+      if (c_source) {
+        command.arguments.insert(
+            command.arguments.end(), {"-x", "c", "-std=c11"});
+      } else {
+        command.arguments.insert(
+            command.arguments.end(), {"-x", "c++", "-std=c++20"});
+      }
       command.arguments.insert(command.arguments.end(),
-          {"-std=c++20", "-fPIC", "-fvisibility=hidden"});
+          {"-fPIC", "-fvisibility=hidden"});
       for (const auto& include : manifest.include_directories) {
         command.arguments.push_back("-I");
         command.arguments.push_back(

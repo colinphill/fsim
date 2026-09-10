@@ -104,6 +104,16 @@ endmodule
             assert(std::ranges::all_of(
                 capture->coverage,
                 [](const auto& coverage) {
+                    return !coverage.instance_identity.empty()
+                        && coverage.source_span != 0U;
+                }));
+            assert(capture->coverage[0].instance_identity
+                == capture->coverage[1].instance_identity);
+            assert(capture->coverage[1].instance_identity
+                == capture->coverage[2].instance_identity);
+            assert(std::ranges::all_of(
+                capture->coverage,
+                [](const auto& coverage) {
                     return coverage.attempts == 1
                         && coverage.passes == 1
                         && coverage.failures == 0;
@@ -113,6 +123,8 @@ endmodule
                 [](const auto& event) {
                     return event.outcome
                         == fsim::app::ConcurrentAssertionOutcome::pass
+                        && !event.instance_identity.empty()
+                        && event.source_span != 0U
                         && event.time == 1 && event.delta == 1;
                 }));
         }

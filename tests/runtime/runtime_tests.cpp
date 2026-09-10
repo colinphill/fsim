@@ -4,11 +4,24 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
+#include <string_view>
 
-int main()
+int main(const int argc, const char* const* argv)
 {
     using namespace fsim::tests::runtime;
     try {
+        if (argc == 2) {
+            if (std::string_view { argv[1] } != "vpi_reference_plugins") {
+                throw std::runtime_error { "unknown runtime test selection" };
+            }
+            test_systemverilog_vpi_reference_plugins();
+            std::cout << "VPI C/C++ reference plug-in tests passed\n";
+            return EXIT_SUCCESS;
+        }
+        if (argc != 1) {
+            throw std::runtime_error { "invalid runtime test selection" };
+        }
         // FSIM-CONFORMANCE CF-COMMON-SCHEDULER-001 source=SRC-COCOTB expectation=execute
         // FSIM-CONFORMANCE CF-COMMON-SIMIR-001 source=SRC-FSIM expectation=execute
         // FSIM-CONFORMANCE CF-COMMON-FAILURE-001 source=SRC-COCOTB expectation=contain
@@ -55,6 +68,7 @@ int main()
         test_systemverilog_vpi_reference_plugins();
         test_systemverilog_vpi_control();
         test_systemverilog_vpi_reset_and_finish_control();
+        test_systemverilog_vpi_assertion_api();
         test_systemverilog_vpi_io_descriptors();
         test_systemverilog_vpi_io_diagnostics_and_teardown();
         test_systemverilog_vpi_system_registration_and_execution();

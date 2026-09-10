@@ -50,6 +50,37 @@ SystemVerilogBindDirective VerilogParser::parse_systemverilog_bind(
     const Token& start)
 {
     SystemVerilogBindDirective directive;
+    const auto overload_operator = [&] {
+        switch (current().kind) {
+        case TokenKind::Assign:
+        case TokenKind::Less:
+        case TokenKind::Greater:
+        case TokenKind::LessEqual:
+        case TokenKind::GreaterEqual:
+        case TokenKind::EqualEqual:
+        case TokenKind::NotEqual:
+        case TokenKind::Plus:
+        case TokenKind::PlusPlus:
+        case TokenKind::Minus:
+        case TokenKind::MinusMinus:
+        case TokenKind::Star:
+        case TokenKind::Power:
+        case TokenKind::Slash:
+        case TokenKind::Percent:
+            return true;
+        default:
+            return false;
+        }
+    }();
+    if (overload_operator
+        && standard_revision_ == StandardRevision::SystemVerilog2023) {
+        diagnose_systemverilog_2023_annex(
+            SystemVerilogAnnexConstruct::operator_overloading,
+            current());
+        skip_to_semicolon();
+        directive.span = span_from(start, previous());
+        return directive;
+    }
     directive.target = parse_systemverilog_hierarchical_name(
         "bind target", true);
     directive.instances = parse_instances();

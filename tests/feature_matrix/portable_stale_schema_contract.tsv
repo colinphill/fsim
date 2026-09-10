@@ -9,8 +9,8 @@ object	future-format	format=8	header-only-input-returns-no-metadata
 object	stale-portable-schema	schemas=0-12	header-only-input-returns-no-metadata
 object	future-portable-schema	schema=14	header-only-input-returns-no-metadata
 object	publication	validate-original-before-canonical-write	no-destination-or-staging-tree-on-downgrade
-portable-unit	owning-unit	FSIMUNIT,schema=31	exact-schema-short-circuit-before-unit-read
-portable-unit	class-unit	FSIMCLSU,schema=31	exact-schema-short-circuit-before-unit-read
+portable-unit	owning-unit	FSIMUNIT,schema=32	exact-schema-short-circuit-before-unit-read
+portable-unit	class-unit	FSIMCLSU,schema=32	exact-schema-short-circuit-before-unit-read
 portable-unit	udp-declaration	FSIMUDPD,schema=1	exact-schema-short-circuit-before-declaration-read
 design	metadata-envelope	format=12,runtime-abi=1	both-identities-reject-before-root-decoding
 design	writer	fixed-format=12	caller-supplied-downgrade-cannot-be-emitted
@@ -29,5 +29,5 @@ library	future-portable-schema	schema=14	returns-no-metadata
 library	lazy-admission	metadata-only	invalid-schema-precedes-portable-or-native-payload-access
 library	publication	validate-original-before-canonical-write	no-destination-or-staging-tree-on-downgrade
 nested	portable-composition	change-8-inventory=65	exact-schema-comparisons-and-no-partial-state
-nested	design-state	runtime=61,semantic=4,design-ir=4,class=12,constraint=7,coverage=7,uvm=3,vhdl=4	stale-future-corrupt-truncated-trailing-reject
+nested	design-state	runtime=62,semantic=4,design-ir=4,class=12,constraint=7,coverage=7,uvm=3,vhdl=4	stale-future-corrupt-truncated-trailing-reject
 nested	sdf-trace-transaction-checkpoint-scv	current-identities-per-owner	bounded-decode-and-transactional-rejection

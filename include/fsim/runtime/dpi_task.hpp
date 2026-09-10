@@ -24,6 +24,7 @@ enum class SystemVerilogDpiTaskError {
   InvalidScope,
   ArityMismatch,
   DirectionMismatch,
+  DeclarationMismatch,
   Disabled,
   SchedulerFailure,
   Exception,
@@ -98,6 +99,10 @@ class SystemVerilogDpiImportedTaskRegistry final {
       std::string linkage_name,
       SystemVerilogDpiScopeHandle scope,
       std::vector<SystemVerilogDpiTransferMode> directions,
+      SystemVerilogDpiImportedTask task);
+  [[nodiscard]] SystemVerilogDpiTaskError register_task(
+      SystemVerilogDpiRuntimeDeclaration declaration,
+      SystemVerilogDpiScopeHandle scope,
       SystemVerilogDpiImportedTask task);
   [[nodiscard]] SystemVerilogDpiTaskStartResult start(
       std::string_view linkage_name,

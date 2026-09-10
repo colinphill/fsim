@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
 
@@ -124,6 +125,7 @@ namespace {
   case StandardRevision::SystemVerilog2009:
   case StandardRevision::SystemVerilog2012:
   case StandardRevision::SystemVerilog2017:
+  case StandardRevision::SystemVerilog2023:
     return KeywordSet::SystemVerilog2005;
   default:
     return keyword_set_for_standard_revision(revision);
@@ -1318,6 +1320,14 @@ bool VerilogParser::instance_start() const {
     return false;
   }
   if (keyword_reserved(keyword_set_, current().text)) {
+    return false;
+  }
+  if (const auto* declaration
+          = find_systemverilog_standard_package_declaration(
+              StandardRevision::SystemVerilog2023, current().text);
+      declaration != nullptr
+      && declaration->kind
+          == SystemVerilogStandardPackageMemberKind::class_type) {
     return false;
   }
   if (at(TokenKind::LeftParen, 1) || at(TokenKind::Hash, 1)) {

@@ -45,6 +45,7 @@ void test_systemverilog_vpi_checkpoint_restart_and_artifact();
 void test_systemverilog_vpi_reference_plugins();
 void test_systemverilog_vpi_control();
 void test_systemverilog_vpi_reset_and_finish_control();
+void test_systemverilog_vpi_assertion_api();
 void test_systemverilog_vpi_io_descriptors();
 void test_systemverilog_vpi_io_diagnostics_and_teardown();
 void test_systemverilog_vpi_system_registration_and_execution();

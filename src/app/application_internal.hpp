@@ -1362,6 +1362,10 @@ std::string make_cache_key(
     const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics);
 
+void add_systemverilog_standard_package_identities(
+    compiler::CacheKeyBuilder& key,
+    const CheckedProject& checked);
+
 std::optional<std::vector<std::string>>
 make_specialization_cache_keys(
     const project::Config& config,

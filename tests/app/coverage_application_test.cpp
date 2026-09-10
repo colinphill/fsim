@@ -268,6 +268,20 @@ endmodule
         }
     }
     assert(project && !diagnostics.has_error());
+    assert(project->systemverilog_coverage.declarations.size() == 1U);
+    assert(project->systemverilog_coverage.instances.size() == 1U);
+    const auto declaration_identity
+        = project->systemverilog_coverage.declarations.front()
+              .canonical_identity;
+    const auto instance_identity
+        = project->systemverilog_coverage.instances.front().runtime_identity;
+    assert(!declaration_identity.empty() && !instance_identity.empty());
+    assert(project->systemverilog_coverage.declarations.front()
+               .standard_revision
+        == fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(project->systemverilog_coverage.instances.front()
+               .declaration_identity
+        == declaration_identity);
     fsim::app::Simulation simulation {
         std::move(*project), config.run.max_deltas, engine
     };
@@ -279,6 +293,20 @@ endmodule
     const auto value = simulation.read_scalar_signal(*signal);
     assert(value.kind == fsim::runtime::SystemVerilogScalarKind::Real);
     assert(value.as_real() && *value.as_real() == 100.0);
+    const auto& coverage = simulation.systemverilog_coverage();
+    assert(coverage.declarations.size() == 1U
+        && coverage.instances.size() == 1U);
+    const auto& instance = coverage.instances.front();
+    assert(instance.declaration_identity == declaration_identity
+        && instance.runtime_identity == instance_identity);
+    assert(instance.bin_hits.size() == 2U);
+    assert(!instance.bin_hits[0].identity.empty()
+        && !instance.bin_hits[1].identity.empty()
+        && instance.bin_hits[0].identity != instance.bin_hits[1].identity);
+    assert(instance.bin_hits[0].hit_count == 1U
+        && instance.bin_hits[1].hit_count == 1U
+        && instance.bin_hits[0].covered
+        && instance.bin_hits[1].covered);
 }
 
 void write_database_source(

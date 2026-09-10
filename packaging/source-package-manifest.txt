@@ -332,6 +332,7 @@ include/fsim/frontend/sdf.hpp
 include/fsim/frontend/source.hpp
 include/fsim/frontend/systemverilog_scalar_folding.hpp
 include/fsim/frontend/systemverilog_scalars.hpp
+include/fsim/frontend/systemverilog_standard_package.hpp
 include/fsim/frontend/token.hpp
 include/fsim/library/artifact.hpp
 include/fsim/library/portable_unit.hpp
@@ -388,6 +389,7 @@ include/fsim/runtime/simir_signal_queries.hpp
 include/fsim/runtime/simir_specify.hpp
 include/fsim/runtime/simir_vital.hpp
 include/fsim/runtime/string_methods.hpp
+include/fsim/runtime/svdpi_bridge.h
 include/fsim/runtime/systemverilog_chandle.hpp
 include/fsim/runtime/systemverilog_scalar.hpp
 include/fsim/runtime/systemverilog_string.hpp
@@ -449,10 +451,12 @@ include/fsim/runtime/vhpi_time.hpp
 include/fsim/runtime/vhpi_type.hpp
 include/fsim/runtime/vhpi_value.hpp
 include/fsim/runtime/vpi_abi.h
+include/fsim/runtime/vpi_bridge.h
 include/fsim/runtime/vpi_callback.hpp
 include/fsim/runtime/vpi_checkpoint.hpp
 include/fsim/runtime/vpi_control.hpp
 include/fsim/runtime/vpi_coverage.hpp
+include/fsim/runtime/vpi_data_read.hpp
 include/fsim/runtime/vpi_error.hpp
 include/fsim/runtime/vpi_io.hpp
 include/fsim/runtime/vpi_object.hpp
@@ -503,7 +507,10 @@ include/fsim/systemc/scv_resources.hpp
 include/fsim/systemc/scv_smart_ptr.hpp
 include/fsim/systemc_abi.h
 include/fsim/version.hpp
+include/sv_vpi_user.h
+include/svdpi.h
 include/systemc
+include/vpi_user.h
 packaging/example-output-freeze.tsv
 packaging/package-policy.txt
 packaging/source-package-exclusions.txt
@@ -609,6 +616,7 @@ src/app/application_simulation_internal.hpp
 src/app/application_simulation_scalar.cpp
 src/app/application_standard_library.cpp
 src/app/application_standard_library_vital.cpp
+src/app/application_standard_package.cpp
 src/app/application_systemc_trace.cpp
 src/app/application_systemc_trace.hpp
 src/app/application_systemverilog_executable_hir.cpp
@@ -894,7 +902,9 @@ src/frontend/sdf_lexer.cpp
 src/frontend/sdf_normalization.cpp
 src/frontend/sdf_parser.cpp
 src/frontend/systemverilog_scalar_folding.cpp
+src/frontend/systemverilog_standard_package.cpp
 src/frontend/verilog_parser.cpp
+src/frontend/verilog_parser_annex.cpp
 src/frontend/verilog_parser_assertion_formals.cpp
 src/frontend/verilog_parser_assertion_locals.cpp
 src/frontend/verilog_parser_assertion_resolution.cpp
@@ -1044,6 +1054,7 @@ src/runtime/simir_string_methods.cpp
 src/runtime/simir_synchronization.cpp
 src/runtime/simir_vital.cpp
 src/runtime/simir_vital_memory_path.cpp
+src/runtime/svdpi.cpp
 src/runtime/systemverilog_chandle.cpp
 src/runtime/systemverilog_scalar.cpp
 src/runtime/systemverilog_scalar_text.cpp
@@ -1130,10 +1141,12 @@ src/runtime/vpi_callback.cpp
 src/runtime/vpi_checkpoint.cpp
 src/runtime/vpi_control.cpp
 src/runtime/vpi_coverage.cpp
+src/runtime/vpi_data_read.cpp
 src/runtime/vpi_error.cpp
 src/runtime/vpi_io.cpp
 src/runtime/vpi_object.cpp
 src/runtime/vpi_plugin.cpp
+src/runtime/vpi_standard.cpp
 src/runtime/vpi_system.cpp
 src/runtime/vpi_time.cpp
 src/runtime/vpi_type_descriptor.cpp
@@ -1777,8 +1790,10 @@ tests/runtime/vhpi_reference_plugin_c.c
 tests/runtime/vhpi_reference_plugin_cpp.cpp
 tests/runtime/vhpi_test_plugin.cpp
 tests/runtime/vpi_coverage_test.cpp
+tests/runtime/vpi_data_read_test.cpp
 tests/runtime/vpi_reference_plugin_c.c
 tests/runtime/vpi_reference_plugin_cpp.cpp
+tests/runtime/vpi_standard_startup_plugin.c
 tests/runtime/vpi_test_plugin.cpp
 tests/scv/scv_artifact_test.cpp
 tests/scv/scv_backend_protocol_test.cpp

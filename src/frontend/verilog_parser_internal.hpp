@@ -56,6 +56,15 @@ enum class KeywordSet {
   SystemVerilog2023,
 };
 
+enum class SystemVerilogAnnexConstruct {
+  sampled_clock_argument,
+  ended_sequence_method,
+  checker_always,
+  operator_overloading,
+  defparam,
+  procedural_assign_deassign,
+};
+
 [[nodiscard]] Language language_for_standard_revision(
     StandardRevision standard);
 [[nodiscard]] KeywordSet keyword_set_for_standard_revision(
@@ -102,6 +111,10 @@ class VerilogParser final : private detail::ParserBase {
 
   [[nodiscard]] bool compatibility_enabled(
       std::string_view name) const noexcept;
+
+  void diagnose_systemverilog_2023_annex(
+      SystemVerilogAnnexConstruct construct,
+      const Token& token);
 
   bool require_standard(
       std::string_view feature,
@@ -715,6 +728,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> container_iterator_names_;
   std::vector<SystemVerilogImport>
       compilation_unit_imports_;
+  std::unordered_map<std::string, std::string>
+      dpi_import_linkage_profiles_;
   std::vector<SystemVerilogAssertionDeclaration>
       compilation_unit_checkers_;
   std::vector<SystemVerilogImport> active_package_imports_;

@@ -681,7 +681,11 @@ end architecture;
             std::move(*project), config.run.max_deltas, engine };
         if (engine != fsim::app::SimulationEngine::interpreter) {
             simulation.await_all_native_compilation();
+#if defined(FSIM_HAS_LLVM)
             assert(simulation.compiled_process_count() != 0U);
+#else
+            assert(simulation.compiled_process_count() == 0U);
+#endif
         }
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);
@@ -938,7 +942,11 @@ end architecture;
             std::move(*project), 1000, engine };
         if (engine != fsim::app::SimulationEngine::interpreter) {
             simulation.await_all_native_compilation();
+#if defined(FSIM_HAS_LLVM)
             assert(simulation.compiled_process_count() != 0U);
+#else
+            assert(simulation.compiled_process_count() == 0U);
+#endif
         }
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);

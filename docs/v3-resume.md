@@ -5,6 +5,10 @@ Read [implementation_plan_v3.md](implementation_plan_v3.md) first. It is the
 authoritative v3 batch and status record. Preserve the completed v1 and v2
 history in their existing plan and resume documents.
 
+Before triggering any hosted CI run authorized by the governing batch cadence,
+inspect the most recent applicable run, its conclusion, and its failing job
+logs. Identify and resolve known actionable errors before starting the new run.
+
 ## Batch 178 planned restart checkpoint - before Change 1
 
 1. Resume in the fsim repository on branch codex/v3. The branch starts from
@@ -8893,3 +8897,631 @@ history in their existing plan and resume documents.
    to Batch 187 Change 1 only: implement the SystemVerilog-2023 DPI declaration
    and runtime revisions. Preserve the exact 20-change cadence and do not pull
    Change 2 header work into the same bounded slice.
+
+## Batch 187 Change 1 checkpoint
+
+1. Batch 187 Change 1 is complete in the accumulated `codex/v3` worktree.
+   DPI imports retain optional formal names and legal named-input defaults,
+   reject `ref` and `const ref`, and compare canonical name/default-independent
+   profiles whenever multiple declarations share one C linkage name across
+   compilation-unit or design-unit ownership.
+2. Runtime exported-callback and imported-task registries accept explicit v3
+   declaration contracts. Export callbacks reject import-only qualifiers;
+   imported tasks require task kind and reject `pure` before publication.
+3. Exact Clang warnings-as-errors Debug builds of `fsim_frontend_tests` and
+   `fsim_runtime_tests` succeeded with eight workers. Their complete binaries
+   pass. The SystemVerilog-2023 inventory has 18 active and 38 preserved rows
+   at normalized SHA-256
+   `f49635744a00e284a0f80c446aeae97e24c0abdac96b551c7865f397ad4f2544`.
+4. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 2: update the standard DPI C layer and
+   `svdpi.h`. Do not begin foreign-code inclusion/context work from Change 3
+   in the same bounded slice.
+
+## Batch 187 Change 2 checkpoint
+
+1. Batch 187 Changes 1-2 are complete in the accumulated `codex/v3`
+   worktree. Preserve both changes uncommitted through Change 20.
+2. A root-level installed `svdpi.h` owns the canonical scalar, vector, open-
+   array, scope, context, and SystemVerilog-2023 time declarations. C11 and
+   C++20 probes freeze its layouts, constants, and representative signatures.
+3. The shared `fsim_tf` link surface exports the standard implementation
+   version and normalized canonical bit-select/part-select utilities. Focused
+   runtime evidence covers word crossings and exact aval/bval four-state
+   behavior.
+4. Installed-public, binary-install ownership, foreign-ABI freeze, source-
+   package, source-line, resource-portability, and SystemVerilog-2023 inventory
+   policies govern the new public surface. Deprecated implementation-specific
+   packed-array helpers remain excluded from the portable boundary.
+5. S23-B187-C02 is preserved. The inventory has 17 active and 39 preserved
+   rows at normalized SHA-256
+   `76ec401a542e44250549ca43b4c7b809d284ff6196f8b85c8ade9cbfa6965526`.
+   The source package has 1,880 files at SHA-256
+   `afd51c75b2a79f2abd03c3ebbba353e9766408034fd1458728a6c57fd4fa77aa`.
+6. Exact Clang warnings-as-errors Debug runtime compilation and the complete
+   runtime binary pass. The focused runtime, inventory, ABI freeze, source,
+   install-ownership, installed-public, and portability policy set passes 8/8
+   in 35.61 wall seconds. No Release, clean-first, sanitizer, hosted-CI,
+   commit, or push action ran.
+7. Proceed only to Batch 187 Change 3: implement revised foreign source
+   inclusion and context behavior. Do not begin the PLI/VPI overview work from
+   Change 4 in the same bounded slice.
+
+## Batch 187 Change 3 checkpoint
+
+1. Batch 187 Changes 1-3 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. DPI foreign source planning selects explicit C11 for `.c` and C++20 for
+   `.cc`/`.cpp`/`.cxx` on POSIX and MSVC-compatible argv surfaces while
+   retaining path, duplicate, visibility, calling-convention, and shell-
+   independence policy.
+3. A versioned 112-byte x86-64 C bridge owns a bounded 64-frame active-context
+   stack. Export callbacks and imported tasks enter and leave the exact top
+   frame across success, re-entry, exception, suspension, and disable paths.
+4. Standard scope, name, scope lookup, caller, scope-keyed user-data, disabled-
+   state, simulation-time, time-unit, and time-precision APIs reach only the
+   current simulation. A real independently authored C plug-in routine proves
+   those calls through a loaded symbol; outside an invocation they fail safely.
+5. S23-B187-C03 is preserved. The inventory has 16 active and 40 preserved
+   rows at normalized SHA-256
+   `1f3795b88ecf4443486a740b7a571f50c781ab8c86ba2f6e078d0981b3212a25`.
+   The source package has 1,881 files at SHA-256
+   `aac27442cec7438a1b60d46d188ec5941600050fdf421a869cc7fa31326c0da0`.
+6. Exact Clang warnings-as-errors Debug runtime compilation and the complete
+   runtime binary pass. The focused runtime, inventory, ABI freeze, source,
+   install, and portability closure passes 8/8 in 29.40 wall seconds. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. Proceed only to Batch 187 Change 4: reconcile the standardized PLI/VPI
+   lifecycle overview with the direct v3 plug-in model. Do not begin the VPI
+   object-model work from Change 5 in the same bounded slice.
+
+## Batch 187 Change 4 checkpoint
+
+1. Batch 187 Changes 1-4 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. The VPI loader accepts either the validated direct v3 bind descriptor or,
+   when that symbol is absent, the standardized ordered null-terminated
+   `vlog_startup_routines` table. It never combines the two entry models.
+3. Direct v3 startup/shutdown containment and exactly-once teardown remain
+   unchanged. Standard startup is bounded at 4,096 entries and publishes the
+   image only after every entry returns; no nonstandard shutdown is invented.
+4. An independently authored C plug-in proves two ordered standard startup
+   routines and observable effects. C11/C++20 probes freeze the standard symbol
+   and routine-pointer contract alongside the existing direct ABI.
+5. S23-B187-C04 is preserved. The inventory has 15 active and 41 preserved
+   rows at normalized SHA-256
+   `62e9c5c6f14d401645c89826eac72ac93d715d526a9d0c7b456e8ae170e224cc`.
+   The source package has 1,882 files at SHA-256
+   `81437e575d304d48355bfbe363101be3ec23bdb8137a1e0498c6a8d8b12255e8`.
+6. Exact Clang warnings-as-errors Debug runtime compilation and the complete
+   runtime binary pass. The focused runtime, inventory, ABI freeze, source,
+   install, and portability closure passes 8/8 in 21.13 wall seconds. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. Proceed only to Batch 187 Change 5: update the complete VPI object model.
+   Do not begin added/revised VPI routine implementation from Change 6 in the
+   same bounded slice.
+
+## Batch 187 Change 5 checkpoint
+
+1. Batch 187 Changes 1-5 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. The VPI object-kind enum is append-only. Root through min/typ/max retain
+   explicit identities 0 through 21, and the complete 2023 hierarchy,
+   primitive, callable, statement, assertion, coverage, declaration, type,
+   selection, call, and attribute taxonomy follows those values.
+3. Object lookup now exposes live-child counts and canonical creation
+   ordinals. Generic properties own their returned strings, carry explicit
+   result types, inherit existing type provenance, and distinguish absent
+   optional metadata from an unsupported property.
+4. Typed iterators select one exact kind globally or below a validated parent.
+   Relationship iterators select parent, children, internal scopes,
+   declarations, ports, nets, variables, parameters, processes, assertions,
+   drivers, expressions, arguments, types, and coverage in deterministic
+   creation order. Every scan revalidates generation and liveness.
+5. Independently authored runtime evidence covers numeric stability,
+   capabilities, structural objects, properties, typed and relationship
+   traversal, invalid selectors, cross-simulation rejection, and release after
+   snapshot. `vpi_object.cpp` remains at 1,997 lines.
+6. S23-B187-C05 is preserved. The inventory has 14 active and 42 preserved
+   rows at normalized SHA-256
+   `2fb4beb07ebaf03112c36bb38a69fea0a961cdd0760d36353ecc34b638708ea1`.
+   The source package remains at 1,882 paths and SHA-256
+   `81437e575d304d48355bfbe363101be3ec23bdb8137a1e0498c6a8d8b12255e8`.
+7. Exact Clang warnings-as-errors Debug runtime compilation succeeds and the
+   complete runtime binary passes. Source-line, source-package, inventory, and
+   resource-portability policy tests pass. No Release, clean-first, sanitizer,
+   hosted-CI, commit, or push action ran.
+8. Proceed only to Batch 187 Change 6: implement every revised or added VPI
+   routine. Do not begin the assertion API from Change 7 in the same bounded
+   slice.
+
+## Batch 187 Change 6 checkpoint
+
+1. Batch 187 Changes 1-6 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. `SystemVerilogVpiRoutineKind` and its index-stable 42-entry catalog cover
+   the complete 2023 callback, system-callable, hierarchy, property, value,
+   delay, time, lifetime, comparison, data, user-data, control, diagnostic,
+   formatted-output, MCD, and file routine surface. Every entry names one sized
+   service family and explicit handle/result/callback policy.
+3. `invoke_systemverilog_vpi_2023_routine` validates the v2 host prefix,
+   callback, request size/family, one-megabyte text ceiling, and null/optional/
+   required handle policy before callback entry. It contains exceptions and
+   validates callback/result status, size, reserved fields, and required
+   returned handles before publication.
+4. Stable `FSIM-VPI-ROUTINE-001` through `-007` error views distinguish unknown
+   routines, invalid hosts, invalid requests, missing handles, exceptions,
+   callback rejection, and malformed results. Invalid host callback pointers
+   are never entered.
+5. Independently authored runtime evidence freezes all 42 names and indices,
+   rejects unknown/vendor selectors, and covers every dispatch failure class.
+   S23-B187-C06 is preserved. The inventory has 13 active and 43 preserved rows
+   at normalized SHA-256
+   `afdb5f6a0487117f5bdcd48867b4d121fbfe6c7cf1d3301bbe5cd49722d26a10`.
+   The source package remains at 1,882 paths and SHA-256
+   `81437e575d304d48355bfbe363101be3ec23bdb8137a1e0498c6a8d8b12255e8`.
+6. Exact Clang warnings-as-errors Debug runtime compilation and the complete
+   runtime binary pass. Source-line, source-package, inventory, and resource-
+   portability gates pass. No Release, clean-first, sanitizer, hosted-CI,
+   commit, or push action ran.
+7. Proceed only to Batch 187 Change 7: implement the assertion API. Do not
+   begin the standardized coverage API validation from Change 8 in the same
+   bounded slice.
+
+## Batch 187 Change 7 checkpoint
+
+1. Batch 187 Changes 1-7 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. `SystemVerilogVpiAssertionApi` validates generation-qualified assertion
+   objects and exposes global or object-selected reset, enable, disable, and
+   kill controls. A common-control hook must accept the request before API
+   state changes; failure and exception paths leave no partial state.
+3. Integrated `Simulation` control uses the existing concurrent-assertion
+   spawn filter, target enable/disable overrides, dynamic-process cancellation,
+   and pending-attempt map. HDL and foreign controls therefore share one
+   scheduler/execution model.
+4. Every common completion records saturating attempt, success, failure,
+   vacuous, disabled, and aborted counts before using the existing persistent
+   VPI callback manager. Disabled observations remain visible but do not count
+   as attempts. Object tracking is limited to 65,536 entries and combined
+   event text to one MiB; reservations preserve resource checks across control
+   re-entry.
+5. Runtime evidence covers all assertion kinds/outcomes and failure classes.
+   Application evidence globally disables the assertion engine, selectively
+   enables one hierarchy assertion, executes it, and matches API statistics to
+   the callback stream. Exact Clang warnings-as-errors Debug runtime and VPI
+   application targets compile; `fsim.runtime` and `fsim.application.vpi` pass.
+6. S23-B187-C07 is preserved. The inventory has 12 active and 44 preserved
+   rows at normalized SHA-256
+   `2b2cbaf8c4d55140ed3606c9a7524ab0a160895be3f8e3a63513a72881075850`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. Proceed only to Batch 187 Change 8: validate the complete standardized
+   coverage API against the unified v3 coverage database. Do not begin the
+   data-read API from Change 9 in the same bounded slice.
+
+## Batch 187 Change 8 checkpoint
+
+1. Batch 187 Changes 1-8 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. The standardized coverage service retains the exact six controls, four
+   metric types, presence and aggregate properties, six assertion counters,
+   FSM/state relations and values, generation-qualified iterators, and typed
+   failure boundaries. New evidence enters every control/type family and
+   contains statistics and control provider exceptions.
+3. Integrated assertion coverage now reads Change 7 assertion API state
+   directly. Start, stop, reset, and check map to the common enable, disable,
+   reset, and saturation state; attempt, success, failure, vacuous, disabled,
+   and killed properties cannot drift from the callback completion stream.
+4. An independently authored coverage-enabled application fixture publishes a
+   bounded statement inventory, runs concurrent assertions, compares coverage
+   properties to assertion API statistics, atomically saves and decodes a
+   direct-v3 `.fsimcov`, and proves duplicate-run merge rejection leaves it
+   unchanged. Unavailable toggle storage returns NOCOV and creates no file.
+5. The post-documentation database schema/model/codec/merge/partial-merge/
+   robustness, SystemVerilog functional, PSL, VPI application/runtime,
+   source-budget, source-package, resource-portability, and inventory lane
+   passes 14/14 in 29.77 wall seconds. Its first run found one inventory
+   evidence-owner formatting error; the correction retains one repository
+   path per ownership field.
+6. S23-B187-C08 is preserved. The inventory has 11 active and 45 preserved
+   rows at normalized SHA-256
+   `255ead76f3d672af85aa021e2f8bdc498bd361cd1bfa5ba725be3fa030f34916`.
+   The source package remains at 1,882 paths and SHA-256
+   `81437e575d304d48355bfbe363101be3ec23bdb8137a1e0498c6a8d8b12255e8`.
+7. Exact Clang warnings-as-errors Debug VPI runtime/application targets compile
+   with eight workers. No Release, clean-first, sanitizer, hosted-CI, commit,
+   or push action ran.
+8. Proceed only to Batch 187 Change 9: implement the standardized data-read
+   API. Do not begin normative header updates from Change 10 in the same
+   bounded slice.
+
+## Batch 187 Change 9 checkpoint
+
+1. Batch 187 Changes 1-9 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. `SystemVerilogVpiDataReadService` freezes the standard traverse/collection,
+   property, access, loaded-iteration, and navigation identities. It supports
+   limited-interactive, history-preserving interactive, and post-process
+   histories over the existing generation-qualified VPI registry.
+3. Scope and collection loading selects only value-bearing objects. A
+   collection transaction stages only its affected histories before an
+   all-or-none commit; it never takes a whole-registry or whole-history
+   snapshot. Loaded-object iteration is declaration ordered and hierarchy
+   filtered.
+4. Object/traverse collections, kind and Boolean filtering, single and common-
+   time collection traversal, minimum/maximum/previous/next/time navigation,
+   no-value positions, exact canonical values, unload/close behavior, and
+   explicit reader-handle release are implemented with distinct checked
+   failures and resource ceilings.
+5. Every `Simulation` owns a live limited-interactive reader clocked by the
+   common scheduler. Application evidence loads a real hierarchy object and
+   observes its effective forced value through both interpreter and LLVM runs.
+6. Exact Clang warnings-as-errors Debug runtime/application targets compile
+   with eight workers. The post-documentation source-line, source-package,
+   SystemVerilog-2023 inventory, resource-portability, VPI application,
+   complete runtime, and data-read lane passes 7/7 in 16.06 wall seconds.
+7. S23-B187-C09 is preserved. The inventory has 10 active and 46 preserved
+   rows at normalized SHA-256
+   `47b41d236d3d7284556080298cef7b548aca6ac0cd43e0b3ace4cf43e02a4c61`.
+   The source package has 1,885 paths at SHA-256
+   `642a2c5b0b60e695c56fb4cace39742d55f63438678f2eac251b30d7c36b85a6`.
+8. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 10: update the normative VPI and
+   compatibility headers over this typed reader service.
+
+## Batch 187 Change 10 checkpoint
+
+1. Batch 187 Changes 1-10 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. The installed SDK now owns root `vpi_user.h` and `sv_vpi_user.h` names plus
+   the internal `vpi_abi.h` and `vpi_bridge.h`. C11/C++20 probes freeze public
+   scalar, handle, time, vector, value, delay, callback, assertion-attempt, and
+   bridge layouts, numeric identities, and representative signatures.
+3. `fsim_tf` exports the core, array-value, assertion, and data-reader C entry
+   points. A bounded 64-frame thread-local context marshals them through the
+   Change 6 checked dispatcher, bounds text to one MiB, supports nested re-
+   entry, and returns safe failure values outside a live context.
+4. The plugin loader enters that context for v2-host standard startup tables
+   and direct startup. V1 hosts retain their frozen loader behavior without an
+   invented service callback. The C startup fixture proves a normative call
+   reaches the v2 lifecycle service; invalid and mismatched context frames are
+   rejected without host entry.
+5. Root and runtime headers are installed byte-for-byte, owned by the install
+   manifest, and compiled/linked by the installed C consumer against
+   `fsim::tf`. Source-line, source-package, foreign-ABI, binary-ownership,
+   installed-public, resource-portability, runtime, and inventory evidence
+   passes 8/8 in 21.43 wall seconds after exact Clang warnings-as-errors Debug
+   target compilation.
+6. S23-B187-C10 is preserved. The inventory has 9 active and 47 preserved rows
+   at normalized SHA-256
+   `faa1fe14de216236dfb3edf0cfb7ad10244636e47d2b5e562f18ca6c2ed4ba37`.
+   The source package has 1,889 paths at SHA-256
+   `f1da31ccafd7296f02d40d5ee7f11e77007198db74cecf4cae4b49790f11619f`.
+7. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 11: update standard package behavior. Do
+   not begin random-distribution work from Change 12 in the same bounded slice.
+
+## Batch 187 Change 11 checkpoint
+
+1. Batch 187 Changes 1-11 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. `systemverilog_standard_package` provides a zero-allocation declaration
+   view and exact revision/digest for each SystemVerilog source profile.
+   SystemVerilog-2005 through 2017 expose `mailbox`, `process`, `semaphore`,
+   and `randomize`; SystemVerilog-2023 additionally exposes parameterized
+   `weak_reference` and records the revised final `process` contract.
+3. Qualified and implicit standard class spellings share one parser/type path.
+   `std::process::self()` reaches the existing process runtime. Unknown or
+   profile-ineligible `std` members diagnose `FSIM-ELAB-SVPKG-011`, and source
+   cannot redeclare compiler-owned `package std` (`FSIM-SV-SEM-270`).
+4. Every parsed SystemVerilog unit records its package revision and declaration
+   identity. Portable-library schema 32 round-trips both fields and rejects
+   schema 31; sorted unique identities participate in the whole-design and
+   specialization cache keys.
+5. The new non-template cache-key helper is a separate `.cpp` translation unit.
+   `application_run.cpp` is 1,999 lines and remains below the project-wide
+   2,000-line ceiling.
+6. Exact Clang warnings-as-errors Debug frontend/library/application targets
+   compile with eight workers. The focused application, library, schema,
+   source-line, source-package, SystemVerilog-2023 inventory, and resource-
+   portability lane passes.
+7. S23-B187-C11 is preserved. The inventory has 8 active and 48 preserved rows
+   at normalized SHA-256
+   `a8c3f9025f94744741ba5eee824ad59453813e59c927c606657467fb9eb29ec9`.
+   The source package has 1,895 paths at SHA-256
+   `98461ffe85853c8a2b46e09f4c25a209d6d2fa4f15d13f0116873efbcf4de6b8`.
+8. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 12: update the standardized random-
+   distribution implementation. Do not begin annex/deprecation work from
+   Change 13 in the same bounded slice.
+
+## Batch 187 Change 12 checkpoint
+
+1. Batch 187 Changes 1-12 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. All seven integer `$dist_*` routines use one bounded transactional service
+   for interpreter and compiled execution. The standardized sampler consumes
+   the low 23 bits of each updated nonzero seed through exact binary32
+   construction, so replay is deterministic across LLVM O0/O2 and the
+   interpreter.
+3. Invalid distribution domains and X/Z arguments return zero without changing
+   the seed and emit stable source-located warnings. Equal or reversed uniform
+   bounds return the first bound without consuming the seed. Negative normal
+   deviation and zero-mean Erlang are legal. Rejection sampling is limited to
+   one million draws and rolls back the seed on exhaustion.
+4. `RandomDistribution` carries source provenance through lowering, native-
+   cache keys, and `.fsimdesign` serialization. The owning runtime-state schema
+   is 62 and explicitly rejects stale schema 61 and future schema 63;
+   portable-unit schema 32 is unchanged.
+5. Exact Clang warnings-as-errors Debug application, runtime, and LLVM targets
+   compile with eight workers. The focused random, artifact, runtime, LLVM,
+   inventory, ABI-reference, nested/stale/owning schema, source-line, source-
+   package, and resource-portability evidence passes.
+6. S23-B187-C12 is preserved. The inventory has 7 active and 49 preserved rows
+   at normalized SHA-256
+   `62bf468043f8569d9dd52a0b7001bb2fb44eba841c4f726116f93f3052a808a2`.
+   The source package remains 1,895 paths at SHA-256
+   `98461ffe85853c8a2b46e09f4c25a209d6d2fa4f15d13f0116873efbcf4de6b8`.
+7. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 13: apply the normative syntax, keyword,
+   and deprecation annex requirements. Do not begin legacy TF/ACC interaction
+   proof from Change 14 in the same bounded slice.
+
+## Batch 187 Change 13 checkpoint
+
+1. Batch 187 Changes 1-13 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. SystemVerilog-2017 and 2023 use distinct keyword-set identities with the
+   same reserved-word contents. The `keyword-profile` selector now reaches
+   the SystemVerilog-2005 keyword set from exact 2023 without restoring any
+   source form removed from the 2023 grammar.
+3. A separate non-template parser translation unit owns the annex policy.
+   Exact 2023 rejects a clocked `$sampled` second argument, sequence `.ended`,
+   general checker `always`, and operator-overload bind declarations with
+   `FSIM-SV-DEPR-001`. Specialized checker always forms remain accepted.
+4. Exact 2023 retains `defparam` and procedural `assign`/`deassign` with one
+   source-located `FSIM-SV-DEPR-002` warning per construct. SystemVerilog-2017
+   receives neither the removal errors nor candidate warnings.
+5. Exact Clang warnings-as-errors Debug frontend/application targets compile
+   with eight workers. The focused frontend, application, inventory,
+   compatibility, standard-mode, source-line, source-package, and resource
+   lane plus declared dependencies passes 33/33.
+6. S23-B187-C13 is preserved. The inventory has 6 active and 50 preserved rows
+   at normalized SHA-256
+   `59d12129b1d171f6eab42541b1c265b6c26e6006847bd602c7ef20ec0aabc4f6`.
+   The source-package manifest has 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+7. `verilog_parser_units.cpp` is 1,922 lines after moving the non-template
+   defparam implementation into the annex translation unit. Every touched
+   implementation file remains below the 2,000-line ceiling.
+8. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 14: prove legacy TF/ACC interaction with
+   the exact 2023 profile. Do not begin new-construct coverage proof from
+   Change 15 in the same bounded slice.
+
+## Batch 187 Change 14 checkpoint
+
+1. Batch 187 Changes 1-14 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. Exact SystemVerilog-2023 source now has focused coexistence evidence for a
+   context DPI import and registered TF task/function call sites. The direct-v3
+   C TF plug-in resolves in every retained Verilog/SystemVerilog profile,
+   including exact 2023, while all VHDL profiles reject that namespace.
+3. The application TF scheduler binds and executes the loaded direct-v3 task
+   specifically as SystemVerilog-2023. It retains the established serialized
+   call, publication, and callback boundaries.
+4. During one TF callback, the ACC context and standardized DPI context map
+   module/root scopes onto the same simulation-owned VPI object identities.
+   Caller location, time/scale, user data, TF arguments, values, work area,
+   generation, and teardown remain coherent and bounded.
+5. Exact Clang warnings-as-errors Debug frontend, application, and runtime
+   targets compile with eight workers. The focused frontend, application,
+   runtime, legacy-inventory, source, SystemVerilog-2023 inventory, and
+   resource-contract lane passes 11/11 in 40.95 wall seconds.
+6. S23-B187-C14 is preserved. The inventory has 5 active and 51 preserved rows
+   at normalized SHA-256
+   `f1f38eac68ee70717a89d41b20309a89be024819910ffcc5d30743af66656c3c`.
+   The source-package manifest remains 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+7. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 15: prove code, assertion, and functional
+   coverage for the supported new constructs. Do not begin scheduler-phase
+   callback proof from Change 16 in the same bounded slice.
+
+## Batch 187 Change 15 checkpoint
+
+1. Batch 187 Changes 1-15 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. Exact-2023 statement-coverage evidence now covers the revised streaming and
+   aggregate-pattern assignment targets, tolerance membership expression, and
+   string `foreach`. Each source has two hierarchy instances and one
+   executable point; declarations and the null loop body create no synthetic
+   points. Source/instance identity, hit counts, and aggregation agree through
+   interpreter, Debug, and LLVM O0-O3 execution.
+3. The exact-2023 real-coverpoint application proves stable declaration,
+   runtime-instance, and distinct exact/tolerance-bin identities. Both bins
+   score one hit and 100-percent coverage through interpreter and LLVM O0/O2.
+4. Concurrent assertion registration now publishes the elaborated instance
+   path and semantic source-span identity in the coverage record and every
+   assertion event. Exact-2023 checker assertions prove the identities and
+   pass totals through interpreter and cold/warm LLVM O0/O2, closing the empty
+   identity fields previously forwarded to callbacks and VPI.
+5. Exact Clang warnings-as-errors Debug application targets compile with eight
+   workers. The coverage database, source budget/package, inventory, resource,
+   code/metric equivalence, functional coverage, assertions, common runtime,
+   and VPI coverage lane passes 11/11 in 45.99 wall seconds.
+6. S23-B187-C15 is preserved. The inventory has 4 active and 52 preserved rows
+   at normalized SHA-256
+   `e69c5efb680116f3025e2cac8a68e0cdb0e6c3a4e6af429f2d5f6a088db58db0`.
+   The source-package manifest remains 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+7. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 16: prove DPI and VPI callbacks across all
+   governed scheduler phases with deterministic re-entry containment. Do not
+   begin artifact/cache/checkpoint/debug/trace proof from Change 17 in the same
+   bounded slice.
+
+## Batch 187 Change 16 checkpoint
+
+1. Batch 187 Changes 1-16 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. An integrated runtime fixture executes DPI exports and immediate VPI
+   lifecycle notifications in all eight scheduler regions: active, inactive,
+   update, observed, reactive, re-inactive, re-update, and postponed. Region,
+   time, user-data, simulation, registration, and one-shot identities remain
+   exact.
+3. VPI callback dispatch now owns a per-kind re-entry guard. Recursive
+   delivery of the same active notification returns `ReentrantDispatch`
+   instead of recursing or silently dropping a request. Different kinds and
+   later notifications remain available.
+4. Nested DPI callbacks retain the scheduler region, install and restore their
+   own scopes, and preserve the outer foreign call context. Recursive DPI entry
+   reaches the existing 64-frame context ceiling, returns its contained error,
+   and unwinds with no borrowed context or scope left behind.
+5. Exact Clang warnings-as-errors Debug runtime compilation passes with eight
+   workers. The runtime, SystemVerilog-2023 inventory, and resource-portability
+   lane passes 3/3 in 35.03 wall seconds.
+6. S23-B187-C16 is preserved. The inventory has 3 active and 53 preserved rows
+   at normalized SHA-256
+   `4b27e72c1b2d7d75080ebc67712a9cf7e69e6b16c17e95445d2ff92ad4a81aec`.
+   The source-package manifest remains 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+7. Before any future hosted CI run authorized by the cadence, inspect the most
+   recent applicable run, conclusion, and failing logs, and resolve known
+   actionable errors before triggering the new run.
+8. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 17: prove artifact, cache, checkpoint,
+   debug, and trace behavior. Do not begin the cross-platform foreign-
+   application proof from Change 18 in the same bounded slice.
+
+## Batch 187 Change 17 checkpoint
+
+1. Batch 187 Changes 1-17 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. The exact-2023 conformance artifact runs after its source and object are
+   hidden and after the design is relocated. Profile, class-specialization,
+   result, and cache-key identities agree across interpreter, cold/warm LLVM
+   O2, and Debug execution.
+3. Each engine captures the same byte-exact versioned checkpoint and decodes it
+   back to the original artifact. The cold compiled run owns misses/stores;
+   warm and relocated compiled runs own the corresponding hits.
+4. `DebuggerControl` observes the final SystemVerilog signal in Debug. An
+   artifact-only compiled CLI run emits a filtered VCD carrying the hierarchy,
+   signal, final value, and exact `systemverilog-2023` provenance.
+5. The persistence proof was added to the 1,855-line SystemVerilog conformance
+   unit. The existing 1,956-line artifact-phase translation unit was not
+   enlarged.
+6. Exact Clang warnings-as-errors Debug application compilation passes with
+   eight workers. The conformance application, SystemVerilog-2023 inventory,
+   and resource-portability lane passes 3/3 in 23.85 wall seconds.
+7. S23-B187-C17 is preserved. The inventory has 2 active and 54 preserved rows
+   at normalized SHA-256
+   `457cfcb70a73fecacf3e538a44039d0ad72c6b1a4840848ce79a5b9a2490bb6b`.
+   The source-package manifest remains 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+8. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 18: prove independently authored C and C++
+   foreign applications on both platforms. Do not begin inventory closure from
+   Change 19 in the same bounded slice.
+
+## Batch 187 Change 18 checkpoint
+
+1. Batch 187 Changes 1-18 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted through Change 20.
+2. Independently authored C11 and C++20 VPI reference applications use only
+   the public v3 ABI and exercise all ten typed host services across
+   interpreter, LLVM O0, and LLVM O2 host identities, relocation, lifecycle,
+   malformed-result, resource, old-host, and post-unload cases.
+3. `fsim.runtime.vpi_reference_plugins` selects that bounded proof from the
+   existing runtime executable. The C and C++ shared libraries, compile
+   definitions, dependencies, resource lock, and CTest labels are identical in
+   Linux and Windows configurations; no second harness or duplicate test
+   compilation was added.
+4. Exact Clang warnings-as-errors Debug runtime compilation passes with eight
+   workers, and both reference libraries build locally. The dedicated runtime,
+   source budget/package, inventory, and resource-portability lane passes 5/5
+   in 34.64 wall seconds.
+5. S23-B187-C18 is preserved. The inventory has 1 active and 55 preserved rows
+   at normalized SHA-256
+   `f38a9e912a836c4e6c057518b3c5dc5b41ea3f433e1a4332e2c6018ea605bf68`.
+   The source-package manifest remains 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+6. Hosted Windows execution remains deferred to the authorized v3.0 release
+   qualification. Before triggering that run, inspect the most recent
+   applicable CI status and failing logs and resolve known actionable errors.
+7. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Proceed only to Batch 187 Change 19: close the final active
+   SystemVerilog-2023 inventory row. Do not begin Change 20 qualification in the
+   same bounded slice.
+
+## Batch 187 Change 19 checkpoint
+
+1. Batch 187 Changes 1-19 are complete in the accumulated `codex/v3`
+   worktree. Preserve them uncommitted until Change 20 performs the standard
+   closure.
+2. All 56 independently worded SystemVerilog-2023 delta rows are preserved and
+   zero remain active. The normalized inventory SHA-256 is
+   `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+3. The governed SystemVerilog closure selection passes 29/29 in 90.28 wall
+   seconds. Its 26 witnesses plus inventory, audit, and matrix completion cover
+   semantics, frontend, elaboration, libraries/artifacts, interpreter/LLVM,
+   VPI/runtime, Debug/VCD, assertions, randomization, coverage,
+   hierarchy/interfaces, timing/SDF, UVM, typed boundaries, and mixed
+   VHDL/SystemC composition.
+4. C11/C++20 VPI applications remain locally green; their identical hosted
+   Windows selector is deferred to the authorized v3.0 release CI.
+5. No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+   Change 20 must first compile the clean Clang Release configuration and fix
+   any compiler errors. Only then run the final Debug suite, update closure
+   documentation, commit once, and push once. Batch 187 is not a sanitizer or
+   hosted-CI boundary.
+6. Before any later authorized hosted CI trigger, inspect the most recent
+   applicable run, conclusion, and failing logs and resolve known actionable
+   errors first.
+
+## Batch 187 Change 20 checkpoint
+
+1. Batch 187 is complete in the accumulated `codex/v3` worktree. Its single
+   implementation commit and push follow the final documentation checks; do
+   not split the batch into additional commits.
+2. The clean Clang warnings-as-errors Release build completed all 3,149 build
+   steps. After correcting exact-evidence audit drift and the obsolete local
+   prohibition on the standardized `vpi_printf` export, the full Release suite
+   passes 408/408 in 571.45 wall seconds.
+3. The audit evidence is the measured 2,758 diagnostics, 1,525 authored
+   sources, 1,828 authored SPDX entries, 777 test/control paths, and 567
+   v1-conformance test/control paths. The governed IEEE license reference is
+   accepted only for the exact standardized `include/vpi_user.h` and
+   `include/sv_vpi_user.h` public headers; Apache remains required everywhere
+   else.
+4. The subsequent clean Clang warnings-as-errors Debug build completed all
+   3,149 build steps. The full Debug suite passes 408/408 in 527.08 wall
+   seconds.
+5. Full SystemVerilog-2023 support is declared complete: all 56 independently
+   worded delta rows are preserved and zero remain active at normalized
+   SHA-256
+   `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+   The source-package manifest contains 1,896 paths at SHA-256
+   `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+6. Batch 187 is not a sanitizer or hosted-CI boundary, so neither lane ran.
+   Sanitizer and hosted qualification remain owned by Batch 188 Change 20
+   under the active v3.0 release goal.
+7. After the one commit and push, proceed only to Batch 188 Change 1: audit
+   zero unresolved rows across coverage, PLI, VHDL, and SystemVerilog. Do not
+   begin Release, sanitizer, or hosted-CI qualification before Change 20.
+8. Whenever Batch 188 Change 20 authorizes hosted CI, first inspect the most
+   recent applicable run, its conclusion, and every failing log, and resolve
+   known actionable errors before triggering a new run.
+9. The pre-push inspection of Batch 186 run `34439219992` identified four
+   actionable classes: unconditional compiled-process assertions in an LLVM-
+   disabled VHDL-2019 test, a concurrent Windows cache-shard creation race,
+   Windows process-start pressure under four-way hosted execution, and stale
+   Windows package audit inventories. The test now distinguishes LLVM-enabled
+   and disabled builds; cache publication validates the directory
+   postcondition after a racing create; all five hosted build/test commands use
+   two workers; and package audits expect 395/399 non-recursive tests plus
+   1,259 entries.
+10. The focused cache, resource-portability, source-line, and source-package
+    lane passes 4/4. At the owner's direction, do not repeat the already-green
+    Batch 187 full Release/Debug qualification for these CI-preflight-only
+    changes before commit and push.

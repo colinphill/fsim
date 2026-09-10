@@ -21,9 +21,20 @@
 
 namespace fsim::runtime::simir {
 
+enum class RandomDistributionIssue : std::uint8_t {
+    none,
+    exponential_mean,
+    poisson_mean,
+    chi_square_degrees,
+    student_t_degrees,
+    erlang_stages,
+    resource_limit,
+};
+
 struct RandomDistributionResult {
     std::int32_t value { };
     std::int32_t seed { };
+    RandomDistributionIssue issue { RandomDistributionIssue::none };
 };
 
 [[nodiscard]] RandomDistributionResult evaluate_random_distribution(
@@ -31,6 +42,9 @@ struct RandomDistributionResult {
     std::int32_t seed,
     std::int32_t first,
     std::optional<std::int32_t> second);
+
+[[nodiscard]] std::string_view random_distribution_issue_message(
+    RandomDistributionIssue issue) noexcept;
 
 void validate_container_value(const ContainerValue& value);
 
@@ -966,6 +980,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_stochastic_queue(
         ProcessState&, const StochasticQueueOperation&);
     void execute_pla(ProcessState&, const PlaEvaluate&);
+    void execute_random_distribution(ProcessState&, const RandomDistribution&);
 
     [[nodiscard]] static ValueKind register_value_kind(
         const ProcessState& process,

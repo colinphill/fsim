@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build --preset "${{ matrix.preset }}" --parallel 4 2>&1 \
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
 
       - name: Test
@@ -164,7 +164,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build "${{ matrix.build_dir }}" --parallel 4 2>&1 \
+          cmake --build "${{ matrix.build_dir }}" --parallel 2 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
 
       - name: Test
@@ -225,7 +225,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build --preset ci-fuzz --parallel 4 2>&1 \
+          cmake --build --preset ci-fuzz --parallel 2 2>&1 \
             | tee -a "${FSIM_RETAINED_LOG}"
 
       - name: Fuzz lexer and parser
@@ -275,8 +275,8 @@ jobs:
             binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
             binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log
             install_log: build/qualification/batch177-change20-windows-no-llvm-install.log
-            expected_tests: '371'
-            expected_archive_entries: '1252'
+            expected_tests: '395'
+            expected_archive_entries: '1259'
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
@@ -286,8 +286,8 @@ jobs:
             binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip
             binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log
             install_log: build/qualification/batch177-change20-windows-llvm22-install.log
-            expected_tests: '375'
-            expected_archive_entries: '1252'
+            expected_tests: '399'
+            expected_archive_entries: '1259'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -382,7 +382,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          & cmake --build "${{ matrix.build_dir }}" --parallel 4 2>&1 `
+          & cmake --build "${{ matrix.build_dir }}" --parallel 2 2>&1 `
             | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -392,7 +392,7 @@ jobs:
           CTEST_OUTPUT_ON_FAILURE: '1'
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$' 2>&1 `
+          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 2 --progress --output-on-failure -LE '^recursive-closure$' 2>&1 `
             | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

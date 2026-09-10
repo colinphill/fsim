@@ -38,7 +38,7 @@ foreach(FSIM_INPUT IN ITEMS
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "ca4193e587e93d48ac90bc8d63c5085d5a7b79a7b8e160e2074324a5994e974e")
+  "74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf")
 fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -124,9 +124,9 @@ foreach(FSIM_INDEX RANGE 2 57)
   endforeach()
 endforeach()
 
-if(NOT FSIM_ACTIVE_COUNT EQUAL 19 OR NOT FSIM_PRESERVED_COUNT EQUAL 37)
+if(NOT FSIM_ACTIVE_COUNT EQUAL 0 OR NOT FSIM_PRESERVED_COUNT EQUAL 56)
   message(FATAL_ERROR
-    "SystemVerilog-2023 inventory must contain 19 active and 37 preserved rows after Batch 186 Change 19")
+    "SystemVerilog-2023 inventory must contain 0 active and 56 preserved rows after Batch 187 Change 19")
 endif()
 foreach(FSIM_BATCH IN ITEMS 185 186 187)
   if(FSIM_BATCH EQUAL 185)

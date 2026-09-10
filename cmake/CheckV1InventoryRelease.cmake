@@ -44,9 +44,9 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "diagnostic catalog covers 2746 production codes"
-    "Checked 1510 authored sources against the 2000-line hard limit"
-    "v1 conformance audit: 565 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
+    "diagnostic catalog covers 2758 production codes"
+    "Checked 1525 authored sources against the 2000-line hard limit"
+    "v1 conformance audit: 567 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
     "v1 conformance corpus: 100 expectations, 28 fixtures, 27 CTests, 715a4a1846f160a785171c86b777972cfd194271450b5b267588424d4a4a6f07")
   string(FIND
     "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
@@ -77,19 +77,25 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1813)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1828)
   message(FATAL_ERROR
-    "authored license inventory changed: expected 1813 files, "
+    "authored license inventory changed: expected 1828 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
   file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
+  file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
   string(FIND
     "${FSIM_PREFIX}" "SPDX-License-Identifier: Apache-2.0" FSIM_SPDX_INDEX)
   if(FSIM_SPDX_INDEX EQUAL -1)
-    file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
-    message(FATAL_ERROR
-      "authored release artifact lacks Apache-2.0 SPDX notice: ${FSIM_RELATIVE}")
+    string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: LicenseRef-IEEE-1800"
+      FSIM_IEEE_SPDX_INDEX)
+    if((NOT FSIM_RELATIVE STREQUAL "include/vpi_user.h" AND
+        NOT FSIM_RELATIVE STREQUAL "include/sv_vpi_user.h") OR
+       FSIM_IEEE_SPDX_INDEX EQUAL -1)
+      message(FATAL_ERROR
+        "authored release artifact lacks an approved SPDX notice: ${FSIM_RELATIVE}")
+    endif()
   endif()
 endforeach()
 

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/dpi_callback.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -82,6 +84,180 @@ namespace {
                 return event.kind == kind;
             });
         return found == events.end() ? nullptr : &*found;
+    }
+
+    void test_foreign_callbacks_across_scheduler_phases()
+    {
+        using fsim::runtime::SchedulerPhase;
+        using fsim::runtime::SystemVerilogDpiCallbackContext;
+        using fsim::runtime::SystemVerilogDpiCallbackError;
+        using fsim::runtime::SystemVerilogDpiCallbackFrame;
+        using fsim::runtime::SystemVerilogDpiCallbackRegistry;
+        using fsim::runtime::SystemVerilogDpiScopeRegistry;
+
+        constexpr std::array phases {
+            SchedulerPhase::active,
+            SchedulerPhase::inactive,
+            SchedulerPhase::update,
+            SchedulerPhase::observed,
+            SchedulerPhase::reactive,
+            SchedulerPhase::re_inactive,
+            SchedulerPhase::re_update,
+            SchedulerPhase::postponed,
+        };
+        constexpr std::array lifecycle_kinds {
+            SystemVerilogVpiCallbackKind::StartOfSimulation,
+            SystemVerilogVpiCallbackKind::EndOfSimulation,
+            SystemVerilogVpiCallbackKind::StartOfReset,
+            SystemVerilogVpiCallbackKind::EndOfReset,
+            SystemVerilogVpiCallbackKind::StartOfSave,
+            SystemVerilogVpiCallbackKind::EndOfSave,
+            SystemVerilogVpiCallbackKind::StartOfRestart,
+            SystemVerilogVpiCallbackKind::EndOfRestart,
+        };
+
+        Scheduler scheduler;
+        SystemVerilogVpiObjectRegistry objects { 904 };
+        SystemVerilogVpiTimeService time_service {
+            scheduler, SystemVerilogVpiTimeProfile { -9, -12 }
+        };
+        SystemVerilogVpiCallbackManager vpi {
+            objects, scheduler, time_service, 50'000
+        };
+        SystemVerilogDpiScopeRegistry scopes { 904 };
+        const auto outer_scope = scopes.define("top");
+        const auto inner_scope = scopes.define("top.inner", outer_scope.value);
+        SystemVerilogDpiCallbackRegistry dpi { scopes };
+        SystemVerilogDpiCallbackContext context { scopes };
+
+        std::optional<SchedulerPhase> expected_phase;
+        std::vector<SchedulerPhase> vpi_phases;
+        std::vector<SchedulerPhase> dpi_outer_phases;
+        std::vector<SchedulerPhase> dpi_inner_phases;
+        std::size_t dpi_reentry_depth { };
+        std::size_t dpi_max_reentry_depth { };
+        std::size_t dpi_reentry_contained { };
+        bool exact_identity { true };
+        const auto inner_registered = dpi.register_callback(
+            "phase_inner", inner_scope.value, { },
+            [&](SystemVerilogDpiCallbackFrame& frame) {
+                const auto phase = scheduler.current_phase();
+                exact_identity = exact_identity && phase == expected_phase
+                    && frame.current_scope() == inner_scope.value
+                    && fsim_svdpi_current_call_context_v3() != nullptr;
+                if (phase) {
+                    dpi_inner_phases.push_back(*phase);
+                }
+            });
+        const auto outer_registered = dpi.register_callback(
+            "phase_outer", outer_scope.value, { },
+            [&](SystemVerilogDpiCallbackFrame& frame) {
+                const auto phase = scheduler.current_phase();
+                exact_identity = exact_identity && phase == expected_phase
+                    && frame.current_scope() == outer_scope.value
+                    && fsim_svdpi_current_call_context_v3() != nullptr;
+                if (phase) {
+                    dpi_outer_phases.push_back(*phase);
+                }
+                const auto nested = dpi.dispatch("phase_inner", { }, context);
+                exact_identity = exact_identity && nested
+                    && frame.current_scope() == outer_scope.value
+                    && fsim_svdpi_current_call_context_v3() != nullptr;
+            });
+        const auto recursive_registered = dpi.register_callback(
+            "phase_recursive", outer_scope.value, { },
+            [&](SystemVerilogDpiCallbackFrame& frame) {
+                ++dpi_reentry_depth;
+                dpi_max_reentry_depth = std::max(
+                    dpi_max_reentry_depth, dpi_reentry_depth);
+                exact_identity = exact_identity
+                    && scheduler.current_phase() == expected_phase
+                    && frame.current_scope() == outer_scope.value
+                    && fsim_svdpi_current_call_context_v3() != nullptr;
+                if (dpi_reentry_depth < 100U) {
+                    const auto nested = dpi.dispatch(
+                        "phase_recursive", { }, context);
+                    if (nested.error == SystemVerilogDpiCallbackError::Exception
+                        && nested.message
+                            == "DPI context stack rejected callback entry") {
+                        ++dpi_reentry_contained;
+                    } else if (!nested) {
+                        exact_identity = false;
+                    }
+                }
+                --dpi_reentry_depth;
+            });
+        require_vpi_callback(
+            outer_scope && inner_scope
+                && inner_registered == SystemVerilogDpiCallbackError::None
+                && outer_registered == SystemVerilogDpiCallbackError::None
+                && recursive_registered
+                    == SystemVerilogDpiCallbackError::None,
+            "foreign scheduler-phase fixtures register exact DPI scopes");
+
+        std::vector<fsim::runtime::SystemVerilogVpiCallbackHandle> handles;
+        handles.reserve(phases.size());
+        for (std::size_t index = 0; index < phases.size(); ++index) {
+            const auto kind = lifecycle_kinds[index];
+            const auto registration = vpi.register_callback(
+                { kind, std::nullopt, std::nullopt, 300U + index,
+                    [&, kind, index](const SystemVerilogVpiCallbackEvent& event) {
+                        const auto phase = scheduler.current_phase();
+                        exact_identity = exact_identity
+                            && phase == expected_phase
+                            && event.kind == kind
+                            && event.user_data == 300U + index
+                            && event.time.ticks == scheduler.now()
+                            && event.simulation_identity == 904;
+                        if (phase) {
+                            vpi_phases.push_back(*phase);
+                        }
+                        exact_identity = exact_identity
+                            && vpi.dispatch_lifecycle_now(kind)
+                                == SystemVerilogVpiCallbackError::ReentrantDispatch;
+                        context.set_simulation_time(
+                            scheduler.now(), -9, -12);
+                        exact_identity = exact_identity
+                            && dpi.dispatch("phase_outer", { }, context)
+                            && !context.current_scope()
+                            && fsim_svdpi_current_call_context_v3() == nullptr;
+                        exact_identity = exact_identity
+                            && dpi.dispatch("phase_recursive", { }, context)
+                            && !context.current_scope()
+                            && fsim_svdpi_current_call_context_v3() == nullptr;
+                    } });
+            require_vpi_callback(
+                static_cast<bool>(registration),
+                "VPI scheduler-phase lifecycle registration failed");
+            handles.push_back(registration.value);
+            scheduler.schedule(phases[index], 60'000U + index,
+                [&, kind, index](Scheduler&) {
+                    expected_phase = phases[index];
+                    if (vpi.dispatch_lifecycle_now(kind)
+                        != SystemVerilogVpiCallbackError::None) {
+                        exact_identity = false;
+                    }
+                });
+        }
+
+        const auto run = scheduler.run();
+        bool all_fired { true };
+        for (const auto handle : handles) {
+            all_fired = all_fired
+                && vpi.status(handle).status
+                    == SystemVerilogVpiCallbackStatus::Fired;
+        }
+        require_vpi_callback(
+            run.status == fsim::runtime::RunStatus::completed
+                && exact_identity && all_fired
+                && vpi_phases == std::vector<SchedulerPhase>(
+                    phases.begin(), phases.end())
+                && dpi_outer_phases == vpi_phases
+                && dpi_inner_phases == vpi_phases
+                && dpi_reentry_depth == 0U
+                && dpi_max_reentry_depth == 64U
+                && dpi_reentry_contained == phases.size(),
+            "DPI and VPI callbacks preserve every scheduler phase, contain same-kind VPI re-entry, and restore nested DPI context deterministically");
     }
 
 } // namespace
@@ -389,6 +565,8 @@ void test_systemverilog_vpi_callbacks()
         other_manager.status(value_a_first.value).error
             == SystemVerilogVpiCallbackError::CrossManager,
         "VPI callback handles preserve manager ownership within one simulation");
+
+    test_foreign_callbacks_across_scheduler_phases();
 }
 void test_systemverilog_vpi_callback_lifecycle()
 {

@@ -20,7 +20,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "ed52d2fee0ffe00edd1010c9c965cf7db78431aeb08602af77185cea0989a017")
+  "4ed5b234150396c0cffb4f7b7ed8bd87ed9223b994f2e4a453227314d051be2d")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "nested portable contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -116,7 +116,7 @@ set(FSIM_DESIGN_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 61"
+  "kRuntimeStateSchema = 62"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 4"
   "kClassStateSchema = 12"
@@ -132,7 +132,7 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "design state exceeds the safe structural nesting depth"
   "design state contains trailing bytes")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 61"
+  "kRuntimeStateSchema == 62"
   "kSystemVerilogCoverageStateSchema == 7"
   "kSystemVerilogUvmStateSchema == 3"
   "future-coverage-state.bin"

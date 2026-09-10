@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -717,7 +718,13 @@ Expression VerilogParser::parse_primary()
         }
         while (match(TokenKind::Scope)) {
             canonical += "::";
-            canonical += expect_identifier("package-scoped name").text;
+            const bool standard_member = canonical == "std::"
+                && at(TokenKind::Identifier)
+                && find_systemverilog_standard_package_declaration(
+                       standard_revision_, current().text) != nullptr;
+            canonical += (standard_member
+                ? advance()
+                : expect_identifier("package-scoped name")).text;
         }
         if (canonical == "$unit" || canonical.starts_with("$unit::")
             || canonical == "$root" || canonical.starts_with("$root::")
@@ -840,6 +847,12 @@ Expression VerilogParser::parse_primary()
             }
             expect(TokenKind::RightParen, "')' after arguments",
                 "FSIM-SV-PARSE-028");
+            if (canonical == "$sampled" && arguments.size() == 2U
+                && arguments.back().kind != ExpressionKind::Invalid) {
+                diagnose_systemverilog_2023_annex(
+                    SystemVerilogAnnexConstruct::sampled_clock_argument,
+                    name);
+            }
             expression = Expression { ExpressionKind::Call, canonical,
                 std::move(arguments),
                 cover(name.span, previous().span) };

@@ -83,8 +83,7 @@ int main() {
     }
   }
   for (const char* const forbidden : {
-           "err_intercept", "veriuser_version_str", "endofcompile_routines",
-           "vpi_printf"}) {
+           "err_intercept", "veriuser_version_str", "endofcompile_routines"}) {
     if (!require(link_library->symbol(forbidden, error) == nullptr &&
                      !error.empty(),
                  "TF link library exports a plugin-owned or vendor symbol")) {

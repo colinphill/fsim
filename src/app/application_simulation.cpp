@@ -455,6 +455,18 @@ Simulation::systemverilog_vpi_time() const noexcept
     return *impl_->vpi_time;
 }
 
+runtime::SystemVerilogVpiDataReadService&
+Simulation::systemverilog_vpi_data_read() noexcept
+{
+    return *impl_->vpi_data_read;
+}
+
+const runtime::SystemVerilogVpiDataReadService&
+Simulation::systemverilog_vpi_data_read() const noexcept
+{
+    return *impl_->vpi_data_read;
+}
+
 runtime::SystemVerilogVpiCallbackManager&
 Simulation::systemverilog_vpi_callbacks() noexcept
 {
@@ -489,6 +501,18 @@ const runtime::SystemVerilogVpiControlService&
 Simulation::systemverilog_vpi_control() const noexcept
 {
     return *impl_->vpi_control;
+}
+
+runtime::SystemVerilogVpiAssertionApi&
+Simulation::systemverilog_vpi_assertions() noexcept
+{
+    return *impl_->vpi_assertions;
+}
+
+const runtime::SystemVerilogVpiAssertionApi&
+Simulation::systemverilog_vpi_assertions() const noexcept
+{
+    return *impl_->vpi_assertions;
 }
 
 void Simulation::set_safe_point_hook(SafePointHook hook)

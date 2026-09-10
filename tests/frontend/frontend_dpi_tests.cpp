@@ -57,7 +57,7 @@ endprogram : dpi_program
 
 module dpi_top;
   import "DPI-C" function chandle acquire();
-  import "DPI-C" task transfer(input logic [7:0] source[4], output int result, inout int state, const ref int handle);
+  import "DPI-C" task transfer(input logic [7:0] source[4], output int result, inout int state, int unnamed, input int defaulted = 7);
   export "DPI-C" function release_handle;
   function void release_handle;
   endfunction : release_handle
@@ -190,16 +190,64 @@ endmodule : dpi_top
       });
   require(
       task != module->systemverilog_dpi_declarations.end()
-          && task->formals.size() == 4
+          && task->formals.size() == 5
           && task->formals[0].direction == PortDirection::Input
           && !task->formals[0].type_tokens.empty()
           && task->formals[0].type_tokens.front().text == "logic"
           && task->formals[0].dimension_tokens.size() == 3
           && task->formals[1].direction == PortDirection::Output
           && task->formals[2].direction == PortDirection::Inout
-          && task->formals[3].direction == PortDirection::Ref
-          && task->formals[3].const_reference,
-      "task directions, packed type, unpacked dimension, and const ref parse");
+          && task->formals[3].direction == PortDirection::Input
+          && task->formals[3].name == "unnamed"
+          && task->formals[4].name == "defaulted"
+          && task->formals[4].default_tokens.size() == 1
+          && task->formals[4].default_tokens.front().text == "7",
+      "task directions, packed type, dimensions, and defaults parse");
+
+  const auto revised_profile = parse_verilog(
+      SourceText { "dpi-revised-profile.sv", R"(
+import "DPI-C" pure aliases = function int left(input int, bit [7:0]);
+module dpi_alias_owner;
+  import "DPI-C" pure aliases = function int right(input int value, bit [7:0] payload = 8'h2a);
+endmodule
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      revised_profile.ok()
+          && revised_profile.design.systemverilog_dpi_declarations.size() == 1
+          && revised_profile.design.units.size() == 1
+          && revised_profile.design.units.front()
+                 .systemverilog_dpi_declarations.size() == 1
+          && revised_profile.design.systemverilog_dpi_declarations.front()
+                 .formals.front().name.empty()
+          && revised_profile.design.units.front()
+                 .systemverilog_dpi_declarations.front()
+                 .formals.back().default_tokens.size() == 1,
+      "2023 DPI aliases retain compatible profiles across owner scopes");
+
+  const auto legacy_pli_composition = parse_verilog(
+      SourceText { "sv2023-foreign-composition.sv", R"(
+import "DPI-C" context function int dpi_transform(input int value);
+module sv2023_foreign_composition;
+  int value;
+  initial begin
+    $fsim_tf_link_probe();
+    value = $fsim_tf_function_probe();
+    value = dpi_transform(value);
+  end
+endmodule
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      legacy_pli_composition.ok()
+          && legacy_pli_composition.design
+                 .systemverilog_dpi_declarations.size() == 1
+          && legacy_pli_composition.design.units.size() == 1
+          && legacy_pli_composition.design.units.front().standard_revision
+              == StandardRevision::SystemVerilog2023
+          && legacy_pli_composition.design.units.front().processes.size() == 1,
+      "exact-2023 source retains DPI and registered legacy TF call sites in "
+      "one design unit");
 
   const auto unterminated = parse_text(
       "dpi-unterminated.sv",
@@ -222,8 +270,11 @@ import "DPI-C" function int ();
 export "DPI-C" pure function invalid_export;
 import "DPI-C" pure task invalid_pure_task();
 import "DPI-C" pure function int invalid_pure_output(output int value);
-import "DPI-C" function int defaulted(input int value = 1);
+import "DPI-C" function int bad_ref(ref int value);
+import "DPI-C" function int bad_default(output int value = 1);
+import "DPI-C" shared_a = function int alias_a(input int value);
 module invalid_scope;
+  import "DPI-C" shared_a = function int alias_b(input longint value);
   import "DPI-C" function int duplicate(input int value);
   import "DPI-C" function int duplicate(input int other);
   import "DPI-C" function int native_conflict();
@@ -256,6 +307,9 @@ endmodule
           && has_code("FSIM-SV-SEM-229")
           && has_code("FSIM-SV-SEM-230"),
       "DPI link, callable-kind, and name failures have stable diagnostics");
+  require(
+      has_code("FSIM-SV-SEM-393"),
+      "incompatible declarations sharing a C linkage name are rejected");
 }
 
 }  // namespace fsim::tests::frontend

@@ -3,6 +3,8 @@
 function(fsim_add_tf_link_surface target)
   add_library(
     ${target} SHARED
+    "${PROJECT_SOURCE_DIR}/src/runtime/svdpi.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/vpi_standard.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/tf_link.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/tf_containment.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/acc_lifecycle.cpp"
@@ -28,6 +30,8 @@ function(fsim_add_tf_link_surface target)
     PRIVATE
       FSIM_TF_LINK_SURFACE_BUILD=1
       FSIM_ACC_LINK_SURFACE_BUILD=1
+      FSIM_SVDPI_LINK_SURFACE_BUILD=1
+      FSIM_VPI_LINK_SURFACE_BUILD=1
       FSIM_PROJECT_VERSION="${PROJECT_VERSION}"
   )
   target_include_directories(

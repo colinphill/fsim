@@ -1166,6 +1166,14 @@ void VerilogParser::structure_assertion_endpoints(
 {
     const auto& tokens = declaration.expression_tokens;
     for (std::size_t position = 0; position < tokens.size(); ++position) {
+        if (tokens[position].text == "ended"
+            && position >= 2U
+            && tokens[position - 1U].kind == TokenKind::Dot) {
+            diagnose_systemverilog_2023_annex(
+                SystemVerilogAnnexConstruct::ended_sequence_method,
+                tokens[position]);
+            continue;
+        }
         if (tokens[position].text != "matched"
             && tokens[position].text != "triggered") {
             continue;
@@ -1363,6 +1371,11 @@ VerilogParser::parse_assertion_declaration(
             } else if (at(TokenKind::Backtick)) {
                 parse_directive();
             } else {
+                if (keyword("always")) {
+                    diagnose_systemverilog_2023_annex(
+                        SystemVerilogAnnexConstruct::checker_always,
+                        current());
+                }
                 if (at(TokenKind::Identifier)
                     && assertion_local_type_keyword(current().text)
                     && at(TokenKind::Assign, 1)) {

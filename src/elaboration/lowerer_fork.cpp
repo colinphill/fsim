@@ -21,7 +21,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_process_expression(
         || expression.kind != ExpressionKind::Call) {
         return { };
     }
-    if (expression.text == "process::self") {
+    if (expression.text == "process::self"
+        || expression.text == "std::process::self") {
         if (!expression.operands.empty()) {
             report(
                 "FSIM-ELAB-SVPROCESS-001",

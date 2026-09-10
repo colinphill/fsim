@@ -25,7 +25,19 @@ void test_systemverilog_vpi_objects_and_errors() {
   using fsim::runtime::SystemVerilogVpiObjectError;
   using fsim::runtime::SystemVerilogVpiObjectKind;
   using fsim::runtime::SystemVerilogVpiObjectRegistry;
+  using fsim::runtime::SystemVerilogVpiPropertyKind;
+  using fsim::runtime::SystemVerilogVpiPropertyValueKind;
+  using fsim::runtime::SystemVerilogVpiRelationshipKind;
   using fsim::runtime::SystemVerilogVpiSourceLocation;
+
+  static_assert(static_cast<std::uint32_t>(SystemVerilogVpiObjectKind::Root)
+      == 0U);
+  static_assert(static_cast<std::uint32_t>(
+                    SystemVerilogVpiObjectKind::MinTypMax)
+      == 21U);
+  static_assert(static_cast<std::uint32_t>(
+                    SystemVerilogVpiObjectKind::ModuleArray)
+      == 22U);
 
   SystemVerilogVpiErrorState invalid_errors{0};
   require_vpi_state(
@@ -262,6 +274,116 @@ void test_systemverilog_vpi_objects_and_errors() {
       first.lookup(root.value).error
           == SystemVerilogVpiObjectError::ReleasedHandle,
       "VPI registry retains released-root identity until safe reuse");
+
+  const auto capabilities = SystemVerilogVpiObjectRegistry::capabilities();
+  require_vpi_state(
+      capabilities.systemverilog_revision == 2023U
+          && capabilities.object_kind_count
+              == static_cast<std::uint32_t>(
+                     SystemVerilogVpiObjectKind::AttributeSpecification)
+                  + 1U
+          && capabilities.relationship_kind_count == 15U
+          && capabilities.property_kind_count == 24U
+          && capabilities.stable_numeric_identities
+          && capabilities.source_locations && capabilities.type_provenance
+          && capabilities.snapshot_iterators,
+      "VPI capabilities publish the bounded complete 2023 object model");
+
+  SystemVerilogVpiObjectRegistry model{43};
+  const auto model_root =
+      model.create(SystemVerilogVpiObjectKind::Root, 0, "model");
+  const auto model_module =
+      model.create(SystemVerilogVpiObjectKind::Module, model_root.value, "u");
+  const auto model_port =
+      model.create(SystemVerilogVpiObjectKind::Port, model_module.value, "p");
+  const auto model_always =
+      model.create(SystemVerilogVpiObjectKind::Always, model_module.value, "a");
+  const auto model_expression = model.create(
+      SystemVerilogVpiObjectKind::Expression, model_always.value, "condition");
+  const auto model_type = model.create(
+      SystemVerilogVpiObjectKind::TypeSpecification,
+      model_module.value,
+      "logic_t");
+  require_vpi_state(
+      model_root && model_module && model_port && model_always
+          && model_expression && model_type,
+      "VPI registry represents hierarchy declarations statements expressions and types");
+
+  const auto kind_property =
+      model.property(model_always.value, SystemVerilogVpiPropertyKind::ObjectKind);
+  const auto parent_property =
+      model.property(model_always.value, SystemVerilogVpiPropertyKind::Parent);
+  const auto ordinal_property =
+      model.property(model_always.value, SystemVerilogVpiPropertyKind::Ordinal);
+  const auto width_property =
+      model.property(model_port.value, SystemVerilogVpiPropertyKind::Width);
+  require_vpi_state(
+      kind_property
+          && kind_property.kind == SystemVerilogVpiPropertyValueKind::ObjectKind
+          && kind_property.object_kind == SystemVerilogVpiObjectKind::Always
+          && parent_property
+          && parent_property.kind == SystemVerilogVpiPropertyValueKind::Handle
+          && parent_property.handle == model_module.value
+          && ordinal_property && ordinal_property.unsigned_integer != 0U
+          && width_property && width_property.unsigned_integer == 1U
+          && model.property(
+                   model_always.value,
+                   SystemVerilogVpiPropertyKind::SourceFile)
+                 .error
+              == SystemVerilogVpiObjectError::NotFound
+          && model.property(
+                   model_always.value,
+                   static_cast<SystemVerilogVpiPropertyKind>(999U))
+                 .error
+              == SystemVerilogVpiObjectError::InvalidProperty,
+      "VPI generic properties preserve owning values and distinguish absent metadata");
+
+  const auto processes = model.iterate_relationship(
+      model_module.value, SystemVerilogVpiRelationshipKind::Processes);
+  const auto process = model.scan(processes.value);
+  const auto expressions = model.iterate_relationship(
+      model_always.value, SystemVerilogVpiRelationshipKind::Expressions);
+  const auto expression = model.scan(expressions.value);
+  const auto parent = model.iterate_relationship(
+      model_always.value, SystemVerilogVpiRelationshipKind::Parent);
+  const auto parent_item = model.scan(parent.value);
+  const auto types = model.iterate_objects(
+      SystemVerilogVpiObjectKind::TypeSpecification, model_module.value);
+  const auto type_item = model.scan(types.value);
+  require_vpi_state(
+      processes && process.value == model_always.value
+          && model.scan(processes.value).error
+              == SystemVerilogVpiIteratorError::End
+          && expressions && expression.value == model_expression.value
+          && parent && parent_item.value == model_module.value
+          && types && type_item.value == model_type.value,
+      "VPI relationship and typed iterators use deterministic snapshot order");
+  require_vpi_state(
+      model.iterate_objects(
+               static_cast<SystemVerilogVpiObjectKind>(999U))
+              .error
+          == SystemVerilogVpiIteratorError::InvalidKind
+          && model.iterate_relationship(
+                   model_module.value,
+                   static_cast<SystemVerilogVpiRelationshipKind>(999U))
+                 .error
+              == SystemVerilogVpiIteratorError::InvalidRelationship
+          && model.iterate_relationship(
+                   second_root.value,
+                   SystemVerilogVpiRelationshipKind::Children)
+                 .error
+              == SystemVerilogVpiIteratorError::InvalidObject,
+      "VPI iterator construction rejects unsupported and cross-simulation selectors");
+
+  const auto stale_snapshot = model.iterate_objects(
+      SystemVerilogVpiObjectKind::Port, model_module.value);
+  require_vpi_state(
+      stale_snapshot
+          && model.release(model_port.value)
+              == SystemVerilogVpiObjectError::None
+          && model.scan(stale_snapshot.value).error
+              == SystemVerilogVpiIteratorError::ReleasedHandle,
+      "VPI snapshot iterators never return a released object as live");
 }
 
 }  // namespace fsim::tests::runtime

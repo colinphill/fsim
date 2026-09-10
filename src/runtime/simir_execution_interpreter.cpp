@@ -1811,35 +1811,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, RandomDistribution>) {
-                    const auto integer_operand = [&](const RegisterId register_id) {
-                        const auto& operand = get_register(process, register_id);
-                        if (operand.width() != 32U || operand.is_logic9()
-                            || operand.low_word().bval != 0U) {
-                            fail(process,
-                                "random distribution operand must be a known 32-bit integer");
-                        }
-                        return std::bit_cast<std::int32_t>(
-                            static_cast<std::uint32_t>(operand.low_word().aval));
-                    };
-                    const auto seed = integer_operand(op.seed);
-                    const auto first = integer_operand(op.first);
-                    const auto second = op.second
-                        ? std::optional<std::int32_t> {
-                              integer_operand(*op.second)
-                          }
-                        : std::nullopt;
-                    const auto evaluated = evaluate_random_distribution(
-                        op.kind, seed, first, second);
-                    get_register(process, op.destination)
-                        = PackedLogic4::from_aval_bval(
-                            32U,
-                            std::bit_cast<std::uint32_t>(evaluated.value),
-                            0U);
-                    get_register(process, op.seed)
-                        = PackedLogic4::from_aval_bval(
-                            32U,
-                            std::bit_cast<std::uint32_t>(evaluated.seed),
-                            0U);
+                    execute_random_distribution(process, op);
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, VhdlEnvironmentTime>

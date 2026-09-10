@@ -23,6 +23,11 @@ starts on branch codex/v3 from clean v2 checkpoint
   are green.
 - Batch 180 and Batch 190 remain tenth-batch sanitizer and hosted-CI
   boundaries.
+- Whenever the governing cadence authorizes a new hosted CI run, inspect the
+  most recent applicable run first, including the status and failing job logs,
+  and identify existing errors before triggering the new run. Resolve known
+  actionable failures in the worktree instead of starting a run merely to
+  rediscover them.
 - Local builds use at least eight workers. Local and hosted qualification
   commands retain 120-minute timeouts.
 - Avoid formatting-only header changes. Make semantic header edits only when
@@ -5437,26 +5442,533 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 187 - SystemVerilog-2023 foreign APIs and complete closure
 
-1. Implement DPI declaration and runtime revisions.
-2. Update the standard DPI C layer and svdpi.h.
-3. Implement revised foreign-code inclusion and context behavior.
-4. Reconcile PLI/VPI overview rules with the v3 plugin model.
-5. Update the complete VPI object model.
-6. Implement every revised or added VPI routine.
-7. Implement the assertion API.
-8. Validate the complete standardized coverage API against Batch 180.
-9. Implement the data-read API.
-10. Update normative VPI and compatibility headers.
-11. Update standard package behavior.
-12. Update the standardized random-distribution implementation.
+1. **Complete.** Implement DPI declaration and runtime revisions.
+
+   DPI import formals now follow the callable boundary instead of ordinary
+   SystemVerilog argument rules: names are optional, named input formals may
+   retain defaults, and `ref`/`const ref` passing is rejected. A canonical
+   name-independent profile preserves callable kind, qualifier, return type,
+   direction, type, and dimensions. Imports that share one C linkage name are
+   accepted across compilation-unit and design-unit owners only when those
+   profiles agree; names and default expressions do not perturb compatibility.
+
+   Runtime callback and imported-task registration accepts an explicit v3 DPI
+   declaration contract. Export callbacks reject import-only qualifiers, while
+   imported tasks require task kind and reject `pure`; all failures occur
+   before registry publication. Independently authored exact-2023 frontend
+   evidence covers unnamed formals, defaults, compatible cross-owner aliases,
+   illegal references/defaults, and incompatible aliases. Runtime evidence
+   covers declaration-checked context tasks and transactional rejection. Exact
+   Clang warnings-as-errors Debug frontend/runtime builds and both complete
+   focused binaries pass. S23-B187-C01 is preserved, leaving 18 active and 38
+   preserved rows at normalized SHA-256
+   `f49635744a00e284a0f80c446aeae97e24c0abdac96b551c7865f397ad4f2544`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+2. **Complete.** Update the standard DPI C layer and `svdpi.h`.
+
+   Fsim now installs a root-level, independently authored `svdpi.h` with the
+   canonical two-state and four-state scalar/vector representations, stable
+   VPI-compatible vector and time layouts, packed-word helpers, open-array
+   access declarations, scope/context declarations, and the SystemVerilog-2023
+   simulation-time, time-unit, and time-precision declarations. Deprecated
+   implementation-representation helpers are deliberately absent from the
+   portable v3 boundary.
+
+   The existing cross-platform `fsim_tf` link surface exports the standard
+   implementation version plus canonical bit-select and narrow part-select
+   helpers. They preserve normalized word indexing and all four logic states;
+   invalid null or negative accesses fail without dereferencing storage. C11
+   and C++20 compile-time probes freeze scalar, vector, time, alignment,
+   offset, constant, and function-signature compatibility. Runtime evidence
+   exercises word crossings and aval/bval updates. Installed-public and binary
+   ownership gates require an exact copy of `svdpi.h`, while the foreign-ABI
+   freeze checker owns the header and implementation tokens.
+
+   Exact Clang warnings-as-errors Debug runtime compilation and the complete
+   focused runtime binary pass. The runtime, inventory, ABI freeze, source,
+   install-ownership, installed-public, and portability closure passes 8/8 in
+   35.61 wall seconds. S23-B187-C02 is preserved, leaving 17 active
+   and 39 preserved rows at normalized SHA-256
+   `76ec401a542e44250549ca43b4c7b809d284ff6196f8b85c8ade9cbfa6965526`.
+   The deterministic source package contains 1,880 files at SHA-256
+   `afd51c75b2a79f2abd03c3ebbba353e9766408034fd1458728a6c57fd4fa77aa`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+3. **Complete.** Implement revised foreign-code inclusion and context behavior.
+
+   Foreign source planning now compiles `.c` inputs explicitly as C11 and
+   `.cc`/`.cpp`/`.cxx` inputs explicitly as C++20 on both the POSIX and MSVC-
+   compatible argv surfaces. Both retain PIC/default-hidden or DLL calling-
+   convention policy, and source/include paths remain relative, normalized,
+   duplicate-free, and shell-independent before any command is published.
+
+   A versioned C bridge installs one simulation-owned DPI context only across
+   an actual exported callback or imported-task invocation. The bounded 64-
+   frame thread-local stack validates its complete callback table, supports
+   nested re-entry, rejects mismatched exits, and is removed on success,
+   exception, disable, and task suspension. Standard scope lookup/set/name,
+   caller information, scope-keyed user data, disabled-state, simulation-time,
+   time-unit, and time-precision calls delegate through that exact context;
+   outside a call they return no-context failure values.
+
+   An independently authored C shared-library routine links against the
+   installed-equivalent `fsim_tf` surface and proves the standard APIs through
+   a dynamically resolved symbol. C11/C++20 probes freeze the 112-byte x86-64
+   bridge prefix. The exact Clang warnings-as-errors Debug runtime target and
+   complete runtime binary pass; the focused runtime, inventory, ABI freeze,
+   source, install, and portability closure passes 8/8 in 29.40 wall seconds.
+   S23-B187-C03 is preserved, leaving 16 active
+   and 40 preserved rows at normalized SHA-256
+   `1f3795b88ecf4443486a740b7a571f50c781ab8c86ba2f6e078d0981b3212a25`.
+   The deterministic source package contains 1,881 files at SHA-256
+   `aac27442cec7438a1b60d46d188ec5941600050fdf421a869cc7fa31326c0da0`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+4. **Complete.** Reconcile PLI/VPI overview rules with the v3 plug-in model.
+
+   The loader now recognizes two explicit, disjoint entry models. The direct
+   v3 path retains its sized host and plug-in descriptors, validated bind,
+   contained startup, and exactly-once explicit or destructor-driven shutdown.
+   If that bind symbol is absent, the loader recognizes the standardized
+   `vlog_startup_routines` table, invokes its entries in declaration order up
+   to a 4,096-entry null-termination ceiling, and publishes one owner only
+   after all startup routines return. A standard-table image has no invented
+   shutdown ABI; its registered end-of-simulation callbacks remain the
+   language-level teardown surface and the loader owns image lifetime.
+
+   Independently authored C evidence exports two standard startup routines and
+   proves their order/effects without a direct descriptor. Existing C++
+   fixtures retain bind/startup failure containment and exactly-once shutdown.
+   C11 and C++20 probes freeze the standard entry symbol and routine-pointer
+   representation. The exact Clang warnings-as-errors Debug runtime target and
+   complete runtime binary pass; the focused runtime, inventory, ABI freeze,
+   source, install, and portability closure passes 8/8 in 21.13 wall seconds.
+   S23-B187-C04 is preserved, leaving 15 active
+   and 41 preserved rows at normalized SHA-256
+   `62e9c5c6f14d401645c89826eac72ac93d715d526a9d0c7b456e8ae170e224cc`.
+   The deterministic source package contains 1,882 files at SHA-256
+   `81437e575d304d48355bfbe363101be3ec23bdb8137a1e0498c6a8d8b12255e8`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+5. **Complete.** Update the complete VPI object model.
+
+   The VPI registry now publishes an append-only 2023 taxonomy spanning
+   hierarchy arrays, primitives, callables, statements, assertions, coverage,
+   declarations, types, selections, calls, and attributes. The pre-existing
+   root-through-min/typ/max identities are explicitly frozen at 0 through 21;
+   every new kind follows them without renumbering an established value. A
+   bounded capability record makes the supported object, relationship,
+   property, and iterator inventory queryable.
+
+   Object metadata now retains its creation ordinal and live-child count.
+   Generic property results own strings and distinguish object, handle,
+   unsigned, and Boolean values, absent optional metadata, and invalid
+   properties. Typed iterators select an exact kind globally or beneath one
+   parent. Relationship iterators cover parent, children, scopes,
+   declarations, ports, nets, variables, parameters, processes, assertions,
+   drivers, expressions, arguments, types, and coverage in canonical creation
+   order. Scan revalidates every snapshotted handle, so release or slot reuse
+   cannot return a dead object as live.
+
+   Independently authored runtime evidence freezes the old and first appended
+   numeric identities, capabilities, structural construction, owning
+   properties, typed and relationship iteration, unsupported selectors,
+   cross-simulation containment, and released-snapshot behavior. The VPI
+   runtime compiles warning-clean with exact Clang in Debug and its complete
+   test binary passes. Source-line, source-package, inventory, and resource-
+   portability gates pass; `vpi_object.cpp` remains below the 2,000-line
+   translation-unit ceiling. S23-B187-C05 is preserved, leaving 14 active and
+   42 preserved rows at normalized SHA-256
+   `2fb4beb07ebaf03112c36bb38a69fea0a961cdd0760d36353ecc34b638708ea1`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+6. **Complete.** Implement every revised or added VPI routine.
+
+   A complete, index-stable 42-routine 2023 catalog now covers callback and
+   system-callable registration, hierarchy and multidimensional lookup,
+   property/value/delay/time access, handle lifetime and comparison, opaque
+   data and user data, control, diagnostics, formatted output, MCDs, and file
+   access. Each routine maps to exactly one existing sized host service family
+   and carries explicit null/optional/required handle, handle-result, and
+   callback-boundary policy.
+
+   One no-throw dispatcher validates the full v2 host prefix, service callback,
+   request size and family, bounded text, and handle policy before entry. It
+   contains callback exceptions and then validates callback status, result
+   size, reserved fields, result status, and required returned handles before
+   publication. Stable `FSIM-VPI-ROUTINE-001` through `-007` diagnostics flow
+   through the host's bounded error view; an unvalidated host callback is never
+   entered. This is the single checked implementation seam for the normative C
+   wrappers added at Change 10.
+
+   Independently authored runtime evidence freezes all names and enum indices,
+   rejects unknown standard/vendor selectors, and covers successful dispatch,
+   wrong-family and missing-handle rejection, callback status failure,
+   malformed results, exceptions, unknown routines, and incomplete hosts.
+   Exact Clang warnings-as-errors Debug runtime compilation and the complete
+   runtime binary pass. Source-line, source-package, resource-portability, and
+   inventory policy gates pass. S23-B187-C06 is preserved, leaving 13 active
+   and 43 preserved rows at normalized SHA-256
+   `afdb5f6a0487117f5bdcd48867b4d121fbfe6c7cf1d3301bbe5cd49722d26a10`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+7. **Complete.** Implement the assertion API.
+
+   A simulation-owned assertion API now layers global and object-selected
+   reset, enable, disable, and kill controls over the existing concurrent-
+   assertion execution state. The control hook updates the same spawn filter,
+   target override sets, dynamic-process cancellation, and pending-attempt map
+   used by HDL `$assert*` control; rejected or throwing controls publish no API
+   state. Generation-qualified assertion handles are validated before entry,
+   including wrong-kind, released, and cross-simulation rejection.
+
+   The common completion path now records saturating per-object attempt,
+   success, failure, vacuous, disabled, and aborted counts before dispatching
+   the established persistent assertion callbacks. Disabled observations are
+   retained separately and do not score as attempts. A 65,536-object ceiling,
+   one-megabyte aggregate event-text ceiling, reservation accounting, enum
+   validation, and callback failure status keep the surface bounded and
+   transactional under re-entry.
+
+   Independently authored runtime evidence covers all four assertion kinds,
+   all five outcomes, exact counter semantics, callbacks, global/object
+   controls, reset, hook failure, wrong-kind, unknown-control, and cross-
+   simulation rejection. Application evidence globally disables assertions,
+   selectively re-enables one hierarchy-owned assertion, executes it through
+   the real scheduler, and proves its API counters equal the callback stream.
+   Exact Clang warnings-as-errors Debug runtime/application compilation and the
+   focused tests pass. S23-B187-C07 is preserved, leaving 12 active and 44
+   preserved rows at normalized SHA-256
+   `2b2cbaf8c4d55140ed3606c9a7524ab0a160895be3f8e3a63513a72881075850`. No
+   Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+8. **Complete.** Validate the complete standardized coverage API against
+   Batch 180. The runtime evidence now freezes the exact control and metric
+   identity ranges and exercises start, stop, reset, check, merge, and save
+   across all four standardized coverage types. It retains distinct presence,
+   aggregate, assertion-counter, FSM relation, exact state-value, iterator,
+   cross-simulation, resource, signed-overflow, and provider-exception
+   behavior.
+
+   The application bridge no longer reconstructs assertion coverage from its
+   older report vector. Assertion presence and every attempt, success,
+   failure, vacuous, disabled, and killed value now come from the Change 7
+   simulation-owned assertion API. Exact assertion start, stop, reset, and
+   check controls delegate to that same enable, disable, reset, and saturation
+   state, so foreign coverage control cannot diverge from HDL assertion
+   execution. Statement save writes and decodes the direct-v3 `.fsimcov`
+   container; a duplicate-run merge returns ERROR without changing the file,
+   while unavailable toggle/FSM storage returns NOCOV and creates no phantom
+   output. The database-model, codec, strict/partial merge, SystemVerilog
+   functional namespace, PSL namespace, VPI runtime/application, source,
+   inventory, and resource gates pass. S23-B187-C08 is preserved, leaving 11
+   active and 45 preserved rows at normalized SHA-256
+   `255ead76f3d672af85aa021e2f8bdc498bd361cd1bfa5ba725be3fa030f34916`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+9. **Complete.** Implement the data-read API.
+
+   A simulation-owned reader service now freezes the standardized traverse,
+   collection, property, access, loaded-iteration, and time-control identities.
+   Its limited-interactive, history-preserving interactive, and post-process
+   modes share the generation-qualified VPI object registry rather than
+   copying hierarchy, connectivity, source, or type state. Every `Simulation`
+   owns a live limited-interactive reader clocked by the common scheduler time
+   and delta.
+
+   Scope or object-collection load selection accepts only value-bearing design
+   objects. Collection loads stage the affected histories and publish all or
+   none without a whole-container snapshot. Explicit unload prevents new
+   traverse creation while preserving existing readers. Object/traverse
+   collections, type and Boolean filtering, minimum/maximum/previous/next/time
+   navigation, common-time collection traversal, loaded-object iteration, and
+   exact canonical value access retain deterministic ordering and distinct
+   ownership/lifetime failures.
+
+   Database names, loaded objects, histories, changes, collections, members,
+   and traverses are bounded. Imported changes are type checked and monotonic;
+   invalid, cross-extension, released, unloaded, closed, wrong-kind, out-of-
+   order, type, and resource failures publish no partial state. Independently
+   authored runtime evidence freezes numeric identities, all three modes,
+   hierarchy depths, collection traversal/filtering, time/delta history,
+   no-value positions, teardown, failure containment, and transactional limit
+   rejection. Application evidence exercises the same live reader through
+   interpreter and LLVM execution. S23-B187-C09 is preserved, leaving 10
+   active and 46 preserved rows at normalized SHA-256
+   `47b41d236d3d7284556080298cef7b548aca6ac0cd43e0b3ace4cf43e02a4c61`.
+   The deterministic source package contains 1,885 paths at SHA-256
+   `642a2c5b0b60e695c56fb4cace39742d55f63438678f2eac251b30d7c36b85a6`.
+   No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+10. **Complete.** Update normative VPI and compatibility headers.
+
+    The installed SDK now publishes root-level `vpi_user.h` and
+    `sv_vpi_user.h`, the latter retaining SystemVerilog object, assertion,
+    coverage, reader, and established compatibility identities. Fixed-width
+    C11/C++20 layout probes freeze public handle, time, vector, value, delay,
+    callback, assertion-attempt, and context representations plus key function
+    signatures and numeric identities. The internal v3 ABI includes the same
+    headers, so include order cannot create a second type universe.
+
+    The `fsim_tf` link surface exports core, array-value, assertion, and data-
+    reader wrappers over one bounded 64-frame thread-local context. Every call
+    marshals through the Change 6 checked dispatcher; aggregate parameters are
+    synchronous pointer views, text is bounded to one MiB, and no-context or
+    mismatched-leave paths never enter the host. A v2 plugin host is entered
+    around both standard startup tables and direct startup, allowing standard
+    registration calls without weakening the direct v3 descriptor checks.
+    The installed C consumer compiles and links the headers and proves safe
+    no-context behavior. Exact Clang warnings-as-errors Debug targets compile;
+    the source-line, source-package, inventory, resource, foreign-ABI, binary-
+    ownership, installed-public, and runtime lane passes 8/8 in 21.43 wall
+    seconds. S23-B187-C10 is preserved, leaving 9 active and 47
+    preserved rows at normalized SHA-256
+    `faa1fe14de216236dfb3edf0cfb7ad10244636e47d2b5e562f18ca6c2ed4ba37`.
+    The deterministic source package contains 1,889 paths at SHA-256
+    `f1da31ccafd7296f02d40d5ee7f11e77007198db74cecf4cae4b49790f11619f`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+11. Update standard package behavior. Complete: a zero-allocation catalog now
+    gives every SystemVerilog source profile an exact compiler-owned `std`
+    package revision, declaration set, and SHA-256 identity. The established
+    `mailbox`, `process`, `semaphore`, and `randomize` declarations remain
+    available in 2005-2017, while parameterized `weak_reference` and the
+    revised final `process` contract are isolated to 2023. Qualified and
+    implicit class spellings use the same type path; `std::process::self()`
+    executes through the existing process service. Unknown or unavailable
+    `std` members and source redeclaration of `package std` are rejected with
+    stable diagnostics. Parsed-unit provenance survives portable-library
+    round trips and sorted unique package identities participate in both
+    whole-design and specialization cache keys. The owning portable schema is
+    32 and rejects schema 31 directly. A focused Clang warnings-as-errors
+    Debug rebuild and package/profile, library, schema, source-budget,
+    source-package, inventory, and resource tests pass. S23-B187-C11 is
+    preserved, leaving 8 active and 48 preserved rows at normalized SHA-256
+    `a8c3f9025f94744741ba5eee824ad59453813e59c927c606657467fb9eb29ec9`.
+    The deterministic source package contains 1,895 paths at SHA-256
+    `98461ffe85853c8a2b46e09f4c25a209d6d2fa4f15d13f0116873efbcf4de6b8`.
+    `application_run.cpp` remains below the 2,000-line ceiling by placing the
+    new non-template cache-key implementation in its own `.cpp`. No Release,
+    clean-first, sanitizer, hosted-CI, commit, or push action ran.
+12. Update the standardized random-distribution implementation. Complete: the
+    seven integer `$dist_*` routines now share one bounded, transactional
+    runtime implementation across interpreter and compiled process boundaries.
+    Each updated nonzero seed is sampled from its low 23 bits through an exact
+    binary32 construction; seed replay and the uniform equal/reversed-bound
+    rules are deterministic. Invalid exponential and Poisson means, chi-square
+    and Student-t degrees, and Erlang stage counts return zero, preserve the
+    incoming seed, and emit stable source-located warnings. Unknown seed or
+    argument bits follow the same contained result, and rejection sampling is
+    capped at one million draws with rollback rather than partial state
+    publication. Negative normal deviation and zero-mean Erlang remain legal.
+    Random-distribution source provenance round-trips through `.fsimdesign`,
+    participates in native-cache identity, and advances the owning runtime
+    state schema to 62; schema 61 and 63 are rejected directly while the
+    portable-unit schema remains 32. Exact-sequence application evidence covers
+    every distribution at LLVM O0/O2 and interpreter/compiled equivalence,
+    domain and resource diagnostics, source locations, artifact restoration,
+    and cache separation. Focused Clang warnings-as-errors Debug targets and
+    the runtime, application, LLVM, schema, inventory, source-budget, source-
+    package, and resource-contract lanes pass. S23-B187-C12 is preserved,
+    leaving 7 active and 49 preserved rows at normalized SHA-256
+    `62bf468043f8569d9dd52a0b7001bb2fb44eba841c4f726116f93f3052a808a2`.
+    The deterministic source package remains 1,895 paths at SHA-256
+    `98461ffe85853c8a2b46e09f4c25a209d6d2fa4f15d13f0116873efbcf4de6b8`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
 13. Apply normative syntax, keyword, and deprecation annex requirements.
-14. Prove legacy TF/ACC interaction with the 2023 profile.
-15. Prove code and functional coverage for new constructs.
-16. Prove DPI/VPI callbacks across all scheduler phases.
-17. Prove artifact, cache, checkpoint, debug, and trace behavior.
-18. Prove independently authored C/C++ foreign applications on both platforms.
-19. Close every active SystemVerilog-2023 clause row.
-20. Run standard batch closure and declare full SystemVerilog-2023 support complete.
+    Complete: SystemVerilog-2017 and 2023 retain distinct keyword-set
+    identities while intentionally sharing the same reserved-word contents.
+    The existing `keyword-profile` compatibility selector now reaches the
+    SystemVerilog-2005 keyword set from the exact 2023 profile without
+    restoring source grammar removed in 2023.
+
+    One centralized, non-template parser translation unit owns the independently
+    worded annex policy. Exact 2023 source rejects a second clocking-event
+    argument to `$sampled`, the sequence `.ended` form, general `always` inside
+    a checker, and operator-overload bind declarations with
+    `FSIM-SV-DEPR-001`. Specialized checker `always_comb`, `always_latch`, and
+    `always_ff` forms remain accepted. `defparam` and procedural
+    `assign`/`deassign` remain executable but emit source-located
+    `FSIM-SV-DEPR-002` warnings only under 2023; the retained 2017 profile is
+    unchanged.
+
+    Frontend and application evidence covers removed forms, warning-only
+    candidates, profile isolation, source spans, and compatibility composition.
+    Exact Clang warnings-as-errors Debug targets compile with eight workers;
+    the focused frontend, application, inventory, compatibility, source-budget,
+    source-package, standard-mode, and resource-contract lane plus its declared
+    dependencies passes 33/33. S23-B187-C13 is preserved, leaving 6 active and
+    50 preserved rows at normalized SHA-256
+    `59d12129b1d171f6eab42541b1c265b6c26e6006847bd602c7ef20ec0aabc4f6`.
+    The deterministic source-package manifest contains 1,896 paths at SHA-256
+    `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+    `verilog_parser_units.cpp` remains below the 2,000-line ceiling after the
+    non-template annex split. No Release, clean-first, sanitizer, hosted-CI,
+    commit, or push action ran.
+14. Prove legacy TF/ACC interaction with the 2023 profile. Complete: exact
+    SystemVerilog-2023 source retains a context DPI import beside registered TF
+    task and function call sites. The application registry now proves every
+    retained Verilog/SystemVerilog profile through 2023 resolves the same
+    direct-v3 TF registration, and the scheduler executes that loaded C task
+    specifically under the exact 2023 profile.
+
+    The TF/ACC coherence fixture now enters the standardized DPI context during
+    the same TF callback and maps DPI scopes to the same generation-qualified
+    VPI object identities exposed through ACC. Module/root scope selection,
+    source location, simulation time and scale, user data, TF arguments,
+    values, work area, and teardown are observed without copying or widening
+    lifetime. The established ACC/VPI fixture independently revalidates value,
+    hierarchy, connectivity, timing, and released-generation equivalence.
+
+    Exact Clang warnings-as-errors Debug frontend, application, and runtime
+    targets compile with eight workers. The focused frontend, direct-plugin,
+    scheduler, ACC/TF/DPI/VPI coherence, legacy inventory, source-budget,
+    source-package, SystemVerilog-2023 inventory, and resource-contract lane
+    passes 11/11 in 40.95 wall seconds. S23-B187-C14 is preserved, leaving 5
+    active and 51 preserved rows at normalized SHA-256
+    `f1f38eac68ee70717a89d41b20309a89be024819910ffcc5d30743af66656c3c`.
+    The deterministic source-package manifest remains 1,896 paths at SHA-256
+    `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+15. **Complete.** Prove code, assertion, and functional coverage for supported
+    new constructs.
+
+    Exact SystemVerilog-2023 code-coverage discovery now has one-point
+    witnesses for the revised streaming assignment target, aggregate-pattern
+    assignment target, tolerance membership expression, and string `foreach`
+    loop. Each source is instantiated twice; source identities remain shared,
+    instance identities remain distinct, and statement hits and aggregation
+    agree across the interpreter, Debug engine, and LLVM O0-O3. Declaration
+    nodes and the null `foreach` body produce no phantom executable point.
+
+    The exact-2023 real-coverpoint application now proves canonical
+    declaration and runtime-instance identities plus two distinct bin
+    identities, with both the exact and tolerance bins scoring one hit and
+    100-percent coverage in interpreter and LLVM O0/O2 execution. The
+    independently authored checker application likewise proves per-instance
+    assertion counters and events in exact 2023. The runtime registration seam
+    now copies each assertion process's elaborated instance path and semantic
+    source-span identity into both the stable coverage record and every event,
+    so callbacks and the standardized VPI assertion/coverage bridge no longer
+    receive empty identity fields.
+
+    Exact Clang warnings-as-errors Debug application targets compile with eight
+    workers. The functional-coverage database, source budget/package,
+    SystemVerilog-2023 inventory, resource portability, code and metric
+    equivalence, functional coverage, assertions, common runtime, and VPI
+    coverage lane passes 11/11 in 45.99 wall seconds. S23-B187-C15 is preserved,
+    leaving 4 active and 52 preserved rows at normalized SHA-256
+    `e69c5efb680116f3025e2cac8a68e0cdb0e6c3a4e6af429f2d5f6a088db58db0`.
+    The deterministic source-package manifest remains 1,896 paths at SHA-256
+    `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+16. **Complete.** Prove DPI/VPI callbacks across all scheduler phases.
+
+    One integrated runtime fixture now schedules foreign work in all eight
+    governed regions: active, inactive, update, observed, reactive,
+    re-inactive, re-update, and postponed. Immediate VPI lifecycle callbacks
+    retain the exact current region, time, user data, simulation identity, and
+    registration status. A per-kind dispatch guard rejects recursive delivery
+    of the notification already in progress with explicit
+    `ReentrantDispatch`; different kinds and later notifications remain
+    independently dispatchable.
+
+    Each VPI callback crosses a DPI export boundary in the same region. Nested
+    DPI callbacks install and restore distinct hierarchy scopes without losing
+    the outer call context, and deliberately recursive DPI entry stops at the
+    existing 64-frame foreign-context ceiling before unwinding to an empty
+    scope and call-context stack. Exact Clang warnings-as-errors Debug runtime
+    compilation passes with eight workers. The runtime, SystemVerilog-2023
+    inventory, and resource-portability lane passes 3/3 in 35.03 wall seconds.
+    S23-B187-C16 is preserved, leaving 3 active and 53 preserved rows at
+    normalized SHA-256
+    `4b27e72c1b2d7d75080ebc67712a9cf7e69e6b16c17e95445d2ff92ad4a81aec`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+17. **Complete.** Prove artifact, cache, checkpoint, debug, and trace behavior.
+
+    The exact-2023 conformance design now runs from its `.fsimdesign` after the
+    original source and `.fsimobj` are hidden. Its profile, class
+    specialization identities, result, and native-cache keys agree across the
+    interpreter, cold and warm LLVM O2, and Debug engines. Every engine emits
+    byte-identical versioned UVM/checkpoint state that decodes back to the
+    captured artifact; cold misses/stores and warm plus relocated hits remain
+    exact.
+
+    The Debug engine observes the final 2023 signal through `DebuggerControl`.
+    A separate artifact-only compiled CLI run writes a filtered VCD containing
+    the hierarchy, result signal, final value, and `systemverilog-2023`
+    provenance. This proof lives in the smaller SystemVerilog conformance unit;
+    the existing 1,956-line artifact-phase translation unit was not enlarged.
+    Exact Clang warnings-as-errors Debug application compilation passes with
+    eight workers. The conformance application, SystemVerilog-2023 inventory,
+    and resource-portability lane passes 3/3 in 23.85 wall seconds.
+    S23-B187-C17 is preserved, leaving 2 active and 54 preserved rows at
+    normalized SHA-256
+    `457cfcb70a73fecacf3e538a44039d0ad72c6b1a4840848ce79a5b9a2490bb6b`.
+    No Release, clean-first, sanitizer, hosted-CI, commit, or push action ran.
+18. **Complete.** Prove independently authored C/C++ foreign applications on
+    both platforms.
+
+    The independently authored C11 and C++20 VPI reference applications now
+    have a dedicated `fsim.runtime.vpi_reference_plugins` selection in the
+    existing runtime executable, avoiding a duplicate test compilation. Both
+    public-ABI consumers traverse all ten typed host services under
+    interpreter, LLVM O0, and LLVM O2 identities, then repeat after image
+    relocation. Their startup/shutdown transcripts, malformed result and
+    resource failures, reporting-only v1-host rejection, and post-unload
+    lifetime containment remain exact.
+
+    The shared-library targets, compile definitions, dependencies, resource
+    lock, and CTest labels are common to Linux and Windows builds, so the next
+    authorized Windows lane runs the same binaries and selector rather than a
+    static substitute. Exact Clang warnings-as-errors Debug runtime compilation
+    passes with eight workers; both reference libraries build locally. The
+    dedicated runtime, source budget/package, SystemVerilog-2023 inventory, and
+    resource-portability lane passes 5/5 in 34.64 wall seconds. S23-B187-C18 is
+    preserved, leaving 1 active and 55 preserved rows at normalized SHA-256
+    `f38a9e912a836c4e6c057518b3c5dc5b41ea3f433e1a4332e2c6018ea605bf68`.
+    Hosted Windows execution remains deferred to the authorized v3.0 release
+    qualification. No Release, clean-first, sanitizer, hosted-CI, commit, or
+    push action ran.
+19. **Complete.** Close every active SystemVerilog-2023 clause row.
+
+    S23-B187-C19 is preserved, leaving zero active and all 56 independently
+    worded SystemVerilog-2023 inventory rows preserved at normalized SHA-256
+    `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+    The inventory validator retains exact one-to-one ownership across Batches
+    185-187 and rejects forbidden private-reference tokens, missing owners,
+    duplicate identities, profile drift, and any reopened row.
+
+    The governed SystemVerilog closure selection passes 29/29 in 90.28 wall
+    seconds, including its 26 executable witnesses plus inventory, audit, and
+    de-duplicated matrix completion. It spans semantic/frontend/elaboration,
+    library/artifact, interpreter and LLVM, VPI/runtime, Debug/VCD, assertions,
+    randomization, coverage, hierarchy/interfaces, timing/SDF, UVM, typed
+    boundaries, and mixed VHDL/SystemC composition. No Release, clean-first,
+    sanitizer, hosted-CI, commit, or push action ran.
+20. **Complete.** Run standard batch closure and declare full SystemVerilog-2023 support complete.
+
+    The clean Clang warnings-as-errors Release build completed all 3,149
+    build steps. The first Release qualification exposed only exact-evidence
+    audit drift and one obsolete local prohibition on the standardized
+    `vpi_printf` export. The audits now derive from the measured 2,758
+    diagnostics, 1,525 authored sources, 1,828 authored SPDX entries, 777
+    test/control paths, and 567 v1-conformance test/control paths. License
+    audits admit the governed IEEE license reference only for the two exact
+    standardized VPI public headers; all other authored sources retain the
+    Apache requirement. The combined TF/VPI link proof now permits the
+    standardized VPI export while continuing to reject vendor-owned names.
+
+    The corrected full Release suite passes 408/408 in 571.45 wall seconds.
+    The subsequent clean Clang warnings-as-errors Debug build completed all
+    3,149 build steps, and the full Debug suite passes 408/408 in 527.08 wall
+    seconds. Full SystemVerilog-2023 support is therefore declared complete
+    with zero active and 56 preserved inventory rows at normalized SHA-256
+    `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+    Batch 187 is not a sanitizer or hosted-CI boundary, so neither lane ran.
+
+    The mandatory pre-push CI inspection found the preceding Batch 186 run
+    failed on an LLVM-disabled test assertion, a Windows cache publication
+    race, four-worker Windows process-start pressure, and stale package audit
+    counts. Compiled-process expectations now account for builds without
+    LLVM; concurrent cache shard creation accepts an already-created directory
+    only after checking its exact postcondition; all five hosted build/test
+    commands use two workers; and Windows package audits expect 395/399
+    non-recursive tests and 1,259 archive entries. Focused cache, resource,
+    source, and manifest checks pass 4/4. At the owner's direction, these
+    preflight-only repairs are assumed not to disturb the completed Batch 187
+    qualification and the full suites were not repeated before commit.
 
 ### Batch 188 - v3.0.0 integration and release
 

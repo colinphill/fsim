@@ -640,30 +640,20 @@ Simulation::Impl::standard_vpi_coverage_statistics(
     if (keys == vpi_assertion_coverage_keys.end()) {
         return std::nullopt;
     }
-    const auto key_matches = [&](const ConcurrentAssertionCoverage& item) {
-        return std::ranges::find(keys->second, item.process)
-            != keys->second.end()
-            || std::ranges::find(keys->second, item.name)
-            != keys->second.end();
-    };
-    result.coverable_items = 1U;
-    for (const auto& coverage : concurrent_assertion_coverage) {
-        if (!key_matches(coverage)) {
-            continue;
-        }
-        const auto add = [](std::uint64_t& destination,
-                             const std::uint64_t value) {
-            destination = destination
-                    > std::numeric_limits<std::uint64_t>::max() - value
-                ? std::numeric_limits<std::uint64_t>::max()
-                : destination + value;
-        };
-        add(result.assertion_attempts, coverage.attempts);
-        add(result.assertion_successes, coverage.passes);
-        add(result.assertion_failures, coverage.failures);
-        add(result.assertion_vacuous_successes, coverage.vacuous);
-        add(result.assertion_kills, coverage.aborted);
+    if (!vpi_assertions) {
+        return std::nullopt;
     }
+    const auto status = vpi_assertions->status(handle);
+    if (!status) {
+        return std::nullopt;
+    }
+    result.coverable_items = 1U;
+    result.assertion_attempts = status.statistics.attempts;
+    result.assertion_successes = status.statistics.successes;
+    result.assertion_failures = status.statistics.failures;
+    result.assertion_vacuous_successes = status.statistics.vacuous;
+    result.assertion_disables = status.statistics.disabled;
+    result.assertion_kills = status.statistics.aborted;
     result.covered_count = result.assertion_successes;
     result.covered_items = result.assertion_attempts != 0U
             && result.assertion_successes != 0U
@@ -683,11 +673,11 @@ Simulation::Impl::standard_vpi_coverage_statistics(
         return static_cast<std::int32_t>(value);
     };
     try {
-        if (request.type != Type::Statement) {
-            return status(Status::no_coverage);
-        }
         if (request.control == Control::Merge
             || request.control == Control::Save) {
+            if (request.type != Type::Statement) {
+                return status(Status::no_coverage);
+            }
             runtime::simir::CoverageAccessEvent event;
             event.kind = request.control == Control::Merge
                 ? runtime::simir::SystemVerilogCoverageAccessKind::merge
@@ -699,6 +689,33 @@ Simulation::Impl::standard_vpi_coverage_statistics(
         }
         if (!request.object) {
             return status(Status::error);
+        }
+        if (request.type == Type::Assertion) {
+            if (!vpi_assertions
+                || !vpi_assertion_coverage_keys.contains(*request.object)) {
+                return status(Status::no_coverage);
+            }
+            if (request.control == Control::Check) {
+                const auto assertion_status
+                    = vpi_assertions->status(*request.object);
+                return !assertion_status
+                    ? status(Status::error)
+                    : assertion_status.statistics.saturated
+                    ? status(Status::overflow)
+                    : status(Status::ok);
+            }
+            const auto operation = request.control == Control::Start
+                ? runtime::SystemVerilogVpiAssertionControlOperation::Enable
+                : request.control == Control::Stop
+                ? runtime::SystemVerilogVpiAssertionControlOperation::Disable
+                : runtime::SystemVerilogVpiAssertionControlOperation::Reset;
+            return vpi_assertions->control(operation, *request.object)
+                    == runtime::SystemVerilogVpiAssertionApiError::None
+                ? status(Status::ok)
+                : status(Status::error);
+        }
+        if (request.type != Type::Statement) {
+            return status(Status::no_coverage);
         }
         const auto selected = vpi_statement_counters.find(
             *request.object);

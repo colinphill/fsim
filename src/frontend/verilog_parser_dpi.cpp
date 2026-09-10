@@ -42,6 +42,40 @@ matching_right_parenthesis(
   });
 }
 
+void append_dpi_tokens(
+    std::string& profile, const std::vector<Token>& tokens) {
+  for (const auto& token : tokens) {
+    profile.append(std::to_string(static_cast<unsigned>(token.kind)));
+    profile.push_back(':');
+    profile.append(token.text);
+    profile.push_back(';');
+  }
+}
+
+[[nodiscard]] std::string canonical_dpi_import_profile(
+    const SystemVerilogDpiDeclaration& declaration) {
+  std::string profile;
+  profile.reserve(declaration.profile_tokens.size() * 8U);
+  profile.append(declaration.callable_kind
+          == SystemVerilogDpiCallableKind::Function
+      ? "function|"
+      : "task|");
+  profile.append(std::to_string(
+      static_cast<unsigned>(declaration.qualifier)));
+  profile.push_back('|');
+  append_dpi_tokens(profile, declaration.return_type_tokens);
+  profile.push_back('|');
+  for (const auto& formal : declaration.formals) {
+    profile.append(std::to_string(static_cast<unsigned>(formal.direction)));
+    profile.push_back(':');
+    append_dpi_tokens(profile, formal.type_tokens);
+    profile.push_back(':');
+    append_dpi_tokens(profile, formal.dimension_tokens);
+    profile.push_back('|');
+  }
+  return profile;
+}
+
 }  // namespace
 
 bool VerilogParser::dpi_declaration_start(
@@ -325,26 +359,37 @@ void VerilogParser::structure_dpi_profile(
         tokens.begin() + static_cast<std::ptrdiff_t>(last));
     formal.span = span_from(tokens[first], tokens[last - 1U]);
     std::size_t position = first;
-    if (position + 1U < last
+    const bool const_reference = position + 1U < last
         && dpi_word(tokens[position], "const")
-        && dpi_word(tokens[position + 1U], "ref")) {
+        && dpi_word(tokens[position + 1U], "ref");
+    const bool reference = position < last
+        && dpi_word(tokens[position], "ref");
+    if (const_reference) {
       formal.const_reference = true;
       formal.direction = PortDirection::Ref;
       formal.direction_token = tokens[position + 1U];
       position += 2U;
+    } else if (reference) {
+      formal.direction = PortDirection::Ref;
+      formal.direction_token = tokens[position];
+      ++position;
     } else if (position < last
                && contains_word(
-                   {"input", "output", "inout", "ref"},
+                   {"input", "output", "inout"},
                    tokens[position].text)) {
       formal.direction_token = tokens[position];
       formal.direction = tokens[position].text == "output"
           ? PortDirection::Output
           : tokens[position].text == "inout"
               ? PortDirection::Inout
-              : tokens[position].text == "ref"
-                  ? PortDirection::Ref
-                  : PortDirection::Input;
+              : PortDirection::Input;
       ++position;
+    }
+    if (formal.direction == PortDirection::Ref) {
+      error(
+          *formal.direction_token,
+          "FSIM-SV-SEM-227",
+          "a DPI import formal cannot use ref or const ref passing");
     }
 
     std::size_t parentheses{};
@@ -373,29 +418,36 @@ void VerilogParser::structure_dpi_profile(
       else if (tokens[index].kind == TokenKind::RightBrace
                && braces > 0) --braces;
     }
-    if (!formal_name || *formal_name == position) {
+    if (position == assign) {
       error(
           tokens[first],
           "FSIM-SV-PARSE-328",
-          "a DPI formal requires an explicit type and name");
+          "a DPI formal requires a type");
       return;
     }
+    const bool has_name = formal_name && *formal_name > position;
+    const auto type_end = has_name ? *formal_name : assign;
     formal.type_tokens.assign(
         tokens.begin() + static_cast<std::ptrdiff_t>(position),
-        tokens.begin() + static_cast<std::ptrdiff_t>(*formal_name));
-    formal.name = tokens[*formal_name].text;
-    formal.name_token = tokens[*formal_name];
-    formal.dimension_tokens.assign(
-        tokens.begin() + static_cast<std::ptrdiff_t>(*formal_name + 1U),
-        tokens.begin() + static_cast<std::ptrdiff_t>(assign));
+        tokens.begin() + static_cast<std::ptrdiff_t>(type_end));
+    if (has_name) {
+      formal.name = tokens[*formal_name].text;
+      formal.name_token = tokens[*formal_name];
+      formal.dimension_tokens.assign(
+          tokens.begin() + static_cast<std::ptrdiff_t>(*formal_name + 1U),
+          tokens.begin() + static_cast<std::ptrdiff_t>(assign));
+    }
     if (assign < last) {
       formal.default_tokens.assign(
           tokens.begin() + static_cast<std::ptrdiff_t>(assign + 1U),
           tokens.begin() + static_cast<std::ptrdiff_t>(last));
-      error(
-          tokens[assign],
-          "FSIM-SV-SEM-227",
-          "a DPI formal cannot have a default value");
+      if (!has_name || formal.direction != PortDirection::Input
+          || formal.default_tokens.empty()) {
+        error(
+            tokens[assign],
+            "FSIM-SV-SEM-227",
+            "a DPI default requires a named input formal and an expression");
+      }
     }
     declaration.formals.push_back(std::move(formal));
   };
@@ -538,6 +590,19 @@ void VerilogParser::resolve_dpi_declarations(
             "FSIM-SV-SEM-229",
             "DPI import conflicts with native callable '"
                 + declaration.systemverilog_name + "'");
+      }
+      if (declaration.validated && diagnostics_.size() == before) {
+        const auto profile = canonical_dpi_import_profile(declaration);
+        const auto [existing, inserted] = dpi_import_linkage_profiles_.emplace(
+            declaration.linkage_name, profile);
+        if (!inserted && existing->second != profile) {
+          error(
+              *declaration.systemverilog_name_token,
+              "FSIM-SV-SEM-393",
+              "DPI imports sharing C linkage name '"
+                  + declaration.linkage_name
+                  + "' require compatible callable profiles");
+        }
       }
     } else {
       if (!export_linkage_names.insert(declaration.linkage_name).second) {

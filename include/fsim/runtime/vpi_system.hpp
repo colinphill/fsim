@@ -17,6 +17,102 @@
 
 namespace fsim::runtime {
 
+enum class SystemVerilogVpiRoutineKind : std::uint32_t {
+  RegisterCallback = 0,
+  RemoveCallback,
+  GetCallbackInfo,
+  RegisterSystemTaskFunction,
+  GetSystemTaskFunctionInfo,
+  Handle,
+  HandleByName,
+  HandleByIndex,
+  HandleByMultiIndex,
+  HandleMulti,
+  Iterate,
+  Scan,
+  GetProperty,
+  GetProperty64,
+  GetStringProperty,
+  GetDelays,
+  PutDelays,
+  GetValue,
+  PutValue,
+  GetTime,
+  GetVlogInfo,
+  CheckError,
+  FreeObject,
+  ReleaseHandle,
+  CompareObjects,
+  GetData,
+  PutData,
+  GetUserData,
+  PutUserData,
+  Control,
+  VariableControl,
+  Print,
+  VariablePrint,
+  Flush,
+  McdOpen,
+  McdClose,
+  McdName,
+  McdPrint,
+  McdVariablePrint,
+  McdFlush,
+  FileOpen,
+  GetFile,
+};
+
+enum class SystemVerilogVpiRoutineHandlePolicy : std::uint32_t {
+  None = 0,
+  Optional,
+  Required,
+};
+
+struct SystemVerilogVpiRoutineDescriptor {
+  SystemVerilogVpiRoutineKind kind{
+      SystemVerilogVpiRoutineKind::RegisterCallback};
+  std::string_view name;
+  fsim_vpi_service_operation_v1 service{FSIM_VPI_SERVICE_HIERARCHY};
+  SystemVerilogVpiRoutineHandlePolicy handle_policy{
+      SystemVerilogVpiRoutineHandlePolicy::None};
+  bool returns_handle{};
+  bool callback_boundary{};
+};
+
+enum class SystemVerilogVpiRoutineError {
+  None,
+  InvalidHost,
+  InvalidRoutine,
+  InvalidRequest,
+  InvalidHandle,
+  CallbackFailure,
+  CallbackException,
+  MalformedResult,
+};
+
+struct SystemVerilogVpiRoutineResult {
+  fsim_vpi_service_result_v1 value{};
+  SystemVerilogVpiRoutineError error{SystemVerilogVpiRoutineError::None};
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return error == SystemVerilogVpiRoutineError::None
+        && value.status == FSIM_VPI_STATUS_OK;
+  }
+};
+
+[[nodiscard]] std::span<const SystemVerilogVpiRoutineDescriptor>
+systemverilog_vpi_2023_routines() noexcept;
+[[nodiscard]] const SystemVerilogVpiRoutineDescriptor*
+find_systemverilog_vpi_2023_routine(
+    SystemVerilogVpiRoutineKind kind) noexcept;
+[[nodiscard]] const SystemVerilogVpiRoutineDescriptor*
+find_systemverilog_vpi_2023_routine(std::string_view name) noexcept;
+[[nodiscard]] SystemVerilogVpiRoutineResult
+invoke_systemverilog_vpi_2023_routine(
+    const fsim_vpi_host_v2& host,
+    SystemVerilogVpiRoutineKind routine,
+    const fsim_vpi_service_request_v1& request) noexcept;
+
 enum class SystemVerilogVpiSystemCallableKind {
   Task,
   Function,

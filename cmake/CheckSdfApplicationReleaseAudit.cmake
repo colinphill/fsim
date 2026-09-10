@@ -53,8 +53,8 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF application inventory passed: rows=17 preserved=17 active=0 revisions=SDF21,SDF30,SDF40 profiles=V1995,V2001,V2001NoConfig,V2005,SV2005,SV2009,SV2012,SV2017 digest=47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754"
-    "diagnostic catalog covers 2746 production codes"
-    "Checked 1510 authored sources against the 2000-line hard limit")
+    "diagnostic catalog covers 2758 production codes"
+    "Checked 1525 authored sources against the 2000-line hard limit")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -83,19 +83,25 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1813)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 1828)
   message(FATAL_ERROR
-    "authored SDF application inventory changed: expected 1813 files, "
+    "authored SDF application inventory changed: expected 1828 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
   file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
+  file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
   string(FIND
     "${FSIM_PREFIX}" "SPDX-License-Identifier: Apache-2.0" FSIM_SPDX_INDEX)
   if(FSIM_SPDX_INDEX EQUAL -1)
-    file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
-    message(FATAL_ERROR
-      "authored SDF application artifact lacks Apache-2.0 SPDX notice: ${FSIM_RELATIVE}")
+    string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: LicenseRef-IEEE-1800"
+      FSIM_IEEE_SPDX_INDEX)
+    if((NOT FSIM_RELATIVE STREQUAL "include/vpi_user.h" AND
+        NOT FSIM_RELATIVE STREQUAL "include/sv_vpi_user.h") OR
+       FSIM_IEEE_SPDX_INDEX EQUAL -1)
+      message(FATAL_ERROR
+        "authored SDF application artifact lacks an approved SPDX notice: ${FSIM_RELATIVE}")
+    endif()
   endif()
 endforeach()
 

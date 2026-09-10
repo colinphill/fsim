@@ -83,7 +83,7 @@ bool has_identity_diagnostic(
 int main()
 {
     static_assert(fsim::library::kFormatVersion == 5);
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 31);
+    static_assert(fsim::library::kOwningUnitSchemaVersion == 32);
     static_assert(fsim::library::kPortableSchemaVersion == 14);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
@@ -307,6 +307,11 @@ endmodule
     source_unit.compilation_unit_identity = "fixture-compilation-unit";
     source_unit.standard_revision
         = fsim::frontend::StandardRevision::SystemVerilog2023;
+    source_unit.systemverilog_standard_package
+        = fsim::frontend::SystemVerilogStandardPackageProvenance {
+            "ieee-1800-2023:std:fsim-v3",
+            "dcf685c1c89945589b737b4a02fa162d23dbfeba3a2b219480f723637ef5a148",
+        };
     source_unit.functions.front().arguments.front().reference = true;
     source_unit.functions.front().arguments.front().const_reference = true;
     source_unit.functions.front().arguments.front().static_reference = true;
@@ -407,6 +412,11 @@ endmodule
         == "fixture-compilation-unit");
     assert(restored_unit->standard_revision
         == fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(restored_unit->systemverilog_standard_package);
+    assert(restored_unit->systemverilog_standard_package->revision
+        == "ieee-1800-2023:std:fsim-v3");
+    assert(restored_unit->systemverilog_standard_package->declaration_identity
+        == "dcf685c1c89945589b737b4a02fa162d23dbfeba3a2b219480f723637ef5a148");
     assert(
         restored_unit->functions.front().arguments.front().reference
         && restored_unit->functions.front().arguments.front().const_reference
@@ -1144,8 +1154,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_class_unit(
         stale_class, "stale.fsimclass", stale_class_diagnostics));
     assert(has_identity_diagnostic(
-        stale_class_diagnostics, "portable class unit", "schema 30",
-        "schema 31", ".fsimobj"));
+        stale_class_diagnostics, "portable class unit", "schema 31",
+        "schema 32", ".fsimobj"));
     auto future_class = *class_bytes;
     future_class[8] = static_cast<char>(
         fsim::library::kOwningUnitSchemaVersion + 1U);
@@ -1153,8 +1163,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_class_unit(
         future_class, "future.fsimclass", future_class_diagnostics));
     assert(has_identity_diagnostic(
-        future_class_diagnostics, "portable class unit", "schema 32",
-        "schema 31", ".fsimobj"));
+        future_class_diagnostics, "portable class unit", "schema 33",
+        "schema 32", ".fsimobj"));
     fsim::diagnostic::Engine truncated_class_diagnostics;
     assert(!fsim::library::deserialize_portable_class_unit(
         class_bytes->substr(0, 15), "truncated.fsimclass",
@@ -1265,8 +1275,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_unit(
         future_unit, "future.fsimir", future_diagnostics));
     assert(has_identity_diagnostic(
-        future_diagnostics, "portable owning unit", "schema 32",
-        "schema 31", ".fsimobj"));
+        future_diagnostics, "portable owning unit", "schema 33",
+        "schema 32", ".fsimobj"));
     auto stale_unit = *unit_bytes;
     stale_unit[8] = static_cast<char>(
         fsim::library::kOwningUnitSchemaVersion - 1U);
@@ -1274,8 +1284,8 @@ endprimitive
     assert(!fsim::library::deserialize_portable_unit(
         stale_unit, "stale.fsimir", stale_diagnostics));
     assert(has_identity_diagnostic(
-        stale_diagnostics, "portable owning unit", "schema 30",
-        "schema 31", ".fsimobj"));
+        stale_diagnostics, "portable owning unit", "schema 31",
+        "schema 32", ".fsimobj"));
     fsim::diagnostic::Engine truncated_unit_diagnostics;
     assert(!fsim::library::deserialize_portable_unit(
         unit_bytes->substr(0, 15), "truncated.fsimir",
