@@ -33,6 +33,16 @@
 extern "C" {
 #endif
 
+#if defined(_MSC_VER) || defined(__MINGW32__) || defined(__CYGWIN__)
+#if defined(FSIM_VPI_LINK_SURFACE_BUILD)
+#define SV_VPI_DLLISPEC __declspec(dllexport)
+#else
+#define SV_VPI_DLLISPEC __declspec(dllimport)
+#endif
+#else
+#define SV_VPI_DLLISPEC
+#endif
+
 /****************************** OBJECT TYPES ******************************/
 #define vpiPackage                            600
 #define vpiInterface                          601
@@ -552,7 +562,7 @@ typedef PLI_INT32(vpi_assertion_callback_func)(
    PLI_BYTE8 *user_data             /* user data entered upon registration */
 );
 
-vpiHandle vpi_register_assertion_cb(
+SV_VPI_DLLISPEC vpiHandle vpi_register_assertion_cb(
    vpiHandle assertion,             /* handle to assertion */
    PLI_INT32 reason,                /* reason for which callbacks needed */
    vpi_assertion_callback_func *cb_rtn,
@@ -586,28 +596,33 @@ vpiHandle vpi_register_assertion_cb(
 #define vpiNextVC 870
 #define vpiTime 874
 
-PLI_INT32 vpi_load_extension(
+SV_VPI_DLLISPEC PLI_INT32 vpi_load_extension(
    PLI_BYTE8 *extension_name, PLI_BYTE8 *name, PLI_INT32 mode, ...);
-PLI_INT32 vpi_close(PLI_INT32 tool, PLI_INT32 property, PLI_BYTE8 *name);
-PLI_INT32 vpi_load_init(
+SV_VPI_DLLISPEC PLI_INT32 vpi_close(
+   PLI_INT32 tool, PLI_INT32 property, PLI_BYTE8 *name);
+SV_VPI_DLLISPEC PLI_INT32 vpi_load_init(
    vpiHandle object_collection, vpiHandle scope, PLI_INT32 level);
-PLI_INT32 vpi_load(vpiHandle object);
-PLI_INT32 vpi_unload(vpiHandle object);
-vpiHandle vpi_create(
+SV_VPI_DLLISPEC PLI_INT32 vpi_load(vpiHandle object);
+SV_VPI_DLLISPEC PLI_INT32 vpi_unload(vpiHandle object);
+SV_VPI_DLLISPEC vpiHandle vpi_create(
    PLI_INT32 property, vpiHandle collection, vpiHandle object);
-vpiHandle vpi_goto(
+SV_VPI_DLLISPEC vpiHandle vpi_goto(
    PLI_INT32 property, vpiHandle object, p_vpi_time time,
    PLI_INT32 *return_code);
-vpiHandle vpi_filter(vpiHandle object, PLI_INT32 filter,
-   PLI_INT32 include_matches);
+SV_VPI_DLLISPEC vpiHandle vpi_filter(
+   vpiHandle object, PLI_INT32 filter, PLI_INT32 include_matches);
 
 /* Compatibility entry points implemented by the fsim link surface. */
-PLI_INT32 vpi_vcontrol(PLI_INT32 operation, va_list arguments);
-PLI_INT32 vpi_fopen(const PLI_BYTE8 *name, const PLI_BYTE8 *mode);
-FILE *vpi_get_file(PLI_INT32 descriptor);
+SV_VPI_DLLISPEC PLI_INT32 vpi_vcontrol(
+   PLI_INT32 operation, va_list arguments);
+SV_VPI_DLLISPEC PLI_INT32 vpi_fopen(
+   const PLI_BYTE8 *name, const PLI_BYTE8 *mode);
+SV_VPI_DLLISPEC FILE *vpi_get_file(PLI_INT32 descriptor);
 
 #ifdef __cplusplus
 }
 #endif
+
+#undef SV_VPI_DLLISPEC
 
 #endif

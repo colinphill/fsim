@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+id	family	v2_identity	v3_identity	evidence	containment	owner
+V3REJECT-MANIFEST	manifest	schema=2	schema=3	tests/project/project_config_test.cpp	exact-diagnostic-no-config	B188-C03
+V3REJECT-OBJECT	object	format=6,portable=10	format=7,portable=14	tests/artifact/object_artifact_test.cpp	header-first-exact-diagnostic	B188-C03
+V3REJECT-PORTABLE	object	owning-unit=26	owning-unit=32	tests/library/library_artifact_test.cpp	header-first-no-unit	B188-C03
+V3REJECT-DESIGN	design	format=11	format=12	tests/artifact/design_artifact_test.cpp	header-first-exact-diagnostic	B188-C03
+V3REJECT-LIBRARY	design	format=5,portable=10	format=5,portable=14	tests/library/library_artifact_test.cpp	metadata-first-exact-diagnostic	B188-C03
+V3REJECT-RUNTIME	checkpoint	runtime=48	runtime=62	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
+V3REJECT-SEMANTIC	checkpoint	semantic=3	semantic=4	tests/app/application_test_non_project_cli.cpp	header-first-no-state	B188-C03
+V3REJECT-DESIGN-IR	checkpoint	design-ir=3	design-ir=4	tests/app/application_test_non_project_cli.cpp	header-first-no-state	B188-C03
+V3REJECT-CLASS	checkpoint	class=10	class=12	tests/app/application_test_classes.cpp	header-first-no-state	B188-C03
+V3REJECT-CONSTRAINT	checkpoint	sv-constraint=6	sv-constraint=7	tests/app/application_test_classes.cpp	header-first-no-state	B188-C03
+V3REJECT-COVERAGE	checkpoint	sv-coverage=4	sv-coverage=7	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
+V3REJECT-UVM	checkpoint	sv-uvm=2	sv-uvm=3	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
+V3REJECT-VHDL-HIR	checkpoint	vhdl-hir=1	vhdl-hir=4	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
+V3REJECT-CACHE	cache	llvm-native=v116	llvm-native=v168	src/compiler/llvm_jit_cache_key.cpp	namespace-miss-no-fallback	B188-C03
+V3REJECT-PLUGIN	plugin	native-abi=2	native-abi=3	tests/runtime/native_plugin_abi_test.cpp	abi-error-no-metadata	B188-C03

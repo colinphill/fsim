@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+id	platform	compiler	configuration	llvm_mode	configure_owner	workflow_owner	warning_policy	owner
+V3WARN-LINUX-CLANG-DEBUG	ubuntu	clang-22	Debug	OFF	CMakePresets.json	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-LINUX-CLANG-RELEASE	ubuntu	clang-22	Release	OFF	CMakePresets.json	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-LINUX-LLVM-DEBUG	ubuntu-24.04	clang-22	Debug	ON	.github/workflows/ci.yml	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-LINUX-LLVM-RELEASE	ubuntu-24.04	clang-22	Release	ON	.github/workflows/ci.yml	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-LINUX-FUZZ	ubuntu-24.04	clang	RelWithDebInfo	OFF	CMakePresets.json	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-WINDOWS-DEBUG-OFF	windows-2022	llvm-mingw-clang	Debug	OFF	.github/workflows/ci.yml	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-WINDOWS-DEBUG-ON	windows-2022	llvm-mingw-clang	Debug	ON	.github/workflows/ci.yml	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-WINDOWS-RELEASE-OFF	windows-2022	llvm-mingw-clang	Release	OFF	.github/workflows/ci.yml	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13
+V3WARN-WINDOWS-RELEASE-ON	windows-2022	llvm-mingw-clang	Release	ON	.github/workflows/ci.yml	.github/workflows/ci.yml	cmake/FsimWarnings.cmake:-Werror	B188-C13

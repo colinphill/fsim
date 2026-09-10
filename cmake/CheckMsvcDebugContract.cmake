@@ -225,7 +225,7 @@ foreach(FSIM_JOB_POLICY IN ITEMS
     "windows-llvm-mingw:"
     "configuration:"
     "llvm_mode:"
-    "--parallel 4")
+    "--parallel 2")
   string(FIND
     "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_JOB_INDEX)
   if(FSIM_JOB_INDEX EQUAL -1)

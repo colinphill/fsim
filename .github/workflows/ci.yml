@@ -190,7 +190,7 @@ jobs:
     timeout-minutes: 120
     env:
       FSIM_ARTIFACT: github-linux-fuzz
-      FSIM_RETAINED_LOG: build/qualification/batch177-change20-hosted-linux-fuzz.log
+      FSIM_RETAINED_LOG: build/qualification/batch188-change20-hosted-linux-fuzz.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -260,34 +260,34 @@ jobs:
             llvm_mode: 'OFF'
             build_dir: build/ci-windows-llvm-mingw-Debug-llvm-OFF
             artifact: github-windows-debug-llvm-off
-            retained_log: build/qualification/batch177-change20-hosted-windows-debug-llvm-off.log
+            retained_log: build/qualification/batch188-change20-hosted-windows-debug-llvm-off.log
           - configuration: Debug
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Debug-llvm-ON
             artifact: github-windows-debug-llvm-on
-            retained_log: build/qualification/batch177-change20-hosted-windows-debug-llvm-on.log
+            retained_log: build/qualification/batch188-change20-hosted-windows-debug-llvm-on.log
           - configuration: Release
             llvm_mode: 'OFF'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-OFF
             artifact: github-windows-release-llvm-off
-            retained_log: build/qualification/batch177-change20-hosted-windows-release-llvm-off.log
-            binary_package: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm
-            binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
-            binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log
-            install_log: build/qualification/batch177-change20-windows-no-llvm-install.log
-            expected_tests: '395'
-            expected_archive_entries: '1259'
+            retained_log: build/qualification/batch188-change20-hosted-windows-release-llvm-off.log
+            binary_package: fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm
+            binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
+            binary_log: build/qualification/batch188-change20-windows-no-llvm-archive.log
+            install_log: build/qualification/batch188-change20-windows-no-llvm-install.log
+            expected_tests: '415'
+            expected_archive_entries: '1269'
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
             artifact: github-windows-release-llvm-on
-            retained_log: build/qualification/batch177-change20-hosted-windows-release-llvm-on.log
-            binary_package: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22
-            binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip
-            binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log
-            install_log: build/qualification/batch177-change20-windows-llvm22-install.log
-            expected_tests: '399'
-            expected_archive_entries: '1259'
+            retained_log: build/qualification/batch188-change20-hosted-windows-release-llvm-on.log
+            binary_package: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22
+            binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip
+            binary_log: build/qualification/batch188-change20-windows-llvm22-archive.log
+            install_log: build/qualification/batch188-change20-windows-llvm22-install.log
+            expected_tests: '419'
+            expected_archive_entries: '1269'
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -433,17 +433,16 @@ jobs:
           ) | Set-Content -LiteralPath $installLog -Encoding utf8
           $arguments = @(
             "-DFSIM_SOURCE_DIR=$env:GITHUB_WORKSPACE",
-            "-DFSIM_CHANGE12_LANE=ON",
-            "-DFSIM_CHANGE12_BINARY_DIR=${{ matrix.build_dir }}",
-            "-DFSIM_CHANGE12_ARCHIVE=$env:GITHUB_WORKSPACE/${{ matrix.binary_archive }}",
-            "-DFSIM_CHANGE12_ARCHIVE_ROOT=${{ matrix.binary_package }}",
-            "-DFSIM_CHANGE12_REGRESSION_LOG=$env:GITHUB_WORKSPACE/${{ matrix.retained_log }}",
-            "-DFSIM_CHANGE12_WORK_DIR=${{ matrix.build_dir }}/change12-install-audit",
-            "-DFSIM_CHANGE12_EXPECTED_TESTS=${{ matrix.expected_tests }}",
-            "-DFSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES=${{ matrix.expected_archive_entries }}",
-            "-DFSIM_CHANGE12_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
-            "-DFSIM_CHANGE12_EXECUTABLE_SUFFIX=.exe",
-            "-P", "cmake/CheckV2ReleaseRecords.cmake"
+            "-DFSIM_ARCHIVE_AUDIT_BINARY_DIR=${{ matrix.build_dir }}",
+            "-DFSIM_ARCHIVE_AUDIT_ARCHIVE=$env:GITHUB_WORKSPACE/${{ matrix.binary_archive }}",
+            "-DFSIM_ARCHIVE_AUDIT_ROOT=${{ matrix.binary_package }}",
+            "-DFSIM_ARCHIVE_AUDIT_REGRESSION_LOG=$env:GITHUB_WORKSPACE/${{ matrix.retained_log }}",
+            "-DFSIM_ARCHIVE_AUDIT_WORK_DIR=${{ matrix.build_dir }}/v3-install-audit",
+            "-DFSIM_ARCHIVE_AUDIT_EXPECTED_TESTS=${{ matrix.expected_tests }}",
+            "-DFSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES=${{ matrix.expected_archive_entries }}",
+            "-DFSIM_ARCHIVE_AUDIT_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
+            "-DFSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX=.exe",
+            "-P", "cmake/CheckV3InstalledArchive.cmake"
           )
           & cmake @arguments 2>&1 `
             | Tee-Object -FilePath $installLog -Append

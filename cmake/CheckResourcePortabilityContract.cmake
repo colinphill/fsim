@@ -6649,7 +6649,7 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "resource portability contract: five four-worker build/test steps, "
+  "resource portability contract: five two-worker build/test steps, "
   "120-minute hosted jobs, "
   "eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded "
   "large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence "

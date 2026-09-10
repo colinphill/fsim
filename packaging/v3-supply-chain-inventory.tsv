@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# id	kind	path	owner
+V3SUP-PROJECT-LICENSE	license	LICENSE	B188-C17
+V3SUP-IEEE1076-LICENSE	license	third_party/ieee-1076-2019/LICENSE	B188-C17
+V3SUP-SYSTEMC-LICENSE	license	third_party/systemc-3.0.2/LICENSE	B188-C17
+V3SUP-SYSTEMC-NOTICE	notice	third_party/systemc-3.0.2/NOTICE	B188-C17
+V3SUP-SYSTEMC-SBOM	sbom	third_party/systemc-3.0.2/systemc-3.0.2.spdx.json	B188-C17
+V3SUP-SCV-LICENSE	license	third_party/scv-2.0.1/LICENSE	B188-C17
+V3SUP-SCV-NOTICE	notice	third_party/scv-2.0.1/NOTICE	B188-C17
+V3SUP-SCV-SBOM	sbom	third_party/scv-2.0.1/scv-2.0.1.spdx.json	B188-C17
+V3SUP-SCV-PATCHES	provenance	third_party/scv-2.0.1/PATCHES.txt	B188-C17
+V3SUP-UVM-PROVENANCE	provenance	docs/uvm-source-provenance.md	B188-C17
+V3SUP-SOURCE-EXCLUSIONS	exclusion	packaging/source-package-exclusions.txt	B188-C17
+V3SUP-VHDL-INVENTORY	reference-audit	tests/feature_matrix/vhdl_2019_inventory.tsv	B188-C17
+V3SUP-SV-INVENTORY	reference-audit	tests/feature_matrix/systemverilog_2023_inventory.tsv	B188-C17
+# SPDX-License-Identifier: Apache-2.0

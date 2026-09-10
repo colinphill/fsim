@@ -218,11 +218,13 @@ void ApplicationTestFixture::test_class_simulation_integration()
             fsim::diagnostic::Engine truncated_diagnostics;
             assert(!fsim::app::deserialize_class_state(
                 truncated, "truncated-classes.bin", truncated_diagnostics));
-            auto future = *class_state;
-            future[8] = static_cast<char>(fsim::app::kClassStateSchema + 1U);
-            fsim::diagnostic::Engine future_diagnostics;
-            assert(!fsim::app::deserialize_class_state(future, "future-classes.bin",
-                future_diagnostics));
+            for (const auto schema : { 10U, fsim::app::kClassStateSchema + 1U }) {
+                auto incompatible = *class_state;
+                incompatible[8] = static_cast<char>(schema);
+                fsim::diagnostic::Engine incompatible_diagnostics;
+                assert(!fsim::app::deserialize_class_state(incompatible,
+                    "incompatible-classes.bin", incompatible_diagnostics));
+            }
 
             const auto constraint_hir_state = fsim::app::serialize_systemverilog_constraint_hir_state(
                 built->systemverilog_hir, built->semantics,
@@ -277,14 +279,14 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 restored_constraint_base->properties, std::string { "wide_value" },
                 &fsim::semantic::sv::ClassProperty::name);
             assert(restored_constraint_wide != restored_constraint_base->properties.end() && restored_constraint_wide->type.executable_width == 137);
-            auto future_constraint_hir = *constraint_hir_state;
-            future_constraint_hir[8] = static_cast<char>(
-                fsim::app::kSystemVerilogConstraintHirStateSchema + 1U);
-            fsim::diagnostic::Engine future_constraint_hir_diagnostics;
-            assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
-                future_constraint_hir, "future-sv-constraint-hir.bin",
-                built->semantics,
-                future_constraint_hir_diagnostics));
+            for (const auto schema : { 6U, fsim::app::kSystemVerilogConstraintHirStateSchema + 1U }) {
+                auto incompatible = *constraint_hir_state;
+                incompatible[8] = static_cast<char>(schema);
+                fsim::diagnostic::Engine incompatible_diagnostics;
+                assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
+                    incompatible, "incompatible-sv-constraint-hir.bin",
+                    built->semantics, incompatible_diagnostics));
+            }
         }
         if (engine == fsim::app::SimulationEngine::interpreter) {
             fsim::diagnostic::Engine stale_debug_diagnostics;

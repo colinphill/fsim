@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+schema = 3
+
+[project]
+name = "v3-coverage-example"
+top = "sv:work.coverage_tb"
+
+[[source_set]]
+language = "systemverilog"
+standard = "2023"
+files = ["counter.sv", "coverage_tb.sv"]
+
+[coverage]
+enabled = true
+
+[run]
+max_deltas = 1000

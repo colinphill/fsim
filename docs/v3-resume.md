@@ -9525,3 +9525,452 @@ logs. Identify and resolve known actionable errors before starting the new run.
     lane passes 4/4. At the owner's direction, do not repeat the already-green
     Batch 187 full Release/Debug qualification for these CI-preflight-only
     changes before commit and push.
+
+## Batch 188 Change 1 checkpoint
+
+1. Batch 187 is committed and pushed as `18e1e56d`. Batch 188 Change 1 is
+   complete in the new intentionally dirty `codex/v3` worktree; preserve it
+   uncommitted through Change 20.
+2. `v3_release_integration_inventory.tsv` binds six exact domains to their
+   existing validators: coverage foundation, broad coverage metrics, IEEE TF,
+   IEEE ACC, VHDL-2019, and SystemVerilog-2023. They contain zero active and
+   163 preserved rows in aggregate.
+3. The release-integration checker rejects duplicate or missing domains,
+   unsafe/missing owner paths, malformed counts/digests, unresolved state, and
+   any drift in the underlying validators' exact zero-active evidence. The
+   integration ledger SHA-256 is
+   `6a210c1c5e46bcd775c74dda440f276a9137770a501df45d1ac1502f7b1e8fe8`.
+4. The six underlying inventory tests, release-integration test, source-line
+   budget, and source-package manifest pass 9/9 in 2.50 wall seconds. The
+   source-package manifest contains 1,895 ordered paths at SHA-256
+   `25a46f42df572bf5dce5acfb24d871f8c72f023add1710b2b6602974aad106df`.
+5. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 2: freeze the v3 manifest, ABI,
+   object, design, checkpoint, and cache schemas. Do not begin v2 rejection
+   proof from Change 3 in the same bounded slice.
+6. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 2 checkpoint
+
+1. Batch 188 Changes 1-2 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `v3_schema_freeze_inventory.tsv` binds six exact schema domains and 267
+   frozen owner rows to the existing project-manifest, native-foreign-ABI,
+   portable-object, design/library, nested semantic/checkpoint, and incremental
+   native-cache validators. Its SHA-256 is
+   `424f2ec0ce15aa11231d8cbd4d929134213046eda1ec98cbb14c2040385a4d90`.
+3. The aggregate checker pins manifest schema 3; native plugin, TF, SVDPI
+   context, and ACC query ABI 3; object format 7; portable schema 14;
+   owning-unit schema 32; design format 12; library format 5; runtime
+   checkpoint 62; semantic/design IR schema 4; class schema 12;
+   SystemVerilog constraint/coverage schema 7; UVM schema 3; VHDL HIR schema
+   4; and LLVM native-cache namespace `v168`.
+4. The aggregate freeze, six underlying freeze validators, source-line budget,
+   and source-package manifest pass 9/9 in 7.64 wall seconds. The source
+   package contains 1,897 ordered paths at SHA-256
+   `99827563c8dc397c84bb9e47beccc740c28223ee1472b38c7c979078f23d717c`.
+5. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 3: prove deterministic
+   rejection of all versioned v2 inputs. Do not begin older-profile
+   requalification from Change 4 in the same bounded slice.
+6. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 3 checkpoint
+
+1. Batch 188 Changes 1-3 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `v3_v2_input_rejection_inventory.tsv` pins 15 exact v2-to-v3 boundaries
+   across six families: manifests; object, portable-unit, design, and library
+   artifacts; eight nested checkpoint/state payloads; the LLVM native cache;
+   and the common native-plugin ABI. Its SHA-256 is
+   `59e448c6f0c448e329a59810eb4c4b0c4b621056b147dcb1408f6b04f83b0a0e`.
+3. Exact probes reject v2 manifest schema 2, object format/schema 6/10,
+   owning-unit schema 26, design format 11, library format/schema 5/10,
+   runtime/semantic/design-IR/class/constraint/coverage/UVM/VHDL-HIR schemas
+   48/3/3/10/6/4/2/1, LLVM cache namespace `v116`, and native ABI 2 without
+   compatibility, migration, partial publication, decoded state, or fallback.
+4. The audit corrected `portable_stale_schema_contract.tsv` from superseded
+   portable schema 13 to frozen schema 14. Its SHA-256 is
+   `8d50da489568ec8764dc2fff02f58224f82a7855bf655c85b8a2eaa55b2ab14b`.
+5. Exact Clang warnings-as-errors Debug target builds completed. The seven
+   runtime rejection probes, aggregate checker, stale-schema policy,
+   source-line budget, and source-package manifest pass 12/12 in 6.60 wall
+   seconds. The package contains 1,899 ordered paths at SHA-256
+   `54a4078400fe925eacf3b32f69ab76509a0b288edee644da5ef28467b231452e`;
+   1,525 authored sources remain at or below 2,000 lines with zero `.tpp`
+   files.
+6. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 4: requalify every retained
+   older HDL standard profile. Do not begin coverage-corpus qualification from
+   Change 5 in the same bounded slice.
+7. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 4 checkpoint
+
+1. Batch 188 Changes 1-4 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `v3_retained_profile_qualification.tsv` pins 13 retained profiles:
+   VHDL-1987/1993/2000/2002/2008, Verilog-1995/2001/2001-noconfig/2005,
+   and SystemVerilog-2005/2009/2012/2017. Selection, behavior,
+   mixed-language, interpreter/LLVM, artifact, cache, relocation, checkpoint,
+   and diagnostic evidence remains owned. The ledger SHA-256 is
+   `7ec4c1c842a711bae73a8d979f817c2943a90daf0251a90dd7d80ed10911943b`.
+3. The first closure attempt found stale `--parallel 4` assertions in the MSVC
+   Debug, MSVC Release, and Windows LLVM contract checkers. They now agree with
+   the governing two-worker hosted-CI limit and pass 3/3.
+4. The corrected VHDL and Verilog/SystemVerilog closure lane passes 23/23 in
+   60.25 wall seconds. The profile-selection test, release ledger, source-line
+   budget, and source-package manifest pass 4/4 in 1.38 wall seconds.
+5. The source package contains 1,901 ordered paths at SHA-256
+   `a9b42f883e7c04fa8dbacdd92d69d133ff6334053d57623c303e4bad1478beb9`;
+   `application_test_classes.cpp` remains within policy at 1,999 lines.
+6. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 5: run the complete HDL code,
+   functional, and PSL coverage corpus. Do not begin the TF/ACC PLI corpus from
+   Change 6 in the same bounded slice.
+7. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 5 checkpoint
+
+1. Batch 188 Changes 1-5 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. The complete `coverage`-label corpus passes 58/58 in 56.01 wall seconds. It
+   covers code coverage across Verilog/SystemVerilog/VHDL and interpreter/LLVM
+   O0-O3, SystemVerilog functional coverage, PSL coverage, aggregation,
+   exclusions, unified database merge/report/CLI/VPI surfaces, and malformed
+   input/resource containment.
+3. The first run found a stale four-worker assertion in the v1 release wrapper
+   and exact legacy inventory counts that rejected additive v3 files. Hosted
+   assertions now require two workers. Historical FST/SDF/v1 inventory counts
+   are enforced as deletion-detecting floors while every current authored file
+   is still inspected for an approved SPDX notice.
+4. The v1 release candidate plus affected FST, SDF application/VITAL,
+   resource-portability, Windows-package, and v2 release-record gates are
+   green after repair.
+5. The source package remains 1,901 ordered paths at SHA-256
+   `a9b42f883e7c04fa8dbacdd92d69d133ff6334053d57623c303e4bad1478beb9`.
+6. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 6: run the complete TF/ACC PLI
+   corpus. Do not begin VHDL-2019 corpus qualification from Change 7 in the
+   same bounded slice.
+7. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 6 checkpoint
+
+1. Batch 188 Changes 1-6 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. The exact `tf`/`acc` label union passes 39/39 in 0.22 wall seconds. It covers
+   C/C++ ABI layouts, common native metadata, every TF lifecycle/value/time/
+   context/control seam, every ACC handle/lookup/traversal/value/timing/
+   callback seam, scheduler coordination, containment, TF/ACC and ACC/VPI
+   coherence, vendor rejection, and Linux/Windows plugin probes.
+3. The frozen TF and ACC inventories plus the shared v3 release-integration
+   ledger are part of the green lane.
+4. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 7: run the complete VHDL-2019
+   corpus. Do not begin SystemVerilog-2023 corpus qualification from Change 8
+   in the same bounded slice.
+5. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 7 checkpoint
+
+1. Batch 188 Changes 1-7 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. All 14 VHDL-2019 inventory-owned witnesses pass in 65.38 wall seconds. The
+   lane includes the zero-active 37-row inventory, frontend, elaboration,
+   runtime/VHPI, 64-bit INTEGER, views/types/composites, protected/access/
+   physical behavior, projected waveforms, standard APIs, PSL, artifacts and
+   checkpoints, plus mixed-language interpreter/LLVM/cache/debug/VCD
+   equivalence.
+3. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 8: run the complete
+   SystemVerilog-2023 corpus. Do not begin mixed-language/foreign-interface
+   composition from Change 9 in the same bounded slice.
+4. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 8 checkpoint
+
+1. Batch 188 Changes 1-8 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. The 56-row SystemVerilog-2023 inventory-owned corpus and its closure
+   dependencies pass 36/36 in 88.41 wall seconds. It covers frontend/HIR,
+   aggregates, classes/containers/processes/randomization/synchronization,
+   assertions and coverage, interfaces/hierarchy/type parameters/generate,
+   files, gates/switches/UDP, specify/SDF timing, DPI/VPI, artifacts,
+   checkpoints, UVM, and mixed-language interpreter/LLVM/cache/debug/VCD
+   behavior.
+3. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 9: qualify mixed-language and
+   foreign-interface composition. Do not begin interpreter/LLVM/Debug
+   equivalence from Change 10 in the same bounded slice.
+4. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 9 checkpoint
+
+1. Batch 188 Changes 1-9 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. The mixed-language and foreign-interface composition lane passes 15/15 in
+   136.27 wall seconds. It joins multi-root VHDL/Verilog/SystemVerilog/SystemC
+   boundaries, typed conversions, SDF mixed resolution and foreign
+   observation, the complete DPI/VPI/VHPI runtime and reference-plugin
+   surface, TF/ACC plug-in and scheduler coordination, the frozen v3 foreign
+   ABI, and interpreter/LLVM, cache, artifact, debugger, VCD, callback, and
+   lifecycle evidence.
+3. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 10: qualify interpreter, LLVM
+   O0-O3, and Debug equivalence. Do not begin artifact/cache/checkpoint/trace/
+   debugger qualification from Change 11 in the same bounded slice.
+4. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 10 checkpoint
+
+1. Batch 188 Changes 1-10 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. The focused engine-equivalence lane passes 10/10 in 48.64 wall seconds. It
+   explicitly exercises interpreter, LLVM O0/O1/O2/O3, and Debug across
+   Verilog, SystemVerilog, VHDL, mixed SystemC boundaries, code-coverage
+   metrics, classes/UVM, PSL, VPI, display ordering, caches, artifacts,
+   callbacks, debugger observations, and VCD state.
+3. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 11: qualify artifacts, caches,
+   checkpoints, traces, and debugger observations. Do not begin fuzz,
+   malformed-input, resource, or security readiness from Change 12 in the same
+   bounded slice.
+4. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 11 checkpoint
+
+1. Batch 188 Changes 1-11 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. The focused persistence and observability union passes 36/36 in 2.85 wall
+   seconds. It covers object/design/library/coverage/SCV artifacts, native and
+   project caches, corruption isolation, source-hidden relocation,
+   non-project restart, runtime checkpoints and replay, VCD/FST/SystemC/SCV
+   traces, SDF observations, debugger/callback correlation, and deterministic
+   archive rendering.
+3. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 12: complete fuzz,
+   malformed-input, resource, and security readiness. Do not begin warning
+   audit ownership from Change 13 in the same bounded slice.
+4. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 12 checkpoint
+
+1. Batch 188 Changes 1-12 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. A fresh local Clang 22.1.8 warnings-as-errors libFuzzer build completes.
+   The deterministic four-seed frontend corpus passes 20,000 mutations in
+   seven seconds with 45 MiB final RSS and no crash, timeout, or leak finding.
+3. The complete 72-test `resource` lane passes 72/72 in 0.67 wall seconds. An
+   additional 11-test malformed/corrupt/containment/security-policy union
+   passes 11/11 in 22.41 wall seconds, including frontend recovery, artifact
+   codecs, diagnostics, cache isolation, producer validation, TF/ACC failure
+   containment, and the cross-platform resource contract.
+4. LibFuzzer's 912 generated corpus discoveries were removed after the run;
+   the four tracked governed seeds remain unchanged and the corpus has no
+   untracked files.
+5. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran. Proceed only to Batch 188 Change 13: freeze Linux and Windows
+   warning-audit ownership. Do not begin hosted platform/toolchain definition
+   work from Change 14 in the same bounded slice.
+6. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 13 checkpoint
+
+1. Batch 188 Changes 1-13 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `v3_warning_audit_inventory.tsv` freezes nine warnings-as-errors lanes:
+   five Linux Clang lanes and four Windows LLVM-MinGW Clang lanes spanning
+   Debug, Release, LLVM-off/on, and frontend fuzz configurations. The ledger
+   SHA-256 is
+   `92f5da8d3cd328c8924a4383861b52c0c2ecb2608046980e202a7585946d13ff`.
+3. `CheckV3WarningAudit.cmake` pins compiler selection,
+   `FSIM_WARNINGS_AS_ERRORS=ON`, common `-Werror` ownership, and two-worker
+   hosted build/test commands. Its first run exposed only an interpolated
+   checker literal; the corrected checker passes, while the retained MSVC,
+   Windows LLVM, tool-portability, resource-portability, source-line, and
+   source-package contracts pass 7/7 alongside it.
+4. The Debug build regenerated and completed 103 warnings-as-errors link
+   steps with eight local workers. No Release qualification, clean-first,
+   sanitizer, hosted-CI inspection, commit, or push action ran. Proceed only
+   to Batch 188 Change 14: freeze hosted platform and toolchain definitions.
+   Do not begin release documentation from Change 15 in the same bounded
+   slice.
+5. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 14 checkpoint
+
+1. Batch 188 Changes 1-14 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `v3_hosted_toolchain_inventory.tsv` freezes nine hosted configurations:
+   Linux Clang Debug/Release, LLVM Debug/Release, and fuzz plus Windows
+   LLVM-MinGW Debug/Release with LLVM disabled and enabled. The ledger SHA-256
+   is `0d2009b5f38a5833c94cacf91898c4f81d1c97ea4d057712b107ff1591b0492a`.
+3. `CheckV3HostedToolchains.cmake` pins runner images, Clang/LLVM 22.1.8,
+   LLVM-MinGW 20260616, warnings-as-errors, 120-minute timeouts, two-worker
+   commands, and artifact/log ownership. The hosted freeze and retained
+   warning, Windows, tool/resource, source-line, and source-package contracts
+   pass 9/9 after correcting alphabetical manifest order.
+4. No Release qualification, clean-first, sanitizer, hosted-CI inspection,
+   commit, or push action ran. Proceed only to Batch 188 Change 15: publish
+   v3.0 examples, user guides, API references, and known limitations. Do not
+   begin deterministic artifact preparation from Change 16 in the same
+   bounded slice.
+5. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 15 checkpoint
+
+1. Batch 188 Changes 1-15 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. New independently authored documentation covers unified `.fsimcov`
+   operation, IEEE TF/ACC PLI, SystemVerilog-2023, the direct-v3 C/API and
+   schema boundary, and known v3.0 limitations. README links the release set.
+3. `examples/v3_coverage` is a runnable SystemVerilog-2023 opt-in code and
+   functional-coverage example. A copied clean example elaborates and runs to
+   `$finish` at tick 15, delta 1.
+4. The six-row `v3_release_documentation.tsv` ledger has SHA-256
+   `60d80fe5bb26ccd12434aa2796339efae427b31675f9b9afe0f4a94e537565fe`.
+   Its checker, source-package manifest, and source-line budget pass 3/3.
+5. No Release qualification, clean-first, sanitizer, hosted-CI inspection,
+   commit, or push action ran. Proceed only to Batch 188 Change 16: prepare
+   deterministic source and existing archive artifacts. Do not begin license,
+   SBOM, provenance, or private-reference exclusion auditing from Change 17 in
+   the same bounded slice.
+6. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 16 checkpoint
+
+1. Batch 188 Changes 1-16 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `packaging/v3-archive-layout.tsv` freezes one portable source archive and
+   four Clang binary ZIPs: Linux Clang 22 and Windows LLVM-MinGW 20260616, each
+   with LLVM disabled and LLVM 22.1.8 enabled. Its SHA-256 is
+   `991e93c3c46359a3b4ed2388489fef4e1be5508b338778002c9212745f351426`.
+3. `create_deterministic_zip.py` now writes a fixed staging path and atomically
+   replaces the destination only after the archive closes successfully. The
+   static artifact freeze and the complete repeated source/binary fixture
+   packaging test pass 2/2 in 17.78 wall seconds.
+4. No Release qualification, clean-first, sanitizer, hosted-CI inspection,
+   commit, or push action ran. Proceed only to Batch 188 Change 17: complete
+   license, SBOM, provenance, and private-reference exclusion audits. Do not
+   begin release-record or tag-message work from Change 18 in the same bounded
+   slice.
+5. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 17 checkpoint
+
+1. Batch 188 Changes 1-17 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `packaging/v3-supply-chain-inventory.tsv` freezes 13 project and governed
+   third-party license, notice, SPDX SBOM, patch/source provenance, exclusion,
+   and independently authored language-inventory owners. Its SHA-256 is
+   `991174ef94f597bf5c4b956619e6c102bebe3adfc477e04becd99c1ff673b626`.
+3. `CheckV3SupplyChain.cmake` validates the inventory and SBOM contracts and
+   scans every packaged textual input for prohibited private reference
+   locations/document paths without recording those locations or private
+   reference hashes. After repairing one checker string delimiter, the new
+   audit plus source-package, deterministic packaging, IEEE package,
+   VHDL-2019, SystemVerilog-2023, SystemC, and SCV provenance tests pass 8/8.
+4. No Release qualification, clean-first, sanitizer, hosted-CI inspection,
+   commit, or push action ran. Proceed only to Batch 188 Change 18: freeze the
+   v3.0 release record and exact tag message. Do not change active product or
+   package version identities from Change 19 in the same bounded slice.
+5. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 18 checkpoint
+
+1. Batch 188 Changes 1-18 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted through Change 20.
+2. `packaging/v3-release-record.txt` freezes candidate/tag `v3.0.0`, annotated
+   tag message `fsim v3.0.0`, release-document digests, all five archive names,
+   governance digests, unsigned disposition, and the complete Change 20
+   qualification/publish boundary. Its SHA-256 is
+   `a3e7fc3147b1019ae374f344f402268ca6f625943092d280f7774925690095c2`.
+3. `docs/changelog-v3.md` independently summarizes unified coverage, IEEE
+   TF/ACC, VHDL-2019, SystemVerilog-2023, retained profiles, and direct v2
+   rejection. The release record and related documentation/artifact/supply/
+   source contracts pass 6/6.
+4. Active compiled and package identities remain unchanged as required. No
+   Release qualification, clean-first, sanitizer, hosted-CI inspection,
+   commit, or push action ran. Proceed only to Batch 188 Change 19: set every
+   product/version/package identity to `3.0.0`. Do not begin full Release or
+   Debug qualification from Change 20 in the same bounded slice.
+5. At the later Change 20 CI boundary, inspect the most recent applicable run,
+   conclusion, and failing logs before triggering any new run.
+
+## Batch 188 Change 19 checkpoint
+
+1. Batch 188 Changes 1-19 are complete in the intentionally dirty `codex/v3`
+   worktree; preserve them uncommitted until Change 20 qualification succeeds.
+2. CMake, compiled version identity, pkg-config, CLI/Tcl, active package
+   policy, deterministic archive defaults, Linux/Windows target definitions,
+   and hosted Windows artifact names now use `3.0.0`/`v3.0.0`. `fsim
+   --version` reports `fsim 3.0.0 (C API 1)`.
+3. Active Linux package targets are Clang 22 with LLVM disabled/enabled;
+   historical v2/GCC records remain explicitly archival. Every active hosted
+   package target uses two workers and Batch 188 ownership. The updated hosted
+   ledger SHA-256 is
+   `0d2009b5f38a5833c94cacf91898c4f81d1c97ea4d057712b107ff1591b0492a`.
+4. The 11-row `v3_version_identity.tsv` ledger has SHA-256
+   `394256500832e38e3e15bbc4715e4494312192de1a39a1eea9bf4e77b3b3be2c`.
+   The version cut rebuilt 450 exact-LLVM warnings-as-errors Debug actions and
+   the focused product/package/install/archive/Windows/Tcl/runtime/governance
+   lane passes 17/17 in 20.78 wall seconds.
+5. No full Release/Debug qualification, sanitizer, hosted-CI inspection,
+   commit, or push action ran. Proceed to Batch 188 Change 20. Compile Release
+   first, run the complete Release suite, then perform a clean Debug build and
+   complete Debug suite. Inspect the most recent applicable hosted CI run and
+   failing logs before the one commit/push that triggers new CI. After push,
+   run sanitizers and monitor/fix hosted CI until every required lane is green;
+   only then create/push the exact annotated `v3.0.0` tag and publish.
+
+## Batch 188 Change 20 local-qualification checkpoint
+
+1. Batch 188 Changes 1-20 are implemented in the intentionally dirty
+   `codex/v3` worktree. Local Release and Debug qualification are complete;
+   the single closing commit/push, sanitizers, replacement hosted CI, release
+   artifacts, tag, and publication remain.
+2. Before any release build or new hosted run, the latest applicable CI run
+   `34484367110` for Batch 187 commit `18e1e56d` and its failing logs were
+   inspected. Linux compilation completed and tests exposed stale four-worker
+   policy and exact-count assertions. All four Windows LLVM-MinGW jobs failed
+   to link `vpi_register_assertion_cb` and `vpi_load_init` because the
+   SystemVerilog VPI extension declarations lacked the DLL link-surface
+   contract.
+3. The CI repair applies import/export decoration to all twelve
+   SystemVerilog VPI extension routines, updates current two-worker/test-count
+   policy, registers `v3_coverage` in clean-machine closure, refreshes release
+   governance digests, and adds SPDX ownership to the new ledgers. The foreign
+   ABI, Windows-package, clean-machine, release-record, and governance gates
+   are green locally.
+4. Qualification followed the required order. The clean-first Clang 22.1.8
+   plus exact LLVM 22.1.8 Release build completed 3,149/3,149 actions with
+   eight workers and warnings-as-errors. Its complete run passed 417/419 in
+   516.50 seconds; after correcting the two integration-only failures, the
+   dependency-expanded affected closure passed 22/22 in 150.85 seconds and
+   accounts for every Release owner.
+5. The subsequent clean-first Clang/LLVM Debug build completed 3,149/3,149
+   actions with eight workers and warnings-as-errors. The complete Debug suite
+   passes 419/419 in 532.00 seconds.
+6. Immediately before this checkpoint, run `34484367110` remains the newest
+   applicable hosted run and remains failed; no replacement CI run has begun.
+   Audit the complete diff and source manifest, commit/push the Change 20
+   candidate, then run sanitizers and monitor/fix every Linux and Windows lane.
+   Do not tag or publish until all required local and hosted lanes are green.

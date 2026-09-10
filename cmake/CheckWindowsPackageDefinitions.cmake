@@ -39,7 +39,7 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
       target_triple crt llvm_mode llvm_version llvm_package tcl_mode
       configurations archive_format toolchain_archive_url
       toolchain_archive_sha256 job_timeout_minutes hosted_workers
-      warning_log_owner batch176_evidence batch177_required signature)
+      warning_log_owner batch188_evidence batch188_required signature)
     list(FIND FSIM_KEYS "${FSIM_REQUIRED_KEY}" FSIM_KEY_INDEX)
     if(FSIM_KEY_INDEX EQUAL -1)
       message(FATAL_ERROR
@@ -61,12 +61,12 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
      OR NOT FSIM_VALUE_toolchain_archive_sha256 STREQUAL
         "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
      OR NOT FSIM_VALUE_job_timeout_minutes STREQUAL "120"
-     OR NOT FSIM_VALUE_hosted_workers STREQUAL "4"
+     OR NOT FSIM_VALUE_hosted_workers STREQUAL "2"
      OR NOT FSIM_VALUE_warning_log_owner STREQUAL
-        "batch177-retained-compiler-linker-and-test-log"
-     OR NOT FSIM_VALUE_batch176_evidence STREQUAL
+        "batch188-retained-compiler-linker-and-test-log"
+     OR NOT FSIM_VALUE_batch188_evidence STREQUAL
         "definition-and-static-portability-only"
-     OR NOT FSIM_VALUE_batch177_required STREQUAL
+     OR NOT FSIM_VALUE_batch188_required STREQUAL
         "debug-build,release-build,binary-archive,install-smoke,warning-audit,hosted-windows-matrix"
      OR NOT FSIM_VALUE_signature STREQUAL "unsigned-release")
     message(FATAL_ERROR
@@ -119,25 +119,26 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "llvm_mode: 'ON'"
     "llvm_mode: 'OFF'"
     "-DFSIM_TCL_MODE=ON"
-    "fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
-    "fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
-    "batch177-change20-windows-no-llvm-install.log"
-    "batch177-change20-windows-llvm22-install.log"
-    "expected_tests: '371'"
-    "expected_tests: '375'"
-    "expected_archive_entries: '1252'"
+    "fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
+    "fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "batch188-change20-windows-no-llvm-install.log"
+    "batch188-change20-windows-llvm22-install.log"
+    "expected_tests: '415'"
+    "expected_tests: '419'"
+    "expected_archive_entries: '1269'"
     "for attempt in 1 2 3; do"
     "LLVM package installation attempt \${attempt} failed; retrying"
     "-DFSIM_BINARY_ONLY=ON"
     "-DFSIM_BINARY_PACKAGE_NAME=\${{ matrix.binary_package }}"
     "Create deterministic Windows binary archive"
     "Audit deterministic Windows install lane"
-    "-DFSIM_CHANGE12_LANE=ON"
-    "-DFSIM_CHANGE12_EXPECTED_ARCHIVE_ENTRIES=\${{ matrix.expected_archive_entries }}"
+    "-DFSIM_ARCHIVE_AUDIT_ARCHIVE=\$env:GITHUB_WORKSPACE/\${{ matrix.binary_archive }}"
+    "-DFSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES=\${{ matrix.expected_archive_entries }}"
+    "cmake/CheckV3InstalledArchive.cmake"
     "Upload deterministic Windows binary archive"
     "actions/upload-artifact@v7"
     "if-no-files-found: error"
-    "--parallel 4")
+    "--parallel 2")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_WORKFLOW_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -194,4 +195,4 @@ message(STATUS
   "hosted timeouts are 120 minutes; four retained Windows lane artifacts and "
   "two Release binary archives, /bigobj and warning-clean test assertion "
   "policy are statically owned; every real Windows result is deferred to "
-  "Batch 177 Change 20")
+  "Batch 188 Change 20")

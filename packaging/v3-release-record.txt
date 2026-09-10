@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+schema=fsim-v3-release-record-v1
+candidate=v3.0.0
+compiled_version_required=3.0.0
+tag_name=v3.0.0
+tag_kind=annotated
+tag_message=fsim v3.0.0
+release_notes=docs/changelog-v3.md
+release_notes_sha256=1584aa0940511edaf2a89f461bc3f0bc3d479d28896b096119be780f3f2fe44e
+known_issues=docs/known-issues-v3.md
+known_issues_sha256=294cd3479d989001342577aaccc71aec1378e8667a0df8d9bc85546af4f3eabd
+api_reference=docs/v3-api.md
+api_reference_sha256=2f407977955ab81d86e82fb776e1f890da8c05095b6366ca471b9885280c9da2
+source_artifact=fsim-v3.0.0-source.zip
+linux_clang22_no_llvm_artifact=fsim-v3.0.0-linux-x86_64-clang22-no-llvm.zip
+linux_clang22_llvm22_artifact=fsim-v3.0.0-linux-x86_64-clang22-llvm22.zip
+windows_llvm_mingw_no_llvm_artifact=fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
+windows_llvm_mingw_llvm22_artifact=fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip
+archive_layout_sha256=991e93c3c46359a3b4ed2388489fef4e1be5508b338778002c9212745f351426
+supply_chain_inventory_sha256=991174ef94f597bf5c4b956619e6c102bebe3adfc477e04becd99c1ff673b626
+signature=unsigned-release
+release_state=prepared
+batch188_required=release-build,release-tests,debug-build,debug-tests,sanitizers,linux-windows-hosted-ci,artifacts,tag,publish

@@ -612,6 +612,15 @@ int main() {
           stale_format_diagnostics,
           "format " + std::to_string(stale_format) + " and runtime ABI 1"));
   }
+  auto v2_header = encoded.substr(0, 16U);
+  store_u32(v2_header, 8U, 11U);
+  for (const auto* const source : { "v2-design", "v2-design-repeat" }) {
+    fsim::diagnostic::Engine v2_diagnostics;
+    assert(!fsim::artifact::deserialize_design_metadata(
+        v2_header, source, v2_diagnostics));
+    assert(has_design_identity_diagnostic(
+        v2_diagnostics, "format 11 and runtime ABI 1"));
+  }
 
   auto future_header = encoded.substr(0, 16U);
   store_u32(

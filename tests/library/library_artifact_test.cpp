@@ -1286,6 +1286,14 @@ endprimitive
     assert(has_identity_diagnostic(
         stale_diagnostics, "portable owning unit", "schema 31",
         "schema 32", ".fsimobj"));
+    auto v2_unit = *unit_bytes;
+    v2_unit[8] = static_cast<char>(26U);
+    fsim::diagnostic::Engine v2_unit_diagnostics;
+    assert(!fsim::library::deserialize_portable_unit(
+        v2_unit, "v2.fsimir", v2_unit_diagnostics));
+    assert(has_identity_diagnostic(
+        v2_unit_diagnostics, "portable owning unit", "schema 26",
+        "schema 32", ".fsimobj"));
     fsim::diagnostic::Engine truncated_unit_diagnostics;
     assert(!fsim::library::deserialize_portable_unit(
         unit_bytes->substr(0, 15), "truncated.fsimir",
@@ -1385,6 +1393,20 @@ endprimitive
         assert(has_identity_diagnostic(
             stale_portable_diagnostics, ".fsimlib",
             "portable-unit schema " + std::to_string(schema),
+            "portable-unit schema 14", ".fsimlib"));
+    }
+    auto v2_library_text = serialized;
+    v2_library_text.replace(
+        v2_library_text.find("portable_schema = 14"),
+        std::string { "portable_schema = 14" }.size(),
+        "portable_schema = 10");
+    for (const auto* const source : { "v2-library.toml",
+                                      "v2-library-repeat.toml" }) {
+        fsim::diagnostic::Engine v2_library_diagnostics;
+        assert(!fsim::library::parse_metadata(
+            v2_library_text, source, v2_library_diagnostics));
+        assert(has_identity_diagnostic(
+            v2_library_diagnostics, ".fsimlib", "portable-unit schema 10",
             "portable-unit schema 14", ".fsimlib"));
     }
 

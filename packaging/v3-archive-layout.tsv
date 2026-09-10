@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# artifact	kind	platform	compiler	llvm	owner
+fsim-v3.0.0-source.zip	source	portable	none	none	B188-C16
+fsim-v3.0.0-linux-x86_64-clang22-no-llvm.zip	binary	linux-x86_64	clang-22	off	B188-C16
+fsim-v3.0.0-linux-x86_64-clang22-llvm22.zip	binary	linux-x86_64	clang-22	22.1.8	B188-C16
+fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip	binary	windows-x86_64	llvm-mingw-20260616	off	B188-C16
+fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip	binary	windows-x86_64	llvm-mingw-20260616	22.1.8	B188-C16
+# SPDX-License-Identifier: Apache-2.0

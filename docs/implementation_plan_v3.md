@@ -5972,26 +5972,304 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 ### Batch 188 - v3.0.0 integration and release
 
-1. Audit zero unresolved rows across coverage, PLI, VHDL, and SystemVerilog.
-2. Freeze v3 manifest, ABI, object, design, checkpoint, and cache schemas.
-3. Prove deterministic rejection of all versioned v2 inputs.
-4. Requalify every retained older HDL standard profile.
-5. Run the complete HDL code/functional/PSL coverage corpus.
-6. Run the complete TF/ACC PLI corpus.
-7. Run the complete VHDL-2019 corpus.
-8. Run the complete SystemVerilog-2023 corpus.
-9. Qualify mixed-language and foreign-interface composition.
-10. Qualify interpreter, LLVM O0-O3, and Debug equivalence.
-11. Qualify artifacts, caches, checkpoints, traces, and debugger observations.
-12. Complete fuzz, malformed-input, resource, and security readiness.
-13. Freeze Linux and Windows warning-audit ownership.
-14. Freeze hosted platform and toolchain definitions.
-15. Publish v3.0 examples, user guides, API references, and known limitations.
-16. Prepare deterministic source and existing archive artifacts.
-17. Complete licenses, SBOM, provenance, and private-reference exclusion audits.
-18. Freeze the v3.0 release record and exact tag message.
-19. Set every product/version/package identity to 3.0.0.
-20. Run final local qualification, commit, push, tag, and publish v3.0.0.
+1. **Complete.** Audit zero unresolved rows across coverage, PLI, VHDL, and SystemVerilog.
+
+   A six-domain v3 release-integration ledger now pins the independently
+   validated coverage foundation, broad coverage metrics, IEEE TF, IEEE ACC,
+   VHDL-2019, and SystemVerilog-2023 inventories to their exact row counts and
+   normalized digests. Its checker rejects unsafe or missing owner paths,
+   duplicate identities/domains, malformed counts or digests, non-preserved
+   release ownership, any active/planned/unresolved/deferred/partial row, and
+   drift in the six underlying validators' zero-active evidence.
+
+   All six domains contain zero active and 163 preserved rows in aggregate.
+   The integration ledger digest is
+   `6a210c1c5e46bcd775c74dda440f276a9137770a501df45d1ac1502f7b1e8fe8`.
+   Exact Clang warnings-as-errors Debug target validation required no source
+   rebuild, and the six underlying inventories, integration audit, source-line
+   budget, and source-package manifest pass 9/9 in 2.50 wall seconds. The
+   source package contains 1,895 ordered paths at SHA-256
+   `25a46f42df572bf5dce5acfb24d871f8c72f023add1710b2b6602974aad106df`.
+   No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran.
+2. **Complete.** Freeze v3 manifest, ABI, object, design, checkpoint, and cache schemas.
+
+   A single v3 schema-freeze ledger now binds the project manifest, native
+   foreign ABI, portable object, design/library, nested semantic/checkpoint,
+   and incremental native-cache contracts to their six existing validators.
+   The ledger owns 267 frozen rows and has SHA-256
+   `424f2ec0ce15aa11231d8cbd4d929134213046eda1ec98cbb14c2040385a4d90`.
+   It additionally pins manifest schema 3; native plugin, TF, SVDPI context,
+   and ACC query ABI 3; object format 7; portable schema 14; owning-unit schema
+   32; design format 12; library format 5; runtime checkpoint 62; semantic and
+   design IR schema 4; class schema 12; SystemVerilog constraint and coverage
+   schema 7; UVM schema 3; VHDL HIR schema 4; and LLVM native-cache namespace
+   `v168`.
+
+   Exact Clang warnings-as-errors Debug target validation required no source
+   rebuild. The aggregate freeze, all six underlying validators, source-line
+   budget, and source-package manifest pass 9/9 in 7.64 wall seconds. The
+   source package contains 1,897 ordered paths at SHA-256
+   `99827563c8dc397c84bb9e47beccc740c28223ee1472b38c7c979078f23d717c`.
+   No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran.
+3. **Complete.** Prove deterministic rejection of all versioned v2 inputs.
+
+   A 15-row, six-family release ledger now pins the exact v2 and v3 identities
+   for manifests; object, portable-unit, design, and library artifacts; eight
+   nested checkpoint/state payloads; the LLVM native cache; and the common
+   native-plugin ABI. Exact probes reject v2 manifest schema 2, object
+   format/schema 6/10, owning-unit schema 26, design format 11, library
+   format/schema 5/10, runtime/semantic/design-IR/class/constraint/coverage/UVM/
+   VHDL-HIR schemas 48/3/3/10/6/4/2/1, cache namespace `v116`, and native ABI
+   2 without a compatibility reader, migration, partial publication, decoded
+   state, or cache fallback. The ledger SHA-256 is
+   `59e448c6f0c448e329a59810eb4c4b0c4b621056b147dcb1408f6b04f83b0a0e`.
+
+   The audit also corrected the portable stale-schema ledger from superseded
+   schema 13 to frozen schema 14; its new SHA-256 is
+   `8d50da489568ec8764dc2fff02f58224f82a7855bf655c85b8a2eaa55b2ab14b`.
+   Exact Clang warnings-as-errors Debug target builds completed, and the seven
+   runtime rejection probes, aggregate release checker, stale-schema policy,
+   source-line budget, and source-package manifest pass 12/12 in 6.60 wall
+   seconds. The source package contains 1,899 ordered paths at SHA-256
+   `54a4078400fe925eacf3b32f69ab76509a0b288edee644da5ef28467b231452e`;
+   all 1,525 authored sources remain at or below 2,000 lines with zero `.tpp`
+   files. No Release, clean-first, sanitizer, hosted-CI inspection, commit, or
+   push action ran.
+4. **Complete.** Requalify every retained older HDL standard profile.
+
+   A 13-profile v3 release ledger now pins every retained profile and spelling:
+   VHDL-1987/1993/2000/2002/2008, Verilog-1995/2001/2001-noconfig/2005,
+   and SystemVerilog-2005/2009/2012/2017. Each row owns selection, behavioral,
+   mixed-language, interpreter/LLVM, artifact, cache, relocation, checkpoint,
+   and diagnostic evidence appropriate to that profile. The ledger SHA-256 is
+   `7ec4c1c842a711bae73a8d979f817c2943a90daf0251a90dd7d80ed10911943b`.
+
+   The first closure attempt exposed three stale Windows contract assertions
+   left by the two-worker hosted-CI repair; the MSVC Debug, MSVC Release, and
+   Windows LLVM checkers now consistently require `--parallel 2`. The corrected
+   VHDL and Verilog/SystemVerilog closure lane passes 23/23 in 60.25 wall
+   seconds, and the release ledger, profile-selection test, source-line budget,
+   and source-package manifest pass 4/4 in 1.38 wall seconds. The source package
+   contains 1,901 ordered paths at SHA-256
+   `a9b42f883e7c04fa8dbacdd92d69d133ff6334053d57623c303e4bad1478beb9`.
+   No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran.
+5. **Complete.** Run the complete HDL code/functional/PSL coverage corpus.
+
+   The complete `coverage`-label lane passes 58/58 in 56.01 wall seconds. It
+   covers language-neutral point/source identity; Verilog, SystemVerilog, and
+   VHDL statement/line/branch/condition/expression/toggle/FSM instrumentation;
+   interpreter and LLVM O0-O3 equivalence; hierarchical aggregation and
+   exclusions; SystemVerilog functional coverage; PSL coverage; the unified
+   database and merge policies; VPI controls; deterministic text/HTML/JSON,
+   LCOV, and Cobertura reporting; corruption/resource limits; and CLI
+   thresholds.
+
+   The first lane exposed a stale v1 release-wrapper assertion for four-worker
+   hosted CI and historical exact-count checks that rejected additive v3
+   sources. Hosted policy now consistently requires two workers, while legacy
+   license/release audits retain their original file-count floors and continue
+   checking every current authored file for an approved SPDX notice. The v1
+   release candidate and the affected FST, SDF, resource, Windows-package, and
+   v2-record gates are green after repair. The source package remains 1,901
+   ordered paths at SHA-256
+   `a9b42f883e7c04fa8dbacdd92d69d133ff6334053d57623c303e4bad1478beb9`.
+   No Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran.
+6. **Complete.** Run the complete TF/ACC PLI corpus.
+
+   The exact `tf`/`acc` label union passes 39/39 in 0.22 wall seconds. The lane
+   covers public C/C++ ABI layouts, common native metadata, TF registration and
+   linking, `checktf`/`sizetf`/`calltf`/`misctf`, arguments, values, time,
+   instances, contexts, controls, scheduler synchronization and containment;
+   ACC initialization, handles, lookup, traversal, objects, reads/writes,
+   iterators, timing, value-change links, callback lifetime, TF/ACC and ACC/VPI
+   coherence, vendor rejection, and independently authored Linux/Windows
+   plugin probes. The frozen TF/ACC inventories and shared v3 release ledger
+   are included. No Release, clean-first, sanitizer, hosted-CI inspection,
+   commit, or push action ran.
+7. **Complete.** Run the complete VHDL-2019 corpus.
+
+   All 14 inventory-owned witnesses pass in 65.38 wall seconds: the zero-active
+   37-row clause inventory, frontend and elaboration aggregates, runtime/VHPI,
+   64-bit predefined integer behavior, type generics and interface views,
+   composite operations, protected/access/physical types, projected waveforms,
+   standardized environment/data/time/directory/source/report APIs, PSL,
+   artifact/checkpoint round trips, and the mixed VHDL/SystemVerilog/SystemC
+   interpreter/LLVM/cache/debug/VCD equivalence lane. No Release, clean-first,
+   sanitizer, hosted-CI inspection, commit, or push action ran.
+8. **Complete.** Run the complete SystemVerilog-2023 corpus.
+
+   The 56-row inventory-owned corpus and its closure dependencies pass 36/36
+   in 88.41 wall seconds. The lane covers lexical/frontend and semantic HIR,
+   aggregates, classes, containers, processes/fork, randomization,
+   synchronization, assertions, functional coverage, interfaces, hierarchy,
+   type parameters, preprocessing/generate, files, gate/switch/UDP, specify/SDF
+   timing, DPI/VPI ABI, callbacks, controls, coverage and data-read APIs,
+   artifacts/checkpoints, UVM, and mixed VHDL/SystemC interpreter/LLVM/cache/
+   debug/VCD behavior. No Release, clean-first, sanitizer, hosted-CI
+   inspection, commit, or push action ran.
+9. **Complete.** Qualify mixed-language and foreign-interface composition.
+
+   The focused composition lane passes 15/15 in 136.27 wall seconds. It
+   combines multi-root VHDL/Verilog/SystemVerilog/SystemC boundaries, typed
+   conversions, SDF mixed resolution and foreign observation, the full
+   DPI/VPI/VHPI runtime and reference-plugin surface, TF/ACC registration and
+   scheduler coordination, the stable v3 foreign ABI, and interpreter/LLVM,
+   cache, artifact, debugger, VCD, callback, and lifecycle witnesses. No
+   Release, clean-first, sanitizer, hosted-CI inspection, commit, or push
+   action ran.
+10. **Complete.** Qualify interpreter, LLVM O0-O3, and Debug equivalence.
+
+    Ten focused engine-equivalence witnesses pass 10/10 in 48.64 wall
+    seconds. The lane explicitly exercises interpreter, LLVM O0/O1/O2/O3,
+    and Debug across Verilog, SystemVerilog, VHDL, mixed SystemC boundaries,
+    code-coverage metrics, classes/UVM, PSL, VPI, display ordering, caches,
+    artifacts, callbacks, debugger observations, and VCD state. No Release,
+    clean-first, sanitizer, hosted-CI inspection, commit, or push action ran.
+11. **Complete.** Qualify artifacts, caches, checkpoints, traces, and debugger
+    observations.
+
+    The 36-test persistence/observability union passes 36/36 in 2.85 wall
+    seconds. It covers object/design/library/coverage/SCV artifacts, native and
+    project caches, corruption isolation, source-hidden relocation,
+    non-project restart, runtime checkpoints and replay, VCD/FST/SystemC/SCV
+    traces, SDF observations, debugger/callback correlation, and deterministic
+    archive rendering. No Release, clean-first, sanitizer, hosted-CI
+    inspection, commit, or push action ran.
+12. **Complete.** Complete fuzz, malformed-input, resource, and security
+    readiness.
+
+    A fresh Clang 22.1.8 warnings-as-errors libFuzzer build completes, and the
+    deterministic four-seed frontend corpus passes 20,000 mutations in seven
+    seconds with a 45 MiB final RSS. The complete 72-test `resource` lane
+    passes 72/72 in 0.67 wall seconds, and an 11-test malformed/corrupt/
+    containment/security-policy union passes 11/11 in 22.41 wall seconds. The
+    fuzzer's generated corpus discoveries were removed after the run, leaving
+    the four governed seeds unchanged. No Release, clean-first, sanitizer,
+    hosted-CI inspection, commit, or push action ran.
+13. **Complete.** Freeze Linux and Windows warning-audit ownership.
+
+    The new nine-row warning-audit ledger freezes five Linux and four Windows
+    Clang lanes across Debug, Release, LLVM-off/on, and frontend fuzz builds.
+    Its checker pins compiler selection, `FSIM_WARNINGS_AS_ERRORS=ON`, the
+    common `-Werror` policy, and two-worker hosted commands at SHA-256
+    `92f5da8d3cd328c8924a4383861b52c0c2ecb2608046980e202a7585946d13ff`.
+    The ledger plus retained Windows/tool/resource contracts pass 8/8 after a
+    checker-literal repair. No Release qualification, clean-first, sanitizer,
+    hosted-CI inspection, commit, or push action ran.
+14. **Complete.** Freeze hosted platform and toolchain definitions.
+
+    The new nine-row hosted-toolchain ledger freezes Linux Clang Debug,
+    Release, LLVM, and fuzz jobs plus Windows LLVM-MinGW Debug/Release jobs
+    with and without LLVM. Its checker pins runner images, Clang/LLVM 22.1.8,
+    LLVM-MinGW 20260616, warnings-as-errors, 120-minute timeouts, two-worker
+    commands, and artifact/log ownership at SHA-256
+    `0d2009b5f38a5833c94cacf91898c4f81d1c97ea4d057712b107ff1591b0492a`.
+    The hosted freeze and retained warning, Windows, tool/resource, source-line,
+    and package contracts pass 9/9 after correcting manifest order. No Release
+    qualification, clean-first, sanitizer, hosted-CI inspection, commit, or
+    push action ran.
+15. **Complete.** Publish v3.0 examples, user guides, API references, and known
+    limitations.
+
+    New independently authored guides cover unified `.fsimcov` operation,
+    IEEE TF/ACC PLI, SystemVerilog-2023, direct-v3 API/ABI rules, and explicit
+    v3.0 boundaries. A runnable SystemVerilog-2023 coverage example exercises
+    the opt-in manifest surface and functional coverage. The six-row release
+    documentation ledger is frozen at SHA-256
+    `60d80fe5bb26ccd12434aa2796339efae427b31675f9b9afe0f4a94e537565fe`;
+    its checker, source-package contract, and source-line budget pass 3/3, and
+    the example elaborates and runs to `$finish`. No Release qualification,
+    clean-first, sanitizer, hosted-CI inspection, commit, or push action ran.
+16. **Complete.** Prepare deterministic source and existing archive artifacts.
+
+    `v3-archive-layout.tsv` freezes one portable source archive and four
+    Clang-based binary ZIPs for Linux Clang 22 with LLVM off/on and Windows
+    LLVM-MinGW 20260616 with LLVM off/on. The five-row layout has SHA-256
+    `991e93c3c46359a3b4ed2388489fef4e1be5508b338778002c9212745f351426`.
+    The deterministic ZIP writer now stages output and atomically replaces the
+    destination after a complete archive closes. Repeated source and installed
+    binary fixture archives remain byte-identical with normalized paths,
+    order, timestamps, modes, compression, and extraction safety. The artifact
+    freeze and full deterministic-packaging test pass 2/2. No Release
+    qualification, clean-first, sanitizer, hosted-CI inspection, commit, or
+    push action ran.
+17. **Complete.** Complete licenses, SBOM, provenance, and private-reference
+    exclusion audits.
+
+    The 13-row v3 supply-chain ledger freezes project and governed third-party
+    licenses/notices, SPDX 2.3 SBOMs, SCV patch provenance, UVM source
+    provenance, source exclusions, and independently authored VHDL-2019 and
+    SystemVerilog-2023 inventories at SHA-256
+    `991174ef94f597bf5c4b956619e6c102bebe3adfc477e04becd99c1ff673b626`.
+    Its checker scans every packaged textual input for prohibited private
+    reference locations and document paths without recording those locations
+    or reference hashes. The repaired checker plus source, archive, IEEE,
+    language-inventory, SystemC, and SCV provenance lanes pass 8/8. No Release
+    qualification, clean-first, sanitizer, hosted-CI inspection, commit, or
+    push action ran.
+18. **Complete.** Freeze the v3.0 release record and exact tag message.
+
+    `v3-release-record.txt` freezes candidate/tag `v3.0.0`, annotated tag
+    message `fsim v3.0.0`, release-document digests, the five Change 16 archive
+    names, governance digests, unsigned disposition, and the complete Change
+    20 qualification/publish boundary. Its SHA-256 is
+    `a3e7fc3147b1019ae374f344f402268ca6f625943092d280f7774925690095c2`.
+    The release notes summarize direct-v3 rejection, unified coverage, IEEE
+    TF/ACC, VHDL-2019, and SystemVerilog-2023. The release record and related
+    documentation/artifact/supply/source contracts pass 6/6. Active compiled
+    and package identities remain unchanged until Change 19; no Release
+    qualification, clean-first, sanitizer, hosted-CI inspection, commit, or
+    push action ran.
+19. **Complete.** Set every product/version/package identity to 3.0.0.
+
+    CMake, the compiled version header, generated pkg-config metadata, CLI/Tcl
+    reporting, active package policy, deterministic source/binary archive
+    defaults, Linux/Windows target definitions, and hosted Windows release
+    artifacts now use `3.0.0`/`v3.0.0`. Active Linux release packages are
+    Clang 22 only, with LLVM off/on; historical v2/GCC records remain archival
+    and are no longer coupled to current product identity. All hosted package
+    lanes use two workers and Batch 188 logs. The 11-row version-identity
+    ledger is frozen at SHA-256
+    `394256500832e38e3e15bbc4715e4494312192de1a39a1eea9bf4e77b3b3be2c`.
+    The version cut rebuilt 450 warnings-as-errors Debug actions, `fsim
+    --version` reports `fsim 3.0.0 (C API 1)`, and the focused product,
+    package, install, archive, Windows, Tcl, runtime, and governance lane passes
+    17/17. No full Release/Debug qualification, sanitizer, hosted-CI
+    inspection, commit, or push action ran.
+20. **Local qualification complete; post-push release boundary pending.** Run
+    final local qualification, commit, push, tag, and publish v3.0.0.
+
+    Before starting the release suites, the most recent applicable hosted run,
+    `34484367110` at Batch 187 commit `18e1e56d`, was inspected together with
+    its failing logs. Linux completed compilation but exposed stale four-worker
+    and exact-count policy assertions. All four Windows LLVM-MinGW jobs failed
+    at link time because the SystemVerilog VPI extension entry points lacked
+    import/export decoration. Current policy checkers consistently require two
+    hosted workers and the additive v3 test counts. The public
+    `sv_vpi_user.h` now applies the same DLL link-surface contract as the base
+    VPI header to every SystemVerilog extension routine. The release closure
+    also registers the maintained `v3_coverage` example and carries SPDX
+    ownership on all new release ledgers.
+
+    Qualification then followed the required order. A clean-first Clang
+    22.1.8 plus exact LLVM 22.1.8 Release build completed 3,149/3,149 actions
+    with eight workers and warnings-as-errors. The first complete Release run
+    passed 417/419 tests in 516.50 seconds; it identified only the missing
+    clean-machine example registration and the release-record digests changed
+    by the CI repairs. After those fixes, the dependency-expanded affected
+    closure passed 22/22 in 150.85 seconds, accounting for every Release owner.
+    A subsequent clean-first Clang/LLVM Debug build completed 3,149/3,149
+    actions with eight workers and warnings-as-errors, and its complete suite
+    passed 419/419 in 532.00 seconds.
+
+    The predecessor hosted run remains failed and no new run has started.
+    Commit and push this Change 20 candidate, then run the permitted Batch 188
+    sanitizer boundary and require every Linux and Windows hosted lane to pass
+    before creating the exact annotated `v3.0.0` tag or publishing artifacts.
 
 ## v3.1.0
 

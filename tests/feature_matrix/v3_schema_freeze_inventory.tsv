@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+id	domain	checker	expected_rows	expected_digest	state	owner
+V3SCHEMA-MANIFEST	manifest	cmake/CheckProjectManifestFreeze.cmake	16	be2e1aee6cdc3dafd30c8f7e20c933545394a2ebdd39595e6988a0738e0b8430	preserved	B188-C02
+V3SCHEMA-ABI	abi	cmake/CheckForeignAbiFreeze.cmake	35	121bff0ce429135089c6e68212398ee54a273e5cb509edbff4b289729ad67b60	preserved	B188-C02
+V3SCHEMA-OBJECT	object	cmake/CheckPortableObjectFreeze.cmake	46	059915915e53748387bb12c071996b4bd01f76e49846fb7f733c5cecc289980c	preserved	B188-C02
+V3SCHEMA-DESIGN	design	cmake/CheckDesignLibraryFreeze.cmake	49	238084297c9ba6cdc04487c9ef07e86d98d183960495cd9dd2e03a8d0c8a3737	preserved	B188-C02
+V3SCHEMA-CHECKPOINT	checkpoint	cmake/CheckNestedPortableFreeze.cmake	65	4ed5b234150396c0cffb4f7b7ed8bd87ed9223b994f2e4a453227314d051be2d	preserved	B188-C02
+V3SCHEMA-CACHE	cache	cmake/CheckIncrementalNativeFreeze.cmake	56	f2d1b2316d4bf168ccf9f6f259ee8477a6d9a1d06548e3a99624bdaccdb51e7d	preserved	B188-C02

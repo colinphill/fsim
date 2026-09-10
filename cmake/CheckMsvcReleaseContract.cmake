@@ -92,7 +92,7 @@ foreach(FSIM_JOB_POLICY IN ITEMS
     "-DFSIM_TCL_MODE=ON"
     "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}"
     "configuration: Release"
-    "--parallel 4")
+    "--parallel 2")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_POLICY_INDEX)
   if(FSIM_POLICY_INDEX EQUAL -1)
     message(FATAL_ERROR

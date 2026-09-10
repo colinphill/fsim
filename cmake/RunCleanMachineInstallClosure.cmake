@@ -13,6 +13,7 @@ set(FSIM_MAINTAINED_EXAMPLES
     sdf_annotation
     sdf_vital_mixed
     three_language_hierarchy
+    v3_coverage
     vertical_slice)
 file(GLOB FSIM_EXAMPLE_ENTRIES RELATIVE "${FSIM_SOURCE_DIR}/examples"
      "${FSIM_SOURCE_DIR}/examples/*")
@@ -68,11 +69,12 @@ file(APPEND "${FSIM_INVENTORY}"
   "sdf_annotation\tfsim.sdf-application-inventory,fsim.application.sdf_control\n"
   "sdf_vital_mixed\tfsim.sdf-vital-inventory,fsim.application.sdf_vital_corpus\n"
   "three_language_hierarchy\tfsim.application.systemc_matrix,fsim.application.trace_control,fsim.application.fst_corpus\n"
+  "v3_coverage\tfsim.v3-release-documentation\n"
   "vertical_slice\tfsim.application\n")
 
 set(FSIM_STAGES
   "install@@3@@^fsim\\.(binary-install-ownership|installed-public-contract|installed-pkg-config-consumer)$"
-  "examples@@8@@^fsim\\.(application|non-project-restartability-contract|library\\.artifact|sdf-application-inventory|sdf-vital-inventory|application\\.(sdf_control|sdf_vital_corpus|systemc_matrix))$"
+  "examples@@9@@^fsim\\.(application|non-project-restartability-contract|library\\.artifact|sdf-application-inventory|sdf-vital-inventory|v3-release-documentation|application\\.(sdf_control|sdf_vital_corpus|systemc_matrix))$"
   "artifacts@@4@@^fsim\\.(artifact\\.(object|design)|application\\.artifact_phases|source-hidden-relocation-contract)$"
   "observation@@4@@^fsim\\.(application\\.(trace_control|fst_corpus|vcd_control)|tool-portability-contract)$")
 

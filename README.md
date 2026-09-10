@@ -26,6 +26,14 @@ See the [v2 ABI and schema reference](docs/abi-schema-reference.md) for the
 current installed targets, public layouts and symbols, artifact formats,
 native-cache identity rules, rejection policy, and source rebuild workflows.
 
+The v3.0 release documentation is organized by its public additions:
+[unified coverage](docs/code-coverage.md),
+[VHDL-2019](docs/vhdl-2019.md),
+[SystemVerilog-2023](docs/systemverilog-2023.md),
+[IEEE TF/ACC PLI](docs/legacy-pli.md), the
+[v3 API/ABI reference](docs/v3-api.md), and
+[known v3.0 limitations](docs/known-issues-v3.md).
+
 Verilog and SystemVerilog bit strings and based-number literals have no
 implementation-selected language width limit. Source- and context-determined
 width, signedness, and `X`/`Z` planes remain exact through parsing, folding,

@@ -73,28 +73,38 @@ def main() -> int:
     paths = checked_paths(args.manifest)
     timestamp = zip_timestamp(args.mtime)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(
-        args.output,
-        mode="w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=9,
-        strict_timestamps=True,
-    ) as archive:
-        archive.comment = b""
-        for spelling in paths:
-            path = Path(spelling)
-            mode, data = archive_mode(path, spelling)
-            info = zipfile.ZipInfo(spelling, date_time=timestamp)
-            info.create_system = 3
-            info.create_version = 20
-            info.extract_version = 20
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = mode << 16
-            info.flag_bits = 0x800
-            info.extra = b""
-            info.comment = b""
-            archive.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED,
-                             compresslevel=9)
+    temporary = args.output.with_name(f".{args.output.name}.tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(
+            temporary,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+            strict_timestamps=True,
+        ) as archive:
+            archive.comment = b""
+            for spelling in paths:
+                path = Path(spelling)
+                mode, data = archive_mode(path, spelling)
+                info = zipfile.ZipInfo(spelling, date_time=timestamp)
+                info.create_system = 3
+                info.create_version = 20
+                info.extract_version = 20
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = mode << 16
+                info.flag_bits = 0x800
+                info.extra = b""
+                info.comment = b""
+                archive.writestr(
+                    info,
+                    data,
+                    compress_type=zipfile.ZIP_DEFLATED,
+                    compresslevel=9,
+                )
+        os.replace(temporary, args.output)
+    finally:
+        temporary.unlink(missing_ok=True)
     return 0
 
 

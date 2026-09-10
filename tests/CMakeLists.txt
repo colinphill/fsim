@@ -1797,6 +1797,144 @@ set_tests_properties(
     LABELS "acc;pli;ieee1364;inventory;documentation;positive;negative;fast"
 )
 add_test(
+  NAME fsim.v3-release-integration-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3ReleaseIntegrationInventory.cmake"
+)
+set_tests_properties(
+  fsim.v3-release-integration-inventory
+  PROPERTIES
+    LABELS
+      "v3;release;integration;coverage;pli;tf;acc;vhdl2019;systemverilog2023;inventory;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-schema-freeze
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3SchemaFreeze.cmake"
+)
+set_tests_properties(
+  fsim.v3-schema-freeze
+  PROPERTIES
+    LABELS
+      "v3;release;manifest;abi;object;design;checkpoint;cache;schema;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-v2-input-rejection
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3V2InputRejection.cmake"
+)
+set_tests_properties(
+  fsim.v3-v2-input-rejection
+  PROPERTIES
+    LABELS
+      "v3;release;manifest;abi;object;design;checkpoint;cache;plugin;schema;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-retained-profile-qualification
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3RetainedProfiles.cmake"
+)
+set_tests_properties(
+  fsim.v3-retained-profile-qualification
+  PROPERTIES
+    LABELS
+      "v3;release;vhdl;verilog;systemverilog;profile;inventory;artifact;interpreter;llvm;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-warning-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3WarningAudit.cmake"
+)
+set_tests_properties(
+  fsim.v3-warning-audit
+  PROPERTIES
+    LABELS "v3;warning;warnings-as-errors;clang;linux;windows;debug;release;llvm;fuzz;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-hosted-toolchains
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3HostedToolchains.cmake"
+)
+set_tests_properties(
+  fsim.v3-hosted-toolchains
+  PROPERTIES
+    LABELS "v3;hosted;ci;platform;toolchain;clang;llvm;llvm-mingw;linux;windows;debug;release;fuzz;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-release-documentation
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3ReleaseDocumentation.cmake"
+)
+set_tests_properties(
+  fsim.v3-release-documentation
+  PROPERTIES
+    LABELS "v3;documentation;examples;api;coverage;pli;systemverilog-2023;release;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-deterministic-artifacts
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3DeterministicArtifacts.cmake"
+)
+set_tests_properties(
+  fsim.v3-deterministic-artifacts
+  PROPERTIES
+    LABELS "v3;release;package;source;binary;archive;reproducibility;manifest;linux;windows;clang;llvm;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-supply-chain
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3SupplyChain.cmake"
+)
+set_tests_properties(
+  fsim.v3-supply-chain
+  PROPERTIES
+    LABELS "v3;release;package;source;license;notice;sbom;provenance;reference-audit;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-release-record
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3ReleaseRecord.cmake"
+)
+set_tests_properties(
+  fsim.v3-release-record
+  PROPERTIES
+    LABELS "v3;release;record;version;tag;package;archive;documentation;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-version-identity
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3VersionIdentity.cmake"
+)
+set_tests_properties(
+  fsim.v3-version-identity
+  PROPERTIES
+    LABELS "v3;release;version;product;package;archive;hosted;clang;llvm;linux;windows;positive;negative;fast"
+)
+add_test(
   NAME fsim.sdf-inventory
   COMMAND
     "${CMAKE_COMMAND}"

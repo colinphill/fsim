@@ -39,7 +39,7 @@ endforeach()
 file(STRINGS "${FSIM_POLICY}" FSIM_POLICY_LINES ENCODING UTF-8)
 foreach(FSIM_EXPECTED IN ITEMS
     "schema=fsim-package-policy-v1"
-    "release_identity=fsim-v2.0.0"
+    "release_identity=fsim-v3.0.0"
     "archive_format=zip"
     "archive_compression=python-zipfile-deflate-level-9"
     "entry_order=utf8-bytewise-ascending"
@@ -51,12 +51,12 @@ foreach(FSIM_EXPECTED IN ITEMS
     "source_entry_limit=5000"
     "binary_entry_limit=5000"
     "source_archive_byte_limit=67108864"
-    "source_package_root=fsim-v2.0.0-source"
-    "source_artifact=build/release/fsim-v2.0.0-source.zip"
+    "source_package_root=fsim-v3.0.0-source"
+    "source_artifact=build/release/fsim-v3.0.0-source.zip"
     "source_extraction=preflight-safe-paths-before-extract"
     "source_reconstruction=manifest-validate-and-fetchcontent-disconnected-configure"
     "binary_archive_byte_limit=536870912"
-    "binary_artifacts=fsim-v2.0.0-linux-x86_64-clang22-llvm22.zip,fsim-v2.0.0-linux-x86_64-gcc13-llvm22.zip,fsim-v2.0.0-linux-x86_64-gcc13-no-llvm.zip,fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip,fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "binary_artifacts=fsim-v3.0.0-linux-x86_64-clang22-no-llvm.zip,fsim-v3.0.0-linux-x86_64-clang22-llvm22.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
     "binary_extraction=preflight-safe-paths-and-relative-symlink-targets"
     "path_byte_limit=1024"
     "checksum=sha256"
@@ -183,15 +183,15 @@ if(DEFINED FSIM_SOURCE_PACKAGE_NAME AND
    NOT FSIM_SOURCE_PACKAGE_NAME STREQUAL "")
   set(FSIM_SOURCE_PACKAGE "${FSIM_SOURCE_PACKAGE_NAME}")
 else()
-  set(FSIM_SOURCE_PACKAGE "fsim-v2.0.0-test-source")
+  set(FSIM_SOURCE_PACKAGE "fsim-v3.0.0-test-source")
 endif()
 if(NOT FSIM_SOURCE_PACKAGE MATCHES "^[A-Za-z0-9_.+-]+$")
   message(FATAL_ERROR "source package name is unsafe: ${FSIM_SOURCE_PACKAGE}")
 endif()
 if(FSIM_SOURCE_ONLY AND
-   NOT FSIM_SOURCE_PACKAGE STREQUAL "fsim-v2.0.0-source")
+   NOT FSIM_SOURCE_PACKAGE STREQUAL "fsim-v3.0.0-source")
   message(FATAL_ERROR
-    "final source package root must be fsim-v2.0.0-source")
+    "final source package root must be fsim-v3.0.0-source")
 endif()
 foreach(FSIM_RUN IN ITEMS a b)
   set(FSIM_PARENT "${FSIM_WORK_DIR}/source-${FSIM_RUN}")
@@ -257,7 +257,7 @@ if(NOT FSIM_SOURCE_ONLY)
     set(FSIM_BINARY_PACKAGE "${FSIM_BINARY_PACKAGE_NAME}")
   else()
     set(FSIM_BINARY_PACKAGE
-        "fsim-v2.0.0-test-debug-${FSIM_PLATFORM_ID}-${FSIM_COMPILER_ID}")
+        "fsim-v3.0.0-test-debug-${FSIM_PLATFORM_ID}-${FSIM_COMPILER_ID}")
   endif()
   if(NOT FSIM_BINARY_PACKAGE MATCHES "^[A-Za-z0-9_.+-]+$")
     message(FATAL_ERROR "binary package name is unsafe: ${FSIM_BINARY_PACKAGE}")
@@ -471,9 +471,9 @@ if(DEFINED FSIM_SOURCE_ARCHIVE_OUTPUT AND
   get_filename_component(
     FSIM_SOURCE_ARCHIVE_OUTPUT_NAME "${FSIM_SOURCE_ARCHIVE_OUTPUT}" NAME)
   if(FSIM_SOURCE_ONLY AND
-     NOT FSIM_SOURCE_ARCHIVE_OUTPUT_NAME STREQUAL "fsim-v2.0.0-source.zip")
+     NOT FSIM_SOURCE_ARCHIVE_OUTPUT_NAME STREQUAL "fsim-v3.0.0-source.zip")
     message(FATAL_ERROR
-      "final source artifact must be fsim-v2.0.0-source.zip")
+      "final source artifact must be fsim-v3.0.0-source.zip")
   endif()
   get_filename_component(
     FSIM_SOURCE_ARCHIVE_OUTPUT_DIR "${FSIM_SOURCE_ARCHIVE_OUTPUT}" DIRECTORY)

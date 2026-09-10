@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 schema=fsim-package-policy-v1
-release_identity=fsim-v2.0.0
+release_identity=fsim-v3.0.0
 archive_format=zip
 archive_compression=python-zipfile-deflate-level-9
 entry_order=utf8-bytewise-ascending
@@ -12,12 +12,12 @@ host_owner_identity=not-encoded
 source_entry_limit=5000
 binary_entry_limit=5000
 source_archive_byte_limit=67108864
-source_package_root=fsim-v2.0.0-source
-source_artifact=build/release/fsim-v2.0.0-source.zip
+source_package_root=fsim-v3.0.0-source
+source_artifact=build/release/fsim-v3.0.0-source.zip
 source_extraction=preflight-safe-paths-before-extract
 source_reconstruction=manifest-validate-and-fetchcontent-disconnected-configure
 binary_archive_byte_limit=536870912
-binary_artifacts=fsim-v2.0.0-linux-x86_64-clang22-llvm22.zip,fsim-v2.0.0-linux-x86_64-gcc13-llvm22.zip,fsim-v2.0.0-linux-x86_64-gcc13-no-llvm.zip,fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip,fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip
+binary_artifacts=fsim-v3.0.0-linux-x86_64-clang22-no-llvm.zip,fsim-v3.0.0-linux-x86_64-clang22-llvm22.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip
 binary_extraction=preflight-safe-paths-and-relative-symlink-targets
 path_byte_limit=1024
 checksum=sha256

@@ -932,6 +932,7 @@ end architecture;
         vhdl_2019_runtime_bytes
         && !vhdl_2019_runtime_diagnostics.has_error());
     for (const auto schema : std::array {
+             48U,
              app::kRuntimeStateSchema - 1U,
              app::kRuntimeStateSchema + 1U }) {
         auto incompatible_runtime = *vhdl_2019_runtime_bytes;
@@ -1003,6 +1004,12 @@ end architecture;
     assert(!app::deserialize_vhdl_hir_state(
         future_vhdl_hir, "future-vhdl-hir.bin",
         coverage_checkpoint->semantics, future_vhdl_hir_diagnostics));
+    auto v2_vhdl_hir = *vhdl_hir_bytes;
+    v2_vhdl_hir[8] = static_cast<char>(1U);
+    diagnostic::Engine v2_vhdl_hir_diagnostics;
+    assert(!app::deserialize_vhdl_hir_state(
+        v2_vhdl_hir, "v2-vhdl-hir.bin", coverage_checkpoint->semantics,
+        v2_vhdl_hir_diagnostics));
     diagnostic::Engine truncated_vhdl_hir_diagnostics;
     assert(!app::deserialize_vhdl_hir_state(
         vhdl_hir_bytes->substr(0, vhdl_hir_bytes->size() - 1U),
@@ -1052,6 +1059,11 @@ end architecture;
                    "schema 4; required schema 3; regenerate .fsimdesign "
                    "with this fsim build";
         }));
+    auto v2_uvm = *uvm_bytes;
+    v2_uvm[8] = static_cast<char>(2U);
+    diagnostic::Engine v2_uvm_diagnostics;
+    assert(!app::deserialize_systemverilog_uvm_state(
+        v2_uvm, "v2-sv-uvm.bin", v2_uvm_diagnostics));
     const auto truncated_uvm = uvm_bytes->substr(0, uvm_bytes->size() - 1U);
     diagnostic::Engine truncated_uvm_diagnostics;
     assert(!app::deserialize_systemverilog_uvm_state(
@@ -1359,6 +1371,11 @@ end architecture;
     assert(!app::deserialize_systemverilog_coverage_state(
         future_coverage, "future-coverage-state.bin",
         future_coverage_diagnostics));
+    auto v2_coverage = *coverage_bytes;
+    v2_coverage[8] = static_cast<char>(4U);
+    diagnostic::Engine v2_coverage_diagnostics;
+    assert(!app::deserialize_systemverilog_coverage_state(
+        v2_coverage, "v2-coverage-state.bin", v2_coverage_diagnostics));
     diagnostic::Engine truncated_coverage_diagnostics;
     assert(!app::deserialize_systemverilog_coverage_state(
         coverage_bytes->substr(0, coverage_bytes->size() - 1U),

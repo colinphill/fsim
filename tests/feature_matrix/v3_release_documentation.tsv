@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# id	kind	path	owner
+V3DOC-COVERAGE	guide	docs/code-coverage.md	B188-C15
+V3DOC-PLI	guide	docs/legacy-pli.md	B188-C15
+V3DOC-SV2023	guide	docs/systemverilog-2023.md	B188-C15
+V3DOC-API	reference	docs/v3-api.md	B188-C15
+V3DOC-LIMITS	reference	docs/known-issues-v3.md	B188-C15
+V3DOC-EXAMPLE	example	examples/v3_coverage/README.md	B188-C15

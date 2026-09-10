@@ -6,9 +6,9 @@ endif()
 
 set(FSIM_TARGET_DIR "${FSIM_SOURCE_DIR}/packaging/targets")
 set(FSIM_TARGET_FILES
+    linux-clang22-no-llvm.txt
     linux-clang22-llvm22.txt
-    linux-gcc13-llvm22.txt
-    linux-gcc13-no-llvm.txt)
+)
 set(FSIM_TARGET_IDS)
 foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
   set(FSIM_PATH "${FSIM_TARGET_DIR}/${FSIM_TARGET_FILE}")
@@ -38,7 +38,7 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
   foreach(FSIM_REQUIRED_KEY IN ITEMS
       schema target_id host compiler_family compiler_version llvm_mode
       llvm_version configurations archive_format job_timeout_minutes
-      local_workers_minimum hosted_workers batch176_evidence batch177_required
+      local_workers_minimum hosted_workers batch188_evidence batch188_required
       signature)
     list(FIND FSIM_KEYS "${FSIM_REQUIRED_KEY}" FSIM_KEY_INDEX)
     if(FSIM_KEY_INDEX EQUAL -1)
@@ -52,18 +52,17 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
      OR NOT FSIM_VALUE_archive_format STREQUAL "zip"
      OR NOT FSIM_VALUE_job_timeout_minutes STREQUAL "120"
      OR NOT FSIM_VALUE_local_workers_minimum STREQUAL "8"
-     OR NOT FSIM_VALUE_hosted_workers STREQUAL "4"
+     OR NOT FSIM_VALUE_hosted_workers STREQUAL "2"
      OR NOT FSIM_VALUE_signature STREQUAL "unsigned-release"
-     OR NOT FSIM_VALUE_batch177_required MATCHES "release-build"
-     OR NOT FSIM_VALUE_batch177_required MATCHES "release-archive"
-     OR NOT FSIM_VALUE_batch177_required MATCHES "install-smoke")
+     OR NOT FSIM_VALUE_batch188_required MATCHES "release-build"
+     OR NOT FSIM_VALUE_batch188_required MATCHES "release-archive"
+     OR NOT FSIM_VALUE_batch188_required MATCHES "install-smoke")
     message(FATAL_ERROR
       "Linux package target policy drifted: ${FSIM_TARGET_FILE}")
   endif()
-  if(FSIM_VALUE_batch176_evidence MATCHES "release"
-     OR FSIM_VALUE_batch176_evidence MATCHES "hosted")
-    message(FATAL_ERROR
-      "Batch 176 Linux package evidence overclaims Release/hosted work: ${FSIM_TARGET_FILE}")
+  if(NOT FSIM_VALUE_compiler_family STREQUAL "Clang"
+     OR NOT FSIM_VALUE_compiler_version STREQUAL "22.1.8")
+    message(FATAL_ERROR "v3 Linux release packages must use Clang 22.1.8")
   endif()
   if(FSIM_VALUE_llvm_mode STREQUAL "ON")
     if(NOT FSIM_VALUE_llvm_version STREQUAL "22.1.8")
@@ -82,8 +81,8 @@ endforeach()
 
 list(SORT FSIM_TARGET_IDS)
 if(NOT FSIM_TARGET_IDS STREQUAL
-   "linux-x86_64-clang22-llvm22;linux-x86_64-gcc13-llvm22;linux-x86_64-gcc13-no-llvm")
+   "linux-x86_64-clang22-llvm22;linux-x86_64-clang22-no-llvm")
   message(FATAL_ERROR "Linux package target set drifted: ${FSIM_TARGET_IDS}")
 endif()
 message(STATUS
-  "Linux package definitions: 3 Debug-owned targets, every Release/archive/install/hosted result deferred to Batch 177")
+  "Linux package definitions: 2 Clang 22 targets with two hosted workers; final results owned by Batch 188")

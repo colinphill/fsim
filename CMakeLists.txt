@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
   fsim
-  VERSION 2.0.0
+  VERSION 3.0.0
   DESCRIPTION "Mixed-language compiled HDL simulator"
   LANGUAGES C CXX
 )

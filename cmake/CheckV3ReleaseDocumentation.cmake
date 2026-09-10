@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+cmake_minimum_required(VERSION 3.25)
+
+if(NOT DEFINED FSIM_SOURCE_DIR)
+  message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
+endif()
+
+set(inventory "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_release_documentation.tsv")
+file(STRINGS "${inventory}" rows)
+set(ids)
+set(count 0)
+foreach(row IN LISTS rows)
+  if(row MATCHES "^#" OR row STREQUAL "")
+    continue()
+  endif()
+  string(REPLACE "\t" ";" fields "${row}")
+  list(LENGTH fields field_count)
+  if(NOT field_count EQUAL 4)
+    message(FATAL_ERROR "invalid v3 release documentation row: ${row}")
+  endif()
+  list(GET fields 0 id)
+  list(GET fields 2 path)
+  list(GET fields 3 owner)
+  if(id IN_LIST ids OR NOT owner STREQUAL "B188-C15")
+    message(FATAL_ERROR "invalid v3 release documentation identity/owner: ${row}")
+  endif()
+  if(NOT EXISTS "${FSIM_SOURCE_DIR}/${path}")
+    message(FATAL_ERROR "missing v3 release documentation path: ${path}")
+  endif()
+  file(READ "${FSIM_SOURCE_DIR}/${path}" contents)
+  if(NOT contents MATCHES "SPDX-License-Identifier: Apache-2.0")
+    message(FATAL_ERROR "missing SPDX ownership in ${path}")
+  endif()
+  list(APPEND ids "${id}")
+  math(EXPR count "${count} + 1")
+endforeach()
+if(NOT count EQUAL 6)
+  message(FATAL_ERROR "expected six v3 release documentation rows, found ${count}")
+endif()
+
+foreach(path IN ITEMS
+    docs/code-coverage.md
+    docs/legacy-pli.md
+    docs/systemverilog-2023.md
+    docs/v3-api.md
+    docs/known-issues-v3.md
+    examples/v3_coverage/README.md
+    examples/v3_coverage/fsim.toml
+    examples/v3_coverage/counter.sv
+    examples/v3_coverage/coverage_tb.sv)
+  file(READ "${FSIM_SOURCE_DIR}/packaging/source-package-manifest.txt" manifest)
+  set(bounded_manifest "\n${manifest}\n")
+  string(FIND "${bounded_manifest}" "\n${path}\n" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "v3 release documentation path absent from source manifest: ${path}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_SOURCE_DIR}/docs/code-coverage.md" coverage)
+foreach(token IN ITEMS ".fsimcov" "fsim coverage merge" "fsim coverage report" "--threshold" "exit status 4")
+  if(NOT coverage MATCHES "${token}")
+    message(FATAL_ERROR "coverage guide misses required token: ${token}")
+  endif()
+endforeach()
+file(READ "${FSIM_SOURCE_DIR}/docs/legacy-pli.md" pli)
+foreach(token IN ITEMS "veriuser.h" "acc_user.h" "v2 plug-ins" "scheduler coordinator")
+  if(NOT pli MATCHES "${token}")
+    message(FATAL_ERROR "legacy PLI guide misses required token: ${token}")
+  endif()
+endforeach()
+file(READ "${FSIM_SOURCE_DIR}/docs/systemverilog-2023.md" sv)
+foreach(token IN ITEMS "SystemVerilog-2023" "standard = \"2023\"" "objects" "LLVM O0-O3")
+  if(NOT sv MATCHES "${token}")
+    message(FATAL_ERROR "SystemVerilog-2023 guide misses required token: ${token}")
+  endif()
+endforeach()

@@ -276,11 +276,12 @@ foreach(FSIM_JOB_POLICY IN ITEMS
     "github-windows-debug-llvm-on"
     "github-windows-release-llvm-off"
     "github-windows-release-llvm-on"
-    "fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
-    "fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
+    "fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
     "-DFSIM_BINARY_ONLY=ON"
+    "cmake/CheckV3InstalledArchive.cmake"
     "actions/upload-artifact@v7"
-    "--parallel 4")
+    "--parallel 2")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "workflow lost Windows LLVM policy: ${FSIM_JOB_POLICY}")

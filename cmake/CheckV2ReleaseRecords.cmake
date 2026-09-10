@@ -35,6 +35,29 @@ foreach(FSIM_INPUT IN ITEMS
   endif()
 endforeach()
 
+# The v2 record is immutable historical evidence once the active product
+# advances to v3. Validate its frozen identity without coupling it to current
+# product/package surfaces.
+file(READ "${FSIM_ROOT_CMAKE}" FSIM_ACTIVE_ROOT_CMAKE)
+if(FSIM_ACTIVE_ROOT_CMAKE MATCHES "VERSION 3[.]0[.]0")
+  file(READ "${FSIM_RECORD}" FSIM_HISTORICAL_RECORD)
+  foreach(FSIM_HISTORICAL_TOKEN IN ITEMS
+      "schema=fsim-v2-release-record-v1"
+      "candidate=v2.0.0"
+      "compiled_version=2.0.0"
+      "tag_name=v2.0.0"
+      "signature=unsigned-release")
+    string(FIND "${FSIM_HISTORICAL_RECORD}" "${FSIM_HISTORICAL_TOKEN}"
+      FSIM_HISTORICAL_OFFSET)
+    if(FSIM_HISTORICAL_OFFSET EQUAL -1)
+      message(FATAL_ERROR
+        "historical v2 release record lost ${FSIM_HISTORICAL_TOKEN}")
+    endif()
+  endforeach()
+  message(STATUS "historical v2.0.0 release record remains frozen under v3")
+  return()
+endif()
+
 file(STRINGS "${FSIM_RECORD}" FSIM_RECORD_LINES ENCODING UTF-8)
 set(FSIM_RECORD_KEYS)
 foreach(FSIM_LINE IN LISTS FSIM_RECORD_LINES)
@@ -378,7 +401,7 @@ fsim_require_workflow_occurrences(
 fsim_require_workflow_occurrences("timeout-minutes: 120" 4)
 foreach(FSIM_HOSTED_COMMAND IN ITEMS
     "cmake --preset \"\${{ matrix.preset }}\""
-    "cmake --build --preset \"\${{ matrix.preset }}\" --parallel 4"
+    "cmake --build --preset \"\${{ matrix.preset }}\" --parallel 2"
     "ctest --preset \"\${{ matrix.preset }}\" -LE '^recursive-closure$'"
     "ctest --preset \"\${{ matrix.preset }}\" -L '^recursive-closure$'"
     "-DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm"
@@ -386,7 +409,7 @@ foreach(FSIM_HOSTED_COMMAND IN ITEMS
     "-runs=20000"
     "\$buildDirectory = \"\${{ matrix.build_dir }}\""
     "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}"
-    "ctest --test-dir \"\${{ matrix.build_dir }}\" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$'"
+    "ctest --test-dir \"\${{ matrix.build_dir }}\" --parallel 2 --progress --output-on-failure -LE '^recursive-closure$'"
     "tee -a \"\${{ matrix.retained_log }}\""
     "Tee-Object -FilePath \"\${{ matrix.retained_log }}\" -Append")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_HOSTED_COMMAND}"

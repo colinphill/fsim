@@ -139,6 +139,14 @@ int main() {
             "format " + std::to_string(format)
                 + " and portable-unit schema 14");
     }
+    auto v2_header = encoded.substr(0, 16U);
+    store_u32(v2_header, 8U, 6U);
+    store_u32(v2_header, 12U, 10U);
+    expect_identity_rejection(
+        v2_header, "v2-object", "format 6 and portable-unit schema 10");
+    expect_identity_rejection(
+        std::move(v2_header), "v2-object-repeat",
+        "format 6 and portable-unit schema 10");
     auto future_format = encoded.substr(0, 16U);
     store_u32(
         future_format, 8U, fsim::artifact::kObjectFormatVersion + 1U);

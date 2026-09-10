@@ -6,7 +6,7 @@
 
 namespace fsim {
 
-inline constexpr std::string_view version = "2.0.0";
+inline constexpr std::string_view version = "3.0.0";
 inline constexpr std::uint32_t manifest_schema_version = 1;
 inline constexpr std::uint32_t native_abi_version = 1;
 inline constexpr std::uint32_t runtime_abi_version = 1;

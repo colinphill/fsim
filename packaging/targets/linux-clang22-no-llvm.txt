@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+schema=fsim-package-target-v1
+target_id=linux-x86_64-clang22-no-llvm
+host=linux-x86_64
+compiler_family=Clang
+compiler_version=22.1.8
+llvm_mode=OFF
+llvm_version=none
+configurations=Debug,Release
+archive_format=zip
+job_timeout_minutes=120
+local_workers_minimum=8
+hosted_workers=2
+batch188_evidence=debug-release-package-and-fixture
+batch188_required=release-build,release-archive,install-smoke,hosted-disposition
+signature=unsigned-release

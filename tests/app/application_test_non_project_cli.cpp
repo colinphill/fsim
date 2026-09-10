@@ -992,6 +992,16 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         *design_ir_state, "design-ir", restore_diagnostics);
     assert(restored_runtime && restored_semantics && restored_design_ir);
     assert(!restore_diagnostics.has_error());
+    auto v2_semantic_state = *semantic_state;
+    v2_semantic_state[8] = static_cast<char>(3U);
+    diagnostic::Engine v2_semantic_diagnostics;
+    assert(!app::deserialize_semantic_state(
+        v2_semantic_state, "v2-semantics", v2_semantic_diagnostics));
+    auto v2_design_ir_state = *design_ir_state;
+    v2_design_ir_state[8] = static_cast<char>(3U);
+    diagnostic::Engine v2_design_ir_diagnostics;
+    assert(!app::deserialize_design_ir_state(
+        v2_design_ir_state, "v2-design-ir", v2_design_ir_diagnostics));
     assert(restored_runtime->signal_paths() == object_build->design.signal_paths());
     assert(restored_runtime->processes().size() == object_build->design.processes().size());
     assert(restored_design_ir->valid(*restored_semantics));

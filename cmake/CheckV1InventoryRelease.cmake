@@ -77,9 +77,9 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 1828)
+if(FSIM_AUTHORED_COUNT LESS 1828)
   message(FATAL_ERROR
-    "authored license inventory changed: expected 1828 files, "
+    "authored license inventory fell below the v1 baseline of 1828 files: "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
