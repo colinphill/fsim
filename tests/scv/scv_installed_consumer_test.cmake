@@ -90,7 +90,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "Requires: systemc = 3.0.2"
     "Libs: -L\${libdir} -lscv"
     "compatibility_schema=fsim-scv-compatibility-v1"
-    "patch_sha256=bda0f09d9071884b00423c8e1e7c9f43746ab350b138ae7b01f84766d03941e3"
+    "patch_sha256=94647538a091b0bf56790d096beb4e0be0a9c82097a973469914ec62f4d748c0"
     "artifact_schema=1"
     "cache_schema=1")
   string(FIND "${FSIM_SCV_PC}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)

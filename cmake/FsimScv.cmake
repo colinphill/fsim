@@ -20,11 +20,11 @@ set(FSIM_SCV_LICENSE_EXPRESSION "Apache-2.0")
 set(FSIM_SCV_SBOM_PURL
     "pkg:generic/scv@2.0.1?download_url=https%3A%2F%2Fwww.accellera.org%2Fimages%2Fdownloads%2Fstandards%2Fsystemc%2Fscv-2.0.1.tar.gz")
 set(FSIM_SCV_PATCH_SCHEMA "fsim-scv-patch-set-v1")
-set(FSIM_SCV_PATCH_COUNT 5)
+set(FSIM_SCV_PATCH_COUNT 6)
 set(FSIM_SCV_PATCH_MANIFEST_SHA256
-    "bda0f09d9071884b00423c8e1e7c9f43746ab350b138ae7b01f84766d03941e3")
+    "94647538a091b0bf56790d096beb4e0be0a9c82097a973469914ec62f4d748c0")
 set(FSIM_SCV_PATCHED_TREE_SHA256
-    "760660f1beb27fc7166784f57239bbccbb319b884822dc8623e166ddad2a9a8c")
+    "3a7720ec1356eaa8e58226c58256f7c3e8e7d055dddfbf57c5f97c8564c23f42")
 set(FSIM_SCV_BAG_PATCH_SHA256
     "f931c715608578638a7d49c88d20a9d323aa836023cac0af64c078c21f3a39fb")
 set(FSIM_SCV_BAG_INPUT_SHA256
@@ -55,6 +55,12 @@ set(FSIM_SCV_WINDOWS_RAND_INPUT_SHA256
     "949cda9eb9eee1fdc90b5bf7a174e72949b7da40a740ee1ae6a1f4250a58cf9d")
 set(FSIM_SCV_WINDOWS_RAND_OUTPUT_SHA256
     "0f4cf39d1a7b3ca7f7a2ace1634a7738a20097d476beca3587cb5730876dcda7")
+set(FSIM_SCV_STREAM_CORE_PATCH_SHA256
+    "620b0196678bb3528a5f79c6b39a7d4c88ff19096859ce73de083c272b95f6be")
+set(FSIM_SCV_STREAM_CORE_INPUT_SHA256
+    "b512bfdaa866181748bc4415988fbe1bacb9f69676f7c82d61c309a64298b361")
+set(FSIM_SCV_STREAM_CORE_OUTPUT_SHA256
+    "c6e2435e6a9e1b34625181c9d3ac59c3e44903daea5aec90ba9d1871b4a59219")
 set(
   FSIM_SCV_REQUIRED_FILES
   "LICENSE|4b4fe282d05e6f3f63e36b124565a5d07727e84bc32fe30e2937ca0f84a34601"
@@ -306,12 +312,13 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "patch=scv-int-range-overflow|${FSIM_SCV_INT_RANGE_PATCH_SHA256}|src/scv/scv_constraint.cpp|${FSIM_SCV_INT_RANGE_INPUT_SHA256}|${FSIM_SCV_INT_RANGE_OUTPUT_SHA256}"
           "patch=scv-range-size-overflow|${FSIM_SCV_RANGE_SIZE_PATCH_SHA256}|src/scv/scv_constraint_range.cpp|${FSIM_SCV_RANGE_SIZE_INPUT_SHA256}|${FSIM_SCV_RANGE_SIZE_OUTPUT_SHA256}"
           "patch=scv-nested-extension-constructors|${FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256}|src/scv/_scv_introspection.h|${FSIM_SCV_NESTED_EXTENSION_INPUT_SHA256}|${FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256}"
+          "patch=scv-stream-core-lifetime|${FSIM_SCV_STREAM_CORE_PATCH_SHA256}|src/scv/scv_tr.cpp|${FSIM_SCV_STREAM_CORE_INPUT_SHA256}|${FSIM_SCV_STREAM_CORE_OUTPUT_SHA256}"
           "patch=scv-windows-rand-r|${FSIM_SCV_WINDOWS_RAND_PATCH_SHA256}|src/scv/scv_random.cpp|${FSIM_SCV_WINDOWS_RAND_INPUT_SHA256}|${FSIM_SCV_WINDOWS_RAND_OUTPUT_SHA256}"
           "unmodified_linux_result=shared-and-static-library-build-pass"
           "llvm22_configure_result=blocked-before-source-compilation"
           "gcc13_cxx20_result=blocked-by-template-id-constructor-spelling"
-          "decision=external-cmake-adapter-with-five-generated-source-patches"
-          "positive_probe=patched-exact-tree-builds-with-clang-gcc-and-llvm-mingw-and-preserves-const-peek-randomization-nested-extension-construction-full-width-int-randomization-overflow-safe-interval-sizing-and-windows-random-stream-compilation"
+          "decision=external-cmake-adapter-with-six-generated-source-patches"
+          "positive_probe=patched-exact-tree-builds-with-clang-gcc-and-llvm-mingw-and-preserves-const-peek-randomization-nested-extension-construction-full-width-int-randomization-overflow-safe-interval-sizing-windows-random-stream-compilation-and-leak-free-stream-destruction"
           "negative_probe=changed-manifest-patch-input-output-or-source-tree-rejected-before-build"
           "removal_criteria=")
         string(FIND "${manifest_text}" "${token}" token_index)
@@ -340,10 +347,13 @@ function(fsim_scv_patch_governance_error root manifest output_error)
           "${manifest_root}/patches/scv-windows-rand-r.patch")
       set(nested_extension_patch
           "${manifest_root}/patches/scv-nested-extension-constructors.patch")
+      set(stream_core_patch
+          "${manifest_root}/patches/scv-stream-core-lifetime.patch")
       if(NOT EXISTS "${bag_patch}" OR NOT EXISTS "${int_range_patch}" OR
          NOT EXISTS "${range_size_patch}" OR
          NOT EXISTS "${windows_rand_patch}" OR
-         NOT EXISTS "${nested_extension_patch}")
+         NOT EXISTS "${nested_extension_patch}" OR
+         NOT EXISTS "${stream_core_patch}")
         set(error "SCV compatibility patch set is incomplete")
       else()
         file(SHA256 "${bag_patch}" bag_patch_digest)
@@ -368,6 +378,11 @@ function(fsim_scv_patch_governance_error root manifest output_error)
         if(NOT nested_extension_patch_digest STREQUAL
            FSIM_SCV_NESTED_EXTENSION_PATCH_SHA256)
           set(error "SCV nested-extension compatibility patch SHA-256 mismatch")
+        endif()
+        file(SHA256 "${stream_core_patch}" stream_core_patch_digest)
+        if(NOT stream_core_patch_digest STREQUAL
+           FSIM_SCV_STREAM_CORE_PATCH_SHA256)
+          set(error "SCV stream-core lifetime patch SHA-256 mismatch")
         endif()
       endif()
     endif()
@@ -455,6 +470,29 @@ function(fsim_scv_apply_governed_patches root manifest output_root)
   if(NOT nested_extension_output_digest STREQUAL
      FSIM_SCV_NESTED_EXTENSION_OUTPUT_SHA256)
     message(FATAL_ERROR "SCV nested-extension patch output SHA-256 mismatch")
+  endif()
+  set(stream_core_source "${patched_root}/src/scv/scv_tr.cpp")
+  file(SHA256 "${stream_core_source}" stream_core_input_digest)
+  if(NOT stream_core_input_digest STREQUAL FSIM_SCV_STREAM_CORE_INPUT_SHA256)
+    message(FATAL_ERROR "SCV stream-core patch input SHA-256 mismatch")
+  endif()
+  file(READ "${stream_core_source}" stream_core_contents)
+  set(old_stream_destructor
+      "                scv_tr_stream::DELETE);\n\n#ifdef scv_tr_TRACE")
+  set(new_stream_destructor
+      "                scv_tr_stream::DELETE);\n\n  delete this->_scv_tr_stream_core_p;\n\n#ifdef scv_tr_TRACE")
+  string(FIND "${stream_core_contents}" "${old_stream_destructor}"
+         stream_core_offset)
+  if(stream_core_offset EQUAL -1)
+    message(FATAL_ERROR "SCV stream-core patch anchor is missing")
+  endif()
+  string(REPLACE "${old_stream_destructor}" "${new_stream_destructor}"
+         stream_core_contents "${stream_core_contents}")
+  file(CONFIGURE OUTPUT "${stream_core_source}" CONTENT "${stream_core_contents}"
+       @ONLY NEWLINE_STYLE LF)
+  file(SHA256 "${stream_core_source}" stream_core_output_digest)
+  if(NOT stream_core_output_digest STREQUAL FSIM_SCV_STREAM_CORE_OUTPUT_SHA256)
+    message(FATAL_ERROR "SCV stream-core patch output SHA-256 mismatch")
   endif()
   set(int_range_source "${patched_root}/src/scv/scv_constraint.cpp")
   file(SHA256 "${int_range_source}" int_range_input_digest)

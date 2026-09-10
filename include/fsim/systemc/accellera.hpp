@@ -787,11 +787,18 @@ namespace detail {
             for (auto* object : sc_core::sc_get_top_level_objects()) {
                 collect_native_processes(*object, processes);
             }
-            const auto current = sc_core::sc_get_current_process_handle();
+            auto current = sc_core::sc_get_current_process_handle();
             for (auto& process : processes) {
                 if (process != current && !process.terminated()) {
                     process.kill();
                 }
+            }
+            // sc_spawn methods remain live after their callable returns.  The
+            // shutdown helper is intentionally one-shot, so disconnect it
+            // while it is still the current process; otherwise every
+            // simulation leaves one method and its spawn host behind.
+            if (current.valid() && !current.terminated()) {
+                current.kill();
             }
         }
 

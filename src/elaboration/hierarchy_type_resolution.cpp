@@ -460,12 +460,20 @@ using namespace elaboration_detail;
                         DesignatedSubtype) {
                     if (type.vhdl_access
                         && type.vhdl_access->designated_types.size() == 1U) {
-                        type = type.vhdl_access->designated_types.front();
+                        // The designated subtype is owned by `type` itself.
+                        // Copy it before assigning, because Type assignment
+                        // releases vhdl_access before copying later fields.
+                        auto designated =
+                            type.vhdl_access->designated_types.front();
+                        type = std::move(designated);
                         return true;
                     }
                     if (type.vhdl_file
                         && type.vhdl_file->element_types.size() == 1U) {
-                        type = type.vhdl_file->element_types.front();
+                        // As above, avoid assigning from storage that the
+                        // assignment invalidates partway through the copy.
+                        auto element = type.vhdl_file->element_types.front();
+                        type = std::move(element);
                         return true;
                     }
                     report(

@@ -791,8 +791,12 @@ int main(const int argc, char** argv)
     duplicate_compile.source = duplicate_source;
     duplicate_compile.output = root / "duplicate.fsimscobj";
     fsim::diagnostic::Engine duplicate_factory_diagnostics;
-    assert(fsim::systemc::compile_incremental_object(
-        duplicate_compile, duplicate_factory_diagnostics));
+    if (!fsim::systemc::compile_incremental_object(
+            duplicate_compile, duplicate_factory_diagnostics)) {
+        fsim::diagnostic::print_text(
+            std::cerr, duplicate_factory_diagnostics);
+        assert(false && "duplicate-factory object compilation failed");
+    }
     auto duplicate_factory_link = link_request;
     duplicate_factory_link.objects = {
         first_request.output, duplicate_compile.output

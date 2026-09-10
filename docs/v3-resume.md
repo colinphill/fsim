@@ -9974,3 +9974,38 @@ logs. Identify and resolve known actionable errors before starting the new run.
    Audit the complete diff and source manifest, commit/push the Change 20
    candidate, then run sanitizers and monitor/fix every Linux and Windows lane.
    Do not tag or publish until all required local and hosted lanes are green.
+
+## Batch 188 Change 20 hosted-repair checkpoint
+
+1. Candidate commit `cad15781` is pushed on `codex/v3`. Its replacement hosted
+   run `34504855725` completed failed: every Linux lane passed and all four
+   Windows LLVM-MinGW configurations compiled and linked, confirming the VPI
+   DLL-linkage fix. Each Windows test job then reported the same nine failures:
+   eight byte-governance checks saw CRLF checkout materialization and
+   `fsim.application.random` compared the canonical `/` source path with a
+   native `\` path spelling.
+2. `.gitattributes` now forces LF for repository text on every host while
+   preserving the existing `-text` treatment for governed binary inputs. The
+   random application assertion compares against `generic_string()`. These
+   changes directly cover all nine common Windows failures; hosted confirmation
+   remains pending until this repair commit is pushed.
+3. The Batch 188 sanitizer boundary is complete. It repaired self-owned VHDL
+   access/file subtype assignment, VHDL scalar-attribute object shorthand,
+   SystemC shutdown-helper lifetime, and the upstream SCV stream-core leak.
+   The SCV fix is recorded as a sixth governed source patch with deterministic
+   LF materialization and updated manifest, tree, ABI, package, and supply-chain
+   identities. The final ASan/UBSan suite with leak detection passes 415/415 in
+   929.15 seconds.
+4. Final local qualification after all repairs followed the required order.
+   A fresh Clang 22.1.8 plus LLVM 22.1.8 Release build completed 3,149/3,149
+   actions with eight workers and warnings-as-errors, and its complete suite
+   passes 419/419 in 532.87 seconds. A fresh equivalent Debug build then
+   completed 3,149/3,149 actions and its complete suite passes 419/419 in
+   539.28 seconds. The only build interruption was sandbox DNS blocking the
+   pinned Tcl 9.0.4 download; resuming the same build with network access
+   completed without a source failure.
+5. Before starting another hosted run, verify that `34504855725` is still the
+   latest applicable completed run and inspect its conclusion. Audit and commit
+   this repair diff, push once, then monitor and fix every required hosted lane
+   until green. Do not create or push `v3.0.0`, publish release artifacts, or
+   begin Batch 189 before hosted closure is green.

@@ -272,7 +272,7 @@ void test_random(
         assert(report.message == warning_messages[index]);
         assert(report.severity
             == fsim::runtime::simir::AssertionSeverity::warning);
-        assert(report.source.path == source.string());
+        assert(report.source.path == source.generic_string());
         assert(report.source.line > 0U && report.source.column > 0U);
         assert(report.time == 0U && report.delta == 0U);
     }

@@ -407,10 +407,10 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
     return narrow_enumeration_ordinal(*argument, type);
   }
 
+  const auto& candidate = object_shorthand
+      ? expression.operands.front()
+      : expression.operands[1];
   const auto argument = [&]() -> std::optional<RegisterId> {
-    const auto& candidate = object_shorthand
-        ? expression.operands.front()
-        : expression.operands[1];
     if (enumeration) {
       if (candidate.kind == ExpressionKind::IntegerLiteral
           || candidate.kind == ExpressionKind::BooleanLiteral
@@ -471,7 +471,7 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
     return ordinal;
   }
 
-  const auto static_ordinal = constant_index(expression.operands[1]);
+  const auto static_ordinal = constant_index(candidate);
   const auto lower = successor ? low : low + 1;
   const auto upper = successor ? high - 1 : high;
   if (lower > upper
@@ -481,7 +481,7 @@ std::optional<RegisterId> Lowerer::lower_vhdl_scalar_attribute(
         range_diagnostic,
         expression.text + " argument has no result inside scalar type '"
             + type.spelling + "'",
-        expression.operands[1].span);
+        candidate.span);
     return std::nullopt;
   }
   process_.operations.emplace_back(IntegerCheck{ordinal, lower, upper});

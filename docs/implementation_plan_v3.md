@@ -6240,7 +6240,7 @@ starts on branch codex/v3 from clean v2 checkpoint
     package, install, archive, Windows, Tcl, runtime, and governance lane passes
     17/17. No full Release/Debug qualification, sanitizer, hosted-CI
     inspection, commit, or push action ran.
-20. **Local qualification complete; post-push release boundary pending.** Run
+20. **Repair qualification complete; replacement hosted closure pending.** Run
     final local qualification, commit, push, tag, and publish v3.0.0.
 
     Before starting the release suites, the most recent applicable hosted run,
@@ -6266,10 +6266,30 @@ starts on branch codex/v3 from clean v2 checkpoint
     actions with eight workers and warnings-as-errors, and its complete suite
     passed 419/419 in 532.00 seconds.
 
-    The predecessor hosted run remains failed and no new run has started.
-    Commit and push this Change 20 candidate, then run the permitted Batch 188
-    sanitizer boundary and require every Linux and Windows hosted lane to pass
-    before creating the exact annotated `v3.0.0` tag or publishing artifacts.
+    Candidate commit `cad15781` was pushed after that qualification. Hosted run
+    `34504855725` completed with every Linux lane green and all four Windows
+    configurations linking successfully, proving the VPI DLL surface repair.
+    The Windows test jobs then exposed two checkout-portability defects: CRLF
+    conversion changed byte-governed text identities, and one randomization
+    assertion compared a normalized source path against a native separator
+    spelling. Repository text is now checked out with LF on every host while
+    governed binary inputs retain `-text`, and the source-path assertion uses
+    the generic path spelling.
+
+    The sanitizer boundary additionally found and repaired a self-owned VHDL
+    subtype assignment use-after-free, an object-shorthand scalar-attribute
+    operand overrun, one leaked SystemC shutdown helper, and the upstream SCV
+    transaction-stream core leak. The SCV repair is a sixth governed patch with
+    exact input, output, patch-manifest, and patched-tree identities. The final
+    ASan/UBSan run with leak detection passes 415/415 in 929.15 seconds.
+
+    After all hosted and sanitizer repairs, fresh Clang 22.1.8 plus exact LLVM
+    22.1.8 warnings-as-errors builds completed with eight workers. The complete
+    Release suite passes 419/419 in 532.87 seconds, followed by the complete
+    Debug suite passing 419/419 in 539.28 seconds. Commit and push this repair,
+    then require every Linux and Windows lane in the replacement hosted run to
+    pass before creating the exact annotated `v3.0.0` tag or publishing
+    artifacts.
 
 ## v3.1.0
 

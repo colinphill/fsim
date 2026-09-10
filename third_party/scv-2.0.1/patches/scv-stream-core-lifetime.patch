@@ -1,0 +1,11 @@
+--- a/src/scv/scv_tr.cpp
++++ b/src/scv/scv_tr.cpp
+@@ -747,6 +747,8 @@
+                 _scv_tr_stream_core::callback_list_p,
+                 scv_tr_stream::DELETE);
+ 
++  delete this->_scv_tr_stream_core_p;
++
+ #ifdef scv_tr_TRACE
+   cout << "Leaving scv_tr_stream dtor\n";
+ #endif

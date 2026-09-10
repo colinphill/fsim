@@ -1919,6 +1919,7 @@ third_party/scv-2.0.1/patches/scv-bag-mutable-random.patch
 third_party/scv-2.0.1/patches/scv-int-range-overflow.patch
 third_party/scv-2.0.1/patches/scv-nested-extension-constructors.patch
 third_party/scv-2.0.1/patches/scv-range-size-overflow.patch
+third_party/scv-2.0.1/patches/scv-stream-core-lifetime.patch
 third_party/scv-2.0.1/patches/scv-windows-rand-r.patch
 third_party/scv-2.0.1/scv-2.0.1.spdx.json
 third_party/scv-2.0.1/scv-2.0.1.tar.gz

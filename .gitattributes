@@ -1,3 +1,8 @@
+# Governed inventories and release records use byte-stable LF identities on
+# every host.  PowerShell, CMake, and the LLVM-MinGW toolchain all accept LF,
+# so Windows checkouts must not rewrite repository text to CRLF.
+* text=auto eol=lf
+
 # The reviewed IEEE bundle is verified byte-for-byte at runtime and in CTest.
 third_party/ieee-1076-2019/** -text
 

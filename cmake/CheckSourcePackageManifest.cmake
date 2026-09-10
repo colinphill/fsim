@@ -146,6 +146,7 @@ foreach(FSIM_REQUIRED IN ITEMS
     third_party/scv-2.0.1/patches/scv-int-range-overflow.patch
     third_party/scv-2.0.1/patches/scv-nested-extension-constructors.patch
     third_party/scv-2.0.1/patches/scv-range-size-overflow.patch
+    third_party/scv-2.0.1/patches/scv-stream-core-lifetime.patch
     third_party/scv-2.0.1/scv-2.0.1.spdx.json)
   list(FIND FSIM_MANIFEST_FILES "${FSIM_REQUIRED}" FSIM_REQUIRED_INDEX)
   if(FSIM_REQUIRED_INDEX EQUAL -1)
