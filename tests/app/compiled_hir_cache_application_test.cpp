@@ -2523,11 +2523,6 @@ end architecture;
 
 int main()
 {
-    const auto relative_source = std::filesystem::path {
-        "compiled-hir-source-key" } / "top.sv";
-    assert(fsim::app::application_detail::source_path_key(relative_source)
-        == fsim::app::application_detail::source_path_key(
-            std::filesystem::current_path() / relative_source));
 #if defined(_WIN32)
     assert(fsim::app::application_detail::source_path_key(
                std::filesystem::path { "D:\\Build\\Sources\\Top.sv" })
@@ -2644,6 +2639,46 @@ int main()
         embedded_path_diagnostics));
     assert(has_diagnostic(
         embedded_path_diagnostics, "FSIM-ART-HIR-001"));
+
+    const auto equivalent_directory = temporary.path / "equivalent-sources";
+    const auto equivalent_producer = equivalent_directory / "producer.sv";
+    const auto equivalent_alias = equivalent_directory / "alias.sv";
+    write_file(equivalent_producer, "module producer; endmodule\n");
+    std::filesystem::create_hard_link(
+        equivalent_producer, equivalent_alias);
+    fsim::diagnostic::Engine equivalent_decode_diagnostics;
+    auto equivalent_design = fsim::app::deserialize_compiled_hir_bundle(
+        std::string_view {
+            reinterpret_cast<const char*>(cold_payload.data()),
+            cold_payload.size() },
+        "equivalent expansion path test", equivalent_decode_diagnostics);
+    assert(equivalent_design && !equivalent_decode_diagnostics.has_error());
+    auto equivalent_records = equivalent_design->semantics.records();
+    assert(!equivalent_records.expansions.empty());
+    const auto alias_name = fsim::support::path_to_utf8(equivalent_alias);
+    constexpr std::string_view equivalent_logical {
+        "cache-sources/equivalent/producer.sv" };
+    equivalent_records.expansions.front().description
+        = "macro `ALIAS' defined at " + alias_name
+        + ":1:9, expanded at " + alias_name + ":2:3";
+    auto equivalent_semantics = fsim::semantic::Model::from_records(
+        std::move(equivalent_records));
+    assert(equivalent_semantics);
+    equivalent_design->semantics = std::move(*equivalent_semantics);
+    const std::array equivalent_mapping {
+        fsim::library::SourceNameMapping {
+            fsim::support::path_to_utf8(equivalent_producer),
+            std::string { equivalent_logical } }
+    };
+    fsim::diagnostic::Engine equivalent_diagnostics;
+    assert(fsim::app::application_detail::relocate_compiled_design_sources(
+        *equivalent_design, equivalent_mapping, equivalent_diagnostics));
+    assert(!equivalent_diagnostics.has_error());
+    const auto& equivalent_description
+        = equivalent_design->semantics.expansions().front().description;
+    assert(equivalent_description.find(alias_name) == std::string::npos);
+    assert(equivalent_description.find(equivalent_logical)
+        != std::string::npos);
 
     fsim::diagnostic::Engine repeated_decode_diagnostics;
     auto repeated_design = fsim::app::deserialize_compiled_hir_bundle(

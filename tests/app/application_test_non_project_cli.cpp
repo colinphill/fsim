@@ -987,6 +987,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         std::istreambuf_iterator<char> { bundle_input },
         std::istreambuf_iterator<char> { } };
     assert(!bundle_input.bad());
+    bundle_input.close();
     diagnostic::Engine bundle_diagnostics;
     const auto bundle = app::deserialize_compiled_hir_bundle(
         bundle_bytes, support::path_to_utf8(metadata->compiled_hir_artifact),

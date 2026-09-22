@@ -373,6 +373,32 @@ bool relocate_embedded_source_names(
     return relocated;
 }
 
+bool relocate_equivalent_embedded_source_names(
+    std::string& name,
+    const SourceMappingIndex& mappings)
+{
+    bool relocated = false;
+    for (const auto& embedded : expansion_source_paths(name)) {
+        const auto mapping = std::ranges::find_if(
+            mappings.ordered, [&](const auto& candidate) {
+                return same_source_path(embedded,
+                    support::path_from_utf8(candidate.producer_name));
+            });
+        if (mapping == mappings.ordered.end()) {
+            continue;
+        }
+        const auto encoded = support::path_to_utf8(embedded);
+        std::size_t offset = 0;
+        while (!encoded.empty()
+            && (offset = name.find(encoded, offset)) != std::string::npos) {
+            name.replace(offset, encoded.size(), mapping->logical_name);
+            offset += mapping->logical_name.size();
+            relocated = true;
+        }
+    }
+    return relocated;
+}
+
 bool relocate_name(
     std::string& name,
     const SourceMappingIndex& mappings,
@@ -398,6 +424,7 @@ bool relocate_name(
         return true;
     }
     (void)relocate_embedded_source_names(name, mappings);
+    (void)relocate_equivalent_embedded_source_names(name, mappings);
     const auto relocated_path = std::filesystem::path { name };
     const auto mapped_destination = [&](const auto& candidate) {
         return mappings.logical_names.contains(

@@ -328,23 +328,7 @@ bool same_source_path(
 
 std::string source_path_key(const std::filesystem::path& path)
 {
-    if (path.empty()) {
-        return { };
-    }
-    auto normalized = path.lexically_normal();
-    std::error_code absolute_error;
-    const auto absolute = std::filesystem::absolute(
-        normalized, absolute_error);
-    if (!absolute_error) {
-        normalized = absolute.lexically_normal();
-    }
-    std::error_code canonical_error;
-    const auto canonical = std::filesystem::weakly_canonical(
-        normalized, canonical_error);
-    if (!canonical_error) {
-        normalized = canonical;
-    }
-    auto result = support::path_to_utf8(normalized);
+    auto result = support::path_to_utf8(path.lexically_normal());
 #if defined(_WIN32)
     std::ranges::transform(result, result.begin(), [](const char character) {
         return character >= 'A' && character <= 'Z'

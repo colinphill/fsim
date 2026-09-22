@@ -559,6 +559,7 @@ end architecture;
         std::istreambuf_iterator<char> { }
     };
     assert(compiled_hir_input.good() || compiled_hir_input.eof());
+    compiled_hir_input.close();
     assert(compiled_hir_bytes.starts_with("FSIMCHIR"));
     diagnostic::Engine compiled_hir_diagnostics;
     const auto compiled_hir = app::deserialize_compiled_hir_bundle(
