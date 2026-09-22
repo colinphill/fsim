@@ -480,6 +480,7 @@ add_library(fsim_semantic STATIC
   src/semantic/vhdl_hir.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)
 fsim_configure_library(fsim_semantic)
+target_link_libraries(fsim_semantic PRIVATE fsim_boost_pfr_headers)
 
 set(
   FSIM_FRONTEND_SOURCES
