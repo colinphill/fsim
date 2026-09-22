@@ -387,6 +387,16 @@ bool relocate_name(
         name = mapping->second;
         return true;
     }
+    const auto native_name = support::path_from_utf8(name);
+    const auto equivalent = std::ranges::find_if(
+        mappings.ordered, [&](const auto& mapping) {
+            return same_source_path(native_name,
+                support::path_from_utf8(mapping.producer_name));
+        });
+    if (equivalent != mappings.ordered.end()) {
+        name = equivalent->logical_name;
+        return true;
+    }
     (void)relocate_embedded_source_names(name, mappings);
     const auto relocated_path = std::filesystem::path { name };
     const auto mapped_destination = [&](const auto& candidate) {
@@ -592,7 +602,7 @@ compiled_cache_source_mappings(
     diagnostic::Engine& diagnostics)
 {
     std::vector<library::SourceNameMapping> result;
-    std::set<std::string> producers;
+    std::vector<std::filesystem::path> producers;
     std::set<std::string> logical_names;
     bool valid = true;
     const auto add = [&](const std::filesystem::path& path,
@@ -601,9 +611,12 @@ compiled_cache_source_mappings(
             return;
         }
         const auto producer = support::path_to_utf8(path.lexically_normal());
-        if (!producers.insert(source_path_key(path)).second) {
+        if (std::ranges::any_of(producers, [&](const auto& producer) {
+                return same_source_path(producer, path);
+            })) {
             return;
         }
+        producers.push_back(path);
         auto logical = support::path_to_utf8(
             std::filesystem::path { make_logical() }.lexically_normal());
         if (logical.empty()

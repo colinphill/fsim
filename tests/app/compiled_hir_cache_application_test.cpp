@@ -2523,6 +2523,11 @@ end architecture;
 
 int main()
 {
+    const auto relative_source = std::filesystem::path {
+        "compiled-hir-source-key" } / "top.sv";
+    assert(fsim::app::application_detail::source_path_key(relative_source)
+        == fsim::app::application_detail::source_path_key(
+            std::filesystem::current_path() / relative_source));
 #if defined(_WIN32)
     assert(fsim::app::application_detail::source_path_key(
                std::filesystem::path { "D:\\Build\\Sources\\Top.sv" })
