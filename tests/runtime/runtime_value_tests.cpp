@@ -1042,6 +1042,66 @@ void test_simir_noninitializing_static_process() {
       "a noninitializing static process must wake on its sensitivity");
 }
 
+void test_simir_initial_static_wait_activation_order() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto run = [](const bool writer_first) {
+    Interpreter interpreter;
+    const auto trigger = interpreter.add_signal(
+        {"top.trigger", PackedLogic4::from_msb_string("0")});
+    const auto observed = interpreter.add_signal(
+        {"top.observed", PackedLogic4::from_msb_string("0")});
+
+    const auto add_writer = [&] {
+      Process process;
+      process.id = static_cast<ProcessId>(
+          writer_first ? 0U : 1U);
+      process.name = "writer";
+      process.register_count = 1U;
+      process.operations = {
+          LoadConstant {0U, PackedLogic4::from_msb_string("1")},
+          WriteBlocking {trigger, 0U},
+          Halt { },
+      };
+      (void)interpreter.add_process(std::move(process));
+    };
+    const auto add_observer = [&] {
+      Process process;
+      process.id = static_cast<ProcessId>(
+          writer_first ? 1U : 0U);
+      process.name = "observer";
+      process.register_count = 1U;
+      process.static_sensitivity.push_back(
+          {trigger, EdgeKind::any});
+      process.operations = {
+          WaitSensitivity { },
+          ReadSignal {0U, trigger},
+          WriteBlocking {observed, 0U},
+          Halt { },
+      };
+      (void)interpreter.add_process(std::move(process));
+    };
+
+    if (writer_first) {
+      add_writer();
+      add_observer();
+    } else {
+      add_observer();
+      add_writer();
+    }
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed
+            && interpreter.signal_value(observed).to_msb_string() == "1",
+        "an initial static wait observes a time-zero writer regardless of "
+        "process order");
+  };
+
+  run(false);
+  run(true);
+}
+
 void test_simir_static_sensitivity_cohort() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;

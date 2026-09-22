@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/coverage_branches.hpp"
+#include "fsim/frontend/coverage_branches.hpp"
 
 #include "fsim/frontend/parser.hpp"
 
@@ -99,7 +99,7 @@ endmodule
         frontend::Language::SystemVerilog2017);
     require(parsed.ok() && parsed.design.units.front().processes.size() == 1U,
         "independently authored SystemVerilog branch corpus must parse");
-    const auto discovered = elaboration::discover_coverage_branch_points(
+    const auto discovered = frontend::discover_coverage_branch_points(
         parsed.design.units.front().processes.front().statements,
         frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U });
@@ -136,7 +136,7 @@ endmodule
                 }),
         "every branch arm must retain typed language, source, and exact span");
 
-    const auto as_verilog = elaboration::discover_coverage_branch_points(
+    const auto as_verilog = frontend::discover_coverage_branch_points(
         parsed.design.units.front().processes.front().statements,
         frontend::CodeCoverageLanguage::Verilog,
         std::span { &source, 1U });
@@ -184,11 +184,11 @@ end rtl;
     const auto parsed_b = parse(source_b);
     require(parsed_a.ok() && parsed_b.ok(),
         "independently authored relocated VHDL branch corpora must parse");
-    const auto first = elaboration::discover_coverage_branch_points(
+    const auto first = frontend::discover_coverage_branch_points(
         parsed_a.design.units.back().processes.front().statements,
         frontend::CodeCoverageLanguage::Vhdl,
         std::span { &source_a, 1U });
-    const auto relocated = elaboration::discover_coverage_branch_points(
+    const auto relocated = frontend::discover_coverage_branch_points(
         parsed_b.design.units.back().processes.front().statements,
         frontend::CodeCoverageLanguage::Vhdl,
         std::span { &source_b, 1U });
@@ -218,7 +218,7 @@ void test_rejections_and_limits()
     const std::vector statements { decision };
 
     const auto invalid_language
-        = elaboration::discover_coverage_branch_points(statements,
+        = frontend::discover_coverage_branch_points(statements,
             static_cast<frontend::CodeCoverageLanguage>(255U),
             std::span { &source, 1U });
     require(!invalid_language.ok()
@@ -228,7 +228,7 @@ void test_rejections_and_limits()
     auto invalid_source = source;
     ++invalid_source.identity.content_bytes;
     const auto unauthenticated
-        = elaboration::discover_coverage_branch_points(statements,
+        = frontend::discover_coverage_branch_points(statements,
             frontend::CodeCoverageLanguage::SystemVerilog,
             std::span { &invalid_source, 1U });
     require(!unauthenticated.ok() && unauthenticated.points.empty()
@@ -237,7 +237,7 @@ void test_rejections_and_limits()
         "unauthenticated branch source metadata must fail transactionally");
     auto unnamed_source = source;
     unnamed_source.source_name.clear();
-    const auto unnamed = elaboration::discover_coverage_branch_points(
+    const auto unnamed = frontend::discover_coverage_branch_points(
         statements, frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &unnamed_source, 1U });
     require(!unnamed.ok()
@@ -246,7 +246,7 @@ void test_rejections_and_limits()
         "an empty branch source mapping name must be rejected");
     const std::vector duplicate_sources { source, source };
     const auto duplicate_source
-        = elaboration::discover_coverage_branch_points(statements,
+        = frontend::discover_coverage_branch_points(statements,
             frontend::CodeCoverageLanguage::SystemVerilog,
             duplicate_sources);
     require(!duplicate_source.ok()
@@ -255,7 +255,7 @@ void test_rejections_and_limits()
         "ambiguous branch source mappings must be rejected");
     auto missing = decision;
     missing.statements.clear();
-    const auto missing_arm = elaboration::discover_coverage_branch_points(
+    const auto missing_arm = frontend::discover_coverage_branch_points(
         std::span { &missing, 1U },
         frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U });
@@ -265,7 +265,7 @@ void test_rejections_and_limits()
         "a malformed decision without its explicit arm must be rejected");
     auto unknown = decision;
     unknown.statements.front().span.source_name = "unknown.sv";
-    const auto unknown_source = elaboration::discover_coverage_branch_points(
+    const auto unknown_source = frontend::discover_coverage_branch_points(
         std::span { &unknown, 1U },
         frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U });
@@ -275,7 +275,7 @@ void test_rejections_and_limits()
         "an arm without an authenticated source mapping must be rejected");
     auto outside = decision;
     outside.statements.front().span.end.offset = contents.size() + 1U;
-    const auto outside_source = elaboration::discover_coverage_branch_points(
+    const auto outside_source = frontend::discover_coverage_branch_points(
         std::span { &outside, 1U },
         frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U });
@@ -284,14 +284,14 @@ void test_rejections_and_limits()
                 == elaboration::CoverageBranchError::InvalidArmSpan,
         "an arm outside authenticated source bytes must be rejected");
     const std::vector duplicate_statements { decision, decision };
-    const auto duplicate = elaboration::discover_coverage_branch_points(
+    const auto duplicate = frontend::discover_coverage_branch_points(
         duplicate_statements, frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U });
     require(!duplicate.ok() && duplicate.points.empty()
             && duplicate.error
                 == elaboration::CoverageBranchError::DuplicatePoint,
         "duplicate arm identities must not publish partial output");
-    const auto arm_limit = elaboration::discover_coverage_branch_points(
+    const auto arm_limit = frontend::discover_coverage_branch_points(
         statements, frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U }, { 1U, 1U, 1U, 1U });
     require(!arm_limit.ok()
@@ -301,7 +301,7 @@ void test_rejections_and_limits()
     frontend::Statement block;
     block.kind = frontend::StatementKind::Block;
     block.statements.push_back(decision);
-    const auto nesting = elaboration::discover_coverage_branch_points(
+    const auto nesting = frontend::discover_coverage_branch_points(
         std::span { &block, 1U },
         frontend::CodeCoverageLanguage::SystemVerilog,
         std::span { &source, 1U }, { 1U, 2U, 2U, 1U });

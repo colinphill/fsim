@@ -85,8 +85,8 @@ allowlist, or suppression route.
 
 The exact SHA-256 identities are:
 
-- clause/integration inventory: `197002076a46cc02970c508d3f3f70dbfd08707b5f548acd2f589d5e562e976e`;
-- literal-width inventory: `c79817fbeae532062b71ce933245d1217dc5a105cb03f01cafcff747933cbad1`;
+- clause/integration inventory: `74a1481e60e5046e294c8ce64fe4be9a4582450a55aaf9c3b783cfa1f5098570`;
+- literal-width inventory: `59028a3ee889a7bbcfe0cc60a87ab1e285598f6fcebcf29be9f649337697d453`;
 - release closure: `f4e8dcdfb60362544e6958449fa2a1e852cedcbba2ef6e929d5fb0a3aee1d124`.
 
 The synchronized static baseline is 2,461 production diagnostics, 1,020 bounded

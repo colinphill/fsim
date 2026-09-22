@@ -3,7 +3,6 @@
 
 #include "fsim/elaboration/coverage_conditions.hpp"
 
-#include <span>
 #include <string_view>
 
 namespace fsim::elaboration {
@@ -16,12 +15,5 @@ using VhdlCoverageConditionPoint = CoverageConditionPoint;
 using VhdlCoverageConditionLimits = CoverageConditionLimits;
 using VhdlCoverageConditionError = CoverageConditionError;
 using VhdlCoverageConditionResult = CoverageConditionResult;
-
-[[nodiscard]] VhdlCoverageConditionResult discover_vhdl_coverage_conditions(
-    std::span<const frontend::Statement> statements,
-    frontend::Language language,
-    frontend::VhdlStandard standard,
-    std::span<const VhdlCoverageConditionSource> sources,
-    VhdlCoverageConditionLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

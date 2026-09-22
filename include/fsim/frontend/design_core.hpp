@@ -111,6 +111,7 @@ struct Expression {
     SystemVerilogScalarKind systemverilog_scalar_kind {
         SystemVerilogScalarKind::None
     };
+    GeneratedTextKind generated_text { GeneratedTextKind::none };
     Expression() = default;
 
     Expression(
@@ -1618,6 +1619,7 @@ struct Statement {
     // one conversion and one value.
     support::RareVector<OutputValue> output_values;
     std::string output_trailing_text;
+    GeneratedTextKind output_generated_text { GeneratedTextKind::none };
 
     // Block contents or the true branch/delayed statement.
     support::RareVector<Statement> statements;

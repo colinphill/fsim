@@ -31,6 +31,7 @@ enum class Section {
   vhdl_package_dependency,
   source,
   unit,
+  auxiliary_artifact,
   native_artifact
 };
 
@@ -295,6 +296,13 @@ std::string serialize_metadata(const Metadata& metadata) {
          << "producer = \"" << escape(metadata.producer) << "\"\n"
          << "runtime_schema = " << metadata.runtime_schema << '\n'
          << "portable_schema = " << kPortableSchemaVersion << '\n'
+         << "compiled_hir_schema = " << kCompiledHirSchemaVersion << '\n'
+         << "compiled_hir_artifact = \""
+         << escape(fsim::support::path_to_utf8(
+                metadata.compiled_hir_artifact))
+         << "\"\n"
+         << "compiled_hir_checksum = \""
+         << escape(metadata.compiled_hir_checksum) << "\"\n"
          << "trace_archive = \"" << escape(metadata.trace_archive) << "\"\n";
   for (const auto& dependency : metadata.dependencies) {
     output << "\n[[dependency]]\n"
@@ -351,6 +359,18 @@ std::string serialize_metadata(const Metadata& metadata) {
            << "compatibility_profile = \""
            << escape(unit.compatibility_profile) << "\"\n";
   }
+  for (const auto& auxiliary : metadata.auxiliary_artifacts) {
+    output << "\n[[auxiliary]]\n"
+           << "kind = \"" << escape(auxiliary.kind) << "\"\n"
+           << "name = \"" << escape(auxiliary.name) << "\"\n"
+           << "artifact = \""
+           << escape(fsim::support::path_to_utf8(auxiliary.artifact))
+           << "\"\n"
+           << "checksum = \"" << escape(auxiliary.checksum) << "\"\n"
+           << "revision = \"" << escape(auxiliary.revision) << "\"\n"
+           << "compatibility_profile = \""
+           << escape(auxiliary.compatibility_profile) << "\"\n";
+  }
   for (const auto& native : metadata.native_artifacts) {
     output << "\n[[native]]\n"
            << "kind = \"" << escape(native.kind) << "\"\n"
@@ -386,6 +406,7 @@ std::optional<Metadata> parse_metadata(
   Metadata metadata;
   metadata.format = 0;
   metadata.portable_schema = 0;
+  metadata.compiled_hir_schema = 0;
   Section section = Section::root;
   std::string* dependency = nullptr;
   std::unordered_set<std::string> root_keys;
@@ -446,6 +467,13 @@ std::optional<Metadata> parse_metadata(
       section_keys.clear();
       continue;
     }
+    if (line == "[[auxiliary]]") {
+      metadata.auxiliary_artifacts.emplace_back();
+      dependency = nullptr;
+      section = Section::auxiliary_artifact;
+      section_keys.clear();
+      continue;
+    }
     const auto equals = line.find('=');
     if (equals == std::string::npos) {
       error(
@@ -477,7 +505,7 @@ std::optional<Metadata> parse_metadata(
     }
     if (section == Section::root) {
       if (key == "format" || key == "runtime_schema"
-          || key == "portable_schema") {
+          || key == "portable_schema" || key == "compiled_hir_schema") {
         const auto number = unsigned_value(value);
         if (!number.has_value()) {
           error(
@@ -488,16 +516,25 @@ std::optional<Metadata> parse_metadata(
           metadata.format = *number;
         } else if (key == "runtime_schema") {
           metadata.runtime_schema = *number;
-        } else {
+        } else if (key == "portable_schema") {
           metadata.portable_schema = *number;
+        } else {
+          metadata.compiled_hir_schema = *number;
         }
       } else if ((key == "library" || key == "producer"
+                     || key == "compiled_hir_artifact"
+                     || key == "compiled_hir_checksum"
                      || key == "trace_archive")
                  && text.has_value()) {
         if (key == "library")
           metadata.library = *text;
         else if (key == "producer")
           metadata.producer = *text;
+        else if (key == "compiled_hir_artifact")
+          metadata.compiled_hir_artifact
+              = fsim::support::path_from_utf8(*text);
+        else if (key == "compiled_hir_checksum")
+          metadata.compiled_hir_checksum = *text;
         else
           metadata.trace_archive = *text;
       } else {
@@ -520,6 +557,35 @@ std::optional<Metadata> parse_metadata(
         metadata.native_artifacts.back().runtime_abi = *number;
       } else {
         metadata.native_artifacts.back().systemc_abi = *number;
+      }
+      continue;
+    }
+    if (section == Section::auxiliary_artifact) {
+      if (!text.has_value()) {
+        error(
+            diagnostics, kSyntaxCode,
+            "[[auxiliary]] values must be quoted strings",
+            source_name, line_number);
+        continue;
+      }
+      auto& auxiliary = metadata.auxiliary_artifacts.back();
+      if (key == "kind") {
+        auxiliary.kind = *text;
+      } else if (key == "name") {
+        auxiliary.name = *text;
+      } else if (key == "artifact") {
+        auxiliary.artifact = fsim::support::path_from_utf8(*text);
+      } else if (key == "checksum") {
+        auxiliary.checksum = *text;
+      } else if (key == "revision") {
+        auxiliary.revision = *text;
+      } else if (key == "compatibility_profile") {
+        auxiliary.compatibility_profile = *text;
+      } else {
+        error(
+            diagnostics, kSyntaxCode,
+            "unknown [[auxiliary]] key '" + key + "'",
+            source_name, line_number);
       }
       continue;
     }
@@ -665,6 +731,18 @@ std::optional<Metadata> parse_metadata(
               ".fsimlib"),
           source_name, document_line);
   }
+  if (metadata.compiled_hir_schema != kCompiledHirSchemaVersion) {
+    error(
+        diagnostics, kSchemaCode,
+        diagnostic::unsupported_artifact_identity(
+            ".fsimlib",
+            "compiled-HIR schema "
+                + std::to_string(metadata.compiled_hir_schema),
+            "compiled-HIR schema "
+                + std::to_string(kCompiledHirSchemaVersion),
+            ".fsimlib"),
+        source_name, document_line);
+  }
   if ((metadata.trace_archive.size() % 2U) != 0U
       || !std::ranges::all_of(metadata.trace_archive, [](const char value) {
            return (value >= '0' && value <= '9')
@@ -726,6 +804,17 @@ std::optional<Metadata> parse_metadata(
   }
   std::unordered_set<std::string> source_names;
   std::unordered_set<std::string> payload_paths;
+  if (!safe_relative_path(metadata.compiled_hir_artifact)
+      || !checksum_spelling(metadata.compiled_hir_checksum)) {
+    error(
+        diagnostics, kValueCode,
+        "metadata requires a contained compiled-HIR bundle with a lowercase "
+        "SHA-256 checksum",
+        source_name, document_line);
+  } else {
+    payload_paths.insert(
+        fsim::support::path_to_utf8(metadata.compiled_hir_artifact));
+  }
   for (const auto& source_entry : metadata.sources) {
     const bool no_text = source_entry.artifact.empty()
         && source_entry.checksum.empty();
@@ -769,25 +858,45 @@ std::optional<Metadata> parse_metadata(
               && standard.revision == unit.standard;
         });
     if (unit.language.empty() || unit.kind.empty() || unit.name.empty()
-        || !safe_relative_path(unit.artifact)
-        || !checksum_spelling(unit.checksum) || !known_standard
+        || !unit.artifact.empty() || !unit.checksum.empty() || !known_standard
         || unit.compatibility_profile.empty()
         || (unit.language == "vhdl"
             && unit.compatibility_profile == "none")) {
       error(
           diagnostics, kValueCode,
           "every [[unit]] requires language, selected standard, compatibility "
-          "profile, kind, name, a contained relative artifact path, and a "
-          "lowercase SHA-256 checksum",
+          "profile, kind, name, and metadata-only compiled-HIR inventory",
           source_name, document_line);
     }
   }
   for (const auto& unit : metadata.units) {
+    if (unit.artifact.empty()) {
+      continue;
+    }
     if (!payload_paths.insert(
             fsim::support::path_to_utf8(unit.artifact)).second) {
       error(
           diagnostics, kValueCode,
           "artifact payload paths must be unique across every index",
+          source_name, document_line);
+    }
+  }
+  std::unordered_set<std::string> auxiliary_identities;
+  for (const auto& auxiliary : metadata.auxiliary_artifacts) {
+    const auto identity = auxiliary.kind + "\n" + auxiliary.name;
+    if (auxiliary.kind.empty() || auxiliary.name.empty()
+        || !safe_relative_path(auxiliary.artifact)
+        || !checksum_spelling(auxiliary.checksum)
+        || auxiliary.revision.empty()
+        || auxiliary.compatibility_profile.empty()
+        || !auxiliary_identities.insert(identity).second
+        || !payload_paths.insert(
+            fsim::support::path_to_utf8(auxiliary.artifact)).second) {
+      error(
+          diagnostics, kValueCode,
+          "every [[auxiliary]] requires a unique kind/name identity, a "
+          "contained checksummed payload, revision, and compatibility "
+          "profile",
           source_name, document_line);
     }
   }
@@ -817,10 +926,11 @@ std::optional<Metadata> parse_metadata(
           source_name, document_line);
     }
   }
-  if (metadata.units.empty() && metadata.sources.empty()) {
+  if (metadata.units.empty() && metadata.sources.empty()
+      && metadata.auxiliary_artifacts.empty()) {
     error(
         diagnostics, kValueCode,
-        "metadata must index at least one portable unit or source payload",
+        "metadata must index at least one unit, source, or auxiliary payload",
         source_name, document_line);
   }
   return diagnostics.has_error()
@@ -883,17 +993,22 @@ bool publish(
 
   diagnostic::Engine metadata_diagnostics;
   if (metadata.format != kFormatVersion
-      || metadata.portable_schema != kPortableSchemaVersion) {
+      || metadata.portable_schema != kPortableSchemaVersion
+      || metadata.compiled_hir_schema != kCompiledHirSchemaVersion) {
       diagnostics.error(
           std::string { kPublishCode },
           diagnostic::unsupported_artifact_identity(
               ".fsimlib publication",
               "format " + std::to_string(metadata.format)
                   + " and portable-unit schema "
-                  + std::to_string(metadata.portable_schema),
+                  + std::to_string(metadata.portable_schema)
+                  + " and compiled-HIR schema "
+                  + std::to_string(metadata.compiled_hir_schema),
               "format " + std::to_string(kFormatVersion)
                   + " and portable-unit schema "
-                  + std::to_string(kPortableSchemaVersion),
+                  + std::to_string(kPortableSchemaVersion)
+                  + " and compiled-HIR schema "
+                  + std::to_string(kCompiledHirSchemaVersion),
               ".fsimlib"));
       return false;
   }
@@ -910,7 +1025,15 @@ bool publish(
 
   std::unordered_set<std::string> expected;
   std::unordered_map<std::string, std::string> expected_checksums;
+  const auto compiled_hir_path = fsim::support::path_to_utf8(
+      metadata.compiled_hir_artifact);
+  expected.insert(compiled_hir_path);
+  expected_checksums.emplace(
+      compiled_hir_path, metadata.compiled_hir_checksum);
   for (const auto& unit : metadata.units) {
+    if (unit.artifact.empty()) {
+      continue;
+    }
     const auto path = fsim::support::path_to_utf8(unit.artifact);
     expected.insert(path);
     expected_checksums.emplace(path, unit.checksum);
@@ -922,6 +1045,11 @@ bool publish(
     const auto path = fsim::support::path_to_utf8(source_entry.artifact);
     expected.insert(path);
     expected_checksums.emplace(path, source_entry.checksum);
+  }
+  for (const auto& auxiliary : metadata.auxiliary_artifacts) {
+    const auto path = fsim::support::path_to_utf8(auxiliary.artifact);
+    expected.insert(path);
+    expected_checksums.emplace(path, auxiliary.checksum);
   }
   for (const auto& native : metadata.native_artifacts) {
     const auto path = fsim::support::path_to_utf8(native.artifact);

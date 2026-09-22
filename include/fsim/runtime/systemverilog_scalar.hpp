@@ -98,6 +98,7 @@ enum class SystemVerilogScalarBinaryOperator : std::uint8_t {
     LessEqual,
     Greater,
     GreaterEqual,
+    Convert,
 };
 
 enum class SystemVerilogMathFunction : std::uint8_t {

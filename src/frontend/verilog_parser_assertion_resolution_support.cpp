@@ -399,6 +399,8 @@ std::vector<Statement> action_statements(
                     statement.output_text = message->text.size() >= 2U
                         ? message->text.substr(1U, message->text.size() - 2U)
                         : message->text;
+                    statement.output_generated_text
+                        = message->generated_text;
                 } else {
                     statement.output_text = task->text;
                 }

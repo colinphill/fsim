@@ -257,7 +257,10 @@ struct SystemVerilogCovergroupDeclaration {
     SourceSpan span;
 };
 
-struct SystemVerilogCovergroupSampleCall {
+/// Compile-local syntax captured for one procedural covergroup sample call.
+/// The SystemVerilog HIR builder replaces every actual with an ExpressionId
+/// before ParsedDesign storage is destroyed.
+struct SystemVerilogCovergroupSampleSyntax {
     std::string declaration_identity;
     std::string instance_identity;
     std::vector<Expression> actuals;
@@ -332,9 +335,7 @@ struct SystemVerilogCovergroupInstance {
     std::string declaration_identity;
     std::string specialization_identity;
     std::string runtime_identity;
-    std::vector<Expression> constructor_actuals;
     std::vector<SystemVerilogCovergroupOptionAssignment> initial_option_state;
-    std::vector<SystemVerilogCovergroupSampleCall> sample_calls;
     std::vector<SystemVerilogCoverageBinHit> bin_hits;
     std::vector<SystemVerilogCoverageTransitionProgress> transition_progress;
     std::vector<SystemVerilogCoveragePreviousSample> previous_samples;
@@ -343,6 +344,15 @@ struct SystemVerilogCovergroupInstance {
     bool class_member_template { };
     bool cross_inventory_initialized { };
     SourceSpan span;
+};
+
+/// Compile-local structural syntax associated with one covergroup instance.
+/// runtime_identity joins this sidecar to the leaf-only instance state without
+/// making Expression nodes reachable from post-compilation coverage owners.
+struct SystemVerilogCovergroupInstanceSyntax {
+    std::string runtime_identity;
+    std::vector<Expression> constructor_actuals;
+    std::vector<SystemVerilogCovergroupSampleSyntax> sample_calls;
 };
 
 /// Owning HIR for one SystemVerilog class declaration.
@@ -1042,6 +1052,14 @@ inline constexpr std::size_t maximum_udp_table_storage_bytes = 256U * 1024U * 10
 verilog_udp_table_within_resource_budget(std::size_t input_count,
     std::size_t row_count) noexcept;
 
+/// Validate syntax-free UDP table metadata retained by semantic HIR and
+/// DesignIR artifacts.
+[[nodiscard]] bool verilog_udp_table_well_formed(
+    bool sequential,
+    std::size_t input_count,
+    std::optional<VerilogUdpOutputSymbol> initial_output,
+    std::span<const VerilogUdpTableRow> rows) noexcept;
+
 /// Validate an owning UDP declaration restored from an untrusted artifact.
 /// Source parsing emits more specific diagnostics before producing this HIR.
 [[nodiscard]] bool verilog_udp_declaration_well_formed(
@@ -1226,6 +1244,9 @@ struct SystemVerilogDpiDeclaration {
     StandardRevision standard_revision {
         StandardRevision::SystemVerilog2017
     };
+    std::string library;
+    std::string compilation_unit_identity;
+    std::string verilog_compatibility_profile { "none" };
     SystemVerilogDpiDirection direction { SystemVerilogDpiDirection::Import };
     SystemVerilogDpiOwnerKind owner_kind {
         SystemVerilogDpiOwnerKind::CompilationUnit
@@ -1516,9 +1537,11 @@ struct DesignUnit {
     std::string library;
     std::string compilation_unit_identity;
     std::string name;
+    bool vhdl_extended_name { };
     // For a VHDL architecture, `name` is the architecture and `primary_name`
     // is the entity it implements.
     std::string primary_name;
+    bool vhdl_extended_primary_name { };
     // Nonempty only for a checksum-pinned compiler-supplied standard package.
     // Intrinsic exports remain explicit without masquerading as ordinary user
     // declarations whose bodies and nominal types would require general source
@@ -1634,12 +1657,15 @@ struct ParsedDesign {
     std::vector<SystemVerilogClassMethod> systemverilog_class_method_definitions;
     std::vector<SystemVerilogCovergroupInstance>
         systemverilog_covergroup_instances;
+    std::vector<SystemVerilogCovergroupInstanceSyntax>
+        systemverilog_covergroup_instance_syntax;
 
     // False when source recovery retained nodes after a construct exceeded
     // the selected VHDL revision. Normal application analysis already owns
     // the source diagnostic; direct semantic/elaboration callers use this
     // bit to prevent a recovered later-revision node from becoming executable.
-    // This is transient parse state and is not part of a portable unit.
+    // Compilation copies the status into each owning VHDL HIR unit before
+    // this transient parser state is destroyed.
     bool vhdl_profile_compatible { true };
 
     [[nodiscard]] const DesignUnit* find(UnitKind kind,

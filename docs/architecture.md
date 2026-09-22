@@ -206,10 +206,10 @@ from the common packed signal value at the post-update boundary; wide numeric,
 fixed, file, protected, and physical objects retain their ordinary VHDL owners
 and do not become scalar predicates accidentally. A PSL monitor may observe a
 signal driven by the existing VITAL path-delay runtime on a later clock sample,
-preserving the same delta ordering as every other signal consumer. Portable
-library units retain the frontend PSL declaration/directive token and source-
-span ownership through owning-unit schema 27. Standalone designs additionally
-carry a checksummed `FSIMVHIR` payload containing the complete owning VHDL HIR,
+preserving the same delta ordering as every other signal consumer. The compiled
+HIR bundle retains the PSL declaration/directive token and source-span
+ownership through VHDL HIR schema 5. Standalone designs carry the same
+checksummed `FSIMVHIR` payload containing the complete owning VHDL HIR,
 including analyzed PSL clocks, declarations, temporal operators, directives,
 and source IDs. Loading validates every retained semantic ID and enum before
 publishing a `BuiltProject`; missing, corrupt, future-schema, trailing, or
@@ -742,7 +742,7 @@ multi-root, searched-library, and mixed-language wrapper paths use the same
 resolver and native-cache contract as ordinary hierarchy.
 
 Verilog drive and charge strengths use one canonical rank model from frontend
-HIR through portable units, specialization provenance, SimIR, runtime state,
+HIR through the compiled-HIR bundle, specialization provenance, SimIR, runtime state,
 and native-cache identity. Resolved nets compare independent zero/one
 components per bit, retain exact ties as `X`, ignore high impedance, and keep
 the wired-AND/OR policies distinct. Gate, tri-state, UDP, procedural,
@@ -797,11 +797,12 @@ search scope actually queries it. The loader then verifies canonical
 `fsim-library.toml` metadata, declared dependency order, every selected payload
 checksum, and each indexed unit identity before committing restored units.
 Dependencies are logical names with explicit mappings; fsim never searches
-neighboring host directories. Portable VHDL and SystemVerilog owning unit
-graphs plus distinct `.fsimudp` declaration payloads restore directly into the
-candidate index without invoking a preprocessor or parser. UDP payloads receive
-the same checksum, identity, source-relocation, duplicate-input, and
-transactional publication checks as ordinary units. Bundled logical source
+neighboring host directories. The compiled semantic, VHDL, and SystemVerilog
+HIR bundle restores directly into the candidate index without invoking a
+preprocessor or parser. UDP and class declarations remain records in that one
+checksummed bundle and receive the same identity, source-relocation,
+duplicate-input, and transactional publication checks as ordinary units.
+Bundled logical source
 names and optional source text
 remain artifact-relative, so diagnostics, debugger breakpoints, VCD, and cache
 identity survive moving the complete directory.
@@ -817,8 +818,8 @@ requires the exact LLVM version, runtime/frame/result ABI sizes, target triple,
 data layout, CPU, sorted feature set, optimization level, object key, and
 checksum. LLVM exports compile optional objects from a temporary self-mapped
 portable artifact, ensuring producer and consumer use identical relocated
-source provenance. Any compatibility mismatch falls back to the portable unit
-or bundled SystemC source; a compatible but corrupt payload is an integrity
+source provenance. Any compatibility mismatch falls back to the compiled-HIR
+bundle or bundled SystemC source; a compatible but corrupt payload is an integrity
 error. Accepted native fingerprints and ordered metadata/unit/source identities
 participate in cache provenance, while the mapped directory's absolute path
 does not. Format-1 SystemC publication rejects producer-only include paths,
@@ -828,7 +829,7 @@ publishing a bundled-source fallback that cannot reproduce the producer build.
 Manifest-free execution uses two additional immutable directory artifacts.
 `fsim compile` publishes one explicit VHDL, Verilog, or SystemVerilog
 compilation unit as `.fsimobj`: canonical metadata indexes independently
-checksummed relocated sources and portable owning units. Repeated objects load
+checksummed relocated sources and one compiled-HIR bundle. Repeated objects load
 in command order, preserve VHDL analysis dependencies and SV compilation-unit
 isolation, and never reopen producer sources. `fsim elaborate` resolves one or
 more roots through the ordinary candidate index and publishes `.fsimdesign`.
@@ -1049,7 +1050,7 @@ enable state, revision, stream seed, `randc` domain signature, cycle, and used
 count without exposing an RNG object. A checksummed `sv-constraint-hir`
 payload makes the semantic graph independently reloadable in standalone
 designs; `.fsimobj` and mapped-library flows reconstruct the same graph from
-portable owning units. Covergroups use the coverage ownership described below.
+the compiled-HIR bundle. Covergroups use the coverage ownership described below.
 
 ### UVM object, phase, sequence, and register foundation
 
@@ -1220,10 +1221,11 @@ failures are diagnosed before partial publication. Debugger snapshots and
 trace projections expose stable instance-qualified paths, aliases, meaningful
 VCD-compatible values, source identity, time, and delta without host addresses.
 The built-project coverage state owns declarations, instances, hits, transition
-progress, exclusions, reports, callbacks, traces, and aliases. Owning-unit
-schema 11 and required standalone coverage schema 1 preserve that state through
-`.fsimobj`, `.fsimdesign`, mapped-library relocation, multiple roots, and cold
-or warm LLVM O0/O2 reuse. Published declaration, bin, cross-product,
+progress, exclusions, reports, callbacks, traces, and aliases. Compiled-HIR
+bundle schema 1 preserves the declaration and instance model through
+`.fsimobj` and mapped-library relocation; `.fsimdesign` coverage schema 7
+restores its mutable sampling state. Both paths preserve multiple roots and
+cold or warm LLVM O0/O2 reuse. Published declaration, bin, cross-product,
 transition-work, transaction-input, and persistent-state limits bound all
 static and runtime growth.
 
@@ -1264,9 +1266,9 @@ The same scalar/string/chandle profiles recurse through the supported static,
 dynamic, queue, associative, packed-aggregate, and unpacked-aggregate value
 shapes and through bounded scalar file I/O.
 
-Portable owning-unit schema 8 and portable-library schema 5 preserve scalar
-type identity, canonical literal payloads, and negative contextual operands.
-The design-state codec preserves the corresponding executable signal,
+Compiled-HIR bundle schema 1 and portable schema 15 preserve scalar type
+identity, canonical literal payloads, and negative contextual operands. The
+design-state codec preserves the corresponding executable signal,
 callable, container, aggregate, string, and chandle state. Both codecs reject
 invalid scalar enumeration values before publishing an artifact. Standalone
 `.fsimdesign`, relocated mapped `.fsimlib`, and cold/warm/edited native-cache
@@ -1615,11 +1617,11 @@ notifier toggle and path output use normal signal publication so debugger,
 callbacks, VCD, force/release, and resolved-driver behavior remain shared with
 untimed logic.
 
-Owning-unit, portable-library, and runtime-state schemas serialize this HIR and
-normalized state with checked enums, dense IDs, expression roots, sizes, and
-time ranges. The selected specify specialization and normalized records enter
-native-cache provenance; restored state is validated before either interpreter
-or LLVM execution.
+The compiled-HIR bundle, mapped-library, and runtime-state schemas serialize
+this HIR and normalized state with checked enums, dense IDs, expression roots,
+sizes, and time ranges. The selected specify specialization and normalized
+records enter native-cache provenance; restored state is validated before
+either interpreter or LLVM execution.
 
 The SDF ingestion layer is deliberately adjacent to, but not part of, this
 runtime timing layer. It accepts SDF 4.0 and explicit 2.1/3.0 profiles, retains

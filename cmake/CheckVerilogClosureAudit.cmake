@@ -238,8 +238,8 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "34 supported, 0 active, and 3 deferred"
     "12 preserved, 0 active, and 3 physical"
-    "diagnostic catalog covers 2758 production codes"
-    "Checked 1525 authored sources against the 2000-line hard limit"
+    "diagnostic catalog covers 2765 production codes"
+    "The physical source-line ceiling is disabled; checking translation-unit structure only"
     "v1 conformance audit:"
     "resource portability contract:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)

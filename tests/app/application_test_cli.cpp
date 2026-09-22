@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/library/artifact.hpp"
-#include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/scv.hpp"
@@ -96,18 +96,26 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
             return !source_entry.logical_name.empty()
                 && !std::filesystem::path(source_entry.logical_name).is_absolute();
         }));
+    assert(std::ranges::all_of(
+        exported_metadata->units, [](const auto& unit) {
+            return unit.artifact.empty() && unit.checksum.empty();
+        }));
     {
-        const auto unit_path = exported_library / exported_metadata->units.front().artifact;
-        std::ifstream input(unit_path, std::ios::binary);
+        const auto bundle_path
+            = exported_library / exported_metadata->compiled_hir_artifact;
+        std::ifstream input(bundle_path, std::ios::binary);
         const std::string bytes {
             std::istreambuf_iterator<char> { input },
             std::istreambuf_iterator<char> { }
         };
         fsim::diagnostic::Engine restored_diagnostics;
-        const auto restored = fsim::library::deserialize_portable_unit(
-            bytes, unit_path.string(), restored_diagnostics);
-        assert(restored);
-        assert(restored->library == "work");
+        const auto restored = fsim::app::deserialize_compiled_hir_bundle(
+            bytes, bundle_path.string(), restored_diagnostics);
+        assert(restored && restored->valid());
+        assert(std::ranges::any_of(
+            restored->systemverilog_hir.units(), [](const auto& unit) {
+                return unit.library == "work";
+            }));
     }
     fsim::project::Config mapped_direct_config;
     mapped_direct_config.base_directory = directory;
@@ -117,6 +125,28 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     mapped_direct_config.build.cache_path = directory / "mapped-native-cache";
     mapped_direct_config.run.max_deltas = 1000;
     mapped_direct_config.library_mappings.push_back({ "work", exported_library });
+    const auto oversized_library = directory / "work-oversized.fsimlib";
+    clone_library_writable(exported_library, oversized_library);
+    std::filesystem::resize_file(
+        oversized_library / exported_metadata->compiled_hir_artifact,
+        fsim::app::kCompiledHirDecodeBudgetBytes + 1U);
+    auto oversized_mapping_config = mapped_direct_config;
+    oversized_mapping_config.build.cache_path
+        = directory / "oversized-mapped-cache";
+    oversized_mapping_config.library_mappings.front().path
+        = oversized_library;
+    fsim::diagnostic::Engine oversized_mapping_diagnostics;
+    assert(!fsim::app::build_project(
+        oversized_mapping_config, oversized_mapping_diagnostics));
+    assert(std::ranges::any_of(
+        oversized_mapping_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-LIB-0008"
+                && diagnostic.message.find(
+                       "compiled-HIR decode byte budget")
+                    != std::string::npos;
+        }));
+    std::filesystem::remove_all(oversized_library);
     fsim::diagnostic::Engine mapped_direct_diagnostics;
     auto mapped_direct = fsim::app::build_project(
         mapped_direct_config, mapped_direct_diagnostics);
@@ -585,7 +615,8 @@ endmodule
     const auto corrupt_metadata = fsim::library::load_metadata(
         corrupt_library, "vendor", corrupt_metadata_diagnostics);
     assert(corrupt_metadata && !corrupt_metadata->units.empty());
-    const auto corrupt_payload = corrupt_library / corrupt_metadata->units.front().artifact;
+    const auto corrupt_payload
+        = corrupt_library / corrupt_metadata->compiled_hir_artifact;
     std::filesystem::permissions(
         corrupt_payload, std::filesystem::perms::owner_write,
         std::filesystem::perm_options::add);
@@ -637,7 +668,7 @@ endmodule
         wrong_index_diagnostics.diagnostics(),
         [](const auto& diagnostic) {
             return diagnostic.message.find(
-                       "unit identity does not match its metadata index")
+                       "unit identity does not match its compiled-HIR index")
                 != std::string::npos;
         }));
 
@@ -650,10 +681,12 @@ endmodule
         metadata.library = library_name;
         metadata.producer = "dependency-test";
         metadata.runtime_schema = 1;
+        metadata.compiled_hir_artifact = "compiled/design.fsimhir";
+        metadata.compiled_hir_checksum = std::string(64, '1');
         metadata.standards = { { "systemverilog", "2017" } };
         metadata.dependencies = dependencies;
         metadata.units = { { "systemverilog", "module", "dummy", { }, { },
-            "units/dummy.fsimir", std::string(64, '0'), "2017", "none" } };
+            { }, { }, "2017", "none" } };
         std::ofstream output(
             artifact / fsim::library::kMetadataFilename, std::ios::binary);
         output << fsim::library::serialize_metadata(metadata);
@@ -1069,16 +1102,19 @@ endmodule
     assert(
         shared_checked->hdl_sources[0].compilation_unit_digest
         == shared_checked->hdl_sources[1].compilation_unit_digest);
-    assert(shared_checked->parsed.units.size() == 1);
-    assert(shared_checked->parsed.units.front().is_cell);
-    assert(
-        shared_checked->parsed.units.front().default_nettype == "tri0");
-    assert(shared_checked->parsed.units.front().signals.size() == 1);
-    assert(
-        shared_checked->parsed.units.front().signals.front().name == "value");
-    assert(
-        shared_checked->parsed.units.front().signals.front().type.spelling
-        == "tri0");
+    assert(shared_checked->systemverilog_hir.units().size() == 1);
+    const auto& shared_hir_unit
+        = shared_checked->systemverilog_hir.units().front();
+    assert(shared_hir_unit.compilation.cell);
+    assert(shared_hir_unit.compilation.default_nettype == "tri0");
+    const auto shared_hir_signal = std::ranges::find(
+        shared_checked->systemverilog_hir.declarations(),
+        std::string_view { "value" },
+        &fsim::semantic::sv::Declaration::name);
+    assert(shared_hir_signal
+        != shared_checked->systemverilog_hir.declarations().end());
+    assert(shared_hir_signal->type);
+    assert(shared_hir_signal->type->target.spelling == "tri0");
     assert(shared_checked->semantics.source_files().size() == 2);
     assert(shared_checked->semantics.units().size() == 1);
     assert(shared_checked->semantics.units().front().id.value() == 0);
@@ -1117,7 +1153,7 @@ endmodule
     assert(
         repeated_semantics->semantics.values().front().id
         == shared_checked->semantics.values().front().id);
-    shared_checked->parsed.units.clear();
+    // Public checking has already destroyed the compile-local AST workspace.
     assert(shared_checked->semantics.units().front().name
         == "shared_preprocessor_app");
     assert(shared_checked->semantics.values().front().name == "value");

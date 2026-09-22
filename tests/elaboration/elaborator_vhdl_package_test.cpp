@@ -181,7 +181,7 @@ end architecture;
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "vhdl:work.package_top(rtl)");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -237,7 +237,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing.ok());
-    const auto missing_result = fsim::elaboration::elaborate(
+    const auto missing_result = compile_and_elaborate(
         missing.design, "vhdl:work.missing(rtl)");
     assert(!missing_result.ok());
     assert(has_diagnostic(
@@ -339,7 +339,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto invalid_result = fsim::elaboration::elaborate(
+    const auto invalid_result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid_top(rtl)");
     assert(!invalid_result.ok());
     assert(has_diagnostic(
@@ -400,7 +400,7 @@ end architecture;
         cross_language_binding { { "cross_language_package.child",
             "vhdl:work.foreign_package_target(rtl)",
             std::nullopt } };
-    const auto cross_language_result = fsim::elaboration::elaborate(
+    const auto cross_language_result = compile_and_elaborate(
         cross_language_parent.design,
         "sv:work.cross_language_package",
         cross_language_binding);
@@ -447,7 +447,7 @@ end rtl;
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "vhdl:work.environment_root(rtl)");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -477,7 +477,7 @@ end rtl;
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl1993);
     assert(vhdl_1993.ok());
-    const auto elaborated_1993 = fsim::elaboration::elaborate(
+    const auto elaborated_1993 = compile_and_elaborate(
         vhdl_1993.design, "vhdl:work.vhdl93_predefined(rtl)");
     assert(elaborated_1993.ok());
 }

@@ -105,7 +105,7 @@ struct SdfPortableArchiveDecodeResult {
     const artifact::DesignSdfAnnotation& expected_annotation,
     SdfPortableArchiveLimits limits = { });
 
-[[nodiscard]] library::UnitIndexEntry make_sdf_library_index_entry(
+[[nodiscard]] library::AuxiliaryArtifact make_sdf_library_index_entry(
     const artifact::DesignSdfAnnotation& annotation,
     const std::filesystem::path& artifact_path,
     std::span<const std::byte> bytes);

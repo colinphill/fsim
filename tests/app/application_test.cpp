@@ -57,6 +57,8 @@ int main() {
   run_application_case("systemc scheduling matrix",
       &fsim::test::ApplicationTestFixture::test_systemc_scheduling_matrix);
   fsim_application_case_core_simulation();
+  run_application_case("HIR-first class visibility",
+      &fsim::test::ApplicationTestFixture::test_hir_first_class_visibility);
   run_application_case("class simulation integration",
       &fsim::test::ApplicationTestFixture::test_class_simulation_integration);
   run_application_case("specialization and packages",

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/app/design_artifact.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 namespace {
@@ -31,6 +33,7 @@ void test_mixed_language_construction() {
       R"(
 module sv_to_vhdl_construction;
   logic [3:0] named_q;
+  logic [3:0] named_default_input;
   logic named_enabled;
   logic signed [31:0] named_offset;
   logic [3:0] positional_q;
@@ -48,7 +51,9 @@ module sv_to_vhdl_construction;
   ) named_child(
     .q(named_q),
     .enabled_result(named_enabled),
-    .offset_result(named_offset)
+    .offset_result(named_offset),
+    .default_input(),
+    .default_input_result(named_default_input)
   );
   vhdl_parameter_bound #(
     4, 1'b0, 2, 4'b0101
@@ -81,7 +86,9 @@ entity Vhdl_Parameter_Bound is
   port (
     Q : out bit_vector(Last downto 0);
     Enabled_Result : out bit;
-    Offset_Result : out integer
+    Offset_Result : out integer;
+    Default_Input : in bit_vector(Last downto 0) := Pattern;
+    Default_Input_Result : out bit_vector(Last downto 0)
   );
 end entity;
 
@@ -90,6 +97,7 @@ begin
   Q <= Pattern;
   Enabled_Result <= '1' when Enabled else '0';
   Offset_Result <= Offset;
+  Default_Input_Result <= Default_Input;
 end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
@@ -114,8 +122,24 @@ end architecture;
       {"sv_to_vhdl_construction.default_child",
        "vhdl:work.vhdl_parameter_bound(rtl)", std::nullopt},
   };
+  auto compiled = compile_test_design(std::move(design));
+  assert(fsim::semantic::normalize_compiled_design(compiled));
+  fsim::diagnostic::Engine compiled_diagnostics;
+  const auto compiled_bytes = fsim::app::serialize_compiled_hir_bundle(
+      compiled, compiled_diagnostics);
+  assert(compiled_bytes && !compiled_diagnostics.has_error());
+  auto decoded = fsim::app::deserialize_compiled_hir_bundle(
+      *compiled_bytes, "mixed-default-associations", compiled_diagnostics);
+  assert(decoded && decoded->valid() && !compiled_diagnostics.has_error());
+  const fsim::elaboration::Root root {
+      "sv:work.sv_to_vhdl_construction", "sv_to_vhdl_construction"};
   const auto elaborated = fsim::elaboration::elaborate(
-      design, "sv:work.sv_to_vhdl_construction", bindings);
+      *decoded,
+      std::span<const fsim::elaboration::Root> { &root, 1U },
+      bindings,
+      { },
+      nullptr,
+      { });
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
       std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
@@ -158,6 +182,7 @@ end architecture;
     return interpreter->signal_value(*signal).to_msb_string();
   };
   assert(require_value("named_q") == "1010");
+  assert(require_value("named_default_input") == "1010");
   assert(require_value("named_enabled") == "1");
   assert(require_value("named_offset")
       == "11111111111111111111111111111101");
@@ -170,11 +195,81 @@ end architecture;
   assert(require_value("default_offset")
       == "00000000000000000000000000000001");
 
+  const auto unconnected_sv = fsim::frontend::parse_text(
+      "unconnected_sv_input.sv",
+      R"(
+module unconnected_sv_leaf(
+  input bit source,
+  output bit observed
+);
+  initial observed = source;
+endmodule
+module unconnected_sv_top;
+  bit observed;
+  unconnected_sv_leaf child(.source(), .observed(observed));
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(unconnected_sv.ok());
+  const auto unconnected_sv_result = compile_and_elaborate(
+      unconnected_sv.design, "sv:work.unconnected_sv_top");
+  if (!unconnected_sv_result.ok()) {
+    for (const auto& diagnostic : unconnected_sv_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(unconnected_sv_result.ok());
+  auto unconnected_sv_interpreter =
+      unconnected_sv_result.design->create_interpreter();
+  assert(
+      unconnected_sv_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto unconnected_observed =
+      unconnected_sv_result.design->find_signal("observed");
+  assert(unconnected_observed);
+  assert(
+      unconnected_sv_interpreter->signal_value(*unconnected_observed)
+          .to_msb_string()
+      == "0");
+
+  const auto required_vhdl_parent = fsim::frontend::parse_text(
+      "required_open_vhdl_parent.sv",
+      R"(
+module required_open_vhdl_parent;
+  required_open_vhdl_leaf child(.required_input());
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  const auto required_vhdl_child = fsim::frontend::parse_text(
+      "required_open_vhdl_leaf.vhd",
+      R"(
+entity required_open_vhdl_leaf is
+  port (required_input : in bit);
+end entity;
+architecture rtl of required_open_vhdl_leaf is
+begin
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(required_vhdl_parent.ok() && required_vhdl_child.ok());
+  auto required_vhdl_design = required_vhdl_parent.design;
+  append_units(required_vhdl_design, required_vhdl_child.design);
+  const std::vector<fsim::elaboration::Binding> required_vhdl_bindings{{
+      "required_open_vhdl_parent.child",
+      "vhdl:work.required_open_vhdl_leaf(rtl)",
+      std::nullopt}};
+  const auto required_vhdl_result = compile_and_elaborate(
+      required_vhdl_design,
+      "sv:work.required_open_vhdl_parent",
+      required_vhdl_bindings);
+  assert(!required_vhdl_result.ok());
+  assert(has_diagnostic(required_vhdl_result, "FSIM-ELAB-BIND-027"));
+
   auto invalid_parent = sv_parent.design;
   auto& invalid_instances = invalid_parent.units.front().instances;
   invalid_instances.front().parameter_overrides[1].value.text = "2";
   append_units(invalid_parent, vhdl_child.design);
-  const auto rejected_boolean = fsim::elaboration::elaborate(
+  const auto rejected_boolean = compile_and_elaborate(
       invalid_parent, "sv:work.sv_to_vhdl_construction", bindings);
   assert(!rejected_boolean.ok());
   assert(has_diagnostic(rejected_boolean, "FSIM-ELAB-GENERIC-008"));
@@ -200,6 +295,7 @@ architecture rtl of Vhdl_To_Sv_Construction is
   signal Default_Signed : bit_vector(7 downto 0);
   signal Default_Enabled : bit;
   signal Default_Generated : bit;
+  signal Default_Open_Result : bit;
 begin
   Named_Child : entity work.sv_typed_bound(rtl)
     generic map (
@@ -224,7 +320,9 @@ begin
     port map (
       q => Default_Q, pattern_result => Default_Pattern,
       signed_result => Default_Signed, enabled_result => Default_Enabled,
-      generated_result => Default_Generated);
+      generated_result => Default_Generated,
+      default_input => open,
+      default_input_result => Default_Open_Result);
 end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
@@ -243,13 +341,16 @@ module sv_typed_bound #(
   output bit [3:0] pattern_result,
   output bit signed [7:0] signed_result,
   output bit enabled_result,
-  output bit generated_result
+  output bit generated_result,
+  input bit default_input,
+  output bit default_input_result
 );
   initial begin
     q = PATTERN;
     pattern_result = PATTERN;
     signed_result = SIGNED_VALUE;
     enabled_result = ENABLED;
+    default_input_result = default_input;
   end
   generate
     if (ENABLED) begin : selected
@@ -272,7 +373,7 @@ endmodule
       {"vhdl_to_sv_construction.default_child", "sv:work.sv_typed_bound",
        std::nullopt},
   };
-  const auto reverse = fsim::elaboration::elaborate(
+  const auto reverse = compile_and_elaborate(
       reverse_design, "vhdl:work.vhdl_to_sv_construction(rtl)",
       reverse_bindings);
   if (!reverse.ok()) {
@@ -327,6 +428,7 @@ endmodule
   assert(require_reverse_value("default_q") == "0011");
   assert(require_reverse_value("default_signed") == "11111111");
   assert(require_reverse_value("default_generated") == "0");
+  assert(require_reverse_value("default_open_result") == "0");
 
   const auto ambiguous_sv_child = fsim::frontend::parse_text(
       "ambiguous_sv_parameter.sv",
@@ -356,7 +458,7 @@ end architecture;
   const std::vector<fsim::elaboration::Binding> ambiguous_bindings{{
       "ambiguous_vhdl_parent.child", "sv:work.ambiguous_sv_parameter",
       std::nullopt}};
-  const auto ambiguous = fsim::elaboration::elaborate(
+  const auto ambiguous = compile_and_elaborate(
       ambiguous_design, "vhdl:work.ambiguous_vhdl_parent(rtl)",
       ambiguous_bindings);
   assert(!ambiguous.ok());
@@ -386,7 +488,7 @@ endmodule
   const std::vector<fsim::elaboration::Binding> systemc_sv_binding{{
       "systemc_scalar_sv_parent.child", "systemc:models.scalar",
       std::nullopt}};
-  const auto systemc_from_sv = fsim::elaboration::elaborate(
+  const auto systemc_from_sv = compile_and_elaborate(
       systemc_sv_parent.design, "sv:work.systemc_scalar_sv_parent",
       systemc_sv_binding,
       std::span<const fsim::elaboration::SystemCInstanceDescription>{},
@@ -424,7 +526,7 @@ end architecture;
   const std::vector<fsim::elaboration::Binding> systemc_vhdl_binding{{
       "systemc_scalar_vhdl_parent.child", "systemc:models.scalar",
       std::nullopt}};
-  const auto systemc_from_vhdl = fsim::elaboration::elaborate(
+  const auto systemc_from_vhdl = compile_and_elaborate(
       systemc_vhdl_parent.design,
       "vhdl:work.systemc_scalar_vhdl_parent(rtl)",
       systemc_vhdl_binding,

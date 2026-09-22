@@ -705,12 +705,18 @@ void VerilogParser::parse_fatal_arguments(Statement& statement)
     }
     if (!at(TokenKind::RightParen)) {
         if (at(TokenKind::StringLiteral)) {
-            statement.output_text = decoded_string_literal_text(advance());
+            const auto message = advance();
+            statement.output_text = decoded_string_literal_text(message);
+            statement.output_generated_text = message.generated_text;
         } else {
             (void)parse_expression();
             if (match(TokenKind::Comma)) {
                 if (at(TokenKind::StringLiteral)) {
-                    statement.output_text = decoded_string_literal_text(advance());
+                    const auto message = advance();
+                    statement.output_text
+                        = decoded_string_literal_text(message);
+                    statement.output_generated_text
+                        = message.generated_text;
                 } else {
                     statement.value = parse_expression();
                 }
@@ -735,7 +741,9 @@ void VerilogParser::parse_nonfatal_report_arguments(
     }
     if (!at(TokenKind::RightParen)) {
         if (at(TokenKind::StringLiteral)) {
-            statement.output_text = decoded_string_literal_text(advance());
+            const auto message = advance();
+            statement.output_text = decoded_string_literal_text(message);
+            statement.output_generated_text = message.generated_text;
         } else {
             statement.value = parse_expression();
         }

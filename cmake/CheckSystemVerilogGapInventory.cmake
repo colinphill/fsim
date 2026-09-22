@@ -164,7 +164,7 @@ foreach(FSIM_INDEX RANGE 2 36)
   list(GET FSIM_FIELDS 14 FSIM_RESOURCE)
   if(NOT FSIM_PARSER MATCHES "^src/frontend/" OR
      NOT FSIM_ANALYZER MATCHES "^src/app/" OR
-     NOT FSIM_ELABORATION MATCHES "^src/elaboration/" OR
+     NOT FSIM_ELABORATION MATCHES "^src/(elaboration|semantic)/" OR
      NOT FSIM_RUNTIME MATCHES "^src/" OR
      NOT FSIM_DIAGNOSTIC STREQUAL "docs/diagnostics.md" OR
      NOT FSIM_RESOURCE STREQUAL

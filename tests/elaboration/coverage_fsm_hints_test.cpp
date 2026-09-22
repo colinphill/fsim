@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/diagnostic/diagnostic.hpp"
-#include "fsim/elaboration/coverage_fsm_hints.hpp"
-#include "fsim/elaboration/coverage_fsm_inference.hpp"
+#include "fsim/frontend/coverage_fsm_hints.hpp"
+#include "fsim/frontend/coverage_fsm_inference.hpp"
 #include "fsim/frontend/coverage_source_identity.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/project/project.hpp"
@@ -203,7 +203,7 @@ void test_manifest_surface_and_hint_construction()
             kVhdlSource, frontend::Language::Vhdl2008, standard);
         require(parsed.ok(),
             "independently authored VHDL FSM source hints must parse");
-        const auto built = elaboration::make_coverage_fsm_hints(
+        const auto built = frontend::make_coverage_fsm_hints(
             architecture(parsed), config->coverage.fsm_hints);
         require(built.ok() && built.hints->size() == 5U,
             "three VHDL source contributions and two manifest descriptions must be retained");
@@ -247,10 +247,10 @@ void test_vhdl_and_manifest_inference()
             kVhdlSource, frontend::Language::Vhdl2008, standard);
         require(parsed.ok(), "VHDL source-hint inference fixture must parse");
         const auto& unit = architecture(parsed);
-        const auto hints = elaboration::make_coverage_fsm_hints(
+        const auto hints = frontend::make_coverage_fsm_hints(
             unit, config->coverage.fsm_hints);
         require(hints.ok(), "VHDL and manifest hints must validate together");
-        const auto built = elaboration::make_coverage_fsm_inference(unit,
+        const auto built = frontend::make_coverage_fsm_inference(unit,
             unit.ports, vhdl_owner(source_a), std::span { &source_a, 1U },
             *hints.hints);
         require(built.ok()
@@ -284,9 +284,9 @@ void test_vhdl_and_manifest_inference()
 
     const auto relocated = frontend::parse_text(source_b.source_name,
         kVhdlSource, frontend::Language::Vhdl2008);
-    const auto relocated_hints = elaboration::make_coverage_fsm_hints(
+    const auto relocated_hints = frontend::make_coverage_fsm_hints(
         architecture(relocated), config->coverage.fsm_hints);
-    const auto relocated_inference = elaboration::make_coverage_fsm_inference(
+    const auto relocated_inference = frontend::make_coverage_fsm_inference(
         architecture(relocated), architecture(relocated).ports,
         vhdl_owner(source_b), std::span { &source_b, 1U },
         *relocated_hints.hints);
@@ -308,10 +308,10 @@ void test_manifest_hint_is_language_neutral()
         project::CoverageFsmHintEntry { "root", "state", "next_state",
             std::vector<std::string> { "IDLE", "RUN" } }
     };
-    const auto hints = elaboration::make_coverage_fsm_hints(
+    const auto hints = frontend::make_coverage_fsm_hints(
         parsed.design.units.front(), manifest_hints);
     const auto& unit = parsed.design.units.front();
-    const auto built = elaboration::make_coverage_fsm_inference(unit,
+    const auto built = frontend::make_coverage_fsm_inference(unit,
         unit.ports, sv_owner(source), std::span { &source, 1U },
         *hints.hints);
     require(built.ok()
@@ -340,9 +340,9 @@ void test_systemverilog_pragma_and_manifest_composition()
         project::CoverageFsmHintEntry { "root", "state", "next_state",
             std::vector<std::string> { "IDLE", "RUN" } }
     };
-    const auto hints = elaboration::make_coverage_fsm_hints(
+    const auto hints = frontend::make_coverage_fsm_hints(
         unit, manifest_hints);
-    const auto matching = elaboration::make_coverage_fsm_inference(unit,
+    const auto matching = frontend::make_coverage_fsm_inference(unit,
         unit.ports, sv_owner(source), std::span { &source, 1U },
         *hints.hints);
     require(matching.ok()
@@ -359,7 +359,7 @@ void test_systemverilog_pragma_and_manifest_composition()
     auto conflicting_hints = *hints.hints;
     conflicting_hints.front().legal_states
         = std::vector<std::string> { "IDLE", "DONE" };
-    const auto conflicting = elaboration::make_coverage_fsm_inference(unit,
+    const auto conflicting = frontend::make_coverage_fsm_inference(unit,
         unit.ports, sv_owner(source), std::span { &source, 1U },
         conflicting_hints);
     require(conflicting.ok()
@@ -401,7 +401,7 @@ void test_hint_validation_and_ambiguity()
     require(declaration != bad_declaration.vhdl_attributes.end(),
         "recognized VHDL attribute declaration must exist");
     declaration->type.domain = frontend::ValueDomain::Integer;
-    require(elaboration::make_coverage_fsm_hints(bad_declaration).error
+    require(frontend::make_coverage_fsm_hints(bad_declaration).error
             == HintError::InvalidAttributeDeclaration,
         "recognized VHDL FSM attributes must be declared as strings");
 
@@ -414,68 +414,68 @@ void test_hint_validation_and_ambiguity()
     require(current_attribute != bad_specification.vhdl_attributes.end(),
         "recognized VHDL current-state specification must exist");
     current_attribute->value.decoded_string = "maybe";
-    require(elaboration::make_coverage_fsm_hints(bad_specification).error
+    require(frontend::make_coverage_fsm_hints(bad_specification).error
             == HintError::InvalidAttributeSpecification,
         "VHDL current-state markers must be exact true or false strings");
 
     auto bad_manifest = valid_manifest;
     bad_manifest[0].legal_states
         = std::vector<std::string> { "idle", "idle" };
-    require(elaboration::make_coverage_fsm_hints(unit, bad_manifest).error
+    require(frontend::make_coverage_fsm_hints(unit, bad_manifest).error
             == HintError::InvalidManifestHint,
         "manifest legal-state names must be unique");
 
     auto limits = elaboration::CoverageFsmHintLimits { };
     limits.maximum_attributes = 0U;
-    require(elaboration::make_coverage_fsm_hints(unit, { }, limits).error
+    require(frontend::make_coverage_fsm_hints(unit, { }, limits).error
             == HintError::ResourceLimit,
         "VHDL FSM attribute ceiling must be enforced");
     limits = { };
     limits.maximum_manifest_hints = 0U;
-    require(elaboration::make_coverage_fsm_hints(
+    require(frontend::make_coverage_fsm_hints(
                 unit, valid_manifest, limits)
                 .error
             == HintError::ResourceLimit,
         "manifest FSM hint ceiling must be enforced");
     limits = { };
     limits.maximum_hints = 0U;
-    require(elaboration::make_coverage_fsm_hints(unit, { }, limits).error
+    require(frontend::make_coverage_fsm_hints(unit, { }, limits).error
             == HintError::ResourceLimit,
         "combined FSM hint ceiling must be enforced");
     limits = { };
     limits.maximum_value_bytes = 1U;
-    require(elaboration::make_coverage_fsm_hints(unit, { }, limits).error
+    require(frontend::make_coverage_fsm_hints(unit, { }, limits).error
             == HintError::ResourceLimit,
         "VHDL FSM attribute value ceiling must be enforced transactionally");
     limits = { };
     limits.maximum_attribute_entity_names = 0U;
-    require(elaboration::make_coverage_fsm_hints(unit, { }, limits).error
+    require(frontend::make_coverage_fsm_hints(unit, { }, limits).error
             == HintError::ResourceLimit,
         "VHDL FSM attribute entity-name ceiling must be enforced");
     limits = { };
     limits.maximum_legal_states = 1U;
-    require(elaboration::make_coverage_fsm_hints(unit, { }, limits).error
+    require(frontend::make_coverage_fsm_hints(unit, { }, limits).error
             == HintError::ResourceLimit,
         "aggregate FSM hint legal-state ceiling must be enforced");
     limits = { };
     limits.maximum_name_bytes = 2U;
-    require(elaboration::make_coverage_fsm_hints(unit, { }, limits).error
+    require(frontend::make_coverage_fsm_hints(unit, { }, limits).error
             == HintError::ResourceLimit,
         "FSM hint object-name byte ceiling must be enforced");
     limits = { };
     limits.maximum_instance_bytes = 1U;
-    require(elaboration::make_coverage_fsm_hints(
+    require(frontend::make_coverage_fsm_hints(
                 frontend::DesignUnit { }, valid_manifest, limits)
                 .error
             == HintError::ResourceLimit,
         "manifest FSM instance byte ceiling must be enforced transactionally");
 
-    const auto built_hints = elaboration::make_coverage_fsm_hints(
+    const auto built_hints = frontend::make_coverage_fsm_hints(
         unit, valid_manifest);
     require(built_hints.ok(), "valid negative-base hints must construct");
     const auto invoke = [&](const std::span<const elaboration::CoverageFsmHint> hints,
                             const elaboration::CoverageFsmInferenceLimits inference_limits = { }) {
-        return elaboration::make_coverage_fsm_inference(unit, unit.ports,
+        return frontend::make_coverage_fsm_inference(unit, unit.ports,
             vhdl_owner(source), std::span { &source, 1U }, hints,
             inference_limits);
     };

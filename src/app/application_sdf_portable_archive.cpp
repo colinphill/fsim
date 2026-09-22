@@ -556,14 +556,13 @@ SdfPortableArchiveDecodeResult decode_sdf_portable_archive(
     return result;
 }
 
-library::UnitIndexEntry make_sdf_library_index_entry(
+library::AuxiliaryArtifact make_sdf_library_index_entry(
     const artifact::DesignSdfAnnotation& annotation,
     const std::filesystem::path& artifact_path,
     const std::span<const std::byte> bytes)
 {
-    return { "sdf", "annotation", annotation.cache_key, { }, { },
-        artifact_path, checksum(bytes), annotation.revision,
-        "fsim-sdf-portable-v1" };
+    return { "sdf-annotation", annotation.cache_key, artifact_path,
+        checksum(bytes), annotation.revision, "fsim-sdf-portable-v1" };
 }
 
 artifact::DesignPayload make_sdf_design_payload(
@@ -581,13 +580,14 @@ SdfPortableArchiveDecodeResult load_sdf_library_archive(
     const SdfPortableArchiveLimits limits)
 {
     SdfPortableArchiveDecodeResult result;
-    const auto unit = std::ranges::find_if(metadata.units, [&](const auto& item) {
-        return item.language == "sdf" && item.kind == "annotation"
+    const auto unit = std::ranges::find_if(
+        metadata.auxiliary_artifacts, [&](const auto& item) {
+        return item.kind == "sdf-annotation"
             && item.name == expected_annotation.cache_key
-            && item.standard == expected_annotation.revision
+            && item.revision == expected_annotation.revision
             && item.compatibility_profile == "fsim-sdf-portable-v1";
     });
-    if (unit == metadata.units.end()) {
+    if (unit == metadata.auxiliary_artifacts.end()) {
         diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-003",
             "mapped library does not contain a compatible SDF annotation");
         return result;

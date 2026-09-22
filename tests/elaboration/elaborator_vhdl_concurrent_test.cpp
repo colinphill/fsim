@@ -31,7 +31,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "vhdl:work.vhdl_guarded_assignments(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -137,7 +137,7 @@ end architecture;
       "q <= guarded '1'; end architecture;",
       fsim::frontend::Language::Vhdl2008);
   assert(outside.ok());
-  const auto rejected_outside = fsim::elaboration::elaborate(
+  const auto rejected_outside = compile_and_elaborate(
       outside.design, "vhdl:work.guarded_outside(rtl)");
   assert(!rejected_outside.ok());
   assert(has_diagnostic(
@@ -151,7 +151,7 @@ end architecture;
       "end architecture;",
       fsim::frontend::Language::Vhdl2008);
   assert(wrong_target.ok());
-  const auto rejected_target = fsim::elaboration::elaborate(
+  const auto rejected_target = compile_and_elaborate(
       wrong_target.design, "vhdl:work.guarded_wrong(rtl)");
   assert(!rejected_target.ok());
   assert(has_diagnostic(
@@ -164,7 +164,7 @@ end architecture;
       "q <= not q; end architecture;",
       fsim::frontend::Language::Vhdl2008);
   assert(oscillating.ok());
-  const auto oscillating_result = fsim::elaboration::elaborate(
+  const auto oscillating_result = compile_and_elaborate(
       oscillating.design, "vhdl:work.oscillating(rtl)");
   assert(oscillating_result.ok() && oscillating_result.design);
   auto oscillating_runtime = oscillating_result.design->create_interpreter(
@@ -205,7 +205,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(scoped.ok());
-  const auto scoped_result = fsim::elaboration::elaborate(
+  const auto scoped_result = compile_and_elaborate(
       scoped.design, "vhdl:work.vhdl_statement_scopes(rtl)");
   assert(scoped_result.ok() && scoped_result.design);
   const auto& scoped_process = scoped_result.design->processes().front();

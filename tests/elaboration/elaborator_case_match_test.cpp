@@ -188,7 +188,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.case_matches");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -304,7 +304,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(invalid.ok());
-  const auto invalid_result = fsim::elaboration::elaborate(
+  const auto invalid_result = compile_and_elaborate(
       invalid.design, "sv:work.invalid_case_matches");
   assert(!invalid_result.ok());
   assert(has_diagnostic(invalid_result, "FSIM-ELAB-SVMATCH-003"));
@@ -323,7 +323,7 @@ endmodule
   auto& malformed_statement =
       malformed.units.front().processes.front().statements.front();
   malformed_statement.case_alternatives.front().choices.clear();
-  const auto malformed_result = fsim::elaboration::elaborate(
+  const auto malformed_result = compile_and_elaborate(
       malformed, "sv:work.case_match_hir");
   assert(!malformed_result.ok());
   assert(has_diagnostic(malformed_result, "FSIM-ELAB-SVMATCH-005"));
@@ -333,7 +333,7 @@ endmodule
       multiple_patterns.units.front().processes.front().statements.front();
   multiple_statement.case_alternatives.front().choices.push_back(
       multiple_statement.case_alternatives.front().choices.front());
-  const auto multiple_result = fsim::elaboration::elaborate(
+  const auto multiple_result = compile_and_elaborate(
       multiple_patterns, "sv:work.case_match_hir");
   assert(!multiple_result.ok());
   assert(has_diagnostic(multiple_result, "FSIM-ELAB-SVMATCH-005"));
@@ -345,7 +345,7 @@ endmodule
           "@match-unsupported",
           {},
           {}};
-  const auto unsupported_result = fsim::elaboration::elaborate(
+  const auto unsupported_result = compile_and_elaborate(
       unsupported, "sv:work.case_match_hir");
   assert(!unsupported_result.ok());
   assert(has_diagnostic(unsupported_result, "FSIM-ELAB-SVMATCH-003"));
@@ -359,7 +359,7 @@ endmodule
   auto wrong_language = verilog.design;
   wrong_language.units.front().processes.front().statements.front()
       .case_match_kind = fsim::frontend::CaseMatchKind::Matches;
-  const auto wrong_language_result = fsim::elaboration::elaborate(
+  const auto wrong_language_result = compile_and_elaborate(
       wrong_language, "sv:work.case_match_language");
   assert(!wrong_language_result.ok());
   assert(has_diagnostic(wrong_language_result, "FSIM-ELAB-SVMATCH-001"));

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/coverage_fsm_inference.hpp"
+#include "fsim/frontend/coverage_fsm_inference.hpp"
 #include "fsim/frontend/coverage_source_identity.hpp"
 #include "fsim/frontend/parser.hpp"
 
@@ -231,7 +231,7 @@ void test_parsed_enum_and_case_inference()
     require(parsed.ok() && parsed.design.units.size() == 1U,
         "independently authored FSM source must parse into one semantic unit");
     const auto& unit = parsed.design.units.front();
-    const auto built = elaboration::make_coverage_fsm_inference(unit,
+    const auto built = frontend::make_coverage_fsm_inference(unit,
         unit.ports, sv_owner(source), std::span { &source, 1U });
     require(built.ok()
             && built.inference->current_state_objects.size() == 2U,
@@ -292,10 +292,10 @@ void test_next_state_and_legal_state_inference()
         "independently authored next-state source must parse");
     const auto& unit_a = parsed_a.design.units.front();
     const auto& unit_b = parsed_b.design.units.front();
-    const auto built = elaboration::make_coverage_fsm_inference(unit_a,
+    const auto built = frontend::make_coverage_fsm_inference(unit_a,
         unit_a.ports, sv_owner(source_a, "top.u", "sv:work.next_controller"),
         std::span { &source_a, 1U });
-    const auto relocated = elaboration::make_coverage_fsm_inference(unit_b,
+    const auto relocated = frontend::make_coverage_fsm_inference(unit_b,
         unit_b.ports, sv_owner(source_b, "top.u", "sv:work.next_controller"),
         std::span { &source_b, 1U });
     require(built.ok() && relocated.ok()
@@ -363,7 +363,7 @@ void test_systemverilog_fsm_pragmas()
              frontend::StandardRevision::SystemVerilog2017 }) {
         auto unit = parsed_a.design.units.front();
         unit.standard_revision = standard;
-        const auto built = elaboration::make_coverage_fsm_inference(unit,
+        const auto built = frontend::make_coverage_fsm_inference(unit,
             unit.ports,
             sv_owner(source_a, "top.u", "sv:work.pragma_controller"),
             std::span { &source_a, 1U });
@@ -413,7 +413,7 @@ void test_systemverilog_fsm_pragmas()
     auto relocated_unit = parsed_b.design.units.front();
     relocated_unit.standard_revision
         = frontend::StandardRevision::SystemVerilog2005;
-    const auto relocated = elaboration::make_coverage_fsm_inference(
+    const auto relocated = frontend::make_coverage_fsm_inference(
         relocated_unit, relocated_unit.ports,
         sv_owner(source_b, "top.u", "sv:work.pragma_controller"),
         std::span { &source_b, 1U });
@@ -440,7 +440,7 @@ void test_systemverilog_fsm_pragma_failures()
     require(parsed.ok(), "negative FSM pragma fixture must parse");
     const auto invoke = [&](const frontend::DesignUnit& unit,
                             const elaboration::CoverageFsmInferenceLimits limits = { }) {
-        return elaboration::make_coverage_fsm_inference(unit, unit.ports,
+        return frontend::make_coverage_fsm_inference(unit, unit.ports,
             sv_owner(source, "top.u", "sv:work.pragma_controller"),
             std::span { &source, 1U }, limits);
     };
@@ -599,19 +599,19 @@ void test_relocation_order_and_instance_identity()
         "relocated FSM fixtures must parse");
     auto& unit_a = parsed_a.design.units.front();
     auto& unit_b = parsed_b.design.units.front();
-    const auto first = elaboration::make_coverage_fsm_inference(unit_a,
+    const auto first = frontend::make_coverage_fsm_inference(unit_a,
         unit_a.ports, sv_owner(source_a), std::span { &source_a, 1U });
-    const auto relocated = elaboration::make_coverage_fsm_inference(unit_b,
+    const auto relocated = frontend::make_coverage_fsm_inference(unit_b,
         unit_b.ports, sv_owner(source_b), std::span { &source_b, 1U });
     require(first.ok() && relocated.ok()
             && first.inference == relocated.inference,
         "FSM inference must be checkout-location independent");
     std::ranges::reverse(unit_a.variables);
-    const auto reordered = elaboration::make_coverage_fsm_inference(unit_a,
+    const auto reordered = frontend::make_coverage_fsm_inference(unit_a,
         unit_a.ports, sv_owner(source_a), std::span { &source_a, 1U });
     require(reordered.ok() && reordered.inference == first.inference,
         "candidate declaration-container order must not affect inference");
-    const auto sibling = elaboration::make_coverage_fsm_inference(unit_a,
+    const auto sibling = frontend::make_coverage_fsm_inference(unit_a,
         unit_a.ports, sv_owner(source_a, "top.v"),
         std::span { &source_a, 1U });
     require(sibling.ok()
@@ -728,7 +728,7 @@ void test_vhdl_profiles_and_case_evidence()
         const elaboration::CoverageInventoryOwner owner { 2U, "root",
             frontend::Language::Vhdl2008, source.source_name, { }, "work",
             "vhdl:work.controller(rtl)", { } };
-        const auto built = elaboration::make_coverage_fsm_inference(unit, { },
+        const auto built = frontend::make_coverage_fsm_inference(unit, { },
             owner, std::span { &source, 1U });
         require(built.ok()
                 && built.inference->current_state_objects.size() == 1U
@@ -762,7 +762,7 @@ void test_next_state_ambiguity_shadowing_and_resource_failures()
     require(parsed.ok(), "negative next-state fixture must parse");
     const auto invoke = [&](const frontend::DesignUnit& unit,
                             const elaboration::CoverageFsmInferenceLimits limits = { }) {
-        return elaboration::make_coverage_fsm_inference(unit, unit.ports,
+        return frontend::make_coverage_fsm_inference(unit, unit.ports,
             sv_owner(source, "top.u", "sv:work.next_controller"),
             std::span { &source, 1U }, limits);
     };
@@ -841,7 +841,7 @@ void test_ambiguity_shadowing_and_resource_failures()
     require(parsed.ok(), "negative FSM fixture must parse");
     const auto invoke = [&](const frontend::DesignUnit& unit,
                             const elaboration::CoverageFsmInferenceLimits limits = { }) {
-        return elaboration::make_coverage_fsm_inference(unit, unit.ports,
+        return frontend::make_coverage_fsm_inference(unit, unit.ports,
             sv_owner(source), std::span { &source, 1U }, limits);
     };
 

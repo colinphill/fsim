@@ -153,13 +153,15 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.typed_copy_top(rtl)");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
             std::cerr << diagnostic.code << ": "
-                      << diagnostic.message << '\n';
+                      << diagnostic.message << " at "
+                      << diagnostic.span.begin.line << ':'
+                      << diagnostic.span.begin.column << '\n';
         }
     }
     assert(elaborated.ok());
@@ -469,7 +471,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(constrained_actuals.ok());
     const auto constrained_elaborated =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             constrained_actuals.design,
             "vhdl:work.constrained_actual_top(rtl)");
     if (!constrained_elaborated.ok()) {
@@ -609,7 +611,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(enumeration_forwarding.ok());
     const auto enumeration_forwarded =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             enumeration_forwarding.design,
             "vhdl:work.enumeration_forward_top(rtl)");
     if (!enumeration_forwarded.ok()) {
@@ -712,7 +714,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         invalid.design,
         "vhdl:work.invalid_type_top(rtl)");
     assert(!rejected.ok());
@@ -745,7 +747,7 @@ endmodule
          "vhdl:work.required_type(rtl)",
          std::nullopt}};
     const auto rejected_cross_language =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             cross_language_design,
             "sv:work.type_generic_host",
             bindings);

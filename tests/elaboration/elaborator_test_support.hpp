@@ -17,6 +17,53 @@
 
 namespace fsim::tests::elaboration {
 
+// Parser-owned inputs remain convenient for mutation-oriented elaboration
+// tests. This test-only helper compiles its value-owned syntax workspace,
+// destroys that workspace, and only then enters the production HIR API.
+[[nodiscard]] semantic::CompiledDesign compile_test_design(
+    frontend::ParsedDesign parsed);
+
+[[nodiscard]] fsim::elaboration::ElaborationResult compile_and_elaborate(
+    frontend::ParsedDesign parsed,
+    std::span<const fsim::elaboration::Root> roots,
+    std::span<const fsim::elaboration::Binding> bindings,
+    std::span<const fsim::elaboration::SystemCInstanceDescription>
+        systemc_instances,
+    fsim::elaboration::SystemCFactoryProvider* systemc_provider,
+    std::span<const std::string> search_libraries);
+
+[[nodiscard]] inline fsim::elaboration::ElaborationResult
+compile_and_elaborate(
+    frontend::ParsedDesign parsed,
+    const std::string_view top,
+    const std::span<const fsim::elaboration::Binding> bindings = { },
+    const std::span<const fsim::elaboration::SystemCInstanceDescription>
+        systemc_instances = { },
+    fsim::elaboration::SystemCFactoryProvider* const systemc_provider = nullptr,
+    const std::span<const std::string> search_libraries = { })
+{
+    auto alias = top;
+    if (const auto colon = alias.rfind(':');
+        colon != std::string_view::npos) {
+        alias.remove_prefix(colon + 1U);
+    }
+    if (const auto dot = alias.rfind('.');
+        dot != std::string_view::npos) {
+        alias.remove_prefix(dot + 1U);
+    }
+    if (const auto architecture = alias.find('(');
+        architecture != std::string_view::npos) {
+        alias = alias.substr(0U, architecture);
+    }
+    const fsim::elaboration::Root root {
+        std::string { top }, std::string { alias }
+    };
+    return compile_and_elaborate(
+        std::move(parsed),
+        std::span<const fsim::elaboration::Root> { &root, 1U }, bindings,
+        systemc_instances, systemc_provider, search_libraries);
+}
+
 [[nodiscard]] bool has_diagnostic(
     const fsim::elaboration::ElaborationResult& result,
     std::string_view code);
@@ -76,6 +123,7 @@ void test_mixed_language_conversions();
 void test_mixed_language_construction();
 void test_mixed_language_driver_ownership();
 void test_process_and_wait_lowering();
+void test_direct_hir_lowering();
 void test_systemverilog_fork_lowering();
 void test_systemverilog_function_lowering();
 void test_systemverilog_task_lowering();

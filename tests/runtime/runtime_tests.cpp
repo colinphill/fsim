@@ -94,6 +94,7 @@ int main(const int argc, const char* const* argv)
         test_resolved_driver_slots();
         test_simir_expressions_and_edges();
         test_simir_noninitializing_static_process();
+        test_simir_initial_static_wait_activation_order();
         test_simir_static_sensitivity_cohort();
         test_simir_wide_truth_and_comparison();
         test_simir_wildcard_case_matching();

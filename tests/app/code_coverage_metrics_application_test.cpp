@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/verilog_coverage_conditions.hpp"
-#include "fsim/elaboration/verilog_toggle_inventory.hpp"
-#include "fsim/elaboration/vhdl_coverage_conditions.hpp"
-#include "fsim/elaboration/vhdl_toggle_inventory.hpp"
+#include "fsim/frontend/verilog_coverage_conditions.hpp"
+#include "fsim/frontend/verilog_toggle_inventory.hpp"
+#include "fsim/frontend/vhdl_coverage_conditions.hpp"
+#include "fsim/frontend/vhdl_toggle_inventory.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/runtime/coverage_condition_outcomes.hpp"
 #include "fsim/runtime/coverage_expression.hpp"
@@ -243,16 +243,16 @@ void exercise_systemverilog()
     assert(parsed.ok() && parsed.design.units.size() == 1U
         && parsed.design.units.front().processes.size() == 1U);
     const auto& unit = parsed.design.units.front();
-    const auto conditions = elaboration::discover_verilog_coverage_conditions(
+    const auto conditions = frontend::discover_verilog_coverage_conditions(
         unit.processes.front().statements,
         frontend::Language::SystemVerilog2017,
         std::span { &input.condition, 1U });
     assert(conditions.ok() && conditions.points.size() == 2U);
-    const auto first = elaboration::make_verilog_toggle_inventory(unit,
+    const auto first = frontend::make_verilog_toggle_inventory(unit,
         owner(input, "top.sv_gen[0]",
             frontend::Language::SystemVerilog2017, 0U),
         std::span { &input.toggle, 1U });
-    const auto second = elaboration::make_verilog_toggle_inventory(unit,
+    const auto second = frontend::make_verilog_toggle_inventory(unit,
         owner(input, "top.sv_gen[1]",
             frontend::Language::SystemVerilog2017, 1U),
         std::span { &input.toggle, 1U });
@@ -271,16 +271,16 @@ void exercise_vhdl()
         && parsed.design.units.back().processes.size() == 1U);
     const auto& entity = parsed.design.units.front();
     const auto& architecture = parsed.design.units.back();
-    const auto conditions = elaboration::discover_vhdl_coverage_conditions(
+    const auto conditions = frontend::discover_vhdl_coverage_conditions(
         architecture.processes.front().statements,
         frontend::Language::Vhdl2008, frontend::VhdlStandard::Vhdl2008,
         std::span { &input.condition, 1U });
     assert(conditions.ok() && conditions.points.size() == 2U);
-    const auto first = elaboration::make_vhdl_toggle_inventory(architecture,
+    const auto first = frontend::make_vhdl_toggle_inventory(architecture,
         entity.ports,
         owner(input, "top.vhdl_gen[0]", frontend::Language::Vhdl2008, 0U),
         std::span { &input.toggle, 1U });
-    const auto second = elaboration::make_vhdl_toggle_inventory(architecture,
+    const auto second = frontend::make_vhdl_toggle_inventory(architecture,
         entity.ports,
         owner(input, "top.vhdl_gen[1]", frontend::Language::Vhdl2008, 1U),
         std::span { &input.toggle, 1U });

@@ -650,17 +650,23 @@ bool validate(
   std::set<std::string> payload_paths;
   for (const auto& payload : metadata.payloads) {
     const auto path = support::path_to_utf8(payload.artifact);
-    if (payload.kind.empty() || !payload_kinds.insert(payload.kind).second
+    const bool split_compilation_state = payload.kind == "semantics"
+        || payload.kind == "classes"
+        || payload.kind == "sv-constraint-hir"
+        || payload.kind == "vhdl-hir";
+    if (payload.kind.empty() || split_compilation_state
+        || !payload_kinds.insert(payload.kind).second
         || !safe_relative_path(payload.artifact)
         || !payload_paths.insert(path).second
         || !checksum_spelling(payload.checksum)) {
       report(
           diagnostics, kValueCode,
-          "design payloads require unique kinds and contained checksummed paths",
+          "design payloads require unique current kinds and contained "
+          "checksummed paths; split semantic/HIR payloads are unsupported",
           source);
     }
   }
-  for (const auto required : {"runtime", "semantics", "design-ir"}) {
+  for (const auto required : {"runtime", "compiled-hir", "design-ir"}) {
     if (!payload_kinds.contains(required)) {
       report(
           diagnostics, kValueCode,
@@ -1303,10 +1309,12 @@ bool publish_design(
   for (const auto& payload : payloads) {
     const auto path = support::path_to_utf8(payload.path);
     const auto found = expected.find(path);
+    const auto checksum = payload.trusted_checksum
+        ? *payload.trusted_checksum
+        : support::Sha256::hex(support::Sha256::digest(payload.bytes));
     if (!safe_relative_path(payload.path) || found == expected.end()
         || !supplied.insert(path).second
-        || found->second != support::Sha256::hex(
-            support::Sha256::digest(payload.bytes))) {
+        || found->second != checksum) {
       report(
           diagnostics, kIoCode,
           "design payload is unsafe, duplicate, unindexed, or has a checksum "

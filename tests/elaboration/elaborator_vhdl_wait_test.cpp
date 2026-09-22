@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/app/design_artifact.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -60,7 +62,7 @@ end architecture;
     }
   }
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "vhdl:work.procedure_waits(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -118,7 +120,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(overload.ok());
-  const auto overload_result = fsim::elaboration::elaborate(
+  const auto overload_result = compile_and_elaborate(
       overload.design, "vhdl:work.wait_overload(rtl)");
   assert(overload_result.ok());
 
@@ -157,19 +159,37 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(restricted.ok());
+  auto restricted_compiled = compile_test_design(
+      std::move(restricted.design));
+  assert(fsim::semantic::normalize_compiled_design(
+      restricted_compiled));
   const auto restricted_result = fsim::elaboration::elaborate(
-      restricted.design, "vhdl:work.restricted_waits(rtl)");
-  if (!restricted_result.ok()) {
-    for (const auto& diagnostic : restricted_result.diagnostics) {
-      std::cerr << diagnostic.code << ": "
-                << diagnostic.message << '\n';
+      restricted_compiled, "vhdl:work.restricted_waits(rtl)");
+  fsim::diagnostic::Engine codec_diagnostics;
+  const auto encoded = fsim::app::serialize_compiled_hir_bundle(
+      restricted_compiled, codec_diagnostics);
+  assert(encoded && !codec_diagnostics.has_error());
+  const auto decoded = fsim::app::deserialize_compiled_hir_bundle(
+      *encoded, "vhdl-restricted-waits", codec_diagnostics);
+  assert(decoded && !codec_diagnostics.has_error());
+  const auto decoded_result = fsim::elaboration::elaborate(
+      *decoded, "vhdl:work.restricted_waits(rtl)");
+  assert(!restricted_result.ok() && !decoded_result.ok());
+  const auto diagnostic_signatures = [](const auto& result) {
+    std::vector<std::pair<std::string, std::string>> signatures;
+    for (const auto& diagnostic : result.diagnostics) {
+      signatures.emplace_back(
+          diagnostic.code, diagnostic.message);
     }
+    return signatures;
+  };
+  assert(diagnostic_signatures(restricted_result)
+         == diagnostic_signatures(decoded_result));
+  for (const auto* result :
+      { &restricted_result, &decoded_result }) {
+    assert(has_diagnostic(*result, "FSIM-VHDL-SEM-012"));
+    assert(has_diagnostic(*result, "FSIM-ELAB-VHLEGAL-009"));
   }
-  assert(!restricted_result.ok());
-  assert(has_diagnostic(
-      restricted_result, "FSIM-VHDL-SEM-012"));
-  assert(has_diagnostic(
-      restricted_result, "FSIM-ELAB-VHLEGAL-009"));
 }
 
 }  // namespace fsim::tests::elaboration

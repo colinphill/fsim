@@ -3,6 +3,7 @@
 #include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/parser.hpp"
+#include "elaborator_test_support.hpp"
 
 #include <array>
 #include <cassert>
@@ -166,7 +167,9 @@ endmodule
 )",
         Language::SystemVerilog2017);
     assert(parsed.ok());
-    auto elaborated = fsim::elaboration::elaborate(parsed.design, "top");
+    auto elaborated
+        = fsim::tests::elaboration::compile_and_elaborate(
+            parsed.design, "top");
     assert(elaborated.ok());
     std::vector<fsim::elaboration::CoverageInstanceInventoryDraft> drafts;
     drafts.reserve(elaborated.design->specializations().size());

@@ -259,9 +259,7 @@ void verify_capture(const Capture& capture) {
           != std::string::npos
       && capture.vcd.find("b10000000000000000")
           != std::string::npos);
-  assert((
-      capture.values
-      == std::array<std::string, 79> {
+  const std::array<std::string, 79> expected_values {
           "11111111111111111111111111111111",
           "00000000000000000000000011111111",
           "11111111111111111000000000000000",
@@ -340,7 +338,17 @@ void verify_capture(const Capture& capture) {
           "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001011010",
           "00000000000000000000000010001001",
           "101",
-          "110" }));
+          "110" };
+  if (capture.values != expected_values) {
+    for (std::size_t index = 0; index < capture.values.size(); ++index) {
+      if (capture.values[index] != expected_values[index]) {
+        std::cerr << "value[" << index << "] expected='"
+                  << expected_values[index] << "' actual='"
+                  << capture.values[index] << "'\n";
+      }
+    }
+  }
+  assert(capture.values == expected_values);
 }
 
 void test_expression_revision_gates(
@@ -373,9 +381,7 @@ void test_expression_revision_gates(
   fsim::diagnostic::Engine legal_diagnostics;
   const auto checked = fsim::app::check_project(legal, legal_diagnostics);
   assert(checked && !legal_diagnostics.has_error());
-  assert(
-      checked->parsed.units.front().standard_revision
-      == fsim::frontend::StandardRevision::Verilog2001);
+  assert(checked->systemverilog_hir.units().front().standard == "2001");
   for (const auto engine : {
            fsim::app::SimulationEngine::interpreter,
            fsim::app::SimulationEngine::compiled}) {

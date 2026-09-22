@@ -686,6 +686,7 @@ Expression VerilogParser::parse_primary()
             ExpressionKind::StringLiteral, token.text, { }, token.span
         };
         expression.decoded_string = decoded_string_literal_text(token);
+        expression.generated_text = token.generated_text;
         return parse_postfix(std::move(expression));
     }
     if (at(TokenKind::Identifier)

@@ -403,11 +403,17 @@ class SemanticModelBuilder final {
 semantic::SourceSpanId intern_semantic_span(
     semantic::Model& model,
     const frontend::SourceSpan& source_span) {
-  const auto physical = normalized_source_name(
-      frontend::physical_source(source_span));
-  auto file = model.find_source_file(physical);
+  const auto source_physical = frontend::physical_source(source_span);
+  auto file = model.find_source_file(source_physical);
+  std::string normalized_physical;
+  std::string_view physical = source_physical;
   if (!file) {
-    file = model.intern_source_file(physical);
+    normalized_physical = normalized_source_name(source_physical);
+    physical = normalized_physical;
+    file = model.find_source_file(physical);
+    if (!file) {
+      file = model.intern_source_file(std::string { physical });
+    }
   }
   std::optional<semantic::ExpansionId> expansion;
   if (!source_span.expansion_stack.empty()) {
@@ -421,7 +427,7 @@ semantic::SourceSpanId intern_semantic_span(
   return model.intern_source_span(
       *file,
       source_span.source_name.empty()
-          ? physical
+          ? std::string { physical }
           : source_span.source_name.str(),
       begin,
       end,

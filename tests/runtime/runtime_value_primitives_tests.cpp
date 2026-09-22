@@ -625,13 +625,24 @@ void test_systemverilog_scalar_values() {
       payload_right.value,
       SystemVerilogScalarKind::Real,
       SystemVerilogScalarKind::None);
+  const auto payload_narrowed = systemverilog_scalar_binary_payload(
+      SystemVerilogScalarBinaryOperator::Convert,
+      payload_product.value,
+      SystemVerilogScalarKind::Real,
+      payload_product.value,
+      SystemVerilogScalarKind::Real,
+      SystemVerilogScalarKind::ShortReal);
   require(
-      payload_product && payload_greater
+      payload_product && payload_greater && payload_narrowed
           && decode_systemverilog_scalar_payload(
                  payload_product.value,
                  SystemVerilogScalarKind::Real).value.as_real() == 3.0
+          && decode_systemverilog_scalar_payload(
+                 payload_narrowed.value,
+                 SystemVerilogScalarKind::ShortReal).value.as_shortreal()
+              == 3.0F
           && payload_greater.value.to_msb_string() == "1",
-      "scalar binary payload service must preserve typed arithmetic and predicates");
+      "scalar binary payload service must preserve typed arithmetic, conversion, and predicates");
 
   const auto nearest = convert_systemverilog_scalar(
       SystemVerilogScalarValue::real(2.5),

@@ -3,6 +3,8 @@
 
 #include "fsim/frontend/diagnostic.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +44,15 @@ enum class StandardRevision {
     // retained v3 standard revision.
     Vhdl2019,
     SystemVerilog2023,
+};
+
+// Identifies text whose spelling depends on the source name selected by the
+// SystemVerilog preprocessor. The derived form is used when stringification or
+// token concatenation transforms a direct `__FILE__` expansion.
+enum class GeneratedTextKind : std::uint8_t {
+  none,
+  systemverilog_file_macro,
+  systemverilog_file_macro_derived,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -230,9 +241,15 @@ struct Token {
   // Ordered outermost-to-innermost macro expansion descriptions. Tokens read
   // directly from a source file leave this empty.
   std::vector<std::string> expansion_stack;
+  GeneratedTextKind generated_text { GeneratedTextKind::none };
 
   friend bool operator==(const Token&, const Token&) = default;
 };
+
+[[nodiscard]] std::string systemverilog_string_literal_spelling(
+    std::string_view value);
+[[nodiscard]] std::optional<std::string>
+decode_systemverilog_string_literal(std::string_view spelling);
 
 struct LexResult {
   std::vector<Token> tokens;

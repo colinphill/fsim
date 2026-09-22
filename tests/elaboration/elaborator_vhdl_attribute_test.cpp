@@ -95,7 +95,7 @@ end architecture;
       fsim::frontend::Language::Vhdl2008,
       fsim::frontend::VhdlStandard::Vhdl2019);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "vhdl:work.attribute_closure(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -147,7 +147,7 @@ end architecture;
         filename, source, fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl2019);
     assert(invalid.ok());
-    const auto result = fsim::elaboration::elaborate(
+    const auto result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid(rtl)");
     if (result.ok() || !has_diagnostic(result, code)) {
       std::cerr << filename << " expected " << code << '\n';
@@ -233,7 +233,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(runtime_invalid.ok());
-  const auto runtime_design = fsim::elaboration::elaborate(
+  const auto runtime_design = compile_and_elaborate(
       runtime_invalid.design, "vhdl:work.invalid(rtl)");
   assert(runtime_design.ok());
   bool checked = false;
@@ -267,7 +267,7 @@ end architecture;
         "vhdl-legacy-scalar-length.vhd", scalar_length_source,
         fsim::frontend::Language::Vhdl2008, standard);
     assert(legacy.ok() && legacy.design.vhdl_profile_compatible);
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         legacy.design,
         "vhdl:work.legacy_scalar_attribute(rtl)");
     assert(
@@ -288,7 +288,7 @@ end architecture;
 )", fsim::frontend::Language::Vhdl2008,
       fsim::frontend::VhdlStandard::Vhdl2008);
   assert(!recovered.ok() && !recovered.design.vhdl_profile_compatible);
-  const auto recovered_rejected = fsim::elaboration::elaborate(
+  const auto recovered_rejected = compile_and_elaborate(
       recovered.design, "vhdl:work.recovered(rtl)");
   assert(
       !recovered_rejected.ok()

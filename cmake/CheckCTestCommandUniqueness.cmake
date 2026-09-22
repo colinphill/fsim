@@ -24,11 +24,21 @@ if(FSIM_TEST_COUNT LESS 1)
   message(FATAL_ERROR "generated CTest metadata contains no tests")
 endif()
 math(EXPR FSIM_LAST_TEST "${FSIM_TEST_COUNT} - 1")
+set(FSIM_RESOLVED_COMMAND_COUNT 0)
+set(FSIM_UNRESOLVED_COMMAND_COUNT 0)
 foreach(FSIM_TEST_INDEX RANGE 0 ${FSIM_LAST_TEST})
   string(JSON FSIM_TEST_NAME
     GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX} name)
   string(JSON FSIM_COMMAND_COUNT
+    ERROR_VARIABLE FSIM_COMMAND_ERROR
     LENGTH "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX} command)
+  if(NOT FSIM_COMMAND_ERROR STREQUAL "NOTFOUND")
+    math(EXPR FSIM_UNRESOLVED_COMMAND_COUNT
+      "${FSIM_UNRESOLVED_COMMAND_COUNT} + 1")
+    continue()
+  endif()
+  math(EXPR FSIM_RESOLVED_COMMAND_COUNT
+    "${FSIM_RESOLVED_COMMAND_COUNT} + 1")
   set(FSIM_CANONICAL_COMMAND "")
   if(FSIM_COMMAND_COUNT GREATER 0)
     math(EXPR FSIM_LAST_ARGUMENT "${FSIM_COMMAND_COUNT} - 1")
@@ -125,4 +135,4 @@ fsim_require_fixture_setup(
   fsim_fst_closure_witnesses)
 
 message(STATUS
-  "CTest command uniqueness: ${FSIM_TEST_COUNT} generated commands have one owner each")
+  "CTest command uniqueness: ${FSIM_RESOLVED_COMMAND_COUNT} generated commands have one owner each; ${FSIM_UNRESOLVED_COMMAND_COUNT} unbuilt executable commands omitted")

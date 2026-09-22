@@ -4,7 +4,9 @@
 #include "fsim/semantic/model.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +35,16 @@ enum class ObjectClass : std::uint8_t {
     signal,
     variable,
     file,
+};
+
+enum class ValueDomain : std::uint8_t {
+    unknown,
+    bit2,
+    logic4,
+    logic9,
+    boolean,
+    integer,
+    string,
 };
 
 enum class DeclarationForm : std::uint8_t {
@@ -177,6 +189,12 @@ enum class InstanceSelection : std::uint8_t {
     others,
 };
 
+enum class DisconnectionSelection : std::uint8_t {
+    explicit_names,
+    all,
+    others,
+};
+
 enum class GenerateKind : std::uint8_t {
     block,
     conditional,
@@ -243,6 +261,8 @@ enum class StatementKind : std::uint8_t {
     report,
     wait_statement,
     block,
+    force,
+    release,
     null_statement,
 };
 
@@ -261,6 +281,8 @@ struct Name {
     SourceSpanId source;
     std::optional<DeclarationId> selected;
     std::vector<DeclarationId> overloads;
+
+    bool operator==(const Name&) const = default;
 };
 
 struct RangeConstraint {
@@ -272,6 +294,8 @@ struct RangeConstraint {
     bool descending { };
     bool null { };
     SourceSpanId source;
+
+    bool operator==(const RangeConstraint&) const = default;
 };
 
 struct AggregateAssociation {
@@ -299,6 +323,8 @@ struct Expression {
     // callable profile yields one consistent type per implicit formal.
     std::vector<std::string> inferred_type_identities;
     bool unspecified_type_inference_unique { };
+    ResidualDependencies dependencies;
+    bool folded { };
 };
 
 struct DelayValue {
@@ -314,7 +340,18 @@ struct Delay {
     std::optional<DelayValue> minimum;
     std::optional<DelayValue> typical;
     std::optional<DelayValue> maximum;
-    std::vector<DelayValue> additional;
+    std::vector<Delay> additional;
+};
+
+struct DisconnectionSpecification {
+    DisconnectionSelection selection {
+        DisconnectionSelection::explicit_names
+    };
+    std::vector<Name> signals;
+    Name type_mark;
+    Delay delay;
+    SourceSpanId source;
+    OriginId origin;
 };
 
 struct WaveformElement {
@@ -365,7 +402,12 @@ struct Statement {
     std::optional<Delay> delay;
     std::optional<DelayMechanism> delay_mechanism;
     std::optional<Delay> rejection_limit;
+    bool force_driving_value { };
     bool postponed { };
+    bool conditional_assignment { };
+    bool matching_case { };
+    bool guarded_assignment { };
+    std::optional<ExpressionId> guard;
     std::optional<Delay> disconnection_delay;
     std::vector<WaveformElement> waveform;
     bool unaffected { };
@@ -392,6 +434,8 @@ struct Process {
 
 struct SubtypeIndication {
     TypeReference type_mark;
+    ValueDomain domain { ValueDomain::unknown };
+    std::optional<std::uint64_t> executable_width;
     Name resolution_function;
     std::optional<PredefinedAttribute> predefined_attribute;
     std::optional<ExpressionId> predefined_attribute_dimension;
@@ -406,6 +450,8 @@ struct SubtypeIndication {
     std::vector<std::string> unspecified_component_type_marks;
     std::size_t unspecified_array_index_count { };
     std::string unspecified_inference_identity;
+
+    bool operator==(const SubtypeIndication&) const = default;
 };
 
 struct RecordElement {
@@ -447,6 +493,9 @@ struct TypeDefinition {
     std::optional<SubtypeIndication> element_subtype;
     std::vector<RecordElement> record_elements;
     std::optional<SubtypeIndication> designated_subtype;
+    std::uint32_t maximum_objects {
+        std::numeric_limits<std::uint32_t>::max()
+    };
     bool deallocate_releases_storage { true };
     bool reclaim_when_unreachable { };
     std::vector<DeclarationId> protected_members;
@@ -465,10 +514,25 @@ struct Association {
     SourceSpanId source;
 };
 
+struct Instance {
+    InstanceId id;
+    ScopeId scope;
+    Name target;
+    std::string name;
+    std::vector<Association> generic_map;
+    std::vector<Association> port_map;
+    bool component { };
+    bool configuration { };
+    SourceSpanId source;
+    OriginId origin;
+};
+
 struct CallableProfile {
     bool function { };
     bool pure { };
     bool defined { };
+    std::optional<Name> default_callable;
+    bool default_box { };
     std::optional<SubtypeIndication> return_type;
     std::optional<DeclarationId> return_identifier;
     std::vector<DeclarationId> formals;
@@ -556,6 +620,7 @@ struct Declaration {
     std::optional<SubtypeIndication> subtype;
     std::optional<SubtypeIndication> default_type;
     std::optional<ExpressionId> initializer;
+    std::optional<ExpressionId> file_open_kind;
     ObjectClass object_class { ObjectClass::constant };
     Direction direction { Direction::unknown };
     bool shared { };
@@ -629,12 +694,28 @@ struct GenerateRegion {
     std::vector<Association> generic_map;
     std::vector<Association> port_map;
     std::vector<DeclarationId> declarations;
+    std::vector<DisconnectionSpecification> disconnection_specifications;
     std::vector<InstanceId> instances;
     std::vector<ProcessId> processes;
     std::vector<StatementId> concurrent_statements;
     std::vector<GenerateRegion> nested;
+    struct Choice {
+        ExpressionId left;
+        std::optional<ExpressionId> right;
+        bool descending { };
+        SourceSpanId source;
+    };
+    struct Alternative {
+        ScopeId scope;
+        std::string label;
+        std::vector<Choice> choices;
+        bool is_default { };
+        SourceSpanId source;
+    };
+    std::vector<Alternative> alternatives;
     SourceSpanId source;
     OriginId origin;
+    ResidualDependencies dependencies;
 };
 
 struct PslFormal {
@@ -714,13 +795,27 @@ struct PslVerificationUnit {
     bool comment_embedded { };
 };
 
+struct PredefinedEnvironment {
+    std::string identity;
+    std::string working_library;
+    std::vector<std::string> implicit_libraries;
+    std::vector<std::string> implicit_packages;
+    std::vector<std::string> declarations;
+    std::vector<std::string> operator_profiles;
+    std::vector<std::string> time_units;
+    std::string default_time_unit;
+    std::vector<std::string> attributes;
+};
+
 struct Unit {
     UnitId id;
     ScopeId scope;
     UnitKind kind { UnitKind::entity };
     std::string library;
     std::string name;
+    bool extended_name { };
     std::string primary_name;
+    bool extended_primary_name { };
     SourceSpanId source;
     OriginId origin;
     std::vector<ContextItem> context;
@@ -728,17 +823,39 @@ struct Unit {
     std::vector<PslDeclaration> psl_declarations;
     std::vector<PslDirective> psl_directives;
     std::vector<DeclarationId> declarations;
+    std::vector<DisconnectionSpecification> disconnection_specifications;
     std::vector<ProcessId> processes;
+    std::vector<InstanceId> instances;
     std::vector<StatementId> concurrent_statements;
     std::vector<GenerateRegion> generates;
     std::vector<ComponentConfiguration> component_configurations;
     std::optional<BlockConfiguration> configuration;
+    std::vector<std::string> source_dependencies;
+    std::string compilation_unit_identity;
+    std::string standard;
+    std::string compatibility_profile;
+    PredefinedEnvironment predefined_environment;
+    std::string standard_package_revision;
+    std::vector<std::string> standard_package_declarations;
+    std::vector<std::string> standard_package_operator_profiles;
+    // False when parsing retained a recovery node for syntax unavailable in
+    // this unit's selected VHDL revision. Such HIR is inspectable and
+    // serializable, but elaboration must not make it executable.
+    bool profile_compatible { true };
 };
 
 /// Owning VHDL semantic HIR. It contains no frontend nodes, pointers, or
 /// string views; every cross-record relationship uses a shared semantic ID.
 class Hir final {
 public:
+    /// Changes whenever mutable access to an owning collection is requested.
+    /// Consumers may use this to invalidate non-owning lookup acceleration;
+    /// the revision is intentionally not part of the serialized HIR schema.
+    [[nodiscard]] std::uint64_t revision() const noexcept
+    {
+        return revision_;
+    }
+
     [[nodiscard]] const std::vector<Unit>& units() const noexcept;
     [[nodiscard]] const std::vector<Declaration>& declarations() const noexcept;
     [[nodiscard]] const std::vector<TypeDefinition>& types() const noexcept;
@@ -746,6 +863,7 @@ public:
     [[nodiscard]] const std::vector<Expression>& expressions() const noexcept;
     [[nodiscard]] const std::vector<Statement>& statements() const noexcept;
     [[nodiscard]] const std::vector<Process>& processes() const noexcept;
+    [[nodiscard]] const std::vector<Instance>& instances() const noexcept;
 
     std::vector<Unit>& mutable_units() noexcept;
     std::vector<Declaration>& mutable_declarations() noexcept;
@@ -754,8 +872,11 @@ public:
     std::vector<Expression>& mutable_expressions() noexcept;
     std::vector<Statement>& mutable_statements() noexcept;
     std::vector<Process>& mutable_processes() noexcept;
+    std::vector<Instance>& mutable_instances() noexcept;
 
 private:
+    void note_mutation() noexcept;
+
     std::vector<Unit> units_;
     std::vector<Declaration> declarations_;
     std::vector<TypeDefinition> types_;
@@ -763,6 +884,21 @@ private:
     std::vector<Expression> expressions_;
     std::vector<Statement> statements_;
     std::vector<Process> processes_;
+    std::vector<Instance> instances_;
+    std::uint64_t revision_ { };
 };
+
+/// The independently serialized top-level collections whose relationships
+/// cannot be validated by checking individual ID ranges alone.
+struct TopLevelHirView {
+    std::span<const Declaration> declarations;
+    std::span<const OverloadSet> overload_sets;
+    std::span<const Instance> instances;
+};
+
+/// Validate instance occurrence IDs and overload-set identities and members.
+/// This is shared by CompiledDesign and the standalone HIR codec.
+[[nodiscard]] bool top_level_hir_collections_well_formed(
+    const Model& semantics, TopLevelHirView view);
 
 } // namespace fsim::semantic::vhdl

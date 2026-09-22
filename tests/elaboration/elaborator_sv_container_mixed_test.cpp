@@ -43,7 +43,7 @@ end architecture;
             "sv:work.static_port_leaf",
             std::nullopt }
     };
-    const auto mixed_rejected = fsim::elaboration::elaborate(
+    const auto mixed_rejected = compile_and_elaborate(
         mixed_design,
         "vhdl:work.mixed_port_top(rtl)",
         bindings);
@@ -94,7 +94,7 @@ end architecture;
                 "sv:work.dynamic_port_leaf",
                 std::nullopt }
         };
-    const auto mixed_dynamic_rejected = fsim::elaboration::elaborate(
+    const auto mixed_dynamic_rejected = compile_and_elaborate(
         mixed_dynamic_design,
         "vhdl:work.mixed_dynamic_port_top(rtl)",
         dynamic_bindings);

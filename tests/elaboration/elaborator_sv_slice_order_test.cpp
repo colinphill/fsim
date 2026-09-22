@@ -110,7 +110,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "static_slice_ordering");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -196,7 +196,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(invalid.ok());
-  const auto rejected = fsim::elaboration::elaborate(
+  const auto rejected = compile_and_elaborate(
       invalid.design, "static_slice_ordering_invalid");
   assert(!rejected.ok());
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-001"));

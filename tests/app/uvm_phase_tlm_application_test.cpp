@@ -190,15 +190,15 @@ make_config(const std::filesystem::path &uvm_root,
   return config;
 }
 
-const fsim::frontend::SystemVerilogClassSpecialization &
+const fsim::semantic::sv::ClassSpecialization &
 find_class(const fsim::app::BuiltProject &project,
            const std::string_view suffix) {
   const auto found = std::ranges::find_if(
-      project.systemverilog_class_specializations,
+      project.compiled_systemverilog_class_specializations,
       [&](const auto &specialization) {
         return specialization.declaration_identity.ends_with(suffix);
       });
-  if (found == project.systemverilog_class_specializations.end()) {
+  if (found == project.compiled_systemverilog_class_specializations.end()) {
     std::cerr << "missing class specialization ending in " << suffix << '\n';
     std::abort();
   }
@@ -208,19 +208,19 @@ find_class(const fsim::app::BuiltProject &project,
 struct LegacyMethodRequirement {
   std::string_view name;
   std::size_t argument_count{};
-  fsim::frontend::SystemVerilogClassMethodKind kind{
-      fsim::frontend::SystemVerilogClassMethodKind::Function};
+  fsim::semantic::sv::ClassMethodKind kind{
+      fsim::semantic::sv::ClassMethodKind::function};
 };
 
 void require_legacy_methods(
-    const fsim::frontend::SystemVerilogClassSpecialization &specialization,
+    const fsim::semantic::sv::ClassSpecialization &specialization,
     const std::initializer_list<LegacyMethodRequirement> requirements) {
   for (const auto &requirement : requirements) {
     const auto found = std::ranges::find_if(
         specialization.methods,
         [&](const auto &method) {
           return method.name == requirement.name &&
-                 method.arguments.size() == requirement.argument_count &&
+                 method.formals.size() == requirement.argument_count &&
                  method.kind == requirement.kind;
         });
     if (found == specialization.methods.end()) {
@@ -234,7 +234,7 @@ void require_legacy_methods(
 }
 
 void forbid_methods(
-    const fsim::frontend::SystemVerilogClassSpecialization &specialization,
+    const fsim::semantic::sv::ClassSpecialization &specialization,
     const std::initializer_list<std::string_view> names) {
   for (const auto name : names) {
     if (std::ranges::any_of(
@@ -282,7 +282,7 @@ void require_core_smoke_surface(const fsim::app::BuiltProject &project) {
        {"topology_smoke", 0},
        {"timeout_smoke", 0},
        {"seed_smoke", 0}});
-  assert(!smoke.base_specialization_identity.empty());
+  assert(smoke.base);
   for (const auto &method : smoke.methods) {
     if (method.name.ends_with("_smoke"))
       assert(!method.statements.empty());
@@ -290,7 +290,7 @@ void require_core_smoke_surface(const fsim::app::BuiltProject &project) {
 }
 
 void require_flow_smoke_surface(const fsim::app::BuiltProject &project) {
-  using Kind = fsim::frontend::SystemVerilogClassMethodKind;
+  using Kind = fsim::semantic::sv::ClassMethodKind;
   const auto &component = find_class(project, "::fsim_native_component");
   require_legacy_methods(
       component,
@@ -298,7 +298,7 @@ void require_flow_smoke_surface(const fsim::app::BuiltProject &project) {
        {"connect_phase", 1},
        {"end_of_elaboration_phase", 1},
        {"start_of_simulation_phase", 1},
-       {"run_phase", 1, Kind::Task},
+       {"run_phase", 1, Kind::task},
        {"extract_phase", 1},
        {"check_phase", 1},
        {"report_phase", 1},
@@ -318,7 +318,7 @@ void require_flow_smoke_surface(const fsim::app::BuiltProject &project) {
            "::fsim_uvm_sequencer", "::fsim_uvm_driver",
            "::fsim_uvm_monitor", "::fsim_uvm_agent",
            "::fsim_uvm_callback"}) {
-    assert(!find_class(project, suffix).base_specialization_identity.empty());
+    assert(find_class(project, suffix).base);
   }
 
   require_legacy_methods(
@@ -344,7 +344,7 @@ void require_register_smoke_surface(const fsim::app::BuiltProject &project) {
            "::fsim_uvm_reg", "::fsim_uvm_reg_block",
            "::fsim_uvm_reg_adapter", "::fsim_uvm_reg_predictor",
            "::fsim_uvm_reg_sequence", "::fsim_uvm_reg_callback"}) {
-    assert(!find_class(project, suffix).base_specialization_identity.empty());
+    assert(find_class(project, suffix).base);
   }
 
   require_legacy_methods(
@@ -370,7 +370,7 @@ void require_register_smoke_surface(const fsim::app::BuiltProject &project) {
 
 void require_legacy_uvm_1_2_api_surface(
     const fsim::app::BuiltProject &project) {
-  using Kind = fsim::frontend::SystemVerilogClassMethodKind;
+  using Kind = fsim::semantic::sv::ClassMethodKind;
   std::size_t verified_profiles{};
   const auto require = [&project, &verified_profiles](
                            const std::string_view class_suffix,
@@ -387,7 +387,7 @@ void require_legacy_uvm_1_2_api_surface(
        {"get_objection_count", 1},
        {"sync", 3},
        {"unsync", 3},
-       {"wait_for_state", 2, Kind::Task},
+       {"wait_for_state", 2, Kind::task},
        {"jump", 1},
        {"jump_all", 1}});
   require(
@@ -396,8 +396,8 @@ void require_legacy_uvm_1_2_api_surface(
        {"drop_objection", 3},
        {"clear", 1},
        {"set_drain_time", 2},
-       {"wait_for", 2, Kind::Task},
-       {"wait_for_total_count", 2, Kind::Task},
+       {"wait_for", 2, Kind::task},
+       {"wait_for_total_count", 2, Kind::task},
        {"get_objection_count", 1},
        {"get_objection_total", 1},
        {"display_objections", 2}});
@@ -411,15 +411,15 @@ void require_legacy_uvm_1_2_api_surface(
        {"resolve_bindings", 0}});
   require(
       "::uvm_sequence_base",
-      {{"start", 4, Kind::Task},
+      {{"start", 4, Kind::task},
        {"kill", 0},
-       {"start_item", 3, Kind::Task},
-       {"finish_item", 2, Kind::Task},
-       {"wait_for_grant", 2, Kind::Task},
+       {"start_item", 3, Kind::task},
+       {"finish_item", 2, Kind::task},
+       {"wait_for_grant", 2, Kind::task},
        {"send_request", 2},
-       {"wait_for_item_done", 1, Kind::Task},
+       {"wait_for_item_done", 1, Kind::task},
        {"put_response", 1},
-       {"get_base_response", 2, Kind::Task},
+       {"get_base_response", 2, Kind::task},
        {"set_automatic_phase_objection", 1},
        {"get_automatic_phase_objection", 0}});
   require(
@@ -434,12 +434,12 @@ void require_legacy_uvm_1_2_api_surface(
       {{"callback_mode", 1}, {"is_enabled", 0}});
   require(
       "::uvm_reg",
-      {{"write", 9, Kind::Task},
-       {"read", 9, Kind::Task},
-       {"poke", 7, Kind::Task},
-       {"peek", 7, Kind::Task},
-       {"update", 8, Kind::Task},
-       {"mirror", 9, Kind::Task},
+      {{"write", 9, Kind::task},
+       {"read", 9, Kind::task},
+       {"poke", 7, Kind::task},
+       {"peek", 7, Kind::task},
+       {"update", 8, Kind::task},
+       {"mirror", 9, Kind::task},
        {"predict", 7},
        {"needs_update", 0}});
   require(
@@ -499,8 +499,8 @@ void require_legacy_uvm_1_2_api_surface(
       "::uvm_component",
       {{"status", 0},
        {"kill", 0},
-       {"stop_phase", 1, Kind::Task},
-       {"stop", 1, Kind::Task},
+       {"stop_phase", 1, Kind::task},
+       {"stop", 1, Kind::task},
        {"set_config_int", 3},
        {"set_config_string", 3},
        {"set_config_object", 4},
@@ -511,7 +511,7 @@ void require_legacy_uvm_1_2_api_surface(
   require(
       "::uvm_test_done_objection",
       {{"stop_request", 0},
-       {"force_stop", 1, Kind::Task},
+       {"force_stop", 1, Kind::task},
        {"raise_objection", 3},
        {"drop_objection", 3},
        {"get", 0}});
@@ -795,7 +795,7 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
                          const std::string_view name) {
     const auto found = std::ranges::find(
         specialization.methods, name,
-        &fsim::frontend::SystemVerilogClassMethodProfile::name);
+        &fsim::semantic::sv::SpecializedClassMethod::name);
     return found == specialization.methods.end() ? nullptr : &*found;
   };
   auto *legacy_field_automation = method(
@@ -816,7 +816,7 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
          !method(legacy_component, "report_probe")->statements.empty() &&
          method(legacy_reg, "get_type") != nullptr &&
          method(legacy_callback, "get_type") != nullptr &&
-         !legacy_analysis_imp.base_specialization_identity.empty());
+         legacy_analysis_imp.base);
   const std::array legacy_factory_identities{
       legacy_item.specialization_identity,
       legacy_sequence.specialization_identity,

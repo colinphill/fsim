@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "application_internal.hpp"
+#include "application_systemverilog_hir_internal.hpp"
 
 #include <concepts>
 
@@ -34,6 +34,7 @@ namespace {
                 }
                 fill_unit(input, *found);
             }
+            fill_classes(parsed.systemverilog_classes, std::nullopt);
             resolve_expression_names();
         }
 
@@ -65,6 +66,71 @@ namespace {
             return model_.scopes()[scope.value()].unit;
         }
 
+        void append_imported_name_candidates(
+            sv::Name& result,
+            const semantic::ScopeId scope) const
+        {
+            const auto owner = std::ranges::find(
+                hir_.units(), scope_unit(scope), &sv::Unit::id);
+            if (owner == hir_.units().end()) {
+                return;
+            }
+            const auto append_declarations
+                = [&](const std::string_view package_name,
+                      const std::string_view declaration_name) {
+                for (const auto& package : hir_.units()) {
+                    if (package.kind != sv::UnitKind::package
+                        || package.library != owner->library
+                        || package.name != package_name) {
+                        continue;
+                    }
+                    for (const auto declaration_id : package.declarations) {
+                        const auto declaration = std::ranges::find(
+                            hir_.declarations(), declaration_id,
+                            &sv::Declaration::id);
+                        if (declaration == hir_.declarations().end()
+                            || declaration->name != declaration_name
+                            || std::ranges::find(
+                                   result.overloads, declaration_id)
+                                != result.overloads.end()) {
+                            continue;
+                        }
+                        result.overloads.push_back(declaration_id);
+                    }
+                }
+            };
+
+            const auto qualifier = result.spelling.rfind("::");
+            if (qualifier != std::string::npos) {
+                append_declarations(
+                    std::string_view { result.spelling }.substr(
+                        0U, qualifier),
+                    std::string_view { result.spelling }.substr(
+                        qualifier + 2U));
+                return;
+            }
+
+            bool explicitly_imported { };
+            for (const auto& import : owner->imports) {
+                if (import.wildcard || !import.member
+                    || import.member->spelling != result.spelling) {
+                    continue;
+                }
+                explicitly_imported = true;
+                append_declarations(
+                    import.package.spelling, result.spelling);
+            }
+            if (explicitly_imported) {
+                return;
+            }
+            for (const auto& import : owner->imports) {
+                if (import.wildcard) {
+                    append_declarations(
+                        import.package.spelling, result.spelling);
+                }
+            }
+        }
+
         [[nodiscard]] sv::Name name(
             const std::string_view spelling,
             const frontend::SourceSpan& span,
@@ -83,6 +149,9 @@ namespace {
                     break;
                 }
                 visible_scope = parent_scope(*visible_scope);
+            }
+            if (result.overloads.empty()) {
+                append_imported_name_candidates(result, scope);
             }
             if (result.overloads.size() == 1) {
                 result.selected = result.overloads.front();
@@ -180,6 +249,113 @@ namespace {
             return { id, expression_origin };
         }
 
+        [[nodiscard]] const sv::ClassDeclaration* visible_class(
+            const std::string_view identity,
+            const semantic::ScopeId scope) const
+        {
+            const auto visible = [&](const sv::ClassDeclaration& item) {
+                if (item.canonical_identity == identity) {
+                    return true;
+                }
+                if (item.name != identity || !item.scope.valid()) {
+                    return false;
+                }
+                auto visible_scope = std::optional<semantic::ScopeId> { scope };
+                const auto owner = parent_scope(item.scope);
+                while (visible_scope) {
+                    if (owner == visible_scope) {
+                        return true;
+                    }
+                    visible_scope = parent_scope(*visible_scope);
+                }
+                return false;
+            };
+            const auto declaration = std::ranges::find_if(
+                hir_.classes(), visible);
+            return declaration != hir_.classes().end()
+                ? &*declaration
+                : nullptr;
+        }
+
+        void bind_class_allocation(sv::Expression& output) const
+        {
+            if (output.kind != sv::ExpressionKind::class_allocation
+                || output.class_identity.empty()) {
+                return;
+            }
+            const auto declaration = visible_class(
+                output.class_identity, output.scope);
+            if (declaration != nullptr) {
+                output.class_identity = declaration->canonical_identity;
+            }
+        }
+
+        void bind_implicit_class_method(sv::Expression& output)
+        {
+            if (output.kind != sv::ExpressionKind::call
+                || output.text.size() < 2U || output.text.front() != '.'
+                || output.operands.empty()) {
+                return;
+            }
+            const auto receiver = std::ranges::find_if(
+                hir_.expressions(), [&](const sv::Expression& candidate) {
+                    return candidate.id == output.operands.front();
+                });
+            if (receiver == hir_.expressions().end()
+                || !receiver->referenced_name
+                || !receiver->referenced_name->selected) {
+                return;
+            }
+            const auto object = std::ranges::find_if(
+                hir_.mutable_declarations(),
+                [&](const sv::Declaration& declaration) {
+                    return declaration.id
+                        == *receiver->referenced_name->selected;
+                });
+            if (object == hir_.mutable_declarations().end()
+                || !object->type) {
+                return;
+            }
+            const auto class_identity = !object->type->class_identity.empty()
+                ? std::string_view { object->type->class_identity }
+                : std::string_view { object->type->target.spelling };
+            if (class_identity.empty()) {
+                return;
+            }
+            const auto declaration = visible_class(
+                class_identity, output.scope);
+            if (declaration == nullptr) {
+                return;
+            }
+            const auto member_name
+                = std::string_view { output.text }.substr(1U);
+            const auto method = std::ranges::find_if(
+                declaration->methods,
+                [&](const sv::ClassMethod& candidate) {
+                    return candidate.name == member_name
+                        && !candidate.static_method;
+                });
+            if (method == declaration->methods.end()
+                || std::ranges::any_of(
+                    std::next(method), declaration->methods.end(),
+                    [&](const sv::ClassMethod& candidate) {
+                        return candidate.name == member_name
+                            && !candidate.static_method;
+                    })) {
+                return;
+            }
+            object->type->value_form = sv::TypeForm::class_handle;
+            object->type->class_identity
+                = declaration->canonical_identity;
+            object->type->executable_width = 64U;
+            object->type->four_state = false;
+            output.kind = sv::ExpressionKind::class_method_call;
+            output.class_identity = declaration->canonical_identity;
+            output.class_member_identity = method->canonical_identity;
+            output.class_checked = true;
+            output.referenced_name.reset();
+        }
+
         [[nodiscard]] std::optional<semantic::ExpressionId> expression(
             const frontend::Expression& input,
             const semantic::ScopeId scope,
@@ -189,17 +365,62 @@ namespace {
                 return std::nullopt;
             }
             const auto expression_source = source(input.span);
+            const auto kind = expression_kind(input);
+            const auto signed_value = input.kind
+                    == frontend::ExpressionKind::IntegerLiteral
+                || (input.kind == frontend::ExpressionKind::LogicLiteral
+                    && (input.text.find("'s") != std::string::npos
+                        || input.text.find("'S") != std::string::npos))
+                || (input.call_result_width != 0U
+                    && input.call_result_signed);
+            const auto clocking_edge
+                = input.kind == frontend::ExpressionKind::Call
+                    && input.text == "@sv-clocking-event"
+                ? edge_kind(static_cast<frontend::EdgeKind>(
+                      input.call_result_width))
+                : sv::EdgeKind::any;
+            const auto existing = std::ranges::find_if(
+                hir_.expressions(), [&](const sv::Expression& candidate) {
+                    if (claimed_expressions_.contains(candidate.id.value())
+                        || candidate.scope != scope
+                        || candidate.source != expression_source
+                        || candidate.kind != kind
+                        || candidate.text != input.text
+                        || candidate.nominal_type != input.nominal_type
+                        || candidate.decoded_string != input.decoded_string
+                        || candidate.signed_value != signed_value
+                        || candidate.clocking_edge != clocking_edge
+                        || candidate.scalar_kind
+                            != static_cast<sv::ScalarKind>(
+                                input.systemverilog_scalar_kind)
+                        || candidate.generated_text
+                            != static_cast<sv::GeneratedTextKind>(
+                                input.generated_text)) {
+                        return false;
+                    }
+                    const auto& candidate_origin
+                        = model_.origins()[candidate.origin.value()];
+                    return candidate_origin.parent == parent
+                        && candidate_origin.detail
+                        == "SystemVerilog expression";
+                });
+            if (existing != hir_.expressions().end()) {
+                claimed_expressions_.insert(existing->id.value());
+                return existing->id;
+            }
             const auto [id, expression_origin] = expression_identity(
                 scope, expression_source, parent);
             sv::Expression output;
             output.id = id;
             output.scope = scope;
-            output.kind = expression_kind(input);
+            output.kind = kind;
             output.text = input.text;
             output.source = expression_source;
             output.origin = expression_origin;
             output.nominal_type = input.nominal_type;
             output.class_identity = input.nominal_type;
+            output.signed_value = signed_value;
+            output.clocking_edge = clocking_edge;
             const auto bind_class_operation = [&](const std::string_view prefix) {
                 if (!input.text.starts_with(prefix))
                     return false;
@@ -222,14 +443,38 @@ namespace {
                 && !bind_class_operation("@sv-static-method:")) {
                 output.class_member_identity.clear();
             }
+            bind_class_allocation(output);
             output.class_checked = output.kind == sv::ExpressionKind::class_cast
                 || output.kind == sv::ExpressionKind::class_property
                 || output.kind == sv::ExpressionKind::class_method_call;
             output.decoded_string = input.decoded_string;
+            if (input.systemverilog_decimal_literal) {
+                const auto& literal = *input.systemverilog_decimal_literal;
+                output.decimal_literal = sv::DecimalLiteral {
+                    literal.kind
+                            == frontend::SystemVerilogDecimalLiteralKind::Time
+                        ? sv::DecimalLiteralKind::time
+                        : sv::DecimalLiteralKind::real,
+                    literal.digits,
+                    literal.decimal_exponent,
+                    literal.time_unit,
+                };
+            }
+            output.scalar_kind = static_cast<sv::ScalarKind>(
+                input.systemverilog_scalar_kind);
+            output.generated_text
+                = static_cast<sv::GeneratedTextKind>(input.generated_text);
             if (input.kind == frontend::ExpressionKind::Identifier
                 || (input.kind == frontend::ExpressionKind::Call
                     && !input.text.starts_with("@sv-"))) {
                 output.referenced_name = name(input.text, input.span, scope);
+            } else if (input.kind == frontend::ExpressionKind::Call
+                && input.text.starts_with("@sv-cast:")) {
+                output.referenced_name = name(
+                    input.text.substr(
+                        std::string_view { "@sv-cast:" }.size()),
+                    input.span,
+                    scope);
             }
             output.argument_names = input.call_argument_names;
             for (std::size_t index = 0; index < input.operands.size(); ++index) {
@@ -251,6 +496,7 @@ namespace {
                     output.call_arguments.push_back(std::move(association));
                 }
             }
+            bind_implicit_class_method(output);
             if (input.kind == frontend::ExpressionKind::Aggregate) {
                 for (std::size_t index = 0; index < output.operands.size(); ++index) {
                     sv::AssignmentPatternAssociation association;
@@ -271,6 +517,30 @@ namespace {
                         }
                     }
                     output.associations.push_back(std::move(association));
+                }
+            }
+            const auto inline_marker = std::ranges::find(
+                input.aggregate_choices, "@sv-inline-constraint");
+            if (inline_marker != input.aggregate_choices.end()) {
+                const auto index = static_cast<std::size_t>(std::distance(
+                    input.aggregate_choices.begin(), inline_marker));
+                if (index < input.aggregate_choice_expressions.size()) {
+                    sv::AssignmentPatternAssociation association;
+                    association.choice_spelling
+                        = "@sv-inline-constraint";
+                    association.source = expression_source;
+                    for (const auto& constraint :
+                        input.aggregate_choice_expressions[index]) {
+                        if (const auto constraint_id = expression(
+                                constraint, scope, expression_origin)) {
+                            association.choices.push_back(*constraint_id);
+                        }
+                    }
+                    if (!association.choices.empty()) {
+                        association.value = association.choices.front();
+                        output.associations.push_back(
+                            std::move(association));
+                    }
                 }
             }
             hir_.mutable_expressions().push_back(std::move(output));
@@ -320,9 +590,8 @@ namespace {
             output.typical = alternative(input.typical);
             output.maximum = alternative(input.maximum);
             for (const auto& additional : input.additional_values) {
-                output.additional.push_back(delay_value(
-                    additional.magnitude, additional.divisor, additional.unit,
-                    additional.expression, additional.span, scope, parent));
+                output.additional.push_back(delay(
+                    additional, scope, parent));
             }
             return output;
         }
@@ -398,8 +667,9 @@ namespace {
             case frontend::StatementKind::Disable:
                 return sv::StatementKind::disable;
             case frontend::StatementKind::Display:
-            case frontend::StatementKind::Report:
                 return sv::StatementKind::display;
+            case frontend::StatementKind::Report:
+                return sv::StatementKind::report;
             case frontend::StatementKind::FileClose:
                 return sv::StatementKind::file_close;
             case frontend::StatementKind::FileFlush:
@@ -494,37 +764,20 @@ namespace {
         [[nodiscard]] sv::CaseMatchKind case_match_kind(
             const frontend::CaseMatchKind kind) const noexcept
         {
-            switch (kind) {
-            case frontend::CaseMatchKind::Exact:
-                return sv::CaseMatchKind::exact;
-            case frontend::CaseMatchKind::WildcardZ:
-                return sv::CaseMatchKind::wildcard_z;
-            case frontend::CaseMatchKind::WildcardXZ:
-                return sv::CaseMatchKind::wildcard_xz;
-            case frontend::CaseMatchKind::Inside:
-                return sv::CaseMatchKind::inside;
-            case frontend::CaseMatchKind::Matches:
-                return sv::CaseMatchKind::matches;
-            case frontend::CaseMatchKind::VhdlMatching:
+            if (kind == frontend::CaseMatchKind::VhdlMatching) {
                 return sv::CaseMatchKind::exact;
             }
-            return sv::CaseMatchKind::exact;
+            // The frontend and HIR enums deliberately share the executable
+            // SystemVerilog values. Preserve out-of-range values as well so
+            // the direct-HIR lowerer, rather than this projection, owns the
+            // dedicated invalid-mode diagnostic.
+            return static_cast<sv::CaseMatchKind>(kind);
         }
 
         [[nodiscard]] sv::CaseQualifier case_qualifier(
             const frontend::CaseQualifier qualifier) const noexcept
         {
-            switch (qualifier) {
-            case frontend::CaseQualifier::None:
-                return sv::CaseQualifier::none;
-            case frontend::CaseQualifier::Unique:
-                return sv::CaseQualifier::unique;
-            case frontend::CaseQualifier::Unique0:
-                return sv::CaseQualifier::unique0;
-            case frontend::CaseQualifier::Priority:
-                return sv::CaseQualifier::priority;
-            }
-            return sv::CaseQualifier::none;
+            return static_cast<sv::CaseQualifier>(qualifier);
         }
 
         [[nodiscard]] sv::AssertionSeverity assertion_severity(
@@ -581,18 +834,8 @@ namespace {
             const semantic::ScopeId scope,
             const std::string_view spelling) const noexcept
         {
-            auto visible_scope = std::optional<semantic::ScopeId> { scope };
-            while (visible_scope) {
-                const auto found = std::ranges::find_if(
-                    model_.types(), [&](const semantic::Type& type) {
-                        return type.scope == *visible_scope && type.name == spelling;
-                    });
-                if (found != model_.types().end()) {
-                    return found->id;
-                }
-                visible_scope = parent_scope(*visible_scope);
-            }
-            return { };
+            return systemverilog_hir_detail::find_systemverilog_hir_type(
+                model_, hir_, scope, spelling);
         }
 
         [[nodiscard]] sv::TypeReference type_reference(
@@ -611,11 +854,76 @@ namespace {
                 source(input.named_type.empty() ? fallback : input.named_type_span),
                 spelling
             };
+            const auto type_form = [&] {
+                if (input.systemverilog_container) {
+                    switch (input.systemverilog_container->kind) {
+                    case frontend::SystemVerilogContainerKind::DynamicArray:
+                        return sv::TypeForm::dynamic_array;
+                    case frontend::SystemVerilogContainerKind::Queue:
+                        return sv::TypeForm::queue;
+                    case frontend::SystemVerilogContainerKind::AssociativeArray:
+                        return sv::TypeForm::associative_array;
+                    case frontend::SystemVerilogContainerKind::StaticArray:
+                        return sv::TypeForm::static_array;
+                    }
+                }
+                switch (input.packed_aggregate) {
+                case frontend::PackedAggregateKind::Struct:
+                    return sv::TypeForm::packed_structure;
+                case frontend::PackedAggregateKind::Union:
+                    return sv::TypeForm::packed_union;
+                case frontend::PackedAggregateKind::TaggedUnion:
+                    return sv::TypeForm::tagged_union;
+                case frontend::PackedAggregateKind::UnpackedStruct:
+                    return sv::TypeForm::unpacked_structure;
+                case frontend::PackedAggregateKind::UnpackedUnion:
+                    return sv::TypeForm::unpacked_union;
+                case frontend::PackedAggregateKind::None:
+                    break;
+                }
+                if (!input.enumeration_literals.empty()) {
+                    return sv::TypeForm::enumeration;
+                }
+                if (input.domain == frontend::ValueDomain::String) {
+                    return sv::TypeForm::string;
+                }
+                return sv::TypeForm::packed_integral;
+            }();
+            output.value_form = type_form;
             if (!input.systemverilog_class_declaration.empty()) {
                 output.value_form = sv::TypeForm::class_handle;
                 output.class_identity = input.systemverilog_class_declaration;
             }
+            output.virtual_interface = input.systemverilog_virtual_interface;
+            output.interface_type = input.systemverilog_interface_type;
+            output.interface_modport = input.systemverilog_interface_modport;
+            for (const auto& input_actual :
+                input.systemverilog_class_parameter_actuals) {
+                sv::ActualAssociation actual;
+                actual.formal = input_actual.name;
+                actual.source = source(input_actual.span);
+                if (input_actual.type_actual) {
+                    actual.kind = sv::ActualKind::type;
+                    actual.type = type_reference(
+                        *input_actual.type_actual, input_actual.span,
+                        scope, parent);
+                } else if (input_actual.value.kind
+                    == frontend::ExpressionKind::Invalid) {
+                    actual.kind = sv::ActualKind::default_value;
+                } else {
+                    actual.expression = expression(
+                        input_actual.value, scope, parent);
+                }
+                output.interface_parameter_actuals.push_back(
+                    std::move(actual));
+            }
+            output.systemverilog_net_type = input.systemverilog_net_type;
+            output.systemverilog_resolution_function
+                = input.systemverilog_resolution_function;
             output.signed_value = input.is_signed;
+            output.executable_width = input.width();
+            output.four_state = input.domain == frontend::ValueDomain::Logic4
+                || input.domain == frontend::ValueDomain::Integer;
             if (input.packed_range) {
                 output.packed_range = sv::PackedRange {
                     input.packed_range->left,
@@ -638,20 +946,7 @@ namespace {
             }
             if (input.systemverilog_container) {
                 const auto& container = *input.systemverilog_container;
-                switch (container.kind) {
-                case frontend::SystemVerilogContainerKind::DynamicArray:
-                    output.container_form = sv::TypeForm::dynamic_array;
-                    break;
-                case frontend::SystemVerilogContainerKind::Queue:
-                    output.container_form = sv::TypeForm::queue;
-                    break;
-                case frontend::SystemVerilogContainerKind::AssociativeArray:
-                    output.container_form = sv::TypeForm::associative_array;
-                    break;
-                case frontend::SystemVerilogContainerKind::StaticArray:
-                    output.container_form = sv::TypeForm::static_array;
-                    break;
-                }
+                output.container_form = type_form;
                 output.queue_maximum = container.queue_maximum
                     ? expression(*container.queue_maximum, scope, parent)
                     : std::nullopt;
@@ -677,6 +972,10 @@ namespace {
                         std::nullopt,
                         container.static_range->descending,
                         source(container.span) });
+                }
+                for (const auto& element : container.element_types) {
+                    output.container_element_types.push_back(type_reference(
+                        element, container.span, scope, parent));
                 }
             }
             return output;
@@ -771,12 +1070,19 @@ namespace {
             output.source = statement_source;
             output.origin = statement_origin;
             auto child_scope = enclosing_scope;
+            const bool declares_loop_variable
+                = input.kind == frontend::StatementKind::Loop
+                && input.loop_variable_declared
+                && !input.loop_variable.empty();
             if (input.kind == frontend::StatementKind::Block
                 || input.kind == frontend::StatementKind::Fork
+                || declares_loop_variable
                 || !input.declarations.empty()) {
                 const auto scope_name = input.label.empty()
                     ? (input.kind == frontend::StatementKind::Fork
                               ? "<fork>"
+                          : declares_loop_variable
+                              ? "<loop>"
                               : "<block>")
                     : input.label;
                 child_scope = model_.add_scope(
@@ -786,6 +1092,21 @@ namespace {
                 for (const auto& declaration : input.declarations) {
                     output.declarations.push_back(block_variable(
                         declaration, child_scope, statement_origin));
+                }
+                if (declares_loop_variable) {
+                    frontend::VariableDeclaration loop_variable;
+                    loop_variable.name = input.loop_variable;
+                    loop_variable.type = frontend::Type {
+                        frontend::ValueDomain::Integer,
+                        "int",
+                        std::nullopt,
+                        true,
+                    };
+                    loop_variable.span = input.target.valid()
+                        ? input.target.span
+                        : input.span;
+                    output.declarations.push_back(block_variable(
+                        loop_variable, child_scope, statement_origin));
                 }
             }
             output.assignment_kind = assignment_kind(input.assignment_kind);
@@ -834,6 +1155,30 @@ namespace {
             if (input.delay) {
                 output.delay = delay(*input.delay, child_scope, statement_origin);
             }
+            output.clocking_cycle_delay = input.clocking_cycle_delay;
+            output.clocking_cycle_count = expression(
+                input.clocking_cycle_count, child_scope, statement_origin);
+            if (input.verilog_drive_strength) {
+                output.drive_zero = static_cast<std::uint8_t>(
+                    input.verilog_drive_strength->zero);
+                output.drive_one = static_cast<std::uint8_t>(
+                    input.verilog_drive_strength->one);
+            }
+            output.verilog_switch_driver = input.verilog_switch_driver;
+            output.verilog_switch_bidirectional
+                = input.verilog_switch_bidirectional;
+            output.verilog_switch_resistive
+                = input.verilog_switch_resistive;
+            output.verilog_switch_source = expression(
+                input.verilog_switch_source,
+                child_scope,
+                statement_origin);
+            output.verilog_switch_control = expression(
+                input.verilog_switch_control,
+                child_scope,
+                statement_origin);
+            output.verilog_switch_active_high
+                = input.verilog_switch_active_high;
             for (const auto& item : input.sensitivities) {
                 output.sensitivities.push_back(sensitivity(
                     item, child_scope, statement_origin));
@@ -843,6 +1188,8 @@ namespace {
             output.assertion_has_pass_action = input.assertion_has_pass_action;
             output.assertion_has_failure_action = input.assertion_has_failure_action;
             output.output_text = input.output_text;
+            output.output_generated_text = static_cast<sv::GeneratedTextKind>(
+                input.output_generated_text);
             output.output_newline = input.output_newline;
             output.output_postponed = input.output_postponed;
             if (input.output_format) {
@@ -861,9 +1208,12 @@ namespace {
             output.memory_hex = input.memory_hex;
             output.memory_write = input.memory_write;
             for (const auto& item : input.output_values) {
-                if (const auto value = expression(
-                        item.value, child_scope, statement_origin)) {
-                    output.output_values.push_back({ *value,
+                const auto value = expression(
+                    item.value, child_scope, statement_origin);
+                if (value
+                    || item.format == frontend::OutputFormat::Hierarchy
+                    || item.format == frontend::OutputFormat::Time) {
+                    output.output_values.push_back({ value,
                         output_format(item.format),
                         item.prefix,
                         item.suppress_leading_zero,
@@ -958,6 +1308,8 @@ namespace {
             output.name = identity.name;
             output.source = identity.source;
             output.origin = identity.origin;
+            output.concurrent_assertion
+                = input.systemverilog_concurrent_assertion;
             for (const auto& declaration : input.variables) {
                 static_cast<void>(existing_variable(declaration, identity.scope));
                 const auto* hir_declaration = find_declaration(
@@ -1162,6 +1514,50 @@ namespace {
             refreshed->statements = std::move(statements);
         }
 
+        void fill_class(
+            const frontend::SystemVerilogClassDeclaration& input,
+            const std::optional<semantic::ScopeId> parent_scope)
+        {
+            const auto input_source = source(input.span);
+            const auto found = std::ranges::find_if(
+                hir_.mutable_classes(), [&](const sv::ClassDeclaration& item) {
+                    if (parent_scope && item.source == input_source
+                        && item.scope.valid()
+                        && model_.scopes()[item.scope.value()].parent
+                            == parent_scope) {
+                        return true;
+                    }
+                    return !parent_scope
+                        && !input.canonical_identity.empty()
+                        && item.canonical_identity
+                            == input.canonical_identity;
+                });
+            if (found == hir_.mutable_classes().end())
+                return;
+            const auto class_scope = found->scope;
+            for (const auto& method : input.methods) {
+                if (method.kind
+                    == frontend::SystemVerilogClassMethodKind::Task) {
+                    fill_task(
+                        systemverilog_hir_detail::class_task(method),
+                        class_scope);
+                } else {
+                    fill_function(
+                        systemverilog_hir_detail::class_function(method),
+                        class_scope);
+                }
+            }
+            fill_classes(input.nested_classes, class_scope);
+        }
+
+        void fill_classes(
+            const std::vector<frontend::SystemVerilogClassDeclaration>& inputs,
+            const std::optional<semantic::ScopeId> parent_scope)
+        {
+            for (const auto& input : inputs)
+                fill_class(input, parent_scope);
+        }
+
         void fill_generate_body(
             const frontend::GenerateBody& input,
             sv::GenerateRegion& output)
@@ -1190,6 +1586,7 @@ namespace {
             for (const auto& task : input.tasks) {
                 fill_task(task, output.scope);
             }
+            fill_classes(input.systemverilog_classes, output.scope);
             for (std::size_t index = 0;
                 index < input.processes.size() && index < output.processes.size();
                 ++index) {
@@ -1230,6 +1627,8 @@ namespace {
                 || !input.else_body.variables.empty()
                 || !input.else_body.functions.empty()
                 || !input.else_body.tasks.empty()
+                || !input.else_body.systemverilog_aliases.empty()
+                || !input.else_body.systemverilog_lets.empty()
                 || !input.else_body.systemverilog_classes.empty()
                 || !input.else_body.processes.empty()
                 || !input.else_body.concurrent_statements.empty()
@@ -1240,11 +1639,20 @@ namespace {
                 }
                 ++nested_index;
             }
-            for (const auto& alternative : input.alternatives) {
-                sv::GenerateAlternative converted;
+            for (std::size_t alternative_index = 0U;
+                 alternative_index < input.alternatives.size();
+                 ++alternative_index) {
+                const auto& alternative
+                    = input.alternatives[alternative_index];
+                if (alternative_index >= output.alternatives.size()) {
+                    ++nested_index;
+                    continue;
+                }
+                auto& converted = output.alternatives[alternative_index];
                 converted.source = source(alternative.span);
                 converted.label = alternative.scope;
                 converted.is_default = alternative.is_default;
+                converted.choices.clear();
                 for (const auto& choice : alternative.choices) {
                     const auto left = expression(
                         choice.left, output.scope, output.origin);
@@ -1263,10 +1671,14 @@ namespace {
                 }
                 if (nested_index < output.nested.size()) {
                     converted.scope = output.nested[nested_index].scope;
+                    converted.alternative_discriminator
+                        = output.nested[nested_index]
+                              .alternative_discriminator;
                     fill_generate_body(
                         alternative.body, output.nested[nested_index]);
+                    converted.class_declarations
+                        = output.nested[nested_index].class_declarations;
                 }
-                output.alternatives.push_back(std::move(converted));
                 ++nested_index;
             }
         }
@@ -1346,6 +1758,7 @@ namespace {
             for (const auto& task : input.tasks) {
                 fill_task(task, output.scope);
             }
+            fill_classes(input.systemverilog_classes, output.scope);
             for (std::size_t index = 0;
                 index < input.processes.size() && index < output.processes.size();
                 ++index) {
@@ -1383,6 +1796,10 @@ namespace {
                         break;
                     }
                     visible_scope = parent_scope(*visible_scope);
+                }
+                if (item.referenced_name->overloads.empty()) {
+                    append_imported_name_candidates(
+                        *item.referenced_name, item.scope);
                 }
                 if (item.referenced_name->overloads.size() == 1) {
                     item.referenced_name->selected = item.referenced_name->overloads.front();

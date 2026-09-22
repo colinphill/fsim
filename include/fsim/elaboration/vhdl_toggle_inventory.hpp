@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -102,20 +101,5 @@ struct VhdlToggleInventoryResult {
             && error == VhdlToggleInventoryError::None;
     }
 };
-
-// Scalars and one-dimensional packed bit/std_logic vectors are directly
-// scoreable. Composite or memory-like arrays remain owned by Changes 10-11.
-[[nodiscard]] bool is_vhdl_toggle_type(
-    const frontend::Type& type) noexcept;
-
-// VHDL architectures and entity interfaces are separate semantic units. The
-// caller supplies the already-specialized architecture plus its resolved,
-// specialized entity-port view for one immutable elaborated owner.
-[[nodiscard]] VhdlToggleInventoryResult make_vhdl_toggle_inventory(
-    const frontend::DesignUnit& architecture,
-    std::span<const frontend::SignalDeclaration> ports,
-    const CoverageInventoryOwner& owner,
-    std::span<const VerilogCoverageSource> sources,
-    VhdlToggleInventoryLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

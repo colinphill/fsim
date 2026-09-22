@@ -71,7 +71,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.string_top");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -185,7 +185,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mutable_ports.ok());
-    const auto elaborated_ports = fsim::elaboration::elaborate(
+    const auto elaborated_ports = compile_and_elaborate(
         mutable_ports.design, "sv:work.string_port_top");
     assert(elaborated_ports.ok());
     const auto find_string = [&](const std::string_view name) {
@@ -247,7 +247,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_ports.ok());
-    const auto rejected_ports = fsim::elaboration::elaborate(
+    const auto rejected_ports = compile_and_elaborate(
         invalid_ports.design,
         "sv:work.invalid_string_port_top");
     assert(
@@ -297,7 +297,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_parsed.ok());
-    const auto invalid = fsim::elaboration::elaborate(
+    const auto invalid = compile_and_elaborate(
         invalid_parsed.design, "sv:work.invalid_top");
     assert(
         !invalid.ok()
@@ -346,7 +346,7 @@ endmodule
          "sv:work.foreign_string_child",
          std::nullopt},
     }};
-    const auto boundary = fsim::elaboration::elaborate(
+    const auto boundary = compile_and_elaborate(
         boundary_vhdl.design,
         "vhdl:work.string_boundary_top(rtl)",
         bindings);

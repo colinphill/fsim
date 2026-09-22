@@ -11,6 +11,7 @@ add_subdirectory(runtime)
 
 add_executable(
   fsim_semantic_tests
+  semantic/compiled_design_test.cpp
   semantic/semantic_model_test.cpp
 )
 fsim_configure_test(fsim_semantic_tests)
@@ -19,6 +20,24 @@ add_test(NAME fsim.semantic COMMAND fsim_semantic_tests)
 set_tests_properties(
   fsim.semantic
   PROPERTIES LABELS "fast;semantic;hir;designir;source"
+)
+
+add_executable(
+  fsim_semantic_class_specialization_tests
+  semantic/systemverilog_class_specialization_test.cpp
+)
+fsim_configure_test(fsim_semantic_class_specialization_tests)
+target_link_libraries(
+  fsim_semantic_class_specialization_tests
+  PRIVATE fsim_semantic
+)
+add_test(
+  NAME fsim.semantic.systemverilog_class_specialization
+  COMMAND fsim_semantic_class_specialization_tests
+)
+set_tests_properties(
+  fsim.semantic.systemverilog_class_specialization
+  PROPERTIES LABELS "fast;semantic;hir;systemverilog"
 )
 
 add_executable(
@@ -37,6 +56,42 @@ add_test(
 set_tests_properties(
   fsim.application.systemverilog_hir
   PROPERTIES LABELS "fast;semantic;hir;systemverilog"
+)
+
+add_executable(
+  fsim_hir_lowering_application_tests
+  app/hir_lowering_application_test.cpp
+)
+fsim_configure_test(fsim_hir_lowering_application_tests)
+target_link_libraries(
+  fsim_hir_lowering_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.hir_lowering
+  COMMAND fsim_hir_lowering_application_tests
+)
+set_tests_properties(
+  fsim.application.hir_lowering
+  PROPERTIES LABELS "fast;application;hir;elaboration;artifact"
+)
+
+add_executable(
+  fsim_compiled_hir_cache_application_tests
+  app/compiled_hir_cache_application_test.cpp
+)
+fsim_configure_test(fsim_compiled_hir_cache_application_tests)
+target_link_libraries(
+  fsim_compiled_hir_cache_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.compiled_hir_cache
+  COMMAND fsim_compiled_hir_cache_application_tests
+)
+set_tests_properties(
+  fsim.application.compiled_hir_cache
+  PROPERTIES LABELS "fast;application;cache;hir;portability"
 )
 
 add_executable(
@@ -377,11 +432,12 @@ set_tests_properties(
 
 add_executable(
   fsim_coverage_instance_identity_tests
+  elaboration/elaborator_test_support.cpp
   elaboration/coverage_instance_identity_test.cpp
 )
 fsim_configure_test(fsim_coverage_instance_identity_tests)
 target_link_libraries(
-  fsim_coverage_instance_identity_tests PRIVATE fsim_elaboration)
+  fsim_coverage_instance_identity_tests PRIVATE fsim_application)
 add_test(
   NAME fsim.elaboration.coverage_instance_identity
   COMMAND fsim_coverage_instance_identity_tests
@@ -393,10 +449,11 @@ set_tests_properties(
 
 add_executable(
   fsim_coverage_inventory_tests
+  elaboration/elaborator_test_support.cpp
   elaboration/coverage_inventory_test.cpp
 )
 fsim_configure_test(fsim_coverage_inventory_tests)
-target_link_libraries(fsim_coverage_inventory_tests PRIVATE fsim_elaboration)
+target_link_libraries(fsim_coverage_inventory_tests PRIVATE fsim_application)
 add_test(
   NAME fsim.elaboration.coverage_inventory
   COMMAND fsim_coverage_inventory_tests
@@ -1475,6 +1532,27 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckDiagnosticCatalog.cmake"
 )
+add_custom_target(
+  fsim_ast_lifetime_governance_check
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckAstLifetimeGovernance.cmake"
+  COMMENT "Checking the compiled-HIR AST lifetime boundary"
+  VERBATIM
+)
+add_test(
+  NAME fsim.ast-lifetime-governance
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckAstLifetimeGovernance.cmake"
+)
+set_tests_properties(
+  fsim.ast-lifetime-governance
+  PROPERTIES
+    LABELS "fast;cmake;source;governance;ast;hir;elaboration;cache;positive;negative"
+)
 add_test(
   NAME fsim.uvm-phase-tlm-matrix
   COMMAND
@@ -1858,7 +1936,7 @@ add_test(
 set_tests_properties(
   fsim.v3-warning-audit
   PROPERTIES
-    LABELS "v3;warning;warnings-as-errors;clang;linux;windows;debug;release;llvm;fuzz;inventory;positive;negative;fast"
+    LABELS "v3;warning;warnings-as-errors;clang;linux;windows;debug;release;llvm;inventory;positive;negative;fast"
 )
 add_test(
   NAME fsim.v3-hosted-toolchains
@@ -1870,7 +1948,7 @@ add_test(
 set_tests_properties(
   fsim.v3-hosted-toolchains
   PROPERTIES
-    LABELS "v3;hosted;ci;platform;toolchain;clang;llvm;llvm-mingw;linux;windows;debug;release;fuzz;inventory;positive;negative;fast"
+    LABELS "v3;hosted;ci;platform;toolchain;clang;llvm;llvm-mingw;linux;windows;debug;release;inventory;positive;negative;fast"
 )
 add_test(
   NAME fsim.v3-release-documentation
@@ -3098,6 +3176,7 @@ add_executable(
   elaboration/elaborator_mixed_construction_test.cpp
   elaboration/elaborator_mixed_driver_test.cpp
   elaboration/elaborator_process_test.cpp
+  elaboration/elaborator_hir_lowering_test.cpp
   elaboration/elaborator_fork_test.cpp
   elaboration/elaborator_function_test.cpp
   elaboration/elaborator_task_test.cpp
@@ -3142,7 +3221,7 @@ add_executable(
   elaboration/elaborator_sv_conformance_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
-target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
+target_link_libraries(fsim_elaboration_tests PRIVATE fsim_application)
 add_test(NAME fsim.elaboration COMMAND fsim_elaboration_tests)
 
 add_executable(
@@ -3160,7 +3239,7 @@ add_executable(
 )
 fsim_configure_test(fsim_sv_container_elaboration_tests)
 target_link_libraries(
-  fsim_sv_container_elaboration_tests PRIVATE fsim_elaboration)
+  fsim_sv_container_elaboration_tests PRIVATE fsim_application)
 add_test(
   NAME fsim.elaboration.sv-container
   COMMAND fsim_sv_container_elaboration_tests)
@@ -5042,7 +5121,8 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       3 mixed_conversions app/mixed_conversion_application_test.cpp
       fsim.application.mixed_conversions
-      fast mixed-language conversions cache debugger vcd)
+      fast mixed-language conversions cache debugger vcd hir differential
+      object library design artifact determinism)
     fsim_add_application_case(
       3 typed_boundaries app/typed_boundary_application_test.cpp
       fsim.application.typed_boundaries
@@ -6005,10 +6085,15 @@ set_tests_properties(
     NAME fsim.application.mixed_conversions
     COMMAND fsim_mixed_conversion_application_tests
   )
+  set(
+    fsim_mixed_conversion_labels
+    fast mixed-language conversions cache debugger vcd hir differential
+    object library design artifact determinism
+  )
   set_tests_properties(
     fsim.application.mixed_conversions
     PROPERTIES
-      LABELS "fast;mixed-language;conversions;cache;debugger;vcd"
+      LABELS "${fsim_mixed_conversion_labels}"
   )
 
   add_executable(
@@ -6481,6 +6566,68 @@ set_tests_properties(
       VERBATIM
     )
   endif()
+
+  # Batch 188A Change 19 is an inventory over existing focused tests. Keep the
+  # selection as a label so CTest schedules each test directly and reports its
+  # own failure instead of hiding the matrix behind a wrapper process.
+  set(FSIM_BATCH188A_CHANGE19_TESTS
+    fsim.semantic
+    fsim.elaboration
+    fsim.library.artifact
+    fsim.artifact.object
+    fsim.artifact.design
+    fsim.application.systemverilog_hir
+    fsim.application.hir_lowering
+    fsim.application.compiled_hir_cache
+    fsim.application.mixed_conversions
+    fsim.application.artifact_phases
+    fsim.application.classes
+    fsim.application.assertions
+    fsim.application.coverage
+    fsim.application.transition_delays
+    fsim.application.specify
+    fsim.application.sv_type_parameters
+    fsim.application.vhdl_package_generics
+    fsim.application.vhdl_configurations
+    fsim.diagnostics-catalog
+    fsim.ast-lifetime-governance
+    fsim.v3-schema-freeze
+    fsim.v3-v2-input-rejection
+    fsim.portable-object-schema-freeze
+    fsim.design-library-schema-freeze
+    fsim.nested-portable-schema-freeze
+    fsim.abi-schema-reference
+    fsim.abi-schema-evidence-matrix
+    fsim.resource-portability-contract
+    fsim.source-hidden-relocation-contract
+  )
+  list(LENGTH FSIM_BATCH188A_CHANGE19_TESTS
+    FSIM_BATCH188A_CHANGE19_TEST_COUNT)
+  if(NOT FSIM_BATCH188A_CHANGE19_TEST_COUNT EQUAL 29)
+    message(FATAL_ERROR
+      "Batch 188A Change 19 inventory must contain exactly 29 tests")
+  endif()
+  set(FSIM_BATCH188A_CHANGE19_UNIQUE_TESTS
+    ${FSIM_BATCH188A_CHANGE19_TESTS})
+  list(REMOVE_DUPLICATES FSIM_BATCH188A_CHANGE19_UNIQUE_TESTS)
+  list(LENGTH FSIM_BATCH188A_CHANGE19_UNIQUE_TESTS
+    FSIM_BATCH188A_CHANGE19_UNIQUE_TEST_COUNT)
+  if(NOT FSIM_BATCH188A_CHANGE19_UNIQUE_TEST_COUNT EQUAL
+      FSIM_BATCH188A_CHANGE19_TEST_COUNT)
+    message(FATAL_ERROR
+      "Batch 188A Change 19 inventory contains a duplicate test")
+  endif()
+  foreach(FSIM_BATCH188A_CHANGE19_TEST IN LISTS
+      FSIM_BATCH188A_CHANGE19_TESTS)
+    if(NOT TEST "${FSIM_BATCH188A_CHANGE19_TEST}")
+      message(FATAL_ERROR
+        "Batch 188A Change 19 test is not registered: "
+        "${FSIM_BATCH188A_CHANGE19_TEST}")
+    endif()
+    set_property(
+      TEST "${FSIM_BATCH188A_CHANGE19_TEST}"
+      APPEND PROPERTY LABELS "batch188a-change19")
+  endforeach()
 endif()
 
 # Recursive closure drivers remain directly invokable when retained evidence is

@@ -34,7 +34,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "vhdl:work.recursive_composite(rtl)");
     assert(elaborated.ok());
     const auto payload = elaborated.design->find_signal("payload_value");
@@ -164,7 +164,25 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(enumeration.ok());
-    const auto enumeration_result = fsim::elaboration::elaborate(
+    const auto enumeration_hir = compile_test_design(enumeration.design);
+    std::size_t selected_member_count { };
+    for (const auto& expression : enumeration_hir.vhdl_hir.expressions()) {
+        if (expression.text != "source.payload.mode") {
+            continue;
+        }
+        ++selected_member_count;
+        assert(
+            expression.referenced_name
+            && expression.referenced_name->selected);
+        const auto root = enumeration_hir.find_declaration(
+            *expression.referenced_name->selected);
+        assert(
+            root && root->vhdl != nullptr
+            && root->vhdl->form
+                == fsim::semantic::vhdl::DeclarationForm::signal);
+    }
+    assert(selected_member_count != 0U);
+    const auto enumeration_result = compile_and_elaborate(
         enumeration.design, "vhdl:work.nested_enumeration(rtl)");
     if (!enumeration_result.ok()) {
         for (const auto& diagnostic : enumeration_result.diagnostics) {
@@ -235,7 +253,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(component.ok());
-    const auto component_result = fsim::elaboration::elaborate(
+    const auto component_result = compile_and_elaborate(
         component.design,
         "vhdl:work.nested_enumeration_component_top(rtl)");
     if (!component_result.ok()) {
@@ -280,7 +298,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(nominal_mismatch.ok());
-    const auto nominal_rejected = fsim::elaboration::elaborate(
+    const auto nominal_rejected = compile_and_elaborate(
         nominal_mismatch.design,
         "vhdl:work.nested_enumeration_mismatch(rtl)");
     assert(
@@ -315,7 +333,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         invalid.design,
         "vhdl:work.invalid_recursive_composite(rtl)");
     assert(
@@ -410,7 +428,7 @@ end architecture;
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.access_storage(rtl)");
     if (!elaborated.ok()) {
@@ -534,7 +552,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(cyclic.ok());
-    const auto rejected_cycle = fsim::elaboration::elaborate(
+    const auto rejected_cycle = compile_and_elaborate(
         cyclic.design,
         "vhdl:work.invalid_access_cycle(rtl)");
     assert(
@@ -557,7 +575,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(protected_designated.ok());
-    const auto rejected_protected = fsim::elaboration::elaborate(
+    const auto rejected_protected = compile_and_elaborate(
         protected_designated.design,
         "vhdl:work.invalid_protected_access(rtl)");
     assert(
@@ -585,7 +603,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(nominal_mismatch.ok());
-    const auto rejected_nominal = fsim::elaboration::elaborate(
+    const auto rejected_nominal = compile_and_elaborate(
         nominal_mismatch.design,
         "vhdl:work.invalid_access_nominal_copy(rtl)");
     assert(
@@ -613,7 +631,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(escaping.ok());
-    const auto rejected_escape = fsim::elaboration::elaborate(
+    const auto rejected_escape = compile_and_elaborate(
         escaping.design,
         "vhdl:work.invalid_access_escape(rtl)");
     assert(
@@ -651,7 +669,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(deallocation.ok());
-    const auto deallocated = fsim::elaboration::elaborate(
+    const auto deallocated = compile_and_elaborate(
         deallocation.design,
         "vhdl:work.access_deallocation(rtl)");
     assert(deallocated.ok());
@@ -697,7 +715,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(stale_dereference.ok());
-    const auto stale_design = fsim::elaboration::elaborate(
+    const auto stale_design = compile_and_elaborate(
         stale_dereference.design,
         "vhdl:work.stale_access_dereference(rtl)");
     assert(stale_design.ok());
@@ -731,7 +749,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(null_dereference.ok());
-    const auto null_design = fsim::elaboration::elaborate(
+    const auto null_design = compile_and_elaborate(
         null_dereference.design,
         "vhdl:work.null_access_dereference(rtl)");
     assert(null_design.ok());
@@ -772,7 +790,7 @@ end architecture;
         && exhausted_architecture.type_aliases[0].type.vhdl_access);
     exhausted_architecture.type_aliases[0]
         .type.vhdl_access->maximum_objects = 2;
-    const auto exhausted_design = fsim::elaboration::elaborate(
+    const auto exhausted_design = compile_and_elaborate(
         exhausted.design,
         "vhdl:work.exhausted_access_heap(rtl)");
     assert(exhausted_design.ok());
@@ -817,7 +835,7 @@ end architecture;
         && reclaimed_architecture.type_aliases[0].type.vhdl_access);
     reclaimed_architecture.type_aliases[0]
         .type.vhdl_access->maximum_objects = 1;
-    const auto reclaimed_design = fsim::elaboration::elaborate(
+    const auto reclaimed_design = compile_and_elaborate(
         reclaimed.design,
         "vhdl:work.reclaimed_access_heap(rtl)");
     assert(reclaimed_design.ok());
@@ -860,7 +878,7 @@ end architecture;
         && retained_alias_architecture.type_aliases[0].type.vhdl_access);
     retained_alias_architecture.type_aliases[0]
         .type.vhdl_access->maximum_objects = 1;
-    const auto retained_alias_design = fsim::elaboration::elaborate(
+    const auto retained_alias_design = compile_and_elaborate(
         retained_alias.design,
         "vhdl:work.retained_access_alias(rtl)");
     assert(retained_alias_design.ok());
@@ -948,7 +966,7 @@ end architecture;
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.protected_storage(rtl)");
     if (!elaborated.ok()) {
@@ -1060,7 +1078,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(mismatched.ok());
-    const auto mismatched_result = fsim::elaboration::elaborate(
+    const auto mismatched_result = compile_and_elaborate(
         mismatched.design,
         "vhdl:work.invalid_protected_profile(rtl)");
     assert(
@@ -1084,7 +1102,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_shared.ok());
-    const auto invalid_shared_result = fsim::elaboration::elaborate(
+    const auto invalid_shared_result = compile_and_elaborate(
         invalid_shared.design,
         "vhdl:work.invalid_shared(rtl)");
     assert(
@@ -1130,7 +1148,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_pure_access.ok());
-    const auto invalid_pure_result = fsim::elaboration::elaborate(
+    const auto invalid_pure_result = compile_and_elaborate(
         invalid_pure_access.design,
         "vhdl:work.invalid_pure_protected_access(rtl)");
     assert(
@@ -1195,7 +1213,7 @@ end architecture;
         .type.vhdl_protected->procedures[0]
         .statements[0]
         .kind = fsim::frontend::StatementKind::WaitOn;
-    const auto invalid_execution_result = fsim::elaboration::elaborate(
+    const auto invalid_execution_result = compile_and_elaborate(
         invalid_execution_design,
         "vhdl:work.invalid_protected_execution(rtl)");
     assert(
@@ -1231,7 +1249,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl1993);
     assert(legacy_shared.ok());
-    const auto legacy_result = fsim::elaboration::elaborate(
+    const auto legacy_result = compile_and_elaborate(
         legacy_shared.design, "vhdl:work.legacy_shared(rtl)");
     if (!legacy_result.ok()) {
         for (const auto& diagnostic : legacy_result.diagnostics) {
@@ -1265,7 +1283,7 @@ end architecture;
 )",
             fsim::frontend::Language::Vhdl2008, standard);
         assert(illegal_shared.ok());
-        const auto rejected = fsim::elaboration::elaborate(
+        const auto rejected = compile_and_elaborate(
             illegal_shared.design,
             "vhdl:work.later_unprotected_shared(rtl)");
         assert(
@@ -1318,7 +1336,7 @@ end architecture;
             std::string { protected_revision_source },
             fsim::frontend::Language::Vhdl2008, standard);
         assert(revision_protected.ok());
-        const auto revision_result = fsim::elaboration::elaborate(
+        const auto revision_result = compile_and_elaborate(
             revision_protected.design,
             "vhdl:work.revision_protected(rtl)");
         if (!revision_result.ok()) {
@@ -1400,7 +1418,7 @@ end architecture;
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.physical_execution(rtl)");
     if (!elaborated.ok()) {
@@ -1497,7 +1515,7 @@ end architecture;
         }
     }
     assert(hierarchy.ok());
-    const auto hierarchy_result = fsim::elaboration::elaborate(
+    const auto hierarchy_result = compile_and_elaborate(
         hierarchy.design,
         "vhdl:work.physical_hierarchy(rtl)");
     if (!hierarchy_result.ok()) {
@@ -1547,7 +1565,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(unknown_unit.ok());
-    const auto unknown_unit_result = fsim::elaboration::elaborate(
+    const auto unknown_unit_result = compile_and_elaborate(
         unknown_unit.design,
         "vhdl:work.physical_unknown_unit(rtl)");
     assert(
@@ -1576,7 +1594,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(cross_nominal.ok());
-    const auto cross_nominal_result = fsim::elaboration::elaborate(
+    const auto cross_nominal_result = compile_and_elaborate(
         cross_nominal.design,
         "vhdl:work.physical_cross_nominal(rtl)");
     assert(
@@ -1601,7 +1619,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_scale.ok());
-    const auto invalid_scale_result = fsim::elaboration::elaborate(
+    const auto invalid_scale_result = compile_and_elaborate(
         invalid_scale.design,
         "vhdl:work.physical_invalid_scale(rtl)");
     assert(
@@ -1632,7 +1650,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(overflowing.ok());
-    const auto overflowing_result = fsim::elaboration::elaborate(
+    const auto overflowing_result = compile_and_elaborate(
         overflowing.design,
         "vhdl:work.physical_runtime_overflow(rtl)");
     assert(overflowing_result.ok());
@@ -1675,7 +1693,7 @@ void test_vhdl_revision_expression_elaboration()
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl1993);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "vhdl:work.revision_expression(rtl)");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -1720,7 +1738,7 @@ void test_vhdl_revision_expression_elaboration()
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl1993);
     assert(ambiguous.ok());
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         ambiguous.design, "vhdl:work.revision_ambiguity(rtl)");
     assert(
         !rejected.ok()
@@ -1761,7 +1779,7 @@ void test_vhdl_revision_expression_elaboration()
             fsim::frontend::Language::Vhdl2008,
             fsim::frontend::VhdlStandard::Vhdl1993);
         assert(parsed_legacy.ok());
-        const auto elaborated_legacy = fsim::elaboration::elaborate(
+        const auto elaborated_legacy = compile_and_elaborate(
             parsed_legacy.design,
             "vhdl:work." + std::string { entity } + "(rtl)");
         if (!elaborated_legacy.ok()) {
@@ -1810,7 +1828,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl1993);
     assert(legacy_ambiguous.ok());
-    const auto legacy_rejected = fsim::elaboration::elaborate(
+    const auto legacy_rejected = compile_and_elaborate(
         legacy_ambiguous.design,
         "vhdl:work.legacy_synopsys_ambiguous(rtl)");
     assert(

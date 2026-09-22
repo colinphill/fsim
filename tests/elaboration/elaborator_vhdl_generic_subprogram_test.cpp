@@ -145,7 +145,7 @@ end architecture;
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.generic_subprogram_top(rtl)");
     if (!elaborated.ok()) {
@@ -156,6 +156,7 @@ end architecture;
                       << diagnostic.span.begin.column << '\n';
         }
     }
+    assert(!has_diagnostic(elaborated, "FSIM-ELAB-HIR-001"));
     assert(elaborated.ok());
     const auto top = std::ranges::find_if(
         elaborated.design->specializations(),
@@ -239,7 +240,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
     const auto invalid_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid.design,
             "vhdl:work.invalid_generic_subprograms(rtl)");
     assert(!invalid_result.ok());
@@ -278,7 +279,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(mismatched.ok());
     const auto mismatch_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             mismatched.design,
             "vhdl:work.mismatch_top(rtl)");
     assert(!mismatch_result.ok());
@@ -322,7 +323,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(ambiguous.ok());
     const auto ambiguous_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             ambiguous.design,
             "vhdl:work.ambiguous_generic_subprogram(rtl)");
     assert(!ambiguous_result.ok());
@@ -373,7 +374,7 @@ end architecture;
             "vhdl:work.foreign_generic_target(rtl)",
             std::nullopt}};
     const auto cross_language_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             cross_language_parent.design,
             "sv:work.cross_language_generic_subprogram",
             cross_language_binding);

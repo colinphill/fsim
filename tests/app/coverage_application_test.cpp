@@ -220,6 +220,13 @@ endmodule
     const auto database_project = fsim::app::build_project(
         database_config, database_diagnostics);
     assert(!database_project);
+    if (!std::ranges::any_of(
+            database_diagnostics.diagnostics(), [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-ELAB-SVCOV-002";
+            })) {
+        fsim::diagnostic::print_text(
+            std::cerr, database_diagnostics);
+    }
     assert(std::ranges::any_of(
         database_diagnostics.diagnostics(), [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ELAB-SVCOV-002";
@@ -276,9 +283,18 @@ endmodule
     const auto instance_identity
         = project->systemverilog_coverage.instances.front().runtime_identity;
     assert(!declaration_identity.empty() && !instance_identity.empty());
-    assert(project->systemverilog_coverage.declarations.front()
-               .standard_revision
-        == fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(std::ranges::any_of(
+        project->systemverilog_hir.units(),
+        [&](const fsim::semantic::sv::Unit& unit) {
+            return std::ranges::any_of(
+                unit.coverage,
+                [&](const fsim::semantic::sv::CovergroupDeclaration&
+                        declaration) {
+                    return declaration.canonical_identity
+                            == declaration_identity
+                        && declaration.standard == "2023";
+                });
+        }));
     assert(project->systemverilog_coverage.instances.front()
                .declaration_identity
         == declaration_identity);

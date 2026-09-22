@@ -519,7 +519,7 @@ namespace fsim::app::tcl_detail {
             interpreter,
             result,
             "units",
-            unsigned_object(checked->parsed.units.size()));
+            unsigned_object(checked->semantics.units().size()));
         Tcl_SetObjResult(interpreter, result);
         return TCL_OK;
     }

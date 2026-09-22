@@ -1,12 +1,61 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/elaboration/coverage_external_exclusions.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 
 namespace fsim::app {
 using namespace application_detail;
 namespace {
+
+    constexpr std::string_view kCompiledHirCacheEnvelope
+        = "FSIM-COMPILED-HIR-CACHE-V2\n";
+
+    [[nodiscard]] std::string compiled_hir_cache_payload(
+        const std::string_view key,
+        const std::string_view bundle)
+    {
+        std::string payload;
+        payload.reserve(kCompiledHirCacheEnvelope.size()
+            + key.size() + 1U + bundle.size());
+        payload.append(kCompiledHirCacheEnvelope);
+        payload.append(key);
+        payload.push_back('\n');
+        payload.append(bundle);
+        return payload;
+    }
+
+    [[nodiscard]] std::optional<std::string_view>
+    compiled_hir_cache_bundle(
+        const std::span<const std::byte> payload,
+        const std::string_view expected_key,
+        std::string& failure)
+    {
+        const auto header_size = kCompiledHirCacheEnvelope.size()
+            + expected_key.size() + 1U;
+        if (payload.size() < header_size) {
+            failure = "compiled-HIR cache envelope is truncated";
+            return std::nullopt;
+        }
+        const auto bytes = std::string_view {
+            reinterpret_cast<const char*>(payload.data()), payload.size()
+        };
+        if (!bytes.starts_with(kCompiledHirCacheEnvelope)) {
+            failure = "compiled-HIR cache envelope version is unsupported";
+            return std::nullopt;
+        }
+        const auto stored_key = bytes.substr(
+            kCompiledHirCacheEnvelope.size(), expected_key.size());
+        if (stored_key != expected_key
+            || bytes[header_size - 1U] != '\n') {
+            failure = "compiled-HIR cache payload belongs to another key";
+            return std::nullopt;
+        }
+        return bytes.substr(header_size);
+    }
 
     [[nodiscard]] std::vector<VhdlUnitProvenance>
     vhdl_unit_provenance(const CheckedProject& checked)
@@ -14,36 +63,32 @@ namespace {
         const auto packages = application_detail::vhdl_package_dependencies(
             checked);
         std::vector<VhdlUnitProvenance> result;
-        result.reserve(checked.parsed.units.size());
-        for (std::size_t index = 0; index < checked.parsed.units.size();
-            ++index) {
-            const auto& unit = checked.parsed.units[index];
-            if (unit.language != frontend::Language::Vhdl2008
-                || !unit.standard_package_revision.empty()) {
+        result.reserve(checked.vhdl_hir.units().size());
+        for (const auto& unit : checked.vhdl_hir.units()) {
+            if (!unit.standard_package_revision.empty()) {
                 continue;
             }
             VhdlUnitProvenance item;
-            item.unit = checked.semantics.units().at(index).id;
-            item.standard = std::string { frontend::to_string(
-                unit.vhdl_standard) };
+            item.unit = unit.id;
+            item.standard = unit.standard;
             item.predefined_environment
-                = unit.vhdl_predefined_environment.identity;
-            item.compatibility_profile = unit.vhdl_compatibility_profile;
+                = unit.predefined_environment.identity;
+            item.compatibility_profile = unit.compatibility_profile;
             for (const auto& dependency : packages) {
                 if (dependency.standard != item.standard) {
                     continue;
                 }
                 const auto selected = std::ranges::any_of(
-                    unit.vhdl_context, [&](const auto& context) {
+                    unit.context, [&](const auto& context) {
                         if (context.kind
-                            != frontend::VhdlContextItemKind::UseClause) {
+                            != semantic::vhdl::ContextKind::use_clause) {
                             return false;
                         }
                         return std::ranges::any_of(
                             context.selected_names,
-                            [&](const std::string_view name) {
-                                return name == dependency.package
-                                    || name.starts_with(
+                            [&](const semantic::vhdl::Name& name) {
+                                return name.spelling == dependency.package
+                                    || name.spelling.starts_with(
                                         dependency.package + ".");
                             });
                     });
@@ -75,17 +120,79 @@ namespace {
         return result;
     }
 
+    [[nodiscard]] std::optional<frontend::StandardRevision>
+    verilog_standard_revision(
+        const semantic::Language language,
+        const std::string_view standard)
+    {
+        using Revision = frontend::StandardRevision;
+        if (language == semantic::Language::verilog) {
+            if (standard == "1995") {
+                return Revision::Verilog1995;
+            }
+            if (standard == "2001") {
+                return Revision::Verilog2001;
+            }
+            if (standard == "2001-noconfig") {
+                return Revision::Verilog2001NoConfig;
+            }
+            if (standard == "2005") {
+                return Revision::Verilog2005;
+            }
+            return std::nullopt;
+        }
+        if (language != semantic::Language::system_verilog) {
+            return std::nullopt;
+        }
+        if (standard == "2005") {
+            return Revision::SystemVerilog2005;
+        }
+        if (standard == "2009") {
+            return Revision::SystemVerilog2009;
+        }
+        if (standard == "2012") {
+            return Revision::SystemVerilog2012;
+        }
+        if (standard == "2017") {
+            return Revision::SystemVerilog2017;
+        }
+        if (standard == "2023") {
+            return Revision::SystemVerilog2023;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string> canonical_cache_payload(
+        const semantic::CompiledDesign& design,
+        const std::span<const library::SourceNameMapping> mappings,
+        diagnostic::Engine& diagnostics)
+    {
+        auto relocated = design;
+        if (!relocate_compiled_design_sources(
+                relocated, mappings, diagnostics)) {
+            return std::nullopt;
+        }
+        return serialize_compiled_hir_bundle(relocated, diagnostics);
+    }
+
 } // namespace
 
 std::optional<BuiltProject> build_checked_project(
     const project::Config& config,
-    std::optional<CheckedProject> checked,
+    std::optional<CompilationWorkspace> workspace,
     const std::span<const std::filesystem::path> incremental_plugins,
     diagnostic::Engine& diagnostics)
 {
-    if (!checked) {
+    if (!workspace) {
         return std::nullopt;
     }
+    auto checked = std::optional<CheckedProject> {
+        release_compiled_project(std::move(*workspace))
+    };
+    // Moving the CheckedProject base does not move the derived parser fields.
+    // Destroy the compile-local workspace before cache linking, specialization,
+    // hierarchy construction, or SimIR lowering begins.
+    workspace.reset();
     const auto coverage_exclusions
         = elaboration::make_coverage_external_exclusion_plan(
             config.coverage.exclusions);
@@ -118,7 +225,6 @@ std::optional<BuiltProject> build_checked_project(
             return std::nullopt;
         }
     }
-    auto vhdl_provenance = vhdl_unit_provenance(*checked);
     for (const auto& source_set : config.source_sets) {
         if (source_set.uvm_release != project::SystemVerilogUvmRelease::none
             && source_set.uvm_release
@@ -130,31 +236,6 @@ std::optional<BuiltProject> build_checked_project(
             return std::nullopt;
         }
     }
-    // Lowering remains a temporary compatibility projection while the owning
-    // semantic HIR is the durable boundary. Moving it out proves that no build,
-    // cache, runtime, debugger, trace, or API result can retain an address into
-    // CheckedProject's parser workspace.
-    std::map<std::string, frontend::StandardRevision, std::less<>>
-        verilog_unit_revisions;
-    std::map<std::string, std::string, std::less<>>
-        verilog_unit_compatibility_profiles;
-    for (const auto& unit : checked->parsed.units) {
-        if (unit.language == frontend::Language::Vhdl2008) {
-            continue;
-        }
-        const auto identity = unit.library + "::" + unit.name;
-        verilog_unit_revisions.insert_or_assign(
-            identity, unit.standard_revision);
-        verilog_unit_compatibility_profiles.insert_or_assign(
-            identity, unit.verilog_compatibility_profile);
-    }
-    auto lowering_adapter = std::move(checked->parsed);
-    // Object loading validates an owning semantic/HIR projection, but build
-    // normalization must replace it. Release that obsolete projection before
-    // the AST-heavy normalization and elaboration phases overlap with it.
-    checked->semantics = { };
-    checked->vhdl_hir = { };
-    checked->systemverilog_hir = { };
     std::vector<std::filesystem::path> systemc_plugins;
     std::vector<SystemCLibraryRegistry> systemc_registries;
     std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
@@ -264,9 +345,156 @@ std::optional<BuiltProject> build_checked_project(
         }
         systemc_plugins.push_back(std::move(plugin_path));
     }
-    select_delay_alternatives(
-        lowering_adapter, config.run.delay_mode);
-    const auto resolution = effective_resolution(config, lowering_adapter);
+    auto resolution = effective_resolution(
+        config, static_cast<const semantic::CompiledDesign&>(*checked));
+    const auto tops = selected_tops(config, *checked, diagnostics);
+    validate_bindings(
+        config, *checked, systemc_registries, diagnostics);
+    if (diagnostics.has_error()) {
+        return std::nullopt;
+    }
+    if (config.run.trace_file && config.run.trace_enabled) {
+        const auto object_phase = !checked->objects.empty();
+        auto request = trace_control_request(config.run,
+            object_phase ? TraceControlSurface::NonProjectElaborate
+                         : TraceControlSurface::ProjectCli,
+            object_phase ? TraceControlPhase::Elaborate
+                         : TraceControlPhase::Simulate);
+        auto control = apply_trace_control(std::move(request));
+        if (!control.ok()) {
+            for (const auto& diagnostic : control.diagnostics) {
+                application_detail::import_diagnostic(
+                    diagnostics, diagnostic);
+            }
+            return std::nullopt;
+        }
+        auto snapshot = make_trace_archive_snapshot(
+            *control.application, config.base_directory);
+        if (checked->trace_archive
+            && !trace_archive_profiles_compatible(
+                *checked->trace_archive, snapshot)) {
+            diagnostics.error(
+                "FSIM-TRACE-ARCHIVE-003",
+                "current trace request conflicts with archived object or "
+                "library profile");
+            return std::nullopt;
+        }
+        checked->trace_archive = std::make_shared<const TraceArchiveSnapshot>(
+            std::move(snapshot));
+    }
+    const auto key = make_cache_key(
+        config,
+        *checked,
+        tops,
+        resolution,
+        systemc_plugin_key,
+        diagnostics);
+    if (key.empty()) {
+        return std::nullopt;
+    }
+
+    const auto source_mappings = compiled_cache_source_mappings(
+        *checked, config.base_directory, diagnostics);
+    if (!source_mappings) {
+        return std::nullopt;
+    }
+    std::vector<library::SourceNameMapping> consumer_mappings;
+    consumer_mappings.reserve(source_mappings->size());
+    for (const auto& mapping : *source_mappings) {
+        consumer_mappings.push_back(
+            { mapping.logical_name, mapping.producer_name });
+    }
+
+    compiler::ObjectCache cache(config.build.cache_path);
+    std::error_code cache_error;
+    const auto existing = cache.load(key, cache_error);
+    bool hit = false;
+    std::string cache_failure;
+    if (existing) {
+        diagnostic::Engine cache_diagnostics;
+        const auto bundle = compiled_hir_cache_bundle(
+            *existing, key, cache_failure);
+        auto cached = bundle
+            ? deserialize_compiled_hir_bundle(
+                  *bundle, cache.path_for(key).string(), cache_diagnostics)
+            : std::nullopt;
+        if (cached
+            && !relocate_compiled_design_sources(
+                *cached, consumer_mappings, cache_diagnostics)) {
+            cached.reset();
+        }
+        if (cached
+            && effective_resolution(config, *cached) != resolution) {
+            cache_failure = "compiled-HIR cache time resolution is inconsistent";
+            cached.reset();
+        }
+        if (cached) {
+            // The cache envelope binds the decoded bundle to the complete
+            // checked-input/configuration key used for root and binding
+            // selection.
+            std::vector<semantic::CompiledDesign> inputs;
+            inputs.push_back(std::move(*cached));
+            auto linked = install_linked_compiled_design(
+                *checked, std::move(inputs));
+            hit = linked.ok();
+            cache_failure = std::move(linked.error);
+        }
+        if (!hit && cache_failure.empty()
+            && !cache_diagnostics.empty()) {
+            cache_failure = cache_diagnostics.diagnostics().front().message;
+        }
+        if (!hit && cache_failure.empty()) {
+            cache_failure = "compiled-HIR cache payload is invalid";
+        }
+    } else if (cache_error != std::errc::no_such_file_or_directory) {
+        cache_failure = cache_error.message();
+    }
+    if (!cache_failure.empty()) {
+        std::error_code erase_error;
+        (void)cache.erase(key, erase_error);
+        diagnostics.warning(
+            "FSIM-CACHE-0002",
+            "discarded an unreadable or incompatible cache entry: "
+                + cache_failure);
+    }
+    if (!hit) {
+        diagnostic::Engine canonical_diagnostics;
+        auto canonical_fresh = canonical_cache_payload(
+            static_cast<const semantic::CompiledDesign&>(*checked),
+            *source_mappings, canonical_diagnostics);
+        if (!canonical_fresh) {
+            const auto reason = canonical_diagnostics.empty()
+                ? std::string { "compiled-HIR serialization failed" }
+                : canonical_diagnostics.diagnostics().front().message;
+            diagnostics.error(
+                "FSIM-CACHE-0003",
+                "cannot prepare cache payload: " + reason);
+            return std::nullopt;
+        }
+        const auto cache_payload = compiled_hir_cache_payload(
+            key, *canonical_fresh);
+        const auto payload_bytes = std::as_bytes(
+            std::span<const char> {
+                cache_payload.data(), cache_payload.size() });
+        if (compiler::object_cache_payload_fits(payload_bytes.size())) {
+            cache_error.clear();
+            if (!cache.store(key, payload_bytes, cache_error)) {
+                diagnostics.error(
+                    "FSIM-CACHE-0003",
+                    "cannot populate cache: " + cache_error.message());
+                return std::nullopt;
+            }
+        }
+    }
+
+    resolution = effective_resolution(
+        config, static_cast<const semantic::CompiledDesign&>(*checked));
+    if (!validate_declared_time_precisions(
+            static_cast<const semantic::CompiledDesign&>(*checked),
+            resolution,
+            diagnostics)) {
+        return std::nullopt;
+    }
     if (!systemc_registries.empty()) {
         const auto parsed_resolution = magnitude_and_unit(resolution);
         const auto factor = parsed_resolution
@@ -287,18 +515,38 @@ std::optional<BuiltProject> build_checked_project(
                 parsed_resolution->magnitude * *factor);
         }
     }
-    if (!validate_declared_time_precisions(
-            lowering_adapter, resolution, diagnostics)
-        || !normalize_delays(
-            lowering_adapter, resolution, diagnostics)) {
+
+    auto vhdl_provenance = vhdl_unit_provenance(*checked);
+    std::map<std::string, frontend::StandardRevision, std::less<>>
+        verilog_unit_revisions;
+    std::map<std::string, std::string, std::less<>>
+        verilog_unit_compatibility_profiles;
+    for (const auto& unit : checked->systemverilog_hir.units()) {
+        const auto& semantic_unit = checked->semantics.units().at(
+            unit.id.value());
+        const auto revision = verilog_standard_revision(
+            semantic_unit.language, unit.standard);
+        if (!revision) {
+            diagnostics.error(
+                "FSIM-ELAB-HIR-001",
+                "compiled-HIR unit '" + unit.name
+                    + "' has an invalid Verilog/SystemVerilog standard '"
+                    + unit.standard + "'");
+            return std::nullopt;
+        }
+        const auto identity = unit.library + "::" + unit.name;
+        verilog_unit_revisions.insert_or_assign(identity, *revision);
+        verilog_unit_compatibility_profiles.insert_or_assign(
+            identity, unit.compatibility_profile);
+    }
+    auto systemverilog_coverage = make_systemverilog_coverage_state(
+        checked->systemverilog_hir, checked->semantics);
+    select_delay_alternatives(*checked, config.run.delay_mode);
+    if (!normalize_delays(
+            *checked, resolution, diagnostics)) {
         return std::nullopt;
     }
-    const auto tops = selected_tops(config, lowering_adapter, diagnostics);
-    validate_bindings(
-        config, lowering_adapter, systemc_registries, diagnostics);
-    if (diagnostics.has_error()) {
-        return std::nullopt;
-    }
+    checked->refresh_lookup_indexes();
     auto systemc_instances = construct_systemc_instances(
         tops, systemc_registries, diagnostics);
     if (!systemc_instances) {
@@ -329,26 +577,12 @@ std::optional<BuiltProject> build_checked_project(
         elaboration_roots.push_back({ top.target, top.alias });
     }
     auto elaborated = elaboration::elaborate(
-        lowering_adapter,
+        *checked,
         elaboration_roots,
         bindings,
         *systemc_instances,
         systemc_provider.get(),
         config.elaboration.search_libraries);
-    // Reproject only after elaboration has released its temporary AST
-    // specializations. The durable HIR must reflect normalized delays, but no
-    // elaboration operation consumes this owning semantic projection.
-    checked->semantics = build_semantic_model(
-        lowering_adapter,
-        checked->hdl_sources,
-        checked->systemc_sources,
-        checked->standard_sources);
-    if (!checked->semantics.valid()) {
-        diagnostics.error(
-            "FSIM-SEM-0001",
-            "build normalization produced an invalid owning semantic projection");
-        return std::nullopt;
-    }
     for (const auto& input : elaborated.messages) {
         application_detail::import_diagnostic(diagnostics, input);
     }
@@ -363,76 +597,52 @@ std::optional<BuiltProject> build_checked_project(
     if (!elaborated.design || diagnostics.has_error()) {
         return std::nullopt;
     }
-    const bool has_selected_generated_classes =
-        !elaborated.selected_systemverilog_classes.empty();
-    for (auto& declaration :
+    const auto generated_class_is_selected =
+        [&](const semantic::sv::ClassSpecialization& specialization) {
+          const auto declaration = std::ranges::find_if(
+              checked->systemverilog_hir.classes(),
+              [&](const auto& candidate) {
+                return semantic::sv::class_declaration_identity(candidate)
+                    == specialization.declaration_identity;
+              });
+          if (declaration == checked->systemverilog_hir.classes().end()
+              || !declaration->generate_owner) {
+              return true;
+          }
+          return std::ranges::any_of(
+              elaborated.selected_systemverilog_classes,
+              [&](const auto& selection) {
+                return selection.declaration_identity
+                        == specialization.declaration_identity
+                    && selection.generate_owner
+                        == *declaration->generate_owner
+                    && selection.declaration_scope == declaration->scope
+                    && selection.origin == declaration->origin;
+              });
+        };
+    std::erase_if(
+        checked->compiled_systemverilog_class_specializations,
+        [&](const auto& specialization) {
+          return !generated_class_is_selected(specialization);
+        });
+    for (const auto& selection :
         elaborated.selected_systemverilog_classes) {
-        const auto owner = std::ranges::find_if(
-            lowering_adapter.units,
-            [&](const auto& unit) {
-              const auto unit_library = unit.library.empty()
-                  ? std::string_view { "work" }
-                  : std::string_view { unit.library };
-              const auto declaration_library =
-                  declaration.library.empty()
-                  ? std::string_view { "work" }
-                  : std::string_view { declaration.library };
-              return unit.language
-                      == frontend::Language::SystemVerilog2017
-                  && unit.name == declaration.enclosing_scope
-                  && unit_library == declaration_library;
-            });
-        if (owner == lowering_adapter.units.end()) {
+        if (std::ranges::none_of(
+                checked->compiled_systemverilog_class_specializations,
+                [&](const auto& specialization) {
+                  return specialization.declaration_identity
+                      == selection.declaration_identity;
+                })) {
             diagnostics.error(
                 "FSIM-ELAB-GEN-015",
                 "selected generated class '"
-                    + declaration.canonical_identity
-                    + "' has no owning SystemVerilog design unit");
-            continue;
-        }
-        if (std::ranges::none_of(
-                owner->systemverilog_classes,
-                [&](const auto& existing) {
-                  return existing.canonical_identity
-                      == declaration.canonical_identity;
-                })) {
-            owner->systemverilog_classes.push_back(
-                std::move(declaration));
-        }
-    }
-    if (has_selected_generated_classes && !diagnostics.has_error()) {
-        auto class_specializations =
-            frontend::specialize_systemverilog_classes(
-                lowering_adapter);
-        for (const auto& diagnostic : class_specializations.diagnostics) {
-            application_detail::import_diagnostic(
-                diagnostics, diagnostic);
-        }
-        checked->systemverilog_class_specializations =
-            std::move(class_specializations.specializations);
-        checked->semantics = build_semantic_model(
-            lowering_adapter,
-            checked->hdl_sources,
-            checked->systemc_sources,
-            checked->standard_sources);
-        if (!checked->semantics.valid()) {
-            diagnostics.error(
-                "FSIM-SEM-0001",
-                "generated-class normalization produced an invalid owning "
-                "semantic projection");
+                    + selection.declaration_identity
+                    + "' has no compiled-HIR specialization");
         }
     }
     if (diagnostics.has_error()) {
         return std::nullopt;
     }
-    auto systemverilog_coverage = frontend::capture_systemverilog_coverage_state(lowering_adapter);
-    checked->vhdl_hir = build_vhdl_hir(
-        lowering_adapter, checked->semantics);
-    checked->systemverilog_hir = build_systemverilog_hir(
-        lowering_adapter,
-        checked->semantics,
-        checked->systemverilog_class_specializations);
-    lowering_adapter = { };
     if (!systemc_registries.empty()) {
         try {
             const auto bind_object =
@@ -504,75 +714,6 @@ std::optional<BuiltProject> build_checked_project(
     if (!specialization_cache_keys) {
         return std::nullopt;
     }
-    if (config.run.trace_file && config.run.trace_enabled) {
-        const auto object_phase = !checked->objects.empty();
-        auto request = trace_control_request(config.run,
-            object_phase ? TraceControlSurface::NonProjectElaborate
-                         : TraceControlSurface::ProjectCli,
-            object_phase ? TraceControlPhase::Elaborate
-                         : TraceControlPhase::Simulate);
-        auto control = apply_trace_control(std::move(request));
-        if (!control.ok()) {
-            for (const auto& diagnostic : control.diagnostics)
-                application_detail::import_diagnostic(diagnostics, diagnostic);
-            return std::nullopt;
-        }
-        auto snapshot = make_trace_archive_snapshot(
-            *control.application, config.base_directory);
-        if (checked->trace_archive
-            && !trace_archive_profiles_compatible(
-                *checked->trace_archive, snapshot)) {
-            diagnostics.error("FSIM-TRACE-ARCHIVE-003",
-                "current trace request conflicts with archived object or library profile");
-            return std::nullopt;
-        }
-        checked->trace_archive = std::make_shared<const TraceArchiveSnapshot>(
-            std::move(snapshot));
-    }
-    const auto key = make_cache_key(
-        config,
-        *checked,
-        tops,
-        resolution,
-        systemc_plugin_key,
-        diagnostics);
-    if (key.empty()) {
-        return std::nullopt;
-    }
-    compiler::ObjectCache cache(config.build.cache_path);
-    std::error_code cache_error;
-    const auto existing = cache.load(key, cache_error);
-    const bool hit = existing.has_value();
-    if (!hit) {
-        if (cache_error != std::errc::no_such_file_or_directory) {
-            std::error_code erase_error;
-            (void)cache.erase(key, erase_error);
-            diagnostics.warning(
-                "FSIM-CACHE-0002",
-                "discarded an unreadable or incompatible cache entry: "
-                    + cache_error.message());
-        }
-        std::string record = "FSIM-DESIGN-CACHE-V3\n";
-        record += coverage_identity.identity.digest + "\n";
-        for (const auto& top : tops) {
-            record += top.alias + "=" + top.target + "\n";
-        }
-        record += std::to_string(std::ranges::count_if(
-                      design_ir.objects(), [](const auto& object) {
-                          return object.kind == semantic::design::ObjectKind::signal
-                              && !object.parent_object;
-                      }))
-            + "\n" + std::to_string(design_ir.processes().size()) + "\n";
-        const auto bytes = std::as_bytes(
-            std::span<const char> { record.data(), record.size() });
-        cache_error.clear();
-        if (!cache.store(key, bytes, cache_error)) {
-            diagnostics.error(
-                "FSIM-CACHE-0003",
-                "cannot populate cache: " + cache_error.message());
-            return std::nullopt;
-        }
-    }
     const auto selected_seed = config.project.random_seed
         ? entropy_seed()
         : config.project.seed;
@@ -611,7 +752,7 @@ std::optional<BuiltProject> build_checked_project(
         std::move(mapped_libraries),
         std::move(checked->objects),
         std::move(checked->systemverilog_uvm_provenance), { },
-        std::move(checked->systemverilog_class_specializations),
+        std::move(checked->compiled_systemverilog_class_specializations),
         std::move(systemverilog_coverage), std::nullopt, { },
         std::move(verilog_unit_revisions),
         std::move(verilog_unit_compatibility_profiles), { }, { }
@@ -627,7 +768,7 @@ std::optional<BuiltProject> build_project(
     diagnostic::Engine& diagnostics)
 {
     return build_checked_project(
-        config, check_project(config, diagnostics), { }, diagnostics);
+        config, check_project_workspace(config, diagnostics), { }, diagnostics);
 }
 
 std::optional<BuiltProject> build_objects(
@@ -644,9 +785,9 @@ std::optional<BuiltProject> build_objects(
     const std::span<const std::filesystem::path> systemc_plugins,
     diagnostic::Engine& diagnostics)
 {
-    std::optional<CheckedProject> checked;
+    std::optional<CompilationWorkspace> checked;
     if (objects.empty()) {
-        CheckedProject empty;
+        CompilationWorkspace empty;
         inject_vhdl_standard_libraries(empty, diagnostics);
         empty.semantics = build_semantic_model(
             empty.parsed, empty.hdl_sources, empty.systemc_sources,
@@ -655,7 +796,7 @@ std::optional<BuiltProject> build_objects(
         empty.systemverilog_hir = build_systemverilog_hir(empty.parsed, empty.semantics);
         checked = std::move(empty);
     } else {
-        checked = load_objects(objects, diagnostics);
+        checked = load_object_workspace(objects, diagnostics);
     }
     return build_checked_project(
         config, std::move(checked), systemc_plugins, diagnostics);

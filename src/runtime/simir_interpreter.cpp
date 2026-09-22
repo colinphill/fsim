@@ -129,6 +129,11 @@ void Interpreter::set_class_static_method_call_hook(
     impl_->class_static_method_call_hook = std::move(hook);
 }
 
+void Interpreter::set_dpi_function_call_hook(DpiFunctionCallHook hook)
+{
+    impl_->dpi_function_call_hook = std::move(hook);
+}
+
 SignalId Interpreter::add_signal(Signal signal)
 {
     if (impl_->started) {
@@ -1362,9 +1367,24 @@ void Interpreter::start()
         }
     }
     impl_->build_native_static_regions();
+    std::vector<bool> prearmed_static_waits(
+        impl_->processes.size(), false);
+    for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+        auto& process = impl_->processes[id];
+        if (!process.program.initialize || process.program.final
+            || process.program.static_sensitivity.empty()
+            || process.program.operations.empty()
+            || !operation_holds<WaitSensitivity>(
+                process.program.operations.front())) {
+            continue;
+        }
+        impl_->execute(id);
+        prearmed_static_waits[id] = true;
+    }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
         if (impl_->processes[id].program.initialize
-            && !impl_->processes[id].program.final) {
+            && !impl_->processes[id].program.final
+            && !prearmed_static_waits[id]) {
             impl_->queue_at(id, impl_->scheduler.now());
         }
     }

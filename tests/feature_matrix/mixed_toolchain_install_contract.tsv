@@ -20,7 +20,7 @@ TOOL174-17	systemc-object	SystemC-runtime	reusable	exact	one-shared-runtime	reje
 TOOL174-18	systemc-object	TLM-identity	reusable	exact	one-shared-runtime	reject-before-open	tests/systemc/systemc_compatibility_test.cpp
 TOOL174-19	systemc-object	SCV-identity	reusable	exact	one-shared-runtime	reject-before-open	tests/scv/scv_compatibility_test.cpp
 TOOL174-20	portable-object	format-schema	reusable	none	not-required	accept-current	tests/artifact/object_artifact_test.cpp
-TOOL174-21	portable-library	portable-units	reusable	optional	not-required	ignore-no-native	tests/library/library_artifact_test.cpp
+TOOL174-21	portable-library	compiled-hir-bundle	reusable	optional	not-required	ignore-no-native	tests/library/library_artifact_test.cpp
 TOOL174-22	mapped-library	LLVM-native-index	reusable	exact	one-fsim-runtime	reject-before-fallback	tests/api/api_mapped_library_test.cpp
 TOOL174-23	mapped-library	SystemC-native-index	reusable	exact	one-shared-runtime	reject-before-fallback	tests/app/application_test_cli.cpp
 TOOL174-24	incremental-cache	compiler-fingerprint	reusable	exact	one-shared-runtime	separate-cache	tests/systemc/incremental_compiler_test.cpp

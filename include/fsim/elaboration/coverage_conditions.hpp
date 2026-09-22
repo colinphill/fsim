@@ -7,7 +7,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -88,11 +87,5 @@ struct CoverageConditionResult {
         return error == CoverageConditionError::None;
     }
 };
-
-[[nodiscard]] CoverageConditionResult discover_coverage_conditions(
-    std::span<const frontend::Statement> statements,
-    frontend::CodeCoverageLanguage language,
-    std::span<const CoverageConditionSource> sources,
-    CoverageConditionLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

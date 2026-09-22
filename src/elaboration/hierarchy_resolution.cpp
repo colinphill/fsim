@@ -1,11 +1,121 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <iterator>
 #include <map>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
+
+namespace {
+
+frontend::SourceSpan compiled_resolution_source_span(
+    const semantic::CompiledDesign& compiled,
+    const semantic::SourceSpanId source)
+{
+    frontend::SourceSpan result;
+    const auto& spans = compiled.semantics.source_spans();
+    if (!source.valid() || source.value() >= spans.size()) {
+        return result;
+    }
+    const auto& span = spans[source.value()];
+    result.source_name = span.logical_name;
+    result.begin = {
+        static_cast<std::size_t>(span.begin.offset),
+        span.begin.line,
+        span.begin.column,
+    };
+    result.end = {
+        static_cast<std::size_t>(span.end.offset),
+        span.end.line,
+        span.end.column,
+    };
+    const auto& files = compiled.semantics.source_files();
+    if (span.file.valid() && span.file.value() < files.size()) {
+        result.physical_source_name = files[span.file.value()].physical_name;
+    }
+    return result;
+}
+
+const semantic::sv::Declaration* compiled_systemverilog_declaration(
+    const semantic::CompiledDesign& compiled,
+    const semantic::DeclarationId id)
+{
+    const auto found = compiled.find_declaration(id);
+    return found && found->systemverilog != nullptr
+        ? found->systemverilog
+        : nullptr;
+}
+
+const semantic::sv::TypeDefinition* compiled_systemverilog_type(
+    const semantic::CompiledDesign& compiled,
+    const semantic::TypeId id)
+{
+    const auto found = compiled.find_type(id);
+    return found && found->systemverilog != nullptr
+        ? found->systemverilog
+        : nullptr;
+}
+
+const semantic::sv::Statement* compiled_systemverilog_statement(
+    const semantic::CompiledDesign& compiled,
+    const semantic::StatementId id)
+{
+    const auto found = compiled.find_statement(id);
+    return found && found->systemverilog != nullptr
+        ? found->systemverilog
+        : nullptr;
+}
+
+const semantic::sv::Expression* compiled_systemverilog_expression(
+    const semantic::CompiledDesign& compiled,
+    const semantic::ExpressionId id)
+{
+    const auto found = compiled.find_expression(id);
+    return found && found->systemverilog != nullptr
+        ? found->systemverilog
+        : nullptr;
+}
+
+bool compiled_resolver_returns_first(
+    const semantic::CompiledDesign& compiled,
+    const semantic::sv::Declaration& function)
+{
+    if (!function.callable || function.callable->formals.size() != 1U
+        || function.statements.size() != 1U) {
+        return false;
+    }
+    const auto* formal = compiled_systemverilog_declaration(
+        compiled, function.callable->formals.front());
+    const auto* statement = compiled_systemverilog_statement(
+        compiled, function.statements.front());
+    if (formal == nullptr || statement == nullptr
+        || statement->kind
+            != semantic::sv::StatementKind::return_statement
+        || !statement->value) {
+        return false;
+    }
+    const auto* value = compiled_systemverilog_expression(
+        compiled, *statement->value);
+    if (value == nullptr
+        || value->kind != semantic::sv::ExpressionKind::index
+        || value->operands.size() != 2U) {
+        return false;
+    }
+    const auto* drivers = compiled_systemverilog_expression(
+        compiled, value->operands.front());
+    const auto* index = compiled_systemverilog_expression(
+        compiled, value->operands.back());
+    return drivers != nullptr && index != nullptr
+        && drivers->kind == semantic::sv::ExpressionKind::name
+        && drivers->text == formal->name
+        && index->kind == semantic::sv::ExpressionKind::integer_literal
+        && index->text == "0";
+}
+
+} // namespace
 
 void HierarchyBuilder::finish()
 {
@@ -37,17 +147,24 @@ void HierarchyBuilder::finish()
                 { });
         }
     }
-    for (const auto* directive : compilation_unit_systemverilog_binds_) {
-        if (directive != nullptr
-            && !used_compilation_unit_systemverilog_binds_.contains(
-                directive)) {
-            report(
-                "FSIM-ELAB-SVBIND-002",
-                "bind target '" + directive->target
-                    + "' was not found in the elaborated hierarchy",
-                directive->span);
+    // Root-global predeclaration and authoritative root instantiation both
+    // specialize the same unit now that no prepared AST root is retained.
+    // Preserve the first diagnostic (including constant-function $error
+    // failures) while coalescing the identical second report.
+    std::vector<Diagnostic> unique_diagnostics;
+    unique_diagnostics.reserve(diagnostics_.size());
+    for (auto& diagnostic : diagnostics_) {
+        const auto duplicate = std::ranges::any_of(
+            unique_diagnostics, [&](const Diagnostic& retained) {
+                return retained.code == diagnostic.code
+                    && retained.message == diagnostic.message
+                    && retained.span == diagnostic.span;
+            });
+        if (!duplicate) {
+            unique_diagnostics.push_back(std::move(diagnostic));
         }
     }
+    diagnostics_ = std::move(unique_diagnostics);
 }
 
 ResolutionKind HierarchyBuilder::native_resolution(
@@ -77,10 +194,10 @@ ResolutionKind HierarchyBuilder::native_resolution(
         || net_type == "trior") {
         return ResolutionKind::sv_wor;
     }
-    if (!signal.systemverilog_net_type.empty()
-        && signal.systemverilog_net_type != "uwire") {
-        return ResolutionKind::sv_wire;
-    }
+    // A nonempty name can also be an unresolved user nettype or an
+    // accidentally retained variable spelling. Only the explicit built-in
+    // net kinds above have native wire resolution; user nettypes are handled
+    // by explicit_resolution() after their resolver has been linked.
     return ResolutionKind::none;
 }
 
@@ -90,6 +207,15 @@ HierarchyBuilder::explicit_resolution(
 {
     const auto found = resolver_by_signal_.find(signal);
     if (found == resolver_by_signal_.end()) {
+        const auto& info = design_.signal_info_.at(signal);
+        const auto nettype = info.systemverilog_net_type.empty()
+            ? info.type_name
+            : info.systemverilog_net_type;
+        const auto user_nettype = systemverilog_resolution_kinds_.find(
+            nettype);
+        if (user_nettype != systemverilog_resolution_kinds_.end()) {
+            return user_nettype->second;
+        }
         return std::nullopt;
     }
     if (found->second == "std_logic") {
@@ -115,35 +241,54 @@ HierarchyBuilder::explicit_resolution(
 }
 
 void HierarchyBuilder::register_systemverilog_resolution_functions(
-    const DesignUnit& unit)
+    const semantic::sv::Unit& unit)
 {
-    if (unit.language != frontend::Language::SystemVerilog2017) {
+    if (compiled_ == nullptr) {
         return;
     }
-    for (const auto& alias : unit.type_aliases) {
-        const auto& resolver = alias.systemverilog_resolution_function;
-        if (alias.declaration_kind
-                != frontend::TypeDeclarationKind::SystemVerilogNettype
-            || resolver.empty()) {
+    if (std::ranges::find(
+            systemverilog_resolution_unit_registrations_, unit.id)
+        != systemverilog_resolution_unit_registrations_.end()) {
+        return;
+    }
+    const auto diagnostics_before = diagnostics_.size();
+    for (const auto declaration_id : unit.declarations) {
+        const auto* declaration = compiled_systemverilog_declaration(
+            *compiled_, declaration_id);
+        if (declaration == nullptr
+            || declaration->form
+                != semantic::sv::DeclarationForm::nettype_declaration
+            || !declaration->declared_type) {
             continue;
         }
-        const frontend::DesignUnit* owner = &unit;
-        auto designator = resolver;
-        if (const auto separator = resolver.rfind("::");
-            separator != std::string::npos) {
-            const auto package_name = resolver.substr(0, separator);
-            owner = find_systemverilog_package(unit, package_name);
-            designator = resolver.substr(separator + 2);
+        const auto* type = compiled_systemverilog_type(
+            *compiled_, *declaration->declared_type);
+        if (type == nullptr || type->resolution_function.empty()) {
+            continue;
         }
-        std::vector<const frontend::FunctionDeclaration*> matches;
-        if (owner != nullptr) {
-            for (const auto& function : owner->functions) {
-                if (function.name == designator && function.defined) {
-                    matches.push_back(&function);
-                }
+        const auto& resolver = type->resolution_function;
+        std::vector<const semantic::sv::Declaration*> matches;
+        const semantic::CompiledDeclarationPredicate executable_function
+            = [](const semantic::CompiledDeclarationView& candidate) {
+                  return candidate.systemverilog != nullptr
+                      && candidate.systemverilog->form
+                          == semantic::sv::DeclarationForm::function
+                      && !candidate.systemverilog->statements.empty();
+              };
+        const auto resolution = semantic::CompiledDesignResolver {
+            *compiled_, unit.id }
+                                    .resolve_systemverilog(resolver,
+                                        unit.scope, executable_function,
+                                        false);
+        for (const auto candidate_id : resolution.candidates) {
+            if (const auto* candidate = compiled_systemverilog_declaration(
+                    *compiled_, candidate_id)) {
+                matches.push_back(candidate);
             }
         }
-        if (matches.size() != 1) {
+        const auto source = compiled_resolution_source_span(
+            *compiled_, type->source);
+        if (matches.size() != 1U) {
             report(
                 matches.empty()
                     ? "FSIM-ELAB-SVNETTYPE-001"
@@ -154,47 +299,44 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                         + "' is not visible with an executable body"
                     : "SystemVerilog nettype resolution function '"
                         + resolver + "' is ambiguous",
-                alias.span);
+                source);
             continue;
         }
         const auto& function = *matches.front();
-        const auto alias_width = alias.type.width();
-        const auto return_width = function.return_type.width();
-        const bool profile_matches = function.arguments.size() == 1
-            && function.arguments.front().type.systemverilog_container
-            && function.arguments.front().type.systemverilog_container->kind
-                == frontend::SystemVerilogContainerKind::DynamicArray
-            && alias_width && return_width
-            && *alias_width == *return_width
-            && alias.type.domain == function.return_type.domain;
+        const auto* formal = function.callable
+                && function.callable->formals.size() == 1U
+            ? compiled_systemverilog_declaration(
+                  *compiled_, function.callable->formals.front())
+            : nullptr;
+        const bool profile_matches = function.callable
+            && function.callable->function
+            && formal != nullptr && formal->type
+            && formal->type->container_form
+                == semantic::sv::TypeForm::dynamic_array
+            && type->base.executable_width
+            && function.callable->return_type.executable_width
+            && *type->base.executable_width
+                == *function.callable->return_type.executable_width
+            && type->base.four_state
+                == function.callable->return_type.four_state;
         if (!profile_matches) {
             report(
                 "FSIM-ELAB-SVNETTYPE-003",
                 "SystemVerilog nettype resolution function '" + resolver
                     + "' must take one dynamic array of the net base type "
                       "and return that base type",
-                function.span);
+                compiled_resolution_source_span(
+                    *compiled_, function.source));
             continue;
         }
-        const auto& body = function.statements;
-        const bool returns_first = body.size() == 1
-            && body.front().kind == frontend::StatementKind::Return
-            && body.front().value.kind == frontend::ExpressionKind::Index
-            && body.front().value.operands.size() == 2
-            && body.front().value.operands.front().kind
-                == frontend::ExpressionKind::Identifier
-            && body.front().value.operands.front().text
-                == function.arguments.front().name
-            && body.front().value.operands.back().kind
-                == frontend::ExpressionKind::IntegerLiteral
-            && body.front().value.operands.back().text == "0";
-        if (!returns_first) {
+        if (!compiled_resolver_returns_first(*compiled_, function)) {
             report(
                 "FSIM-ELAB-SVNETTYPE-004",
                 "the executable SystemVerilog nettype resolver '" + resolver
                     + "' is outside the retained deterministic resolution "
                       "forms",
-                function.span);
+                compiled_resolution_source_span(
+                    *compiled_, function.source));
             continue;
         }
         const auto [entry, inserted] = systemverilog_resolution_kinds_.emplace(
@@ -206,92 +348,24 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                 "FSIM-ELAB-SVNETTYPE-002",
                 "SystemVerilog nettype resolution function '" + resolver
                     + "' has conflicting visible bodies",
-                alias.span);
+                source);
+        }
+        const auto [nettype, nettype_inserted]
+            = systemverilog_resolution_kinds_.emplace(
+                declaration->name, ResolutionKind::sv_user_first);
+        if (nettype_inserted) {
+            systemverilog_resolution_kind_insertions_.push_back(
+                declaration->name);
+        } else if (nettype->second != ResolutionKind::sv_user_first) {
+            report(
+                "FSIM-ELAB-SVNETTYPE-002",
+                "SystemVerilog nettype '" + declaration->name
+                    + "' has conflicting visible resolution functions",
+                source);
         }
     }
-}
-
-void HierarchyBuilder::register_vhdl_resolution_functions(
-    const DesignUnit& unit)
-{
-    if (unit.language != frontend::Language::Vhdl2008) {
-        return;
-    }
-    for (const auto& alias : unit.type_aliases) {
-        const auto& resolver = alias.type.vhdl_resolution_function;
-        if (resolver.empty()) {
-            continue;
-        }
-        std::vector<const frontend::FunctionDeclaration*> matches;
-        for (const auto& function : unit.functions) {
-            if (function.name == resolver && function.defined) {
-                matches.push_back(&function);
-            }
-        }
-        if (matches.empty()) {
-            report(
-                "FSIM-ELAB-VHRESOLVE-001",
-                "VHDL resolution function '" + resolver
-                    + "' is not visible with an executable body",
-                alias.span);
-            continue;
-        }
-        std::vector<const frontend::FunctionDeclaration*> profiles;
-        for (const auto* function : matches) {
-            const bool supported_base = alias.type.domain == frontend::ValueDomain::Bit2
-                || alias.type.domain == frontend::ValueDomain::Logic9;
-            if (function->pure
-                && function->arguments.size() == 1
-                && function->arguments.front().type.vhdl_array
-                && supported_base
-                && function->arguments.front().type.vhdl_array->element_domain == alias.type.domain
-                && function->return_type.domain == alias.type.domain) {
-                profiles.push_back(function);
-            }
-        }
-        if (profiles.size() != 1) {
-            report(
-                profiles.empty()
-                    ? "FSIM-ELAB-VHRESOLVE-002"
-                    : "FSIM-ELAB-VHRESOLVE-003",
-                profiles.empty()
-                    ? "VHDL resolution function '" + resolver
-                        + "' must be pure with one array-of-base-type "
-                          "input and a base-type result"
-                    : "VHDL resolution function '" + resolver
-                        + "' is ambiguous for subtype '" + alias.name
-                        + "'",
-                alias.span);
-            continue;
-        }
-        const auto& body = profiles.front()->statements;
-        const auto supported_return = body.size() == 1
-            && body.front().kind == StatementKind::Return
-            && body.front().value.kind == ExpressionKind::Binary
-            && (body.front().value.text == "or"
-                || body.front().value.text == "and");
-        if (!supported_return) {
-            report(
-                "FSIM-ELAB-VHRESOLVE-004",
-                "bounded VHDL resolution function '" + resolver
-                    + "' must return one scalar OR or AND expression",
-                profiles.front()->span);
-            continue;
-        }
-        const auto kind = body.front().value.text == "or"
-            ? ResolutionKind::vhdl_user_or
-            : ResolutionKind::vhdl_user_and;
-        const auto [existing, inserted] = vhdl_resolution_kinds_.emplace(resolver, kind);
-        if (inserted) {
-            vhdl_resolution_kind_insertions_.push_back(resolver);
-        }
-        if (!inserted && existing->second != kind) {
-            report(
-                "FSIM-ELAB-VHRESOLVE-003",
-                "VHDL resolution function designator '" + resolver
-                    + "' denotes conflicting visible bodies",
-                alias.span);
-        }
+    if (diagnostics_.size() == diagnostics_before) {
+        systemverilog_resolution_unit_registrations_.push_back(unit.id);
     }
 }
 
@@ -351,7 +425,10 @@ void HierarchyBuilder::validate_process_drivers()
     };
     for (const auto& [signal, process_drivers] : drivers) {
         const auto& info = design_.signal_info_.at(signal);
+        const auto boundary_drivers = boundary_driver_paths_.find(signal);
         if (process_drivers.size() <= 1
+            || (boundary_drivers != boundary_driver_paths_.end()
+                && boundary_drivers->second.size() > 1U)
             || vhdl_1993_shared_signals_.contains(signal)
             || info.resolution != ResolutionKind::none
             || info.type_name == "reg"
@@ -399,6 +476,172 @@ void HierarchyBuilder::validate_process_drivers()
                 + "' has multiple process drivers",
             { });
     }
+}
+
+const Binding* HierarchyBuilder::binding_for(const std::string& path)
+{
+    const auto found = bindings_.find(path);
+    if (found == bindings_.end()) {
+        return nullptr;
+    }
+    used_bindings_.insert(path);
+    return found->second;
+}
+
+std::optional<UnitResolutionCandidate>
+HierarchyBuilder::compiled_instance_target(
+    const std::string_view parent_library,
+    const std::string_view name,
+    const std::string& path,
+    const frontend::SourceSpan source,
+    const Binding* const binding,
+    std::optional<semantic::CompiledUnitView> linked_target,
+    const bool linked_target_authoritative)
+{
+    if (compiled_ == nullptr) {
+        return std::nullopt;
+    }
+    if (binding != nullptr && binding->target) {
+        const auto target = parse_target(*binding->target);
+        if (!target) {
+            report(
+                "FSIM-ELAB-BIND-013",
+                "malformed binding target '" + *binding->target + "'",
+                source);
+            return std::nullopt;
+        }
+        if (target->language == "systemc") {
+            return UnitResolutionCandidate {
+                binding->target, *binding->target, std::nullopt, nullptr };
+        }
+        if (target->language == "vhdl" && !target->architecture) {
+            report(
+                "FSIM-ELAB-BIND-016",
+                "an explicit VHDL binding target must name an "
+                "architecture, for example vhdl:work.entity(rtl)",
+                source);
+            return std::nullopt;
+        }
+        auto selected = choose_bound_unit(*compiled_, *target);
+        if (!selected) {
+            report(
+                "FSIM-ELAB-BIND-015",
+                "binding target '" + *binding->target
+                    + "' was not found",
+                source);
+            return std::nullopt;
+        }
+        UnitResolutionCandidate result;
+        result.identity = unit_identity(*selected);
+        result.compiled_unit = std::move(selected);
+        return result;
+    }
+    const bool linked_systemverilog_unit = linked_target
+        && linked_target->systemverilog != nullptr
+        && linked_target->vhdl == nullptr
+        && (linked_target->systemverilog->kind
+                == semantic::sv::UnitKind::module
+            || linked_target->systemverilog->kind
+                == semantic::sv::UnitKind::interface
+            || linked_target->systemverilog->kind
+                == semantic::sv::UnitKind::program)
+        && !linked_target->systemverilog->external;
+    const bool linked_vhdl_unit = linked_target
+        && linked_target->vhdl != nullptr
+        && linked_target->systemverilog == nullptr
+        && linked_target->vhdl->kind
+            == semantic::vhdl::UnitKind::architecture;
+    if (linked_target_authoritative
+        && (linked_systemverilog_unit || linked_vhdl_unit)) {
+        UnitResolutionCandidate result;
+        result.identity = unit_identity(*linked_target);
+        result.compiled_unit = std::move(linked_target);
+        return result;
+    }
+
+    const auto scope = effective_search_scope(
+        parent_library, search_libraries_);
+    std::vector<UnitResolutionCandidate> candidates;
+    std::vector<std::string> unavailable_libraries;
+    for (std::size_t index = 0U; index < scope.size(); ++index) {
+        const auto& library = scope[index];
+        if (!has_logical_library(
+                *compiled_, systemc_candidates_, systemc_libraries_,
+                library)) {
+            if (index != 0U) {
+                unavailable_libraries.push_back(library);
+            }
+            continue;
+        }
+        auto resolved = resolve_unit_candidates(
+            *compiled_, library, name);
+        candidates.insert(
+            candidates.end(),
+            std::make_move_iterator(resolved.begin()),
+            std::make_move_iterator(resolved.end()));
+        for (const auto& factory : systemc_candidates_) {
+            if (factory.library == library && factory.name == name) {
+                candidates.push_back({
+                    factory.target,
+                    "systemc:" + factory.library + "." + factory.name,
+                    std::nullopt,
+                    nullptr,
+                });
+            }
+        }
+    }
+    std::stable_sort(
+        candidates.begin(), candidates.end(),
+        [](const auto& left, const auto& right) {
+            return left.identity < right.identity;
+        });
+    std::string formatted_scope;
+    for (const auto& entry : scope) {
+        if (!formatted_scope.empty()) {
+            formatted_scope += ", ";
+        }
+        formatted_scope += entry;
+    }
+    if (!unavailable_libraries.empty()) {
+        std::string unavailable;
+        for (const auto& entry : unavailable_libraries) {
+            if (!unavailable.empty()) {
+                unavailable += ", ";
+            }
+            unavailable += entry;
+        }
+        report(
+            "FSIM-ELAB-BIND-059",
+            "instance '" + path
+                + "' queried unavailable logical library/libraries ["
+                + unavailable + "] while resolving unit '"
+                + std::string { name } + "' in search scope ["
+                + formatted_scope + "]",
+            source);
+        return std::nullopt;
+    }
+    if (candidates.empty()) {
+        report(
+            "FSIM-ELAB-BIND-012",
+            "instance '" + path + "' names unit '"
+                + std::string { name }
+                + "', which was not found across VHDL, Verilog, "
+                  "SystemVerilog, or SystemC in search scope ["
+                + formatted_scope + "]; candidates: <none>",
+            source);
+        return std::nullopt;
+    }
+    if (candidates.size() != 1U) {
+        report(
+            "FSIM-ELAB-BIND-017",
+            "instance '" + path + "' names ambiguous unit '"
+                + std::string { name } + "' in search scope ["
+                + formatted_scope + "]; candidates: "
+                + format_resolution_candidates(candidates),
+            source);
+        return std::nullopt;
+    }
+    return candidates.front();
 }
 
 } // namespace fsim::elaboration

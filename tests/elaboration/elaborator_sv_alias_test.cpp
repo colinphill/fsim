@@ -27,7 +27,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.systemverilog_alias");
     assert(elaborated.ok());
     const auto first = elaborated.design->find_signal(
@@ -80,7 +80,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid.ok());
-    const auto mismatch = fsim::elaboration::elaborate(
+    const auto mismatch = compile_and_elaborate(
         invalid.design, "sv:work.systemverilog_alias_mismatch");
     assert(!mismatch.ok());
     assert(has_diagnostic(mismatch, "FSIM-ELAB-SVALIAS-003"));
@@ -96,7 +96,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(variable.ok());
-    const auto invalid_variable = fsim::elaboration::elaborate(
+    const auto invalid_variable = compile_and_elaborate(
         variable.design, "sv:work.systemverilog_alias_variable");
     assert(!invalid_variable.ok());
     assert(has_diagnostic(

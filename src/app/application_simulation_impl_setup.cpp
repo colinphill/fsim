@@ -86,32 +86,46 @@ Simulation::Impl::Impl(
           uvm_objects, uvm_components, uvm_factory, uvm_command_line)
     , uvm_reports(uvm_objects, uvm_components)
     , class_execution(
-          built.systemverilog_class_specializations,
-          built.systemverilog_hir,
           class_heap,
-          class_static_store,
           uvm_components,
           uvm_phases,
           uvm_roots_by_scope)
+    , class_hir_execution(
+          built.compiled_systemverilog_class_specializations,
+          built.systemverilog_hir,
+          class_heap)
     , interpreter(built.design.create_interpreter(
           runtime::SchedulerOptions { max_deltas, 32 },
           built.seed))
 {
-    class_execution.set_source_invokers(
-        [this](const auto& method, const auto handle, auto& actuals) {
-            return invoke_source_profile(method, handle, actuals, { }, { });
-        },
+    class_hir_execution.set_runtime_services(
         [this](const auto handle, const auto identity, auto& actuals,
             auto& string_actuals, const auto names, const auto directions,
             const bool virtual_dispatch) {
-            return invoke_source_function(
-                handle, identity, actuals, string_actuals, names, directions,
-                virtual_dispatch);
+            return invoke_source_function(handle, identity, actuals,
+                string_actuals, names, directions, virtual_dispatch);
         },
         [this](const auto identity, auto& actuals, auto& string_actuals,
             const auto names, const auto directions) {
             return invoke_source_static_function(
                 identity, actuals, string_actuals, names, directions);
+        },
+        [this](const auto handle, const auto property) {
+            return packed_property_value(class_heap.property(handle, property));
+        },
+        [this](const auto handle, const auto property, const auto& value) {
+            assign_property_value(
+                class_heap.property(handle, property), property, value);
+        },
+        [this](const auto property) {
+            const auto [owner, name] = static_property_parts(property);
+            return packed_property_value(
+                class_static_store.property(owner, name));
+        },
+        [this](const auto property, const auto& value) {
+            const auto [owner, name] = static_property_parts(property);
+            assign_property_value(
+                class_static_store.property(owner, name), property, value);
         });
     const auto resolution = application_detail::magnitude_and_unit(
         built.time_resolution);
@@ -239,9 +253,9 @@ Simulation::Impl::Impl(
         }
     }
     register_systemverilog_uvm_object_types(
-        built.systemverilog_class_specializations, uvm_objects);
+        built.compiled_systemverilog_class_specializations, uvm_objects);
     register_systemverilog_uvm_registry_types(
-        built.systemverilog_class_specializations, uvm_registry);
+        built.compiled_systemverilog_class_specializations, uvm_registry);
     interpreter->set_class_allocate_hook(
         [this](const std::string_view scope,
             const std::string_view specialization,
@@ -333,10 +347,10 @@ Simulation::Impl::Impl(
             const std::span<const frontend::SystemVerilogScalarKind> scalar_kinds,
             const runtime::simir::CoverageSampleTrigger trigger) {
             auto& coverage = built.systemverilog_coverage;
-            auto instance = std::ranges::find(
-                coverage.instances, identity,
-                &frontend::SystemVerilogCovergroupInstance::runtime_identity);
-            if (instance == coverage.instances.end()) {
+            auto* const hir_instance
+                = find_systemverilog_covergroup_instance(
+                    built.systemverilog_hir, identity);
+            if (hir_instance == nullptr) {
                 throw std::out_of_range {
                     "SystemVerilog covergroup instance '"
                     + std::string { identity } + "' is unavailable"
@@ -345,32 +359,34 @@ Simulation::Impl::Impl(
             if (stopped_covergroups.contains(std::string { identity })) {
                 return;
             }
-            const auto declaration = std::ranges::find(
-                coverage.declarations, instance->declaration_identity,
-                &frontend::SystemVerilogCovergroupDeclaration::canonical_identity);
-            if (declaration == coverage.declarations.end()) {
+            const auto* const hir_declaration
+                = find_systemverilog_covergroup_declaration(
+                    built.systemverilog_hir,
+                    hir_instance->declaration_identity);
+            if (hir_declaration == nullptr) {
                 throw std::out_of_range {
                     "SystemVerilog covergroup declaration '"
-                    + instance->declaration_identity + "' is unavailable"
+                    + hir_instance->declaration_identity + "' is unavailable"
                 };
             }
             const auto procedural = trigger
                 == runtime::simir::CoverageSampleTrigger::procedural;
             if (procedural
-                && (!declaration->sampling
-                    || declaration->sampling->kind
-                        != frontend::SystemVerilogCovergroupSamplingKind::WithFunctionSample)) {
+                && (!hir_declaration->sampling
+                    || hir_declaration->sampling->kind
+                        != semantic::sv::CovergroupSamplingKind::
+                            with_function_sample)) {
                 throw std::invalid_argument {
                     "procedural covergroup sampling requires a resolved sample profile"
                 };
             }
             const auto expected_actuals = procedural
-                ? declaration->sampling->formals.size()
+                ? hir_declaration->sampling->formals.size()
                 : static_cast<std::size_t>(std::ranges::count_if(
-                      declaration->coverage_declarations,
+                      hir_declaration->items,
                       [](const auto& item) {
                           return item.kind
-                              == frontend::SystemVerilogCoverageDeclarationKind::Coverpoint;
+                              == semantic::sv::CoverageItemKind::coverpoint;
                       }));
             if (actuals.size() != expected_actuals
                 || signed_actuals.size() != actuals.size()
@@ -381,17 +397,18 @@ Simulation::Impl::Impl(
                 };
             }
             std::vector<frontend::SystemVerilogCovergroupSampleInput> inputs;
-            inputs.reserve(declaration->coverage_declarations.size());
+            inputs.reserve(hir_declaration->items.size());
             std::size_t coverpoint_index { };
-            for (const auto& item : declaration->coverage_declarations) {
+            for (const auto& item : hir_declaration->items) {
                 if (item.kind
-                    != frontend::SystemVerilogCoverageDeclarationKind::Coverpoint) {
+                    != semantic::sv::CoverageItemKind::coverpoint) {
                     continue;
                 }
                 if (procedural
                     && (item.expression_tokens.size() != 1U
                         || item.expression_tokens.front().kind
-                            != frontend::TokenKind::Identifier)) {
+                            != static_cast<std::uint16_t>(
+                                frontend::TokenKind::Identifier))) {
                     throw std::invalid_argument {
                         "executable covergroup sampling currently requires "
                         "each coverpoint to be one direct sample formal"
@@ -400,16 +417,17 @@ Simulation::Impl::Impl(
                 std::size_t actual_index { coverpoint_index++ };
                 if (procedural) {
                     const auto formal = std::ranges::find(
-                        declaration->sampling->formals,
+                        hir_declaration->sampling->formals,
                         item.expression_tokens.front().text,
-                        &frontend::SystemVerilogCovergroupFormal::name);
-                    if (formal == declaration->sampling->formals.end()) {
+                        &semantic::sv::CovergroupFormal::name);
+                    if (formal
+                        == hir_declaration->sampling->formals.end()) {
                         throw std::invalid_argument {
                             "coverpoint expression does not resolve to a sample formal"
                         };
                     }
                     actual_index = static_cast<std::size_t>(std::distance(
-                        declaration->sampling->formals.begin(), formal));
+                        hir_declaration->sampling->formals.begin(), formal));
                 }
                 const auto& value = actuals[actual_index];
                 frontend::SystemVerilogCoverageSampleValue sample;
@@ -449,12 +467,28 @@ Simulation::Impl::Impl(
                             ? '1'
                             : '0');
                 }
-                inputs.push_back({ item.declaration_index,
+                inputs.push_back({
+                    static_cast<std::size_t>(item.declaration_index),
                     std::move(sample) });
             }
+            auto instance = std::ranges::find(
+                coverage.instances, identity,
+                &semantic::sv::CovergroupInstance::runtime_identity);
+            if (instance == coverage.instances.end()) {
+                throw std::logic_error {
+                    "SystemVerilog coverage runtime adapter is inconsistent "
+                    "with compiled HIR"
+                };
+            }
+            auto instance_adapter
+                = project_systemverilog_covergroup_instance(
+                    *instance, built.semantics);
+            const auto declaration_adapter
+                = project_systemverilog_covergroup_declaration(
+                    *hir_declaration, built.semantics);
             const auto result
                 = frontend::execute_systemverilog_covergroup_sample(
-                    *instance, *declaration,
+                    instance_adapter, declaration_adapter,
                     trigger == runtime::simir::CoverageSampleTrigger::procedural
                         ? frontend::SystemVerilogCoverageSampleTrigger::Procedural
                         : trigger == runtime::simir::CoverageSampleTrigger::event
@@ -463,6 +497,8 @@ Simulation::Impl::Impl(
                     coverage_execution_mode, inputs,
                     std::span<const frontend::SystemVerilogCoverageCallback> { },
                     coverage_execution_state, coverage_diagnostics);
+            synchronize_systemverilog_covergroup_runtime_state(
+                *instance, instance_adapter, built.semantics);
             coverage.callback_events.insert(
                 coverage.callback_events.end(),
                 result.events.begin(), result.events.end());
@@ -474,7 +510,8 @@ Simulation::Impl::Impl(
                 coverage.trace_events.end(),
                 std::make_move_iterator(trace_events.begin()),
                 std::make_move_iterator(trace_events.end()));
-            frontend::refresh_systemverilog_coverage_reports(coverage);
+            refresh_systemverilog_coverage_reports(
+                coverage, built.systemverilog_hir, built.semantics);
             if (!result.accepted) {
                 throw std::runtime_error {
                     coverage_diagnostics.empty()
@@ -485,12 +522,14 @@ Simulation::Impl::Impl(
         });
     interpreter->set_coverage_query_hook([this](const auto kind) {
         const auto& coverage = built.systemverilog_coverage;
+        const auto adapter = project_systemverilog_coverage_state(
+            coverage, built.systemverilog_hir, built.semantics);
         const auto percentage = kind
                 == runtime::simir::CoverageQueryKind::overall_instance
             ? frontend::calculate_systemverilog_overall_instance_coverage_percentage(
-                  coverage.declarations, coverage.instances)
+                  adapter.declarations, adapter.instances)
             : frontend::calculate_systemverilog_overall_coverage_percentage(
-                  coverage.declarations, coverage.instances);
+                  adapter.declarations, adapter.instances);
         const auto encoded = runtime::encode_systemverilog_scalar_payload(
             runtime::SystemVerilogScalarValue::real(
                 static_cast<double>(percentage.basis_points) / 100.0));
@@ -515,23 +554,26 @@ Simulation::Impl::Impl(
         });
     std::map<std::string, std::size_t> declaration_counts;
     for (const auto& specialization :
-        built.systemverilog_class_specializations) {
+        built.compiled_systemverilog_class_specializations) {
         ++declaration_counts[specialization.declaration_identity];
     }
     for (const auto& specialization :
-        built.systemverilog_class_specializations) {
+        built.compiled_systemverilog_class_specializations) {
         runtime::SystemVerilogClassStaticDescriptor descriptor;
         descriptor.specialization_identity = specialization.specialization_identity;
-        descriptor.base_specialization_identity = specialization.base_specialization_identity;
+        descriptor.base_specialization_identity = specialization.base
+            ? specialization.base->specialization_identity
+            : std::string { };
         if (declaration_counts[specialization.declaration_identity] == 1
             && specialization.declaration_identity
                 != specialization.specialization_identity) {
             descriptor.aliases.push_back(specialization.declaration_identity);
         }
         for (const auto& property : specialization.properties) {
-            if (property.is_static) {
+            if (property.static_storage) {
                 descriptor.properties.push_back(
-                    class_property_descriptor(property));
+                    class_property_descriptor(
+                        property, built.systemverilog_hir));
             }
         }
         class_static_store.register_specialization(std::move(descriptor));
@@ -689,8 +731,8 @@ Simulation::Impl::Impl(
             };
         }
     }
-    vhdl_psl = std::make_unique<VhdlPslExecution>(built.vhdl_hir, built.design,
-        built.design_ir,
+    vhdl_psl = std::make_unique<VhdlPslExecution>(built.vhdl_hir,
+        built.semantics, built.design, built.design_ir,
         [this](const runtime::simir::SignalId signal) {
             return interpreter->signal_value(signal);
         });
@@ -1054,7 +1096,7 @@ Simulation::Impl::Impl(
                     return std::optional<std::string> { std::move(result) };
                 };
                 for (std::size_t index = 4U; index < fields.size(); ++index) {
-                    std::array<std::string_view, 7> action_fields;
+                    std::array<std::string_view, 8> action_fields;
                     std::size_t action_begin { };
                     for (std::size_t field = 0U;
                         field < action_fields.size(); ++field) {
@@ -1072,6 +1114,7 @@ Simulation::Impl::Impl(
                     action.report = action_fields[0] == "R";
                     std::uint32_t severity { };
                     std::uint32_t newline_value { };
+                    std::uint32_t generated_text { };
                     const auto severity_result = std::from_chars(
                         action_fields[1].data(),
                         action_fields[1].data() + action_fields[1].size(),
@@ -1090,6 +1133,10 @@ Simulation::Impl::Impl(
                         action_fields[6].data(),
                         action_fields[6].data() + action_fields[6].size(),
                         action.source.column);
+                    const auto generated_text_result = std::from_chars(
+                        action_fields[7].data(),
+                        action_fields[7].data() + action_fields[7].size(),
+                        generated_text);
                     if ((action_fields[0] != "R" && action_fields[0] != "D")
                         || severity_result.ec != std::errc { }
                         || severity > static_cast<std::uint32_t>(
@@ -1097,7 +1144,12 @@ Simulation::Impl::Impl(
                         || newline_result.ec != std::errc { }
                         || newline_value > 1U || !message || !path
                         || line_result.ec != std::errc { }
-                        || column_result.ec != std::errc { }) {
+                        || column_result.ec != std::errc { }
+                        || generated_text_result.ec != std::errc { }
+                        || generated_text
+                            > static_cast<std::uint32_t>(
+                                semantic::sv::GeneratedTextKind::
+                                    systemverilog_file_macro_derived)) {
                         throw std::runtime_error {
                             "malformed pending concurrent-assertion action"
                         };
@@ -1202,12 +1254,9 @@ Simulation::Impl::Impl(
                 }
                 const auto action = control.substr(0U, separator);
                 const auto identity = control.substr(separator + 1U);
-                const auto& instances
-                    = built.systemverilog_coverage.instances;
-                if (std::ranges::find(
-                        instances, identity,
-                        &frontend::SystemVerilogCovergroupInstance::runtime_identity)
-                    == instances.end()) {
+                if (find_systemverilog_covergroup_instance(
+                        built.systemverilog_hir, identity)
+                    == nullptr) {
                     throw std::runtime_error {
                         "covergroup control references unavailable instance '"
                         + std::string { identity } + "'"

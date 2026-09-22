@@ -241,7 +241,7 @@ void verify_systemverilog_hir(const fsim::project::Config& config) {
   assert(producer_mid->generates.front().instances.size() == 1);
   const auto retained_unit = interface_unit->id;
   const auto retained_modport = interface_unit->modports.front().declaration;
-  checked->parsed.units.clear();
+  // The public compilation result is already parser-independent.
   assert(interface_unit->id == retained_unit);
   assert(interface_unit->modports.front().declaration == retained_modport);
 }

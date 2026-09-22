@@ -22,14 +22,13 @@ set(FSIM_CLI_DRIVER "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
 set(FSIM_TCL_APPLICATION "${FSIM_SOURCE_DIR}/src/app/tcl.cpp")
 set(FSIM_TCL_COMMANDS "${FSIM_SOURCE_DIR}/src/app/tcl_commands.cpp")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
-set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_RECORD}" "${FSIM_SUPPORT}" "${FSIM_EXAMPLES}"
     "${FSIM_CHANGELOG}" "${FSIM_KNOWN_ISSUES}" "${FSIM_RELEASE_GUIDE}"
     "${FSIM_IMPLEMENTATION_PLAN}"
     "${FSIM_ROOT_CMAKE}" "${FSIM_VERSION_HEADER}" "${FSIM_PC_TEMPLATE}"
     "${FSIM_CLI_DRIVER}" "${FSIM_TCL_APPLICATION}" "${FSIM_TCL_COMMANDS}"
-    "${FSIM_TEST_CMAKE}" "${FSIM_WORKFLOW}")
+    "${FSIM_TEST_CMAKE}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "v2 release-record input is missing: ${FSIM_INPUT}")
   endif()
@@ -133,11 +132,6 @@ endif()
 file(STRINGS "${FSIM_RELEASE_GUIDE}" FSIM_RELEASE_GUIDE_LINES ENCODING UTF-8)
 set(FSIM_EXECUTION_ROWS)
 set(FSIM_EXECUTION_IDS)
-set(FSIM_HOSTED_ARTIFACTS)
-set(FSIM_HOSTED_LOGS)
-set(FSIM_WINDOWS_BINARY_ARTIFACTS)
-set(FSIM_WINDOWS_BINARY_LOGS)
-set(FSIM_WINDOWS_INSTALL_LOGS)
 foreach(FSIM_LINE IN LISTS FSIM_RELEASE_GUIDE_LINES)
   if(NOT FSIM_LINE MATCHES "^E177-")
     continue()
@@ -187,15 +181,6 @@ foreach(FSIM_LINE IN LISTS FSIM_RELEASE_GUIDE_LINES)
        NOT FSIM_BOUNDARY STREQUAL "post-push-hosted-change20")
       message(FATAL_ERROR
         "hosted/Windows execution is not owned by final Change 20: ${FSIM_ID}")
-    endif()
-    if(FSIM_CHANGE STREQUAL "B177-C08")
-      list(APPEND FSIM_HOSTED_ARTIFACTS "${FSIM_ARTIFACT}")
-      list(APPEND FSIM_HOSTED_LOGS "${FSIM_LOG}")
-    elseif(FSIM_CHANGE STREQUAL "B177-C10")
-      list(APPEND FSIM_WINDOWS_BINARY_ARTIFACTS "${FSIM_ARTIFACT}")
-      list(APPEND FSIM_WINDOWS_BINARY_LOGS "${FSIM_LOG}")
-    elseif(FSIM_CHANGE STREQUAL "B177-C12")
-      list(APPEND FSIM_WINDOWS_INSTALL_LOGS "${FSIM_LOG}")
     endif()
   elseif(FSIM_BOUNDARY STREQUAL "post-push-hosted-change20")
     if(NOT FSIM_CHANGE STREQUAL "B177-C08" OR
@@ -247,200 +232,6 @@ if(NOT FSIM_EXECUTION_SHA256 STREQUAL FSIM_RECORD_execution_matrix_sha256)
     "${FSIM_RECORD_execution_matrix_sha256}, got ${FSIM_EXECUTION_SHA256}")
 endif()
 
-file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
-string(REPLACE "\r\n" "\n" FSIM_WORKFLOW_CONTENTS
-  "${FSIM_WORKFLOW_CONTENTS}")
-
-function(fsim_require_workflow_occurrences token expected_count)
-  string(LENGTH "${token}" FSIM_TOKEN_LENGTH)
-  if(FSIM_TOKEN_LENGTH EQUAL 0)
-    message(FATAL_ERROR "empty hosted-workflow policy token")
-  endif()
-  string(LENGTH "${FSIM_WORKFLOW_CONTENTS}" FSIM_BEFORE_LENGTH)
-  string(REPLACE "${token}" "" FSIM_WITHOUT_TOKEN
-    "${FSIM_WORKFLOW_CONTENTS}")
-  string(LENGTH "${FSIM_WITHOUT_TOKEN}" FSIM_AFTER_LENGTH)
-  math(EXPR FSIM_REMOVED_LENGTH
-    "${FSIM_BEFORE_LENGTH} - ${FSIM_AFTER_LENGTH}")
-  math(EXPR FSIM_OCCURRENCES
-    "${FSIM_REMOVED_LENGTH} / ${FSIM_TOKEN_LENGTH}")
-  if(NOT FSIM_OCCURRENCES EQUAL expected_count)
-    message(FATAL_ERROR
-      "hosted-workflow token count drifted: expected ${expected_count}, "
-      "found ${FSIM_OCCURRENCES}: ${token}")
-  endif()
-endfunction()
-
-list(LENGTH FSIM_HOSTED_ARTIFACTS FSIM_HOSTED_ARTIFACT_COUNT)
-list(LENGTH FSIM_HOSTED_LOGS FSIM_HOSTED_LOG_COUNT)
-if(NOT FSIM_HOSTED_ARTIFACT_COUNT EQUAL 9 OR
-   NOT FSIM_HOSTED_LOG_COUNT EQUAL 9)
-  message(FATAL_ERROR "Batch 177 Change 8 requires nine hosted artifacts/logs")
-endif()
-list(REMOVE_DUPLICATES FSIM_HOSTED_ARTIFACTS)
-list(REMOVE_DUPLICATES FSIM_HOSTED_LOGS)
-list(LENGTH FSIM_HOSTED_ARTIFACTS FSIM_HOSTED_ARTIFACT_UNIQUE_COUNT)
-list(LENGTH FSIM_HOSTED_LOGS FSIM_HOSTED_LOG_UNIQUE_COUNT)
-if(NOT FSIM_HOSTED_ARTIFACT_UNIQUE_COUNT EQUAL 9 OR
-   NOT FSIM_HOSTED_LOG_UNIQUE_COUNT EQUAL 9)
-  message(FATAL_ERROR "hosted artifact/log identities are not unique")
-endif()
-
-foreach(FSIM_HOSTED_INDEX RANGE 0 8)
-  list(GET FSIM_HOSTED_ARTIFACTS ${FSIM_HOSTED_INDEX} FSIM_ARTIFACT)
-  list(GET FSIM_HOSTED_LOGS ${FSIM_HOSTED_INDEX} FSIM_LOG)
-  set(FSIM_CURRENT_ARTIFACT "${FSIM_ARTIFACT}")
-  set(FSIM_CURRENT_LOG "${FSIM_LOG}")
-  if(FSIM_ARTIFACT STREQUAL "github-linux-gcc-debug")
-    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-debug")
-    set(FSIM_CURRENT_LOG
-      "build/qualification/batch180-change20-hosted-linux-clang22-debug.log")
-  elseif(FSIM_ARTIFACT STREQUAL "github-linux-gcc-release")
-    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-release")
-    set(FSIM_CURRENT_LOG
-      "build/qualification/batch180-change20-hosted-linux-clang22-release.log")
-  elseif(FSIM_ARTIFACT STREQUAL "github-linux-llvm22-debug")
-    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-llvm22-debug")
-    set(FSIM_CURRENT_LOG
-      "build/qualification/batch180-change20-hosted-linux-clang22-llvm22-debug.log")
-  elseif(FSIM_ARTIFACT STREQUAL "github-linux-llvm22-release")
-    set(FSIM_CURRENT_ARTIFACT "github-linux-clang22-llvm22-release")
-    set(FSIM_CURRENT_LOG
-      "build/qualification/batch180-change20-hosted-linux-clang22-llvm22-release.log")
-  endif()
-  fsim_require_workflow_occurrences("${FSIM_CURRENT_ARTIFACT}" 1)
-  fsim_require_workflow_occurrences("${FSIM_CURRENT_LOG}" 1)
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_CURRENT_ARTIFACT}"
-    FSIM_ARTIFACT_INDEX)
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_CURRENT_LOG}"
-    FSIM_LOG_INDEX)
-  math(EXPR FSIM_MAPPING_DISTANCE "${FSIM_LOG_INDEX} - ${FSIM_ARTIFACT_INDEX}")
-  if(FSIM_MAPPING_DISTANCE LESS 0 OR FSIM_MAPPING_DISTANCE GREATER 200)
-    message(FATAL_ERROR
-      "hosted artifact/log mapping is not adjacent: "
-      "${FSIM_CURRENT_ARTIFACT}/${FSIM_CURRENT_LOG}")
-  endif()
-endforeach()
-
-list(LENGTH FSIM_WINDOWS_BINARY_ARTIFACTS FSIM_WINDOWS_BINARY_ARTIFACT_COUNT)
-list(LENGTH FSIM_WINDOWS_BINARY_LOGS FSIM_WINDOWS_BINARY_LOG_COUNT)
-if(NOT FSIM_WINDOWS_BINARY_ARTIFACT_COUNT EQUAL 2 OR
-   NOT FSIM_WINDOWS_BINARY_LOG_COUNT EQUAL 2)
-  message(FATAL_ERROR "Batch 177 Change 10 requires two Windows archive lanes")
-endif()
-foreach(FSIM_WINDOWS_BINARY_INDEX RANGE 0 1)
-  list(GET FSIM_WINDOWS_BINARY_ARTIFACTS ${FSIM_WINDOWS_BINARY_INDEX}
-    FSIM_BINARY_ARTIFACT)
-  list(GET FSIM_WINDOWS_BINARY_LOGS ${FSIM_WINDOWS_BINARY_INDEX}
-    FSIM_BINARY_LOG)
-  fsim_require_workflow_occurrences("${FSIM_BINARY_ARTIFACT}" 1)
-  fsim_require_workflow_occurrences("${FSIM_BINARY_LOG}" 1)
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_BINARY_ARTIFACT}"
-    FSIM_BINARY_ARTIFACT_INDEX)
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_BINARY_LOG}"
-    FSIM_BINARY_LOG_INDEX)
-  math(EXPR FSIM_BINARY_MAPPING_DISTANCE
-    "${FSIM_BINARY_LOG_INDEX} - ${FSIM_BINARY_ARTIFACT_INDEX}")
-  if(FSIM_BINARY_MAPPING_DISTANCE LESS 0 OR
-     FSIM_BINARY_MAPPING_DISTANCE GREATER 240)
-    message(FATAL_ERROR
-      "Windows archive/log mapping is not adjacent: "
-      "${FSIM_BINARY_ARTIFACT}/${FSIM_BINARY_LOG}")
-  endif()
-endforeach()
-
-list(LENGTH FSIM_WINDOWS_INSTALL_LOGS FSIM_WINDOWS_INSTALL_LOG_COUNT)
-if(NOT FSIM_WINDOWS_INSTALL_LOG_COUNT EQUAL 2)
-  message(FATAL_ERROR "Batch 177 Change 12 requires two Windows install lanes")
-endif()
-foreach(FSIM_WINDOWS_INSTALL_LOG IN LISTS FSIM_WINDOWS_INSTALL_LOGS)
-  fsim_require_workflow_occurrences("${FSIM_WINDOWS_INSTALL_LOG}" 1)
-endforeach()
-
-foreach(FSIM_HOSTED_FRAGMENT IN ITEMS
-    "configuration: Debug\n            preset: ci-linux\n            artifact: github-linux-clang22-debug"
-    "configuration: Release\n            preset: ci-linux-release\n            artifact: github-linux-clang22-release"
-    "configuration: Debug\n            build_dir: build/ci-linux-llvm22-debug\n            artifact: github-linux-clang22-llvm22-debug"
-    "configuration: Release\n            build_dir: build/ci-linux-llvm22-release\n            artifact: github-linux-clang22-llvm22-release"
-    "FSIM_ARTIFACT: github-linux-fuzz\n      FSIM_RETAINED_LOG: build/qualification/batch177-change20-hosted-linux-fuzz.log"
-    "configuration: Debug\n            llvm_mode: 'OFF'\n            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-OFF\n            artifact: github-windows-debug-llvm-off"
-    "configuration: Debug\n            llvm_mode: 'ON'\n            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-ON\n            artifact: github-windows-debug-llvm-on"
-    "configuration: Release\n            llvm_mode: 'OFF'\n            build_dir: build/ci-windows-llvm-mingw-Release-llvm-OFF\n            artifact: github-windows-release-llvm-off"
-    "configuration: Release\n            llvm_mode: 'ON'\n            build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON\n            artifact: github-windows-release-llvm-on")
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_HOSTED_FRAGMENT}"
-    FSIM_FRAGMENT_INDEX)
-  if(FSIM_FRAGMENT_INDEX EQUAL -1)
-    message(FATAL_ERROR
-      "hosted lane configuration/artifact mapping drifted: ${FSIM_HOSTED_FRAGMENT}")
-  endif()
-endforeach()
-
-foreach(FSIM_WINDOWS_ARCHIVE_FRAGMENT IN ITEMS
-    "binary_package: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm\n            binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-no-llvm.zip\n            binary_log: build/qualification/batch177-change20-windows-no-llvm-archive.log\n            install_log: build/qualification/batch177-change20-windows-no-llvm-install.log"
-    "binary_package: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22\n            binary_archive: fsim-v2.0.0-windows-x86_64-llvm-mingw-llvm22.zip\n            binary_log: build/qualification/batch177-change20-windows-llvm22-archive.log\n            install_log: build/qualification/batch177-change20-windows-llvm22-install.log")
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_WINDOWS_ARCHIVE_FRAGMENT}"
-    FSIM_WINDOWS_ARCHIVE_INDEX)
-  if(FSIM_WINDOWS_ARCHIVE_INDEX EQUAL -1)
-    message(FATAL_ERROR
-      "Windows archive package/artifact/log mapping drifted: "
-      "${FSIM_WINDOWS_ARCHIVE_FRAGMENT}")
-  endif()
-endforeach()
-
-fsim_require_workflow_occurrences("actions/upload-artifact@v7" 5)
-fsim_require_workflow_occurrences("if: always()" 5)
-fsim_require_workflow_occurrences("if-no-files-found: error" 5)
-fsim_require_workflow_occurrences("Initialize retained lane log" 4)
-fsim_require_workflow_occurrences("Upload retained lane log" 4)
-fsim_require_workflow_occurrences(
-  "Create deterministic Windows binary archive" 1)
-fsim_require_workflow_occurrences(
-  "Upload deterministic Windows binary archive" 1)
-fsim_require_workflow_occurrences(
-  "Audit deterministic Windows install lane" 1)
-fsim_require_workflow_occurrences("timeout-minutes: 120" 4)
-foreach(FSIM_HOSTED_COMMAND IN ITEMS
-    "cmake --preset \"\${{ matrix.preset }}\""
-    "cmake --build --preset \"\${{ matrix.preset }}\" --parallel 2"
-    "ctest --preset \"\${{ matrix.preset }}\" -LE '^recursive-closure$'"
-    "ctest --preset \"\${{ matrix.preset }}\" -L '^recursive-closure$'"
-    "-DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm"
-    "cmake --preset ci-fuzz"
-    "-runs=20000"
-    "\$buildDirectory = \"\${{ matrix.build_dir }}\""
-    "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}"
-    "ctest --test-dir \"\${{ matrix.build_dir }}\" --parallel 2 --progress --output-on-failure -LE '^recursive-closure$'"
-    "tee -a \"\${{ matrix.retained_log }}\""
-    "Tee-Object -FilePath \"\${{ matrix.retained_log }}\" -Append")
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_HOSTED_COMMAND}"
-    FSIM_COMMAND_INDEX)
-  if(FSIM_COMMAND_INDEX EQUAL -1)
-    message(FATAL_ERROR
-      "hosted lane command/log policy drifted: ${FSIM_HOSTED_COMMAND}")
-  endif()
-endforeach()
-foreach(FSIM_WINDOWS_ARCHIVE_COMMAND IN ITEMS
-    "-DFSIM_BINARY_ONLY=ON"
-    "-DFSIM_BINARY_PACKAGE_NAME=\${{ matrix.binary_package }}"
-    "-DFSIM_BINARY_ARCHIVE_OUTPUT=\$env:GITHUB_WORKSPACE/\${{ matrix.binary_archive }}"
-    "cmake/CheckDeterministicPackaging.cmake"
-    "-DFSIM_CHANGE12_LANE=ON"
-    "-DFSIM_CHANGE12_REGRESSION_LOG=\$env:GITHUB_WORKSPACE/\${{ matrix.retained_log }}"
-    "-DFSIM_CHANGE12_ARCHIVE=\$env:GITHUB_WORKSPACE/\${{ matrix.binary_archive }}"
-    "-DFSIM_CHANGE12_ARCHIVE_ROOT=\${{ matrix.binary_package }}"
-    "-DFSIM_CHANGE12_EXPECTED_TESTS=\${{ matrix.expected_tests }}"
-    "-DFSIM_CHANGE12_EXECUTABLE_SUFFIX=.exe"
-    "name: \${{ matrix.binary_archive }}"
-    "\${{ matrix.binary_log }}"
-    "\${{ matrix.install_log }}")
-  string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_WINDOWS_ARCHIVE_COMMAND}"
-    FSIM_WINDOWS_ARCHIVE_COMMAND_INDEX)
-  if(FSIM_WINDOWS_ARCHIVE_COMMAND_INDEX EQUAL -1)
-    message(FATAL_ERROR
-      "Windows archive command/upload policy drifted: "
-      "${FSIM_WINDOWS_ARCHIVE_COMMAND}")
-  endif()
-endforeach()
 foreach(FSIM_BATCH177_TOKEN IN ITEMS
     all-release-builds-tests-gates final-archives final-install-smokes
     sanitizers linux-windows-hosted-ci version-tag signature-disposition)

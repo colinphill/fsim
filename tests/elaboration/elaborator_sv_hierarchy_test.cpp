@@ -112,7 +112,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017),
         "slow");
 
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         design, "sv:work.configured");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -194,7 +194,7 @@ module mismatch_top; mismatch child(); endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mismatch.ok());
-    const auto mismatch_result = fsim::elaboration::elaborate(
+    const auto mismatch_result = compile_and_elaborate(
         mismatch.design, "sv:work.mismatch_top");
     assert(!mismatch_result.ok());
     assert(has_diagnostic(mismatch_result, "FSIM-ELAB-SVEXTERN-002"));
@@ -207,7 +207,7 @@ module missing_top; endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(missing.ok());
-    const auto missing_result = fsim::elaboration::elaborate(
+    const auto missing_result = compile_and_elaborate(
         missing.design, "sv:work.missing_top");
     assert(!missing_result.ok());
     assert(has_diagnostic(missing_result, "FSIM-ELAB-SVEXTERN-001"));
@@ -230,7 +230,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(implicit_ports.ok());
-    const auto implicit_result = fsim::elaboration::elaborate(
+    const auto implicit_result = compile_and_elaborate(
         implicit_ports.design, "sv:work.implicit_top");
     for (const auto& diagnostic : implicit_result.diagnostics) {
         std::cerr << diagnostic.code << ": "

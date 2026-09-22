@@ -27,7 +27,9 @@ module file_lowering;
   real real_value;
   time time_value;
   chandle handle_value;
+  logic [7:0] strobe_value;
   logic [7:0] memory [3:0];
+  string string_memory [0:1];
   typedef struct packed {
     logic [3:0] tag;
     logic [3:0] data;
@@ -83,13 +85,17 @@ module file_lowering;
     $writememb("dump.bin", memory, 2, 1);
     $writememh("packets.hex", packet_memory);
     $readmemh("packets.hex", packet_memory);
+    $readmemh("strings.hex", string_memory);
+    $writememb("strings.bin", string_memory);
+    $fstrobe(
+        handle, "strobe=%m/%0t/%0h", $time, strobe_value);
     $fclose(handle);
   end
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "file_lowering");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -119,8 +125,35 @@ endmodule
     assert(count(FileBinaryRead { }) == 6);
     assert(count(FilePosition { }) == 3);
     assert(count(FileFlush { }) == 2);
-    assert(count(LoadMemory { }) == 4);
+    assert(count(LoadMemory { }) == 6);
+    assert(count(MonitorInstall { }) == 1);
     assert(count(FileClose { }) == 1);
+    const auto monitor = std::ranges::find_if(
+        operations,
+        [](const auto& operation) {
+            return operation_holds<MonitorInstall>(operation);
+        });
+    assert(monitor != operations.end());
+    const auto* install = operation_get_if<MonitorInstall>(&*monitor);
+    assert(install != nullptr && install->file_handle
+        && install->one_shot && install->newline
+        && install->values.size() == 2U
+        && install->values[0].kind == MonitorValueKind::time
+        && install->values[0].prefix
+            == "strobe=file_lowering/"
+        && install->values[0].suppress_leading_zero
+        && !install->values[0].use_timeformat_width
+        && install->values[1].kind == MonitorValueKind::signal
+        && install->values[1].format == OutputFormat::hexadecimal
+        && install->values[1].prefix == "/"
+        && install->trailing_text.empty());
+    assert(std::ranges::any_of(
+        elaborated.design->processes().front().container_register_types,
+        [](const auto& type) {
+            return type.fixed
+                && type.element_kind == ContainerElementKind::String
+                && type.index_left == 0 && type.index_right == 1;
+        }));
     assert(std::ranges::any_of(
         operations,
         [](const auto& operation) {
@@ -205,7 +238,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(verilog.ok());
-    const auto verilog_elaborated = fsim::elaboration::elaborate(
+    const auto verilog_elaborated = compile_and_elaborate(
         verilog.design, "verilog_file_lowering");
     if (!verilog_elaborated.ok()) {
         for (const auto& diagnostic : verilog_elaborated.diagnostics) {
@@ -321,7 +354,7 @@ endmodule
                    const auto* value = fsim::runtime::simir::operation_get_if<LoadMemory>(&operation);
                    return value != nullptr && value->write;
                })
-        == 3);
+        == 4);
 
     const auto invalid = fsim::frontend::parse_text(
         "file-invalid.sv",
@@ -353,6 +386,7 @@ module file_invalid;
     result = $fread(matrix, handle);
     $readmemh("matrix.hex", dynamic_memory);
     $writememh("matrix.hex", dynamic_memory);
+    $fstrobe(handle, "%0h", bits + 1'b1);
     result = $fseek(handle, value, 0);
     $fflush(value);
     $fclose(value);
@@ -361,7 +395,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid.ok());
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         invalid.design, "file_invalid");
     assert(!rejected.ok());
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-001"));
@@ -373,6 +407,7 @@ endmodule
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-014"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-015"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-016"));
+    assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-007"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVMEMORY-003"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVSTRING-019"));
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVCLI-002"));

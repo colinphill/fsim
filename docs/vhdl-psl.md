@@ -51,12 +51,12 @@ The governed runner requires exact equality through:
 - source-independent replay and portable VHPI checkpoint remapping;
 - duplicated/reordered VHDL roots and adjacent SystemVerilog/SystemC roots.
 
-Owning-unit schema 27 preserves frontend PSL state. Standalone designs add the
-checksummed schema-1 `FSIMVHIR` payload for complete VHDL semantic HIR,
-including analyzed PSL state. Load rejects incompatible schema, checksum,
-trailing bytes, enum values, duplicate identities, invalid semantic links, or
-cross-payload inconsistency before publishing a project. Cache keys include
-the compiler IEEE identity `ieee-1076-2019-16a01232-vhdl-psl-wide-v2`.
+Compiled-HIR bundle schema 1 and VHDL HIR schema 5 preserve analyzed PSL state
+through objects, mapped libraries, ordinary compilation caches, and standalone
+designs. Load rejects incompatible schema, checksum, trailing bytes, enum
+values, duplicate identities, invalid semantic links, or cross-payload
+inconsistency before publishing a project. Cache keys include the compiler
+IEEE identity `ieee-1076-2019-16a01232-vhdl-psl-wide-v2`.
 
 ## Resource and platform contract
 

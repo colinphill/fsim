@@ -73,7 +73,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "sv:work.case_qualifiers");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -160,7 +160,7 @@ endmodule
   malformed.units.front().processes.front().statements.front()
       .case_qualifier =
           static_cast<fsim::frontend::CaseQualifier>(255);
-  const auto malformed_result = fsim::elaboration::elaborate(
+  const auto malformed_result = compile_and_elaborate(
       malformed, "sv:work.case_qualifier_hir");
   assert(!malformed_result.ok());
   assert(has_diagnostic(
@@ -175,7 +175,7 @@ endmodule
   auto wrong_language = verilog.design;
   wrong_language.units.front().processes.front().statements.front()
       .case_qualifier = fsim::frontend::CaseQualifier::Unique;
-  const auto wrong_language_result = fsim::elaboration::elaborate(
+  const auto wrong_language_result = compile_and_elaborate(
       wrong_language, "sv:work.case_qualifier_language");
   assert(!wrong_language_result.ok());
   assert(has_diagnostic(

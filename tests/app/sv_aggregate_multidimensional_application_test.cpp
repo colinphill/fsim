@@ -1116,9 +1116,7 @@ void test_declaration_revision_gates(
   const auto checked =
       fsim::app::check_project(legal_1995, legal_diagnostics);
   assert(checked && !legal_diagnostics.has_error());
-  assert(
-      checked->parsed.units.front().standard_revision
-      == fsim::frontend::StandardRevision::Verilog1995);
+  assert(checked->systemverilog_hir.units().front().standard == "1995");
 
   const auto rejected = directory / "declarations-rejected-1995.v";
   write(

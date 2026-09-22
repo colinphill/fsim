@@ -4,136 +4,149 @@
 namespace fsim::app::application_detail {
 
 runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
-    const frontend::SystemVerilogClassPropertyLayout& property,
+    const semantic::sv::SpecializedClassProperty& property,
+    const semantic::sv::Hir& hir,
     const bool qualified_name) {
   runtime::SystemVerilogClassPropertyDescriptor result;
   result.name = qualified_name
       ? property.owner_identity + "::" + property.name
       : property.name;
-  if (!property.is_static) {
-    result.random_kind = property.is_rand
+  if (!property.static_storage) {
+    result.random_kind = property.random_kind
+            == semantic::sv::ClassRandomKind::rand
         ? runtime::SystemVerilogClassRandomKind::Rand
-        : property.is_randc
-            ? runtime::SystemVerilogClassRandomKind::Randc
-            : runtime::SystemVerilogClassRandomKind::None;
+        : property.random_kind == semantic::sv::ClassRandomKind::randc
+        ? runtime::SystemVerilogClassRandomKind::Randc
+        : runtime::SystemVerilogClassRandomKind::None;
   }
-  result.signed_value = property.type.is_signed;
-  result.nominal_type = !property.type.systemverilog_class_declaration.empty()
-      ? property.type.systemverilog_class_declaration
-      : !property.type.named_type.empty()
-          ? property.type.named_type
-          : property.type.spelling;
-  if (!property.type.systemverilog_class_declaration.empty()
-      && property.type.systemverilog_container) {
-    const auto& source = *property.type.systemverilog_container;
+  result.signed_value = property.type.signed_value;
+  result.nominal_type = !property.type.class_identity.empty()
+      ? property.type.class_identity
+      : !property.type.target.spelling.empty()
+      ? property.type.target.spelling
+      : property.type.value_form == semantic::sv::TypeForm::string
+      ? "string"
+      : property.type.four_state ? "logic" : "bit";
+
+  const auto container_form = property.type.container_form;
+  if (!property.type.class_identity.empty() && container_form) {
     runtime::SystemVerilogClassHandleContainerDescriptor container;
-    container.declared_element_type =
-        property.type.systemverilog_class_declaration;
+    container.declared_element_type = property.type.class_identity;
     const auto addressable_elements = std::numeric_limits<std::size_t>::max()
         / sizeof(runtime::SystemVerilogClassHandle);
     container.maximum_elements = addressable_elements;
-    switch (source.kind) {
-      case frontend::SystemVerilogContainerKind::StaticArray:
-        if (!source.static_range) {
-          throw std::invalid_argument{
-              "class handle static-array property requires a resolved range"};
+    if (*container_form == semantic::sv::TypeForm::static_array) {
+      container.kind = runtime::SystemVerilogClassContainerKind::FixedArray;
+      if (property.type.unpacked_dimensions.empty()
+          || !property.type.unpacked_dimensions.front().left
+          || !property.type.unpacked_dimensions.front().right) {
+        throw std::invalid_argument {
+            "class handle static-array property requires a resolved range"
+        };
+      }
+      const auto& range = property.type.unpacked_dimensions.front();
+      const auto width = static_cast<std::uint64_t>(
+          *range.left >= *range.right
+              ? *range.left - *range.right + 1
+              : *range.right - *range.left + 1);
+      if (width > addressable_elements) {
+        throw std::length_error {
+            "class handle static-array property exceeds addressable storage"
+        };
+      }
+      container.maximum_elements = static_cast<std::size_t>(width);
+      container.initial_elements = container.maximum_elements;
+    } else if (*container_form == semantic::sv::TypeForm::dynamic_array) {
+      container.kind = runtime::SystemVerilogClassContainerKind::DynamicArray;
+      container.reserve_maximum_storage = false;
+    } else if (*container_form == semantic::sv::TypeForm::queue) {
+      container.kind = runtime::SystemVerilogClassContainerKind::Queue;
+      if (property.type.queue_maximum) {
+        const auto maximum = std::ranges::find(
+            hir.expressions(), *property.type.queue_maximum,
+            &semantic::sv::Expression::id);
+        if (maximum == hir.expressions().end()
+            || maximum->kind != semantic::sv::ExpressionKind::integer_literal) {
+          throw std::invalid_argument {
+              "class handle queue property requires a resolved bound"
+          };
         }
-        container.kind = runtime::SystemVerilogClassContainerKind::FixedArray;
-        container.maximum_elements =
-            static_cast<std::size_t>(source.static_range->width());
-        container.initial_elements = container.maximum_elements;
-        break;
-      case frontend::SystemVerilogContainerKind::DynamicArray:
-        container.kind =
-            runtime::SystemVerilogClassContainerKind::DynamicArray;
-        container.reserve_maximum_storage = false;
-        break;
-      case frontend::SystemVerilogContainerKind::Queue:
-        container.kind = runtime::SystemVerilogClassContainerKind::Queue;
-        if (source.queue_maximum
-            && source.queue_maximum->kind
-                == frontend::ExpressionKind::IntegerLiteral) {
-          std::uint64_t maximum_index{};
-          const auto& spelling = source.queue_maximum->text;
-          const auto converted = std::from_chars(
-              spelling.data(), spelling.data() + spelling.size(),
-              maximum_index, 10);
-          if (converted.ec != std::errc{}
-              || converted.ptr != spelling.data() + spelling.size()
-              || maximum_index >= addressable_elements) {
-            throw std::length_error{
-                "class handle queue bound exceeds addressable storage"};
-          }
-          container.maximum_elements =
-              static_cast<std::size_t>(maximum_index + 1U);
-        } else {
-          container.reserve_maximum_storage = false;
+        std::uint64_t maximum_index { };
+        const auto converted = std::from_chars(
+            maximum->text.data(), maximum->text.data() + maximum->text.size(),
+            maximum_index, 10);
+        if (converted.ec != std::errc { }
+            || converted.ptr != maximum->text.data() + maximum->text.size()
+            || maximum_index >= addressable_elements) {
+          throw std::length_error {
+              "class handle queue bound exceeds addressable storage"
+          };
         }
-        break;
-      case frontend::SystemVerilogContainerKind::AssociativeArray:
-        container.kind =
-            runtime::SystemVerilogClassContainerKind::AssociativeArray;
+        container.maximum_elements
+            = static_cast<std::size_t>(maximum_index + 1U);
+      } else {
         container.reserve_maximum_storage = false;
-        break;
+      }
+    } else if (*container_form
+        == semantic::sv::TypeForm::associative_array) {
+      container.kind
+          = runtime::SystemVerilogClassContainerKind::AssociativeArray;
+      container.reserve_maximum_storage = false;
     }
     result.kind = runtime::SystemVerilogClassPropertyKind::Container;
     result.width = 0;
     result.handle_container = std::move(container);
     return result;
   }
-  if (!property.type.systemverilog_class_declaration.empty()) {
+  if (!property.type.class_identity.empty()
+      || property.type.value_form == semantic::sv::TypeForm::class_handle) {
     result.kind = runtime::SystemVerilogClassPropertyKind::ClassHandle;
     result.width = 64;
     return result;
   }
-  if (property.type.systemverilog_container) {
+  if (container_form) {
     result.kind = runtime::SystemVerilogClassPropertyKind::Container;
     result.width = 0;
     return result;
   }
-  switch (property.type.domain) {
-    case frontend::ValueDomain::Bit2:
-    case frontend::ValueDomain::Boolean:
-      result.kind = runtime::SystemVerilogClassPropertyKind::Bit2;
-      break;
-    case frontend::ValueDomain::Logic9:
-      result.kind = runtime::SystemVerilogClassPropertyKind::Logic9;
-      break;
-    case frontend::ValueDomain::Integer:
-      result.kind = runtime::SystemVerilogClassPropertyKind::Integer;
-      break;
-    case frontend::ValueDomain::String:
-      result.kind = runtime::SystemVerilogClassPropertyKind::String;
-      break;
-    default:
-      result.kind = runtime::SystemVerilogClassPropertyKind::Logic4;
-      break;
+  if (property.type.value_form == semantic::sv::TypeForm::string) {
+    result.kind = runtime::SystemVerilogClassPropertyKind::String;
+    result.width = 0;
+  } else {
+    result.kind = property.type.four_state
+        ? runtime::SystemVerilogClassPropertyKind::Logic4
+        : runtime::SystemVerilogClassPropertyKind::Bit2;
+    result.width = property.type.executable_width
+        ? static_cast<std::size_t>(*property.type.executable_width)
+        : std::max<std::size_t>(property.bit_width, 1U);
   }
-  const auto width = property.type.width();
-  if (width && *width > std::numeric_limits<std::size_t>::max()) {
-    throw std::length_error{"class property width exceeds host storage"};
+  if (!property.initializer)
+    return result;
+  const auto initializer = std::ranges::find(
+      hir.expressions(), *property.initializer,
+      &semantic::sv::Expression::id);
+  if (initializer == hir.expressions().end())
+    return result;
+  if (initializer->kind == semantic::sv::ExpressionKind::string_literal
+      && initializer->decoded_string) {
+    result.initial_string = *initializer->decoded_string;
+    return result;
   }
-  result.width = width ? static_cast<std::size_t>(*width) : 1U;
-  if (property.initializer) {
-    if (property.initializer->kind
-        == frontend::ExpressionKind::IntegerLiteral) {
-      std::int64_t value{};
-      const auto* begin = property.initializer->text.data();
-      const auto* end = begin + property.initializer->text.size();
-      const auto converted = std::from_chars(begin, end, value, 10);
-      if (converted.ec == std::errc{} && converted.ptr == end) {
-        const auto initial_width =
-            result.kind == runtime::SystemVerilogClassPropertyKind::Integer
-            ? std::size_t{64}
-            : result.width;
-        result.initial_packed = runtime::PackedLogic4::from_aval_bval(
-            initial_width, static_cast<std::uint64_t>(value), 0);
-      }
-    } else if (
-        property.initializer->kind
-            == frontend::ExpressionKind::StringLiteral
-        && property.initializer->decoded_string) {
-      result.initial_string = *property.initializer->decoded_string;
+  if (initializer->kind == semantic::sv::ExpressionKind::boolean_literal) {
+    result.initial_packed = runtime::PackedLogic4::from_aval_bval(
+        std::max<std::size_t>(result.width, 1U),
+        initializer->text == "true" ? 1U : 0U, 0);
+    return result;
+  }
+  if (initializer->kind == semantic::sv::ExpressionKind::integer_literal) {
+    std::int64_t value { };
+    const auto* begin = initializer->text.data();
+    const auto* end = begin + initializer->text.size();
+    const auto converted = std::from_chars(begin, end, value, 10);
+    if (converted.ec == std::errc { } && converted.ptr == end) {
+      result.initial_packed = runtime::PackedLogic4::from_aval_bval(
+          std::max<std::size_t>(result.width, 1U),
+          static_cast<std::uint64_t>(value), 0);
     }
   }
   return result;

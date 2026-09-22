@@ -3,28 +3,6 @@
 
 namespace fsim::app::application_detail {
 
-const frontend::SystemVerilogClassMethodProfile*
-systemverilog_randomize_callback(
-    const std::span<const frontend::SystemVerilogClassSpecialization>
-        specializations,
-    const runtime::SystemVerilogClassHeap& heap,
-    const runtime::SystemVerilogClassHandle handle,
-    const std::string_view name) {
-  auto identity = heap.object(handle).specialization_identity;
-  while (!identity.empty()) {
-    const auto current = std::ranges::find(
-        specializations, identity,
-        &frontend::SystemVerilogClassSpecialization::specialization_identity);
-    if (current == specializations.end()) return nullptr;
-    const auto found = std::ranges::find(
-        current->methods, name,
-        &frontend::SystemVerilogClassMethodProfile::name);
-    if (found != current->methods.end()) return &*found;
-    identity = current->base_specialization_identity;
-  }
-  return nullptr;
-}
-
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,
     const std::span<const std::string> selected_names) {

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/design_artifact.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -7,6 +9,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -50,6 +53,102 @@ constexpr std::array<std::string_view, 7> signal_names{
     "mixed_conversion_sv_top.integer_result",
     "mixed_conversion_sv_top.bit_result",
     "mixed_conversion_sv_top.state_result"};
+
+struct DiagnosticCaptureEntry {
+  fsim::diagnostic::Severity severity;
+  std::string code;
+  std::string message;
+  std::string path;
+  std::uint32_t begin_line{};
+  std::uint32_t begin_column{};
+  std::uint64_t begin_offset{};
+  std::uint32_t end_line{};
+  std::uint32_t end_column{};
+  std::uint64_t end_offset{};
+
+  friend bool operator==(
+      const DiagnosticCaptureEntry&,
+      const DiagnosticCaptureEntry&) = default;
+};
+
+using DiagnosticCapture = std::vector<DiagnosticCaptureEntry>;
+
+struct NamedDiagnosticCapture {
+  std::string_view name;
+  const DiagnosticCapture* diagnostics{};
+};
+
+DiagnosticCapture capture_diagnostics(
+    const fsim::diagnostic::Engine& diagnostics) {
+  DiagnosticCapture capture;
+  capture.reserve(diagnostics.diagnostics().size());
+  for (const auto& diagnostic : diagnostics.diagnostics()) {
+    capture.push_back({
+        diagnostic.severity,
+        diagnostic.code,
+        diagnostic.message,
+        diagnostic.span.path,
+        diagnostic.span.begin.line,
+        diagnostic.span.begin.column,
+        diagnostic.span.begin.offset,
+        diagnostic.span.end.line,
+        diagnostic.span.end.column,
+        diagnostic.span.end.offset});
+  }
+  return capture;
+}
+
+bool is_five_path_warning(
+    const DiagnosticCapture& diagnostics,
+    const std::string_view logical_source) {
+  if (diagnostics.size() != 1U) {
+    return false;
+  }
+  const auto& warning = diagnostics.front();
+  return warning.severity == fsim::diagnostic::Severity::warning
+      && warning.code == "FSIM-ELAB-SVCONST-002"
+      && warning.message
+          == "$warning during constant evaluation: compiled HIR path=17"
+      && warning.path == logical_source
+      && warning.begin_line > 0U && warning.begin_column > 0U
+      && warning.end_line >= warning.begin_line
+      && warning.end_offset >= warning.begin_offset;
+}
+
+void assert_five_path_warning_equivalence(
+    const std::array<NamedDiagnosticCapture, 5>& captures,
+    const std::string_view logical_source) {
+  bool valid = true;
+  const auto& expected = *captures.front().diagnostics;
+  for (const auto& capture : captures) {
+    const auto well_formed = is_five_path_warning(
+        *capture.diagnostics, logical_source);
+    const auto equivalent = *capture.diagnostics == expected;
+    valid = well_formed && equivalent && valid;
+  }
+  if (!valid) {
+    for (const auto& capture : captures) {
+      std::cerr << capture.name << " diagnostics:\n";
+      if (capture.diagnostics->empty()) {
+        std::cerr << "  <none>\n";
+      }
+      for (const auto& diagnostic : *capture.diagnostics) {
+        std::cerr << "  severity="
+                  << static_cast<unsigned>(diagnostic.severity)
+                  << " code=" << diagnostic.code
+                  << " message=" << diagnostic.message
+                  << " path=" << diagnostic.path
+                  << " begin=" << diagnostic.begin_line << ':'
+                  << diagnostic.begin_column << ':'
+                  << diagnostic.begin_offset
+                  << " end=" << diagnostic.end_line << ':'
+                  << diagnostic.end_column << ':'
+                  << diagnostic.end_offset << '\n';
+      }
+    }
+  }
+  assert(valid);
+}
 
 void write_leaf(
     const std::filesystem::path& source,
@@ -133,47 +232,42 @@ fsim::project::Config make_config(
   return config;
 }
 
-Capture run_once(
+Capture capture_project(
     const fsim::project::Config& config,
+    fsim::app::BuiltProject project,
     const fsim::app::SimulationEngine engine) {
-  fsim::diagnostic::Engine diagnostics;
-  auto project = fsim::app::build_project(config, diagnostics);
-  if (!project) {
-    fsim::diagnostic::print_text(std::cerr, diagnostics);
-  }
-  assert(project);
-  assert(project->design_ir.valid());
-  assert(project->design_ir.valid(project->semantics));
-  assert(project->design_ir.specializations().size()
-         == project->design.specializations().size());
-  assert(project->design_ir.processes().size()
-         == project->design.processes().size());
-  assert(project->design_ir.conversions().size()
-         == project->design.boundary_conversions().size());
+  assert(project.design_ir.valid());
+  assert(project.design_ir.valid(project.semantics));
+  assert(project.design_ir.specializations().size()
+         == project.design.specializations().size());
+  assert(project.design_ir.processes().size()
+         == project.design.processes().size());
+  assert(project.design_ir.conversions().size()
+         == project.design.boundary_conversions().size());
   assert(static_cast<std::size_t>(std::ranges::count_if(
-      project->design_ir.boundaries(), [](const auto& boundary) {
+      project.design_ir.boundaries(), [](const auto& boundary) {
         return boundary.kind
             == fsim::semantic::design::BoundaryKind::language_conversion;
-      })) == project->design.boundary_conversions().size());
+      })) == project.design.boundary_conversions().size());
   assert(std::ranges::all_of(
-      project->design_ir.conversions(), [](const auto& conversion) {
+      project.design_ir.conversions(), [](const auto& conversion) {
         return conversion.formal.valid() && conversion.actual.valid()
             && conversion.source.has_value();
       }));
 
   Capture capture;
   assert(
-      project->specialization_cache_keys.size()
-      == project->design.specializations().size());
+      project.specialization_cache_keys.size()
+      == project.design.specializations().size());
   for (std::size_t index = 0;
-       index < project->design.specializations().size();
+       index < project.design.specializations().size();
        ++index) {
     capture.keys.emplace_back(
-        project->design.specializations()[index].instance,
-        project->specialization_cache_keys[index]);
+        project.design.specializations()[index].instance,
+        project.specialization_cache_keys[index]);
   }
 
-  const auto& conversions = project->design.boundary_conversions();
+  const auto& conversions = project.design.boundary_conversions();
   capture.conversion_count = conversions.size();
   capture.adapter_count = static_cast<std::size_t>(std::ranges::count_if(
       conversions,
@@ -198,7 +292,7 @@ Capture run_once(
   std::optional<std::pair<
       fsim::runtime::simir::ProcessId,
       std::size_t>> debug_local;
-  for (const auto& process : project->design.processes()) {
+  for (const auto& process : project.design.processes()) {
     for (std::size_t index = 0;
          index < process.debug_locals.size();
          ++index) {
@@ -210,7 +304,7 @@ Capture run_once(
   assert(debug_local);
 
   fsim::app::Simulation simulation{
-      std::move(*project), config.run.max_deltas, engine};
+      std::move(project), config.run.max_deltas, engine};
   capture.compiled_processes = simulation.compiled_process_count();
   capture.compiled_modules = simulation.compiled_module_count();
   capture.native_cache = simulation.native_cache_statistics();
@@ -264,6 +358,18 @@ Capture run_once(
   return capture;
 }
 
+Capture run_once(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
+  assert(project && !diagnostics.has_error());
+  return capture_project(config, std::move(*project), engine);
+}
+
 void compare_captures(
     const Capture& reference,
     const Capture& compiled) {
@@ -294,6 +400,178 @@ void verify_capture(const Capture& capture, const bool edited) {
   assert(capture.vcd.find("$enddefinitions $end") != std::string::npos);
 }
 
+void run_five_path_compiled_hir_differential(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& top_source,
+    const std::filesystem::path& middle_source,
+    const std::filesystem::path& leaf_source) {
+  auto source_config = make_config(
+      directory,
+      top_source,
+      middle_source,
+      leaf_source,
+      fsim::project::Optimization::o0);
+  source_config.project.name = "compiled-hir-five-path-differential";
+  source_config.build.cache_path = directory / "five-path-source-cache";
+
+  fsim::diagnostic::Engine direct_diagnostics;
+  auto direct_project = fsim::app::build_project(
+      source_config, direct_diagnostics);
+  if (!direct_project || direct_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(std::cerr, direct_diagnostics);
+  }
+  assert(
+      direct_project && !direct_diagnostics.has_error()
+      && !direct_project->cache_hit);
+  const auto direct_diagnostic_capture = capture_diagnostics(
+      direct_diagnostics);
+  const auto direct = capture_project(
+      source_config,
+      std::move(*direct_project),
+      fsim::app::SimulationEngine::interpreter);
+
+  fsim::diagnostic::Engine warm_diagnostics;
+  auto warm_project = fsim::app::build_project(
+      source_config, warm_diagnostics);
+  if (!warm_project || warm_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(std::cerr, warm_diagnostics);
+  }
+  assert(
+      warm_project && !warm_diagnostics.has_error()
+      && warm_project->cache_hit);
+  const auto warm_diagnostic_capture = capture_diagnostics(
+      warm_diagnostics);
+  const auto warm = capture_project(
+      source_config,
+      std::move(*warm_project),
+      fsim::app::SimulationEngine::interpreter);
+
+  const auto vhdl_object = directory / "five-path-vhdl.fsimobj";
+  const auto sv_object = directory / "five-path-sv.fsimobj";
+  const auto publish_object = [&](const std::size_t source_set,
+                                  const std::filesystem::path& object,
+                                  const std::string_view cache_name) {
+    auto publish_config = source_config;
+    publish_config.source_sets = {
+        source_config.source_sets.at(source_set)};
+    publish_config.build.cache_path = directory / cache_name;
+    fsim::diagnostic::Engine diagnostics;
+    const auto published = fsim::app::compile_artifact(
+        publish_config, object, diagnostics);
+    if (!published || diagnostics.has_error()) {
+      fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(published && diagnostics.empty());
+  };
+  publish_object(
+      0U, vhdl_object, "five-path-vhdl-object-publish-cache");
+  publish_object(
+      1U, sv_object, "five-path-sv-object-publish-cache");
+
+  auto object_config = source_config;
+  object_config.source_sets.clear();
+  object_config.build.cache_path = directory / "five-path-object-cache";
+  const std::array objects { vhdl_object, sv_object };
+  fsim::diagnostic::Engine object_diagnostics;
+  auto object_project = fsim::app::build_objects(
+      object_config, objects, object_diagnostics);
+  if (!object_project || object_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(std::cerr, object_diagnostics);
+  }
+  assert(
+      object_project && !object_diagnostics.has_error()
+      && !object_project->cache_hit);
+  const auto object_diagnostic_capture = capture_diagnostics(
+      object_diagnostics);
+  const auto explicit_object = capture_project(
+      object_config,
+      std::move(*object_project),
+      fsim::app::SimulationEngine::interpreter);
+
+  const auto library = directory / "five-path.fsimlib";
+  auto library_publish_config = source_config;
+  library_publish_config.build.cache_path
+      = directory / "five-path-library-publish-cache";
+  fsim::diagnostic::Engine library_publish_diagnostics;
+  const auto library_published = fsim::app::export_library(
+      library_publish_config,
+      "work",
+      library,
+      library_publish_diagnostics);
+  if (!library_published || library_publish_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(
+        std::cerr, library_publish_diagnostics);
+  }
+  assert(library_published && library_publish_diagnostics.empty());
+
+  auto mapped_config = source_config;
+  mapped_config.source_sets.clear();
+  mapped_config.build.cache_path = directory / "five-path-mapped-cache";
+  mapped_config.library_mappings.push_back({ "work", library });
+  fsim::diagnostic::Engine mapped_diagnostics;
+  auto mapped_project = fsim::app::build_project(
+      mapped_config, mapped_diagnostics);
+  if (!mapped_project || mapped_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(std::cerr, mapped_diagnostics);
+  }
+  assert(
+      mapped_project && !mapped_diagnostics.has_error()
+      && !mapped_project->cache_hit);
+  const auto mapped_diagnostic_capture = capture_diagnostics(
+      mapped_diagnostics);
+  const auto mapped_library = capture_project(
+      mapped_config,
+      std::move(*mapped_project),
+      fsim::app::SimulationEngine::interpreter);
+
+  const auto design = directory / "five-path.fsimdesign";
+  auto design_config = object_config;
+  design_config.build.cache_path = directory / "five-path-design-cache";
+  fsim::diagnostic::Engine design_publish_diagnostics;
+  const auto design_published = fsim::app::elaborate_artifact(
+      design_config,
+      objects,
+      design,
+      design_publish_diagnostics);
+  if (!design_published || design_publish_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(
+        std::cerr, design_publish_diagnostics);
+  }
+  assert(design_published && !design_publish_diagnostics.has_error());
+  const auto design_diagnostic_capture = capture_diagnostics(
+      design_publish_diagnostics);
+  const std::array diagnostics_by_path {
+      NamedDiagnosticCapture { "direct", &direct_diagnostic_capture },
+      NamedDiagnosticCapture { "warm-cache", &warm_diagnostic_capture },
+      NamedDiagnosticCapture { "object", &object_diagnostic_capture },
+      NamedDiagnosticCapture {
+          "mapped-library", &mapped_diagnostic_capture },
+      NamedDiagnosticCapture {
+          "design-artifact", &design_diagnostic_capture },
+  };
+  assert_five_path_warning_equivalence(
+      diagnostics_by_path, "top.sv");
+
+  fsim::diagnostic::Engine design_diagnostics;
+  auto design_project = fsim::app::load_design_artifact(
+      design, design_diagnostics);
+  if (!design_project || design_diagnostics.has_error()) {
+    fsim::diagnostic::print_text(std::cerr, design_diagnostics);
+  }
+  assert(design_project && design_diagnostics.empty());
+  design_project->cache_path = directory / "five-path-design-run-cache";
+  const auto design_artifact = capture_project(
+      design_config,
+      std::move(*design_project),
+      fsim::app::SimulationEngine::interpreter);
+
+  verify_capture(direct, false);
+  compare_captures(direct, warm);
+  compare_captures(direct, explicit_object);
+  compare_captures(direct, mapped_library);
+  compare_captures(direct, design_artifact);
+}
+
 }  // namespace
 
 int main() {
@@ -307,8 +585,14 @@ int main() {
   const auto top_source = directory.path / "top.sv";
   {
     std::ofstream output{top_source};
-    output << R"(
+    output << R"(`line 1 "top.sv" 0
 module mixed_conversion_sv_top;
+  function automatic int announce_compiled_hir_path(input int value);
+    $warning("compiled HIR path=%0d", value);
+    return value;
+  endfunction
+  localparam int COMPILED_HIR_PATH = announce_compiled_hir_path(17);
+
   logic [3:0] width_value;
   logic [7:0] width_result;
   logic [3:0] unsigned_to_signed_value;
@@ -458,6 +742,13 @@ end architecture;
     assert(edited.native_cache.stores == edited.native_cache.misses);
 #endif
   }
+
+  write_leaf(leaf_source, false);
+  run_five_path_compiled_hir_differential(
+      directory.path,
+      top_source,
+      middle_source,
+      leaf_source);
 
   std::cout << "mixed conversion application tests passed\n";
   return 0;

@@ -6,7 +6,6 @@
 #include "fsim/frontend/design.hpp"
 
 #include <cstddef>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -87,18 +86,5 @@ struct VhdlCoveragePointResult {
         return error == VhdlCoveragePointError::None;
     }
 };
-
-[[nodiscard]] bool is_executable_vhdl_statement_kind(
-    frontend::StatementKind kind) noexcept;
-
-// Sequential process/subprogram bodies and concurrent statement collections
-// use the same retained Statement forest. Invoke discovery for each retained
-// forest after static elaboration has selected the constructs that survive.
-[[nodiscard]] VhdlCoveragePointResult discover_vhdl_statement_points(
-    std::span<const frontend::Statement> statements,
-    frontend::Language language,
-    frontend::VhdlStandard standard,
-    std::span<const VhdlCoverageSource> sources,
-    VhdlCoveragePointLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

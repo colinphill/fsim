@@ -74,6 +74,95 @@ fsim::project::Config make_config(
   return config;
 }
 
+void verify_compiled_package_type_reference(
+    const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  const auto checked = fsim::app::check_project(config, diagnostics);
+  if (!checked) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(checked && !diagnostics.has_error());
+
+  const auto package = std::ranges::find_if(
+      checked->vhdl_hir.units(), [](const auto& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::package
+            && unit.name == "overload_pkg" && unit.primary_name.empty();
+      });
+  const auto architecture = std::ranges::find_if(
+      checked->vhdl_hir.units(), [](const auto& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::architecture
+            && unit.name == "rtl" && unit.primary_name == "overload_app";
+      });
+  assert(package != checked->vhdl_hir.units().end());
+  assert(architecture != checked->vhdl_hir.units().end());
+
+  const auto static_bits = std::ranges::find_if(
+      package->declarations, [&](const auto declaration_id) {
+        const auto declaration = checked->find_declaration(declaration_id);
+        return declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->name == "static_bits";
+      });
+  const auto static_vector = std::ranges::find_if(
+      architecture->declarations, [&](const auto declaration_id) {
+        const auto declaration = checked->find_declaration(declaration_id);
+        return declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->name == "static_vector_value";
+      });
+  assert(static_bits != package->declarations.end());
+  assert(static_vector != architecture->declarations.end());
+
+  const auto type_declaration = checked->find_declaration(*static_bits);
+  const auto signal_declaration = checked->find_declaration(*static_vector);
+  assert(type_declaration && type_declaration->vhdl != nullptr
+      && type_declaration->vhdl->declared_type);
+  assert(signal_declaration && signal_declaration->vhdl != nullptr
+      && signal_declaration->vhdl->subtype);
+  assert(signal_declaration->vhdl->subtype->type_mark.target
+      == type_declaration->vhdl->declared_type);
+  const auto linked_type = checked->find_type(
+      signal_declaration->vhdl->subtype->type_mark.target);
+  assert(linked_type && linked_type->vhdl != nullptr);
+  assert(linked_type->vhdl->form
+      == fsim::semantic::vhdl::TypeForm::array);
+  assert(linked_type->vhdl->element_subtype);
+  assert(linked_type->vhdl->array_dimensions.size() == 1);
+  assert(linked_type->vhdl->array_dimensions.front().constraint);
+  assert(linked_type->vhdl->array_dimensions.front().constraint
+      ->left_expression);
+  assert(linked_type->vhdl->array_dimensions.front().constraint
+      ->right_expression);
+
+  const auto aggregate_call = std::ranges::find_if(
+      checked->vhdl_hir.expressions(), [](const auto& expression) {
+        return expression.kind
+                == fsim::semantic::vhdl::ExpressionKind::call
+            && expression.text == "aggregate_select"
+            && expression.operands.size() == 1
+            && expression.referenced_name
+            && expression.referenced_name->selected;
+      });
+  assert(aggregate_call != checked->vhdl_hir.expressions().end());
+  const auto aggregate = checked->find_expression(
+      aggregate_call->operands.front());
+  const auto callable = checked->find_declaration(
+      *aggregate_call->referenced_name->selected);
+  assert(aggregate && aggregate->vhdl != nullptr);
+  assert(aggregate->vhdl->kind
+      == fsim::semantic::vhdl::ExpressionKind::aggregate);
+  assert(callable && callable->vhdl != nullptr
+      && callable->vhdl->callable
+      && callable->vhdl->callable->formals.size() == 1);
+  const auto formal = checked->find_declaration(
+      callable->vhdl->callable->formals.front());
+  assert(formal && formal->vhdl != nullptr
+      && formal->vhdl->subtype);
+  assert(formal->vhdl->subtype->type_mark.target
+      == type_declaration->vhdl->declared_type);
+}
+
 Capture run_once(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine) {
@@ -89,18 +178,25 @@ Capture run_once(
   assert(project->design.specializations().size() == 1);
   const auto resolved =
       project->design.find_signal("overload_app.resolved_value");
+  const auto resolved_and =
+      project->design.find_signal("overload_app.resolved_and_value");
   const auto resolved_logic =
       project->design.find_signal("overload_app.resolved_logic_value");
   const auto resolved_pair =
       project->design.find_signal("overload_app.resolved_pair_value");
   const auto package_resolved =
       project->design.find_signal("overload_app.package_resolved_value");
+  const auto static_vector =
+      project->design.find_signal("overload_app.static_vector_value");
   assert(
-      resolved && resolved_logic && resolved_pair
-      && package_resolved);
+      resolved && resolved_and && resolved_logic && resolved_pair
+      && package_resolved && static_vector);
   assert(
       project->design.signals().at(*resolved).resolution
       == fsim::runtime::simir::ResolutionKind::vhdl_user_or);
+  assert(
+      project->design.signals().at(*resolved_and).resolution
+      == fsim::runtime::simir::ResolutionKind::vhdl_user_and);
   assert(
       project->design.signals().at(*resolved_logic).resolution
       == fsim::runtime::simir::ResolutionKind::vhdl_user_or);
@@ -113,6 +209,10 @@ Capture run_once(
   assert(
       project->design.signals().at(*package_resolved).resolution
       == fsim::runtime::simir::ResolutionKind::vhdl_user_or);
+  assert(project->design.signals().at(*static_vector).width == 8);
+  assert(
+      project->design.signals().at(*static_vector).source_domain
+      == fsim::frontend::ValueDomain::Bit2);
   const auto driver_processes = [&](const auto signal) {
     std::vector<fsim::runtime::simir::ProcessId> result;
     for (const auto& process : project->design.processes()) {
@@ -800,6 +900,9 @@ end architecture;
         package_body,
         top,
         optimization);
+    if (optimization == fsim::project::Optimization::o0) {
+      verify_compiled_package_type_reference(config);
+    }
     const auto reference = run_once(
         config, fsim::app::SimulationEngine::interpreter);
     const auto cold = run_once(

@@ -73,7 +73,7 @@ endmodule : conformance_top
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "sv:work.conformance_top");
   require_elaboration(elaborated, "public SystemVerilog conformance");
 
@@ -119,7 +119,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(dynamic_generate.ok());
-  const auto dynamic_generate_result = fsim::elaboration::elaborate(
+  const auto dynamic_generate_result = compile_and_elaborate(
       dynamic_generate.design, "sv:work.dynamic_generate");
   assert(
       !dynamic_generate_result.ok()
@@ -137,7 +137,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(missing_type.ok());
-  const auto missing_type_result = fsim::elaboration::elaborate(
+  const auto missing_type_result = compile_and_elaborate(
       missing_type.design, "sv:work.missing_type_top");
   assert(
       !missing_type_result.ok()
@@ -159,7 +159,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(ambiguous_type.ok());
-  const auto ambiguous_type_result = fsim::elaboration::elaborate(
+  const auto ambiguous_type_result = compile_and_elaborate(
       ambiguous_type.design, "sv:work.ambiguous_type_top");
   assert(
       !ambiguous_type_result.ok()
@@ -186,7 +186,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(wrong_interface.ok());
-  const auto wrong_interface_result = fsim::elaboration::elaborate(
+  const auto wrong_interface_result = compile_and_elaborate(
       wrong_interface.design, "sv:work.wrong_interface_top");
   assert(
       !wrong_interface_result.ok()
@@ -205,7 +205,7 @@ void test_msvc_debug_elaboration_portability() {
                 "endmodule : portable_elaboration\r\n"},
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "sv:work.portable_elaboration");
   require_elaboration(elaborated, "MSVC Debug source portability");
   const auto value =

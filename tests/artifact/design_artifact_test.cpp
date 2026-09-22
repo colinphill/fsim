@@ -66,7 +66,7 @@ void make_tree_writable(const std::filesystem::path& root) {
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kDesignFormatVersion == 12U);
+    static_assert(fsim::artifact::kDesignFormatVersion == 13U);
     static_assert(fsim::runtime_abi_version == 1U);
     std::string trace_source(257U, '0');
     constexpr char trace_symbols[] = { '0', '1', 'X', 'Z' };
@@ -424,7 +424,8 @@ int main() {
       {0, "systemverilog", "2009", "implicit-net,sizing"});
   metadata.payloads = {
       {"runtime", "state/runtime.bin", checksum(state_bytes)},
-      {"semantics", "state/semantics.bin", checksum(state_bytes)},
+      {"compiled-hir", "state/compiled-design.fsimhir",
+       checksum(state_bytes)},
       {"design-ir", "state/design-ir.bin", checksum(state_bytes)},
       {"systemc-backend-values-v1", "state/systemc-values.bin",
        checksum(crossing_bytes)},
@@ -454,6 +455,16 @@ int main() {
   assert(fsim::artifact::deserialize_design_metadata(
              encoded, "design", decode_diagnostics) == metadata);
   assert(!decode_diagnostics.has_error());
+  auto split_hir_payloads = metadata;
+  split_hir_payloads.payloads[1].kind = "semantics";
+  split_hir_payloads.payloads[1].artifact = "state/semantics.bin";
+  split_hir_payloads.design_digest
+      = fsim::artifact::compute_design_digest(split_hir_payloads);
+  fsim::diagnostic::Engine split_hir_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(split_hir_payloads),
+      "split-hir-design", split_hir_diagnostics));
+  assert(split_hir_diagnostics.has_error());
   auto enabled_coverage = metadata;
   enabled_coverage.code_coverage
       = fsim::artifact::make_code_coverage_artifact_identity(true).identity;
@@ -592,7 +603,7 @@ int main() {
                                                   const auto& diagnostics,
                                                   const std::string& found) {
       const auto expected = "unsupported .fsimdesign identity: found " + found
-          + "; required format 12 and runtime ABI 1; regenerate .fsimdesign "
+          + "; required format 13 and runtime ABI 1; regenerate .fsimdesign "
             "with this fsim build";
       return std::ranges::any_of(
           diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -602,7 +613,7 @@ int main() {
   };
 
   for (const auto stale_format :
-      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U }) {
+      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U }) {
       auto stale_header = encoded.substr(0, 16U);
       store_u32(stale_header, 8U, stale_format);
       fsim::diagnostic::Engine stale_format_diagnostics;
@@ -629,7 +640,7 @@ int main() {
   assert(!fsim::artifact::deserialize_design_metadata(
       future_header, "future-format-design", future_header_diagnostics));
   assert(has_design_identity_diagnostic(
-      future_header_diagnostics, "format 13 and runtime ABI 1"));
+      future_header_diagnostics, "format 14 and runtime ABI 1"));
 
   auto corrupt_magic = encoded;
   corrupt_magic[0] = 'X';
@@ -659,7 +670,7 @@ int main() {
       incompatible_runtime, "incompatible-runtime-abi",
       incompatible_runtime_diagnostics));
   assert(has_design_identity_diagnostic(
-      incompatible_runtime_diagnostics, "format 12 and runtime ABI 2"));
+      incompatible_runtime_diagnostics, "format 13 and runtime ABI 2"));
 
   auto oversized_root = encoded;
   store_u64(oversized_root, 16U, std::numeric_limits<std::uint64_t>::max());
@@ -716,7 +727,7 @@ int main() {
       stale_publication_directory, stale_publication_metadata, payloads,
       stale_publication_diagnostics));
   assert(has_design_identity_diagnostic(
-      stale_publication_diagnostics, "format 11 and runtime ABI 1"));
+      stale_publication_diagnostics, "format 12 and runtime ABI 1"));
   assert(!std::filesystem::exists(stale_publication_directory));
   fsim::diagnostic::Engine publish_diagnostics;
   assert(fsim::artifact::publish_design(directory, metadata, payloads,

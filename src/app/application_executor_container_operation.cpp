@@ -1365,7 +1365,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             }
             std::optional<runtime::simir::ContainerValue> missing;
             const runtime::simir::ContainerValue* selected = nullptr;
-            if (source.type.associative) {
+            if (source.type.element_kind
+                    == runtime::simir::ContainerElementKind::Aggregate
+                && source.type.aggregate_value) {
+                selected = &source;
+            } else if (source.type.associative) {
                 const auto sought = key(source, input0_aval, input0_bval);
                 const auto at = lower_key(source, sought);
                 if (at < source.keys.size()
@@ -1428,8 +1432,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     "container"
                 };
             }
+            auto* selected = target.type.element_kind
+                    == runtime::simir::ContainerElementKind::Aggregate
+                    && target.type.aggregate_value
+                ? &target
+                : static_cast<runtime::simir::ContainerValue*>(nullptr);
             std::size_t at { };
-            if (target.type.associative) {
+            if (selected != nullptr) {
+                // Direct aggregate objects do not have an outer array
+                // element to select before their member path is applied.
+            } else if (target.type.associative) {
                 const auto sought = key(target, input0_aval, input0_bval);
                 at = lower_key(target, sought);
                 if (at >= target.keys.size()
@@ -1468,7 +1480,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     };
                 }
             }
-            auto* selected = &target.nested_elements[at];
+            if (selected == nullptr) {
+                selected = &target.nested_elements[at];
+            }
             runtime::simir::ContainerValue* direct_union = nullptr;
             for (std::size_t path_index = 0;
                 path_index < aggregate_write->members.size(); ++path_index) {

@@ -71,7 +71,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "vhdl:work.qualified_conversion(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -134,15 +134,8 @@ end architecture;
     const auto invalid = fsim::frontend::parse_text(
         filename, source, fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto result = fsim::elaboration::elaborate(
+    const auto result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid(rtl)");
-    if (result.ok() || !has_diagnostic(result, code)) {
-      for (const auto& diagnostic : result.diagnostics) {
-        std::cerr << diagnostic.code << ": " << diagnostic.message
-                  << " at " << diagnostic.span.begin.line << ':'
-                  << diagnostic.span.begin.column << '\n';
-      }
-    }
     assert(!result.ok() && has_diagnostic(result, code));
   };
 
@@ -377,15 +370,19 @@ end architecture;
 )",
       "FSIM-ELAB-VHCONV-003");
 
-  const auto reject_at_runtime = [](
+  const auto reject_static_or_runtime = [](
       const std::string_view filename,
-      const std::string_view source) {
+      const std::string_view source,
+      const std::string_view static_code) {
     const auto invalid = fsim::frontend::parse_text(
         filename, source, fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto runtime_elaborated = fsim::elaboration::elaborate(
+    const auto runtime_elaborated = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid(rtl)");
-    assert(runtime_elaborated.ok());
+    if (!runtime_elaborated.ok()) {
+      assert(has_diagnostic(runtime_elaborated, static_code));
+      return;
+    }
     bool rejected = false;
     try {
       auto runtime_interpreter =
@@ -398,7 +395,7 @@ end architecture;
     }
     assert(rejected);
   };
-  reject_at_runtime(
+  reject_static_or_runtime(
       "vhdl_qualified_integer_constraint.vhd",
       R"(
 entity Invalid is end entity;
@@ -408,8 +405,9 @@ architecture rtl of invalid is
 begin
   Value <= Small_T'(4);
 end architecture;
-)");
-  reject_at_runtime(
+)",
+      "FSIM-ELAB-INTEGER-004");
+  reject_static_or_runtime(
       "vhdl_conversion_enumeration_constraint.vhd",
       R"(
 entity Invalid is end entity;
@@ -420,7 +418,8 @@ architecture rtl of invalid is
 begin
   Value <= Active_T(State_T'(Idle));
 end architecture;
-)");
+)",
+      "FSIM-ELAB-VHENUMRANGE-004");
 }
 
 }  // namespace fsim::tests::elaboration

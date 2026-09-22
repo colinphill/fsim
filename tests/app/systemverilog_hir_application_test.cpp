@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/class_resolution.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 #include "../../src/app/application_internal.hpp"
 
@@ -11,9 +14,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -26,6 +31,126 @@ struct TemporaryDirectory {
     }
 };
 
+void append_u32(std::string& bytes, const std::uint32_t value)
+{
+    for (unsigned shift = 0; shift < 32U; shift += 8U) {
+        bytes.push_back(static_cast<char>((value >> shift) & 0xffU));
+    }
+}
+
+void append_u64(std::string& bytes, const std::uint64_t value)
+{
+    for (unsigned shift = 0; shift < 64U; shift += 8U) {
+        bytes.push_back(static_cast<char>((value >> shift) & 0xffU));
+    }
+}
+
+template <typename Record>
+std::string oversized_first_vector_state(
+    const std::string_view magic,
+    const std::uint32_t schema,
+    const std::size_t preceding_strings = 0U)
+{
+    std::string bytes { magic };
+    append_u32(bytes, schema);
+    for (std::size_t index = 0; index < preceding_strings; ++index) {
+        append_u64(bytes, 0U);
+    }
+    const auto count = static_cast<std::uint64_t>(
+        fsim::app::kCompiledHirDecodeBudgetBytes
+        / sizeof(Record))
+        + 1U;
+    append_u64(bytes, count);
+    bytes.append(static_cast<std::size_t>(count), '\0');
+    return bytes;
+}
+
+bool has_decode_budget_diagnostic(
+    const fsim::diagnostic::Engine& diagnostics)
+{
+    return std::ranges::any_of(
+        diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message
+                == "design state exceeds the aggregate decode allocation budget";
+        });
+}
+
+std::vector<std::string> semantic_expansion_stack(
+    const fsim::semantic::Model& semantics,
+    const fsim::semantic::SourceSpanId source)
+{
+    assert(source.valid() && source.value() < semantics.source_spans().size());
+    auto expansion = semantics.source_spans()[source.value()].expansion;
+    std::vector<std::string> innermost_to_outermost;
+    while (expansion) {
+        assert(expansion->valid()
+            && expansion->value() < semantics.expansions().size());
+        const auto& record = semantics.expansions()[expansion->value()];
+        innermost_to_outermost.push_back(record.description);
+        expansion = record.parent;
+    }
+    std::ranges::reverse(innermost_to_outermost);
+    return innermost_to_outermost;
+}
+
+void assert_projected_source_token(
+    const fsim::semantic::sv::SourceToken& source,
+    const fsim::frontend::Token& projected,
+    const fsim::semantic::Model& semantics)
+{
+    assert(source.source.valid()
+        && source.source.value() < semantics.source_spans().size());
+    const auto& semantic_span
+        = semantics.source_spans()[source.source.value()];
+    assert(semantic_span.file.valid()
+        && semantic_span.file.value() < semantics.source_files().size());
+    const auto& semantic_file
+        = semantics.source_files()[semantic_span.file.value()];
+    const auto logical_name = semantic_span.logical_name.empty()
+        ? semantic_file.physical_name
+        : semantic_span.logical_name;
+    const auto expansions = semantic_expansion_stack(
+        semantics, source.source);
+    assert(static_cast<std::uint16_t>(projected.kind) == source.kind);
+    assert(projected.text == source.text);
+    assert(static_cast<std::uint8_t>(projected.generated_text)
+        == static_cast<std::uint8_t>(source.generated_text));
+    assert(projected.span.source_name.str() == logical_name);
+    assert(projected.span.physical_source_name.str()
+        == semantic_file.physical_name);
+    assert(projected.span.begin.offset == semantic_span.begin.offset);
+    assert(projected.span.begin.line == semantic_span.begin.line);
+    assert(projected.span.begin.column == semantic_span.begin.column);
+    assert(projected.span.end.offset == semantic_span.end.offset);
+    assert(projected.span.end.line == semantic_span.end.line);
+    assert(projected.span.end.column == semantic_span.end.column);
+    assert(std::ranges::equal(
+        projected.span.expansion_stack, expansions));
+    assert(projected.expansion_stack == expansions);
+}
+
+void assert_signed_expression_retention(
+    const fsim::semantic::sv::Hir& hir)
+{
+    const auto assert_signed = [&](const auto kind,
+                                   const std::string_view text) {
+        const auto expression = std::ranges::find_if(
+            hir.expressions(), [&](const auto& candidate) {
+                return candidate.kind == kind && candidate.text == text;
+            });
+        assert(expression != hir.expressions().end());
+        assert(expression->signed_value);
+    };
+    assert_signed(
+        fsim::semantic::sv::ExpressionKind::integer_literal, "987654321");
+    assert_signed(
+        fsim::semantic::sv::ExpressionKind::integer_literal, "-987654321");
+    assert_signed(
+        fsim::semantic::sv::ExpressionKind::logic_literal, "16'shbeef");
+    assert_signed(fsim::semantic::sv::ExpressionKind::call, "$random");
+}
+
 } // namespace
 
 int main()
@@ -36,13 +161,594 @@ int main()
         / ("fsim-systemverilog-hir-" + std::to_string(nonce))
     };
     std::filesystem::create_directories(directory.path);
+    const auto class_only_source = directory.path / "class_only.sv";
+    {
+        std::ofstream output { class_only_source, std::ios::binary };
+        output << R"(
+interface class hir_contract #(type ITEM = int);
+  parameter int ID = 1;
+  pure virtual function int observe(input ITEM value);
+endclass
+
+interface class hir_side;
+  pure virtual function int side();
+endclass
+
+interface class hir_combined
+    extends hir_contract #(logic [7:0]), hir_side;
+endclass
+
+class hir_base #(
+    parameter int WIDTH = 8,
+    parameter type ITEM = logic [WIDTH-1:0]);
+  typedef ITEM item_t;
+  protected ITEM value = '0;
+  function new(ITEM initial_value = '0);
+    begin : initialize
+      value = initial_value;
+    end
+  endfunction
+  extern virtual function int observe(input ITEM item = '0);
+  extern task deferred();
+  class nested;
+  endclass
+endclass
+
+function int hir_base::observe(input ITEM item = '0);
+  typedef ITEM local_item_t;
+  local_item_t retained = item;
+  return retained;
+endfunction
+
+class hir_derived
+    extends hir_base #(.WIDTH(4), .ITEM(logic [3:0]))
+    implements hir_contract #(logic [3:0]);
+endclass
+
+class class_only_coverage;
+  int sampled;
+  covergroup values;
+    sampled_point: coverpoint sampled;
+  endgroup
+endclass
+
+module generated_class_owner #(parameter int SELECT = 1);
+  localparam int MATCH = 1;
+  if (1) begin : selected
+    class generated_class;
+      int value = 7;
+      function int read();
+        return value;
+      endfunction
+    endclass
+  end
+  case (SELECT)
+    MATCH: begin : shared_alternative
+      class alternative_class;
+      endclass
+    end
+    default: begin : shared_alternative
+      class alternative_class;
+      endclass
+    end
+  endcase
+endmodule
+)";
+        assert(output.good());
+    }
+    fsim::project::Config class_only_config;
+    class_only_config.base_directory = directory.path;
+    class_only_config.project.name = "systemverilog-class-only-hir";
+    fsim::project::SourceSet class_only_sources;
+    class_only_sources.language = fsim::project::Language::system_verilog;
+    class_only_sources.standard = "2023";
+    class_only_sources.library = "work";
+    class_only_sources.compilation_unit = "file";
+    class_only_sources.files.push_back(class_only_source);
+    class_only_config.source_sets.push_back(std::move(class_only_sources));
+    fsim::diagnostic::Engine class_only_diagnostics;
+    auto class_only = fsim::app::check_project(
+        class_only_config, class_only_diagnostics);
+    if (!class_only)
+        fsim::diagnostic::print_text(std::cerr, class_only_diagnostics);
+    assert(class_only && class_only->valid());
+    const auto compilation_unit = std::ranges::find(
+        class_only->systemverilog_hir.units(),
+        fsim::semantic::sv::UnitKind::compilation_unit,
+        &fsim::semantic::sv::Unit::kind);
+    assert(compilation_unit
+        != class_only->systemverilog_hir.units().end());
+    assert(compilation_unit->name.starts_with("$unit@"));
+    const auto class_declaration = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        std::string { "class_only_coverage" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(class_declaration
+        != class_only->systemverilog_hir.classes().end());
+    assert(class_declaration->scope.valid());
+    assert(class_declaration->origin.valid());
+    const auto& class_scope = class_only->semantics.scopes().at(
+        class_declaration->scope.value());
+    assert(class_scope.unit == compilation_unit->id);
+    assert(class_scope.parent == compilation_unit->scope);
+    assert(class_declaration->covergroups.size() == 1);
+    assert(class_declaration->covergroups.front().items.size() == 1);
+    const auto class_base = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(class_base != class_only->systemverilog_hir.classes().end());
+    assert(class_base->parameters.size() == 2);
+    assert(class_base->parameters.front().default_value);
+    assert(class_base->parameters.back().type_parameter);
+    assert(class_base->parameters.back().default_type);
+    assert(std::ranges::find(
+        class_base->parameters.back().dependencies.parameters,
+        class_base->parameters.front().declaration)
+        != class_base->parameters.back().dependencies.parameters.end());
+    assert(std::ranges::find(
+        class_base->dependencies.parameters,
+        class_base->parameters.front().declaration)
+        != class_base->dependencies.parameters.end());
+    assert(class_base->type_aliases.size() == 1);
+    assert(class_base->properties.size() == 1);
+    assert(class_base->properties.front().declaration.valid());
+    assert(class_base->properties.front().initializer);
+    assert(class_base->methods.size() == 3);
+    assert(class_base->methods.front().kind
+        == fsim::semantic::sv::ClassMethodKind::constructor);
+    assert(class_base->methods.front().declaration.valid());
+    const auto observed_method = std::ranges::find(
+        class_base->methods, std::string { "observe" },
+        &fsim::semantic::sv::ClassMethod::name);
+    assert(observed_method != class_base->methods.end());
+    assert(observed_method->virtual_method);
+    assert(observed_method->out_of_block_definition);
+    const auto external_method = std::ranges::find(
+        class_base->methods, std::string { "deferred" },
+        &fsim::semantic::sv::ClassMethod::name);
+    assert(external_method != class_base->methods.end());
+    assert(external_method->external && !external_method->defined);
+    const auto base_method = std::ranges::find(
+        class_only->systemverilog_hir.declarations(),
+        observed_method->declaration,
+        &fsim::semantic::sv::Declaration::id);
+    assert(base_method != class_only->systemverilog_hir.declarations().end());
+    assert(base_method->callable);
+    assert(base_method->children.size() == 3);
+    assert(!base_method->statements.empty());
+    assert(class_base->nested_class_identities.size() == 1);
+    const auto nested_class = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        class_base->nested_class_identities.front(),
+        &fsim::semantic::sv::ClassDeclaration::canonical_identity);
+    assert(nested_class != class_only->systemverilog_hir.classes().end());
+    assert(nested_class->enclosing_identity
+        == class_base->canonical_identity);
+    assert(nested_class->origin.valid());
+    const auto class_contract = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        std::string { "hir_contract" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(class_contract != class_only->systemverilog_hir.classes().end());
+    assert(class_contract->interface_class);
+    assert(class_contract->methods.size() == 1);
+    assert(class_contract->methods.front().pure);
+    assert(class_contract->methods.front().virtual_method);
+    assert(class_contract->properties.size() == 1);
+    assert(class_contract->properties.front().parameter);
+    const auto class_combined = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        std::string { "hir_combined" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(class_combined != class_only->systemverilog_hir.classes().end());
+    assert(!class_combined->base);
+    assert(class_combined->extended_interfaces.size() == 2);
+    assert(class_combined->extended_interfaces.front().actuals.size() == 1);
+    const auto class_derived = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        std::string { "hir_derived" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(class_derived != class_only->systemverilog_hir.classes().end());
+    assert(class_derived->base);
+    assert(class_derived->base->actuals.size() == 2);
+    assert(class_derived->implemented_interfaces.size() == 1);
+    assert(class_derived->implemented_interfaces.front().actuals.size() == 1);
+    const auto generated_class = std::ranges::find(
+        class_only->systemverilog_hir.classes(),
+        std::string { "generated_class" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(generated_class != class_only->systemverilog_hir.classes().end());
+    assert(generated_class->generate_owner);
+    assert(generated_class->canonical_identity.starts_with(
+        "work::generated_class_owner::"));
+    assert(generated_class->properties.size() == 1);
+    assert(generated_class->methods.size() == 1);
+    const auto generated_unit = std::ranges::find(
+        class_only->systemverilog_hir.units(),
+        std::string { "generated_class_owner" },
+        &fsim::semantic::sv::Unit::name);
+    assert(generated_unit != class_only->systemverilog_hir.units().end());
+    assert(generated_unit->generates.size() == 2);
+    const auto conditional_generate = std::ranges::find_if(
+        generated_unit->generates, [](const auto& region) {
+            return !region.class_declarations.empty();
+        });
+    assert(conditional_generate != generated_unit->generates.end());
+    assert(conditional_generate->class_declarations.size() == 1);
+    const auto selection_generate = std::ranges::find_if(
+        generated_unit->generates, [](const auto& region) {
+            return !region.alternatives.empty();
+        });
+    assert(selection_generate != generated_unit->generates.end());
+    const auto select_parameter = std::ranges::find(
+        class_only->systemverilog_hir.declarations(),
+        std::string { "SELECT" },
+        &fsim::semantic::sv::Declaration::name);
+    const auto match_parameter = std::ranges::find(
+        class_only->systemverilog_hir.declarations(),
+        std::string { "MATCH" },
+        &fsim::semantic::sv::Declaration::name);
+    assert(select_parameter
+        != class_only->systemverilog_hir.declarations().end());
+    assert(match_parameter
+        != class_only->systemverilog_hir.declarations().end());
+    assert(std::ranges::find(selection_generate->dependencies.parameters,
+               select_parameter->id)
+        != selection_generate->dependencies.parameters.end());
+    assert(std::ranges::find(selection_generate->dependencies.parameters,
+               match_parameter->id)
+        == selection_generate->dependencies.parameters.end());
+    assert(selection_generate->alternatives.size() == 2);
+    const auto selected_choice = std::ranges::find_if(
+        selection_generate->alternatives, [](const auto& item) {
+            return !item.is_default && !item.choices.empty();
+        });
+    assert(selected_choice != selection_generate->alternatives.end());
+    const auto folded_choice = std::ranges::find(
+        class_only->systemverilog_hir.expressions(),
+        selected_choice->choices.front().left,
+        &fsim::semantic::sv::Expression::id);
+    assert(folded_choice
+        != class_only->systemverilog_hir.expressions().end());
+    assert(folded_choice->kind
+        == fsim::semantic::sv::ExpressionKind::integer_literal);
+    assert(folded_choice->text == "1");
+    assert(folded_choice->folded);
+    assert(!folded_choice->referenced_name);
+    assert(folded_choice->dependencies.parameters.empty());
+    assert(folded_choice->dependencies.generics.empty());
+    assert(folded_choice->dependencies.types.empty());
+    assert(folded_choice->dependencies.packages.empty());
+    assert(!folded_choice->dependencies.hierarchy);
+    assert(folded_choice->source.valid());
+    assert(folded_choice->origin.valid());
+    assert(selection_generate->alternatives.front().scope
+        != selection_generate->alternatives.back().scope);
+    assert(selection_generate->alternatives.front().label
+        == selection_generate->alternatives.back().label);
+    assert(selection_generate->alternatives.front()
+            .alternative_discriminator
+        != selection_generate->alternatives.back()
+               .alternative_discriminator);
+    const auto alternative = std::ranges::find_if(
+        selection_generate->alternatives, [](const auto& item) {
+            return !item.class_declarations.empty();
+        });
+    assert(alternative != selection_generate->alternatives.end());
+    assert(alternative->class_declarations.size() == 1);
+    const auto alternative_class = std::ranges::find_if(
+        class_only->systemverilog_hir.classes(),
+        [&](const auto& declaration) {
+            return fsim::semantic::sv::class_declaration_identity(declaration)
+                == alternative->class_declarations.front();
+        });
+    assert(alternative_class != class_only->systemverilog_hir.classes().end());
+    assert(alternative_class->generate_owner);
+    assert(alternative_class->alternative_discriminator
+        == alternative->alternative_discriminator);
+    const auto same_named_alternative_classes = std::ranges::count(
+        class_only->systemverilog_hir.classes(),
+        std::string { "alternative_class" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(same_named_alternative_classes == 2);
+    const auto other_alternative_class = std::ranges::find_if(
+        class_only->systemverilog_hir.classes(),
+        [&](const auto& declaration) {
+            return declaration.name == alternative_class->name
+                && declaration.scope != alternative_class->scope;
+        });
+    assert(other_alternative_class
+        != class_only->systemverilog_hir.classes().end());
+    assert(other_alternative_class->canonical_identity
+        == alternative_class->canonical_identity);
+    assert(fsim::semantic::sv::class_declaration_identity(
+               *other_alternative_class)
+        != fsim::semantic::sv::class_declaration_identity(
+            *alternative_class));
+    fsim::diagnostic::Engine class_bundle_diagnostics;
+    const auto class_source_mappings
+        = fsim::app::application_detail::compiled_cache_source_mappings(
+            *class_only,
+            class_only_config.base_directory,
+            class_bundle_diagnostics);
+    assert(class_source_mappings);
+    assert(fsim::app::application_detail::relocate_compiled_design_sources(
+        *class_only,
+        *class_source_mappings,
+        class_bundle_diagnostics));
+    const auto class_bundle = fsim::app::serialize_compiled_hir_bundle(
+        *class_only, class_bundle_diagnostics);
+    const auto repeated_class_bundle
+        = fsim::app::serialize_compiled_hir_bundle(
+            *class_only, class_bundle_diagnostics);
+    if (!class_bundle || !repeated_class_bundle) {
+        fsim::diagnostic::print_text(
+            std::cerr, class_bundle_diagnostics);
+    }
+    assert(class_bundle && repeated_class_bundle);
+    assert(*class_bundle == *repeated_class_bundle);
+    auto restored_class_bundle
+        = fsim::app::deserialize_compiled_hir_bundle(
+            *class_bundle, "class-only", class_bundle_diagnostics);
+    assert(restored_class_bundle && !class_bundle_diagnostics.has_error());
+    const auto restored_generated_class = std::ranges::find(
+        restored_class_bundle->systemverilog_hir.classes(),
+        generated_class->canonical_identity,
+        &fsim::semantic::sv::ClassDeclaration::canonical_identity);
+    assert(restored_generated_class
+        != restored_class_bundle->systemverilog_hir.classes().end());
+    assert(restored_generated_class->generate_owner
+        == generated_class->generate_owner);
+    assert(restored_generated_class->methods.front().declaration
+        == generated_class->methods.front().declaration);
+    const auto restored_alternative_classes = std::ranges::count(
+        restored_class_bundle->systemverilog_hir.classes(),
+        std::string { "alternative_class" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(restored_alternative_classes == 2);
+    const auto restored_first_alternative = std::ranges::find(
+        restored_class_bundle->systemverilog_hir.classes(),
+        std::string { "alternative_class" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(restored_first_alternative
+        != restored_class_bundle->systemverilog_hir.classes().end());
+    const auto restored_second_alternative = std::ranges::find_if(
+        restored_class_bundle->systemverilog_hir.classes(),
+        [&](const auto& declaration) {
+            return declaration.name == "alternative_class"
+                && declaration.scope != restored_first_alternative->scope;
+        });
+    assert(restored_second_alternative
+        != restored_class_bundle->systemverilog_hir.classes().end());
+    assert(restored_first_alternative->canonical_identity
+        == restored_second_alternative->canonical_identity);
+    assert(fsim::semantic::sv::class_declaration_identity(
+               *restored_first_alternative)
+        != fsim::semantic::sv::class_declaration_identity(
+            *restored_second_alternative));
+    auto invalid_class_hir = class_only->systemverilog_hir;
+    auto invalid_class_base = std::ranges::find(
+        invalid_class_hir.mutable_classes(),
+        std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(invalid_class_base != invalid_class_hir.mutable_classes().end());
+    invalid_class_base->member_declarations.push_back(
+        invalid_class_base->member_declarations.front());
+    fsim::diagnostic::Engine invalid_class_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_class_hir, class_only->semantics,
+        invalid_class_diagnostics));
+    assert(invalid_class_diagnostics.has_error());
+
+    auto wrong_owner_hir = class_only->systemverilog_hir;
+    const auto wrong_owner_class = std::ranges::find(
+        wrong_owner_hir.mutable_classes(), std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(wrong_owner_class != wrong_owner_hir.mutable_classes().end());
+    wrong_owner_class->properties.front().owner_identity = "work::wrong";
+    fsim::diagnostic::Engine wrong_owner_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        wrong_owner_hir, class_only->semantics,
+        wrong_owner_diagnostics));
+    assert(wrong_owner_diagnostics.has_error());
+
+    auto corrupt_scope_hir = class_only->systemverilog_hir;
+    const auto corrupt_scope_class = std::ranges::find(
+        corrupt_scope_hir.mutable_classes(), std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(corrupt_scope_class != corrupt_scope_hir.mutable_classes().end());
+    corrupt_scope_class->scope = compilation_unit->scope;
+    fsim::diagnostic::Engine corrupt_scope_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        corrupt_scope_hir, class_only->semantics,
+        corrupt_scope_diagnostics));
+    assert(corrupt_scope_diagnostics.has_error());
+
+    auto missing_body_hir = class_only->systemverilog_hir;
+    const auto missing_body_class = std::ranges::find(
+        missing_body_hir.mutable_classes(), std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(missing_body_class != missing_body_hir.mutable_classes().end());
+    const auto missing_body_method = std::ranges::find(
+        missing_body_class->methods, std::string { "new" },
+        &fsim::semantic::sv::ClassMethod::name);
+    assert(missing_body_method != missing_body_class->methods.end());
+    const auto missing_body_declaration = std::ranges::find(
+        missing_body_hir.mutable_declarations(),
+        missing_body_method->declaration,
+        &fsim::semantic::sv::Declaration::id);
+    assert(missing_body_declaration
+        != missing_body_hir.mutable_declarations().end());
+    assert(!missing_body_declaration->statements.empty());
+    const auto body_root = std::ranges::find(
+        missing_body_hir.mutable_statements(),
+        missing_body_declaration->statements.front(),
+        &fsim::semantic::sv::Statement::id);
+    assert(body_root != missing_body_hir.mutable_statements().end());
+    assert(!body_root->statements.empty());
+    const auto missing_statement = body_root->statements.front();
+    std::erase_if(missing_body_hir.mutable_statements(),
+        [&](const auto& statement) {
+            return statement.id == missing_statement;
+        });
+    fsim::diagnostic::Engine missing_body_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        missing_body_hir, class_only->semantics,
+        missing_body_diagnostics));
+    assert(missing_body_diagnostics.has_error());
+
+    auto swapped_body_hir = class_only->systemverilog_hir;
+    const auto swapped_body_class = std::ranges::find(
+        swapped_body_hir.mutable_classes(), std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(swapped_body_class != swapped_body_hir.mutable_classes().end());
+    const auto constructor = std::ranges::find(
+        swapped_body_class->methods, std::string { "new" },
+        &fsim::semantic::sv::ClassMethod::name);
+    const auto observer = std::ranges::find(
+        swapped_body_class->methods, std::string { "observe" },
+        &fsim::semantic::sv::ClassMethod::name);
+    assert(constructor != swapped_body_class->methods.end());
+    assert(observer != swapped_body_class->methods.end());
+    const auto constructor_declaration = std::ranges::find(
+        swapped_body_hir.mutable_declarations(), constructor->declaration,
+        &fsim::semantic::sv::Declaration::id);
+    const auto observer_declaration = std::ranges::find(
+        swapped_body_hir.mutable_declarations(), observer->declaration,
+        &fsim::semantic::sv::Declaration::id);
+    assert(constructor_declaration
+        != swapped_body_hir.mutable_declarations().end());
+    assert(observer_declaration
+        != swapped_body_hir.mutable_declarations().end());
+    std::swap(constructor_declaration->statements,
+        observer_declaration->statements);
+    fsim::diagnostic::Engine swapped_body_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        swapped_body_hir, class_only->semantics,
+        swapped_body_diagnostics));
+    assert(swapped_body_diagnostics.has_error());
+
+    auto duplicate_method_hir = class_only->systemverilog_hir;
+    const auto duplicate_method_class = std::ranges::find(
+        duplicate_method_hir.mutable_classes(), std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(duplicate_method_class
+        != duplicate_method_hir.mutable_classes().end());
+    duplicate_method_class->methods.push_back(
+        duplicate_method_class->methods.front());
+    fsim::diagnostic::Engine duplicate_method_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        duplicate_method_hir, class_only->semantics,
+        duplicate_method_diagnostics));
+    assert(duplicate_method_diagnostics.has_error());
+
+    auto duplicate_profile_hir = class_only->systemverilog_hir;
+    const auto duplicate_profile_class = std::ranges::find(
+        duplicate_profile_hir.mutable_classes(), std::string { "hir_base" },
+        &fsim::semantic::sv::ClassDeclaration::name);
+    assert(duplicate_profile_class
+        != duplicate_profile_hir.mutable_classes().end());
+    assert(duplicate_profile_class->methods.size() >= 2);
+    duplicate_profile_class->methods[1].profile_identity
+        = duplicate_profile_class->methods.front().profile_identity;
+    fsim::diagnostic::Engine duplicate_profile_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        duplicate_profile_hir, class_only->semantics,
+        duplicate_profile_diagnostics));
+    assert(duplicate_profile_diagnostics.has_error());
+
+    auto invalid_generate_hir = class_only->systemverilog_hir;
+    auto invalid_generate_unit = std::ranges::find(
+        invalid_generate_hir.mutable_units(),
+        std::string { "generated_class_owner" },
+        &fsim::semantic::sv::Unit::name);
+    assert(invalid_generate_unit
+        != invalid_generate_hir.mutable_units().end());
+    const auto invalid_conditional_generate = std::ranges::find_if(
+        invalid_generate_unit->generates, [](const auto& region) {
+            return !region.class_declarations.empty();
+        });
+    assert(invalid_conditional_generate
+        != invalid_generate_unit->generates.end());
+    invalid_conditional_generate->class_declarations.clear();
+    fsim::diagnostic::Engine invalid_generate_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_generate_hir, class_only->semantics,
+        invalid_generate_diagnostics));
+    assert(invalid_generate_diagnostics.has_error());
+
+    const auto reject_alternative_corruption = [&](auto mutate) {
+        auto invalid_hir = class_only->systemverilog_hir;
+        auto unit = std::ranges::find(
+            invalid_hir.mutable_units(),
+            std::string { "generated_class_owner" },
+            &fsim::semantic::sv::Unit::name);
+        assert(unit != invalid_hir.mutable_units().end());
+        auto selection = std::ranges::find_if(
+            unit->generates, [](const auto& region) {
+                return !region.alternatives.empty();
+            });
+        assert(selection != unit->generates.end());
+        mutate(*selection);
+        fsim::diagnostic::Engine diagnostics;
+        assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+            invalid_hir, class_only->semantics, diagnostics));
+        assert(diagnostics.has_error());
+    };
+    reject_alternative_corruption([](auto& selection) {
+        selection.alternatives.front().class_declarations.clear();
+    });
+    reject_alternative_corruption([](auto& selection) {
+        selection.alternatives.front().scope = selection.scope;
+    });
+    reject_alternative_corruption([](auto& selection) {
+        selection.alternatives.front().alternative_discriminator
+            += "/corrupt";
+    });
+
+    const auto generated_unit_id = generated_unit->id;
+    // The decoded bundle is self-contained. Destroy the only compilation
+    // workspace which ever owned syntax before selecting generated classes.
+    class_only.reset();
+    const auto generated_class_elaboration = fsim::elaboration::elaborate(
+        *restored_class_bundle, "generated_class_owner");
+    assert(generated_class_elaboration.ok());
+    assert(generated_class_elaboration.selected_systemverilog_classes.size()
+        == 2U);
+    for (const auto& selection :
+        generated_class_elaboration.selected_systemverilog_classes) {
+        const auto declaration = std::ranges::find_if(
+            restored_class_bundle->systemverilog_hir.classes(),
+            [&](const auto& candidate) {
+                return fsim::semantic::sv::class_declaration_identity(
+                           candidate)
+                    == selection.declaration_identity;
+            });
+        assert(declaration
+            != restored_class_bundle->systemverilog_hir.classes().end());
+        assert(declaration->generate_owner == selection.generate_owner);
+        assert(declaration->scope == selection.declaration_scope);
+        assert(declaration->origin == selection.origin);
+        assert(selection.unit == generated_unit_id);
+    }
+
     const auto source = directory.path / "semantic_hir.sv";
     {
         std::ofstream output { source, std::ios::binary };
         output << R"(`timescale 1ns/1ps
 `default_nettype tri0
 `define FSIM_REORDER(A, B) B + A
+`define FSIM_COVERGROUP_FORMAL_TYPE int
+import "DPI-C" context unit_c_add = function int unit_add(
+    input int lhs, input int rhs);
+extern module hir_external_probe(input logic value);
+
+module hir_external_probe(input logic value);
+endmodule
+
 package values;
+  import "DPI-C" pure function int c_abs(input int value);
   typedef logic signed [3:0] key_t;
   typedef enum logic [1:0] {idle = 0, busy = 1} state_t;
   typedef struct packed { logic valid; logic [2:0] data; } packet_t;
@@ -66,6 +772,25 @@ package values;
   let merge_mask(logic [7:0] value,
                  logic [7:0] mask = 8'h0f) = value | mask;
   localparam int VALUE = 3;
+  covergroup packet_group(`FSIM_COVERGROUP_FORMAL_TYPE seed = 1)
+      with function sample(input int value);
+    option.weight = seed;
+    type_option.merge_instances = 1;
+    value_point: coverpoint value iff (seed > 0) {
+      option.at_least = 2;
+      bins low = {[0:3]};
+      ignore_bins skipped = {4};
+      illegal_bins forbidden = {5};
+    }
+    value_seed: cross value_point, seed {
+      bins selected = binsof(value_point) intersect {[1:2]};
+    }
+  endgroup : packet_group
+  class coverage_holder;
+    covergroup class_group with function sample(input int value);
+      value_point: coverpoint value;
+    endgroup : class_group
+  endclass
 endpackage
 
 interface bus_if #(
@@ -85,8 +810,10 @@ interface bus_if #(
     data = value;
   endtask
   clocking cb @(posedge clock);
+    default input #1step output negedge #2ns;
     input #0 data;
   endclocking
+  default clocking cb;
   modport initiator(output data, valid, import function sample,
                     import task drive, clocking cb);
 endinterface
@@ -97,13 +824,29 @@ program semantic_hir_program(input logic clock);
   final observed = 0;
 endprogram : semantic_hir_program
 
+module timing_hir_fixture(
+    input logic a, data, enable,
+    output wire z);
+  reg notifier;
+  specify
+    specparam t_path = 1:2:3;
+    specparam PATHPULSE$ = (4, 5);
+    (posedge a => (z +: data)) = (1:2:3, 4);
+    pulsestyle_ondetect z;
+    showcancelled z;
+    $setup(posedge data &&& enable, posedge a, 1:2:3, notifier);
+  endspecify
+endmodule
+
 module semantic_hir_top;
   import values::*;
   bus_if #(.ITEM(logic [3:0])) link();
   integer handle;
   int values[];
+  values::packet_group coverage_monitor = new(7);
   logic [7:0] memory[3:0];
   logic ready_signal;
+  logic clock;
   logic [7:0] alias_left;
   logic [7:0] alias_right;
   alias alias_left = alias_right;
@@ -111,6 +854,12 @@ module semantic_hir_top;
   property ready;
     ready_signal;
   endproperty
+  sequence request_then_ready(int bound = 2);
+    @(posedge clock) ready_signal ##[1:bound] ready_signal[*2];
+  endsequence
+  checker ready_checker(input logic observed);
+  endchecker
+  ready_checker checker_instance(.observed(ready_signal));
   ready_check: assert property (ready)
     $display("ready"); else $error("not ready");
   assume property (ready) else $warning("assumption");
@@ -133,11 +882,16 @@ module semantic_hir_top;
   endgenerate
   initial begin : executable
     int local_value = 1;
+    local_value = 987654321;
+    local_value = -987654321;
+    local_value = 16'shbeef;
+    local_value = $random();
     local_value = `FSIM_REORDER(
         local_value,
         1);
     handle = $fopen("trace.txt", "w");
     values.push_back(local_value);
+    coverage_monitor.sample(local_value);
     memory = '{default: 8'h11, 2: 8'h22};
     fork : workers
       #1 local_value += 1;
@@ -156,6 +910,12 @@ module semantic_hir_top;
     disable executable;
   end
 endmodule
+
+config semantic_hir_configuration;
+  design work.semantic_hir_top;
+  default liblist work;
+  cell bus_if use work.bus_if;
+endconfig : semantic_hir_configuration
 `resetall
 )";
         assert(output.good());
@@ -178,6 +938,67 @@ endmodule
         fsim::diagnostic::print_text(std::cerr, diagnostics);
     }
     assert(checked);
+    // check_project() has destroyed its compile-local AST workspace.
+    assert_signed_expression_retention(checked->systemverilog_hir);
+    const auto external_probe = std::ranges::find_if(
+        checked->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.name == "hir_external_probe" && unit.external;
+        });
+    const auto external_probe_definition = std::ranges::find_if(
+        checked->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.name == "hir_external_probe" && !unit.external;
+        });
+    assert(external_probe != checked->systemverilog_hir.units().end());
+    assert(external_probe_definition
+        != checked->systemverilog_hir.units().end());
+    assert(external_probe->kind == fsim::semantic::sv::UnitKind::module);
+    assert(external_probe->scheduling_declaration);
+    assert(external_probe->scheduling_declaration->prototype);
+    assert(external_probe_definition->scheduling_declaration);
+    assert(!external_probe_definition->scheduling_declaration->prototype);
+    const auto configuration = std::ranges::find(
+        checked->systemverilog_hir.units(),
+        std::string { "semantic_hir_configuration" },
+        &fsim::semantic::sv::Unit::name);
+    assert(configuration != checked->systemverilog_hir.units().end());
+    assert(configuration->kind
+        == fsim::semantic::sv::UnitKind::configuration);
+    assert(configuration->configuration);
+    assert(configuration->configuration->source.valid());
+    assert(configuration->configuration->origin.valid());
+    assert(configuration->configuration->designs.size() == 1);
+    assert(configuration->configuration->designs.front().library == "work");
+    assert(configuration->configuration->designs.front().cell
+        == "semantic_hir_top");
+    assert(configuration->configuration->designs.front().target);
+    assert(configuration->configuration->default_liblist
+        == std::vector<std::string> { "work" });
+    assert(configuration->configuration->rules.size() == 1);
+    const auto& configuration_rule
+        = configuration->configuration->rules.front();
+    assert(configuration_rule.kind
+        == fsim::semantic::sv::ConfigurationRuleKind::cell);
+    assert(configuration_rule.selection
+        == fsim::semantic::sv::ConfigurationSelectionKind::use);
+    assert(configuration_rule.selector == "bus_if");
+    assert(configuration_rule.use_library == "work");
+    assert(configuration_rule.use_cell == "bus_if");
+    assert(configuration_rule.target);
+    assert(configuration_rule.source.valid()
+        && configuration_rule.origin.valid());
+    assert(std::ranges::any_of(
+        checked->references(), [&](const auto& reference) {
+            return reference.owner == configuration->id
+                && reference.name == "semantic_hir_top"
+                && reference.target
+                    == configuration->configuration->designs.front().target;
+        }));
+    assert(std::ranges::any_of(
+        checked->references(), [&](const auto& reference) {
+            return reference.owner == configuration->id
+                && reference.name == "bus_if"
+                && reference.target == configuration_rule.target;
+        }));
     const auto semantic_program = std::ranges::find_if(
         checked->semantics.units(), [](const auto& unit) {
             return unit.kind
@@ -204,6 +1025,26 @@ endmodule
     assert(interface_unit->modports.front().members.size() == 5);
     assert(interface_unit->modports.front().members.back().kind
         == fsim::semantic::sv::ModportMemberKind::clocking);
+    assert(interface_unit->dpi_declarations.empty());
+    assert(interface_unit->clocking_blocks.size() == 1);
+    const auto& clocking = interface_unit->clocking_blocks.front();
+    assert(clocking.name == "cb");
+    assert(clocking.event.size() == 1);
+    assert(clocking.event.front().edge
+        == fsim::semantic::sv::EdgeKind::positive);
+    assert(clocking.default_input_skew);
+    assert(clocking.default_input_skew->one_step);
+    assert(clocking.default_output_skew);
+    assert(clocking.default_output_skew->edge
+        == fsim::semantic::sv::EdgeKind::negative);
+    assert(clocking.default_output_skew->delay);
+    assert(clocking.signals.size() == 1);
+    assert(clocking.signals.front().name.spelling == "data");
+    assert(clocking.source.valid() && clocking.origin.valid());
+    assert(interface_unit->default_clocking);
+    assert(interface_unit->default_clocking->block.spelling == "cb");
+    assert(interface_unit->default_clocking->source.valid());
+    assert(interface_unit->default_clocking->origin.valid());
 
     const auto declaration_for = [&](const std::string_view declaration_name) {
         return std::ranges::find_if(
@@ -306,6 +1147,90 @@ endmodule
             return unit.name == "values";
         });
     assert(values_package != checked->systemverilog_hir.units().end());
+    assert(values_package->dpi_declarations.size() == 1);
+    const auto& package_dpi = values_package->dpi_declarations.front();
+    assert(package_dpi.direction
+        == fsim::semantic::sv::DpiDirection::import);
+    assert(package_dpi.owner_kind
+        == fsim::semantic::sv::DpiOwnerKind::design_unit);
+    assert(package_dpi.qualifier
+        == fsim::semantic::sv::DpiQualifier::pure);
+    assert(package_dpi.systemverilog_name == "c_abs");
+    assert(package_dpi.formals.size() == 1);
+    assert(!package_dpi.return_type_tokens.empty());
+    assert(!package_dpi.formals.front().type_tokens.empty());
+    assert(!package_dpi.resolved_profile);
+    assert(package_dpi.source.valid() && package_dpi.origin.valid());
+    assert(values_package->coverage.size() == 1);
+    const auto& packet_group = values_package->coverage.front();
+    assert(packet_group.owner_kind
+        == fsim::semantic::sv::CovergroupOwnerKind::design_unit);
+    assert(packet_group.name == "packet_group");
+    assert(packet_group.canonical_identity
+        == "work.values::packet_group");
+    assert(packet_group.formals.size() == 1);
+    const auto packet_group_type_token = std::ranges::find(
+        packet_group.formals.front().type_tokens,
+        std::string { "int" },
+        &fsim::semantic::sv::SourceToken::text);
+    assert(packet_group_type_token
+        != packet_group.formals.front().type_tokens.end());
+    const auto packet_group_type_expansions = semantic_expansion_stack(
+        checked->semantics, packet_group_type_token->source);
+    assert(std::ranges::any_of(
+        packet_group_type_expansions, [](const auto& expansion) {
+            return expansion.find("macro `FSIM_COVERGROUP_FORMAL_TYPE'")
+                != std::string::npos;
+        }));
+    const auto projected_packet_group
+        = fsim::app::application_detail::
+            project_systemverilog_covergroup_declaration(
+                packet_group, checked->semantics);
+    const auto type_token_offset = static_cast<std::size_t>(
+        std::distance(packet_group.formals.front().type_tokens.begin(),
+            packet_group_type_token));
+    assert(projected_packet_group.formals.size() == 1);
+    assert(type_token_offset
+        < projected_packet_group.formals.front().type_tokens.size());
+    assert_projected_source_token(
+        *packet_group_type_token,
+        projected_packet_group.formals.front()
+            .type_tokens[type_token_offset],
+        checked->semantics);
+    assert(packet_group.sampling);
+    assert(packet_group.sampling->kind
+        == fsim::semantic::sv::CovergroupSamplingKind::with_function_sample);
+    assert(packet_group.sampling->formals.size() == 1);
+    assert(packet_group.option_assignments.size() == 2);
+    assert(packet_group.items.size() == 2);
+    assert(packet_group.items[0].kind
+        == fsim::semantic::sv::CoverageItemKind::coverpoint);
+    assert(packet_group.items[0].bins.size() == 3);
+    assert(packet_group.items[0].bins[1].kind
+        == fsim::semantic::sv::CoverageBinKind::ignore);
+    assert(packet_group.items[0].bins[2].kind
+        == fsim::semantic::sv::CoverageBinKind::illegal);
+    assert(packet_group.items[1].kind
+        == fsim::semantic::sv::CoverageItemKind::cross);
+    assert(packet_group.items[1].cross_operands.size() == 2);
+    assert(packet_group.items[1].cross_operands[0]
+        .resolved_declaration_index == 0);
+    assert(!packet_group.items[0].references.empty());
+    assert(packet_group.source.valid() && packet_group.origin.valid());
+    assert(packet_group.items[0].source.valid());
+    assert(packet_group.items[0].origin.valid());
+    assert(packet_group.items[0].bins[0].source.valid());
+    assert(packet_group.items[0].bins[0].origin.valid());
+
+    const auto coverage_class = std::ranges::find_if(
+        checked->systemverilog_hir.classes(), [](const auto& declaration) {
+            return declaration.name == "coverage_holder";
+        });
+    assert(coverage_class != checked->systemverilog_hir.classes().end());
+    assert(coverage_class->covergroups.size() == 1);
+    assert(coverage_class->covergroups.front().owner_kind
+        == fsim::semantic::sv::CovergroupOwnerKind::class_declaration);
+    assert(coverage_class->covergroups.front().name == "class_group");
     assert(values_package->lets.size() == 1);
     const auto& package_let = values_package->lets.front();
     assert(package_let.name == "merge_mask");
@@ -325,6 +1250,118 @@ endmodule
             return unit.name == "semantic_hir_top";
         });
     assert(top != checked->systemverilog_hir.units().end());
+    const auto timing_fixture = std::ranges::find_if(
+        checked->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.name == "timing_hir_fixture";
+        });
+    assert(timing_fixture != checked->systemverilog_hir.units().end());
+    assert(timing_fixture->timing.size() == 1);
+    const auto& timing = timing_fixture->timing.front();
+    assert(timing.source.valid() && timing.origin.valid());
+    assert(timing.specparams.size() == 2);
+    const auto& path_specparam = timing.specparams.front();
+    assert(path_specparam.name == "t_path");
+    assert(path_specparam.value.valid());
+    assert(path_specparam.minimum && path_specparam.minimum->valid());
+    assert(path_specparam.typical && path_specparam.typical->valid());
+    assert(path_specparam.maximum && path_specparam.maximum->valid());
+    assert(path_specparam.source.valid() && path_specparam.origin.valid());
+    const auto& pulse_specparam = timing.specparams.back();
+    assert(pulse_specparam.path_pulse);
+    assert(pulse_specparam.path_pulse_error_limit);
+    assert(pulse_specparam.path_pulse_reject_delay);
+    assert(pulse_specparam.path_pulse_error_delay);
+    assert(timing.module_paths.size() == 1);
+    const auto& module_path = timing.module_paths.front();
+    assert(module_path.kind
+        == fsim::semantic::sv::ModulePathKind::parallel);
+    assert(module_path.source_edge
+        == fsim::semantic::sv::SpecifyEdge::positive);
+    assert(module_path.polarity
+        == fsim::semantic::sv::PathPolarity::positive);
+    assert(module_path.sources.size() == 1);
+    assert(module_path.destinations.size() == 1);
+    assert(module_path.destination_data_source);
+    assert(module_path.delays.size() == 2);
+    assert(module_path.source.valid() && module_path.origin.valid());
+    assert(timing.pulse_declarations.size() == 2);
+    assert(timing.pulse_declarations.front().style
+        == fsim::semantic::sv::PulseStyle::ondetect);
+    assert(timing.pulse_declarations.front().controls_style);
+    assert(timing.pulse_declarations.back().show_cancelled);
+    assert(timing.timing_checks.size() == 1);
+    const auto& timing_check = timing.timing_checks.front();
+    assert(timing_check.kind
+        == fsim::semantic::sv::TimingCheckKind::setup);
+    assert(timing_check.reference_event.expression.valid());
+    assert(timing_check.reference_event.edge
+        == fsim::semantic::sv::SpecifyEdge::positive);
+    assert(timing_check.data_event);
+    assert(timing_check.data_event->expression.valid());
+    assert(timing_check.data_event->edge
+        == fsim::semantic::sv::SpecifyEdge::positive);
+    assert(timing_check.data_event->condition);
+    assert(timing_check.limits.size() == 1);
+    assert(timing_check.normalized_limits.size() == 1);
+    assert(timing_check.notifier);
+    assert(timing_check.source.valid() && timing_check.origin.valid());
+    const auto coverage_instance = std::ranges::find_if(
+        checked->systemverilog_hir.covergroup_instances(),
+        [](const auto& instance) {
+            return instance.name == "coverage_monitor";
+        });
+    assert(coverage_instance
+        != checked->systemverilog_hir.covergroup_instances().end());
+    assert(coverage_instance->owner_identity
+        == "work.semantic_hir_top");
+    assert(coverage_instance->declaration_identity
+        == packet_group.canonical_identity);
+    assert(!coverage_instance->specialization_identity.empty());
+    assert(!coverage_instance->runtime_identity.empty());
+    assert(coverage_instance->constructor_actuals.size() == 1);
+    assert(coverage_instance->initial_option_state.size() == 2);
+    assert(coverage_instance->sample_calls.size() == 1);
+    assert(coverage_instance->sample_calls.front().actuals.size() == 1);
+    assert(coverage_instance->cross_inventory_initialized);
+    assert(!coverage_instance->cross_bin_state.empty());
+    assert(coverage_instance->bin_hits.empty());
+    assert(coverage_instance->transition_progress.empty());
+    assert(coverage_instance->previous_samples.empty());
+    assert(coverage_instance->illegal_bin_reports.empty());
+    assert(coverage_instance->source.valid());
+    assert(coverage_instance->origin.valid());
+    assert(coverage_instance->owner_scope == top->scope);
+    const auto class_coverage_instance = std::ranges::find_if(
+        checked->systemverilog_hir.covergroup_instances(),
+        [](const auto& instance) {
+            return instance.class_member_template
+                && instance.name == "class_group";
+        });
+    assert(class_coverage_instance
+        != checked->systemverilog_hir.covergroup_instances().end());
+    assert(class_coverage_instance->owner_scope.valid());
+    assert(class_coverage_instance->owner_scope != top->scope);
+    assert(checked->systemverilog_hir.dpi_declarations().size() == 1);
+    const auto& compilation_dpi =
+        checked->systemverilog_hir.dpi_declarations().front();
+    assert(compilation_dpi.owner_kind
+        == fsim::semantic::sv::DpiOwnerKind::compilation_unit);
+    assert(compilation_dpi.qualifier
+        == fsim::semantic::sv::DpiQualifier::context);
+    assert(compilation_dpi.systemverilog_name == "unit_add");
+    assert(compilation_dpi.c_identifier
+        && *compilation_dpi.c_identifier == "unit_c_add");
+    assert(compilation_dpi.formals.size() == 2);
+    assert(compilation_dpi.profile_source.valid());
+    assert(compilation_dpi.source.valid() && compilation_dpi.origin.valid());
+    assert(compilation_dpi.owner_scope.valid());
+    const auto& compilation_scope = checked->semantics.scopes().at(
+        compilation_dpi.owner_scope.value());
+    assert(compilation_scope.unit.valid());
+    const auto& semantic_compilation_unit = checked->semantics.units().at(
+        compilation_scope.unit.value());
+    assert(semantic_compilation_unit.kind
+        == fsim::semantic::UnitKind::systemverilog_compilation_unit);
     assert(top->imports.size() == 1);
     assert(top->aliases.size() == 1);
     assert(top->aliases.front().terminals.size() == 2);
@@ -336,6 +1373,27 @@ endmodule
     assert(top->lets.front().ports.front().default_value);
     assert(top->lets.front().expression.valid());
     assert(top->instances.size() == 1);
+    const auto retained_assertion = std::ranges::find_if(
+        top->assertion_declarations, [](const auto& declaration) {
+            return declaration.name == "request_then_ready";
+        });
+    assert(retained_assertion != top->assertion_declarations.end());
+    assert(retained_assertion->kind
+        == fsim::semantic::sv::AssertionDeclarationKind::sequence);
+    assert(retained_assertion->formals.size() == 1);
+    assert(retained_assertion->sequence_expression);
+    assert(!retained_assertion->sequence_expression->delays.empty());
+    assert(retained_assertion->source.valid());
+    assert(retained_assertion->origin.valid());
+    assert(top->checker_instances.size() == 1);
+    assert(top->checker_instances.front().name == "checker_instance");
+    assert(top->checker_instances.front().declaration.spelling
+        == "ready_checker");
+    assert(top->checker_instances.front().connections.size() == 1);
+    assert(top->checker_instances.front().connections.front().formal_name
+        == "observed");
+    assert(top->checker_instances.front().source.valid());
+    assert(top->checker_instances.front().origin.valid());
     assert(top->generates.size() == 3);
     const auto& explicit_generate = top->generates[0];
     const auto& direct_generate = top->generates[1];
@@ -370,12 +1428,10 @@ endmodule
     assert(ready_assertion.coverage_slot == 0);
     assert(ready_assertion.has_pass_action);
     assert(ready_assertion.has_failure_action);
-    assert(std::ranges::find(
-               ready_assertion.pass_action_tokens, "$display")
-        != ready_assertion.pass_action_tokens.end());
-    assert(std::ranges::find(
-               ready_assertion.failure_action_tokens, "$error")
-        != ready_assertion.failure_action_tokens.end());
+    assert(std::ranges::any_of(ready_assertion.pass_action_tokens,
+        [](const auto& token) { return token.text == "$display"; }));
+    assert(std::ranges::any_of(ready_assertion.failure_action_tokens,
+        [](const auto& token) { return token.text == "$error"; }));
     assert(ready_assertion.sampling_region
         == fsim::semantic::sv::AssertionRegion::preponed);
     assert(ready_assertion.evaluation_region
@@ -512,6 +1568,7 @@ endmodule
         *hir_state, "systemverilog-hir-state",
         checked->semantics, hir_state_diagnostics);
     assert(restored_hir && !hir_state_diagnostics.has_error());
+    assert_signed_expression_retention(*restored_hir);
     const auto restored_top = std::ranges::find_if(
         restored_hir->units(), [](const auto& unit) {
             return unit.name == "semantic_hir_top";
@@ -520,14 +1577,295 @@ endmodule
         restored_hir->units(), [](const auto& unit) {
             return unit.name == "values";
         });
+    const auto restored_external_probe = std::ranges::find_if(
+        restored_hir->units(), [](const auto& unit) {
+            return unit.name == "hir_external_probe" && unit.external;
+        });
+    const auto restored_configuration = std::ranges::find(
+        restored_hir->units(),
+        std::string { "semantic_hir_configuration" },
+        &fsim::semantic::sv::Unit::name);
     assert(restored_top != restored_hir->units().end());
     assert(restored_values != restored_hir->units().end());
+    assert(restored_external_probe != restored_hir->units().end());
+    assert(restored_configuration != restored_hir->units().end());
+    assert(restored_configuration->configuration);
+    assert(restored_configuration->configuration->designs.front().target
+        == configuration->configuration->designs.front().target);
+    assert(restored_configuration->configuration->rules.front().target
+        == configuration_rule.target);
+    assert(restored_external_probe->scheduling_declaration);
+    assert(restored_external_probe->scheduling_declaration->prototype);
+    const auto restored_timing_fixture = std::ranges::find_if(
+        restored_hir->units(), [](const auto& unit) {
+            return unit.name == "timing_hir_fixture";
+        });
+    assert(restored_timing_fixture != restored_hir->units().end());
+    assert(restored_timing_fixture->timing.size() == 1);
+    const auto& restored_timing
+        = restored_timing_fixture->timing.front();
+    assert(restored_timing.specparams.size() == timing.specparams.size());
+    assert(restored_timing.module_paths.size()
+        == timing.module_paths.size());
+    assert(restored_timing.pulse_declarations.size()
+        == timing.pulse_declarations.size());
+    assert(restored_timing.timing_checks.size()
+        == timing.timing_checks.size());
+    assert(restored_timing.module_paths.front().source_edge
+        == module_path.source_edge);
+    assert(restored_timing.timing_checks.front().notifier
+        == timing_check.notifier);
+    assert(restored_hir->dpi_declarations().size() == 1);
+    assert(restored_hir->dpi_declarations().front().systemverilog_name
+        == "unit_add");
+    assert(restored_hir->dpi_declarations().front().owner_scope
+        == compilation_dpi.owner_scope);
+    assert(restored_top->assertion_declarations.size()
+        == top->assertion_declarations.size());
+    assert(restored_top->checker_instances.size() == 1);
+    assert(restored_values->coverage.size() == 1);
+    assert(restored_values->coverage.front().items.size() == 2);
+    const auto& restored_packet_group
+        = restored_values->coverage.front();
+    assert(restored_packet_group.formals.size() == 1);
+    const auto& restored_formal_type_tokens
+        = restored_packet_group.formals.front().type_tokens;
+    assert(restored_formal_type_tokens.size()
+        == packet_group.formals.front().type_tokens.size());
+    for (std::size_t index = 0;
+         index < restored_formal_type_tokens.size(); ++index) {
+        const auto& original
+            = packet_group.formals.front().type_tokens[index];
+        const auto& restored = restored_formal_type_tokens[index];
+        assert(restored.kind == original.kind);
+        assert(restored.text == original.text);
+        assert(restored.source == original.source);
+        assert(restored.generated_text == original.generated_text);
+    }
+    const auto restored_macro_type_token = std::ranges::find(
+        restored_formal_type_tokens,
+        std::string { "int" },
+        &fsim::semantic::sv::SourceToken::text);
+    assert(restored_macro_type_token
+        != restored_formal_type_tokens.end());
+    assert(restored_macro_type_token->source
+        == packet_group_type_token->source);
+    const auto restored_projected_packet_group
+        = fsim::app::application_detail::
+            project_systemverilog_covergroup_declaration(
+                restored_packet_group, checked->semantics);
+    const auto restored_type_token_offset = static_cast<std::size_t>(
+        std::distance(restored_formal_type_tokens.begin(),
+            restored_macro_type_token));
+    assert(restored_type_token_offset
+        < restored_projected_packet_group.formals.front()
+              .type_tokens.size());
+    assert_projected_source_token(
+        *restored_macro_type_token,
+        restored_projected_packet_group.formals.front()
+            .type_tokens[restored_type_token_offset],
+        checked->semantics);
+    assert(restored_hir->covergroup_instances().size()
+        == checked->systemverilog_hir.covergroup_instances().size());
+    const auto restored_coverage_instance = std::ranges::find_if(
+        restored_hir->covergroup_instances(), [](const auto& instance) {
+            return instance.name == "coverage_monitor";
+        });
+    assert(restored_coverage_instance
+        != restored_hir->covergroup_instances().end());
+    assert(restored_coverage_instance->owner_scope
+        == coverage_instance->owner_scope);
+    assert(restored_coverage_instance->constructor_actuals
+        == coverage_instance->constructor_actuals);
+    assert(restored_coverage_instance->cross_bin_state.size()
+        == coverage_instance->cross_bin_state.size());
     assert(restored_top->aliases.front().terminals
         == retained_alias_terminals);
     assert(restored_top->lets.front().name == "local_bias");
     assert(restored_values->lets.front().expression
         == retained_package_let_expression);
-    checked->parsed.units.clear();
+    auto invalid_source_token_hir = *restored_hir;
+    const auto invalid_source_token_values = std::ranges::find_if(
+        invalid_source_token_hir.mutable_units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(invalid_source_token_values
+        != invalid_source_token_hir.mutable_units().end());
+    assert(!invalid_source_token_values->dpi_declarations.empty());
+    assert(!invalid_source_token_values->dpi_declarations.front()
+                .return_type_tokens.empty());
+    invalid_source_token_values->dpi_declarations.front()
+        .return_type_tokens.front().source = { };
+    fsim::diagnostic::Engine invalid_source_token_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_source_token_hir,
+        checked->semantics,
+        invalid_source_token_diagnostics));
+    assert(invalid_source_token_diagnostics.has_error());
+    auto out_of_range_source_token_hir = *restored_hir;
+    const auto out_of_range_source_token_values = std::ranges::find_if(
+        out_of_range_source_token_hir.mutable_units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(out_of_range_source_token_values
+        != out_of_range_source_token_hir.mutable_units().end());
+    assert(!out_of_range_source_token_values->dpi_declarations.empty());
+    assert(!out_of_range_source_token_values->dpi_declarations.front()
+                .return_type_tokens.empty());
+    out_of_range_source_token_values->dpi_declarations.front()
+        .return_type_tokens.front().source
+        = fsim::semantic::SourceSpanId::from_index(
+            static_cast<std::uint32_t>(
+                checked->semantics.source_spans().size()));
+    fsim::diagnostic::Engine out_of_range_source_token_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        out_of_range_source_token_hir,
+        checked->semantics,
+        out_of_range_source_token_diagnostics));
+    assert(out_of_range_source_token_diagnostics.has_error());
+    auto invalid_generated_text_hir = *restored_hir;
+    const auto invalid_generated_text_values = std::ranges::find_if(
+        invalid_generated_text_hir.mutable_units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(invalid_generated_text_values
+        != invalid_generated_text_hir.mutable_units().end());
+    assert(!invalid_generated_text_values->dpi_declarations.empty());
+    assert(!invalid_generated_text_values->dpi_declarations.front()
+                .return_type_tokens.empty());
+    invalid_generated_text_values->dpi_declarations.front()
+        .return_type_tokens.front().generated_text
+        = static_cast<fsim::semantic::sv::GeneratedTextKind>(255);
+    fsim::diagnostic::Engine invalid_generated_text_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_generated_text_hir,
+        checked->semantics,
+        invalid_generated_text_diagnostics));
+    assert(invalid_generated_text_diagnostics.has_error());
+    auto invalid_hir = *restored_hir;
+    const auto invalid_values = std::ranges::find_if(
+        invalid_hir.mutable_units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(invalid_values != invalid_hir.mutable_units().end());
+    invalid_values->dpi_declarations.front().qualifier =
+        static_cast<fsim::semantic::sv::DpiQualifier>(255);
+    fsim::diagnostic::Engine invalid_hir_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_hir, checked->semantics, invalid_hir_diagnostics));
+    assert(invalid_hir_diagnostics.has_error());
+    auto invalid_configuration_hir = *restored_hir;
+    const auto invalid_configuration = std::ranges::find(
+        invalid_configuration_hir.mutable_units(),
+        std::string { "semantic_hir_configuration" },
+        &fsim::semantic::sv::Unit::name);
+    assert(invalid_configuration
+        != invalid_configuration_hir.mutable_units().end());
+    invalid_configuration->configuration->rules.front().selection
+        = static_cast<
+            fsim::semantic::sv::ConfigurationSelectionKind>(255);
+    fsim::diagnostic::Engine invalid_configuration_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_configuration_hir,
+        checked->semantics,
+        invalid_configuration_diagnostics));
+    assert(invalid_configuration_diagnostics.has_error());
+    auto invalid_coverage_hir = *restored_hir;
+    const auto invalid_coverage_values = std::ranges::find_if(
+        invalid_coverage_hir.mutable_units(), [](const auto& unit) {
+            return unit.name == "values";
+        });
+    assert(invalid_coverage_values
+        != invalid_coverage_hir.mutable_units().end());
+    invalid_coverage_values->coverage.front().items.front().bins.front().kind
+        = static_cast<fsim::semantic::sv::CoverageBinKind>(255);
+    fsim::diagnostic::Engine invalid_coverage_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_coverage_hir,
+        checked->semantics,
+        invalid_coverage_diagnostics));
+    assert(invalid_coverage_diagnostics.has_error());
+
+    const auto reject_top_level_hir_corruption = [&](auto mutate) {
+        auto corrupted = *restored_hir;
+        mutate(corrupted);
+        fsim::diagnostic::Engine corruption_diagnostics;
+        assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+            corrupted, checked->semantics, corruption_diagnostics));
+        assert(corruption_diagnostics.has_error());
+    };
+    assert(!restored_hir->instances().empty());
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_instances().push_back(hir.instances().front());
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_dpi_declarations().push_back(
+            hir.dpi_declarations().front());
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_dpi_declarations().front().systemverilog_name.clear();
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_dpi_declarations().front().source = { };
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_dpi_declarations().front().profile_source = { };
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_dpi_declarations().front().origin = { };
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_dpi_declarations().front().owner_scope = { };
+    });
+    reject_top_level_hir_corruption([&](auto& hir) {
+        hir.mutable_dpi_declarations().front().owner_scope = top->scope;
+    });
+    assert(!restored_hir->covergroup_instances().empty());
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_covergroup_instances().push_back(
+            hir.covergroup_instances().front());
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_covergroup_instances().front().runtime_identity.clear();
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_covergroup_instances().front().origin = { };
+    });
+    reject_top_level_hir_corruption([](auto& hir) {
+        hir.mutable_covergroup_instances().front().owner_scope = { };
+    });
+
+    auto udp_hir = *restored_hir;
+    fsim::semantic::sv::UdpInputPattern udp_input;
+    udp_input.level = fsim::semantic::sv::UdpLevel::zero;
+    udp_input.source = udp_hir.dpi_declarations().front().source;
+    fsim::semantic::sv::UdpTableRow udp_row;
+    udp_row.inputs.push_back(udp_input);
+    udp_row.output = fsim::semantic::sv::UdpOutput::one;
+    udp_row.source = udp_input.source;
+    fsim::semantic::sv::UdpDeclaration udp;
+    udp.language = fsim::semantic::Language::system_verilog;
+    udp.standard = "2017";
+    udp.compatibility_profile = "none";
+    udp.library = "work";
+    udp.name = "hir_validation_udp";
+    udp.output = "q";
+    udp.inputs.push_back("d");
+    udp.rows.push_back(std::move(udp_row));
+    udp.source = udp_input.source;
+    udp.origin = udp_hir.dpi_declarations().front().origin;
+    udp_hir.mutable_udps().push_back(std::move(udp));
+    fsim::diagnostic::Engine udp_diagnostics;
+    assert(fsim::app::serialize_systemverilog_constraint_hir_state(
+        udp_hir, checked->semantics, udp_diagnostics));
+    assert(!udp_diagnostics.has_error());
+    udp_hir.mutable_udps().push_back(udp_hir.udps().front());
+    fsim::diagnostic::Engine duplicate_udp_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        udp_hir, checked->semantics, duplicate_udp_diagnostics));
+    assert(duplicate_udp_diagnostics.has_error());
+    // check_project() has already destroyed its compile-local AST workspace;
+    // all retained identities below are therefore owned by the compiled HIR.
     assert(interface_unit->id == retained_unit);
     assert(state_type->id == retained_type);
     assert(process.id == retained_process);
@@ -535,6 +1873,156 @@ endmodule
     assert(package_let.expression == retained_package_let_expression);
     assert(checked->systemverilog_hir.expressions().size()
         == retained_expression_count);
+    auto portable_records = checked->semantics.records();
+    for (auto& file : portable_records.source_files) {
+        const auto path = std::filesystem::path { file.physical_name };
+        if (path.is_absolute()) {
+            file.physical_name = path.filename().generic_string();
+        }
+    }
+    for (auto& span : portable_records.source_spans) {
+        const auto path = std::filesystem::path { span.logical_name };
+        if (path.is_absolute()) {
+            span.logical_name = path.filename().generic_string();
+        }
+    }
+    auto portable_semantics = fsim::semantic::Model::from_records(
+        std::move(portable_records));
+    assert(portable_semantics);
+    fsim::semantic::CompiledDesign compiled_hir {
+        std::move(*portable_semantics),
+        checked->systemverilog_hir,
+        checked->vhdl_hir,
+        { fsim::semantic::CompiledDependency {
+            top->id, "values", "0123456789abcdef" } },
+        { fsim::semantic::CompiledReference {
+            fsim::semantic::CompiledReferenceKind::module,
+            top->id,
+            "work",
+            "semantic_hir_top",
+            {},
+            top->source,
+            top->id } },
+    };
+    assert(compiled_hir.valid());
+    const auto bundle = fsim::app::serialize_compiled_hir_bundle(
+        compiled_hir, hir_state_diagnostics);
+    const auto repeated_bundle = fsim::app::serialize_compiled_hir_bundle(
+        compiled_hir, hir_state_diagnostics);
+    if (!bundle || !repeated_bundle) {
+        fsim::diagnostic::print_text(std::cerr, hir_state_diagnostics);
+    }
+    assert(bundle && repeated_bundle && *bundle == *repeated_bundle);
+    auto restored_bundle = fsim::app::deserialize_compiled_hir_bundle(
+        *bundle, "compiled-hir-bundle", hir_state_diagnostics);
+    assert(restored_bundle && restored_bundle->valid());
+    assert_signed_expression_retention(
+        restored_bundle->systemverilog_hir);
+    assert(std::ranges::any_of(
+        restored_bundle->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.name == "hir_external_probe" && unit.external;
+        }));
+    assert(restored_bundle->references().size() == 1);
+    assert(restored_bundle->dependencies().size() == 1);
+    assert(fsim::app::serialize_compiled_hir_bundle(
+               *restored_bundle, hir_state_diagnostics)
+        == bundle);
+    auto corrupt_bundle = *bundle;
+    corrupt_bundle.front() = 'X';
+    fsim::diagnostic::Engine corrupt_bundle_diagnostics;
+    assert(!fsim::app::deserialize_compiled_hir_bundle(
+        corrupt_bundle, "corrupt-compiled-hir-bundle",
+        corrupt_bundle_diagnostics));
+    assert(corrupt_bundle_diagnostics.has_error());
+    fsim::semantic::Model empty_semantics;
+    fsim::diagnostic::Engine semantic_budget_diagnostics;
+    assert(!fsim::app::deserialize_semantic_state(
+        oversized_first_vector_state<fsim::semantic::SourceFile>(
+            "FSIMSEM1", fsim::app::kSemanticStateSchema),
+        "semantic-budget", semantic_budget_diagnostics));
+    assert(has_decode_budget_diagnostic(semantic_budget_diagnostics));
+    fsim::diagnostic::Engine systemverilog_budget_diagnostics;
+    assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
+        oversized_first_vector_state<fsim::semantic::sv::Unit>(
+            "FSIMSVCH", fsim::app::kSystemVerilogConstraintHirStateSchema),
+        "systemverilog-budget", empty_semantics,
+        systemverilog_budget_diagnostics));
+    assert(has_decode_budget_diagnostic(systemverilog_budget_diagnostics));
+    fsim::diagnostic::Engine vhdl_budget_diagnostics;
+    assert(!fsim::app::deserialize_vhdl_hir_state(
+        oversized_first_vector_state<fsim::semantic::vhdl::Unit>(
+            "FSIMVHIR", fsim::app::kVhdlHirStateSchema),
+        "vhdl-budget", empty_semantics, vhdl_budget_diagnostics));
+    assert(has_decode_budget_diagnostic(vhdl_budget_diagnostics));
+    fsim::diagnostic::Engine bundle_budget_diagnostics;
+    assert(!fsim::app::deserialize_compiled_hir_bundle(
+        oversized_first_vector_state<fsim::semantic::CompiledDependency>(
+            "FSIMCHIR", fsim::app::kCompiledHirBundleSchema, 3U),
+        "compiled-hir-budget", bundle_budget_diagnostics));
+    assert(has_decode_budget_diagnostic(bundle_budget_diagnostics));
+    const auto make_link_input = [](
+                                     const std::string& name,
+                                     const std::string& library) {
+        fsim::semantic::Model model;
+        const auto file = model.intern_source_file(
+            name + ".sv", "digest-" + name);
+        const auto source_span = model.intern_source_span(
+            file, name + ".sv", { 0, 1, 1 }, { 1, 1, 2 });
+        const auto origin = model.add_origin(
+            fsim::semantic::OriginKind::parsed, source_span);
+        const auto unit_id = model.add_unit(
+            fsim::semantic::Language::system_verilog,
+            fsim::semantic::UnitKind::verilog_module,
+            library, name, {}, source_span, origin);
+        const auto scope = model.units().at(unit_id.value()).scope;
+        fsim::semantic::sv::Unit unit;
+        unit.id = unit_id;
+        unit.scope = scope;
+        unit.kind = fsim::semantic::sv::UnitKind::module;
+        unit.library = library;
+        unit.name = name;
+        unit.source = source_span;
+        unit.origin = origin;
+        fsim::semantic::sv::Hir hir;
+        hir.mutable_units().push_back(std::move(unit));
+        fsim::semantic::CompiledDesign result {
+            std::move(model), std::move(hir), { } };
+        fsim::semantic::refresh_compiled_design_metadata(result);
+        assert(fsim::semantic::normalize_compiled_design(result));
+        return result;
+    };
+    std::vector<fsim::semantic::CompiledDesign> link_inputs;
+    link_inputs.push_back(make_link_input("link_left", "work"));
+    link_inputs.push_back(make_link_input("link_right", "work"));
+    auto linked = fsim::semantic::link_compiled_designs(
+        std::move(link_inputs));
+    assert(linked.ok());
+    assert(linked.design->semantics.units().size() == 2);
+    assert(linked.design->systemverilog_hir.units().size() == 2);
+    assert(linked.design->systemverilog_hir.units()[0].id.value() == 0);
+    assert(linked.design->systemverilog_hir.units()[1].id.value() == 1);
+    assert(linked.design->systemverilog_hir.units()[1].scope.value() == 1);
+    assert(linked.design->dependencies().size() == 2);
+    std::vector<fsim::semantic::CompiledDesign> projection_inputs;
+    projection_inputs.push_back(make_link_input("local_unit", "work"));
+    projection_inputs.push_back(make_link_input("mapped_unit", "vendor"));
+    auto projection_source = fsim::semantic::link_compiled_designs(
+        std::move(projection_inputs));
+    assert(projection_source.ok());
+    const std::vector<std::string> excluded_libraries { "vendor" };
+    auto projected = fsim::semantic::exclude_compiled_libraries(
+        *projection_source.design, excluded_libraries);
+    assert(projected.ok());
+    assert(projected.design->semantics.units().size() == 1);
+    assert(projected.design->systemverilog_hir.units().size() == 1);
+    assert(projected.design->systemverilog_hir.units().front().name
+        == "local_unit");
+    std::vector<fsim::semantic::CompiledDesign> colliding_inputs;
+    colliding_inputs.push_back(make_link_input("link_collision", "work"));
+    colliding_inputs.push_back(make_link_input("link_collision", "work"));
+    assert(!fsim::semantic::link_compiled_designs(
+                std::move(colliding_inputs))
+                .ok());
 
     auto class_parsed = fsim::frontend::parse_text(
         "class_hir.sv",
@@ -1325,7 +2813,7 @@ endmodule
             fsim::diagnostic::print_text(
                 std::cerr, execution_diagnostics);
         }
-        assert(execution_project);
+        assert(execution_project && !execution_diagnostics.has_error());
         const auto resolved = execution_project->design.find_signal(
             "nettype_execution.resolved");
         const auto alias_source = execution_project->design.find_signal(

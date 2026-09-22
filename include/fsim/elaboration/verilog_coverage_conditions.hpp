@@ -3,7 +3,6 @@
 
 #include "fsim/elaboration/coverage_conditions.hpp"
 
-#include <span>
 #include <string_view>
 
 namespace fsim::elaboration {
@@ -16,12 +15,5 @@ using VerilogCoverageConditionPoint = CoverageConditionPoint;
 using VerilogCoverageConditionLimits = CoverageConditionLimits;
 using VerilogCoverageConditionError = CoverageConditionError;
 using VerilogCoverageConditionResult = CoverageConditionResult;
-
-[[nodiscard]] VerilogCoverageConditionResult
-discover_verilog_coverage_conditions(
-    std::span<const frontend::Statement> statements,
-    frontend::Language language,
-    std::span<const VerilogCoverageConditionSource> sources,
-    VerilogCoverageConditionLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

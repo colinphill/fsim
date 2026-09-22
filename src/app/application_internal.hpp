@@ -8,9 +8,12 @@
 #if defined(FSIM_HAS_LLVM)
 #include "fsim/compiler/llvm_jit.hpp"
 #endif
+#include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/coverage_persistence.hpp"
 #include "fsim/frontend/coverage_percentage.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
+#include "fsim/library/source_mapping.hpp"
 #include "fsim/runtime/class_randomize.hpp"
 #include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
@@ -39,6 +42,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -59,7 +63,28 @@ namespace fsim::runtime {
 class FstWriter;
 }
 
+namespace fsim::semantic {
+struct CompiledLinkResult;
+}
+
 namespace fsim::app::application_detail {
+
+enum class BinaryPayloadReadFailure {
+    none,
+    open,
+    size,
+    read,
+};
+
+struct BinaryPayloadReadResult {
+    std::optional<std::string> bytes;
+    BinaryPayloadReadFailure failure { BinaryPayloadReadFailure::none };
+    bool budget_exceeded { };
+};
+
+[[nodiscard]] BinaryPayloadReadResult read_binary_payload(
+    const std::filesystem::path& path,
+    std::optional<std::uintmax_t> maximum_bytes = std::nullopt);
 
 class VhdlPslExecution {
 public:
@@ -68,6 +93,7 @@ public:
 
     VhdlPslExecution(
         const semantic::vhdl::Hir& hir,
+        const semantic::Model& semantics,
         const elaboration::ElaboratedDesign& design,
         const semantic::design::DesignIr& design_ir,
         SignalReader reader);
@@ -159,7 +185,8 @@ using runtime::simir::SignalId;
 
 [[nodiscard]] runtime::SystemVerilogClassPropertyDescriptor
 class_property_descriptor(
-    const frontend::SystemVerilogClassPropertyLayout& property,
+    const semantic::sv::SpecializedClassProperty& property,
+    const semantic::sv::Hir& hir,
     bool qualified_name = false);
 
 [[nodiscard]] std::uint64_t entropy_seed();
@@ -194,6 +221,92 @@ void complete_vhdl_executable_hir(
     semantic::Model& semantics,
     std::span<frontend::SystemVerilogClassSpecialization>
         class_specializations = { });
+
+/// Non-owning functional-coverage inventory over the compiled SystemVerilog
+/// HIR. Declarations remain owned by their unit or class and mutable instance
+/// state remains owned by Hir; the inventory only supplies deterministic
+/// dispatch for application/runtime consumers.
+struct SystemVerilogCoverageHirInventory {
+    std::vector<const semantic::sv::CovergroupDeclaration*> declarations;
+    std::span<const semantic::sv::CovergroupInstance> instances;
+};
+
+[[nodiscard]] SystemVerilogCoverageHirInventory
+systemverilog_coverage_hir_inventory(
+    const semantic::sv::Hir& hir);
+
+[[nodiscard]] const semantic::sv::CovergroupDeclaration*
+find_systemverilog_covergroup_declaration(
+    const SystemVerilogCoverageHirInventory& inventory,
+    std::string_view canonical_identity) noexcept;
+
+[[nodiscard]] const semantic::sv::CovergroupDeclaration*
+find_systemverilog_covergroup_declaration(
+    const semantic::sv::Hir& hir,
+    std::string_view canonical_identity) noexcept;
+
+[[nodiscard]] const semantic::sv::CovergroupInstance*
+find_systemverilog_covergroup_instance(
+    const SystemVerilogCoverageHirInventory& inventory,
+    std::string_view runtime_identity) noexcept;
+
+[[nodiscard]] const semantic::sv::CovergroupInstance*
+find_systemverilog_covergroup_instance(
+    const semantic::sv::Hir& hir,
+    std::string_view runtime_identity) noexcept;
+
+[[nodiscard]] semantic::sv::CovergroupInstance*
+find_systemverilog_covergroup_instance(
+    semantic::sv::Hir& hir,
+    std::string_view runtime_identity) noexcept;
+
+/// Copy mutable sampling results from the temporary frontend execution
+/// adapter into HIR-native runtime state. Declaration and constructor state
+/// are immutable and are deliberately not duplicated here.
+void synchronize_systemverilog_covergroup_runtime_state(
+    semantic::sv::CovergroupInstance& destination,
+    const frontend::SystemVerilogCovergroupInstance& source,
+    semantic::Model& semantics);
+
+[[nodiscard]] runtime::SystemVerilogCoverageState
+make_systemverilog_coverage_state(
+    const semantic::sv::Hir& hir,
+    const semantic::Model& semantics);
+
+[[nodiscard]] frontend::SystemVerilogCovergroupDeclaration
+project_systemverilog_covergroup_declaration(
+    const semantic::sv::CovergroupDeclaration& declaration,
+    const semantic::Model& semantics);
+
+[[nodiscard]] frontend::SystemVerilogCovergroupInstance
+project_systemverilog_covergroup_instance(
+    const semantic::sv::CovergroupInstance& instance,
+    const semantic::Model& semantics);
+
+[[nodiscard]] frontend::SystemVerilogCoverageState
+project_systemverilog_coverage_state(
+    const runtime::SystemVerilogCoverageState& state,
+    const semantic::sv::Hir& hir,
+    const semantic::Model& semantics);
+
+[[nodiscard]] bool restore_systemverilog_coverage_state(
+    runtime::SystemVerilogCoverageState& destination,
+    const runtime::SystemVerilogCoverageState& source,
+    const semantic::sv::Hir& hir,
+    const semantic::Model& semantics,
+    std::string& error);
+
+void refresh_systemverilog_coverage_reports(
+    runtime::SystemVerilogCoverageState& state,
+    const semantic::sv::Hir& hir,
+    const semantic::Model& semantics);
+
+[[nodiscard]] bool merge_systemverilog_coverage_state(
+    runtime::SystemVerilogCoverageState& destination,
+    const runtime::SystemVerilogCoverageState& source,
+    const semantic::sv::Hir& hir,
+    semantic::Model& semantics,
+    std::string& error);
 
 [[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
 systemverilog_constraint_profile(
@@ -234,16 +347,8 @@ void configure_systemverilog_class_constraints(
     runtime::SystemVerilogConstraintSolver& solver,
     const runtime::SystemVerilogClassRandomizeVariables& variables,
     const semantic::sv::Hir& hir,
-    const frontend::SystemVerilogClassSpecialization& specialization,
+    const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled = { });
-
-[[nodiscard]] const frontend::SystemVerilogClassMethodProfile*
-systemverilog_randomize_callback(
-    std::span<const frontend::SystemVerilogClassSpecialization>
-        specializations,
-    const runtime::SystemVerilogClassHeap& heap,
-    runtime::SystemVerilogClassHandle handle,
-    std::string_view name);
 
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,
@@ -1169,6 +1274,7 @@ struct ParseGroup {
     std::vector<ParseInput> inputs;
     std::vector<std::filesystem::path> include_directories;
     std::vector<std::string> defines;
+    std::filesystem::path base_directory;
 };
 
 struct ParsedSnapshot {
@@ -1180,6 +1286,54 @@ struct ParsedSnapshot {
     std::vector<std::size_t> class_method_source_orders;
 };
 
+/// Compile-local parser storage. Public compilation results expose only the
+/// CompiledDesign-owning CheckedProject base; moving that base out destroys
+/// this syntax workspace before the compilation API returns.
+struct CompilationWorkspace final : CheckedProject {
+    frontend::ParsedDesign parsed;
+    std::vector<frontend::SystemVerilogClassSpecialization>
+        systemverilog_class_specializations;
+    std::vector<semantic::CompiledDesign> mapped_compiled_designs;
+};
+
+[[nodiscard]] CheckedProject release_compiled_project(
+    CompilationWorkspace&& workspace);
+
+[[nodiscard]] bool relocate_compiled_design_sources(
+    semantic::CompiledDesign& design,
+    std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::string stable_cache_source_name(
+    const std::filesystem::path& path,
+    const std::filesystem::path& base_directory);
+
+inline constexpr std::uint32_t compiled_hir_cache_producer_revision = 2;
+
+void add_compiled_hir_cache_key_identity(
+    compiler::CacheKeyBuilder& key,
+    std::uint32_t producer_revision
+        = compiled_hir_cache_producer_revision);
+
+[[nodiscard]] std::optional<std::vector<library::SourceNameMapping>>
+compiled_cache_source_mappings(
+    const CheckedProject& checked,
+    const std::filesystem::path& base_directory,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] semantic::CompiledLinkResult install_linked_compiled_design(
+    CheckedProject& checked,
+    std::vector<semantic::CompiledDesign> inputs);
+
+[[nodiscard]] std::optional<CompilationWorkspace> check_project_workspace(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    bool complete_vhdl_environment = false);
+
+[[nodiscard]] std::optional<CompilationWorkspace> load_object_workspace(
+    std::span<const std::filesystem::path> objects,
+    diagnostic::Engine& diagnostics);
+
 bool same_source_path(
     const std::filesystem::path& left,
     const std::filesystem::path& right);
@@ -1189,13 +1343,14 @@ std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedDependency>& inputs,
     std::string_view language,
     std::string_view standard,
-    std::string_view compatibility_profile);
+    std::string_view compatibility_profile,
+    const std::filesystem::path& base_directory);
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group);
 
 bool load_required_mapped_libraries(
     const project::Config& config,
-    CheckedProject& checked,
+    CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics);
 
 std::optional<systemc::PluginCompileRequest> systemc_request(
@@ -1220,13 +1375,62 @@ struct SystemCLibraryRegistry {
 
 std::string unit_key(const frontend::DesignUnit& unit);
 
+[[nodiscard]] std::vector<library::UnitIndexEntry>
+compiled_unit_metadata_entries(
+    const semantic::CompiledDesign& design,
+    std::string_view expected_library);
+
+[[nodiscard]] std::string compiled_unit_metadata_key(
+    const library::UnitIndexEntry& entry,
+    std::string_view library);
+
+std::string compiled_udp_key(
+    const semantic::sv::UdpDeclaration& declaration);
+
+std::string_view compiled_udp_standard(
+    const semantic::sv::UdpDeclaration& declaration);
+
+bool compiled_udp_metadata_matches(
+    const library::UnitIndexEntry& entry,
+    const semantic::sv::UdpDeclaration& declaration,
+    std::string_view expected_library);
+
+const semantic::sv::UdpDeclaration* find_compiled_udp(
+    const semantic::CompiledDesign& design,
+    std::string_view library,
+    std::string_view name);
+
+[[nodiscard]] const semantic::sv::Unit* compiled_class_owner(
+    const semantic::CompiledDesign& design,
+    const semantic::sv::ClassDeclaration& declaration);
+
+[[nodiscard]] const semantic::sv::ClassDeclaration* find_compiled_class(
+    const semantic::CompiledDesign& design,
+    std::string_view library,
+    std::string_view canonical_identity);
+
+[[nodiscard]] std::optional<library::UnitIndexEntry>
+compiled_class_metadata_entry(
+    const semantic::CompiledDesign& design,
+    const semantic::sv::ClassDeclaration& declaration,
+    std::string_view expected_library);
+
+[[nodiscard]] bool compiled_class_metadata_matches(
+    const library::UnitIndexEntry& entry,
+    const semantic::CompiledDesign& design,
+    const semantic::sv::ClassDeclaration& declaration,
+    std::string_view expected_library);
+
+void install_compiled_class_specializations(CheckedProject& checked);
+
 void report_vhdl_duplicate_design_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics);
 
 void validate_vhdl_analysis_order(
     std::span<const frontend::DesignUnit> units,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    bool allow_external_architecture_primary = false);
 
 void validate_vhdl_simulator_api(
     std::span<const frontend::DesignUnit> units,
@@ -1245,8 +1449,9 @@ void validate_vhdl_package_declarations(
     diagnostic::Engine& diagnostics);
 
 void inject_vhdl_standard_libraries(
-    CheckedProject& checked,
-    diagnostic::Engine& diagnostics);
+    CompilationWorkspace& checked,
+    diagnostic::Engine& diagnostics,
+    bool complete_environment = false);
 
 [[nodiscard]] std::vector<library::VhdlPackageDependency>
 vhdl_package_dependencies(const CheckedProject& checked);
@@ -1256,9 +1461,15 @@ vhdl_package_dependencies(const CheckedProject& checked);
     std::string_view artifact,
     diagnostic::Engine& diagnostics);
 
+[[nodiscard]] bool compiled_vhdl_package_dependencies_match(
+    const semantic::CompiledDesign& design,
+    std::span<const library::VhdlPackageDependency> archived,
+    std::string_view artifact,
+    diagnostic::Engine& diagnostics);
+
 std::vector<project::ProjectSection::TopLevel> selected_tops(
     const project::Config& config,
-    const frontend::ParsedDesign& parsed,
+    const semantic::CompiledDesign& compiled,
     diagnostic::Engine& diagnostics);
 
 struct BindingTarget {
@@ -1272,7 +1483,7 @@ std::optional<BindingTarget> parse_binding_target(std::string_view target);
 frontend::PortDirection systemc_direction(
     const fsim_sc_port_direction_v1 direction);
 
-frontend::Type systemc_type(
+elaboration::PackedTypeMetadata systemc_type(
     const fsim_sc_value_encoding_v1 encoding,
     const std::uint32_t width);
 
@@ -1348,7 +1559,7 @@ private:
 
 void validate_bindings(
     const project::Config& config,
-    const frontend::ParsedDesign& parsed,
+    const semantic::CompiledDesign& compiled,
     std::span<const SystemCLibraryRegistry> systemc_registries,
     diagnostic::Engine& diagnostics);
 
@@ -1567,7 +1778,7 @@ bool compile_object(
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics);
 
-std::optional<CheckedProject> check_project_for_object(
+std::optional<CompilationWorkspace> check_project_for_object(
     const project::Config& config,
     diagnostic::Engine& diagnostics);
 
@@ -1817,19 +2028,28 @@ void validate_vhdl_rejection_limits(
 
 std::string effective_resolution(
     const project::Config& config,
-    frontend::ParsedDesign& parsed);
+    const semantic::CompiledDesign& compiled);
 
 bool normalize_delays(
     frontend::ParsedDesign& parsed,
     const std::string_view resolution,
     diagnostic::Engine& diagnostics);
 
+bool normalize_delays(
+    semantic::CompiledDesign& compiled,
+    std::string_view resolution,
+    diagnostic::Engine& diagnostics);
+
 void select_delay_alternatives(
     frontend::ParsedDesign& parsed,
     const project::DelayMode mode);
 
+void select_delay_alternatives(
+    semantic::CompiledDesign& compiled,
+    project::DelayMode mode);
+
 bool validate_declared_time_precisions(
-    const frontend::ParsedDesign& parsed,
+    const semantic::CompiledDesign& compiled,
     const std::string_view resolution,
     diagnostic::Engine& diagnostics);
 

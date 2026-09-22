@@ -15,10 +15,10 @@
 #include "fsim/app/sdf_phase_persistence.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
-#include "fsim/library/portable_unit.hpp"
 #include "fsim/runtime/fst_change_encoder.hpp"
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/incremental.hpp"
@@ -96,9 +96,29 @@ namespace {
         return result;
     }
 
-    std::vector<library::PortablePayload> object_payloads(
+    std::string_view vhdl_unit_kind(
+        const semantic::vhdl::UnitKind kind)
+    {
+        switch (kind) {
+        case semantic::vhdl::UnitKind::entity:
+            return "entity";
+        case semantic::vhdl::UnitKind::architecture:
+            return "architecture";
+        case semantic::vhdl::UnitKind::configuration:
+            return "configuration";
+        case semantic::vhdl::UnitKind::package:
+            return "package";
+        case semantic::vhdl::UnitKind::context:
+            return "context";
+        case semantic::vhdl::UnitKind::psl_verification_unit:
+            return "psl-verification-unit";
+        }
+        return { };
+    }
+
+    std::vector<library::PortablePayload> projected_object_payloads(
         const std::filesystem::path& directory,
-        const artifact::ObjectMetadata& metadata)
+        artifact::ObjectMetadata& metadata)
     {
         std::vector<library::PortablePayload> result;
         for (const auto& source : metadata.sources) {
@@ -106,9 +126,58 @@ namespace {
                 { source.artifact, read_binary_file(directory / source.artifact) });
         }
         for (const auto& unit : metadata.units) {
+            if (unit.artifact.empty()) {
+                continue;
+            }
             result.push_back(
                 { unit.artifact, read_binary_file(directory / unit.artifact) });
         }
+        const auto compiled_bytes = read_binary_file(
+            directory / metadata.compiled_hir_artifact);
+        diagnostic::Engine decode_diagnostics;
+        const auto compiled = app::deserialize_compiled_hir_bundle(
+            compiled_bytes, "projected-object-input", decode_diagnostics);
+        assert(compiled && !decode_diagnostics.has_error());
+
+        std::vector<semantic::UnitId> selected_units;
+        for (const auto& indexed : metadata.units) {
+            assert(indexed.language == "vhdl");
+            const auto found = std::ranges::find_if(
+                compiled->vhdl_hir.units(), [&](const auto& unit) {
+                    const auto library = unit.library.empty()
+                        ? std::string_view { "work" }
+                        : std::string_view { unit.library };
+                    return library == metadata.library
+                        && vhdl_unit_kind(unit.kind) == indexed.kind
+                        && unit.name == indexed.name
+                        && unit.primary_name == indexed.primary_name;
+                });
+            assert(found != compiled->vhdl_hir.units().end());
+            selected_units.push_back(found->id);
+        }
+        std::vector<std::string> supporting_libraries;
+        for (const auto& dependency : metadata.vhdl_package_dependencies) {
+            const auto separator = dependency.package.find('.');
+            assert(separator != std::string::npos);
+            const auto library = dependency.package.substr(0, separator);
+            if (std::ranges::find(supporting_libraries, library)
+                == supporting_libraries.end()) {
+                supporting_libraries.push_back(library);
+            }
+        }
+        auto projected = semantic::extract_compiled_units(
+            *compiled, selected_units, supporting_libraries);
+        assert(projected.ok());
+        diagnostic::Engine encode_diagnostics;
+        auto projected_bytes = app::serialize_compiled_hir_bundle(
+            *projected.design, encode_diagnostics);
+        assert(projected_bytes && !encode_diagnostics.has_error());
+        metadata.compiled_hir_checksum = support::Sha256::hex(
+            support::Sha256::digest(*projected_bytes));
+        metadata.compilation_digest
+            = artifact::compute_object_compilation_digest(metadata);
+        result.push_back({ metadata.compiled_hir_artifact,
+            std::move(*projected_bytes) });
         return result;
     }
 
@@ -878,10 +947,13 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(systemc_standalone_value == "00000101");
     std::cerr << "non-project producer hiding: embedded simulation validated\n";
 
-    assert(cli::run(static_cast<int>(compile_arguments.size()),
-               compile_arguments.data(), production_services, output,
-               error)
-        == 0);
+    const auto compile_status = cli::run(
+        static_cast<int>(compile_arguments.size()), compile_arguments.data(),
+        production_services, output, error);
+    if (compile_status != 0) {
+        std::cerr << error.str();
+    }
+    assert(compile_status == 0);
     assert(error.str().empty());
     assert(output.str().find("compiled 1 source file(s)") != std::string::npos);
 
@@ -905,23 +977,26 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     }));
     std::cerr << "non-project cli: HDL object metadata validated\n";
 
-    const auto& indexed_unit = metadata->units.front();
-    std::ifstream unit_input(object / indexed_unit.artifact, std::ios::binary);
-    assert(unit_input);
-    const std::string unit_bytes { std::istreambuf_iterator<char> { unit_input },
+    assert(std::ranges::all_of(metadata->units, [](const auto& indexed) {
+        return indexed.artifact.empty() && indexed.checksum.empty();
+    }));
+    std::ifstream bundle_input(
+        object / metadata->compiled_hir_artifact, std::ios::binary);
+    assert(bundle_input);
+    const std::string bundle_bytes {
+        std::istreambuf_iterator<char> { bundle_input },
         std::istreambuf_iterator<char> { } };
-    assert(!unit_input.bad());
-    unit_input.close();
-    assert(!unit_input.is_open());
-    diagnostic::Engine unit_diagnostics;
-    const auto unit = library::deserialize_portable_unit(
-        unit_bytes, support::path_to_utf8(indexed_unit.artifact),
-        unit_diagnostics);
-    assert(unit && !unit_diagnostics.has_error());
-    assert(unit->name == indexed_unit.name);
-    assert(!unit->span.source_name.empty());
-    assert(!support::path_from_utf8(unit->span.source_name.str()).is_absolute());
-    std::cerr << "non-project cli: portable unit validated\n";
+    assert(!bundle_input.bad());
+    diagnostic::Engine bundle_diagnostics;
+    const auto bundle = app::deserialize_compiled_hir_bundle(
+        bundle_bytes, support::path_to_utf8(metadata->compiled_hir_artifact),
+        bundle_diagnostics);
+    assert(bundle && !bundle_diagnostics.has_error() && bundle->valid());
+    assert(std::ranges::any_of(
+        bundle->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.name == "tb";
+        }));
+    std::cerr << "non-project cli: compiled HIR bundle validated\n";
 
     output.str({ });
     error.str({ });
@@ -940,10 +1015,10 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto loaded = app::load_objects(object_inputs, load_diagnostics);
     assert(loaded && !load_diagnostics.has_error());
     assert(loaded->objects.size() == 2);
-    assert(loaded->parsed.units.size() == 3);
-    assert(loaded->parsed.units[0].name == "child");
-    assert(loaded->parsed.units[1].name == "tb");
-    assert(loaded->parsed.units[2].name == "extra");
+    assert(loaded->semantics.units().size() == 3);
+    assert(loaded->semantics.units()[0].name == "child");
+    assert(loaded->semantics.units()[1].name == "tb");
+    assert(loaded->semantics.units()[2].name == "extra");
     assert(loaded->semantics.valid());
     std::cerr << "non-project cli: relocated objects loaded\n";
     project::Config object_config;
@@ -1683,10 +1758,30 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         !app::load_design_artifact(corrupt_design, corrupt_design_diagnostics));
     assert(corrupt_design_diagnostics.has_error());
 
+    const auto oversized_design = directory / "oversized.fsimdesign";
+    copy_tree(design, oversized_design);
+    make_tree_writable(oversized_design);
+    std::filesystem::resize_file(
+        oversized_design / "state/compiled-design.fsimhir",
+        app::kCompiledHirDecodeBudgetBytes + 1U);
+    diagnostic::Engine oversized_design_diagnostics;
+    assert(!app::load_design_artifact(
+        oversized_design, oversized_design_diagnostics));
+    assert(std::ranges::any_of(
+        oversized_design_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0014"
+                && diagnostic.message.find(
+                       "compiled-HIR decode byte budget")
+                    != std::string::npos;
+        }));
+    std::filesystem::remove_all(oversized_design);
+
     const auto partial_design = directory / "partial.fsimdesign";
     copy_tree(design, partial_design);
     make_tree_writable(partial_design);
-    assert(std::filesystem::remove(partial_design / "state/semantics.bin"));
+    assert(std::filesystem::remove(
+        partial_design / "state/compiled-design.fsimhir"));
     diagnostic::Engine partial_design_diagnostics;
     assert(
         !app::load_design_artifact(partial_design, partial_design_diagnostics));
@@ -1776,6 +1871,26 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     std::filesystem::rename(hidden_source, source);
     std::filesystem::rename(hidden_extra_source, extra_source);
 
+    const auto oversized_object = directory / "oversized.fsimobj";
+    copy_tree(object, oversized_object);
+    make_tree_writable(oversized_object);
+    std::filesystem::resize_file(
+        oversized_object / metadata->compiled_hir_artifact,
+        app::kCompiledHirDecodeBudgetBytes + 1U);
+    diagnostic::Engine oversized_object_diagnostics;
+    const std::vector oversized_inputs { oversized_object };
+    assert(!app::load_objects(
+        oversized_inputs, oversized_object_diagnostics));
+    assert(std::ranges::any_of(
+        oversized_object_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0005"
+                && diagnostic.message.find(
+                       "compiled-HIR decode byte budget")
+                    != std::string::npos;
+        }));
+    std::filesystem::remove_all(oversized_object);
+
     const auto corrupt_object = directory / "corrupt.fsimobj";
     std::filesystem::create_directory(corrupt_object);
     for (const auto& entry :
@@ -1787,7 +1902,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
             std::filesystem::copy_file(entry.path(), corrupt_object / relative);
         }
     }
-    const auto corrupt_unit = corrupt_object / indexed_unit.artifact;
+    const auto corrupt_unit
+        = corrupt_object / metadata->compiled_hir_artifact;
     std::filesystem::permissions(corrupt_unit,
         std::filesystem::perms::owner_write,
         std::filesystem::perm_options::add);
@@ -1868,21 +1984,30 @@ end architecture;
     design_metadata.compilation_digest = artifact::compute_object_compilation_digest(design_metadata);
     const auto package_object = directory / "package.fsimobj";
     const auto design_object = directory / "design-units.fsimobj";
+    auto package_payloads = projected_object_payloads(
+        vhdl_object, package_metadata);
+    auto design_payloads = projected_object_payloads(
+        vhdl_object, design_metadata);
+    assert(package_metadata.compiled_hir_checksum
+        != design_metadata.compiled_hir_checksum);
     diagnostic::Engine package_publish_diagnostics;
     assert(
         artifact::publish_object(package_object, package_metadata,
-            object_payloads(vhdl_object, package_metadata),
+            package_payloads,
             package_publish_diagnostics));
     assert(!package_publish_diagnostics.has_error());
     diagnostic::Engine design_publish_diagnostics;
     assert(artifact::publish_object(design_object, design_metadata,
-        object_payloads(vhdl_object, design_metadata),
+        design_payloads,
         design_publish_diagnostics));
     assert(!design_publish_diagnostics.has_error());
 
     diagnostic::Engine ordered_vhdl_diagnostics;
     const std::vector ordered_vhdl_inputs { package_object, design_object };
     const auto ordered_vhdl = app::load_objects(ordered_vhdl_inputs, ordered_vhdl_diagnostics);
+    if (!ordered_vhdl) {
+        diagnostic::print_text(std::cerr, ordered_vhdl_diagnostics);
+    }
     assert(ordered_vhdl && !ordered_vhdl_diagnostics.has_error());
     assert(ordered_vhdl->objects.size() == 2U);
     assert(std::ranges::all_of(ordered_vhdl->objects, [](const auto& provenance) {
@@ -1890,17 +2015,21 @@ end architecture;
     }));
     diagnostic::Engine reversed_vhdl_diagnostics;
     const std::vector reversed_vhdl_inputs { design_object, package_object };
-    assert(!app::load_objects(reversed_vhdl_inputs, reversed_vhdl_diagnostics));
-    assert(reversed_vhdl_diagnostics.has_error());
+    const auto reversed_vhdl = app::load_objects(
+        reversed_vhdl_inputs, reversed_vhdl_diagnostics);
+    assert(reversed_vhdl && !reversed_vhdl_diagnostics.has_error());
+    assert(reversed_vhdl->semantics.units().size()
+        == ordered_vhdl->semantics.units().size());
 
     auto wrong_library_metadata = package_metadata;
     wrong_library_metadata.library = "other";
     wrong_library_metadata.compilation_digest = artifact::compute_object_compilation_digest(wrong_library_metadata);
     const auto wrong_library_object = directory / "wrong-library.fsimobj";
+    auto wrong_library_payloads = package_payloads;
     diagnostic::Engine wrong_publish_diagnostics;
     assert(
         artifact::publish_object(wrong_library_object, wrong_library_metadata,
-            object_payloads(vhdl_object, package_metadata),
+            wrong_library_payloads,
             wrong_publish_diagnostics));
     diagnostic::Engine wrong_load_diagnostics;
     const std::vector wrong_library_inputs { wrong_library_object };

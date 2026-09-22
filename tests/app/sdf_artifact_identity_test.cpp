@@ -148,7 +148,8 @@ fsim::artifact::DesignMetadata base_metadata()
         { 0U, "systemverilog", "2017", "none" });
     metadata.payloads = {
         { "runtime", "state/runtime.bin", checksum("runtime") },
-        { "semantics", "state/semantics.bin", checksum("semantics") },
+        { "compiled-hir", "state/compiled-design.fsimhir",
+            checksum("compiled-hir") },
         { "design-ir", "state/design-ir.bin", checksum("design-ir") }
     };
     metadata.specialization_cache_keys = { checksum("specialization") };
@@ -298,14 +299,20 @@ void test_library_design_relocation_and_source_hidden_archive()
     library_metadata.library = "vendor";
     library_metadata.producer = "fsim SDF portable test";
     library_metadata.runtime_schema = 1U;
+    const std::string compiled_hir_bytes { "compiled-hir" };
+    library_metadata.compiled_hir_artifact = "compiled/design.fsimhir";
+    library_metadata.compiled_hir_checksum = checksum(compiled_hir_bytes);
     library_metadata.standards = { { "sdf", identity.revision } };
-    library_metadata.units.push_back(fsim::app::make_sdf_library_index_entry(
-        identity, "sdf/annotation.bin", encoded.bytes));
+    library_metadata.auxiliary_artifacts.push_back(
+        fsim::app::make_sdf_library_index_entry(
+            identity, "sdf/annotation.bin", encoded.bytes));
     const auto original = unique_path("original.fsimlib");
     const auto relocated = unique_path("relocated.fsimlib");
     fsim::diagnostic::Engine publish_diagnostics;
     require(fsim::library::publish(original, library_metadata,
-                { { "sdf/annotation.bin", byte_string(encoded.bytes) } },
+                { { library_metadata.compiled_hir_artifact,
+                      compiled_hir_bytes },
+                    { "sdf/annotation.bin", byte_string(encoded.bytes) } },
                 publish_diagnostics)
             && !publish_diagnostics.has_error(),
         "analyzed library must publish its SDF archive");
@@ -333,7 +340,7 @@ void test_library_design_relocation_and_source_hidden_archive()
     const auto design_path = unique_path("design.fsimdesign");
     const std::vector<fsim::library::PortablePayload> payloads {
         { "state/runtime.bin", "runtime" },
-        { "state/semantics.bin", "semantics" },
+        { "state/compiled-design.fsimhir", "compiled-hir" },
         { "state/design-ir.bin", "design-ir" },
         { "sdf/annotation.bin", byte_string(encoded.bytes) }
     };

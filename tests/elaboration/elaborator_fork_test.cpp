@@ -36,7 +36,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(parsed.design, "forks");
+    const auto elaborated = compile_and_elaborate(parsed.design, "forks");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
             std::cerr << diagnostic.code << ": "
@@ -114,7 +114,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(named_disable.ok());
-    const auto named_disable_elaborated = fsim::elaboration::elaborate(
+    const auto named_disable_elaborated = compile_and_elaborate(
         named_disable.design, "named_disable");
     if (!named_disable_elaborated.ok()) {
         for (const auto& diagnostic : named_disable_elaborated.diagnostics) {
@@ -143,7 +143,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(unknown_disable.ok());
-    const auto rejected_disable = fsim::elaboration::elaborate(
+    const auto rejected_disable = compile_and_elaborate(
         unknown_disable.design, "unknown_disable");
     assert(!rejected_disable.ok());
     assert(has_diagnostic(
@@ -182,7 +182,7 @@ endmodule
     assert(
         handles.design.units.front().signals.front().type.spelling
         == "process");
-    const auto handles_elaborated = fsim::elaboration::elaborate(handles.design, "process_handles");
+    const auto handles_elaborated = compile_and_elaborate(handles.design, "process_handles");
     if (!handles_elaborated.ok()) {
         for (const auto& diagnostic : handles_elaborated.diagnostics) {
             std::cerr << diagnostic.code << ": "
@@ -232,7 +232,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(bounded_task.ok());
-    const auto bounded_task_elaborated = fsim::elaboration::elaborate(
+    const auto bounded_task_elaborated = compile_and_elaborate(
         bounded_task.design, "bounded_task_fork");
     assert(bounded_task_elaborated.ok());
     auto bounded_task_interpreter =
@@ -277,7 +277,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(bounded_task_frame.ok());
     const auto bounded_task_frame_elaborated =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             bounded_task_frame.design,
             "bounded_task_fork_frame");
     assert(bounded_task_frame_elaborated.ok());
@@ -289,6 +289,15 @@ endmodule
         bounded_task_frame_result.status
             == fsim::runtime::RunStatus::completed
         && bounded_task_frame_result.time == 1);
+    const auto bounded_task_frame_observed
+        = bounded_task_frame_elaborated.design->find_signal("observed");
+    assert(bounded_task_frame_observed);
+    assert(
+        bounded_task_frame_interpreter
+            ->signal_value(*bounded_task_frame_observed)
+            .low_word()
+            .aval
+        == 0x41U);
 
     const auto function_background = fsim::frontend::parse_verilog(
         fsim::frontend::SourceText {
@@ -321,7 +330,7 @@ endmodule
 )" },
         fsim::frontend::StandardRevision::SystemVerilog2023);
     assert(function_background.ok());
-    const auto function_background_elaborated = fsim::elaboration::elaborate(
+    const auto function_background_elaborated = compile_and_elaborate(
         function_background.design, "function_background");
     if (!function_background_elaborated.ok()) {
         for (const auto& diagnostic :
@@ -376,7 +385,7 @@ endmodule
 )" },
         fsim::frontend::StandardRevision::SystemVerilog2023);
     assert(noninitial_function_background.ok());
-    const auto noninitial_rejected = fsim::elaboration::elaborate(
+    const auto noninitial_rejected = compile_and_elaborate(
         noninitial_function_background.design,
         "noninitial_function_background");
     assert(!noninitial_rejected.ok());
@@ -443,7 +452,7 @@ endmodule
     malformed.design.units.front().functions.front().statements = {
         std::move(fork)
     };
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         malformed.design, "callable_fork");
     assert(!rejected.ok());
     assert(has_diagnostic(rejected, "FSIM-ELAB-107"));
@@ -457,7 +466,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_strobe.ok());
-    const auto rejected_strobe = fsim::elaboration::elaborate(
+    const auto rejected_strobe = compile_and_elaborate(
         invalid_strobe.design, "invalid_strobe");
     assert(!rejected_strobe.ok());
     assert(has_diagnostic(rejected_strobe, "FSIM-ELAB-108"));

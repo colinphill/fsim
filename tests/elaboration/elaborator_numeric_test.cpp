@@ -59,14 +59,15 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_signed_arithmetic.ok());
     const auto elaborated_vhdl_signed_arithmetic =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_signed_arithmetic.design,
             "vhdl:work.vhdl_signed_arithmetic(rtl)");
     if (!elaborated_vhdl_signed_arithmetic.ok()) {
       for (const auto& diagnostic :
            elaborated_vhdl_signed_arithmetic.diagnostics) {
         std::cerr << diagnostic.code << ": "
-                  << diagnostic.message << '\n';
+                  << diagnostic.message << " at "
+                  << diagnostic.span.begin.line << '\n';
       }
     }
     assert(elaborated_vhdl_signed_arithmetic.ok());
@@ -249,7 +250,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(dynamic_vhdl_shift.ok());
     const auto elaborated_dynamic_vhdl_shift =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             dynamic_vhdl_shift.design,
             "vhdl:work.dynamic_vhdl_shift(rtl)");
     if (!elaborated_dynamic_vhdl_shift.ok()) {
@@ -474,7 +475,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_subtype_source.ok());
     const auto vhdl_subtype_design =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_subtype_source.design,
             "vhdl:work.subtype_execution(rtl)");
     if (!vhdl_subtype_design.ok()) {
@@ -615,7 +616,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_subtypes.ok());
     const auto rejected_vhdl_subtypes =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_subtypes.design,
             "vhdl:work.invalid_vhdl_subtypes(rtl)");
     assert(!rejected_vhdl_subtypes.ok());
@@ -716,7 +717,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_enumeration_source.ok());
     const auto vhdl_enumeration_design =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_enumeration_source.design,
             "vhdl:work.enumeration_execution(rtl)");
     if (!vhdl_enumeration_design.ok()) {
@@ -853,7 +854,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_enumerations.ok());
     const auto rejected_vhdl_enumerations =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_enumerations.design,
             "vhdl:work.invalid_vhdl_enumerations(rtl)");
     assert(
@@ -950,14 +951,15 @@ end architecture;
             fsim::frontend::VhdlStandard::Vhdl2019);
     assert(constrained_vhdl_enumerations.ok());
     const auto constrained_enumeration_design =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             constrained_vhdl_enumerations.design,
             "vhdl:work.constrained_enumeration_execution(rtl)");
     if (!constrained_enumeration_design.ok()) {
       for (const auto& diagnostic :
            constrained_enumeration_design.diagnostics) {
         std::cerr << diagnostic.code << ": "
-                  << diagnostic.message << '\n';
+                  << diagnostic.message << " at "
+                  << diagnostic.span.begin.line << '\n';
       }
     }
     assert(constrained_enumeration_design.ok());
@@ -1104,7 +1106,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_constrained_vhdl_enumerations.ok());
     const auto rejected_constrained_vhdl_enumerations =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_constrained_vhdl_enumerations.design,
             "vhdl:work.invalid_constrained_enumeration_execution(rtl)");
     assert(
@@ -1182,7 +1184,7 @@ end architecture;
     }
     assert(invalid_constrained_enumeration_values.ok());
     const auto rejected_constrained_enumeration_store =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_constrained_enumeration_values.design,
             "vhdl:work.invalid_constrained_store(rtl)");
     assert(
@@ -1191,7 +1193,7 @@ end architecture;
             rejected_constrained_enumeration_store,
             "FSIM-ELAB-VHENUMRANGE-004"));
     const auto rejected_constrained_enumeration_generic =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_constrained_enumeration_values.design,
             "vhdl:work.invalid_constrained_generic_parent(rtl)");
     assert(
@@ -1200,7 +1202,7 @@ end architecture;
             rejected_constrained_enumeration_generic,
             "FSIM-ELAB-GENERIC-008"));
     const auto rejected_constrained_enumeration_default =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_constrained_enumeration_values.design,
             "vhdl:work.invalid_constrained_generic_default(rtl)");
     assert(
@@ -1320,7 +1322,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(enumeration_boundary_vhdl.ok());
     const auto rejected_native_enumeration_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             enumeration_boundary_vhdl.design,
             "vhdl:work.enumeration_native_parent(rtl)");
     assert(
@@ -1329,7 +1331,7 @@ end architecture;
             rejected_native_enumeration_boundary,
             "FSIM-ELAB-BIND-053"));
     const auto rejected_range_enumeration_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             enumeration_boundary_vhdl.design,
             "vhdl:work.enumeration_range_parent(rtl)");
     assert(
@@ -1338,7 +1340,7 @@ end architecture;
             rejected_range_enumeration_boundary,
             "FSIM-ELAB-BIND-054"));
     const auto rejected_output_range_enumeration_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             enumeration_boundary_vhdl.design,
             "vhdl:work.enumeration_output_range_parent(rtl)");
     assert(
@@ -1347,12 +1349,12 @@ end architecture;
             rejected_output_range_enumeration_boundary,
             "FSIM-ELAB-BIND-054"));
     const auto accepted_inout_enumeration_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             enumeration_boundary_vhdl.design,
             "vhdl:work.enumeration_inout_parent(rtl)");
     assert(accepted_inout_enumeration_boundary.ok());
     const auto rejected_inout_range_enumeration_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             enumeration_boundary_vhdl.design,
             "vhdl:work.enumeration_inout_range_parent(rtl)");
     assert(
@@ -1383,7 +1385,7 @@ endmodule
                 "sv:work.foreign_enumeration_child",
                 std::nullopt}};
     const auto rejected_mixed_enumeration_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             mixed_enumeration_boundary,
             "vhdl:work.enumeration_mixed_parent(rtl)",
             enumeration_boundary_binding);
@@ -1412,7 +1414,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_shift.ok());
     const auto rejected_vhdl_shift =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_shift.design,
             "vhdl:work.invalid_vhdl_shift(rtl)");
     assert(!rejected_vhdl_shift.ok());
@@ -1438,7 +1440,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_abs.ok());
     const auto rejected_vhdl_abs =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_abs.design,
             "vhdl:work.invalid_vhdl_abs(rtl)");
     assert(!rejected_vhdl_abs.ok());
@@ -1461,7 +1463,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(generic_integer_constraint.ok());
     const auto elaborated_integer_constraint =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generic_integer_constraint.design,
             "vhdl:work.generic_integer_constraint(rtl)");
     assert(elaborated_integer_constraint.ok());
@@ -1496,7 +1498,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_integer_constraints.ok());
     const auto rejected_integer_constraints =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_integer_constraints.design,
             "vhdl:work.invalid_integer_constraints(rtl)");
     assert(!rejected_integer_constraints.ok());
@@ -1529,7 +1531,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(mixed_vhdl_arithmetic.ok());
     const auto rejected_mixed_vhdl_arithmetic =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             mixed_vhdl_arithmetic.design,
             "vhdl:work.mixed_vhdl_arithmetic(rtl)");
     assert(!rejected_mixed_vhdl_arithmetic.ok());

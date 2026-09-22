@@ -118,14 +118,15 @@ void verify_package(
         [&](const fsim::app::CheckedSource& source) {
             return source.content_digest == body_hash;
         }));
+    const auto& hir = checked->vhdl_hir;
     const auto declaration = std::ranges::find_if(
-        checked->parsed.units,
-        [&](const fsim::frontend::DesignUnit& unit) {
-            return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+        hir.units(),
+        [&](const fsim::semantic::vhdl::Unit& unit) {
+            return unit.kind == fsim::semantic::vhdl::UnitKind::package
                 && unit.library == "ieee" && unit.name == package
                 && unit.primary_name.empty();
         });
-    assert(declaration != checked->parsed.units.end());
+    assert(declaration != hir.units().end());
     assert(
         declaration->standard_package_revision
         == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");
@@ -133,13 +134,23 @@ void verify_package(
                declaration->standard_package_declarations, "resize")
         != declaration->standard_package_declarations.end());
     const auto entity = std::ranges::find_if(
-        checked->parsed.units,
-        [](const fsim::frontend::DesignUnit& unit) {
-            return unit.kind == fsim::frontend::UnitKind::VhdlEntity;
+        hir.units(),
+        [](const fsim::semantic::vhdl::Unit& unit) {
+            return unit.kind == fsim::semantic::vhdl::UnitKind::entity;
         });
-    assert(entity != checked->parsed.units.end());
-    assert(!entity->ports.empty());
-    assert(entity->ports.front().type.domain == domain);
+    assert(entity != hir.units().end());
+    const auto port_id = std::ranges::find_if(
+        entity->declarations, [&](const auto id) {
+            return hir.declarations()[id.value()].form
+                == fsim::semantic::vhdl::DeclarationForm::port;
+        });
+    assert(port_id != entity->declarations.end());
+    const auto& port = hir.declarations()[port_id->value()];
+    assert(port.subtype);
+    const auto expected_domain = domain == fsim::frontend::ValueDomain::Bit2
+        ? fsim::semantic::vhdl::ValueDomain::bit2
+        : fsim::semantic::vhdl::ValueDomain::logic9;
+    assert(port.subtype->domain == expected_domain);
 }
 
 void verify_runs(

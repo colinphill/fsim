@@ -170,3 +170,10 @@ rows and 146 distinct runtime owners. VHDL-2019 coverage and mixed-language
 artifact closure produce 507 interpreter, 424 LLVM/native, 283 cache, 114
 debugger, 138 VCD/trace, 504 scheduling, and 115 failure/diagnostic rows. The
 governed corpus union remains 36 registered CTests.
+
+Batch 188A retains 1,296 required rows and advances the reviewed runtime
+ownership to 147 distinct files after the AST-free HIR lowering cutover.
+Updated HIR-native execution and cache owners produce 508 interpreter, 426
+LLVM/native, 285 cache, 113 debugger, 136 VCD/trace, 504 scheduling, and 115
+failure/diagnostic rows. The governed corpus union remains 36 registered
+CTests.

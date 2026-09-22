@@ -71,6 +71,7 @@ void test_simir_update_coalescing();
 void test_resolved_driver_slots();
 void test_simir_expressions_and_edges();
 void test_simir_noninitializing_static_process();
+void test_simir_initial_static_wait_activation_order();
 void test_simir_static_sensitivity_cohort();
 void test_simir_wide_truth_and_comparison();
 void test_simir_wildcard_case_matching();

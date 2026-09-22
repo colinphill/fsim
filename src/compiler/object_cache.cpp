@@ -35,6 +35,8 @@ namespace {
 constexpr std::string_view kMagic = "FSIM-OBJECT-CACHE-V1\n";
 constexpr std::uintmax_t kMaximumCacheEntryBytes =
     256U * 1024U * 1024U;
+constexpr std::uintmax_t kCacheEnvelopeBytes
+    = kMagic.size() + 64U + 1U;
 std::atomic_uint64_t temp_counter{};
 std::atomic_uint64_t lock_counter{};
 
@@ -523,19 +525,19 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
         return std::nullopt;
     }
 
-    const auto header_size = kMagic.size() + 64 + 1;
+    const auto header_size = static_cast<std::size_t>(kCacheEnvelopeBytes);
     if (encoded->size() < header_size) {
         error = std::make_error_code(std::errc::illegal_byte_sequence);
         return std::nullopt;
     }
     const auto* raw = reinterpret_cast<const char*>(encoded->data());
     if (std::string_view{raw, kMagic.size()} != kMagic
-        || raw[kMagic.size() + 64] != '\n') {
+        || raw[kMagic.size() + 64U] != '\n') {
         error = std::make_error_code(std::errc::illegal_byte_sequence);
         return std::nullopt;
     }
 
-    const std::string_view expected{raw + kMagic.size(), 64};
+    const std::string_view expected { raw + kMagic.size(), 64U };
     const std::span<const std::byte> payload{
         encoded->data() + static_cast<std::ptrdiff_t>(header_size),
         encoded->size() - header_size};
@@ -559,6 +561,10 @@ bool ObjectCache::store(
     const auto path = path_for(key);
     if (path.empty()) {
         error = std::make_error_code(std::errc::invalid_argument);
+        return false;
+    }
+    if (!object_cache_payload_fits(payload.size())) {
+        error = std::make_error_code(std::errc::file_too_large);
         return false;
     }
     std::filesystem::create_directories(path.parent_path(), error);
@@ -611,6 +617,16 @@ bool ObjectCache::store(
         return false;
     }
     return true;
+}
+
+std::uintmax_t maximum_object_cache_payload_bytes() noexcept
+{
+    return kMaximumCacheEntryBytes - kCacheEnvelopeBytes;
+}
+
+bool object_cache_payload_fits(const std::uintmax_t payload_bytes) noexcept
+{
+    return payload_bytes <= maximum_object_cache_payload_bytes();
 }
 
 bool ObjectCache::erase(const std::string_view key, std::error_code& error) const {

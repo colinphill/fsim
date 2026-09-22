@@ -34,7 +34,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(parsed.ok());
-  const auto result = fsim::elaboration::elaborate(
+  const auto result = compile_and_elaborate(
       parsed.design, "vhdl:work.textio_test(rtl)");
   if (!result.ok()) {
     for (const auto& diagnostic : result.diagnostics) {
@@ -88,7 +88,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(invalid.ok());
-  const auto rejected = fsim::elaboration::elaborate(
+  const auto rejected = compile_and_elaborate(
       invalid.design, "vhdl:work.invalid_textio(rtl)");
   assert(!rejected.ok());
   for (const auto* code : {

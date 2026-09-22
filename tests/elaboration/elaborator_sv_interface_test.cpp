@@ -53,7 +53,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(virtual_interfaces.ok());
-  const auto virtual_result = fsim::elaboration::elaborate(
+  const auto virtual_result = compile_and_elaborate(
       virtual_interfaces.design, "sv:work.virtual_interface_top");
   if (!virtual_result.ok()) {
     for (const auto& diagnostic : virtual_result.diagnostics) {
@@ -183,7 +183,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(invalid_virtual.ok());
-  const auto invalid_virtual_result = fsim::elaboration::elaborate(
+  const auto invalid_virtual_result = compile_and_elaborate(
       invalid_virtual.design, "sv:work.invalid_virtual_top");
   assert(!invalid_virtual_result.ok());
   for (const auto code : {
@@ -227,7 +227,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(invalid.ok());
-  const auto result = fsim::elaboration::elaborate(
+  const auto result = compile_and_elaborate(
       invalid.design, "sv:work.invalid_interfaces_top");
   assert(!result.ok());
   for (const auto code : {
@@ -270,7 +270,7 @@ endmodule
   missing_callable.name = "missing_callable";
   members.push_back(std::move(missing_callable));
   members.push_back(members[1]);
-  const auto malformed_result = fsim::elaboration::elaborate(
+  const auto malformed_result = compile_and_elaborate(
       malformed.design, "sv:work.malformed_interface_top");
   assert(!malformed_result.ok());
   for (const auto code : {
@@ -311,7 +311,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(scalar_callable.ok());
-  const auto scalar_callable_result = fsim::elaboration::elaborate(
+  const auto scalar_callable_result = compile_and_elaborate(
       scalar_callable.design, "sv:work.scalar_service_top");
   assert(scalar_callable_result.ok());
 
@@ -348,7 +348,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(wide_interface.ok());
-  const auto wide_interface_result = fsim::elaboration::elaborate(
+  const auto wide_interface_result = compile_and_elaborate(
       wide_interface.design, "sv:work.wide_interface_top");
   if (!wide_interface_result.ok()) {
     for (const auto& diagnostic : wide_interface_result.diagnostics) {
@@ -401,7 +401,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(mismatched_scalar_callable.ok());
-  const auto mismatched_scalar_result = fsim::elaboration::elaborate(
+  const auto mismatched_scalar_result = compile_and_elaborate(
       mismatched_scalar_callable.design, "sv:work.scalar_mismatch_top");
   assert(!mismatched_scalar_result.ok());
   assert(has_diagnostic(
@@ -448,7 +448,7 @@ endmodule
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed.ok());
 
-  const auto host = fsim::elaboration::elaborate(
+  const auto host = compile_and_elaborate(
       parsed.design, "sv:work.program_host");
   if (!host.ok()) {
     for (const auto& diagnostic : host.diagnostics) {
@@ -598,7 +598,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(clocked.ok());
-  const auto clocked_host = fsim::elaboration::elaborate(
+  const auto clocked_host = compile_and_elaborate(
       clocked.design, "sv:work.clocked_host");
   if (!clocked_host.ok()) {
     for (const auto& diagnostic : clocked_host.diagnostics) {
@@ -661,7 +661,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(invalid_clocking.ok());
-  const auto invalid_result = fsim::elaboration::elaborate(
+  const auto invalid_result = compile_and_elaborate(
       invalid_clocking.design, "sv:work.invalid_host");
   assert(!invalid_result.ok());
   assert(std::ranges::any_of(
@@ -675,7 +675,7 @@ endmodule
         return diagnostic.code == "FSIM-ELAB-CLOCK-005";
       }));
 
-  const auto qualified_top = fsim::elaboration::elaborate(
+  const auto qualified_top = compile_and_elaborate(
       parsed.design, "sv:work.standalone_program");
   assert(qualified_top.ok());
   assert(
@@ -685,7 +685,7 @@ endmodule
   assert(qualified_top.design->find_signal(
       "standalone_program.retained"));
 
-  const auto simple_top = fsim::elaboration::elaborate(
+  const auto simple_top = compile_and_elaborate(
       parsed.design, "standalone_program");
   assert(simple_top.ok());
   assert(
@@ -693,7 +693,7 @@ endmodule
       && simple_top.design->specializations().front().unit
           == "sv:work.program(standalone_program)");
 
-  const auto wrong_language_top = fsim::elaboration::elaborate(
+  const auto wrong_language_top = compile_and_elaborate(
       parsed.design, "verilog:work.standalone_program");
   assert(!wrong_language_top.ok());
 }

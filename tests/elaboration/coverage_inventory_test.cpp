@@ -2,6 +2,7 @@
 #include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/parser.hpp"
+#include "elaborator_test_support.hpp"
 
 #include <array>
 #include <cassert>
@@ -285,7 +286,9 @@ void test_elaborated_design_attachment()
     const auto parsed = fsim::frontend::parse_text(
         "design.sv", kSource, Language::SystemVerilog2017);
     assert(parsed.ok());
-    auto elaborated = fsim::elaboration::elaborate(parsed.design, "top");
+    auto elaborated
+        = fsim::tests::elaboration::compile_and_elaborate(
+            parsed.design, "top");
     assert(elaborated.ok());
     auto design = std::move(*elaborated.design);
     assert(design.specializations().size() == 3U);

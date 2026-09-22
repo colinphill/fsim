@@ -1,1731 +1,1556 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "application_internal.hpp"
-
-#include <functional>
-#include <set>
+#include "application_systemverilog_hir_internal.hpp"
 
 namespace fsim::app::application_detail {
-namespace {
-
 namespace sv = semantic::sv;
+namespace systemverilog_hir_detail {
 
-[[nodiscard]] sv::UnitKind unit_kind(
-    const frontend::UnitKind kind) noexcept {
-  switch (kind) {
-    case frontend::UnitKind::SystemVerilogPackage:
-      return sv::UnitKind::package;
-    case frontend::UnitKind::SystemVerilogInterface:
-      return sv::UnitKind::interface;
-    case frontend::UnitKind::SystemVerilogProgram:
-      return sv::UnitKind::program;
-    default:
-      return sv::UnitKind::module;
-  }
-}
+    namespace sv = semantic::sv;
 
-[[nodiscard]] sv::Direction direction(
-    const frontend::PortDirection value) noexcept {
-  switch (value) {
-    case frontend::PortDirection::Input:
-      return sv::Direction::input;
-    case frontend::PortDirection::Output:
-      return sv::Direction::output;
-    case frontend::PortDirection::Inout:
-      return sv::Direction::inout;
-    case frontend::PortDirection::Ref:
-      return sv::Direction::ref;
-    default:
-      return sv::Direction::unknown;
-  }
-}
-
-[[nodiscard]] sv::ConcurrentAssertionKind concurrent_assertion_kind(
-    const frontend::SystemVerilogConcurrentAssertionKind kind) noexcept {
-  switch (kind) {
-    case frontend::SystemVerilogConcurrentAssertionKind::Assume:
-      return sv::ConcurrentAssertionKind::assumption;
-    case frontend::SystemVerilogConcurrentAssertionKind::Cover:
-      return sv::ConcurrentAssertionKind::cover;
-    case frontend::SystemVerilogConcurrentAssertionKind::Restrict:
-      return sv::ConcurrentAssertionKind::restriction;
-    default:
-      return sv::ConcurrentAssertionKind::assertion;
-  }
-}
-
-[[nodiscard]] sv::AssertionRegion assertion_region(
-    const frontend::SystemVerilogAssertionRegion region) noexcept {
-  switch (region) {
-    case frontend::SystemVerilogAssertionRegion::Observed:
-      return sv::AssertionRegion::observed;
-    case frontend::SystemVerilogAssertionRegion::Reactive:
-      return sv::AssertionRegion::reactive;
-    default:
-      return sv::AssertionRegion::preponed;
-  }
-}
-
-[[nodiscard]] sv::Lifetime lifetime(
-    const bool automatic,
-    const bool explicit_lifetime) noexcept {
-  if (automatic) {
-    return sv::Lifetime::automatic;
-  }
-  return explicit_lifetime
-      ? sv::Lifetime::static_lifetime
-      : sv::Lifetime::implicit;
-}
-
-class SystemVerilogHirBuilder final {
- public:
-  SystemVerilogHirBuilder(
-      semantic::Model& model,
-      sv::Hir& hir,
-      const std::span<const frontend::SystemVerilogClassSpecialization>
-          class_specializations)
-      : model_(model), hir_(hir),
-        class_specializations_(class_specializations) {}
-
-  void add_design(const frontend::ParsedDesign& parsed) {
-    for (std::size_t index = 0; index < parsed.units.size(); ++index) {
-      const auto& unit = parsed.units[index];
-      if (unit.language != frontend::Language::Vhdl2008) {
-        add_unit(unit, semantic::UnitId::from_index(
-                           static_cast<std::uint32_t>(index)));
-      }
+    [[nodiscard]] std::string nested_alternative_discriminator(
+        const std::string_view parent, const std::string_view child)
+    {
+        if (parent.empty())
+            return std::string { child };
+        return std::string { parent } + "/" + std::string { child };
     }
-    for (const auto& unit : parsed.units) {
-      if (unit.language == frontend::Language::SystemVerilog2017) {
-        add_classes(unit.systemverilog_classes);
-      }
-    }
-    add_classes(parsed.systemverilog_classes);
-    compose_constraints();
-  }
 
- private:
-  struct Pending {
-    std::string_view physical_source;
-    std::size_t offset{};
-    std::size_t category{};
-    std::size_t index{};
-    std::function<semantic::DeclarationId()> build;
-  };
-
-  [[nodiscard]] semantic::SourceSpanId source(
-      const frontend::SourceSpan& span) {
-    return intern_semantic_span(model_, span);
-  }
-
-  [[nodiscard]] semantic::OriginId origin(
-      const semantic::SourceSpanId span,
-      const semantic::OriginId parent,
-      const std::string_view detail) {
-    return model_.add_origin(
-        semantic::OriginKind::parsed, span, parent, std::string{detail});
-  }
-
-  [[nodiscard]] semantic::UnitId scope_unit(
-      const semantic::ScopeId scope) const {
-    return model_.scopes()[scope.value()].unit;
-  }
-
-  [[nodiscard]] semantic::ScopeId nested_scope(
-      const semantic::ScopeId parent_scope,
-      const std::string_view name,
-      const semantic::SourceSpanId span,
-      const semantic::OriginId scope_origin) {
-    return model_.add_scope(
-        scope_unit(parent_scope),
-        parent_scope,
-        std::string{name},
-        span,
-        scope_origin);
-  }
-
-  [[nodiscard]] sv::Name name(
-      const std::string_view spelling,
-      const frontend::SourceSpan& span,
-      const semantic::ScopeId scope) {
-    sv::Name result{std::string{spelling}, source(span), std::nullopt, {}};
-    auto visible_scope = std::optional<semantic::ScopeId>{scope};
-    while (visible_scope) {
-      for (const auto& declaration : hir_.declarations()) {
-        if (declaration.scope == *visible_scope
-            && declaration.name == spelling) {
-          result.overloads.push_back(declaration.id);
+    [[nodiscard]] sv::UnitKind unit_kind(
+        const frontend::UnitKind kind) noexcept
+    {
+        switch (kind) {
+        case frontend::UnitKind::SystemVerilogPackage:
+            return sv::UnitKind::package;
+        case frontend::UnitKind::SystemVerilogInterface:
+            return sv::UnitKind::interface;
+        case frontend::UnitKind::SystemVerilogProgram:
+            return sv::UnitKind::program;
+        case frontend::UnitKind::SystemVerilogConfiguration:
+            return sv::UnitKind::configuration;
+        case frontend::UnitKind::SystemVerilogBind:
+            return sv::UnitKind::bind;
+        default:
+            return sv::UnitKind::module;
         }
-      }
-      if (!result.overloads.empty()) {
-        break;
-      }
-      visible_scope = model_.scopes()[visible_scope->value()].parent;
     }
-    if (result.overloads.size() == 1) {
-      result.selected = result.overloads.front();
-    }
-    return result;
-  }
 
-  [[nodiscard]] std::optional<semantic::ExpressionId> expression(
-      const frontend::Expression& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    if (input.kind == frontend::ExpressionKind::Invalid) {
-      return std::nullopt;
-    }
-    const auto span = source(input.span);
-    return model_.add_expression_identity(
-        scope, span, origin(span, parent, "SystemVerilog expression"));
-  }
-
-  [[nodiscard]] semantic::TypeId find_type(
-      const semantic::ScopeId scope,
-      const std::string_view type_name,
-      const std::optional<semantic::SourceSpanId> exact_source = std::nullopt)
-      const noexcept {
-    auto visible_scope = std::optional<semantic::ScopeId>{scope};
-    while (visible_scope) {
-      for (const auto& type : model_.types()) {
-        if (type.scope == *visible_scope && type.name == type_name
-            && (!exact_source || type.source == *exact_source)) {
-          return type.id;
+    [[nodiscard]] sv::Direction direction(
+        const frontend::PortDirection value) noexcept
+    {
+        switch (value) {
+        case frontend::PortDirection::Input:
+            return sv::Direction::input;
+        case frontend::PortDirection::Output:
+            return sv::Direction::output;
+        case frontend::PortDirection::Inout:
+            return sv::Direction::inout;
+        case frontend::PortDirection::Ref:
+            return sv::Direction::ref;
+        default:
+            return sv::Direction::unknown;
         }
-      }
-      if (exact_source) {
-        break;
-      }
-      visible_scope = model_.scopes()[visible_scope->value()].parent;
     }
-    return {};
-  }
 
-  [[nodiscard]] semantic::ValueId find_value(
-      const semantic::ScopeId scope,
-      const std::string_view value_name,
-      const semantic::SourceSpanId exact_source) const noexcept {
-    for (const auto& value : model_.values()) {
-      if (value.scope == scope && value.source == exact_source
-          && value.name == value_name) {
-        return value.id;
-      }
-    }
-    return {};
-  }
-
-  [[nodiscard]] sv::PackedRange packed_range(
-      const frontend::PackedRange& range,
-      const semantic::SourceSpanId span) const {
-    return {
-        range.left,
-        range.right,
-        std::nullopt,
-        std::nullopt,
-        range.descending,
-        span};
-  }
-
-  [[nodiscard]] static sv::ClassVisibility class_visibility(
-      const frontend::SystemVerilogClassVisibility visibility) noexcept {
-    switch (visibility) {
-      case frontend::SystemVerilogClassVisibility::Public:
-        return sv::ClassVisibility::public_access;
-      case frontend::SystemVerilogClassVisibility::Protected:
-        return sv::ClassVisibility::protected_access;
-      case frontend::SystemVerilogClassVisibility::Local:
-        return sv::ClassVisibility::local_access;
-    }
-    return sv::ClassVisibility::public_access;
-  }
-
-  [[nodiscard]] static sv::ConstraintExpressionKind constraint_kind(
-      const frontend::Expression& input) noexcept {
-    using FrontendKind = frontend::ExpressionKind;
-    using HirKind = sv::ConstraintExpressionKind;
-    switch (input.kind) {
-      case FrontendKind::Invalid: return HirKind::invalid;
-      case FrontendKind::Identifier: return HirKind::name;
-      case FrontendKind::IntegerLiteral: return HirKind::integer_literal;
-      case FrontendKind::BooleanLiteral: return HirKind::boolean_literal;
-      case FrontendKind::LogicLiteral: return HirKind::logic_literal;
-      case FrontendKind::StringLiteral: return HirKind::string_literal;
-      case FrontendKind::Unary: return HirKind::unary;
-      case FrontendKind::Update: return HirKind::unary;
-      case FrontendKind::Binary: return HirKind::binary;
-      case FrontendKind::Index: return HirKind::index;
-      case FrontendKind::Slice: return HirKind::slice;
-      case FrontendKind::Aggregate: return HirKind::assignment_pattern;
-      case FrontendKind::Concatenation: return HirKind::concatenation;
-      case FrontendKind::Replication: return HirKind::replication;
-      case FrontendKind::DefaultChoice: return HirKind::assignment_pattern;
-      case FrontendKind::Conditional: return HirKind::conditional;
-      case FrontendKind::Call:
-        if (input.text == "?:") return HirKind::conditional;
-        if (input.text == "inside") return HirKind::inside_set;
-        if (input.text == "@inside-range") return HirKind::inside_range;
-        if (input.text == "dist") return HirKind::distribution;
-        if (input.text == "@dist-:=" || input.text == "@dist-:/") {
-          return HirKind::distribution_item;
+    [[nodiscard]] sv::EdgeKind edge_kind(
+        const frontend::EdgeKind value) noexcept
+    {
+        switch (value) {
+        case frontend::EdgeKind::Positive:
+            return sv::EdgeKind::positive;
+        case frontend::EdgeKind::Negative:
+            return sv::EdgeKind::negative;
+        default:
+            return sv::EdgeKind::any;
         }
-        if (input.text == "soft") return HirKind::soft;
-        if (input.text == "@constraint-block") {
-          return HirKind::constraint_block;
+    }
+
+    [[nodiscard]] sv::ConcurrentAssertionKind concurrent_assertion_kind(
+        const frontend::SystemVerilogConcurrentAssertionKind kind) noexcept
+    {
+        switch (kind) {
+        case frontend::SystemVerilogConcurrentAssertionKind::Assume:
+            return sv::ConcurrentAssertionKind::assumption;
+        case frontend::SystemVerilogConcurrentAssertionKind::Cover:
+            return sv::ConcurrentAssertionKind::cover;
+        case frontend::SystemVerilogConcurrentAssertionKind::Restrict:
+            return sv::ConcurrentAssertionKind::restriction;
+        default:
+            return sv::ConcurrentAssertionKind::assertion;
         }
-        if (input.text == "@constraint-implies") {
-          return HirKind::implication;
+    }
+
+    [[nodiscard]] sv::AssertionRegion assertion_region(
+        const frontend::SystemVerilogAssertionRegion region) noexcept
+    {
+        switch (region) {
+        case frontend::SystemVerilogAssertionRegion::Observed:
+            return sv::AssertionRegion::observed;
+        case frontend::SystemVerilogAssertionRegion::Reactive:
+            return sv::AssertionRegion::reactive;
+        default:
+            return sv::AssertionRegion::preponed;
         }
-        if (input.text == "@constraint-if") {
-          return HirKind::conditional_constraint;
+    }
+
+    [[nodiscard]] sv::Lifetime lifetime(
+        const bool automatic,
+        const bool explicit_lifetime) noexcept
+    {
+        if (automatic) {
+            return sv::Lifetime::automatic;
         }
-        if (input.text == "@constraint-foreach") {
-          return HirKind::foreach_constraint;
+        return explicit_lifetime
+            ? sv::Lifetime::static_lifetime
+            : sv::Lifetime::implicit;
+    }
+
+    [[nodiscard]] semantic::TypeId find_systemverilog_hir_type(
+        const semantic::Model& model,
+        const sv::Hir& hir,
+        const semantic::ScopeId scope,
+        const std::string_view spelling) noexcept
+    {
+        const auto parent_scope = [&](const semantic::ScopeId candidate)
+            -> std::optional<semantic::ScopeId> {
+            if (!candidate.valid()
+                || candidate.value() >= model.scopes().size()) {
+                return std::nullopt;
+            }
+            return model.scopes()[candidate.value()].parent;
+        };
+        auto visible_scope = std::optional { scope };
+        while (visible_scope) {
+            const auto found = std::ranges::find_if(
+                model.types(), [&](const semantic::Type& type) {
+                    return type.scope == *visible_scope
+                        && type.name == spelling;
+                });
+            if (found != model.types().end()) {
+                return found->id;
+            }
+            visible_scope = parent_scope(*visible_scope);
         }
-        if (input.text == "@solve-before") return HirKind::solve_before;
-        if (input.text == "@solve-list") return HirKind::solve_list;
-        if (input.text == "@constraint-unique") {
-          return HirKind::unique_constraint;
+
+        const auto owner_id = scope.valid()
+                && scope.value() < model.scopes().size()
+            ? std::optional { model.scopes()[scope.value()].unit }
+            : std::nullopt;
+        if (!owner_id || owner_id->value() >= model.units().size()) {
+            return { };
         }
-        return HirKind::call;
-    }
-    return HirKind::invalid;
-  }
+        const auto& semantic_owner = model.units()[owner_id->value()];
+        const auto owner = std::ranges::find(
+            hir.units(), *owner_id, &sv::Unit::id);
 
-  [[nodiscard]] sv::ConstraintExpression constraint_expression(
-      const frontend::Expression& input) {
-    sv::ConstraintExpression output;
-    output.kind = constraint_kind(input);
-    output.text = input.text;
-    output.source = source(input.span);
-    for (const auto& operand : input.operands) {
-      output.operands.push_back(constraint_expression(operand));
-    }
-    return output;
-  }
-
-  [[nodiscard]] sv::TypeReference class_property_type(
-      const frontend::Type& input,
-      const semantic::SourceSpanId type_source) {
-    sv::TypeReference output;
-    const auto spelling = input.named_type.empty()
-        ? input.spelling
-        : input.named_type;
-    output.target = {{}, type_source, spelling};
-    output.signed_value = input.is_signed;
-    output.executable_width = input.width();
-    output.four_state = input.domain == frontend::ValueDomain::Logic4
-        || input.domain == frontend::ValueDomain::Integer;
-    if (!input.systemverilog_class_declaration.empty()) {
-      output.value_form = sv::TypeForm::class_handle;
-      output.class_identity = input.systemverilog_class_declaration;
-    } else if (input.domain == frontend::ValueDomain::String) {
-      output.value_form = sv::TypeForm::string;
-    } else if (input.systemverilog_container) {
-      switch (input.systemverilog_container->kind) {
-        case frontend::SystemVerilogContainerKind::DynamicArray:
-          output.container_form = sv::TypeForm::dynamic_array;
-          break;
-        case frontend::SystemVerilogContainerKind::Queue:
-          output.container_form = sv::TypeForm::queue;
-          break;
-        case frontend::SystemVerilogContainerKind::AssociativeArray:
-          output.container_form = sv::TypeForm::associative_array;
-          break;
-        case frontend::SystemVerilogContainerKind::StaticArray:
-          output.container_form = sv::TypeForm::static_array;
-          break;
-      }
-    } else if (!input.enumeration_literals.empty()) {
-      output.value_form = sv::TypeForm::enumeration;
-    } else {
-      output.value_form = sv::TypeForm::packed_integral;
-    }
-    if (input.packed_range) {
-      output.packed_range = packed_range(*input.packed_range, type_source);
-    }
-    return output;
-  }
-
-  [[nodiscard]] static bool owner_matches(
-      const std::string_view owner,
-      const std::string_view selected) noexcept {
-    return owner == selected
-        || (owner.size() > selected.size() + 2U
-            && owner.ends_with(selected)
-            && owner[owner.size() - selected.size() - 1U] == ':');
-  }
-
-  [[nodiscard]] bool specializes_or_derives(
-      const frontend::SystemVerilogClassSpecialization& specialization,
-      const std::string_view declaration_identity) const {
-    const auto* current = &specialization;
-    while (current != nullptr) {
-      if (current->declaration_identity == declaration_identity) return true;
-      if (current->base_specialization_identity.empty()) return false;
-      const auto base = std::ranges::find(
-          class_specializations_, current->base_specialization_identity,
-          &frontend::SystemVerilogClassSpecialization::specialization_identity);
-      current = base == class_specializations_.end() ? nullptr : &*base;
-    }
-    return false;
-  }
-
-  [[nodiscard]] std::optional<sv::ConstraintBinding> property_binding(
-      const frontend::SystemVerilogClassDeclaration& declaration,
-      const frontend::SystemVerilogClassSpecialization& specialization,
-      std::string spelling,
-      const semantic::SourceSpanId binding_source) {
-    enum class Selection { ordinary, this_object, super_object, qualified };
-    auto selection = Selection::ordinary;
-    std::string owner;
-    if (spelling.starts_with("this.")) {
-      spelling.erase(0, 5U);
-      selection = Selection::this_object;
-    } else if (spelling.starts_with("super.")) {
-      spelling.erase(0, 6U);
-      selection = Selection::super_object;
-    } else if (const auto separator = spelling.rfind("::");
-               separator != std::string::npos) {
-      owner = spelling.substr(0, separator);
-      spelling.erase(0, separator + 2U);
-      selection = Selection::qualified;
-    }
-    const auto found = std::ranges::find_if(
-        specialization.properties.rbegin(),
-        specialization.properties.rend(),
-        [&](const frontend::SystemVerilogClassPropertyLayout& property) {
-          if (property.name != spelling) return false;
-          if (selection == Selection::super_object) {
-            return property.owner_identity != declaration.canonical_identity;
-          }
-          if (selection == Selection::qualified) {
-            return owner_matches(property.owner_identity, owner);
-          }
-          return true;
-        });
-    if (found == specialization.properties.rend()) return std::nullopt;
-    sv::ConstraintBinding binding;
-    binding.kind = sv::ConstraintReferenceKind::property;
-    binding.specialization_identity =
-        specialization.specialization_identity;
-    binding.canonical_identity = found->owner_identity + "::" + found->name;
-    binding.type = class_property_type(found->type, binding_source);
-    return binding;
-  }
-
-  [[nodiscard]] std::optional<sv::ConstraintBinding> parameter_binding(
-      const frontend::SystemVerilogClassDeclaration& declaration,
-      const frontend::SystemVerilogClassSpecialization& specialization,
-      const std::string_view spelling,
-      const semantic::SourceSpanId binding_source) {
-    const auto value = std::ranges::find(
-        specialization.parameter_values,
-        spelling,
-        &std::pair<std::string, std::string>::first);
-    if (value == specialization.parameter_values.end()) return std::nullopt;
-    const auto formal = std::ranges::find(
-        declaration.parameters,
-        spelling,
-        &frontend::ParameterDeclaration::name);
-    if (formal == declaration.parameters.end()) return std::nullopt;
-    sv::ConstraintBinding binding;
-    binding.kind = sv::ConstraintReferenceKind::parameter;
-    binding.specialization_identity =
-        specialization.specialization_identity;
-    binding.canonical_identity = declaration.canonical_identity
-        + "::" + std::string{spelling};
-    binding.type = class_property_type(formal->type, binding_source);
-    binding.constant_value = value->second;
-    return binding;
-  }
-
-  [[nodiscard]] std::optional<sv::ConstraintBinding> method_binding(
-      const frontend::SystemVerilogClassSpecialization& specialization,
-      std::string spelling,
-      const semantic::SourceSpanId binding_source) {
-    if (spelling.starts_with('.')) spelling.erase(0, 1U);
-    if (const auto separator = spelling.rfind("::");
-        separator != std::string::npos) {
-      spelling.erase(0, separator + 2U);
-    }
-    const auto found = std::ranges::find(
-        specialization.methods,
-        spelling,
-        &frontend::SystemVerilogClassMethodProfile::name);
-    if (found == specialization.methods.end()) return std::nullopt;
-    sv::ConstraintBinding binding;
-    binding.kind = sv::ConstraintReferenceKind::method;
-    binding.specialization_identity =
-        specialization.specialization_identity;
-    binding.canonical_identity = found->canonical_identity;
-    binding.type = class_property_type(found->return_type, binding_source);
-    return binding;
-  }
-
-  void resolve_constraint_expression(
-      sv::ConstraintExpression& expression,
-      const frontend::SystemVerilogClassDeclaration& declaration,
-      const std::optional<std::string_view> enclosing_foreach =
-          std::nullopt) {
-    auto foreach_iterator = enclosing_foreach;
-    if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
-        && expression.operands.size() == 2U
-        && expression.operands[0].kind
-            == sv::ConstraintExpressionKind::index
-        && expression.operands[0].operands.size() == 2U
-        && expression.operands[0].operands[1].kind
-            == sv::ConstraintExpressionKind::name) {
-      foreach_iterator = expression.operands[0].operands[1].text;
-    }
-    for (auto& operand : expression.operands) {
-      resolve_constraint_expression(operand, declaration, foreach_iterator);
-    }
-    for (const auto& specialization : class_specializations_) {
-      if (!specializes_or_derives(
-              specialization, declaration.canonical_identity)) {
-        continue;
-      }
-      std::optional<sv::ConstraintBinding> binding;
-      if (expression.kind == sv::ConstraintExpressionKind::name) {
-        if (foreach_iterator && expression.text == *foreach_iterator) {
-          sv::ConstraintBinding local;
-          local.kind = sv::ConstraintReferenceKind::local_variable;
-          local.specialization_identity =
-              specialization.specialization_identity;
-          local.canonical_identity = declaration.canonical_identity
-              + "::$foreach::" + expression.text;
-          local.type.target = {{}, expression.source, "int"};
-          local.type.value_form = sv::TypeForm::packed_integral;
-          local.type.signed_value = true;
-          local.type.executable_width = 32;
-          local.type.four_state = true;
-          binding = std::move(local);
-        } else {
-          binding = property_binding(
-              declaration, specialization, expression.text,
-              expression.source);
-          if (!binding) {
-            binding = parameter_binding(
-                declaration, specialization, expression.text,
-                expression.source);
-          }
-        }
-      } else if (expression.kind == sv::ConstraintExpressionKind::call) {
-        binding = method_binding(
-            specialization, expression.text, expression.source);
-      }
-      if (binding) expression.bindings.push_back(std::move(*binding));
-    }
-  }
-
-  void add_class(const frontend::SystemVerilogClassDeclaration& input) {
-    sv::ClassDeclaration output;
-    const auto generate_separator = input.name.rfind('.');
-    output.name = generate_separator == std::string::npos
-        ? input.name
-        : input.name.substr(generate_separator + 1U);
-    output.canonical_identity = input.canonical_identity;
-    if (const auto separator = input.canonical_identity.rfind("::");
-        separator != std::string::npos) {
-      output.enclosing_identity = input.canonical_identity.substr(
-          0, separator);
-    }
-    if (input.base) {
-      output.base_declaration_identity = input.base->declaration_identity;
-    }
-    output.virtual_class = input.is_virtual;
-    output.interface_class = input.is_interface;
-    output.source = source(input.span);
-    for (const auto& property : input.properties) {
-      sv::ClassProperty retained;
-      retained.name = property.declaration.name;
-      retained.owner_identity = input.canonical_identity;
-      retained.canonical_identity = input.canonical_identity + "::"
-          + property.declaration.name;
-      retained.type = class_property_type(
-          property.declaration.type, source(property.span));
-      retained.visibility = class_visibility(property.visibility);
-      retained.random_kind = property.is_rand
-          ? sv::ClassRandomKind::rand
-          : property.is_randc
-              ? sv::ClassRandomKind::randc
-              : sv::ClassRandomKind::none;
-      retained.static_storage = property.is_static;
-      retained.constant = property.is_const;
-      retained.source = source(property.span);
-      output.properties.push_back(std::move(retained));
-    }
-    for (const auto& constraint : input.constraints) {
-      sv::ClassConstraint retained;
-      retained.name = constraint.name;
-      retained.canonical_identity = input.canonical_identity + "::"
-          + constraint.name;
-      retained.owner_identity = input.canonical_identity;
-      retained.visibility = class_visibility(constraint.visibility);
-      retained.static_constraint = constraint.is_static;
-      retained.pure = constraint.is_pure;
-      retained.external = constraint.is_extern;
-      retained.defined = constraint.defined;
-      retained.source = source(constraint.span);
-      for (const auto& expression : constraint.expressions) {
-        retained.expressions.push_back(constraint_expression(expression));
-      }
-      for (auto& expression : retained.expressions) {
-        resolve_constraint_expression(expression, input);
-      }
-      output.constraints.push_back(std::move(retained));
-    }
-    hir_.mutable_classes().push_back(std::move(output));
-    add_classes(input.nested_classes);
-  }
-
-  void add_classes(
-      const std::vector<frontend::SystemVerilogClassDeclaration>& inputs) {
-    for (const auto& input : inputs) {
-      add_class(input);
-    }
-  }
-
-  void compose_constraints() {
-    std::set<std::string> complete;
-    std::set<std::string> active;
-    std::function<void(sv::ClassDeclaration&)> compose;
-    compose = [&](sv::ClassDeclaration& declaration) {
-      if (complete.contains(declaration.canonical_identity)) return;
-      if (!active.insert(declaration.canonical_identity).second) return;
-      if (!declaration.base_declaration_identity.empty()) {
-        const auto base = std::ranges::find(
-            hir_.mutable_classes(),
-            declaration.base_declaration_identity,
-            &sv::ClassDeclaration::canonical_identity);
-        if (base != hir_.mutable_classes().end()) {
-          compose(*base);
-          declaration.composed_constraints = base->composed_constraints;
-        }
-      }
-      for (const auto& constraint : declaration.constraints) {
-        sv::ComposedClassConstraint selected;
-        selected.name = constraint.name;
-        selected.selected_identity = constraint.canonical_identity;
-        selected.mode_enabled = constraint.defined
-            && !constraint.pure && !constraint.external;
-        const auto inherited = std::ranges::find(
-            declaration.composed_constraints,
-            constraint.name,
-            &sv::ComposedClassConstraint::name);
-        if (inherited == declaration.composed_constraints.end()) {
-          declaration.composed_constraints.push_back(std::move(selected));
-          continue;
-        }
-        const auto inherited_owner = std::ranges::find_if(
-            hir_.classes(), [&](const sv::ClassDeclaration& candidate) {
-              return std::ranges::any_of(
-                  candidate.constraints,
-                  [&](const sv::ClassConstraint& block) {
-                    return block.canonical_identity
-                        == inherited->selected_identity;
-                  });
-            });
-        const sv::ClassConstraint* inherited_block = nullptr;
-        if (inherited_owner != hir_.classes().end()) {
-          const auto block = std::ranges::find(
-              inherited_owner->constraints,
-              inherited->selected_identity,
-              &sv::ClassConstraint::canonical_identity);
-          if (block != inherited_owner->constraints.end()) {
-            inherited_block = &*block;
-          }
-        }
-        selected.overrides = true;
-        selected.overridden_identity = inherited->selected_identity;
-        selected.override_legal = inherited_block == nullptr
-            || inherited_block->static_constraint
-                == constraint.static_constraint;
-        *inherited = std::move(selected);
-      }
-      active.erase(declaration.canonical_identity);
-      complete.insert(declaration.canonical_identity);
-    };
-    for (auto& declaration : hir_.mutable_classes()) {
-      compose(declaration);
-    }
-  }
-
-  [[nodiscard]] sv::PackedRange packed_range(
-      const frontend::PackedRangeExpression& range,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    return {
-        std::nullopt,
-        std::nullopt,
-        expression(range.left, scope, parent),
-        expression(range.right, scope, parent),
-        range.descending.value_or(true),
-        source(range.span)};
-  }
-
-  [[nodiscard]] sv::TypeReference type_reference(
-      const frontend::Type& input,
-      const frontend::SourceSpan& fallback,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    const auto spelling = input.named_type.empty()
-        ? input.spelling
-        : input.named_type;
-    sv::TypeReference output;
-    output.target = {
-        input.named_type.empty() ? semantic::TypeId{}
-                                 : find_type(scope, input.named_type),
-        source(input.named_type.empty() ? fallback : input.named_type_span),
-        spelling};
-    if (!input.systemverilog_class_declaration.empty()) {
-      output.value_form = sv::TypeForm::class_handle;
-      output.class_identity = input.systemverilog_class_declaration;
-    }
-    output.signed_value = input.is_signed;
-    output.executable_width = input.width();
-    output.four_state = input.domain == frontend::ValueDomain::Logic4
-        || input.domain == frontend::ValueDomain::Integer;
-    if (input.packed_range) {
-      output.packed_range = packed_range(
-          *input.packed_range, source(fallback));
-    } else if (input.packed_range_expression) {
-      output.packed_range = packed_range(
-          *input.packed_range_expression, scope, parent);
-    }
-    if (input.systemverilog_container) {
-      const auto& container = *input.systemverilog_container;
-      output.container_form = type_form(input);
-      output.queue_maximum = container.queue_maximum
-          ? expression(*container.queue_maximum, scope, parent)
-          : std::nullopt;
-      if (container.associative_index_type) {
-        output.associative_index = type_reference(
-            *container.associative_index_type,
-            container.span,
-            scope,
-            parent).target;
-      }
-      if (!container.static_range_expressions.empty()) {
-        for (const auto& range : container.static_range_expressions) {
-          output.unpacked_dimensions.push_back(packed_range(
-              range, scope, parent));
-        }
-      } else if (container.static_range) {
-        output.unpacked_dimensions.push_back(packed_range(
-            *container.static_range, source(container.span)));
-      }
-    }
-    return output;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_declaration_record(
-      const semantic::ScopeId scope,
-      const sv::DeclarationForm form,
-      const semantic::DeclarationKind kind,
-      const std::string_view declaration_name,
-      const frontend::SourceSpan& frontend_span,
-      const semantic::OriginId parent) {
-    const auto span = source(frontend_span);
-    const auto declaration_origin = origin(span, parent, declaration_name);
-    const auto id = model_.add_declaration(
-        scope,
-        kind,
-        std::string{declaration_name},
-        span,
-        declaration_origin);
-    sv::Declaration output;
-    output.id = id;
-    output.scope = scope;
-    output.form = form;
-    output.name = declaration_name;
-    output.source = span;
-    output.origin = declaration_origin;
-    hir_.mutable_declarations().push_back(std::move(output));
-    return id;
-  }
-
-  [[nodiscard]] sv::Declaration& declaration(
-      const semantic::DeclarationId id) {
-    const auto found = std::ranges::find_if(
-        hir_.mutable_declarations(), [&](const sv::Declaration& declaration) {
-          return declaration.id == id;
-        });
-    if (found == hir_.mutable_declarations().end()) {
-      throw std::logic_error{"missing SystemVerilog HIR declaration"};
-    }
-    return *found;
-  }
-
-  [[nodiscard]] semantic::TypeId ensure_type(
-      const std::string_view type_name,
-      const semantic::ScopeId scope,
-      const semantic::TypeKind kind,
-      const sv::TypeReference& base,
-      const semantic::SourceSpanId span,
-      const semantic::OriginId declaration_origin) {
-    auto id = find_type(scope, type_name, span);
-    if (!id.valid()) {
-      id = model_.add_type(
-          scope,
-          kind,
-          std::string{type_name},
-          base.target,
-          span,
-          declaration_origin);
-    }
-    return id;
-  }
-
-  [[nodiscard]] semantic::ValueId ensure_value(
-      const std::string_view value_name,
-      const semantic::ScopeId scope,
-      const semantic::ValueKind kind,
-      const sv::TypeReference& type,
-      const semantic::SourceSpanId span,
-      const semantic::OriginId declaration_origin) {
-    auto id = find_value(scope, value_name, span);
-    if (!id.valid()) {
-      id = model_.add_value(
-          scope,
-          kind,
-          std::string{value_name},
-          type.target,
-          span,
-          declaration_origin);
-    }
-    return id;
-  }
-
-  [[nodiscard]] sv::TypeForm type_form(
-      const frontend::Type& input) const noexcept {
-    if (input.systemverilog_container) {
-      switch (input.systemverilog_container->kind) {
-        case frontend::SystemVerilogContainerKind::DynamicArray:
-          return sv::TypeForm::dynamic_array;
-        case frontend::SystemVerilogContainerKind::Queue:
-          return sv::TypeForm::queue;
-        case frontend::SystemVerilogContainerKind::AssociativeArray:
-          return sv::TypeForm::associative_array;
-        case frontend::SystemVerilogContainerKind::StaticArray:
-          return sv::TypeForm::static_array;
-      }
-    }
-    switch (input.packed_aggregate) {
-      case frontend::PackedAggregateKind::Struct:
-        return sv::TypeForm::packed_structure;
-      case frontend::PackedAggregateKind::Union:
-        return sv::TypeForm::packed_union;
-      case frontend::PackedAggregateKind::TaggedUnion:
-        return sv::TypeForm::tagged_union;
-      case frontend::PackedAggregateKind::UnpackedStruct:
-        return sv::TypeForm::unpacked_structure;
-      case frontend::PackedAggregateKind::UnpackedUnion:
-        return sv::TypeForm::unpacked_union;
-      case frontend::PackedAggregateKind::None:
-        break;
-    }
-    if (!input.enumeration_literals.empty()) {
-      return sv::TypeForm::enumeration;
-    }
-    if (input.domain == frontend::ValueDomain::String) {
-      return sv::TypeForm::string;
-    }
-    return sv::TypeForm::packed_integral;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_type_declaration(
-      const frontend::TypeAliasDeclaration& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-      const auto id = add_declaration_record(
-          scope,
-          input.declaration_kind
-                  == frontend::TypeDeclarationKind::SystemVerilogNettype
-              ? sv::DeclarationForm::nettype_declaration
-              : sv::DeclarationForm::typedef_declaration,
-          semantic::DeclarationKind::type,
-          input.name,
-          input.span,
-          parent);
-      const auto declaration_origin = declaration(id).origin;
-      const auto base = type_reference(
-          input.type, input.span, scope, declaration_origin);
-      const auto type_id = ensure_type(
-          input.name,
-          scope,
-          semantic::TypeKind::alias,
-          base,
-          declaration(id).source,
-          declaration_origin);
-      declaration(id).declared_type = type_id;
-      declaration(id).type = base;
-      sv::TypeDefinition output;
-      output.id = type_id;
-      output.declaration = id;
-      output.form = type_form(input.type);
-      output.name = input.name;
-      output.base = base;
-      output.resolution_function = input.systemverilog_resolution_function;
-      output.source = declaration(id).source;
-      output.origin = declaration_origin;
-      add_type_payload(input, output, scope, declaration_origin);
-      hir_.mutable_types().push_back(std::move(output));
-      return id;
-  }
-
-  void add_type_payload(
-      const frontend::TypeAliasDeclaration& input,
-      sv::TypeDefinition& output,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    for (const auto& member : input.type.packed_members) {
-      frontend::Type member_type;
-      member_type.domain = member.domain;
-      member_type.spelling = member.spelling;
-      member_type.packed_range = member.packed_range;
-      member_type.is_signed = member.is_signed;
-      member_type.packed_range_expression = member.packed_range_expression;
-      if (!member.nested_types.empty()) {
-        member_type = member.nested_types.front();
-      }
-      output.members.push_back({
-          member.name,
-          type_reference(member_type, member.span, scope, parent),
-          member.lsb_offset,
-          source(member.span),
-          member.initializer
-              ? expression(*member.initializer, scope, parent)
-              : std::nullopt});
-    }
-    for (const auto& literal : input.enum_literals) {
-      const auto literal_id = add_declaration_record(
-          scope,
-          sv::DeclarationForm::enumeration_literal,
-          semantic::DeclarationKind::enumeration_literal,
-          literal.name,
-          literal.span,
-          parent);
-      const auto& literal_declaration = declaration(literal_id);
-      sv::TypeReference literal_type;
-      literal_type.target = {
-          output.id, literal_declaration.source, output.name};
-      const auto literal_value = ensure_value(
-          literal.name,
-          scope,
-          semantic::ValueKind::enumeration_literal,
-          literal_type,
-          literal_declaration.source,
-          literal_declaration.origin);
-      output.enumeration_literals.push_back({
-          literal_id,
-          literal_value,
-          literal.name,
-          expression(literal.value, scope, literal_declaration.origin),
-          literal_declaration.source});
-    }
-    if (input.type.systemverilog_container) {
-      const auto& container = *input.type.systemverilog_container;
-      sv::ContainerType converted;
-      converted.form = type_form(input.type);
-      converted.queue_maximum = container.queue_maximum
-          ? expression(*container.queue_maximum, scope, parent)
-          : std::nullopt;
-      if (container.associative_index_type) {
-        converted.associative_index = type_reference(
-            *container.associative_index_type,
-            container.span,
-            scope,
-            parent);
-      }
-      if (!container.static_range_expressions.empty()) {
-        for (const auto& range : container.static_range_expressions) {
-          converted.static_dimensions.push_back(packed_range(
-              range, scope, parent));
-        }
-      } else if (container.static_range) {
-        converted.static_dimensions.push_back(packed_range(
-            *container.static_range, source(container.span)));
-      }
-      converted.source = source(container.span);
-      output.container = std::move(converted);
-    }
-  }
-
-  template <typename Input>
-  [[nodiscard]] semantic::DeclarationId add_object(
-      const Input& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent,
-      const sv::DeclarationForm form,
-      const semantic::DeclarationKind declaration_kind,
-      const semantic::ValueKind value_kind,
-      const sv::Direction object_direction,
-      const std::optional<frontend::Expression>& initializer) {
-    const auto id = add_declaration_record(
-        scope, form, declaration_kind, input.name, input.span, parent);
-    auto& output = declaration(id);
-    output.type = type_reference(
-        input.type, input.span, scope, output.origin);
-    output.direction = object_direction;
-    output.declared_value = ensure_value(
-        input.name,
-        scope,
-        value_kind,
-        *output.type,
-        output.source,
-        output.origin);
-    if (initializer) {
-      output.initializer = expression(*initializer, scope, output.origin);
-    }
-    return id;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_parameter(
-      const frontend::ParameterDeclaration& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    const auto type_parameter = input.kind == frontend::ParameterKind::Type;
-    const auto id = add_declaration_record(
-        scope,
-        type_parameter
-            ? sv::DeclarationForm::type_parameter
-            : (input.local ? sv::DeclarationForm::local_parameter
-                           : sv::DeclarationForm::parameter),
-        type_parameter ? semantic::DeclarationKind::type
-                       : semantic::DeclarationKind::generic,
-        input.name,
-        input.span,
-        parent);
-    auto& output = declaration(id);
-    output.type = type_reference(
-        input.type, input.span, scope, output.origin);
-    if (input.default_type) {
-      output.default_type = type_reference(
-          *input.default_type, input.span, scope, output.origin);
-    }
-    if (type_parameter) {
-      output.declared_type = ensure_type(
-          input.name,
-          scope,
-          semantic::TypeKind::declaration,
-          *output.type,
-          output.source,
-          output.origin);
-    } else {
-      output.declared_value = ensure_value(
-          input.name,
-          scope,
-          semantic::ValueKind::parameter,
-          *output.type,
-          output.source,
-          output.origin);
-      output.initializer = expression(
-          input.default_value, scope, output.origin);
-    }
-    return id;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_signal(
-      const frontend::SignalDeclaration& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    const auto id = add_object(
-        input,
-        scope,
-        parent,
-        input.is_port ? sv::DeclarationForm::port
-                      : sv::DeclarationForm::net,
-        input.is_port ? semantic::DeclarationKind::port
-                      : semantic::DeclarationKind::signal,
-        input.is_port ? semantic::ValueKind::port
-                      : semantic::ValueKind::signal,
-        direction(input.direction),
-        input.default_value);
-    declaration(id).interface_type = input.interface_type;
-    declaration(id).modport = input.modport;
-    return id;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_variable(
-      const frontend::VariableDeclaration& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    return add_object(
-        input,
-        scope,
-        parent,
-        sv::DeclarationForm::variable,
-        semantic::DeclarationKind::variable,
-        semantic::ValueKind::variable,
-        sv::Direction::unknown,
-        input.initializer);
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_function_argument(
-      const frontend::FunctionArgument& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    return add_object(
-        input,
-        scope,
-        parent,
-        sv::DeclarationForm::port,
-        semantic::DeclarationKind::port,
-        semantic::ValueKind::parameter,
-        direction(input.direction),
-        input.default_value);
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_task_argument(
-      const frontend::TaskArgument& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    return add_object(
-        input,
-        scope,
-        parent,
-        sv::DeclarationForm::port,
-        semantic::DeclarationKind::port,
-        semantic::ValueKind::parameter,
-        direction(input.direction),
-        input.default_value);
-  }
-
-  template <typename Range, typename Builder>
-  void add_children(
-      const Range& inputs,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent,
-      std::vector<semantic::DeclarationId>& children,
-      Builder builder) {
-    for (const auto& input : inputs) {
-      children.push_back((this->*builder)(input, scope, parent));
-    }
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_function(
-      const frontend::FunctionDeclaration& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    const auto id = add_declaration_record(
-        scope,
-        sv::DeclarationForm::function,
-        semantic::DeclarationKind::function,
-        input.name,
-        input.span,
-        parent);
-    const auto declaration_source = declaration(id).source;
-    const auto declaration_origin = declaration(id).origin;
-    const auto function_scope = nested_scope(
-        scope, input.name, declaration_source, declaration_origin);
-    auto result_type = type_reference(
-        input.return_type, input.span, scope, declaration_origin);
-    auto& output = declaration(id);
-    output.type = result_type;
-    output.nested_scope = function_scope;
-    const auto callable_lifetime = lifetime(
-        input.automatic, input.lifetime_explicit);
-    output.lifetime = callable_lifetime;
-    output.declared_value = ensure_value(
-        input.name,
-        scope,
-        semantic::ValueKind::function,
-        result_type,
-        declaration_source,
-        declaration_origin);
-    sv::CallableProfile profile;
-    profile.function = true;
-    profile.return_type = result_type;
-    profile.lifetime = callable_lifetime;
-    for (const auto& argument : input.arguments) {
-      profile.formals.push_back(add_function_argument(
-          argument, function_scope, declaration_origin));
-    }
-    declaration(id).callable = std::move(profile);
-    auto children = declaration(id).callable->formals;
-    add_children(
-        input.constants,
-        function_scope,
-        declaration_origin,
-        children,
-        &SystemVerilogHirBuilder::add_parameter);
-    add_children(
-        input.type_aliases,
-        function_scope,
-        declaration_origin,
-        children,
-        &SystemVerilogHirBuilder::add_type_declaration);
-    add_children(
-        input.variables,
-        function_scope,
-        declaration_origin,
-        children,
-        &SystemVerilogHirBuilder::add_variable);
-    add_children(
-        input.functions,
-        function_scope,
-        declaration_origin,
-        children,
-        &SystemVerilogHirBuilder::add_function);
-    declaration(id).children = std::move(children);
-    return id;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_task(
-      const frontend::TaskDeclaration& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    const auto id = add_declaration_record(
-        scope,
-        sv::DeclarationForm::task,
-        semantic::DeclarationKind::task,
-        input.name,
-        input.span,
-        parent);
-    const auto declaration_source = declaration(id).source;
-    const auto declaration_origin = declaration(id).origin;
-    const auto task_scope = nested_scope(
-        scope, input.name, declaration_source, declaration_origin);
-    auto& output = declaration(id);
-    output.nested_scope = task_scope;
-    const auto callable_lifetime = lifetime(
-        input.automatic, input.lifetime_explicit);
-    output.lifetime = callable_lifetime;
-    sv::TypeReference no_type;
-    no_type.target.source = declaration_source;
-    output.declared_value = ensure_value(
-        input.name,
-        scope,
-        semantic::ValueKind::task,
-        no_type,
-        declaration_source,
-        declaration_origin);
-    sv::CallableProfile profile;
-    profile.function = false;
-    profile.lifetime = callable_lifetime;
-    for (const auto& argument : input.arguments) {
-      profile.formals.push_back(add_task_argument(
-          argument, task_scope, declaration_origin));
-    }
-    declaration(id).callable = std::move(profile);
-    auto children = declaration(id).callable->formals;
-    add_children(
-        input.variables,
-        task_scope,
-        declaration_origin,
-        children,
-        &SystemVerilogHirBuilder::add_variable);
-    declaration(id).children = std::move(children);
-    return id;
-  }
-
-  [[nodiscard]] semantic::DeclarationId add_modport(
-      const frontend::SystemVerilogModport& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    return add_declaration_record(
-        scope,
-        sv::DeclarationForm::modport,
-        semantic::DeclarationKind::port,
-        input.name,
-        input.span,
-        parent);
-  }
-
-  [[nodiscard]] semantic::InstanceId ensure_instance(
-      const frontend::Instance& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    const auto instance_source = source(input.span);
-    for (const auto& instance : model_.instances()) {
-      if (instance.scope == scope && instance.source == instance_source
-          && instance.name == input.name) {
-        return instance.id;
-      }
-    }
-    const auto instance_origin = origin(
-        instance_source, parent, input.name);
-    return model_.add_instance(
-        scope,
-        input.name,
-        input.unit_name,
-        instance_source,
-        instance_origin);
-  }
-
-  [[nodiscard]] semantic::ProcessId add_process_skeleton(
-      const frontend::Process& input,
-      const semantic::ScopeId parent_scope,
-      const semantic::OriginId parent_origin) {
-    const auto process_source = source(input.span);
-    const auto process_name = input.name.empty()
-        ? "<process>"
-        : input.name;
-    const auto process_origin = origin(
-        process_source, parent_origin, process_name);
-    const auto process_scope = nested_scope(
-        parent_scope, process_name, process_source, process_origin);
-    const auto id = model_.add_process_identity(
-        process_scope,
-        process_name,
-        process_source,
-        process_origin);
-    std::vector<semantic::DeclarationId> unused;
-    add_children(
-        input.constants,
-        process_scope,
-        process_origin,
-        unused,
-        &SystemVerilogHirBuilder::add_parameter);
-    add_children(
-        input.type_aliases,
-        process_scope,
-        process_origin,
-        unused,
-        &SystemVerilogHirBuilder::add_type_declaration);
-    add_children(
-        input.variables,
-        process_scope,
-        process_origin,
-        unused,
-        &SystemVerilogHirBuilder::add_variable);
-    add_children(
-        input.functions,
-        process_scope,
-        process_origin,
-        unused,
-        &SystemVerilogHirBuilder::add_function);
-    return id;
-  }
-
-  void add_generate_body(
-      const frontend::GenerateBody& input,
-      sv::GenerateRegion& output) {
-    std::vector<Pending> pending;
-    queue_declarations(input, output.scope, output.origin, pending);
-    std::stable_sort(pending.begin(), pending.end(), pending_less);
-    for (auto& item : pending) {
-      output.declarations.push_back(item.build());
-    }
-    for (const auto& instance : input.instances) {
-      output.instances.push_back(ensure_instance(
-          instance, output.scope, output.origin));
-    }
-    for (const auto& process : input.processes) {
-      output.processes.push_back(add_process_skeleton(
-          process, output.scope, output.origin));
-    }
-    for (const auto& nested : input.generate_regions) {
-      output.nested.push_back(add_generate(
-          nested, output.scope, output.origin));
-    }
-  }
-
-  [[nodiscard]] sv::GenerateRegion add_generate(
-      const frontend::GenerateRegion& input,
-      const semantic::ScopeId parent_scope,
-      const semantic::OriginId parent_origin) {
-    const bool owns_scope = !input.then_scope.empty();
-    const auto label = owns_scope
-        ? input.then_scope
-        : "<generate>";
-    const auto declaration_id = add_declaration_record(
-        parent_scope,
-        sv::DeclarationForm::generated,
-        semantic::DeclarationKind::generate,
-        label,
-        input.span,
-        parent_origin);
-    const auto declaration_source = declaration(declaration_id).source;
-    const auto declaration_origin = declaration(declaration_id).origin;
-    sv::GenerateRegion output;
-    output.declaration = declaration_id;
-    output.scope = owns_scope
-        ? nested_scope(
-              parent_scope, label, declaration_source, declaration_origin)
-        : parent_scope;
-    switch (input.kind) {
-      case frontend::GenerateKind::StaticBlock:
-        output.kind = sv::GenerateKind::block;
-        break;
-      case frontend::GenerateKind::Conditional:
-        output.kind = sv::GenerateKind::conditional;
-        break;
-      case frontend::GenerateKind::Iterative:
-        output.kind = sv::GenerateKind::iterative;
-        break;
-      case frontend::GenerateKind::Selection:
-        output.kind = sv::GenerateKind::selection;
-        break;
-    }
-    output.label = input.then_scope;
-    output.alternative_label = input.else_scope;
-    output.iterator = input.variable;
-    output.initial = expression(
-        input.initial, output.scope, declaration_origin);
-    output.condition = expression(
-        input.condition, output.scope, declaration_origin);
-    output.iteration = expression(
-        input.iteration, output.scope, declaration_origin);
-    output.source = declaration_source;
-    output.origin = declaration_origin;
-    if (owns_scope) {
-      declaration(declaration_id).nested_scope = output.scope;
-    }
-    add_generate_body(input.then_body, output);
-    if (!input.else_scope.empty()
-        || !input.else_body.constants.empty()
-        || !input.else_body.type_aliases.empty()
-        || !input.else_body.signals.empty()
-        || !input.else_body.variables.empty()
-        || !input.else_body.functions.empty()
-        || !input.else_body.tasks.empty()
-        || !input.else_body.systemverilog_classes.empty()
-        || !input.else_body.concurrent_statements.empty()
-        || !input.else_body.processes.empty()
-        || !input.else_body.instances.empty()
-        || !input.else_body.generate_regions.empty()) {
-      frontend::GenerateRegion synthetic;
-      synthetic.kind = frontend::GenerateKind::StaticBlock;
-      const auto alternative_scope = input.else_scope.empty()
-          ? label + ".else"
-          : input.else_scope;
-      const bool shares_scope = owns_scope
-          && alternative_scope == input.then_scope;
-      synthetic.then_scope = shares_scope
-          ? std::string { }
-          : alternative_scope;
-      synthetic.then_body = input.else_body;
-      synthetic.span = input.span;
-      output.nested.push_back(add_generate(
-          synthetic,
-          shares_scope ? output.scope : parent_scope,
-          declaration_origin));
-    }
-    for (const auto& alternative : input.alternatives) {
-      frontend::GenerateRegion synthetic;
-      synthetic.kind = frontend::GenerateKind::StaticBlock;
-      const auto alternative_scope = alternative.scope.empty()
-          ? label + ".alternative"
-          : alternative.scope;
-      const bool shares_scope = owns_scope
-          && alternative_scope == input.then_scope;
-      synthetic.then_scope = shares_scope
-          ? std::string { }
-          : alternative_scope;
-      synthetic.then_body = alternative.body;
-      synthetic.span = alternative.span;
-      output.nested.push_back(add_generate(
-          synthetic,
-          shares_scope ? output.scope : parent_scope,
-          declaration_origin));
-    }
-    declaration(declaration_id).children = output.declarations;
-    return output;
-  }
-
-  template <typename Input, typename Builder>
-  void queue(
-      const std::vector<Input>& inputs,
-      const std::size_t category,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent,
-      std::vector<Pending>& pending,
-      Builder builder) {
-    for (std::size_t index = 0; index < inputs.size(); ++index) {
-      const auto& item = inputs[index];
-      pending.push_back({
-          frontend::physical_source(item.span),
-          item.span.begin.offset,
-          category,
-          index,
-          [this, item_ptr = &item, builder, scope, parent] {
-            return (this->*builder)(*item_ptr, scope, parent);
-          }});
-    }
-  }
-
-  void queue_declarations(
-      const frontend::GenerateBody& input,
-      const semantic::ScopeId scope,
-      const semantic::OriginId parent,
-      std::vector<Pending>& pending) {
-    queue(input.constants, 0, scope, parent, pending,
-          &SystemVerilogHirBuilder::add_parameter);
-    queue(input.type_aliases, 1, scope, parent, pending,
-          &SystemVerilogHirBuilder::add_type_declaration);
-    queue(input.signals, 2, scope, parent, pending,
-          &SystemVerilogHirBuilder::add_signal);
-    queue(input.variables, 3, scope, parent, pending,
-          &SystemVerilogHirBuilder::add_variable);
-    queue(input.functions, 4, scope, parent, pending,
-          &SystemVerilogHirBuilder::add_function);
-    queue(input.tasks, 5, scope, parent, pending,
-          &SystemVerilogHirBuilder::add_task);
-  }
-
-  static bool pending_less(
-      const Pending& left,
-      const Pending& right) noexcept {
-    return std::tuple{
-               left.physical_source, left.offset, left.category, left.index}
-        < std::tuple{
-               right.physical_source,
-               right.offset,
-               right.category,
-               right.index};
-  }
-
-  void add_unit(
-      const frontend::DesignUnit& input,
-      const semantic::UnitId unit_id) {
-    const auto& common = model_.units()[unit_id.value()];
-    sv::Unit output;
-    output.id = unit_id;
-    output.scope = common.scope;
-    output.kind = unit_kind(input.kind);
-    output.library = input.library;
-    output.name = input.name;
-    output.source = common.source;
-    output.origin = common.origin;
-    output.compilation = {
-        input.time_unit,
-        input.time_precision,
-        input.default_nettype,
-        input.is_cell};
-    for (const auto& input_import : input.systemverilog_imports) {
-      output.imports.push_back({
-          name(input_import.package, input_import.span, output.scope),
-          input_import.name.empty()
-              ? std::nullopt
-              : std::optional<sv::Name>{name(
-                    input_import.name, input_import.span, output.scope)},
-          input_import.name.empty(),
-          source(input_import.span)});
-    }
-    for (const auto& input_export : input.systemverilog_exports) {
-      output.exports.push_back({
-          name(input_export.package, input_export.span, output.scope),
-          input_export.name.empty()
-              ? std::nullopt
-              : std::optional<sv::Name>{name(
-                    input_export.name, input_export.span, output.scope)},
-          input_export.name.empty(),
-          source(input_export.span)});
-    }
-    for (std::size_t index = 0;
-        index < input.systemverilog_aliases.size(); ++index) {
-        const auto& input_alias = input.systemverilog_aliases[index];
-        sv::Alias alias;
-        alias.source = source(input_alias.span);
-        alias.origin = origin(
-            alias.source, output.origin,
-            "$alias$" + std::to_string(index + 1U));
-        for (const auto& terminal : input_alias.terminals) {
-            const auto terminal_expression = expression(
-                terminal, output.scope, alias.origin);
-            if (terminal_expression) {
-                alias.terminals.push_back(*terminal_expression);
+        const auto separator = spelling.rfind("::");
+        const auto package_name = separator == std::string_view::npos
+            ? std::string_view { }
+            : spelling.substr(0U, separator);
+        const auto simple_name = separator == std::string_view::npos
+            ? spelling
+            : spelling.substr(separator + 2U);
+        const auto find_package = [&](const std::string_view name) {
+            return std::ranges::find_if(
+                hir.units(), [&](const sv::Unit& candidate) {
+                    return candidate.kind == sv::UnitKind::package
+                        && candidate.library == semantic_owner.library
+                        && candidate.name == name;
+                });
+        };
+        const auto direct_type = [&](const sv::Unit& package) {
+            const auto found = std::ranges::find_if(
+                model.types(), [&](const semantic::Type& type) {
+                    return type.scope == package.scope
+                        && type.name == simple_name;
+                });
+            return found == model.types().end()
+                ? semantic::TypeId { }
+                : found->id;
+        };
+        const auto collect = [&](const auto& self,
+                                 const sv::Unit& package,
+                                 std::unordered_set<std::uint32_t>& visiting,
+                                 std::vector<semantic::TypeId>& candidates)
+            -> void {
+            if (!visiting.insert(package.id.value()).second) {
+                return;
+            }
+            if (const auto direct = direct_type(package); direct.valid()) {
+                candidates.push_back(direct);
+                visiting.erase(package.id.value());
+                return;
+            }
+            for (const auto& exported : package.exports) {
+                if ((exported.package.spelling == "*" && exported.member)
+                    || (exported.member
+                        && exported.member->spelling != simple_name)) {
+                    continue;
+                }
+                for (const auto& imported : package.imports) {
+                    if ((exported.package.spelling != "*"
+                            && exported.package.spelling
+                                != imported.package.spelling)
+                        || (imported.member
+                            && imported.member->spelling != simple_name)) {
+                        continue;
+                    }
+                    const auto source = find_package(
+                        imported.package.spelling);
+                    if (source != hir.units().end()) {
+                        self(self, *source, visiting, candidates);
+                    }
+                }
+            }
+            visiting.erase(package.id.value());
+        };
+        std::vector<semantic::TypeId> candidates;
+        const auto append_package = [&](const std::string_view name) {
+            const auto package = find_package(name);
+            if (package == hir.units().end()) {
+                return;
+            }
+            std::unordered_set<std::uint32_t> visiting;
+            collect(collect, *package, visiting, candidates);
+        };
+        if (!package_name.empty()) {
+            append_package(package_name);
+        } else if (owner != hir.units().end()) {
+            bool explicit_import { };
+            for (const auto& imported : owner->imports) {
+                if (imported.wildcard || !imported.member
+                    || imported.member->spelling != simple_name) {
+                    continue;
+                }
+                explicit_import = true;
+                append_package(imported.package.spelling);
+            }
+            if (!explicit_import) {
+                for (const auto& imported : owner->imports) {
+                    if (imported.wildcard) {
+                        append_package(imported.package.spelling);
+                    }
+                }
             }
         }
-        output.aliases.push_back(std::move(alias));
+        std::ranges::sort(
+            candidates, { }, [](const semantic::TypeId id) {
+                return id.value();
+            });
+        const auto unique = std::ranges::unique(candidates);
+        candidates.erase(unique.begin(), unique.end());
+        return candidates.size() == 1U ? candidates.front()
+                                       : semantic::TypeId { };
     }
-    for (const auto& input_let : input.systemverilog_lets) {
-        sv::LetDeclaration let;
-        let.name = input_let.name;
-        let.source = source(input_let.span);
-        let.origin = origin(let.source, output.origin, let.name);
-        for (const auto& input_port : input_let.ports) {
+
+    SystemVerilogHirBuilder::SystemVerilogHirBuilder(
+        semantic::Model& model,
+        sv::Hir& hir,
+        const std::span<const frontend::SystemVerilogClassSpecialization>
+            class_specializations)
+        : model_(model)
+        , hir_(hir)
+        , class_specializations_(class_specializations)
+    {
+    }
+
+    void SystemVerilogHirBuilder::add_design(const frontend::ParsedDesign& parsed)
+    {
+        for (std::size_t index = 0; index < parsed.units.size(); ++index) {
+            const auto& unit = parsed.units[index];
+            if (unit.language != frontend::Language::Vhdl2008) {
+                add_unit(unit, semantic::UnitId::from_index(static_cast<std::uint32_t>(index)));
+            }
+        }
+        for (const auto& unit : parsed.units) {
+            if (unit.language == frontend::Language::SystemVerilog2017) {
+                add_classes(unit.systemverilog_classes);
+            }
+        }
+        for (const auto& declaration :
+            parsed.systemverilog_dpi_declarations) {
+            const auto library = declaration.library.empty()
+                ? std::string { "work" }
+                : declaration.library;
+            auto parent_identity = library + "::$unit";
+            if (!declaration.compilation_unit_identity.empty()) {
+                parent_identity += "@"
+                    + declaration.compilation_unit_identity;
+            }
+            const auto scope = ensure_compilation_unit(
+                declaration.span,
+                library,
+                declaration.compilation_unit_identity,
+                declaration.standard_revision,
+                declaration.verilog_compatibility_profile,
+                parent_identity);
+            const auto parent = model_.scopes().at(scope.value()).unit;
+            hir_.mutable_dpi_declarations().push_back(dpi_declaration(
+                declaration,
+                scope,
+                model_.units().at(parent.value()).origin));
+        }
+        add_classes(parsed.systemverilog_classes);
+        for (const auto& input : parsed.udp_declarations) {
+            const auto udp_source = source(input.span);
+            const auto udp_origin = model_.add_origin(
+                semantic::OriginKind::parsed, udp_source, std::nullopt, input.name);
+            const auto level = [](const frontend::VerilogUdpLevelSymbol value) {
+                using Input = frontend::VerilogUdpLevelSymbol;
+                switch (value) {
+                case Input::Zero:
+                    return sv::UdpLevel::zero;
+                case Input::One:
+                    return sv::UdpLevel::one;
+                case Input::Unknown:
+                    return sv::UdpLevel::unknown;
+                case Input::DontCare:
+                    return sv::UdpLevel::dont_care;
+                case Input::Binary:
+                    return sv::UdpLevel::binary;
+                }
+                return sv::UdpLevel::unknown;
+            };
+            const auto edge = [](const frontend::VerilogUdpEdgeSymbol value) {
+                using Input = frontend::VerilogUdpEdgeSymbol;
+                switch (value) {
+                case Input::None:
+                    return sv::UdpEdge::none;
+                case Input::Rising:
+                    return sv::UdpEdge::rising;
+                case Input::Falling:
+                    return sv::UdpEdge::falling;
+                case Input::Positive:
+                    return sv::UdpEdge::positive;
+                case Input::Negative:
+                    return sv::UdpEdge::negative;
+                case Input::Any:
+                    return sv::UdpEdge::any;
+                case Input::Explicit:
+                    return sv::UdpEdge::explicit_edge;
+                }
+                return sv::UdpEdge::none;
+            };
+            const auto output = [](const frontend::VerilogUdpOutputSymbol value) {
+                using Input = frontend::VerilogUdpOutputSymbol;
+                switch (value) {
+                case Input::Zero:
+                    return sv::UdpOutput::zero;
+                case Input::One:
+                    return sv::UdpOutput::one;
+                case Input::Unknown:
+                    return sv::UdpOutput::unknown;
+                case Input::NoChange:
+                    return sv::UdpOutput::no_change;
+                }
+                return sv::UdpOutput::unknown;
+            };
+            sv::UdpDeclaration declaration;
+            declaration.language = input.language == frontend::Language::Verilog2005
+                ? semantic::Language::verilog
+                : semantic::Language::system_verilog;
+            declaration.standard = std::string {
+                frontend::to_string(input.standard_revision)
+            };
+            declaration.compatibility_profile = input.verilog_compatibility_profile;
+            declaration.library = input.library;
+            declaration.name = input.name;
+            declaration.output = input.output;
+            declaration.inputs = input.inputs;
+            declaration.sequential = input.sequential;
+            declaration.output_register = input.output_reg;
+            if (input.initial_output) {
+                declaration.initial_output = output(*input.initial_output);
+            }
+            for (const auto& input_row : input.rows) {
+                sv::UdpTableRow row;
+                row.source = source(input_row.span);
+                if (input_row.current_state) {
+                    row.current_state = level(*input_row.current_state);
+                }
+                row.output = output(input_row.output);
+                for (const auto& input_pattern : input_row.inputs) {
+                    row.inputs.push_back({ level(input_pattern.level),
+                        edge(input_pattern.edge), level(input_pattern.previous),
+                        level(input_pattern.current), source(input_pattern.span) });
+                }
+                declaration.rows.push_back(std::move(row));
+            }
+            declaration.time_unit = input.time_unit;
+            declaration.time_precision = input.time_precision;
+            declaration.source = udp_source;
+            declaration.origin = udp_origin;
+            hir_.mutable_udps().push_back(std::move(declaration));
+        }
+        if (parsed.systemverilog_covergroup_instances.size()
+            != parsed.systemverilog_covergroup_instance_syntax.size()) {
+            throw std::logic_error {
+                "covergroup instance and syntax inventories disagree"
+            };
+        }
+        for (const auto& input : parsed.systemverilog_covergroup_instances) {
+            const auto syntax = std::ranges::find(
+                parsed.systemverilog_covergroup_instance_syntax,
+                input.runtime_identity,
+                &frontend::SystemVerilogCovergroupInstanceSyntax::
+                    runtime_identity);
+            if (syntax
+                    == parsed.systemverilog_covergroup_instance_syntax.end()
+                || std::ranges::count(
+                       parsed.systemverilog_covergroup_instance_syntax,
+                       input.runtime_identity,
+                       &frontend::SystemVerilogCovergroupInstanceSyntax::
+                           runtime_identity)
+                    != 1) {
+                throw std::logic_error {
+                    "covergroup instance has no unique compile-local syntax "
+                    "sidecar"
+                };
+            }
+            hir_.mutable_covergroup_instances().push_back(
+                covergroup_instance(input, *syntax));
+        }
+        synchronize_generate_class_ownership();
+        compose_constraints();
+    }
+
+    [[nodiscard]] semantic::SourceSpanId SystemVerilogHirBuilder::source(
+        const frontend::SourceSpan& span)
+    {
+        return intern_semantic_span(model_, span);
+    }
+
+    [[nodiscard]] semantic::OriginId SystemVerilogHirBuilder::origin(
+        const semantic::SourceSpanId span,
+        const semantic::OriginId parent,
+        const std::string_view detail)
+    {
+        return model_.add_origin(
+            semantic::OriginKind::parsed, span, parent, std::string { detail });
+    }
+
+    [[nodiscard]] semantic::UnitId SystemVerilogHirBuilder::scope_unit(
+        const semantic::ScopeId scope) const
+    {
+        return model_.scopes()[scope.value()].unit;
+    }
+
+    [[nodiscard]] semantic::ScopeId SystemVerilogHirBuilder::nested_scope(
+        const semantic::ScopeId parent_scope,
+        const std::string_view name,
+        const semantic::SourceSpanId span,
+        const semantic::OriginId scope_origin)
+    {
+        return model_.add_scope(
+            scope_unit(parent_scope),
+            parent_scope,
+            std::string { name },
+            span,
+            scope_origin);
+    }
+
+    [[nodiscard]] sv::Name SystemVerilogHirBuilder::name(
+        const std::string_view spelling,
+        const frontend::SourceSpan& span,
+        const semantic::ScopeId scope)
+    {
+        sv::Name result { std::string { spelling }, source(span), std::nullopt, { } };
+        auto visible_scope = std::optional<semantic::ScopeId> { scope };
+        while (visible_scope) {
+            for (const auto& declaration : hir_.declarations()) {
+                if (declaration.scope == *visible_scope
+                    && declaration.name == spelling) {
+                    result.overloads.push_back(declaration.id);
+                }
+            }
+            if (!result.overloads.empty()) {
+                break;
+            }
+            visible_scope = model_.scopes()[visible_scope->value()].parent;
+        }
+        if (result.overloads.size() == 1) {
+            result.selected = result.overloads.front();
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<semantic::ExpressionId> SystemVerilogHirBuilder::expression(
+        const frontend::Expression& input,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent)
+    {
+        if (input.kind == frontend::ExpressionKind::Invalid) {
+            return std::nullopt;
+        }
+        const auto span = source(input.span);
+        if (const auto found = expressions_.find(&input);
+            found != expressions_.end()) {
+            const auto retained = std::ranges::find(
+                hir_.expressions(), found->second,
+                &sv::Expression::id);
+            if (retained != hir_.expressions().end()
+                && retained->scope == scope
+                && retained->source == span
+                && retained->origin.valid()
+                && retained->origin.value() < model_.origins().size()
+                && model_.origins()[retained->origin.value()].parent
+                    == parent) {
+                return found->second;
+            }
+            // Class callable projections are compile-local values. Their
+            // storage can be reused by a later projection even though it
+            // denotes a different source expression. Do not let an obsolete
+            // pointer alias the earlier HIR expression.
+            expressions_.erase(found);
+        }
+        const auto expression_origin = origin(
+            span, parent, "SystemVerilog expression");
+        const auto id = model_.add_expression_identity(
+            scope, span, expression_origin);
+        expressions_.emplace(&input, id);
+        sv::Expression output;
+        output.id = id;
+        output.scope = scope;
+        output.kind = expression_kind(input);
+        output.text = input.text;
+        output.source = span;
+        output.origin = expression_origin;
+        output.nominal_type = input.nominal_type;
+        output.class_identity = input.nominal_type;
+        output.signed_value = input.kind
+                == frontend::ExpressionKind::IntegerLiteral
+            || (input.kind == frontend::ExpressionKind::LogicLiteral
+                && (input.text.find("'s") != std::string::npos
+                    || input.text.find("'S") != std::string::npos))
+            || (input.call_result_width != 0U
+                && input.call_result_signed);
+        if (input.kind == frontend::ExpressionKind::Call
+            && input.text == "@sv-clocking-event") {
+            output.clocking_edge = edge_kind(
+                static_cast<frontend::EdgeKind>(input.call_result_width));
+        }
+        output.decoded_string = input.decoded_string;
+        if (input.systemverilog_decimal_literal) {
+            const auto& literal = *input.systemverilog_decimal_literal;
+            output.decimal_literal = sv::DecimalLiteral {
+                literal.kind
+                        == frontend::SystemVerilogDecimalLiteralKind::Time
+                    ? sv::DecimalLiteralKind::time
+                    : sv::DecimalLiteralKind::real,
+                literal.digits,
+                literal.decimal_exponent,
+                literal.time_unit,
+            };
+        }
+        output.scalar_kind = static_cast<sv::ScalarKind>(
+            input.systemverilog_scalar_kind);
+        output.generated_text
+            = static_cast<sv::GeneratedTextKind>(input.generated_text);
+        if (input.kind == frontend::ExpressionKind::Identifier
+            || (input.kind == frontend::ExpressionKind::Call
+                && !input.text.starts_with("@sv-"))) {
+            output.referenced_name = name(input.text, input.span, scope);
+        }
+        output.argument_names = input.call_argument_names;
+        for (std::size_t index = 0; index < input.operands.size(); ++index) {
+            const auto& operand = input.operands[index];
+            const auto operand_id = expression(
+                operand, scope, expression_origin);
+            if (operand_id) {
+                output.operands.push_back(*operand_id);
+            }
+            if (input.kind == frontend::ExpressionKind::Call) {
+                sv::CallAssociation association;
+                if (index < input.call_argument_names.size()
+                    && !input.call_argument_names[index].empty()) {
+                    association.formal = input.call_argument_names[index];
+                }
+                association.actual = operand_id;
+                association.source = operand.valid()
+                    ? source(operand.span)
+                    : span;
+                output.call_arguments.push_back(std::move(association));
+            }
+        }
+        if (input.kind == frontend::ExpressionKind::Aggregate) {
+            for (std::size_t index = 0; index < output.operands.size(); ++index) {
+                sv::AssignmentPatternAssociation association;
+                association.value = output.operands[index];
+                association.source = index < input.operands.size()
+                    ? source(input.operands[index].span)
+                    : span;
+                if (index < input.aggregate_choices.size()) {
+                    association.choice_spelling = input.aggregate_choices[index];
+                }
+                if (index < input.aggregate_choice_expressions.size()) {
+                    for (const auto& choice :
+                        input.aggregate_choice_expressions[index]) {
+                        if (const auto choice_id = expression(
+                                choice, scope, expression_origin)) {
+                            association.choices.push_back(*choice_id);
+                        }
+                    }
+                }
+                output.associations.push_back(std::move(association));
+            }
+        }
+        const auto inline_marker = std::ranges::find(
+            input.aggregate_choices, "@sv-inline-constraint");
+        if (inline_marker != input.aggregate_choices.end()) {
+            const auto index = static_cast<std::size_t>(std::distance(
+                input.aggregate_choices.begin(), inline_marker));
+            if (index < input.aggregate_choice_expressions.size()) {
+                sv::AssignmentPatternAssociation association;
+                association.choice_spelling = "@sv-inline-constraint";
+                association.source = span;
+                for (const auto& constraint :
+                    input.aggregate_choice_expressions[index]) {
+                    if (const auto constraint_id = expression(
+                            constraint, scope, expression_origin)) {
+                        association.choices.push_back(*constraint_id);
+                    }
+                }
+                if (!association.choices.empty()) {
+                    association.value = association.choices.front();
+                    output.associations.push_back(std::move(association));
+                }
+            }
+        }
+        hir_.mutable_expressions().push_back(std::move(output));
+        return id;
+    }
+
+    [[nodiscard]] sv::ExpressionKind SystemVerilogHirBuilder::expression_kind(
+        const frontend::Expression& expression) noexcept
+    {
+        if (expression.text == "@sv-null") {
+            return sv::ExpressionKind::class_null;
+        }
+        if (expression.text.starts_with("@sv-new:")) {
+            return sv::ExpressionKind::class_allocation;
+        }
+        if (expression.text.starts_with("@sv-dollar-cast:")) {
+            return sv::ExpressionKind::class_cast;
+        }
+        if (expression.text.starts_with("@sv-property:")) {
+            return sv::ExpressionKind::class_property;
+        }
+        if (expression.text.starts_with("@sv-static-property:")) {
+            return sv::ExpressionKind::class_static_property;
+        }
+        if (expression.text.starts_with("@sv-method:")
+            || expression.text.starts_with("@sv-base-method:")) {
+            return sv::ExpressionKind::class_method_call;
+        }
+        if (expression.text.starts_with("@sv-static-method:")) {
+            return sv::ExpressionKind::class_static_method_call;
+        }
+        using Input = frontend::ExpressionKind;
+        switch (expression.kind) {
+        case Input::Invalid:
+            return sv::ExpressionKind::invalid;
+        case Input::Identifier:
+            return sv::ExpressionKind::name;
+        case Input::IntegerLiteral:
+            return sv::ExpressionKind::integer_literal;
+        case Input::BooleanLiteral:
+            return sv::ExpressionKind::boolean_literal;
+        case Input::LogicLiteral:
+            return sv::ExpressionKind::logic_literal;
+        case Input::StringLiteral:
+            return sv::ExpressionKind::string_literal;
+        case Input::Unary:
+            return sv::ExpressionKind::unary;
+        case Input::Update:
+            return sv::ExpressionKind::update;
+        case Input::Binary:
+            return sv::ExpressionKind::binary;
+        case Input::Call:
+            return sv::ExpressionKind::call;
+        case Input::Index:
+            return sv::ExpressionKind::index;
+        case Input::Slice:
+            return sv::ExpressionKind::slice;
+        case Input::Aggregate:
+            return sv::ExpressionKind::assignment_pattern;
+        case Input::Concatenation:
+            return sv::ExpressionKind::concatenation;
+        case Input::Replication:
+            return sv::ExpressionKind::replication;
+        case Input::DefaultChoice:
+            return sv::ExpressionKind::default_choice;
+        case Input::Conditional:
+            return sv::ExpressionKind::invalid;
+        }
+        return sv::ExpressionKind::invalid;
+    }
+
+    [[nodiscard]] semantic::TypeId SystemVerilogHirBuilder::find_type(
+        const semantic::ScopeId scope,
+        const std::string_view type_name,
+        const std::optional<semantic::SourceSpanId> exact_source)
+        const noexcept
+    {
+        auto visible_scope = std::optional<semantic::ScopeId> { scope };
+        while (visible_scope) {
+            for (const auto& type : model_.types()) {
+                if (type.scope == *visible_scope && type.name == type_name
+                    && (!exact_source || type.source == *exact_source)) {
+                    return type.id;
+                }
+            }
+            if (exact_source) {
+                break;
+            }
+            if (!visible_scope->valid()
+                || visible_scope->value() >= model_.scopes().size()) {
+                break;
+            }
+            visible_scope = model_.scopes()[visible_scope->value()].parent;
+        }
+        const auto qualifier_separator = type_name.rfind("::");
+        const auto simple_name = qualifier_separator
+                == std::string_view::npos
+            ? type_name
+            : type_name.substr(qualifier_separator + 2U);
+        if (exact_source) {
+            semantic::TypeId selected;
+            for (const auto& type : model_.types()) {
+                if (type.source != *exact_source
+                    || type.name != simple_name) {
+                    continue;
+                }
+                if (selected.valid() && selected != type.id) {
+                    return { };
+                }
+                selected = type.id;
+            }
+            if (selected.valid()) {
+                return selected;
+            }
+        }
+        if (exact_source) {
+            return { };
+        }
+        if (const auto selected = find_systemverilog_hir_type(
+                model_, hir_, scope, type_name);
+            selected.valid()) {
+            return selected;
+        }
+        for (const auto& imported : current_imports_) {
+            if (!imported.name.empty() && imported.name != simple_name) {
+                continue;
+            }
+            const auto qualified = imported.package + "::"
+                + std::string { simple_name };
+            if (const auto selected = find_systemverilog_hir_type(
+                    model_, hir_, scope, qualified);
+                selected.valid()) {
+                return selected;
+            }
+        }
+        return { };
+    }
+
+    [[nodiscard]] semantic::ValueId SystemVerilogHirBuilder::find_value(
+        const semantic::ScopeId scope,
+        const std::string_view value_name,
+        const semantic::SourceSpanId exact_source) const noexcept
+    {
+        for (const auto& value : model_.values()) {
+            if (value.scope == scope && value.source == exact_source
+                && value.name == value_name) {
+                return value.id;
+            }
+        }
+        return { };
+    }
+
+    [[nodiscard]] sv::PackedRange SystemVerilogHirBuilder::packed_range(
+        const frontend::PackedRange& range,
+        const semantic::SourceSpanId span) const
+    {
+        return {
+            range.left,
+            range.right,
+            std::nullopt,
+            std::nullopt,
+            range.descending,
+            span
+        };
+    }
+
+    [[nodiscard]] semantic::InstanceId SystemVerilogHirBuilder::ensure_instance(
+        const frontend::Instance& input,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent)
+    {
+        const auto instance_source = source(input.span);
+        semantic::InstanceId id;
+        for (const auto& instance : model_.instances()) {
+            if (instance.scope == scope && instance.source == instance_source
+                && instance.name == input.name) {
+                id = instance.id;
+                break;
+            }
+        }
+        const auto instance_origin = origin(instance_source, parent, input.name);
+        if (!id.valid()) {
+            id = model_.add_instance(scope, input.name, input.unit_name,
+                instance_source, instance_origin);
+        }
+        const auto retained = std::ranges::find(
+            hir_.instances(), id, &sv::Instance::id);
+        if (retained != hir_.instances().end()) {
+            return id;
+        }
+        sv::Instance output;
+        output.id = id;
+        output.scope = scope;
+        output.target = name(input.unit_name, input.span, scope);
+        output.name = input.name;
+        output.anonymous = input.anonymous;
+        output.udp = input.udp_instance;
+        output.array_indices = input.array_indices;
+        for (const auto& input_parameter : input.parameter_overrides) {
+            sv::ActualAssociation parameter;
+            parameter.formal = input_parameter.name;
+            parameter.source = source(input_parameter.span);
+            if (input_parameter.default_box) {
+                parameter.kind = sv::ActualKind::default_value;
+            } else if (input_parameter.type_value) {
+                parameter.kind = sv::ActualKind::type;
+                parameter.type = type_reference(*input_parameter.type_value,
+                    input_parameter.span, scope, instance_origin);
+            } else {
+                parameter.expression = expression(
+                    input_parameter.value, scope, instance_origin);
+            }
+            output.parameters.push_back(std::move(parameter));
+        }
+        for (const auto& input_port : input.connections) {
+            sv::ActualAssociation port;
+            port.formal = input_port.port;
+            port.source = source(input_port.span);
+            if (input_port.kind == frontend::PortActualKind::Open) {
+                port.kind = sv::ActualKind::open;
+            } else if (input_port.kind == frontend::PortActualKind::Default) {
+                port.kind = sv::ActualKind::default_value;
+            } else {
+                port.expression = expression(
+                    input_port.value, scope, instance_origin);
+            }
+            output.ports.push_back(std::move(port));
+        }
+        if (input.udp_delay) {
+            output.udp_delay = instance_delay(
+                *input.udp_delay, scope, instance_origin);
+        }
+        if (input.drive_strength) {
+            output.drive_zero = static_cast<std::uint8_t>(
+                input.drive_strength->zero);
+            output.drive_one = static_cast<std::uint8_t>(
+                input.drive_strength->one);
+        }
+        using Drive = frontend::VerilogUnconnectedDrive;
+        output.unconnected_drive = input.unconnected_drive == Drive::Pull0
+            ? sv::UnconnectedDrive::pull_zero
+            : input.unconnected_drive == Drive::Pull1
+            ? sv::UnconnectedDrive::pull_one
+            : sv::UnconnectedDrive::none;
+        output.source = instance_source;
+        output.origin = instance_origin;
+        hir_.mutable_instances().push_back(std::move(output));
+        return id;
+    }
+
+    [[nodiscard]] semantic::ProcessId SystemVerilogHirBuilder::add_process_skeleton(
+        const frontend::Process& input,
+        const semantic::ScopeId parent_scope,
+        const semantic::OriginId parent_origin)
+    {
+        const auto process_source = source(input.span);
+        const auto process_name = input.name.empty()
+            ? "<process>"
+            : input.name;
+        const auto process_origin = origin(
+            process_source, parent_origin, process_name);
+        const auto process_scope = nested_scope(
+            parent_scope, process_name, process_source, process_origin);
+        const auto id = model_.add_process_identity(
+            process_scope,
+            process_name,
+            process_source,
+            process_origin);
+        std::vector<semantic::DeclarationId> unused;
+        add_children(
+            input.constants,
+            process_scope,
+            process_origin,
+            unused,
+            &SystemVerilogHirBuilder::add_parameter);
+        add_children(
+            input.type_aliases,
+            process_scope,
+            process_origin,
+            unused,
+            &SystemVerilogHirBuilder::add_type_declaration);
+        add_children(
+            input.variables,
+            process_scope,
+            process_origin,
+            unused,
+            &SystemVerilogHirBuilder::add_variable);
+        add_children(
+            input.functions,
+            process_scope,
+            process_origin,
+            unused,
+            &SystemVerilogHirBuilder::add_function);
+        return id;
+    }
+
+    [[nodiscard]] sv::Alias SystemVerilogHirBuilder::add_alias(
+        const frontend::SystemVerilogAliasDeclaration& input,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent,
+        const std::size_t index)
+    {
+        sv::Alias output;
+        output.source = source(input.span);
+        output.origin = origin(
+            output.source, parent,
+            "$alias$" + std::to_string(index + 1U));
+        for (const auto& terminal : input.terminals) {
+            const auto terminal_expression = expression(
+                terminal, scope, output.origin);
+            if (terminal_expression) {
+                output.terminals.push_back(*terminal_expression);
+            }
+        }
+        return output;
+    }
+
+    [[nodiscard]] sv::LetDeclaration SystemVerilogHirBuilder::add_let(
+        const frontend::SystemVerilogLetDeclaration& input,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent)
+    {
+        sv::LetDeclaration output;
+        output.name = input.name;
+        output.source = source(input.span);
+        output.origin = origin(output.source, parent, output.name);
+        for (const auto& input_port : input.ports) {
             sv::LetPort port;
             port.name = input_port.name;
             port.source = source(input_port.span);
             if (input_port.type) {
                 port.type = type_reference(
-                    *input_port.type, input_port.span, output.scope, let.origin);
+                    *input_port.type, input_port.span, scope, output.origin);
             }
             if (input_port.default_value) {
                 port.default_value = expression(
-                    *input_port.default_value, output.scope, let.origin);
+                    *input_port.default_value, scope, output.origin);
             }
-            let.ports.push_back(std::move(port));
+            output.ports.push_back(std::move(port));
         }
         const auto let_expression = expression(
-            input_let.expression, output.scope, let.origin);
+            input.expression, scope, output.origin);
         if (let_expression) {
-            let.expression = *let_expression;
+            output.expression = *let_expression;
         }
-        output.lets.push_back(std::move(let));
+        return output;
     }
 
-    std::vector<Pending> pending;
-    queue(input.parameters, 0, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_parameter);
-    queue(input.ports, 1, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_signal);
-    queue(input.type_aliases, 2, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_type_declaration);
-    queue(input.signals, 3, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_signal);
-    queue(input.variables, 4, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_variable);
-    queue(input.functions, 5, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_function);
-    queue(input.tasks, 6, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_task);
-    queue(input.systemverilog_modports, 7, output.scope, output.origin, pending,
-          &SystemVerilogHirBuilder::add_modport);
-    std::stable_sort(pending.begin(), pending.end(), pending_less);
-    for (auto& item : pending) {
-      output.declarations.push_back(item.build());
+    [[nodiscard]] std::optional<sv::Defparam>
+    SystemVerilogHirBuilder::add_defparam(
+        const frontend::VerilogDefparamDeclaration& input,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent)
+    {
+        sv::Defparam output;
+        output.source = source(input.span);
+        output.origin = origin(output.source, parent, "defparam");
+        const auto value = expression(input.value, scope, output.origin);
+        if (!value) {
+            return std::nullopt;
+        }
+        output.value = *value;
+        for (const auto& input_segment : input.path) {
+            sv::DefparamPathSegment segment;
+            segment.name = input_segment.name;
+            segment.source = source(input_segment.span);
+            for (const auto& input_index : input_segment.indices) {
+                if (const auto index = expression(
+                        input_index, scope, output.origin)) {
+                    segment.indices.push_back(*index);
+                }
+            }
+            output.path.push_back(std::move(segment));
+        }
+        return output;
     }
-    for (const auto& input_modport : input.systemverilog_modports) {
-      const auto declaration_id = std::ranges::find_if(
-          hir_.declarations(), [&](const sv::Declaration& declaration) {
-            return declaration.scope == output.scope
-                && declaration.form == sv::DeclarationForm::modport
-                && declaration.name == input_modport.name
-                && declaration.source == source(input_modport.span);
-          })->id;
-      sv::Modport modport;
-      modport.declaration = declaration_id;
-      modport.name = input_modport.name;
-      modport.source = source(input_modport.span);
-      modport.origin = declaration(declaration_id).origin;
-      for (const auto& input_member : input_modport.members) {
-        sv::ModportMemberKind kind = sv::ModportMemberKind::signal;
-        switch (input_member.kind) {
-          case frontend::SystemVerilogModportMemberKind::Signal:
-            kind = sv::ModportMemberKind::signal;
+
+    void SystemVerilogHirBuilder::add_generate_body(
+        const frontend::GenerateBody& input,
+        sv::GenerateRegion& output)
+    {
+        for (std::size_t index = 0;
+            index < input.systemverilog_aliases.size(); ++index) {
+            output.aliases.push_back(add_alias(
+                input.systemverilog_aliases[index], output.scope,
+                output.origin, index));
+        }
+        for (const auto& input_let : input.systemverilog_lets) {
+            output.lets.push_back(add_let(
+                input_let, output.scope, output.origin));
+        }
+        std::vector<Pending> pending;
+        queue_declarations(input, output.scope, output.origin, pending);
+        std::stable_sort(pending.begin(), pending.end(), pending_less);
+        for (auto& item : pending) {
+            output.declarations.push_back(item.build());
+        }
+        const auto first_class = hir_.classes().size();
+        add_classes(
+            input.systemverilog_classes, output.scope, output.declaration,
+            output.alternative_discriminator);
+        for (std::size_t index = first_class;
+            index < hir_.classes().size(); ++index) {
+            const auto& declaration = hir_.classes()[index];
+            if (declaration.generate_owner == output.declaration) {
+                output.class_declarations.push_back(
+                    sv::class_declaration_identity(declaration));
+            }
+        }
+        for (const auto& instance : input.instances) {
+            output.instances.push_back(ensure_instance(
+                instance, output.scope, output.origin));
+        }
+        for (const auto& process : input.processes) {
+            output.processes.push_back(add_process_skeleton(
+                process, output.scope, output.origin));
+        }
+        for (const auto& input_defparam : input.verilog_defparams) {
+            if (auto defparam = add_defparam(
+                    input_defparam, output.scope, output.origin)) {
+                output.defparams.push_back(std::move(*defparam));
+            }
+        }
+        for (const auto& nested : input.generate_regions) {
+            output.nested.push_back(add_generate(
+                nested, output.scope, output.origin,
+                output.alternative_discriminator));
+        }
+    }
+
+    [[nodiscard]] sv::GenerateRegion SystemVerilogHirBuilder::add_generate(
+        const frontend::GenerateRegion& input,
+        const semantic::ScopeId parent_scope,
+        const semantic::OriginId parent_origin,
+        std::string alternative_discriminator)
+    {
+        const bool owns_scope = !input.then_scope.empty();
+        const auto label = owns_scope
+            ? input.then_scope
+            : "<generate>";
+        const auto declaration_id = add_declaration_record(
+            parent_scope,
+            sv::DeclarationForm::generated,
+            semantic::DeclarationKind::generate,
+            label,
+            input.span,
+            parent_origin);
+        const auto declaration_source = declaration(declaration_id).source;
+        const auto declaration_origin = declaration(declaration_id).origin;
+        sv::GenerateRegion output;
+        output.declaration = declaration_id;
+        output.scope = owns_scope
+            ? nested_scope(
+                  parent_scope, label, declaration_source, declaration_origin)
+            : parent_scope;
+        switch (input.kind) {
+        case frontend::GenerateKind::StaticBlock:
+            output.kind = sv::GenerateKind::block;
             break;
-          case frontend::SystemVerilogModportMemberKind::FunctionImport:
-            kind = sv::ModportMemberKind::function_import;
+        case frontend::GenerateKind::Conditional:
+            output.kind = sv::GenerateKind::conditional;
             break;
-          case frontend::SystemVerilogModportMemberKind::FunctionExport:
-            kind = sv::ModportMemberKind::function_export;
+        case frontend::GenerateKind::Iterative:
+            output.kind = sv::GenerateKind::iterative;
             break;
-          case frontend::SystemVerilogModportMemberKind::TaskImport:
-            kind = sv::ModportMemberKind::task_import;
-            break;
-          case frontend::SystemVerilogModportMemberKind::TaskExport:
-            kind = sv::ModportMemberKind::task_export;
-            break;
-          case frontend::SystemVerilogModportMemberKind::Clocking:
-            kind = sv::ModportMemberKind::clocking;
+        case frontend::GenerateKind::Selection:
+            output.kind = sv::GenerateKind::selection;
             break;
         }
-        modport.members.push_back({
-            kind,
-            name(input_member.name, input_member.span, output.scope),
-            direction(input_member.direction),
-            source(input_member.span)});
-      }
-      output.modports.push_back(std::move(modport));
+        output.label = input.then_scope;
+        output.alternative_label = input.else_scope;
+        output.alternative_discriminator
+            = std::move(alternative_discriminator);
+        output.iterator = input.variable;
+        output.initial = expression(
+            input.initial, output.scope, declaration_origin);
+        output.condition = expression(
+            input.condition, output.scope, declaration_origin);
+        output.iteration = expression(
+            input.iteration, output.scope, declaration_origin);
+        output.source = declaration_source;
+        output.origin = declaration_origin;
+        if (owns_scope) {
+            declaration(declaration_id).nested_scope = output.scope;
+        }
+        add_generate_body(input.then_body, output);
+        if (!input.else_scope.empty()
+            || !input.else_body.constants.empty()
+            || !input.else_body.type_aliases.empty()
+            || !input.else_body.signals.empty()
+            || !input.else_body.variables.empty()
+            || !input.else_body.functions.empty()
+            || !input.else_body.tasks.empty()
+            || !input.else_body.systemverilog_aliases.empty()
+            || !input.else_body.systemverilog_lets.empty()
+            || !input.else_body.systemverilog_classes.empty()
+            || !input.else_body.concurrent_statements.empty()
+            || !input.else_body.processes.empty()
+            || !input.else_body.instances.empty()
+            || !input.else_body.generate_regions.empty()
+            || !input.else_body.verilog_defparams.empty()) {
+            frontend::GenerateRegion synthetic;
+            synthetic.kind = frontend::GenerateKind::StaticBlock;
+            const auto alternative_scope = input.else_scope.empty()
+                ? label + ".else"
+                : input.else_scope;
+            const bool shares_scope = owns_scope
+                && alternative_scope == input.then_scope;
+            synthetic.then_scope = shares_scope
+                ? std::string { }
+                : alternative_scope;
+            synthetic.then_body = input.else_body;
+            synthetic.span = input.span;
+            output.nested.push_back(add_generate(
+                synthetic,
+                shares_scope ? output.scope : parent_scope,
+                declaration_origin,
+                nested_alternative_discriminator(
+                    output.alternative_discriminator, "else")));
+        }
+        for (std::size_t alternative_index = 0;
+            alternative_index < input.alternatives.size();
+            ++alternative_index) {
+            const auto& alternative = input.alternatives[alternative_index];
+            sv::GenerateAlternative converted;
+            converted.source = source(alternative.span);
+            converted.label = alternative.scope;
+            converted.is_default = alternative.is_default;
+            for (const auto& choice : alternative.choices) {
+                const auto left = expression(
+                    choice.left, output.scope, declaration_origin);
+                if (!left) {
+                    continue;
+                }
+                sv::GenerateChoice converted_choice;
+                converted_choice.left = *left;
+                converted_choice.descending = choice.descending;
+                converted_choice.source = source(choice.span);
+                if (choice.right) {
+                    converted_choice.right = expression(
+                        *choice.right, output.scope, declaration_origin);
+                }
+                converted.choices.push_back(
+                    std::move(converted_choice));
+            }
+            frontend::GenerateRegion synthetic;
+            synthetic.kind = frontend::GenerateKind::StaticBlock;
+            const auto alternative_scope = alternative.scope.empty()
+                ? label + ".alternative"
+                : alternative.scope;
+            const bool shares_scope = owns_scope
+                && alternative_scope == input.then_scope;
+            synthetic.then_scope = shares_scope
+                ? std::string { }
+                : alternative_scope;
+            synthetic.then_body = alternative.body;
+            synthetic.span = alternative.span;
+            auto nested = add_generate(
+                synthetic,
+                shares_scope ? output.scope : parent_scope,
+                declaration_origin,
+                nested_alternative_discriminator(
+                    output.alternative_discriminator,
+                    "case-" + std::to_string(alternative_index)));
+            converted.scope = nested.scope;
+            converted.alternative_discriminator
+                = nested.alternative_discriminator;
+            converted.class_declarations
+                = nested.class_declarations;
+            output.nested.push_back(std::move(nested));
+            output.alternatives.push_back(std::move(converted));
+        }
+        declaration(declaration_id).children = output.declarations;
+        return output;
     }
-    for (const auto& instance : input.instances) {
-      output.instances.push_back(ensure_instance(
-          instance, output.scope, output.origin));
-    }
-    for (const auto& process : input.processes) {
-      output.processes.push_back(add_process_skeleton(
-          process, output.scope, output.origin));
-    }
-    for (std::size_t index = 0;
-         index < input.systemverilog_concurrent_assertions.size();
-         ++index) {
-      const auto& input_assertion =
-          input.systemverilog_concurrent_assertions[index];
-      sv::ConcurrentAssertion assertion;
-      assertion.kind = concurrent_assertion_kind(input_assertion.kind);
-      assertion.form = input_assertion.form
-              == frontend::SystemVerilogConcurrentAssertionForm::Sequence
-          ? sv::ConcurrentAssertionForm::sequence
-          : sv::ConcurrentAssertionForm::property;
-      assertion.explicit_label = !input_assertion.label.empty();
-      assertion.name = assertion.explicit_label
-          ? input_assertion.label
-          : "$assertion$" + std::to_string(index + 1U);
-      for (const auto& token : input_assertion.property_tokens) {
-        assertion.property_tokens.push_back(token.text);
-      }
-      assertion.has_pass_action = input_assertion.has_pass_action;
-      for (const auto& token : input_assertion.pass_action_tokens) {
-        assertion.pass_action_tokens.push_back(token.text);
-      }
-      assertion.has_failure_action =
-          input_assertion.has_failure_action;
-      for (const auto& token : input_assertion.failure_action_tokens) {
-        assertion.failure_action_tokens.push_back(token.text);
-      }
-      assertion.sampling_region =
-          assertion_region(input_assertion.sampling_region);
-      assertion.evaluation_region =
-          assertion_region(input_assertion.evaluation_region);
-      assertion.action_region =
-          assertion_region(input_assertion.action_region);
-      assertion.observers.callback_on_failure =
-          input_assertion.kind
-              != frontend::SystemVerilogConcurrentAssertionKind::Cover
-          && input_assertion.kind
-              != frontend::SystemVerilogConcurrentAssertionKind::Restrict;
-      assertion.coverage_slot = static_cast<std::uint32_t>(index);
-      assertion.source = source(input_assertion.span);
-      if (!input_assertion.label.empty()) {
-        assertion.label_source = source(input_assertion.label_span);
-      }
-      if (input_assertion.has_pass_action
-          && !input_assertion.pass_action_tokens.empty()) {
-        assertion.pass_action_source =
-            source(input_assertion.pass_action_span);
-      }
-      if (input_assertion.has_failure_action
-          && !input_assertion.failure_action_tokens.empty()) {
-        assertion.failure_action_source =
-            source(input_assertion.failure_action_span);
-      }
-      assertion.origin = origin(
-          assertion.source, output.origin, assertion.name);
-      output.concurrent_assertions.push_back(std::move(assertion));
-    }
-    for (const auto& generate : input.generate_regions) {
-      output.generates.push_back(add_generate(
-          generate, output.scope, output.origin));
-    }
-    hir_.mutable_units().push_back(std::move(output));
-  }
 
-  semantic::Model& model_;
-  sv::Hir& hir_;
-  std::span<const frontend::SystemVerilogClassSpecialization>
-      class_specializations_;
-};
+    template <typename Input, typename Builder>
+    void SystemVerilogHirBuilder::queue(
+        const std::vector<Input>& inputs,
+        const std::size_t category,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent,
+        std::vector<Pending>& pending,
+        Builder builder)
+    {
+        for (std::size_t index = 0; index < inputs.size(); ++index) {
+            const auto& item = inputs[index];
+            pending.push_back({ frontend::physical_source(item.span),
+                item.span.begin.offset,
+                category,
+                index,
+                [this, item_ptr = &item, builder, scope, parent] {
+                    return (this->*builder)(*item_ptr, scope, parent);
+                } });
+        }
+    }
 
-} // namespace
+    void SystemVerilogHirBuilder::queue_declarations(
+        const frontend::GenerateBody& input,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent,
+        std::vector<Pending>& pending)
+    {
+        queue(input.constants, 0, scope, parent, pending,
+            &SystemVerilogHirBuilder::add_parameter);
+        queue(input.type_aliases, 1, scope, parent, pending,
+            &SystemVerilogHirBuilder::add_type_declaration);
+        queue(input.signals, 2, scope, parent, pending,
+            &SystemVerilogHirBuilder::add_signal);
+        queue(input.variables, 3, scope, parent, pending,
+            &SystemVerilogHirBuilder::add_variable);
+        queue(input.functions, 4, scope, parent, pending,
+            &SystemVerilogHirBuilder::add_function);
+        queue(input.tasks, 5, scope, parent, pending,
+            &SystemVerilogHirBuilder::add_task);
+    }
+
+    bool SystemVerilogHirBuilder::pending_less(
+        const Pending& left,
+        const Pending& right) noexcept
+    {
+        return std::tuple {
+            left.physical_source, left.offset, left.category, left.index
+        }
+        < std::tuple {
+              right.physical_source,
+              right.offset,
+              right.category,
+              right.index
+          };
+    }
+
+    void SystemVerilogHirBuilder::add_unit(
+        const frontend::DesignUnit& input,
+        const semantic::UnitId unit_id)
+    {
+        current_imports_ = std::span { input.systemverilog_imports };
+        const auto& common = model_.units()[unit_id.value()];
+        sv::Unit output;
+        output.id = unit_id;
+        output.scope = common.scope;
+        output.kind = unit_kind(input.kind);
+        output.external = input.systemverilog_extern;
+        output.library = input.library;
+        output.name = input.name;
+        output.source = common.source;
+        output.origin = common.origin;
+        output.compilation_unit_identity = input.compilation_unit_identity;
+        output.standard = std::string {
+            frontend::revision_string(input.standard_revision)
+        };
+        output.compatibility_profile = input.verilog_compatibility_profile;
+        output.source_dependencies = input.source_dependencies;
+        if (input.systemverilog_scheduling_declaration) {
+            const auto& scheduling = *input.systemverilog_scheduling_declaration;
+            output.scheduling_declaration = sv::DesignSchedulingDeclaration {
+                scheduling.process_region
+                        == frontend::SystemVerilogProcessRegion::Reactive
+                    ? sv::DesignProcessRegion::reactive
+                    : sv::DesignProcessRegion::active,
+                scheduling.prototype,
+                source(scheduling.span)
+            };
+        }
+        if (input.systemverilog_standard_package) {
+            output.standard_package = sv::StandardPackageProvenance {
+                input.systemverilog_standard_package->revision,
+                input.systemverilog_standard_package->declaration_identity
+            };
+        }
+        output.compilation = {
+            input.time_unit,
+            input.time_precision,
+            input.default_nettype,
+            input.is_cell
+        };
+        if (input.systemverilog_configuration) {
+            const auto& input_configuration
+                = *input.systemverilog_configuration;
+            sv::ConfigurationDeclaration configuration;
+            configuration.source = source(input_configuration.span);
+            configuration.origin = origin(configuration.source,
+                output.origin, "$configuration$" + input.name);
+            configuration.default_liblist
+                = input_configuration.default_liblist;
+            for (const auto& input_design : input_configuration.designs) {
+                const auto design_source = source(input_design.span);
+                configuration.designs.push_back({
+                    input_design.library,
+                    input_design.cell,
+                    std::nullopt,
+                    design_source,
+                    origin(design_source, configuration.origin,
+                        "$design$" + input_design.cell),
+                });
+            }
+            for (const auto& input_rule : input_configuration.rules) {
+                const auto rule_source = source(input_rule.span);
+                configuration.rules.push_back({
+                    input_rule.kind
+                            == frontend::SystemVerilogConfigurationRuleKind::Instance
+                        ? sv::ConfigurationRuleKind::instance
+                        : sv::ConfigurationRuleKind::cell,
+                    input_rule.selection
+                            == frontend::SystemVerilogConfigurationSelectionKind::Use
+                        ? sv::ConfigurationSelectionKind::use
+                        : sv::ConfigurationSelectionKind::liblist,
+                    input_rule.selector,
+                    input_rule.use_library,
+                    input_rule.use_cell,
+                    input_rule.use_configuration,
+                    input_rule.liblist,
+                    std::nullopt,
+                    rule_source,
+                    origin(rule_source, configuration.origin,
+                        "$rule$" + input_rule.selector),
+                });
+            }
+            output.configuration = std::move(configuration);
+        }
+        for (const auto& input_import : input.systemverilog_imports) {
+            output.imports.push_back({ name(input_import.package, input_import.span, output.scope),
+                input_import.name.empty()
+                    ? std::nullopt
+                    : std::optional<sv::Name> { name(
+                          input_import.name, input_import.span, output.scope) },
+                input_import.name.empty(),
+                source(input_import.span) });
+        }
+        for (const auto& input_export : input.systemverilog_exports) {
+            output.exports.push_back({ name(input_export.package, input_export.span, output.scope),
+                input_export.name.empty()
+                    ? std::nullopt
+                    : std::optional<sv::Name> { name(
+                          input_export.name, input_export.span, output.scope) },
+                input_export.name.empty(),
+                source(input_export.span) });
+        }
+        for (std::size_t index = 0;
+            index < input.systemverilog_aliases.size(); ++index) {
+            output.aliases.push_back(add_alias(
+                input.systemverilog_aliases[index], output.scope,
+                output.origin, index));
+        }
+        for (const auto& input_let : input.systemverilog_lets) {
+            output.lets.push_back(add_let(
+                input_let, output.scope, output.origin));
+        }
+
+        std::vector<Pending> pending;
+        queue(input.parameters, 0, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_parameter);
+        queue(input.ports, 1, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_signal);
+        queue(input.type_aliases, 2, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_type_declaration);
+        queue(input.signals, 3, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_signal);
+        queue(input.variables, 4, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_variable);
+        queue(input.functions, 5, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_function);
+        queue(input.tasks, 6, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_task);
+        queue(input.systemverilog_modports, 7, output.scope, output.origin, pending,
+            &SystemVerilogHirBuilder::add_modport);
+        std::stable_sort(pending.begin(), pending.end(), pending_less);
+        for (auto& item : pending) {
+            output.declarations.push_back(item.build());
+        }
+        for (const auto& input_modport : input.systemverilog_modports) {
+            const auto declaration_id = std::ranges::find_if(
+                hir_.declarations(), [&](const sv::Declaration& declaration) {
+                    return declaration.scope == output.scope
+                        && declaration.form == sv::DeclarationForm::modport
+                        && declaration.name == input_modport.name
+                        && declaration.source == source(input_modport.span);
+                })->id;
+            sv::Modport modport;
+            modport.declaration = declaration_id;
+            modport.name = input_modport.name;
+            modport.source = source(input_modport.span);
+            modport.origin = declaration(declaration_id).origin;
+            for (const auto& input_member : input_modport.members) {
+                sv::ModportMemberKind kind = sv::ModportMemberKind::signal;
+                switch (input_member.kind) {
+                case frontend::SystemVerilogModportMemberKind::Signal:
+                    kind = sv::ModportMemberKind::signal;
+                    break;
+                case frontend::SystemVerilogModportMemberKind::FunctionImport:
+                    kind = sv::ModportMemberKind::function_import;
+                    break;
+                case frontend::SystemVerilogModportMemberKind::FunctionExport:
+                    kind = sv::ModportMemberKind::function_export;
+                    break;
+                case frontend::SystemVerilogModportMemberKind::TaskImport:
+                    kind = sv::ModportMemberKind::task_import;
+                    break;
+                case frontend::SystemVerilogModportMemberKind::TaskExport:
+                    kind = sv::ModportMemberKind::task_export;
+                    break;
+                case frontend::SystemVerilogModportMemberKind::Clocking:
+                    kind = sv::ModportMemberKind::clocking;
+                    break;
+                }
+                modport.members.push_back({ kind,
+                    name(input_member.name, input_member.span, output.scope),
+                    direction(input_member.direction),
+                    source(input_member.span) });
+            }
+            output.modports.push_back(std::move(modport));
+        }
+        for (const auto& instance : input.instances) {
+            output.instances.push_back(ensure_instance(
+                instance, output.scope, output.origin));
+        }
+        for (const auto& input_defparam : input.verilog_defparams) {
+            if (auto defparam = add_defparam(
+                    input_defparam, output.scope, output.origin)) {
+                output.defparams.push_back(std::move(*defparam));
+            }
+        }
+        for (const auto& input_bind : input.systemverilog_binds) {
+            sv::BindDirective bind;
+            bind.target = name(input_bind.target, input_bind.span, output.scope);
+            bind.source = source(input_bind.span);
+            bind.origin = origin(bind.source, output.origin, "bind");
+            for (const auto& input_instance : input_bind.instances) {
+                bind.instances.push_back(ensure_instance(
+                    input_instance, output.scope, bind.origin));
+            }
+            output.binds.push_back(std::move(bind));
+        }
+        for (std::size_t index = 0;
+            index < input.verilog_specify_blocks.size(); ++index) {
+            output.timing.push_back(timing_record(
+                input.verilog_specify_blocks[index],
+                output.scope,
+                output.origin,
+                index));
+        }
+        for (const auto& input_coverage : input.systemverilog_covergroups) {
+            output.coverage.push_back(covergroup_declaration(
+                input_coverage, output.scope, output.origin));
+        }
+        for (const auto& input_dpi : input.systemverilog_dpi_declarations) {
+            output.dpi_declarations.push_back(dpi_declaration(
+                input_dpi, output.scope, output.origin));
+        }
+        for (const auto& input_clocking :
+            input.systemverilog_clocking_blocks) {
+            output.clocking_blocks.push_back(clocking_block(
+                input_clocking, output.scope, output.origin));
+        }
+        if (input.systemverilog_default_clocking_block) {
+            const auto default_source = source(
+                input.systemverilog_default_clocking_span);
+            output.default_clocking = sv::DefaultClockingReference {
+                name(*input.systemverilog_default_clocking_block,
+                    input.systemverilog_default_clocking_span,
+                    output.scope),
+                default_source,
+                origin(default_source, output.origin, "default clocking")
+            };
+        }
+        for (const auto& input_assertion :
+            input.systemverilog_assertion_declarations) {
+            output.assertion_declarations.push_back(assertion_declaration(
+                input_assertion, output.scope, output.origin));
+        }
+        for (const auto& input_checker :
+            input.systemverilog_checker_instances) {
+            sv::CheckerInstance checker;
+            checker.declaration = name(
+                input_checker.declaration_name,
+                input_checker.span,
+                output.scope);
+            checker.name = input_checker.name;
+            checker.source = source(input_checker.span);
+            checker.origin = origin(
+                checker.source, output.origin, input_checker.name);
+            for (const auto& input_connection : input_checker.connections) {
+                checker.connections.push_back({ input_connection.formal_name,
+                    source_tokens(input_connection.actual_tokens),
+                    input_connection.open,
+                    source(input_connection.span) });
+            }
+            output.checker_instances.push_back(std::move(checker));
+        }
+        for (const auto& process : input.processes) {
+            output.processes.push_back(add_process_skeleton(
+                process, output.scope, output.origin));
+        }
+        for (std::size_t index = 0;
+            index < input.systemverilog_concurrent_assertions.size();
+            ++index) {
+            const auto& input_assertion = input.systemverilog_concurrent_assertions[index];
+            output.concurrent_assertions.push_back(concurrent_assertion(
+                input_assertion, index, output.origin));
+        }
+        for (const auto& generate : input.generate_regions) {
+            output.generates.push_back(add_generate(
+                generate, output.scope, output.origin));
+        }
+        hir_.mutable_units().push_back(std::move(output));
+        current_imports_ = { };
+    }
+
+} // namespace systemverilog_hir_detail
 
 semantic::sv::Hir build_systemverilog_hir(
     const frontend::ParsedDesign& parsed,
     semantic::Model& semantics,
     const std::span<frontend::SystemVerilogClassSpecialization>
-        class_specializations) {
-  semantic::sv::Hir result;
-  SystemVerilogHirBuilder builder{
-      semantics, result, class_specializations};
-  builder.add_design(parsed);
-  complete_systemverilog_executable_hir(parsed, semantics, result);
-  for (auto& specialization : class_specializations) {
-    specialization.constraint_modes.clear();
-    const auto declaration = std::ranges::find(
-        result.classes(),
-        specialization.declaration_identity,
-        &sv::ClassDeclaration::canonical_identity);
-    if (declaration == result.classes().end()) continue;
-    for (const auto& constraint : declaration->composed_constraints) {
-      if (constraint.override_legal) {
-        specialization.constraint_modes.emplace_back(
-            constraint.selected_identity, constraint.mode_enabled);
-      }
+        class_specializations)
+{
+    semantic::sv::Hir result;
+    systemverilog_hir_detail::SystemVerilogHirBuilder builder {
+        semantics, result, class_specializations
+    };
+    builder.add_design(parsed);
+    complete_systemverilog_executable_hir(parsed, semantics, result);
+    for (auto& specialization : class_specializations) {
+        specialization.constraint_modes.clear();
+        const auto declaration = std::ranges::find(
+            result.classes(),
+            specialization.declaration_identity,
+            &sv::ClassDeclaration::canonical_identity);
+        if (declaration == result.classes().end())
+            continue;
+        for (const auto& constraint : declaration->composed_constraints) {
+            if (constraint.override_legal) {
+                specialization.constraint_modes.emplace_back(
+                    constraint.selected_identity, constraint.mode_enabled);
+            }
+        }
     }
-  }
-  return result;
+    return result;
 }
 
 } // namespace fsim::app::application_detail

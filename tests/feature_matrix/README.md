@@ -60,10 +60,10 @@ provenance and artifact anchors. The registered 16-witness serial matrix
 retains one log per witness and a 17-row stage ledger across engines, caches,
 artifacts, mixed languages, public services, platforms and resources. The
 mode, compatibility, revision-corpus and switch-corpus SHA-256 identities are
-`21a05e4732aa8da8b546f2c7048ee2b5d51cdca4572114fb5c9946d4bfad8d3e`,
-`5e7a74d4f9c0af29e28c4d0b9b35b96a5c9df6482b53759633f80904812c5f6f`,
+`0da5aa061721a8a58a213d462ddb44677bc203a9894c0a21d4b4b558c32513c9`,
+`84eea9da575770077be46e44cfa3faeccbabb0873f4665a69a66db483ceaa874`,
 `8c3018215c3e8c7d1fdc90c275d2f3d3e4ee065956c8b205fb740a8d750981f7`, and
-`34eca16ab78a6e2ab73f1e7d77cb36091fad5571b89f4ba5f8c512d69355a24a`.
+`9b4beb086ee639c4fb3d40aa8ebc1df2b1c9e17e0a84e350fd975b6db81dc9a3`.
 
 Batch 168 starts with the authoritative 17-row `sdf_inventory.tsv` ledger.
 Rows are assigned one-to-one to Changes 2-18 and remain active until their
@@ -125,7 +125,7 @@ aggregation, artifact, diagnostic, and resource owners. The language-neutral
 All seventeen rows are preserved. Change 19 proves cross-row engine and
 aggregation equivalence, and Change 20 freezes the completed batch. The
 registered normalized SHA-256 identity is
-`06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234`.
+`e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814`.
 
 Batch 179 starts with the exact 17-row
 `code_coverage_metrics_inventory.tsv` ledger. All seventeen rows are preserved
@@ -144,7 +144,7 @@ mixed-language equivalence and advances enabled artifact identity to the
 broad-metrics model; Change 20 freezes the complete broad-metric set with
 MC/DC still excluded. The registered normalized
 SHA-256 identity is
-`e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
+`9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
 
 Batch 181 starts with the IEEE-only 18-row `legacy_tf_inventory.tsv` ledger.
 Its stable rows assign Changes 2-19 one-to-one across the direct v3 native
@@ -279,7 +279,7 @@ These suites are the evidence currently referenced by the matrix:
 | [runtime/runtime_uvm_config_db_tests.cpp](../runtime/runtime_uvm_config_db_tests.cpp) | Simulation-isolated UVM config set/get/exists tracing and audited precedence/read/write inventories with callback containment, stable escaping, deterministic eviction, and entry/waiter/report/trace ceilings |
 | [runtime/runtime_uvm_command_line_tests.cpp](../runtime/runtime_uvm_command_line_tests.cpp) | Simulation-isolated ordered argv retention, plusarg/UVM subsets, exact and prefix matching, first/all value extraction with duplicates, tool/version identity, factory/config/default and phase/time verbosity/max-quit/objection-trace application, deterministic hierarchical matching, malformed transactional rejection, and bounded argument/query/result/report-control resources |
 | [runtime/runtime_uvm_test_runner_tests.cpp](../runtime/runtime_uvm_test_runner_tests.cpp) | Simulation-owned `run_test` selection and precedence, deterministic seed and global-timeout handling, topology output, repeated-run cleanup, `$finish` success, fatal/exception containment, re-entry rejection, and bounded run/name/topology/message resources |
-| [library/library_artifact_test.cpp](../library/library_artifact_test.cpp) | CM-087 canonical `.fsimlib` metadata, checksum validation, deterministic publication, read-only installation, schema-27 portable VHDL/SystemVerilog unit and embedded-PSL round trips, complete VHDL-2019 frontend-form preservation, relocation, and malformed/schema/path/depth/identity rejection |
+| [library/library_artifact_test.cpp](../library/library_artifact_test.cpp) | CM-087 canonical `.fsimlib` metadata, checksum validation, deterministic publication, read-only installation, compiled semantic/SystemVerilog/VHDL HIR bundle and embedded-PSL round trips, complete VHDL-2019 HIR preservation, relocation, and malformed/schema/path/depth/identity rejection |
 | [api/api_mapped_library_test.cpp](../api/api_mapped_library_test.cpp) | CM-087 append-only C API inspection of ordered mapped-library identity, digest, unit count, and optional-native admission without disturbing legacy clients |
 | [project/project_config_test.cpp](../project/project_config_test.cpp) | Source-ID-marked project acceptance/diagnostic expectations: schema-1 manifests including deterministic `min`/`typ`/`max` delay-mode configuration and default, glob ordering, schema/unknown/invalid-value diagnostics, and JSON escaping |
 | [app/expression_application_test.cpp](../app/expression_application_test.cpp) | Fast source-to-runtime interpreter/compiled differential for expression checkpoints, currently covering VHDL/Verilog-2005/SystemVerilog fixed-width exponentiation; SystemVerilog final-procedure lifecycle, procedural compound/standalone updates, wildcard equality/inequality and logical-equality unknown dominance, derived `$clog2` widths and cache-distinct specializations, `$signed`/`$unsigned` comparison/shift semantics, `$isunknown`, `$onehot`/`$onehot0`, `$countones`/`$countbits`, packed `$bits`, one-dimensional packed bound/size/increment queries with optional dimension `1`, and packed dimension counts; plus VHDL conditional and selected assignments, concurrent assertions, direct timing/driver attributes, duration-qualified implicit signal attributes in expressions/process sensitivities/waits, redundant transaction toggles, signed `abs`, `sla`/`rol`/`ror`, negative-count reversal, oversized arithmetic fill, modulo-width rotation, and LLVM O0/O2 execution |
@@ -296,7 +296,8 @@ These suites are the evidence currently referenced by the matrix:
 | [app/vhdl_float_application_test.cpp](../app/vhdl_float_application_test.cpp) | Checksum-pinned `ieee.float_generic_pkg`/`float_pkg` dependency provenance, constrained binary32 values, static conversion/rounding/arithmetic/comparison/classification, exceptional values, raw-vector/integer conversion diagnostics, interpreter/LLVM O0/O2 parity, and cold/warm native-cache reuse |
 | [app/vhdl_ieee_integration_application_test.cpp](../app/vhdl_ieee_integration_application_test.cpp) | Reusable-context activation of every reviewed package; clean-room VITAL type/source provenance, composite constants/generics, delays/maps, all combinational primitive families, wide/null/direction/all-state semantics, static truth tables, negative profiles, typed debugger locals, exact VCD, O0/O2 parity, cold/warm reuse, and context-edit invalidation |
 | [app/vhdl_vital_delay_application_test.cpp](../app/vhdl_vital_delay_application_test.cpp) | VITAL signal/wire/path and pulse scheduling plus configured vendor-style cell/memory models, static embedded memory contents, VITAL_LEVEL metadata, guarded timing, extended identifiers, component bindings, null paths, interpreter/LLVM O0/O2/debug, cold/warm cache, runtime-state, `.fsimobj`, relocated `.fsimdesign`, callback, and VCD parity |
-| [app/vhdl_analysis_order_application_test.cpp](../app/vhdl_analysis_order_application_test.cpp) | Independently authored, source-ID-marked VHDL library/package/context/entity/architecture/type/subtype/generic/component/configuration/generate structural conformance, successful generated elaboration, deterministic source-unit order, and all eight exact package-body, context/use, architecture/configuration, entity/configuration-binding, and direct-configuration analysis-order failures |
+| [app/vhdl_analysis_order_application_test.cpp](../app/vhdl_analysis_order_application_test.cpp) | Independently authored, source-ID-marked VHDL library/package/context/entity/architecture/type/subtype/generic/component/configuration/generate structural conformance, successful generated elaboration, deterministic source-unit order, and all eight exact direct-source package-body, context/use, architecture/configuration, entity/configuration-binding, and direct-configuration analysis-order failures |
+| [app/compiled_hir_cache_application_test.cpp](../app/compiled_hir_cache_application_test.cpp) | Parser-independent compiled-HIR cache/object/library/design replay, deterministic worker-count publication, corruption rejection, and source-hidden split VHDL entity/architecture object linking with retained interface declarations and entity references; a real mixed-revision object pair is rejected first as `FSIM-ART-VHDEP-001`, while extracted-work direct revision/profile links retain structured `FSIM-FE-VHORDER-011` evidence |
 | [app/tcl_application_test.cpp](../app/tcl_application_test.cpp) | Embedded Tcl repeatable-command and script batches, Tcl argument variables, fsim-owned standard streams, deterministic embedded exit codes, multiline interactive command completion, prompts/results, project/check/build dictionaries, signal hierarchy/value access, deposit/force/release semantics, time-limited and terminal runs, status dictionaries, and targeted evaluation/incomplete-input diagnostics |
 | [app/display_application_test.cpp](../app/display_application_test.cpp) | Verilog/SystemVerilog literal, empty, constant numeric, and one-value `%b`/`%h`/`%o`/`%d`/`%c`/`%s` runtime `$display`/`$write` ordering, `%0` leading-zero suppression, formatted `$strobe` capture-before-mutation, literal-only `$monitor` initial publication, and all-severity source-aware VHDL reports including callback-before-failure termination; decoded language escapes, signed/unknown formatting, newline/no-newline and immediate/postponed policy, process/time/delta metadata, CLI routing, and interpreter versus LLVM O0/O2 equivalence |
 | [app/sv_file_application_test.cpp](../app/sv_file_application_test.cpp) | Isolated same-language SystemVerilog text-file interpreter/LLVM O0/O2 exact-content and line-value parity, native execution without fallback, task stop/inspect/resume, root confinement, cold/warm cache reuse, input-content exclusion from compilation identity, selective HDL-literal invalidation, and exact 137-bit packed-signal/fixed-memory `$fread` plus read/write-memory, debugger, callback, VCD, and fully compiled O0/O2 cold/warm evidence |

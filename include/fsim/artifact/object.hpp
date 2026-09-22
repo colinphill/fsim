@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kObjectFormatVersion = 7;
+inline constexpr std::uint32_t kObjectFormatVersion = 8;
 inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 
 // One explicitly scripted HDL compilation unit. Paths stored here are
@@ -22,6 +22,9 @@ inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 struct ObjectMetadata {
   std::uint32_t format{kObjectFormatVersion};
   std::uint32_t portable_schema{library::kPortableSchemaVersion};
+  std::uint32_t compiled_hir_schema{library::kCompiledHirSchemaVersion};
+  std::filesystem::path compiled_hir_artifact;
+  std::string compiled_hir_checksum;
   std::string producer;
   std::string language;
   std::string standard;
@@ -47,8 +50,9 @@ struct ObjectMetadata {
 [[nodiscard]] std::string compute_object_compilation_digest(
     const ObjectMetadata& metadata);
 
-// Canonical little-endian metadata codec. Payload bytes are independently
-// indexed and checksummed; they are not embedded in this record.
+// Canonical little-endian metadata codec. Owning payload bytes are
+// independently indexed and checksummed; primitive and class entries are
+// metadata-only inventories validated against the compiled-HIR bundle.
 [[nodiscard]] std::string serialize_object_metadata(
     const ObjectMetadata& metadata);
 

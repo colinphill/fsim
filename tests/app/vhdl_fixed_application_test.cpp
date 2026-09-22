@@ -99,14 +99,15 @@ void verify_projection(const fsim::project::Config& config) {
           return source.content_digest == digest;
         }));
   }
+  const auto& hir = checked->vhdl_hir;
   const auto package = std::ranges::find_if(
-      checked->parsed.units,
-      [](const fsim::frontend::DesignUnit& unit) {
-        return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+      hir.units(),
+      [](const fsim::semantic::vhdl::Unit& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::package
             && unit.library == "ieee" && unit.name == "fixed_pkg"
             && unit.primary_name.empty();
       });
-  assert(package != checked->parsed.units.end());
+  assert(package != hir.units().end());
   assert(
       package->standard_package_revision
       == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");
@@ -114,17 +115,23 @@ void verify_projection(const fsim::project::Config& config) {
              package->standard_package_declarations, "ufixed")
          != package->standard_package_declarations.end());
   const auto entity = std::ranges::find_if(
-      checked->parsed.units,
-      [](const fsim::frontend::DesignUnit& unit) {
-        return unit.kind == fsim::frontend::UnitKind::VhdlEntity;
+      hir.units(),
+      [](const fsim::semantic::vhdl::Unit& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::entity;
       });
-  assert(entity != checked->parsed.units.end());
-  assert(!entity->ports.empty());
-  assert(entity->ports.front().type.domain
-         == fsim::frontend::ValueDomain::Logic9);
-  assert(entity->ports.front().type.packed_range);
-  assert(entity->ports.front().type.packed_range->left == 3);
-  assert(entity->ports.front().type.packed_range->right == -4);
+  assert(entity != hir.units().end());
+  const auto port_id = std::ranges::find_if(
+      entity->declarations, [&](const auto id) {
+        return hir.declarations()[id.value()].form
+            == fsim::semantic::vhdl::DeclarationForm::port;
+      });
+  assert(port_id != entity->declarations.end());
+  const auto& port = hir.declarations()[port_id->value()];
+  assert(port.subtype);
+  assert(port.subtype->domain == fsim::semantic::vhdl::ValueDomain::logic9);
+  assert(!port.subtype->constraints.empty());
+  assert(port.subtype->constraints.front().left == 3);
+  assert(port.subtype->constraints.front().right == -4);
 }
 
 void verify_runs(

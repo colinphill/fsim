@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/vhdl_coverage_conditions.hpp"
+#include "fsim/frontend/vhdl_coverage_conditions.hpp"
 
 #include "fsim/frontend/parser.hpp"
 
@@ -112,7 +112,7 @@ end rtl;
     const auto root_text = statements.front().condition.text;
     const auto root_operands = statements.front().condition.operands.size();
 
-    const auto discovered = elaboration::discover_vhdl_coverage_conditions(
+    const auto discovered = frontend::discover_vhdl_coverage_conditions(
         statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U });
     require(discovered.ok() && discovered.points.size() == 12U,
@@ -214,12 +214,12 @@ end rtl;
             source_text, frontend::Language::Vhdl2008, standard);
         require(parsed_a.ok() && parsed_b.ok(),
             "every retained VHDL profile must parse the Boolean corpus");
-        const auto first = elaboration::discover_vhdl_coverage_conditions(
+        const auto first = frontend::discover_vhdl_coverage_conditions(
             parsed_a.design.units.back().processes.front().statements,
             frontend::Language::Vhdl2008, standard,
             std::span { &source_a, 1U });
         const auto relocated
-            = elaboration::discover_vhdl_coverage_conditions(
+            = frontend::discover_vhdl_coverage_conditions(
                 parsed_b.design.units.back().processes.front().statements,
                 frontend::Language::Vhdl2008, standard,
                 std::span { &source_b, 1U });
@@ -253,7 +253,7 @@ void test_vhdl_rejections_and_bounds()
         frontend::ExpressionKind::Unary, "??", { left },
         span(source.source_name, 0U, 3U)
     };
-    const auto converted = elaboration::discover_vhdl_coverage_conditions(
+    const auto converted = frontend::discover_vhdl_coverage_conditions(
         std::span { &condition_conversion, 1U },
         frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008,
@@ -265,7 +265,7 @@ void test_vhdl_rejections_and_bounds()
         "the VHDL-2008 condition conversion must remain one source-exact atom");
 
     const auto invalid_common_language
-        = elaboration::discover_coverage_conditions(
+        = frontend::discover_coverage_conditions(
             std::span { &decision, 1U },
             static_cast<frontend::CodeCoverageLanguage>(255U),
             std::span { &source, 1U });
@@ -275,7 +275,7 @@ void test_vhdl_rejections_and_bounds()
         "the common condition engine must reject unknown language identities");
 
     const auto invalid_language
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &decision, 1U },
             frontend::Language::SystemVerilog2017,
             frontend::VhdlStandard::Vhdl2008,
@@ -285,7 +285,7 @@ void test_vhdl_rejections_and_bounds()
                 == elaboration::VhdlCoverageConditionError::InvalidLanguage,
         "non-VHDL language families must be rejected");
     const auto invalid_standard
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &decision, 1U }, frontend::Language::Vhdl2008,
             static_cast<frontend::VhdlStandard>(255U),
             std::span { &source, 1U });
@@ -296,7 +296,7 @@ void test_vhdl_rejections_and_bounds()
     auto invalid_source = source;
     ++invalid_source.identity.content_bytes;
     const auto unauthenticated
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &decision, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &invalid_source, 1U });
@@ -307,7 +307,7 @@ void test_vhdl_rejections_and_bounds()
     auto missing = decision;
     missing.condition = { };
     const auto missing_condition
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &missing, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U });
@@ -318,7 +318,7 @@ void test_vhdl_rejections_and_bounds()
     auto malformed = decision;
     malformed.condition.operands.pop_back();
     const auto malformed_binary
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &malformed, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U });
@@ -332,7 +332,7 @@ void test_vhdl_rejections_and_bounds()
         span(source.source_name, 2U, 3U)
     };
     const auto malformed_unary
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &malformed_not, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U });
@@ -343,7 +343,7 @@ void test_vhdl_rejections_and_bounds()
     auto unknown = decision;
     unknown.condition.operands.front().span.source_name = "unknown.vhd";
     const auto unknown_source
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &unknown, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U });
@@ -354,7 +354,7 @@ void test_vhdl_rejections_and_bounds()
     auto outside = decision;
     outside.condition.operands.front().span.end.offset = contents.size() + 1U;
     const auto outside_source
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &outside, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U });
@@ -363,7 +363,7 @@ void test_vhdl_rejections_and_bounds()
                 == elaboration::VhdlCoverageConditionError::InvalidConditionSpan,
         "VHDL atomic spans must stay inside authenticated bytes");
     const std::vector duplicates { decision, decision };
-    const auto duplicate = elaboration::discover_vhdl_coverage_conditions(
+    const auto duplicate = frontend::discover_vhdl_coverage_conditions(
         duplicates, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U });
     require(!duplicate.ok() && duplicate.points.empty()
@@ -374,7 +374,7 @@ void test_vhdl_rejections_and_bounds()
     auto limits = elaboration::VhdlCoverageConditionLimits { };
     limits.maximum_conditions = 1U;
     const auto condition_limit
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &decision, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U }, limits);
@@ -385,7 +385,7 @@ void test_vhdl_rejections_and_bounds()
     limits = { };
     limits.maximum_expression_nesting = 1U;
     const auto nesting_limit
-        = elaboration::discover_vhdl_coverage_conditions(
+        = frontend::discover_vhdl_coverage_conditions(
             std::span { &decision, 1U }, frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U }, limits);
@@ -403,7 +403,7 @@ void test_vhdl_rejections_and_bounds()
     frontend::Statement bare_wait = unconditional_loop;
     bare_wait.kind = frontend::StatementKind::WaitUntil;
     const std::vector unconditional { unconditional_loop, bare_wait };
-    const auto omitted = elaboration::discover_vhdl_coverage_conditions(
+    const auto omitted = frontend::discover_vhdl_coverage_conditions(
         unconditional, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U });
     require(omitted.ok() && omitted.points.empty(),

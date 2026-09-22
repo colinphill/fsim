@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -36,7 +37,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(select_concat_process.ok());
     const auto elaborated_select_concat =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             select_concat_process.design,
             "sv:work.select_concat_process");
     assert(elaborated_select_concat.ok());
@@ -109,7 +110,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(selected_assignment.ok());
     const auto elaborated_selected_assignment =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             selected_assignment.design,
             "sv:work.selected_assignment");
     if (!elaborated_selected_assignment.ok()) {
@@ -168,7 +169,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(reversed_assignment_select.ok());
     const auto rejected_reversed_assignment_select =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             reversed_assignment_select.design,
             "sv:work.reversed_assignment_select");
     assert(!rejected_reversed_assignment_select.ok());
@@ -187,7 +188,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(reversed_select.ok());
     const auto rejected_reversed_select =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             reversed_select.design, "sv:work.reversed_select");
     assert(!rejected_reversed_select.ok());
     assert(has_diagnostic(
@@ -211,7 +212,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(dynamic_select.ok());
     const auto elaborated_dynamic_select =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             dynamic_select.design, "sv:work.dynamic_select");
     assert(elaborated_dynamic_select.ok());
     const auto dynamic_index_value =
@@ -281,7 +282,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(dynamic_part_select.ok());
     const auto elaborated_dynamic_part_select =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             dynamic_part_select.design,
             "sv:work.dynamic_part_select");
     assert(elaborated_dynamic_part_select.ok());
@@ -345,14 +346,14 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_dynamic_parts.ok());
     const auto rejected_dynamic_width =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_dynamic_parts.design,
             "sv:work.dynamic_width");
     assert(!rejected_dynamic_width.ok());
     assert(has_diagnostic(
         rejected_dynamic_width, "FSIM-ELAB-SVEXPR-004"));
     const auto elaborated_dynamic_target =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_dynamic_parts.design,
             "sv:work.dynamic_target");
     assert(elaborated_dynamic_target.ok());
@@ -398,13 +399,32 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_streams.ok());
     const auto rejected_dynamic_stream =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_streams.design,
             "sv:work.dynamic_stream");
     assert(!rejected_dynamic_stream.ok());
     assert(has_diagnostic(
         rejected_dynamic_stream, "FSIM-ELAB-SVEXPR-002"));
-    const auto elaborated_wide_stream = fsim::elaboration::elaborate(
+    auto malformed_stream = compile_test_design(invalid_streams.design);
+    assert(semantic::normalize_compiled_design(malformed_stream));
+    auto& malformed_stream_expressions
+        = malformed_stream.mutable_systemverilog().mutable_expressions();
+    const auto malformed_stream_call = std::ranges::find_if(
+        malformed_stream_expressions,
+        [](const semantic::sv::Expression& expression) {
+            return expression.kind == semantic::sv::ExpressionKind::call
+                && expression.text == "@stream-left";
+        });
+    assert(malformed_stream_call != malformed_stream_expressions.end());
+    assert(malformed_stream_call->operands.size() >= 2U);
+    malformed_stream_call->operands.resize(1U);
+    malformed_stream.refresh_lookup_indexes();
+    const auto rejected_malformed_stream = fsim::elaboration::elaborate(
+        malformed_stream, "sv:work.dynamic_stream");
+    assert(!rejected_malformed_stream.ok());
+    assert(has_diagnostic(
+        rejected_malformed_stream, "FSIM-ELAB-SVEXPR-001"));
+    const auto elaborated_wide_stream = compile_and_elaborate(
         invalid_streams.design,
         "sv:work.wide_stream");
     assert(elaborated_wide_stream.ok());
@@ -421,7 +441,7 @@ endmodule
         == "0000000100100011010001010110011110001001101010111100110111101111"
            "1111111011011100101110101001100001110110010101000011001000010000");
     const auto rejected_container_stream =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_streams.design,
             "sv:work.container_stream");
     assert(!rejected_container_stream.ok());
@@ -442,7 +462,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(narrow_dynamic_select.ok());
     const auto elaborated_narrow_dynamic_select =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             narrow_dynamic_select.design,
             "sv:work.narrow_dynamic_select");
     assert(elaborated_narrow_dynamic_select.ok());
@@ -459,7 +479,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(empty_concatenation.ok());
     const auto rejected_empty_concatenation =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             empty_concatenation.design,
             "sv:work.empty_concatenation");
     assert(!rejected_empty_concatenation.ok());
@@ -501,7 +521,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_select_concat.ok());
     const auto elaborated_vhdl_select_concat =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_select_concat.design,
             "vhdl:work.vhdl_select_concat(rtl)");
     assert(elaborated_vhdl_select_concat.ok());
@@ -582,7 +602,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_selected_assignment.ok());
     const auto elaborated_vhdl_selected_assignment =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_selected_assignment.design,
             "vhdl:work.vhdl_selected_assignment(rtl)");
     if (!elaborated_vhdl_selected_assignment.ok()) {
@@ -648,7 +668,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(reversed_vhdl_select.ok());
     const auto rejected_reversed_vhdl_select =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             reversed_vhdl_select.design,
             "vhdl:work.reversed_vhdl_select(rtl)");
     assert(!rejected_reversed_vhdl_select.ok());
@@ -666,7 +686,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(empty_wildcard.ok());
     const auto rejected_empty_wildcard =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             empty_wildcard.design, "sv:work.empty_wildcard");
     assert(!rejected_empty_wildcard.ok());
     assert(has_diagnostic(
@@ -707,7 +727,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(callable_wildcard.ok());
     const auto elaborated_callable_wildcard =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             callable_wildcard.design,
             "sv:work.callable_wildcard");
     assert(elaborated_callable_wildcard.ok());
@@ -769,7 +789,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(packed_event_expression.ok());
     const auto elaborated_packed_event_expression =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             packed_event_expression.design,
             "sv:work.packed_event_expression");
     if (!elaborated_packed_event_expression.ok()) {
@@ -845,7 +865,7 @@ endmodule
                 {},
                 {}});
     const auto rejected_malformed_event_expression =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             malformed_event_expression.design,
             "sv:work.malformed_event_expression");
     assert(!rejected_malformed_event_expression.ok());
@@ -868,7 +888,7 @@ endmodule
     malformed_repeated_event.design.units.front().processes.front()
         .statements.front().procedural_assignment_repeat = true;
     const auto rejected_malformed_repeated_event =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             malformed_repeated_event.design,
             "sv:work.malformed_repeated_event");
     assert(!rejected_malformed_repeated_event.ok());
@@ -887,7 +907,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_event_alias_source.ok());
-    const auto rejected_event_alias_source = fsim::elaboration::elaborate(
+    const auto rejected_event_alias_source = compile_and_elaborate(
         invalid_event_alias_source.design,
         "sv:work.invalid_event_alias_source");
     assert(!rejected_event_alias_source.ok());
@@ -906,7 +926,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_event_alias_timing.ok());
-    const auto rejected_event_alias_timing = fsim::elaboration::elaborate(
+    const auto rejected_event_alias_timing = compile_and_elaborate(
         invalid_event_alias_timing.design,
         "sv:work.invalid_event_alias_timing");
     assert(!rejected_event_alias_timing.ok());
@@ -931,7 +951,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(dynamic_wildcard.ok());
     const auto elaborated_dynamic_wildcard =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             dynamic_wildcard.design, "sv:work.dynamic_wildcard");
     assert(elaborated_dynamic_wildcard.ok());
     const auto& dynamic_wait_process =
@@ -975,7 +995,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(empty_dynamic_wildcard.ok());
     const auto rejected_empty_dynamic_wildcard =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             empty_dynamic_wildcard.design,
             "sv:work.empty_dynamic_wildcard");
     assert(!rejected_empty_dynamic_wildcard.ok());
@@ -1018,7 +1038,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(parsed_sv_conditionals.ok());
     const auto elaborated_sv_conditionals =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_sv_conditionals.design,
             "sv:work.conditional_flow");
     assert(elaborated_sv_conditionals.ok());
@@ -1131,7 +1151,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(parsed_vhdl_conditionals.ok());
     const auto elaborated_vhdl_conditionals =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_vhdl_conditionals.design,
             "vhdl:work.conditional_flow(rtl)");
     if (!elaborated_vhdl_conditionals.ok()) {
@@ -1196,7 +1216,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_sequential_loops.ok());
     const auto elaborated_vhdl_sequential_loops =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_sequential_loops.design,
             "vhdl:work.sequential_loops(rtl)");
     if (!elaborated_vhdl_sequential_loops.ok()) {
@@ -1262,7 +1282,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_loops.ok());
     const auto rejected_vhdl_loops =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_loops.design,
             "vhdl:work.invalid_sequential_loops(rtl)");
     assert(!rejected_vhdl_loops.ok());
@@ -1294,7 +1314,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(systemverilog_procedural_loops.ok());
     const auto elaborated_systemverilog_procedural_loops =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             systemverilog_procedural_loops.design,
             "sv:work.procedural_loops");
     if (!elaborated_systemverilog_procedural_loops.ok()) {
@@ -1353,7 +1373,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(dynamic_systemverilog_loops.ok());
     const auto elaborated_dynamic_systemverilog_loops =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             dynamic_systemverilog_loops.design,
             "sv:work.dynamic_procedural_loops");
     assert(elaborated_dynamic_systemverilog_loops.ok());
@@ -1387,7 +1407,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_systemverilog_loops.ok());
     const auto rejected_systemverilog_loops =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_systemverilog_loops.design,
             "sv:work.invalid_procedural_loops");
     assert(!rejected_systemverilog_loops.ok());
@@ -1421,7 +1441,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(repeat_statements.ok());
     const auto elaborated_repeat_statements =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             repeat_statements.design,
             "sv:work.repeat_statements");
     assert(elaborated_repeat_statements.ok());
@@ -1474,7 +1494,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(runtime_for_statements.ok());
     const auto elaborated_runtime_for =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             runtime_for_statements.design,
             "sv:work.runtime_for_statements");
     assert(elaborated_runtime_for.ok());
@@ -1505,7 +1525,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_repeat_statements.ok());
     const auto rejected_repeat_statements =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_repeat_statements.design,
             "sv:work.invalid_repeat_statements");
     assert(!rejected_repeat_statements.ok());
@@ -1536,7 +1556,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(runtime_loop_statements.ok());
     const auto elaborated_runtime_loop_statements =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             runtime_loop_statements.design,
             "sv:work.runtime_loop_statements");
     if (!elaborated_runtime_loop_statements.ok()) {
@@ -1618,7 +1638,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(systemverilog_loop_control.ok());
     const auto elaborated_systemverilog_loop_control =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             systemverilog_loop_control.design,
             "sv:work.systemverilog_loop_control");
     if (!elaborated_systemverilog_loop_control.ok()) {
@@ -1671,7 +1691,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(!orphan_loop_control.ok());
     const auto rejected_orphan_loop_control =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             orphan_loop_control.design,
             "sv:work.orphan_loop_control");
     assert(!rejected_orphan_loop_control.ok());
@@ -1705,7 +1725,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_runtime_loop.ok());
     const auto elaborated_vhdl_runtime_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_runtime_loop.design,
             "vhdl:work.vhdl_runtime_loop(rtl)");
     assert(elaborated_vhdl_runtime_loop.ok());
@@ -1796,7 +1816,7 @@ end architecture;
     }
     assert(vhdl_loop_control.ok());
     const auto elaborated_vhdl_loop_control =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_loop_control.design,
             "vhdl:work.vhdl_loop_control(rtl)");
     if (!elaborated_vhdl_loop_control.ok()) {
@@ -1848,7 +1868,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(!orphan_vhdl_loop_target.ok());
     const auto rejected_orphan_vhdl_loop_target =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             orphan_vhdl_loop_target.design,
             "vhdl:work.orphan_vhdl_loop_target(rtl)");
     assert(!rejected_orphan_vhdl_loop_target.ok());
@@ -1880,7 +1900,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(post_test_loop.ok());
     const auto elaborated_post_test_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             post_test_loop.design,
             "sv:work.post_test_loop");
     if (!elaborated_post_test_loop.ok()) {
@@ -1946,7 +1966,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(unconditional_vhdl_loop.ok());
     const auto elaborated_unconditional_vhdl_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             unconditional_vhdl_loop.design,
             "vhdl:work.unconditional_vhdl_loop(rtl)");
     assert(elaborated_unconditional_vhdl_loop.ok());

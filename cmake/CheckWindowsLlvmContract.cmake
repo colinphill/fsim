@@ -265,18 +265,14 @@ foreach(FSIM_JOB_POLICY IN ITEMS
     "configuration: Release"
     "llvm_mode:"
     "llvm_mode: 'ON'"
-    "llvm_mode: 'OFF'"
     "llvm-mingw-20260616-ucrt-x86_64.zip"
     "mingw-w64-clang-x86_64-llvm-22.1.8-2"
     "/clang64/bin/lli.exe --version"
     "id: msys2"
     "steps.msys2.outputs.msys2-location"
     "LLVMConfig.cmake was not installed at"
-    "github-windows-debug-llvm-off"
     "github-windows-debug-llvm-on"
-    "github-windows-release-llvm-off"
     "github-windows-release-llvm-on"
-    "fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
     "fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
     "-DFSIM_BINARY_ONLY=ON"
     "cmake/CheckV3InstalledArchive.cmake"
@@ -299,5 +295,5 @@ endif()
 message(STATUS
   "Windows LLVM contract: x64 GNU Windows ABI target, native PE/COFF target and "
   "cache identity, strict C layout, safe DLL ownership, atomic cache replace, "
-  "O0/O2/debug provenance, third-party warning isolation, four retained "
-  "LLVM-MinGW hosted artifacts and two Release binary archive lanes are present")
+  "O0/O2/debug provenance, third-party warning isolation, two retained "
+  "LLVM-MinGW hosted artifacts and one Release binary archive lane are present")

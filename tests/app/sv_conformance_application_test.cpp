@@ -214,13 +214,9 @@ void test_standard_identity(const std::filesystem::path& directory)
     assert(
         checked->hdl_sources[1].standard_revision
         == fsim::frontend::StandardRevision::SystemVerilog2009);
-    assert(checked->parsed.units.size() == 2);
-    assert(
-        checked->parsed.units[0].standard_revision
-        == fsim::frontend::StandardRevision::Verilog2001);
-    assert(
-        checked->parsed.units[1].standard_revision
-        == fsim::frontend::StandardRevision::SystemVerilog2009);
+    assert(checked->systemverilog_hir.units().size() == 2);
+    assert(checked->systemverilog_hir.units()[0].standard == "2001");
+    assert(checked->systemverilog_hir.units()[1].standard == "2009");
 
     const auto shared = identity / "shared.svh";
     const auto first = identity / "first.sv";
@@ -299,9 +295,8 @@ void test_declaration_revision_gates(const std::filesystem::path& directory)
     const auto checked_1995 =
         fsim::app::check_project(legal_1995, legal_1995_diagnostics);
     assert(checked_1995 && !legal_1995_diagnostics.has_error());
-    assert(
-        checked_1995->parsed.units.front().standard_revision
-        == fsim::frontend::StandardRevision::Verilog1995);
+    assert(checked_1995->systemverilog_hir.units().front().standard
+        == "1995");
 
     const auto rejected = gates / "rejected-1995.v";
     write_text(
@@ -332,9 +327,8 @@ void test_declaration_revision_gates(const std::filesystem::path& directory)
     const auto checked_2001 =
         fsim::app::check_project(legal_2001, legal_2001_diagnostics);
     assert(checked_2001 && !legal_2001_diagnostics.has_error());
-    assert(
-        checked_2001->parsed.units.front().standard_revision
-        == fsim::frontend::StandardRevision::Verilog2001);
+    assert(checked_2001->systemverilog_hir.units().front().standard
+        == "2001");
 
     const auto compatibility_source = gates / "compatibility-profile.sv";
     write_text(
@@ -355,14 +349,19 @@ void test_declaration_revision_gates(const std::filesystem::path& directory)
     const auto checked_compatibility = fsim::app::check_project(
         compatibility_config, compatibility_diagnostics);
     assert(checked_compatibility && !compatibility_diagnostics.has_error());
-    assert(checked_compatibility->parsed.units.size() == 1
-        && checked_compatibility->parsed.units.front().name == "checker"
-        && checked_compatibility->parsed.units.front()
-                .verilog_compatibility_profile
+    const auto& compatibility_hir = checked_compatibility->systemverilog_hir;
+    assert(compatibility_hir.units().size() == 1
+        && compatibility_hir.units().front().name == "checker"
+        && compatibility_hir.units().front().compatibility_profile
             == "keyword-profile,implicit-net,port-connection,sizing,lifetime,"
-               "scheduler-assertion,configuration"
-        && checked_compatibility->parsed.units.front().signals.front()
-                .type.width()
+               "scheduler-assertion,configuration");
+    const auto value = std::ranges::find_if(
+        compatibility_hir.declarations(), [](const auto& declaration) {
+            return declaration.name == "value";
+        });
+    assert(value != compatibility_hir.declarations().end());
+    assert(value->type
+        && value->type->executable_width
             == std::optional<std::uint64_t> { 257 });
 }
 
@@ -401,27 +400,28 @@ endprogram
     fsim::diagnostic::Engine check_diagnostics;
     const auto checked = fsim::app::check_project(config, check_diagnostics);
     assert(checked && !check_diagnostics.has_error());
-    assert(checked->parsed.units.size() == 3);
-    const auto& module = checked->parsed.units[0];
-    const auto& interface_unit = checked->parsed.units[1];
-    const auto& program = checked->parsed.units[2];
-    assert(module.kind == fsim::frontend::UnitKind::VerilogModule);
+    const auto& units = checked->systemverilog_hir.units();
+    assert(units.size() == 3);
+    const auto& module = units[0];
+    const auto& interface_unit = units[1];
+    const auto& program = units[2];
+    assert(module.kind == fsim::semantic::sv::UnitKind::module);
     assert(interface_unit.kind
-        == fsim::frontend::UnitKind::SystemVerilogInterface);
+        == fsim::semantic::sv::UnitKind::interface);
     assert(program.kind
-        == fsim::frontend::UnitKind::SystemVerilogProgram);
-    assert(module.systemverilog_scheduling_declaration);
-    assert(interface_unit.systemverilog_scheduling_declaration);
-    assert(program.systemverilog_scheduling_declaration);
-    assert(module.systemverilog_scheduling_declaration->process_region
-        == fsim::frontend::SystemVerilogProcessRegion::Active);
-    assert(interface_unit.systemverilog_scheduling_declaration->process_region
-        == fsim::frontend::SystemVerilogProcessRegion::Active);
-    assert(program.systemverilog_scheduling_declaration->process_region
-        == fsim::frontend::SystemVerilogProcessRegion::Reactive);
-    assert(!module.systemverilog_scheduling_declaration->prototype);
-    assert(!interface_unit.systemverilog_scheduling_declaration->prototype);
-    assert(!program.systemverilog_scheduling_declaration->prototype);
+        == fsim::semantic::sv::UnitKind::program);
+    assert(module.scheduling_declaration);
+    assert(interface_unit.scheduling_declaration);
+    assert(program.scheduling_declaration);
+    assert(module.scheduling_declaration->process_region
+        == fsim::semantic::sv::DesignProcessRegion::active);
+    assert(interface_unit.scheduling_declaration->process_region
+        == fsim::semantic::sv::DesignProcessRegion::active);
+    assert(program.scheduling_declaration->process_region
+        == fsim::semantic::sv::DesignProcessRegion::reactive);
+    assert(!module.scheduling_declaration->prototype);
+    assert(!interface_unit.scheduling_declaration->prototype);
+    assert(!program.scheduling_declaration->prototype);
 
     fsim::diagnostic::Engine active_diagnostics;
     const auto active = fsim::app::build_project(config, active_diagnostics);
@@ -1066,11 +1066,20 @@ endmodule
     assert(
         checked && !semantic_diagnostics.has_error()
         && std::ranges::all_of(
-            checked->parsed.units, [](const auto& unit) {
-                return unit.standard_revision
-                    == fsim::frontend::StandardRevision::SystemVerilog2023;
+            checked->systemverilog_hir.units(), [](const auto& unit) {
+                return unit.standard == "2023";
             })
-        && checked->parsed.systemverilog_classes.size() == 4);
+        && checked->systemverilog_hir.classes().size() == 4);
+    const auto module_unit = std::ranges::find(
+        checked->systemverilog_hir.units(),
+        fsim::semantic::sv::UnitKind::module,
+        &fsim::semantic::sv::Unit::kind);
+    const auto compilation_unit = std::ranges::find(
+        checked->systemverilog_hir.units(),
+        fsim::semantic::sv::UnitKind::compilation_unit,
+        &fsim::semantic::sv::Unit::kind);
+    assert(module_unit != checked->systemverilog_hir.units().end()
+        && compilation_unit != checked->systemverilog_hir.units().end());
 
     fsim::project::Config elaborate_config;
     elaborate_config.manifest_path = "<systemverilog-2023-artifact>";
@@ -1099,6 +1108,8 @@ endmodule
         && design_metadata->objects.size() == 1
         && design_metadata->objects.front().standard == "2023"
         && design_metadata->verilog_unit_provenance.size() == 1
+        && design_metadata->verilog_unit_provenance.front().unit
+            == module_unit->id.value()
         && design_metadata->verilog_unit_provenance.front().standard
             == "2023");
 
@@ -1139,7 +1150,7 @@ endmodule
             provenance.size() == 1
             && provenance.front().standard == "systemverilog-2023"
             && std::ranges::any_of(
-                loaded->systemverilog_class_specializations,
+                loaded->compiled_systemverilog_class_specializations,
                 [](const auto& specialization) {
                     return specialization.declaration_identity.ends_with(
                         "::ConcreteContract");
@@ -1635,9 +1646,9 @@ endmodule
         fsim::diagnostic::print_text(std::cerr, diagnostics);
     }
     assert(checked && !diagnostics.has_error());
-    assert(checked->parsed.units.size() == 1U);
+    assert(checked->systemverilog_hir.units().size() == 1U);
     const auto& provenance
-        = checked->parsed.units.front().systemverilog_standard_package;
+        = checked->systemverilog_hir.units().front().standard_package;
     assert(provenance);
     assert(provenance->revision == package_2023->revision);
     assert(provenance->declaration_identity

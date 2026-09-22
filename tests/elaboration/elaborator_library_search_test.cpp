@@ -17,7 +17,7 @@ fsim::elaboration::ElaborationResult elaborate_with_search(
     const std::span<const Binding> bindings = {},
     const std::span<const SystemCInstanceDescription> systemc_instances = {},
     fsim::elaboration::SystemCFactoryProvider* provider = nullptr) {
-    return fsim::elaboration::elaborate(
+    return compile_and_elaborate(
         design,
         top,
         bindings,

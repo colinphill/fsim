@@ -117,14 +117,10 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "configuration: Debug"
     "configuration: Release"
     "llvm_mode: 'ON'"
-    "llvm_mode: 'OFF'"
     "-DFSIM_TCL_MODE=ON"
-    "fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip"
     "fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
-    "batch188-change20-windows-no-llvm-install.log"
     "batch188-change20-windows-llvm22-install.log"
-    "expected_tests: '415'"
-    "expected_tests: '419'"
+    "expected_tests: '423'"
     "expected_archive_entries: '1269'"
     "for attempt in 1 2 3; do"
     "LLVM package installation attempt \${attempt} failed; retrying"
@@ -148,9 +144,9 @@ endforeach()
 string(REGEX MATCHALL "timeout-minutes:[ ]*([0-9]+)" FSIM_TIMEOUT_ROWS
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_TIMEOUT_ROWS FSIM_TIMEOUT_COUNT)
-if(NOT FSIM_TIMEOUT_COUNT EQUAL 4)
+if(NOT FSIM_TIMEOUT_COUNT EQUAL 2)
   message(FATAL_ERROR
-    "hosted job timeout inventory drifted: expected 4, found ${FSIM_TIMEOUT_COUNT}")
+    "hosted job timeout inventory drifted: expected 2, found ${FSIM_TIMEOUT_COUNT}")
 endif()
 foreach(FSIM_TIMEOUT_ROW IN LISTS FSIM_TIMEOUT_ROWS)
   if(NOT FSIM_TIMEOUT_ROW MATCHES "timeout-minutes:[ ]*120$")
@@ -191,8 +187,8 @@ if(NOT FSIM_UNDEBUG_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "Windows package definitions: 2 LLVM-MinGW 20260616 UCRT targets; all 4 "
-  "hosted timeouts are 120 minutes; four retained Windows lane artifacts and "
-  "two Release binary archives, /bigobj and warning-clean test assertion "
+  "Windows package definitions: 2 LLVM-MinGW 20260616 UCRT targets; all 2 "
+  "hosted timeouts are 120 minutes; two retained Windows lane artifacts and "
+  "one Release binary archive, /bigobj and warning-clean test assertion "
   "policy are statically owned; every real Windows result is deferred to "
   "Batch 188 Change 20")

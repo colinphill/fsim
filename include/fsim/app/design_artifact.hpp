@@ -4,9 +4,11 @@
 #include "fsim/app/application.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/model.hpp"
 
+#include <cstddef>
 #include <optional>
 #include <istream>
 #include <ostream>
@@ -18,11 +20,13 @@ namespace fsim::app {
 inline constexpr std::uint32_t kRuntimeStateSchema = 62;
 inline constexpr std::uint32_t kSemanticStateSchema = 4;
 inline constexpr std::uint32_t kDesignIrStateSchema = 4;
-inline constexpr std::uint32_t kClassStateSchema = 12;
-inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 7;
+inline constexpr std::uint32_t kCompiledHirBundleSchema = 1;
+inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 8;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
-inline constexpr std::uint32_t kVhdlHirStateSchema = 4;
+inline constexpr std::uint32_t kVhdlHirStateSchema = 5;
+inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
+    = 256U * 1024U * 1024U;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
@@ -57,21 +61,20 @@ deserialize_runtime_state(
     std::string source_name,
     diagnostic::Engine& diagnostics);
 
+[[nodiscard]] std::optional<std::string> serialize_compiled_hir_bundle(
+    const semantic::CompiledDesign& design,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<semantic::CompiledDesign>
+deserialize_compiled_hir_bundle(
+    std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics);
+
 [[nodiscard]] std::optional<std::string> serialize_design_ir_state(
     const semantic::design::DesignIr& design,
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<semantic::design::DesignIr>
 deserialize_design_ir_state(
-    std::string_view bytes,
-    std::string source_name,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] std::optional<std::string> serialize_class_state(
-    std::span<const frontend::SystemVerilogClassSpecialization> classes,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<std::vector<
-    frontend::SystemVerilogClassSpecialization>>
-deserialize_class_state(
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);
@@ -90,12 +93,16 @@ deserialize_systemverilog_constraint_hir_state(
 
 [[nodiscard]] std::optional<std::string>
 serialize_systemverilog_coverage_state(
-    const frontend::SystemVerilogCoverageState& state,
+    const runtime::SystemVerilogCoverageState& state,
+    const semantic::sv::Hir& hir,
+    const semantic::Model& semantics,
     diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<frontend::SystemVerilogCoverageState>
+[[nodiscard]] std::optional<runtime::SystemVerilogCoverageState>
 deserialize_systemverilog_coverage_state(
     std::string_view bytes,
     std::string source_name,
+    const semantic::sv::Hir& hir,
+    const semantic::Model& semantics,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<std::string>

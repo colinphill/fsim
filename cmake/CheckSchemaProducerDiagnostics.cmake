@@ -14,9 +14,8 @@ set(FSIM_PROJECT "${FSIM_SOURCE_DIR}/src/project/project.cpp")
 set(FSIM_OBJECT "${FSIM_SOURCE_DIR}/src/artifact/object.cpp")
 set(FSIM_DESIGN "${FSIM_SOURCE_DIR}/src/artifact/design.cpp")
 set(FSIM_LIBRARY "${FSIM_SOURCE_DIR}/src/library/artifact.cpp")
-set(FSIM_PORTABLE "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
 set(FSIM_DESIGN_STATE
-  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec.cpp")
+  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec_internal.hpp")
 set(FSIM_LIBRARY_IMPORT
   "${FSIM_SOURCE_DIR}/src/app/application_library_import.cpp")
 set(FSIM_INCREMENTAL_CODEC
@@ -57,7 +56,6 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_OBJECT}"
     "${FSIM_DESIGN}"
     "${FSIM_LIBRARY}"
-    "${FSIM_PORTABLE}"
     "${FSIM_DESIGN_STATE}"
     "${FSIM_LIBRARY_IMPORT}"
     "${FSIM_INCREMENTAL_CODEC}"
@@ -87,16 +85,16 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "48dda18806aeba6b108e84770686057e8000f9deb1084f7d52662c8972a1928e")
+  "aa05326e11b94e93d086237412b3d03bfb299e804544a5f7221b78a96ad00b2d")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "schema/producer diagnostic contract changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 39)
+if(NOT FSIM_ROW_COUNT EQUAL 36)
   message(FATAL_ERROR
-    "schema/producer diagnostic contract requires SPDX, header and 37 rows")
+    "schema/producer diagnostic contract requires SPDX, header and 34 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -106,7 +104,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
   message(FATAL_ERROR
     "schema/producer diagnostic header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 38)
+foreach(FSIM_INDEX RANGE 2 35)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -160,6 +158,7 @@ fsim_require_schema_diagnostic_tokens("${FSIM_OBJECT}"
   "\".fsimobj\""
   "\".fsimobj publication\""
   "portable-unit schema"
+  "compiled-HIR schema"
   "unsupported_artifact_identity(")
 fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN}"
   "\".fsimdesign\""
@@ -169,11 +168,7 @@ fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY}"
   "\".fsimlib\""
   "\".fsimlib publication\""
   "portable-unit schema"
-  "unsupported_artifact_identity(")
-fsim_require_schema_diagnostic_tokens("${FSIM_PORTABLE}"
-  "\"portable owning unit\""
-  "\"portable UDP declaration\""
-  "\"portable class unit\""
+  "compiled-HIR schema"
   "unsupported_artifact_identity(")
 fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN_STATE}"
   "\"design state \" + std::string { magic }"
@@ -227,7 +222,8 @@ fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN_TEST}"
   "stale-publication")
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "has_identity_diagnostic"
-  "portable-unit schema 14"
+  "portable-unit schema 15"
+  "compiled-HIR schema 1"
   "stale-publication.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
   "unsupported design state FSIMUVM1 identity: found"
@@ -256,4 +252,4 @@ fsim_require_schema_diagnostic_tokens("${FSIM_TEST_BUILD}"
   "CheckSchemaProducerDiagnostics.cmake")
 
 message(STATUS
-  "schema/producer diagnostic policy passed: rows=37 digest=${FSIM_CONTRACT_DIGEST}")
+  "schema/producer diagnostic policy passed: rows=34 digest=${FSIM_CONTRACT_DIGEST}")

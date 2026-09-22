@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -25,7 +26,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(unsafe_edge.ok());
     const auto rejected_edge =
-        fsim::elaboration::elaborate(unsafe_edge.design, "unsafe_edge");
+        compile_and_elaborate(unsafe_edge.design, "unsafe_edge");
     assert(!rejected_edge.ok());
     assert(has_diagnostic(rejected_edge, "FSIM-ELAB-045"));
 
@@ -39,7 +40,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(logical_not.ok());
     const auto elaborated_not =
-        fsim::elaboration::elaborate(logical_not.design, "logical_not");
+        compile_and_elaborate(logical_not.design, "logical_not");
     assert(elaborated_not.ok());
     const auto not_value =
         elaborated_not.design->find_signal("value");
@@ -98,7 +99,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(assignment_timing.ok());
     const auto elaborated_assignment_timing =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             assignment_timing.design, "assignment_timing");
     if (!elaborated_assignment_timing.ok()) {
         for (const auto& diagnostic :
@@ -288,15 +289,26 @@ endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
     assert(inconsistent_assignment_control.ok());
-    inconsistent_assignment_control.design.units.front()
-        .processes.front()
-        .statements.front()
-        .procedural_assignment_control =
-        fsim::frontend::ProceduralAssignmentControl::Event;
-    const auto rejected_assignment_control =
-        fsim::elaboration::elaborate(
-            inconsistent_assignment_control.design,
-            "inconsistent_assignment_control");
+    auto malformed_assignment_control = compile_test_design(
+        std::move(inconsistent_assignment_control.design));
+    assert(semantic::normalize_compiled_design(
+        malformed_assignment_control));
+    auto& malformed_control_statements = malformed_assignment_control
+                                             .mutable_systemverilog()
+                                             .mutable_statements();
+    auto malformed_control = std::ranges::find_if(
+        malformed_control_statements,
+        [](const semantic::sv::Statement& statement) {
+            return statement.kind
+                == semantic::sv::StatementKind::assignment;
+        });
+    assert(malformed_control != malformed_control_statements.end());
+    malformed_control->assignment_control
+        = semantic::sv::AssignmentControl::event;
+    malformed_assignment_control.refresh_lookup_indexes();
+    const auto rejected_assignment_control = fsim::elaboration::elaborate(
+        malformed_assignment_control,
+        "sv:work.inconsistent_assignment_control");
     assert(!rejected_assignment_control.ok());
     assert(has_diagnostic(
         rejected_assignment_control, "FSIM-ELAB-105"));
@@ -312,12 +324,25 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(inconsistent_update.ok());
-    inconsistent_update.design.units.front()
-        .processes.front()
-        .statements.front()
-        .procedural_update_operator = "-";
+    auto malformed_update = compile_test_design(
+        std::move(inconsistent_update.design));
+    assert(semantic::normalize_compiled_design(malformed_update));
+    auto& malformed_update_statements
+        = malformed_update.mutable_systemverilog().mutable_statements();
+    auto malformed_update_statement = std::ranges::find_if(
+        malformed_update_statements,
+        [](const semantic::sv::Statement& statement) {
+            return statement.kind
+                    == semantic::sv::StatementKind::assignment
+                && statement.update_kind
+                    != semantic::sv::UpdateKind::none;
+        });
+    assert(malformed_update_statement
+        != malformed_update_statements.end());
+    malformed_update_statement->update_operator = "-";
+    malformed_update.refresh_lookup_indexes();
     const auto rejected_update = fsim::elaboration::elaborate(
-        inconsistent_update.design, "inconsistent_update");
+        malformed_update, "sv:work.inconsistent_update");
     assert(!rejected_update.ok());
     assert(has_diagnostic(rejected_update, "FSIM-ELAB-106"));
 
@@ -338,7 +363,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_force.ok());
-    const auto rejected_force = fsim::elaboration::elaborate(
+    const auto rejected_force = compile_and_elaborate(
         invalid_force.design, "invalid_force");
     assert(!rejected_force.ok());
     assert(!has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
@@ -359,7 +384,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_procedural_assign.ok());
-    const auto rejected_procedural_assign = fsim::elaboration::elaborate(
+    const auto rejected_procedural_assign = compile_and_elaborate(
         invalid_procedural_assign.design,
         "invalid_procedural_assign");
     assert(!rejected_procedural_assign.ok());
@@ -381,7 +406,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(dynamic_force.ok());
-    const auto elaborated_dynamic_force = fsim::elaboration::elaborate(
+    const auto elaborated_dynamic_force = compile_and_elaborate(
         dynamic_force.design, "dynamic_force");
     if (!elaborated_dynamic_force.ok()) {
       for (const auto& diagnostic : elaborated_dynamic_force.diagnostics) {
@@ -435,7 +460,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(width_conversion.ok());
     const auto converted_width =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             width_conversion.design, "width_conversion");
     assert(converted_width.ok());
     const auto converted_q =
@@ -454,10 +479,26 @@ endmodule
         "module unsupported_domain(input logic value); endmodule",
         fsim::frontend::Language::SystemVerilog2017);
     assert(unsupported_domain.ok());
-    unsupported_domain.design.units.front().ports.front().type.domain =
-        fsim::frontend::ValueDomain::Unknown;
+    auto unsupported_domain_hir = compile_test_design(
+        std::move(unsupported_domain.design));
+    assert(semantic::normalize_compiled_design(unsupported_domain_hir));
+    auto& unsupported_declarations
+        = unsupported_domain_hir.mutable_systemverilog()
+              .mutable_declarations();
+    auto unsupported_port = std::ranges::find_if(
+        unsupported_declarations,
+        [](const semantic::sv::Declaration& declaration) {
+            return declaration.form
+                    == semantic::sv::DeclarationForm::port
+                && declaration.name == "value";
+        });
+    assert(
+        unsupported_port != unsupported_declarations.end()
+        && unsupported_port->type);
+    unsupported_port->type->executable_width = 0U;
+    unsupported_domain_hir.refresh_lookup_indexes();
     const auto rejected_domain = fsim::elaboration::elaborate(
-        unsupported_domain.design, "unsupported_domain");
+        unsupported_domain_hir, "sv:work.unsupported_domain");
     assert(!rejected_domain.ok());
     assert(has_diagnostic(
         rejected_domain, "FSIM-ELAB-TYPE-001"));
@@ -478,7 +519,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(default_values.ok());
-    const auto elaborated_defaults = fsim::elaboration::elaborate(
+    const auto elaborated_defaults = compile_and_elaborate(
         default_values.design, "default_values");
     assert(elaborated_defaults.ok());
     auto default_interpreter =
@@ -514,7 +555,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(nine_state_literals.ok());
     const auto elaborated_nine_state_literals =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             nine_state_literals.design, "nine_state_literals");
     assert(elaborated_nine_state_literals.ok());
     auto nine_state_interpreter =
@@ -541,7 +582,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(lossy_assignment.ok());
-    const auto converted_lossy_assignment = fsim::elaboration::elaborate(
+    const auto converted_lossy_assignment = compile_and_elaborate(
         lossy_assignment.design, "lossy_assignment");
     assert(converted_lossy_assignment.ok());
     auto lossy_assignment_interpreter = converted_lossy_assignment.design->create_interpreter();
@@ -567,7 +608,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(two_state_assignment.ok());
     const auto accepted_two_state_assignment =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             two_state_assignment.design, "two_state_assignment");
     assert(accepted_two_state_assignment.ok());
 
@@ -588,7 +629,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(unknown_condition.ok());
     const auto elaborated_unknown_condition =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             unknown_condition.design, "unknown_condition");
     assert(elaborated_unknown_condition.ok());
     auto unknown_condition_interpreter =
@@ -624,7 +665,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(multiple_drivers.ok());
-    const auto missing_resolver = fsim::elaboration::elaborate(
+    const auto missing_resolver = compile_and_elaborate(
         multiple_drivers.design, "driver_top");
     assert(!missing_resolver.ok());
     assert(has_diagnostic(missing_resolver, "FSIM-ELAB-BIND-024"));
@@ -632,7 +673,7 @@ endmodule
         {"driver_top.first", "sv:work.driver", std::string{"sv_wire"}},
         {"driver_top.second", "sv:work.other_driver", std::string{"sv_wire"}},
     };
-    const auto resolved_boundary = fsim::elaboration::elaborate(
+    const auto resolved_boundary = compile_and_elaborate(
         multiple_drivers.design, "driver_top", resolver_bindings);
     assert(resolved_boundary.ok());
     const auto shared =
@@ -658,7 +699,7 @@ endmodule
         {"driver_top.first", "sv:work.driver", std::string{"wired"}},
         {"driver_top.second", "sv:work.other_driver", std::string{"wired"}},
     };
-    const auto invalid_resolver = fsim::elaboration::elaborate(
+    const auto invalid_resolver = compile_and_elaborate(
         multiple_drivers.design,
         "driver_top",
         invalid_resolver_bindings);
@@ -677,7 +718,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(process_drivers.ok());
-    const auto rejected_process_drivers = fsim::elaboration::elaborate(
+    const auto rejected_process_drivers = compile_and_elaborate(
         process_drivers.design, "process_drivers");
     assert(!rejected_process_drivers.ok());
     assert(has_diagnostic(
@@ -701,7 +742,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(initialized_event_driver.ok());
     const auto accepted_initialized_event_driver =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             initialized_event_driver.design,
             "initialized_event_driver");
     assert(accepted_initialized_event_driver.ok());
@@ -733,7 +774,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(legacy_integral_process_drivers.ok());
     const auto accepted_legacy_integral_process_drivers =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             legacy_integral_process_drivers.design,
             "legacy_integral_process_drivers");
     assert(accepted_legacy_integral_process_drivers.ok());
@@ -760,7 +801,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(declaration_initializer_driver.ok());
     const auto accepted_declaration_initializer_driver =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             declaration_initializer_driver.design,
             "declaration_initializer_driver");
     assert(accepted_declaration_initializer_driver.ok());
@@ -786,7 +827,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(selected_process_drivers.ok());
     const auto rejected_selected_process_drivers =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             selected_process_drivers.design,
             "selected_process_drivers");
     assert(!rejected_selected_process_drivers.ok());
@@ -807,7 +848,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(selected_continuous_drivers.ok());
     const auto accepted_selected_continuous_drivers =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             selected_continuous_drivers.design,
             "selected_continuous_drivers");
     assert(accepted_selected_continuous_drivers.ok());
@@ -830,7 +871,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(native_wire_drivers.ok());
     const auto elaborated_native_wire =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             native_wire_drivers.design, "native_wire_drivers");
     assert(elaborated_native_wire.ok());
     const auto native_wire_q =
@@ -870,7 +911,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(native_std_logic_drivers.ok());
     const auto elaborated_native_std_logic =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             native_std_logic_drivers.design,
             "native_std_logic_drivers");
     assert(elaborated_native_std_logic.ok());
@@ -909,7 +950,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(local_variables.ok());
-    const auto elaborated_locals = fsim::elaboration::elaborate(
+    const auto elaborated_locals = compile_and_elaborate(
         local_variables.design, "local_variables");
     assert(elaborated_locals.ok());
     const auto& local_process =
@@ -985,7 +1026,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(scoped_variables.ok());
     const auto elaborated_scoped =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             scoped_variables.design, "scoped_variables");
     if (!elaborated_scoped.ok()) {
         for (const auto& diagnostic :
@@ -1091,7 +1132,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(duplicate_scoped_variables.ok());
     const auto rejected_duplicate_scoped =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             duplicate_scoped_variables.design,
             "duplicate_scoped_variables");
     assert(!rejected_duplicate_scoped.ok());
@@ -1116,7 +1157,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_call_point.ok());
     const auto elaborated_vhdl_call_point =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_call_point.design,
             "vhdl:work.vhdl_call_point(rtl)");
     assert(elaborated_vhdl_call_point.ok());
@@ -1154,7 +1195,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_local_variables.ok());
     const auto elaborated_vhdl_locals =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_local_variables.design,
             "vhdl:work.local_variables(rtl)");
     assert(elaborated_vhdl_locals.ok());
@@ -1221,7 +1262,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_waits.ok());
     const auto elaborated_vhdl_waits =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_waits.design, "vhdl:work.waits(rtl)");
     assert(elaborated_vhdl_waits.ok());
     const auto& vhdl_wait_process =
@@ -1290,7 +1331,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(sv_events.ok());
     const auto elaborated_sv_events =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             sv_events.design, "sv:work.events");
     assert(elaborated_sv_events.ok());
     assert(elaborated_sv_events.design->processes().size() == 2);
@@ -1376,7 +1417,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_condition_wait.ok());
     const auto elaborated_vhdl_condition_wait =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_condition_wait.design,
             "vhdl:work.condition_wait(rtl)");
     assert(elaborated_vhdl_condition_wait.ok());
@@ -1467,7 +1508,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(vhdl_combined_wait.ok());
     const auto elaborated_vhdl_combined_wait =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_combined_wait.design,
             "vhdl:work.combined_wait(rtl)");
     if (!elaborated_vhdl_combined_wait.ok()) {
@@ -1597,7 +1638,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(sv_condition_wait.ok());
     const auto elaborated_sv_condition_wait =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             sv_condition_wait.design,
             "sv:work.condition_wait");
     if (!elaborated_sv_condition_wait.ok()) {
@@ -1674,7 +1715,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_condition_wait.ok());
     const auto rejected_vhdl_condition_wait =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_condition_wait.design,
             "vhdl:work.invalid_condition_wait(rtl)");
     assert(!rejected_vhdl_condition_wait.ok());
@@ -1694,7 +1735,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(unknown_wait.ok());
     const auto rejected_unknown_wait =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             unknown_wait.design,
             "vhdl:work.unknown_wait(rtl)");
     assert(!rejected_unknown_wait.ok());
@@ -1711,7 +1752,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(vector_edge_wait.ok());
     const auto rejected_vector_edge_wait =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vector_edge_wait.design, "sv:work.vector_edge_wait");
     assert(!rejected_vector_edge_wait.ok());
     assert(has_diagnostic(
@@ -1733,7 +1774,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(wildcard_processes.ok());
     const auto elaborated_wildcard =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             wildcard_processes.design, "sv:work.wildcard_processes");
     assert(elaborated_wildcard.ok());
     assert(elaborated_wildcard.design->processes().size() == 3);
@@ -1837,7 +1878,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(mutable_strings.ok());
     const auto elaborated_strings =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             mutable_strings.design, "sv:work.mutable_strings");
     assert(elaborated_strings.ok());
     assert(
@@ -1879,7 +1920,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(nonblocking_string.ok());
     const auto rejected_nonblocking_string =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             nonblocking_string.design,
             "sv:work.nonblocking_string");
     assert(!rejected_nonblocking_string.ok());
@@ -1900,7 +1941,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(oversize_string.ok());
     const auto rejected_oversize_string =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             oversize_string.design,
             "sv:work.oversize_string");
     assert(!rejected_oversize_string.ok());

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/library/artifact.hpp"
-#include "fsim/library/portable_unit.hpp"
+#include "fsim/library/source_mapping.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/scv.hpp"
@@ -34,47 +36,6 @@ namespace {
         output << directory << '/' << std::setw(8) << std::setfill('0') << index
                << suffix;
         return output.str();
-    }
-
-    std::string unit_language(const frontend::DesignUnit& unit)
-    {
-        if (unit.language == frontend::Language::Vhdl2008) {
-            return "vhdl";
-        }
-        return unit.language == frontend::Language::Verilog2005
-            ? "verilog"
-            : "systemverilog";
-    }
-
-    std::string unit_kind(const frontend::UnitKind kind)
-    {
-        switch (kind) {
-        case frontend::UnitKind::VhdlEntity:
-            return "entity";
-        case frontend::UnitKind::VhdlArchitecture:
-            return "architecture";
-        case frontend::UnitKind::VhdlConfiguration:
-            return "configuration";
-        case frontend::UnitKind::VhdlPackage:
-            return "package";
-        case frontend::UnitKind::VhdlContext:
-            return "context";
-        case frontend::UnitKind::VhdlPslVerificationUnit:
-            return "psl-verification-unit";
-        case frontend::UnitKind::SystemVerilogPackage:
-            return "package";
-        case frontend::UnitKind::SystemVerilogInterface:
-            return "interface";
-        case frontend::UnitKind::VerilogModule:
-            return "module";
-        case frontend::UnitKind::SystemVerilogProgram:
-            return "program";
-        case frontend::UnitKind::SystemVerilogConfiguration:
-            return "configuration";
-        case frontend::UnitKind::SystemVerilogBind:
-            return "bind";
-        }
-        return "unit";
     }
 
     std::optional<std::string> read_checked_source(
@@ -398,52 +359,50 @@ bool export_library(
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics)
 {
-    auto checked = check_project(config, diagnostics);
+    auto checked = application_detail::check_project_workspace(
+        config, diagnostics, true);
     if (!checked) {
         return false;
     }
-    std::vector<const frontend::DesignUnit*> units;
-    for (const auto& unit : checked->parsed.units) {
+    const auto has_systemverilog_unit = std::ranges::any_of(
+        checked->systemverilog_hir.units(), [&](const auto& unit) {
         const auto library_name = unit.library.empty()
             ? std::string_view { "work" }
             : std::string_view { unit.library };
-        if (library_name == logical_library) {
-            units.push_back(&unit);
-        }
-    }
-    std::vector<const frontend::VerilogUdpDeclaration*> udp_declarations;
-    for (const auto& declaration : checked->parsed.udp_declarations) {
+        return library_name == logical_library
+            && unit.kind != semantic::sv::UnitKind::compilation_unit;
+    });
+    const auto has_vhdl_unit = std::ranges::any_of(
+        checked->vhdl_hir.units(), [&](const auto& unit) {
+        const auto library_name = unit.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { unit.library };
+        return library_name == logical_library;
+    });
+    const bool has_unit = has_systemverilog_unit || has_vhdl_unit;
+    const auto has_udp = std::ranges::any_of(
+        checked->systemverilog_hir.udps(), [&](const auto& declaration) {
         const auto library_name = declaration.library.empty()
             ? std::string_view { "work" }
             : std::string_view { declaration.library };
-        if (library_name == logical_library) {
-            udp_declarations.push_back(&declaration);
-        }
-    }
-    std::map<std::string, library::PortableSystemVerilogClassUnit> class_units;
-    for (const auto& declaration : checked->parsed.systemverilog_classes) {
-        const auto library_name = declaration.library.empty()
-            ? std::string_view { "work" }
-            : std::string_view { declaration.library };
-        if (library_name != logical_library)
-            continue;
-        auto& unit = class_units[declaration.compilation_unit_identity];
-        unit.library = std::string { library_name };
-        unit.compilation_unit_identity = declaration.compilation_unit_identity;
-        unit.uvm_release = std::string { project::to_string(
-            checked->systemverilog_uvm_provenance.release) };
-        unit.declarations.push_back(declaration);
-    }
-    // Class resolution has already transactionally linked every valid
-    // out-of-block definition into its owning declaration.  Persisting the raw
-    // definitions as well would ask library loading to link them a second time.
+        return library_name == logical_library;
+    });
+    const auto has_class = std::ranges::any_of(
+        checked->systemverilog_hir.classes(), [&](const auto& declaration) {
+            const auto* owner = application_detail::compiled_class_owner(
+                *checked, declaration);
+            const auto library_name = owner == nullptr || owner->library.empty()
+                ? std::string_view { "work" }
+                : std::string_view { owner->library };
+            return owner != nullptr && library_name == logical_library;
+        });
     const bool has_systemc = std::ranges::any_of(
         config.source_sets,
         [&](const auto& source_set) {
             return source_set.library == logical_library
                 && source_set.language == project::Language::systemc;
         });
-    if (units.empty() && udp_declarations.empty() && class_units.empty()
+    if (!has_unit && !has_udp && !has_class
         && !has_systemc) {
         diagnostics.error(
             "FSIM-LIB-0007",
@@ -583,109 +542,136 @@ bool export_library(
         payloads.push_back({ artifact, std::move(*contents) });
     }
 
-    for (std::size_t index = 0; index < units.size(); ++index) {
-        auto unit = *units[index];
-        // Class resolution has copied every valid out-of-block method body into
-        // its package-owned class declaration.  Do not archive the raw definition
-        // list too, because library loading performs semantic resolution again.
-        unit.systemverilog_class_method_definitions.clear();
-        for (auto& dependency : unit.source_dependencies) {
-            const auto normalized = std::filesystem::path(dependency).lexically_normal();
-            const auto mapping = std::ranges::find_if(
-                source_mappings,
-                [&](const auto& item) {
-                    if (std::filesystem::path(item.producer_name).lexically_normal()
-                        == normalized) {
-                        return true;
-                    }
-                    std::error_code error;
-                    return std::filesystem::equivalent(
-                               support::path_from_utf8(item.producer_name),
-                               support::path_from_utf8(dependency), error)
-                        && !error;
-                });
-            if (mapping != source_mappings.end()) {
-                dependency = mapping->logical_name;
-            }
+    std::vector<std::string> persisted_libraries {
+        std::string { logical_library }
+    };
+    for (const auto& dependency : metadata.vhdl_package_dependencies) {
+        const auto separator = dependency.package.find('.');
+        const auto library = dependency.package.substr(0, separator);
+        if (!library.empty()
+            && std::ranges::find(persisted_libraries, library)
+                == persisted_libraries.end()) {
+            persisted_libraries.push_back(library);
         }
-        if (!library::relocate_unit_sources(unit, source_mappings, diagnostics)) {
-            return false;
-        }
-        auto bytes = library::serialize_portable_unit(unit, diagnostics);
-        if (!bytes.has_value()) {
-            return false;
-        }
-        const auto artifact = indexed_path("units", index, ".fsimir");
-        const auto checksum = support::Sha256::hex(support::Sha256::digest(*bytes));
-        metadata.units.push_back(
-            { unit_language(unit), unit_kind(unit.kind), unit.name,
-                unit.primary_name,
-                unit.kind == frontend::UnitKind::VhdlArchitecture
-                    ? unit.name
-                    : std::string { },
-                artifact, checksum,
-                std::string { frontend::revision_string(unit.standard_revision) },
-                unit.language == frontend::Language::Vhdl2008
-                    ? unit.vhdl_compatibility_profile
-                    : unit.verilog_compatibility_profile });
-        payloads.push_back({ artifact, std::move(*bytes) });
     }
-    for (std::size_t index = 0;
-        index < udp_declarations.size(); ++index) {
-        auto declaration = *udp_declarations[index];
-        if (!library::relocate_udp_sources(
-                declaration, source_mappings, diagnostics)) {
-            return false;
+    auto projected_design = semantic::extract_compiled_libraries(
+        std::move(static_cast<semantic::CompiledDesign&>(*checked)),
+        persisted_libraries);
+    if (!projected_design.ok()) {
+        diagnostics.error(
+            "FSIM-LIB-0007", projected_design.error);
+        return false;
+    }
+    auto compiled_design = std::move(*projected_design.design);
+    auto compiled_mappings = source_mappings;
+    std::set<std::filesystem::path> mapped_compiled_sources;
+    for (const auto& mapping : compiled_mappings) {
+        mapped_compiled_sources.insert(
+            support::path_from_utf8(mapping.producer_name)
+                .lexically_normal());
+    }
+    std::size_t compiled_source_index { };
+    const auto map_compiled_source = [&](const std::string_view name) {
+        if (name.empty()) {
+            return;
         }
-        auto bytes = library::serialize_portable_udp(declaration, diagnostics);
-        if (!bytes.has_value()) {
-            return false;
+        const auto path = support::path_from_utf8(name).lexically_normal();
+        if (!path.is_absolute()
+            || !mapped_compiled_sources.insert(path).second) {
+            return;
         }
-        const auto artifact = indexed_path(
-            "units", units.size() + index, ".fsimudp");
-        const auto checksum = support::Sha256::hex(
-            support::Sha256::digest(*bytes));
-        metadata.units.push_back({ declaration.language == frontend::Language::Verilog2005
+        const auto filename = path.filename().empty()
+            ? std::string { "source" }
+            : support::path_to_utf8(path.filename());
+        compiled_mappings.push_back({ std::string { name },
+            indexed_path("compiled/sources", compiled_source_index++,
+                "/" + filename) });
+    };
+    for (const auto& source : compiled_design.semantics.source_files()) {
+        map_compiled_source(source.physical_name);
+    }
+    for (const auto& source : compiled_design.semantics.source_spans()) {
+        map_compiled_source(source.logical_name);
+    }
+    for (const auto& dependency : compiled_design.dependencies()) {
+        map_compiled_source(dependency.logical_name);
+    }
+    for (const auto& unit : compiled_design.systemverilog_hir.units()) {
+        for (const auto& dependency : unit.source_dependencies) {
+            map_compiled_source(dependency);
+        }
+    }
+    for (const auto& unit : compiled_design.vhdl_hir.units()) {
+        for (const auto& dependency : unit.source_dependencies) {
+            map_compiled_source(dependency);
+        }
+    }
+    if (!application_detail::relocate_compiled_design_sources(
+            compiled_design, compiled_mappings, diagnostics)) {
+        return false;
+    }
+    auto compiled_units = application_detail::compiled_unit_metadata_entries(
+        compiled_design, logical_library);
+    for (auto& entry : compiled_units) {
+        metadata.units.push_back(std::move(entry));
+    }
+    for (const auto& declaration
+        : compiled_design.systemverilog_hir.udps()) {
+        const auto library = declaration.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { declaration.library };
+        if (library != logical_library) {
+            continue;
+        }
+        metadata.units.push_back({
+            declaration.language == semantic::Language::verilog
                 ? "verilog"
                 : "systemverilog",
-            "primitive", declaration.name, { }, { }, artifact, checksum,
-            std::string {
-                frontend::revision_string(declaration.standard_revision) },
-            declaration.verilog_compatibility_profile });
-        payloads.push_back({ artifact, std::move(*bytes) });
+            "primitive", declaration.name, { }, { }, { }, { },
+            std::string { application_detail::compiled_udp_standard(
+                declaration) },
+            declaration.compatibility_profile });
     }
-    std::size_t class_index { };
-    for (auto& [identity, class_unit] : class_units) {
-        if (identity.empty()
-            || !library::relocate_class_unit_sources(
-                class_unit, source_mappings, diagnostics)) {
-            if (identity.empty()) {
-                diagnostics.error(
-                    "FSIM-LIB-0006",
-                    "class declaration has no compilation-unit identity");
+    for (const auto& declaration
+        : compiled_design.systemverilog_hir.classes()) {
+        auto entry = application_detail::compiled_class_metadata_entry(
+            compiled_design, declaration, logical_library);
+        if (!entry) {
+            const auto* owner = application_detail::compiled_class_owner(
+                compiled_design, declaration);
+            if (owner != nullptr) {
+                const auto library_name = owner->library.empty()
+                    ? std::string_view { "work" }
+                    : std::string_view { owner->library };
+                if (library_name != logical_library) {
+                    continue;
+                }
             }
+            diagnostics.error(
+                "FSIM-LIB-0007",
+                "compiled class declaration has no valid HIR owner: '"
+                    + semantic::sv::class_declaration_identity(declaration)
+                    + "'");
             return false;
         }
-        auto bytes = library::serialize_portable_class_unit(
-            class_unit, diagnostics);
-        if (!bytes)
-            return false;
-        const auto artifact = indexed_path(
-            "units", units.size() + udp_declarations.size() + class_index++,
-            ".fsimclass");
-        const auto checksum = support::Sha256::hex(
-            support::Sha256::digest(*bytes));
-        metadata.units.push_back({ "systemverilog", "class-unit", identity, { }, { }, artifact, checksum,
-            std::string { frontend::revision_string(
-                class_unit.declarations.front().standard_revision) },
-            class_unit.declarations.front().verilog_compatibility_profile });
-        payloads.push_back({ artifact, std::move(*bytes) });
+        metadata.units.push_back(std::move(*entry));
     }
+    auto compiled_bytes = serialize_compiled_hir_bundle(
+        compiled_design, diagnostics);
+    if (!compiled_bytes) {
+        return false;
+    }
+    metadata.compiled_hir_artifact = "compiled/design.fsimhir";
+    metadata.compiled_hir_checksum = support::Sha256::hex(
+        support::Sha256::digest(*compiled_bytes));
+    payloads.push_back(
+        { metadata.compiled_hir_artifact, std::move(*compiled_bytes) });
+
     if (!append_systemc_native_artifact(
             config, logical_library, metadata, payloads, diagnostics)) {
         return false;
     }
-    if (!units.empty() || !udp_declarations.empty()) {
+    if (has_unit || has_udp) {
         append_canonical_llvm_native_artifacts(
             config, logical_library, destination, metadata, payloads);
     }

@@ -89,13 +89,11 @@ CheckResult check(
             result.source_profiles.push_back(
                 source.language + ":" + source.standard);
         }
-        for (const auto& unit : checked->parsed.units) {
+        for (const auto& unit : checked->vhdl_hir.units()) {
             result.units.push_back(unit.library + ":" + unit.name);
-            if (unit.language == fsim::frontend::Language::Vhdl2008) {
-                result.unit_profiles.push_back(
-                    "vhdl:" + std::string { fsim::frontend::to_string(unit.vhdl_standard) }
-                    + ":" + unit.library + ":" + unit.name);
-            }
+            result.unit_profiles.push_back(
+                "vhdl:" + unit.standard + ":" + unit.library + ":"
+                + unit.name);
         }
         bool attribute_seen = false;
         bool attribute_specification_seen = false;
@@ -300,15 +298,14 @@ end configuration;
 )"
 };
 
-void test_structural_conformance()
+void test_structural_conformance(
+    const std::filesystem::path& directory)
 {
     // This compact fixture is independently authored from the bounded
     // structural expectations identified by SRC-IEEE-P1076 and SRC-UVVM.
     // FSIM-CONFORMANCE CF-VHDL-COMPONENT-001 source=SRC-UVVM expectation=accept
     // FSIM-CONFORMANCE CF-VHDL-GENERATE-001 source=SRC-IEEE-P1076 expectation=accept
-    const auto parsed = fsim::frontend::parse_text(
-        "structural-conformance.vhd",
-        R"(package structural_types is
+    constexpr std::string_view source = R"(package structural_types is
   subtype element_t is integer range 0 to 15;
   constant lane_count : integer := 2;
 end package structural_types;
@@ -366,7 +363,10 @@ configuration structural_selected of structural_top is
     end for;
   end for;
 end configuration structural_selected;
-)",
+)";
+    const auto parsed = fsim::frontend::parse_text(
+        "structural-conformance.vhd",
+        source,
         fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
     assert(parsed.design.units.size() == 7);
@@ -380,8 +380,27 @@ end configuration structural_selected;
         fsim::frontend::UnitKind::VhdlConfiguration,
         "structural_selected"));
 
+    const auto path = directory / "structural-conformance.vhd";
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << source;
+        assert(output.good());
+    }
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vhdl-structural-conformance";
+    config.build.jobs = 8;
+    fsim::project::SourceSet source_set;
+    source_set.language = fsim::project::Language::vhdl;
+    source_set.standard = "2008";
+    source_set.library = "work";
+    source_set.files = { path };
+    config.source_sets.push_back(std::move(source_set));
+    fsim::diagnostic::Engine diagnostics;
+    const auto compiled = fsim::app::check_project(config, diagnostics);
+    assert(compiled && !diagnostics.has_error());
     const auto elaborated = fsim::elaboration::elaborate(
-        parsed.design, "vhdl:work.structural_top(structure)");
+        *compiled, "vhdl:work.structural_top(structure)");
     assert(elaborated.ok());
     assert(elaborated.design->find_signal(
         "structural_top.generated[0].observed"));
@@ -689,7 +708,7 @@ entity \leaf\ is end entity;
         && std::ranges::find(extended_identity.units, "libb:leaf")
             != extended_identity.units.end());
 
-    test_structural_conformance();
+    test_structural_conformance(directory.path);
 
     return 0;
 }

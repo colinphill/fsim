@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/object.hpp"
 
-#include "fsim/library/portable_unit.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -55,14 +54,16 @@ void make_tree_writable(const std::filesystem::path& root) {
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kObjectFormatVersion == 7U);
-    static_assert(fsim::library::kPortableSchemaVersion == 14U);
-    static_assert(fsim::library::kOwningUnitSchemaVersion == 32U);
+    static_assert(fsim::artifact::kObjectFormatVersion == 8U);
+    static_assert(fsim::library::kPortableSchemaVersion == 15U);
+    static_assert(fsim::library::kCompiledHirSchemaVersion == 1U);
     const std::string source_bytes = "module child; endmodule\n";
-    const std::string unit_bytes = "portable-unit";
+    const std::string compiled_hir_bytes = "compiled-hir";
     fsim::artifact::ObjectMetadata metadata;
     metadata.code_coverage
         = fsim::artifact::make_code_coverage_artifact_identity(false).identity;
+    metadata.compiled_hir_artifact = "compiled/design.fsimhir";
+    metadata.compiled_hir_checksum = checksum(compiled_hir_bytes);
     metadata.producer = "fsim test";
     metadata.language = "systemverilog";
     metadata.standard = "2017";
@@ -75,8 +76,14 @@ int main() {
         checksum(source_bytes), "systemverilog", metadata.standard,
         metadata.compatibility_profile });
     metadata.units.push_back({ "systemverilog", "module", "child", { }, { },
-        "units/00000000.fsimir", checksum(unit_bytes), metadata.standard,
+        { }, { }, metadata.standard,
         metadata.compatibility_profile });
+    metadata.units.push_back({ "systemverilog", "primitive", "invert",
+        { }, { }, { }, { }, metadata.standard,
+        metadata.compatibility_profile });
+    metadata.units.push_back({ "systemverilog", "class",
+        "work::$unit@fixture::Packet", "fixture", { }, { }, { },
+        metadata.standard, metadata.compatibility_profile });
     metadata.compilation_digest = fsim::artifact::compute_object_compilation_digest(metadata);
 
     const auto encoded = fsim::artifact::serialize_object_metadata(metadata);
@@ -85,8 +92,23 @@ int main() {
     const auto decoded = fsim::artifact::deserialize_object_metadata(
         encoded, "object", decode_diagnostics);
     assert(decoded == metadata);
+    assert(decoded->units.back().kind == "class");
+    assert(decoded->units.back().artifact.empty());
+    assert(decoded->units.back().checksum.empty());
     assert(!decode_diagnostics.has_error());
     assert(encoded.starts_with(std::string_view { "FSIMOBJ\0", 8U }));
+    auto legacy_class_metadata = metadata;
+    legacy_class_metadata.units.push_back({ "systemverilog",
+        "class-runtime-adapter", "fixture", { }, { },
+        "units/fixture.fsimclass", std::string(64, 'b'), metadata.standard,
+        metadata.compatibility_profile });
+    legacy_class_metadata.compilation_digest
+        = fsim::artifact::compute_object_compilation_digest(
+            legacy_class_metadata);
+    fsim::diagnostic::Engine legacy_class_diagnostics;
+    assert(!fsim::artifact::deserialize_object_metadata(
+        fsim::artifact::serialize_object_metadata(legacy_class_metadata),
+        "legacy-class", legacy_class_diagnostics));
     auto enabled_metadata = metadata;
     enabled_metadata.code_coverage
         = fsim::artifact::make_code_coverage_artifact_identity(true).identity;
@@ -119,7 +141,8 @@ int main() {
         assert(!fsim::artifact::deserialize_object_metadata(
             bytes, source, diagnostics));
         const auto expected = "unsupported .fsimobj identity: found " + found
-            + "; required format 7 and portable-unit schema 14; regenerate "
+            + "; required format 8, portable-unit schema 15, and compiled-HIR "
+              "schema 1; regenerate "
               ".fsimobj with this fsim build";
         assert(std::ranges::any_of(
             diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -132,45 +155,57 @@ int main() {
     expect_metadata_rejection(std::move(corrupt_magic), "corrupt-magic");
     for (std::uint32_t format = 0;
         format < fsim::artifact::kObjectFormatVersion; ++format) {
-        auto noncurrent_header = encoded.substr(0, 16U);
+        auto noncurrent_header = encoded.substr(0, 20U);
         store_u32(noncurrent_header, 8U, format);
         expect_identity_rejection(
             std::move(noncurrent_header), "stale-format",
             "format " + std::to_string(format)
-                + " and portable-unit schema 14");
+                + ", portable-unit schema 15, and compiled-HIR schema 1");
     }
-    auto v2_header = encoded.substr(0, 16U);
+    auto v2_header = encoded.substr(0, 20U);
     store_u32(v2_header, 8U, 6U);
     store_u32(v2_header, 12U, 10U);
     expect_identity_rejection(
-        v2_header, "v2-object", "format 6 and portable-unit schema 10");
+        v2_header, "v2-object",
+        "format 6, portable-unit schema 10, and compiled-HIR schema 1");
     expect_identity_rejection(
         std::move(v2_header), "v2-object-repeat",
-        "format 6 and portable-unit schema 10");
-    auto future_format = encoded.substr(0, 16U);
+        "format 6, portable-unit schema 10, and compiled-HIR schema 1");
+    auto future_format = encoded.substr(0, 20U);
     store_u32(
         future_format, 8U, fsim::artifact::kObjectFormatVersion + 1U);
     expect_identity_rejection(
         std::move(future_format), "future-format",
-        "format 8 and portable-unit schema 14");
+        "format 9, portable-unit schema 15, and compiled-HIR schema 1");
     for (std::uint32_t schema = 0;
         schema < fsim::library::kPortableSchemaVersion; ++schema) {
-        auto noncurrent_header = encoded.substr(0, 16U);
+        auto noncurrent_header = encoded.substr(0, 20U);
         store_u32(noncurrent_header, 12U, schema);
         expect_identity_rejection(
             std::move(noncurrent_header), "stale-portable-schema",
-            "format 7 and portable-unit schema " + std::to_string(schema));
+            "format 8, portable-unit schema " + std::to_string(schema)
+                + ", and compiled-HIR schema 1");
     }
-    auto future_portable_schema = encoded.substr(0, 16U);
+    auto future_portable_schema = encoded.substr(0, 20U);
     store_u32(
         future_portable_schema, 12U,
         fsim::library::kPortableSchemaVersion + 1U);
     expect_identity_rejection(
         std::move(future_portable_schema), "future-portable-schema",
-        "format 7 and portable-unit schema 15");
-    expect_metadata_rejection(encoded.substr(0, 15U), "truncated-header");
+        "format 8, portable-unit schema 16, and compiled-HIR schema 1");
+    auto stale_compiled_hir_schema = encoded.substr(0, 20U);
+    store_u32(stale_compiled_hir_schema, 16U, 0U);
+    expect_identity_rejection(
+        std::move(stale_compiled_hir_schema), "stale-compiled-hir-schema",
+        "format 8, portable-unit schema 15, and compiled-HIR schema 0");
+    auto future_compiled_hir_schema = encoded.substr(0, 20U);
+    store_u32(future_compiled_hir_schema, 16U, 2U);
+    expect_identity_rejection(
+        std::move(future_compiled_hir_schema), "future-compiled-hir-schema",
+        "format 8, portable-unit schema 15, and compiled-HIR schema 2");
+    expect_metadata_rejection(encoded.substr(0, 19U), "truncated-header");
     auto oversized_root = encoded;
-    store_u64(oversized_root, 16U, UINT64_MAX);
+    store_u64(oversized_root, 20U, UINT64_MAX);
     expect_metadata_rejection(std::move(oversized_root), "oversized-root");
 
     auto vhdl_metadata = metadata;
@@ -186,6 +221,7 @@ int main() {
     vhdl_metadata.units.front().standard = vhdl_metadata.standard;
     vhdl_metadata.units.front().compatibility_profile
         = vhdl_metadata.compatibility_profile;
+    vhdl_metadata.units.resize(1);
     vhdl_metadata.vhdl_package_dependencies = { { "1993", "ieee-1076-standard:1993:fsim-v3",
         "ieee.std_logic_unsigned",
         "synopsys-legacy-ieee:1990-1992:fsim-synopsys-ieee-compat-v2",
@@ -255,6 +291,26 @@ int main() {
     assert(!fsim::artifact::deserialize_object_metadata(
         fsim::artifact::serialize_object_metadata(duplicate_source),
         "duplicate-source", duplicate_source_diagnostics));
+    auto legacy_udp_payload = metadata;
+    legacy_udp_payload.units.back().artifact = "units/invert.fsimudp";
+    legacy_udp_payload.units.back().checksum = checksum("portable-udp");
+    legacy_udp_payload.compilation_digest
+        = fsim::artifact::compute_object_compilation_digest(
+            legacy_udp_payload);
+    fsim::diagnostic::Engine legacy_udp_diagnostics;
+    assert(!fsim::artifact::deserialize_object_metadata(
+        fsim::artifact::serialize_object_metadata(legacy_udp_payload),
+        "legacy-udp-payload", legacy_udp_diagnostics));
+    auto legacy_unit_payload = metadata;
+    legacy_unit_payload.units.front().artifact = "units/child.fsimir";
+    legacy_unit_payload.units.front().checksum = checksum("portable-unit");
+    legacy_unit_payload.compilation_digest
+        = fsim::artifact::compute_object_compilation_digest(
+            legacy_unit_payload);
+    fsim::diagnostic::Engine legacy_unit_diagnostics;
+    assert(!fsim::artifact::deserialize_object_metadata(
+        fsim::artifact::serialize_object_metadata(legacy_unit_payload),
+        "legacy-unit-payload", legacy_unit_diagnostics));
 
     const auto directory = std::filesystem::temp_directory_path()
         / ("fsim-object-artifact-test-"
@@ -262,7 +318,7 @@ int main() {
                 std::chrono::steady_clock::now().time_since_epoch().count()));
     const std::vector<fsim::library::PortablePayload> payloads {
         { metadata.sources.front().artifact, source_bytes },
-        { metadata.units.front().artifact, unit_bytes }
+        { metadata.compiled_hir_artifact, compiled_hir_bytes }
     };
     auto stale_publication_metadata = metadata;
     stale_publication_metadata.format = fsim::artifact::kObjectFormatVersion - 1U;
@@ -282,6 +338,12 @@ int main() {
     assert(fsim::artifact::load_object_metadata(directory, load_diagnostics)
         == metadata);
     assert(!load_diagnostics.has_error());
+    assert(std::ranges::none_of(
+        std::filesystem::recursive_directory_iterator { directory },
+        [](const auto& entry) {
+            return entry.path().extension() == ".fsimudp"
+                || entry.path().extension() == ".fsimir";
+        }));
     assert(
         (std::filesystem::status(directory).permissions()
             & std::filesystem::perms::owner_write)
@@ -301,10 +363,10 @@ int main() {
       directory, rollback_diagnostics) == metadata);
   {
     std::ifstream input(
-        directory / metadata.units.front().artifact, std::ios::binary);
+        directory / metadata.compiled_hir_artifact, std::ios::binary);
     assert((std::string{
         std::istreambuf_iterator<char>{input},
-        std::istreambuf_iterator<char>{}} == unit_bytes));
+        std::istreambuf_iterator<char>{}} == compiled_hir_bytes));
   }
   auto mismatched_payloads = payloads;
   mismatched_payloads.front().bytes.push_back('x');

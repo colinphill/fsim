@@ -25,7 +25,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_runtime_loop.ok());
     const auto rejected_vhdl_runtime_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_runtime_loop.design,
             "vhdl:work.invalid_vhdl_runtime_loop(rtl)");
     assert(!rejected_vhdl_runtime_loop.ok());
@@ -54,7 +54,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_condition.ok());
     const auto rejected_vhdl_condition =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_condition.design,
             "vhdl:work.invalid_condition(rtl)");
     assert(!rejected_vhdl_condition.ok());

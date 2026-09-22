@@ -31,6 +31,8 @@ private:
         std::function<semantic::DeclarationId()> build;
     };
 
+    // Low-level source, expression, delay, and type projection helpers are
+    // implemented together in application_vhdl_hir_projection.cpp.
     [[nodiscard]] semantic::SourceSpanId source(
         const frontend::SourceSpan& span);
 
@@ -54,6 +56,31 @@ private:
 
     [[nodiscard]] vh::ExpressionKind expression_kind(
         const frontend::Expression& expression) const noexcept;
+
+    [[nodiscard]] vh::DelayValue delay_value(
+        std::uint64_t magnitude,
+        std::uint64_t divisor,
+        const std::string& unit,
+        const std::optional<frontend::Expression>& input_expression,
+        const frontend::SourceSpan& span,
+        semantic::ScopeId scope,
+        semantic::OriginId parent);
+
+    [[nodiscard]] vh::Delay delay(
+        const frontend::Delay& input,
+        semantic::ScopeId scope,
+        semantic::OriginId parent);
+
+    [[nodiscard]] vh::DisconnectionSpecification disconnection_specification(
+        const frontend::VhdlDisconnectionSpecification& input,
+        semantic::ScopeId scope,
+        semantic::OriginId parent);
+
+    void add_disconnection_specifications(
+        const std::vector<frontend::VhdlDisconnectionSpecification>& inputs,
+        semantic::ScopeId scope,
+        semantic::OriginId parent,
+        std::vector<vh::DisconnectionSpecification>& output);
 
     [[nodiscard]] semantic::TypeId find_type(
         const semantic::ScopeId scope,
@@ -80,6 +107,9 @@ private:
         const frontend::EnumerationRange& range,
         const semantic::SourceSpanId span) const;
 
+    [[nodiscard]] static std::optional<std::int64_t> static_integer(
+        const frontend::Expression& expression);
+
     template <typename RangeExpression>
     [[nodiscard]] vh::RangeConstraint expression_range(
         const RangeExpression& range,
@@ -87,14 +117,18 @@ private:
         const semantic::ScopeId scope,
         const semantic::OriginId parent)
     {
+        const auto left = static_integer(range.left);
+        const auto right = static_integer(range.right);
+        const bool null = left && right
+            && (range.descending ? *left < *right : *left > *right);
         return {
             kind,
-            std::nullopt,
-            std::nullopt,
+            left,
+            right,
             expression(range.left, scope, parent),
             expression(range.right, scope, parent),
             range.descending,
-            false,
+            null,
             source(range.span)
         };
     }
@@ -263,6 +297,11 @@ private:
         const semantic::ScopeId scope,
         const semantic::OriginId parent);
 
+    [[nodiscard]] semantic::InstanceId add_instance(
+        const frontend::Instance& input,
+        semantic::ScopeId scope,
+        semantic::OriginId parent);
+
     [[nodiscard]] semantic::ScopeId nested_scope(
         const semantic::ScopeId parent_scope,
         const std::string_view scope_name,
@@ -419,9 +458,16 @@ private:
 
     vh::Hir& hir_;
 
+    // The unit being projected is not published into hir_ until all of its
+    // declarations are complete.  Keep a non-owning view of that local unit
+    // so type projection can honor its already-converted context clauses.
+    const vh::Unit* current_unit_ { };
+
     frontend::VhdlStandard current_vhdl_standard_ {
         frontend::VhdlStandard::Vhdl2008
     };
+
+    bool profile_compatible_ { true };
 };
 
 } // namespace fsim::app::application_detail

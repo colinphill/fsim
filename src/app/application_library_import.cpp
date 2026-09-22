@@ -2,16 +2,16 @@
 #include "application_internal.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/library/artifact.hpp"
-#include "fsim/library/portable_unit.hpp"
+#include "fsim/library/source_mapping.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
 
-#include <fstream>
 #include <map>
 #include <set>
-#include <sstream>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -19,25 +19,23 @@ namespace {
     std::optional<std::string> read_payload(
         const std::filesystem::path& path,
         const std::string_view expected_checksum,
-        diagnostic::Engine& diagnostics)
+        diagnostic::Engine& diagnostics,
+        const std::optional<std::uintmax_t> maximum_bytes = std::nullopt)
     {
-        std::ifstream input(path, std::ios::binary);
-        if (!input) {
+        auto payload = read_binary_payload(path, maximum_bytes);
+        if (!payload.bytes) {
+            const auto budget = payload.budget_exceeded
+                ? " exceeds the compiled-HIR decode byte budget: "
+                : ": ";
             diagnostics.error(
                 "FSIM-LIB-0008",
-                "cannot open mapped library payload: " + support::path_to_utf8(path));
+                (payload.failure == BinaryPayloadReadFailure::open
+                        ? "cannot open mapped library payload"
+                        : "cannot read mapped library payload")
+                    + std::string { budget } + support::path_to_utf8(path));
             return std::nullopt;
         }
-        std::ostringstream contents;
-        contents << input.rdbuf();
-        if (!input.good() && !input.eof()) {
-            diagnostics.error(
-                "FSIM-LIB-0008",
-                "cannot read mapped library payload: " + support::path_to_utf8(path));
-            return std::nullopt;
-        }
-        auto bytes = contents.str();
-        if (support::Sha256::hex(support::Sha256::digest(bytes))
+        if (support::Sha256::hex(support::Sha256::digest(*payload.bytes))
             != expected_checksum) {
             diagnostics.error(
                 "FSIM-LIB-0008",
@@ -45,7 +43,7 @@ namespace {
                     + support::path_to_utf8(path));
             return std::nullopt;
         }
-        return bytes;
+        return std::move(payload.bytes);
     }
 
     bool body_has_instances(const frontend::GenerateBody& body);
@@ -146,61 +144,6 @@ namespace {
             == (unit.language == frontend::Language::Vhdl2008
                     ? unit.vhdl_compatibility_profile
                     : unit.verilog_compatibility_profile);
-    }
-
-    bool metadata_identity_matches(
-        const library::UnitIndexEntry& entry,
-        const frontend::VerilogUdpDeclaration& declaration)
-    {
-        const auto language = declaration.language == frontend::Language::Verilog2005
-            ? std::string_view { "verilog" }
-            : std::string_view { "systemverilog" };
-        return entry.name == declaration.name
-            && entry.primary_name.empty() && entry.architecture.empty()
-            && entry.language == language && entry.kind == "primitive"
-            && entry.standard
-            == frontend::revision_string(declaration.standard_revision)
-            && entry.compatibility_profile
-            == declaration.verilog_compatibility_profile;
-    }
-
-    bool class_provenance_matches(
-        const library::UnitIndexEntry& entry,
-        const frontend::SystemVerilogClassDeclaration& declaration)
-    {
-        if (entry.standard
-                != frontend::revision_string(declaration.standard_revision)
-            || entry.compatibility_profile
-                != declaration.verilog_compatibility_profile
-            || std::ranges::any_of(
-                declaration.methods, [&](const auto& method) {
-                    return entry.standard
-                        != frontend::revision_string(method.standard_revision)
-                        || entry.compatibility_profile
-                        != method.verilog_compatibility_profile;
-                })) {
-            return false;
-        }
-        return std::ranges::all_of(
-            declaration.nested_classes, [&](const auto& nested) {
-                return class_provenance_matches(entry, nested);
-            });
-    }
-
-    bool class_unit_provenance_matches(
-        const library::UnitIndexEntry& entry,
-        const library::PortableSystemVerilogClassUnit& unit)
-    {
-        return std::ranges::all_of(
-                   unit.declarations, [&](const auto& declaration) {
-                       return class_provenance_matches(entry, declaration);
-                   })
-            && std::ranges::all_of(unit.method_definitions, [&](const auto& method) {
-                   return entry.standard
-                       == frontend::revision_string(method.standard_revision)
-                       && entry.compatibility_profile
-                       == method.verilog_compatibility_profile;
-               });
     }
 
 #if defined(FSIM_HAS_LLVM)
@@ -379,7 +322,7 @@ namespace {
 
 bool load_required_mapped_libraries(
     const project::Config& config,
-    CheckedProject& checked,
+    CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics)
 {
     std::map<std::string, const project::LibraryMapping*> mappings;
@@ -448,6 +391,11 @@ bool load_required_mapped_libraries(
     enum class State { loading,
         loaded };
     std::map<std::string, State> states;
+    std::set<std::string> mapped_udp_keys;
+    std::set<std::string> mapped_unit_keys;
+    std::vector<library::VhdlPackageDependency> vhdl_dependency_identity;
+    std::optional<semantic::CompiledDesign> vhdl_dependency_bundle;
+    std::optional<std::string> vhdl_dependency_bundle_bytes;
     const auto load_one = [&](const auto& self, const std::string& library_name)
         -> bool {
         if (const auto state = states.find(library_name); state != states.end()) {
@@ -682,116 +630,220 @@ bool load_required_mapped_libraries(
             }
             source_settings->files.push_back(logical_path);
         }
-        for (const auto& entry : metadata->units) {
-            auto bytes = read_payload(
-                mapping->second->path / entry.artifact,
-                entry.checksum,
-                diagnostics);
-            if (!bytes.has_value()) {
+        auto compiled_bytes = read_payload(
+            mapping->second->path / metadata->compiled_hir_artifact,
+            metadata->compiled_hir_checksum,
+            diagnostics, kCompiledHirDecodeBudgetBytes);
+        if (!compiled_bytes) {
+            return false;
+        }
+        auto compiled_design = deserialize_compiled_hir_bundle(
+            *compiled_bytes,
+            support::path_to_utf8(
+                mapping->second->path / metadata->compiled_hir_artifact),
+            diagnostics);
+        if (!compiled_design) {
+            return false;
+        }
+        if (!metadata->vhdl_package_dependencies.empty()) {
+            if (!validate_vhdl_package_dependencies(
+                    metadata->vhdl_package_dependencies,
+                    ".fsimlib", diagnostics)
+                || !compiled_vhdl_package_dependencies_match(
+                    *compiled_design,
+                    metadata->vhdl_package_dependencies,
+                    ".fsimlib", diagnostics)) {
                 return false;
             }
-            if (entry.kind == "class-unit") {
-                auto unit = library::deserialize_portable_class_unit(
-                    *bytes,
-                    support::path_to_utf8(
-                        mapping->second->path / entry.artifact),
-                    diagnostics);
-                if (!unit || unit->library != library_name
-                    || entry.language != "systemverilog"
-                    || entry.name != unit->compilation_unit_identity
-                    || !class_unit_provenance_matches(entry, *unit)) {
+        }
+        auto remaining_compiled_units = compiled_unit_metadata_entries(
+            *compiled_design, library_name);
+        std::set<std::string> indexed_udp_keys;
+        std::set<std::string> indexed_class_identities;
+        for (const auto& entry : metadata->units) {
+            if (entry.kind == "primitive") {
+                const auto* declaration = find_compiled_udp(
+                    *compiled_design, library_name, entry.name);
+                if (declaration == nullptr
+                    || !compiled_udp_metadata_matches(
+                        entry, *declaration, library_name)) {
                     diagnostics.error(
                         "FSIM-LIB-0008",
-                        "mapped class-unit identity does not match its metadata index");
+                        "mapped UDP identity does not match its metadata index");
                     return false;
                 }
-                for (auto& declaration : unit->declarations) {
-                    const auto duplicate = std::ranges::find(
-                        checked.parsed.systemverilog_classes,
-                        declaration.canonical_identity,
-                        &frontend::SystemVerilogClassDeclaration::canonical_identity);
-                    if (duplicate != checked.parsed.systemverilog_classes.end()) {
-                        diagnostics.error(
-                            "FSIM-LIB-0008",
-                            "mapped class collides with an already loaded declaration '"
-                                + declaration.canonical_identity + "'");
-                        return false;
-                    }
-                    checked.parsed.systemverilog_classes.push_back(
-                        std::move(declaration));
-                }
-                for (auto& method : unit->method_definitions) {
-                    checked.parsed.systemverilog_class_method_definitions.push_back(
-                        std::move(method));
-                }
-                provenance.unit_checksums.push_back(entry.checksum);
-                continue;
-            }
-            if (entry.kind == "primitive") {
-                auto declaration = library::deserialize_portable_udp(
-                    *bytes,
-                    support::path_to_utf8(
-                        mapping->second->path / entry.artifact),
-                    diagnostics);
-                if (!declaration.has_value()
-                    || declaration->library != library_name
-                    || !metadata_identity_matches(entry, *declaration)) {
-                    if (declaration.has_value()) {
-                        diagnostics.error(
-                            "FSIM-LIB-0008",
-                            "mapped UDP identity does not match its metadata index");
-                    }
-                    return false;
-                }
-                const auto duplicate = std::ranges::find_if(
+                const auto key = compiled_udp_key(*declaration);
+                indexed_udp_keys.insert(key);
+                const auto local_duplicate = std::ranges::any_of(
                     checked.parsed.udp_declarations,
                     [&](const auto& existing) {
                         const auto existing_library = existing.library.empty()
                             ? std::string_view { "work" }
                             : std::string_view { existing.library };
-                        return existing_library == library_name
-                            && existing.name == declaration->name;
+                        return key == "udp:" + std::string { existing_library }
+                            + "." + existing.name;
                     });
-                if (duplicate != checked.parsed.udp_declarations.end()) {
+                if (local_duplicate || !mapped_udp_keys.insert(key).second) {
                     diagnostics.error(
                         "FSIM-LIB-0008",
-                        "mapped UDP collides with an already loaded declaration 'udp:"
-                            + library_name + "." + declaration->name + "'");
+                        "mapped UDP collides with an already loaded declaration '"
+                            + key + "'");
                     return false;
                 }
-                provenance.unit_checksums.push_back(entry.checksum);
-                checked.parsed.udp_declarations.push_back(
-                    std::move(*declaration));
+                provenance.unit_checksums.push_back(
+                    metadata->compiled_hir_checksum);
                 continue;
             }
-            auto unit = library::deserialize_portable_unit(
-                *bytes,
-                support::path_to_utf8(mapping->second->path / entry.artifact),
-                diagnostics);
-            if (!unit.has_value() || unit->library != library_name
-                || !metadata_identity_matches(entry, *unit)) {
-                if (unit.has_value()) {
+            if (entry.kind == "class") {
+                const auto* declaration = find_compiled_class(
+                    *compiled_design, library_name, entry.name);
+                if (declaration == nullptr
+                    || !compiled_class_metadata_matches(
+                        entry, *compiled_design, *declaration,
+                        library_name)) {
                     diagnostics.error(
                         "FSIM-LIB-0008",
-                        "mapped unit identity does not match its metadata index");
+                        "mapped class identity does not match its compiled-HIR index");
+                    return false;
                 }
+                if (!indexed_class_identities.insert(entry.name).second) {
+                    diagnostics.error(
+                        "FSIM-LIB-0008",
+                        "mapped class has a duplicate compiled-HIR index '"
+                            + entry.name + "'");
+                    return false;
+                }
+                provenance.unit_checksums.push_back(
+                    metadata->compiled_hir_checksum);
+                continue;
+            }
+            const auto expected = std::ranges::find(
+                remaining_compiled_units, entry);
+            if (expected == remaining_compiled_units.end()) {
+                diagnostics.error(
+                    "FSIM-LIB-0008",
+                    "mapped unit identity does not match its compiled-HIR index");
                 return false;
             }
-            const auto duplicate = std::ranges::find_if(
-                checked.parsed.units,
-                [&](const auto& existing) {
-                    return unit_key(existing) == unit_key(*unit);
+            const auto local_duplicate = std::ranges::any_of(
+                checked.parsed.units, [&](const auto& existing) {
+                    return metadata_identity_matches(entry, existing)
+                        && (existing.library.empty()
+                                ? std::string_view { "work" }
+                                : std::string_view { existing.library })
+                            == library_name;
                 });
-            if (duplicate != checked.parsed.units.end()) {
+            const auto key = compiled_unit_metadata_key(entry, library_name);
+            if (local_duplicate || !mapped_unit_keys.insert(key).second) {
                 diagnostics.error(
                     "FSIM-LIB-0008",
                     "mapped unit collides with an already loaded design unit '"
-                        + unit_key(*unit) + "'");
+                        + key + "'");
                 return false;
             }
-            provenance.unit_checksums.push_back(entry.checksum);
-            checked.parsed.units.push_back(std::move(*unit));
+            remaining_compiled_units.erase(expected);
+            provenance.unit_checksums.push_back(
+                metadata->compiled_hir_checksum);
         }
+        if (!remaining_compiled_units.empty()) {
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                "mapped compiled-HIR unit is missing from its metadata index");
+            return false;
+        }
+        for (const auto& declaration
+            : compiled_design->systemverilog_hir.udps()) {
+            const auto declaration_library = declaration.library.empty()
+                ? std::string_view { "work" }
+                : std::string_view { declaration.library };
+            if (declaration_library == library_name
+                && !indexed_udp_keys.contains(
+                    compiled_udp_key(declaration))) {
+                diagnostics.error(
+                    "FSIM-LIB-0008",
+                    "mapped UDP identity does not match its metadata index");
+                return false;
+            }
+        }
+        for (const auto& declaration
+            : compiled_design->systemverilog_hir.classes()) {
+            const auto* owner = compiled_class_owner(
+                *compiled_design, declaration);
+            const auto declaration_library
+                = owner == nullptr || owner->library.empty()
+                ? std::string_view { "work" }
+                : std::string_view { owner->library };
+            if (declaration_library == library_name
+                && !indexed_class_identities.contains(
+                    semantic::sv::class_declaration_identity(declaration))) {
+                diagnostics.error(
+                    "FSIM-LIB-0008",
+                    "mapped class identity is missing from its compiled-HIR index");
+                return false;
+            }
+        }
+        auto primary_bundle = semantic::extract_compiled_library(
+            *compiled_design, library_name);
+        if (!primary_bundle.ok()) {
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                "cannot project mapped primary library HIR: "
+                    + primary_bundle.error);
+            return false;
+        }
+        if (!metadata->vhdl_package_dependencies.empty()) {
+            std::vector<std::string> dependency_libraries;
+            for (const auto& dependency
+                : metadata->vhdl_package_dependencies) {
+                const auto separator = dependency.package.find('.');
+                const auto dependency_library
+                    = dependency.package.substr(0, separator);
+                if (dependency_library != library_name
+                    && std::ranges::find(
+                           dependency_libraries, dependency_library)
+                        == dependency_libraries.end()) {
+                    dependency_libraries.push_back(dependency_library);
+                }
+            }
+            auto dependencies = semantic::extract_compiled_libraries(
+                *compiled_design, dependency_libraries);
+            if (!dependencies.ok()) {
+                diagnostics.error(
+                    "FSIM-LIB-0008",
+                    "cannot project mapped compiler dependency HIR: "
+                        + dependencies.error);
+                return false;
+            }
+            auto dependency_bytes = serialize_compiled_hir_bundle(
+                *dependencies.design, diagnostics);
+            if (!dependency_bytes) {
+                return false;
+            }
+            const auto incompatible_environment
+                = !vhdl_dependency_identity.empty()
+                && (metadata->vhdl_package_dependencies
+                        != vhdl_dependency_identity
+                    || *dependency_bytes
+                        != *vhdl_dependency_bundle_bytes);
+            if (incompatible_environment) {
+                diagnostics.error(
+                    "FSIM-ART-VHDEP-001",
+                    "mapped libraries select incompatible compiler-supplied "
+                    "VHDL package environments; regenerate every .fsimlib "
+                    "with one VHDL standard and this fsim build");
+                return false;
+            }
+            if (vhdl_dependency_identity.empty()) {
+                vhdl_dependency_identity
+                    = metadata->vhdl_package_dependencies;
+                vhdl_dependency_bundle_bytes
+                    = std::move(*dependency_bytes);
+                vhdl_dependency_bundle
+                    = std::move(*dependencies.design);
+            }
+        }
+        checked.mapped_compiled_designs.push_back(
+            std::move(*primary_bundle.design));
         for (const auto& native : metadata->native_artifacts) {
             if (native.kind == "systemc_plugin") {
                 if (!admit_systemc_artifact(
@@ -818,6 +870,10 @@ bool load_required_mapped_libraries(
         if (!load_one(load_one, library_name)) {
             return false;
         }
+    }
+    if (vhdl_dependency_bundle) {
+        checked.mapped_compiled_designs.push_back(
+            std::move(*vhdl_dependency_bundle));
     }
     return true;
 }

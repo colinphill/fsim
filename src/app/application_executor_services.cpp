@@ -105,8 +105,26 @@ void LlvmProcessExecutor::write_report(
         const auto* report = fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
             &state.process->operations[instruction]);
         if (report != nullptr) {
+            if (state.process->language_standard == "2019") {
+                state.context->vhdl_report(
+                    instruction, report->message, report->severity,
+                    report->source, true);
+                return;
+            }
             state.context->report(
                 report->message, report->severity, report->source);
+            if (report->severity
+                == runtime::simir::AssertionSeverity::failure) {
+                throw runtime::simir::AssertionError(
+                    process,
+                    instruction,
+                    report->message.empty()
+                        ? "report failure"
+                        : report->message,
+                    report->severity,
+                    report->source,
+                    true);
+            }
             return;
         }
         const auto* string_report = fsim::runtime::simir::operation_get_if<runtime::simir::StringReport>(
@@ -166,12 +184,17 @@ void LlvmProcessExecutor::write_report(
                 "instruction"
             };
         }
-        state.context->report(
-            assertion->message.empty()
-                ? std::string_view { "assertion failed" }
-                : std::string_view { assertion->message },
-            assertion->severity,
-            assertion->source);
+        const auto message = assertion->message.empty()
+            ? std::string_view { "assertion failed" }
+            : std::string_view { assertion->message };
+        if (state.process->language_standard == "2019") {
+            state.context->vhdl_report(
+                instruction, message, assertion->severity,
+                assertion->source, false);
+        } else {
+            state.context->report(
+                message, assertion->severity, assertion->source);
+        }
     } catch (...) {
         capture_failure(state);
     }

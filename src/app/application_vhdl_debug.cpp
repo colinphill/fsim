@@ -13,6 +13,48 @@ namespace {
 
     std::atomic<std::uint64_t> next_vhdl_debug_simulation { 1U };
 
+    [[nodiscard]] std::uint32_t stable_source_identity(
+        const semantic::Model& model,
+        const std::optional<semantic::SourceSpanId> source) noexcept
+    {
+        if (!source || !source->valid()
+            || source->value() >= model.source_spans().size()) {
+            return std::numeric_limits<std::uint32_t>::max();
+        }
+        const auto& span = model.source_spans()[source->value()];
+        const auto& files = model.source_files();
+        const auto stable_file = span.file.valid()
+                && span.file.value() < files.size()
+                && !files[span.file.value()].content_digest.empty()
+            ? std::string_view { files[span.file.value()].content_digest }
+            : std::string_view { span.logical_name };
+        std::uint32_t hash { 2'166'136'261U };
+        const auto append_byte = [&](const std::uint8_t byte) {
+            hash ^= byte;
+            hash *= 16'777'619U;
+        };
+        for (const auto byte : stable_file) {
+            append_byte(static_cast<std::uint8_t>(byte));
+        }
+        append_byte(0U);
+        const auto append_position = [&](const auto value) {
+            const auto widened = static_cast<std::uint64_t>(value);
+            for (unsigned shift { 56U }; shift <= 56U; shift -= 8U) {
+                append_byte(static_cast<std::uint8_t>(widened >> shift));
+                if (shift == 0U) {
+                    break;
+                }
+            }
+        };
+        append_position(span.begin.line);
+        append_position(span.begin.column);
+        append_position(span.end.line);
+        append_position(span.end.column);
+        return hash == std::numeric_limits<std::uint32_t>::max()
+            ? hash - 1U
+            : hash;
+    }
+
     [[nodiscard]] std::optional<runtime::VhdlVhpiSourceLocation> source_location(
         const semantic::Model& model,
         const std::optional<semantic::SourceSpanId> source)
@@ -767,9 +809,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
             scope.package_dependencies
                 = provenance->package_dependencies;
         }
-        scope.source_span = specialization.source
-            ? specialization.source->value()
-            : std::numeric_limits<std::uint32_t>::max();
+        scope.source_span = stable_source_identity(
+            semantics(), specialization.source);
         if (const auto handle = vhdl_vhpi_objects().find(scope.path)) {
             scope.vhpi_handle = handle.value.handle;
         }
@@ -805,7 +846,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
             item.name = declaration->name;
             item.type = type_name(*declaration, type);
             item.kind = debug_kind(*declaration, type);
-            item.source_span = declaration->source.value();
+            item.source_span = stable_source_identity(
+                semantics(), declaration->source);
             item.external_alias
                 = declaration->form == semantic::vhdl::DeclarationForm::alias;
             if (const auto handle = vhdl_vhpi_objects().find(item.path)) {
@@ -846,9 +888,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
             const auto source = source_process
                 ? std::optional { source_process->source }
                 : process.source;
-            item.source_span = source
-                ? source->value()
-                : std::numeric_limits<std::uint32_t>::max();
+            item.source_span = stable_source_identity(
+                semantics(), source);
             item.postponed = source_process && source_process->postponed;
             if (const auto handle = vhdl_vhpi_objects().find(item.path)) {
                 item.vhpi_handle = handle.value.handle;
@@ -880,9 +921,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
                 || object.kind == semantic::design::ObjectKind::protected_member
             ? VhdlDebugDeclarationKind::protected_type
             : VhdlDebugDeclarationKind::other;
-        item.source_span = object.source
-            ? object.source->value()
-            : std::numeric_limits<std::uint32_t>::max();
+        item.source_span = stable_source_identity(
+            semantics(), object.source);
         item.driver_count = static_cast<std::uint32_t>(
             std::ranges::count(design_ir().drivers(), object.id,
                 &semantic::design::Driver::object));

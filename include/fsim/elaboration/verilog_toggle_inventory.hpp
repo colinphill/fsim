@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -110,22 +109,5 @@ struct VerilogToggleInventoryResult {
             && error == VerilogToggleInventoryError::None;
     }
 };
-
-// True only for scalar or packed integral objects represented by binary or
-// four-state bits. Real, string, handle, interface, and container objects do
-// not manufacture binary toggle bins. Change 10 owns explicit default
-// exclusion records; Change 11 owns selected container elements.
-[[nodiscard]] bool is_verilog_toggle_type(
-    const frontend::Type& type) noexcept;
-
-// The supplied unit is the already specialized semantic unit for exactly one
-// CoverageInventoryOwner. Generate expansion has qualified retained object
-// names before this boundary, so the resulting hierarchy never depends on
-// parsing process or runtime display names.
-[[nodiscard]] VerilogToggleInventoryResult make_verilog_toggle_inventory(
-    const frontend::DesignUnit& unit,
-    const CoverageInventoryOwner& owner,
-    std::span<const VerilogCoverageSource> sources,
-    VerilogToggleInventoryLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

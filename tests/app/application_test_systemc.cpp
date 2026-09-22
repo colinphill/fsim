@@ -32,7 +32,7 @@ assert(checked->hdl_sources.front().content_digest.size() == 64);
 assert(
     checked->hdl_sources.front().compilation_unit_digest.size()
     == 64);
-assert(checked->parsed.units.size() == 2);
+assert(checked->semantics.units().size() == 2);
 
 auto first = fsim::app::build_project(config, diagnostics);
 if (!first) {

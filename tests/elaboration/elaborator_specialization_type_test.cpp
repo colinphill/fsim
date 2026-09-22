@@ -150,7 +150,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(nominal_legality.ok());
-    const auto nominal_positive = fsim::elaboration::elaborate(
+    const auto nominal_positive = compile_and_elaborate(
         nominal_legality.design,
         "sv:work.nominal_legality_host");
     if (!nominal_positive.ok()) {
@@ -162,7 +162,7 @@ endmodule
     assert(nominal_positive.ok());
     const auto rejects = [&](const std::string_view top,
                              const std::string_view code) {
-        const auto result = fsim::elaboration::elaborate(
+        const auto result = compile_and_elaborate(
             nominal_legality.design, "sv:work." + std::string { top });
         if (result.ok() || !has_diagnostic(result, code)) {
             for (const auto& diagnostic : result.diagnostics) {
@@ -273,31 +273,31 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_aggregate.ok());
-    const auto invalid_nominal = fsim::elaboration::elaborate(
+    const auto invalid_nominal = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_nominal");
-    const auto invalid_pattern = fsim::elaboration::elaborate(
+    const auto invalid_pattern = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_pattern");
-    const auto invalid_cast = fsim::elaboration::elaborate(
+    const auto invalid_cast = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_cast");
-    const auto invalid_comparison = fsim::elaboration::elaborate(
+    const auto invalid_comparison = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_comparison");
-    const auto invalid_multidimensional_index = fsim::elaboration::elaborate(
+    const auto invalid_multidimensional_index = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_multidimensional_index");
-    const auto invalid_multidimensional_rank = fsim::elaboration::elaborate(
+    const auto invalid_multidimensional_rank = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_multidimensional_rank");
-    const auto invalid_multidimensional_pattern = fsim::elaboration::elaborate(
+    const auto invalid_multidimensional_pattern = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_multidimensional_pattern");
-    const auto invalid_tagged_member = fsim::elaboration::elaborate(
+    const auto invalid_tagged_member = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_tagged_member");
-    const auto invalid_tagged_context = fsim::elaboration::elaborate(
+    const auto invalid_tagged_context = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_tagged_context");
-    const auto invalid_delayed_union_write = fsim::elaboration::elaborate(
+    const auto invalid_delayed_union_write = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_delayed_union_write");
-    const auto invalid_member_initializer = fsim::elaboration::elaborate(
+    const auto invalid_member_initializer = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_member_initializer");
     assert(
@@ -392,7 +392,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(multidimensional.ok());
-    const auto multidimensional_elaborated = fsim::elaboration::elaborate(
+    const auto multidimensional_elaborated = compile_and_elaborate(
         multidimensional.design,
         "sv:work.multidimensional_static");
     if (!multidimensional_elaborated.ok()) {

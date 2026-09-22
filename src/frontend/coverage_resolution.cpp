@@ -11,6 +11,7 @@
 #include <set>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 
 namespace fsim::frontend {
@@ -731,6 +732,7 @@ namespace {
         std::vector<Diagnostic>& diagnostics)
     {
         SystemVerilogCovergroupInstance instance;
+        SystemVerilogCovergroupInstanceSyntax syntax;
         instance.name = variable.name;
         instance.owner_identity = owner;
         instance.declaration_identity = entry.declaration->canonical_identity;
@@ -739,9 +741,10 @@ namespace {
         std::string actual_identity;
         if (variable.initializer
             && variable.initializer->kind == ExpressionKind::Call
-            && variable.initializer->text == "@sv-new") {
+            && (variable.initializer->text == "@sv-new"
+                || variable.initializer->text.starts_with("@sv-new:"))) {
             validate_actuals(*entry.declaration, *variable.initializer, diagnostics);
-            instance.constructor_actuals = variable.initializer->operands;
+            syntax.constructor_actuals = variable.initializer->operands;
             actual_identity = expression_identity(*variable.initializer);
         } else if (!entry.declaration->formals.empty()) {
             const auto missing_required = std::ranges::any_of(
@@ -762,12 +765,15 @@ namespace {
             + actual_identity + ")";
         instance.runtime_identity = owner + "." + variable.name + "@"
             + instance.specialization_identity;
+        syntax.runtime_identity = instance.runtime_identity;
         if (!initialize_systemverilog_cross_inventory(
                 instance, *entry.declaration, diagnostics)) {
             return;
         }
         design.systemverilog_covergroup_instances.push_back(
             std::move(instance));
+        design.systemverilog_covergroup_instance_syntax.push_back(
+            std::move(syntax));
     }
 
     void collect_sample_calls(
@@ -1084,12 +1090,14 @@ namespace {
         const auto owner = library + "." + declaration.canonical_identity;
         for (auto& covergroup : declaration.covergroups) {
             SystemVerilogCovergroupInstance instance;
+            SystemVerilogCovergroupInstanceSyntax syntax;
             instance.name = covergroup.name;
             instance.owner_identity = owner;
             instance.declaration_identity = covergroup.canonical_identity;
             instance.specialization_identity = covergroup.specialization_identity;
             instance.initial_option_state = covergroup.option_assignments;
             instance.runtime_identity = covergroup.runtime_identity_prefix + "<object>";
+            syntax.runtime_identity = instance.runtime_identity;
             instance.class_member_template = true;
             instance.span = covergroup.span;
             if (!initialize_systemverilog_cross_inventory(
@@ -1098,6 +1106,8 @@ namespace {
             }
             design.systemverilog_covergroup_instances.push_back(
                 std::move(instance));
+            design.systemverilog_covergroup_instance_syntax.push_back(
+                std::move(syntax));
         }
         for (const auto& property : declaration.properties) {
             auto candidates = find_covergroups(
@@ -1209,12 +1219,23 @@ namespace {
                             }
                         }
                     }
-                    SystemVerilogCovergroupSampleCall call;
+                    auto& syntax_inventory
+                        = design.systemverilog_covergroup_instance_syntax;
+                    const auto syntax = std::ranges::find(
+                        syntax_inventory,
+                        instance->runtime_identity,
+                        &SystemVerilogCovergroupInstanceSyntax::runtime_identity);
+                    if (syntax == syntax_inventory.end()) {
+                        throw std::logic_error {
+                            "covergroup instance has no compile-local syntax sidecar"
+                        };
+                    }
+                    SystemVerilogCovergroupSampleSyntax call;
                     call.declaration_identity = instance->declaration_identity;
                     call.instance_identity = instance->runtime_identity;
                     call.actuals = statement.task_arguments;
                     call.span = statement.span;
-                    instance->sample_calls.push_back(std::move(call));
+                    syntax->sample_calls.push_back(std::move(call));
                     if (!procedural_sample && entry != entries.end()) {
                         if (auto actuals = direct_coverpoint_actuals(
                                 *entry->declaration, diagnostics, statement.span)) {
@@ -1246,6 +1267,7 @@ bool resolve_systemverilog_covergroups(
 {
     const auto initial_diagnostic_count = diagnostics.size();
     design.systemverilog_covergroup_instances.clear();
+    design.systemverilog_covergroup_instance_syntax.clear();
     std::vector<CovergroupEntry> entries;
     std::vector<ClassCoverageEntry> classes;
     for (auto& unit : design.units) {

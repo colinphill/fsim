@@ -773,6 +773,7 @@ std::optional<Statement> VerilogParser::parse_statement()
             } while (match(TokenKind::Comma));
         } else {
             const auto format_token = advance();
+            statement.output_generated_text = format_token.generated_text;
             auto parsed_format = parse_output_format(
                 decoded_string_literal_text(format_token));
             const bool has_unformatted = std::ranges::any_of(
@@ -927,6 +928,8 @@ std::optional<Statement> VerilogParser::parse_statement()
             if (!at(TokenKind::RightParen)) {
                 if (at(TokenKind::StringLiteral)) {
                     const auto format_token = advance();
+                    statement.output_generated_text
+                        = format_token.generated_text;
                     auto parsed_format = parse_output_format(
                         decoded_string_literal_text(format_token));
                     const bool has_unformatted = std::ranges::any_of(

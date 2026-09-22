@@ -360,7 +360,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "container_lowering");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -635,7 +635,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(atomic_pattern_parsed.ok());
-    const auto atomic_pattern_elaborated = fsim::elaboration::elaborate(
+    const auto atomic_pattern_elaborated = compile_and_elaborate(
         atomic_pattern_parsed.design,
         "static_pattern_atomic");
     assert(atomic_pattern_elaborated.ok());
@@ -800,7 +800,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(slice_parsed.ok());
-    const auto slice_elaborated = fsim::elaboration::elaborate(
+    const auto slice_elaborated = compile_and_elaborate(
         slice_parsed.design, "static_slices");
     if (!slice_elaborated.ok()) {
         for (const auto& diagnostic :
@@ -902,7 +902,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(atomic_slice_parsed.ok());
-    const auto atomic_slice_elaborated = fsim::elaboration::elaborate(
+    const auto atomic_slice_elaborated = compile_and_elaborate(
         atomic_slice_parsed.design,
         "static_slice_atomic");
     assert(atomic_slice_elaborated.ok());
@@ -991,15 +991,12 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(memory_word_output_parsed.ok());
-    const auto memory_word_output_elaborated =
-        fsim::elaboration::elaborate(
-            memory_word_output_parsed.design,
-            "memory_word_output");
+    const auto memory_word_output_elaborated = compile_and_elaborate(
+        memory_word_output_parsed.design,
+        "memory_word_output");
     assert(memory_word_output_elaborated.ok());
-    auto memory_word_output_interpreter =
-        memory_word_output_elaborated.design->create_interpreter();
-    const auto memory_word_output_result =
-        memory_word_output_interpreter->run();
+    auto memory_word_output_interpreter = memory_word_output_elaborated.design->create_interpreter();
+    const auto memory_word_output_result = memory_word_output_interpreter->run();
     assert(
         memory_word_output_result.status
             == fsim::runtime::RunStatus::completed
@@ -1038,15 +1035,12 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(procedural_memory_parsed.ok());
-    const auto procedural_memory_elaborated =
-        fsim::elaboration::elaborate(
-            procedural_memory_parsed.design,
-            "procedural_memory");
+    const auto procedural_memory_elaborated = compile_and_elaborate(
+        procedural_memory_parsed.design,
+        "procedural_memory");
     assert(procedural_memory_elaborated.ok());
-    auto procedural_memory_interpreter =
-        procedural_memory_elaborated.design->create_interpreter();
-    const auto procedural_memory_result =
-        procedural_memory_interpreter->run();
+    auto procedural_memory_interpreter = procedural_memory_elaborated.design->create_interpreter();
+    const auto procedural_memory_result = procedural_memory_interpreter->run();
     assert(
         procedural_memory_result.status
             == fsim::runtime::RunStatus::stopped
@@ -1111,15 +1105,12 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(function_memory_parsed.ok());
-    const auto function_memory_elaborated =
-        fsim::elaboration::elaborate(
-            function_memory_parsed.design,
-            "function_memory");
+    const auto function_memory_elaborated = compile_and_elaborate(
+        function_memory_parsed.design,
+        "function_memory");
     assert(function_memory_elaborated.ok());
-    auto function_memory_interpreter =
-        function_memory_elaborated.design->create_interpreter();
-    const auto function_memory_result =
-        function_memory_interpreter->run();
+    auto function_memory_interpreter = function_memory_elaborated.design->create_interpreter();
+    const auto function_memory_result = function_memory_interpreter->run();
     assert(
         function_memory_result.status
             == fsim::runtime::RunStatus::completed
@@ -1128,7 +1119,8 @@ endmodule
         "wide_observed");
     assert(wide_observed);
     assert(function_memory_interpreter->signal_value(*wide_observed)
-        .to_msb_string() == "00000000000000000000000001111011");
+               .to_msb_string()
+        == "00000000000000000000000001111011");
 
     const auto port_parsed = fsim::frontend::parse_text(
         "container-ports.sv",
@@ -1213,7 +1205,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(port_parsed.ok());
-    const auto port_elaborated = fsim::elaboration::elaborate(
+    const auto port_elaborated = compile_and_elaborate(
         port_parsed.design, "static_port_top");
     if (!port_elaborated.ok()) {
         for (const auto& diagnostic : port_elaborated.diagnostics) {
@@ -1377,7 +1369,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(dynamic_port_parsed.ok());
-    const auto dynamic_port_elaborated = fsim::elaboration::elaborate(
+    const auto dynamic_port_elaborated = compile_and_elaborate(
         dynamic_port_parsed.design, "dynamic_port_top");
     if (!dynamic_port_elaborated.ok()) {
         for (const auto& diagnostic :
@@ -1451,7 +1443,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(expanded_static.ok());
-    const auto expanded_static_design = fsim::elaboration::elaborate(
+    const auto expanded_static_design = compile_and_elaborate(
         expanded_static.design, "container_expanded_static");
     assert(expanded_static_design.ok());
     auto expanded_static_interpreter = expanded_static_design.design->create_interpreter();
@@ -1595,7 +1587,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid.ok());
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         invalid.design, "container_invalid_lowering");
     assert(!rejected.ok());
     assert(has_diagnostic(
@@ -1683,7 +1675,7 @@ endmodule
         oversized_predicate,
         fsim::frontend::Language::SystemVerilog2017);
     assert(oversized_parsed.ok());
-    const auto oversized_rejected = fsim::elaboration::elaborate(
+    const auto oversized_rejected = compile_and_elaborate(
         oversized_parsed.design, "oversized_predicate");
     assert(
         !oversized_rejected.ok()
@@ -1741,7 +1733,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_slices.ok());
-    const auto rejected_slices = fsim::elaboration::elaborate(
+    const auto rejected_slices = compile_and_elaborate(
         invalid_slices.design, "static_slice_invalid");
     assert(!rejected_slices.ok());
     assert(has_diagnostic(
@@ -1826,7 +1818,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_ports.ok());
-    const auto rejected_ports = fsim::elaboration::elaborate(
+    const auto rejected_ports = compile_and_elaborate(
         invalid_ports.design, "bad_port_top");
     assert(!rejected_ports.ok());
     assert(has_diagnostic(
@@ -1926,7 +1918,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_dynamic_ports.ok());
-    const auto rejected_dynamic_ports = fsim::elaboration::elaborate(
+    const auto rejected_dynamic_ports = compile_and_elaborate(
         invalid_dynamic_ports.design,
         "bad_dynamic_port_top");
     assert(!rejected_dynamic_ports.ok());

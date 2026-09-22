@@ -50,11 +50,11 @@ void require_class(const fsim::app::BuiltProject &project,
                    const std::string_view class_name) {
   const std::string suffix = "::" + std::string{class_name};
   const auto found = std::ranges::find_if(
-      project.systemverilog_class_specializations,
+      project.compiled_systemverilog_class_specializations,
       [&](const auto &specialization) {
         return specialization.declaration_identity.ends_with(suffix);
       });
-  if (found == project.systemverilog_class_specializations.end()) {
+  if (found == project.compiled_systemverilog_class_specializations.end()) {
     fail("supported family " + std::string{family} +
          " is missing retained class " + std::string{class_name});
   }

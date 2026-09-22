@@ -4,10 +4,12 @@
 #include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -37,10 +39,203 @@ struct Root {
     std::string alias;
 };
 
+/// Parser-independent identity of a class made visible by one selected
+/// SystemVerilog generate branch. The CompiledDesign supplied to elaboration
+/// owns the declaration and every executable member referenced by this
+/// record.
+struct SelectedSystemVerilogClass {
+    semantic::UnitId unit;
+    semantic::DeclarationId generate_owner;
+    semantic::ScopeId declaration_scope;
+    semantic::OriginId origin;
+    std::string declaration_identity;
+
+    friend bool operator==(
+        const SelectedSystemVerilogClass&,
+        const SelectedSystemVerilogClass&) = default;
+};
+
+struct PackedTypeMetadata;
+
+struct PackedMemberMetadata {
+    std::string name;
+    frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+    std::string spelling;
+    std::optional<frontend::PackedRange> packed_range;
+    bool is_signed { };
+    std::uint64_t lsb_offset { };
+    frontend::SourceSpan span;
+    std::vector<PackedTypeMetadata> nested_types;
+
+    [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
+};
+
+struct VhdlArrayDimensionMetadata {
+    std::string index_subtype;
+    frontend::SourceSpan index_span;
+    std::optional<frontend::IntegerRange> index_base_range;
+    std::optional<frontend::IntegerRange> range;
+    bool null { };
+    std::uint64_t stride { };
+    bool unconstrained { };
+};
+
+struct VhdlArrayMetadata {
+    std::string index_subtype;
+    frontend::SourceSpan index_span;
+    std::optional<frontend::IntegerRange> index_base_range;
+    std::string element_spelling;
+    std::string element_named_type;
+    frontend::SourceSpan element_span;
+    frontend::ValueDomain element_domain { frontend::ValueDomain::Unknown };
+    bool unconstrained { };
+    std::optional<std::uint64_t> flat_width;
+    std::vector<VhdlArrayDimensionMetadata> dimensions;
+    std::vector<PackedTypeMetadata> element_types;
+};
+
+struct VhdlAccessMetadata {
+    std::vector<PackedTypeMetadata> designated_types;
+    frontend::SourceSpan designated_span;
+    std::uint32_t handle_width { 32U };
+    std::uint32_t maximum_objects {
+        std::numeric_limits<std::uint32_t>::max()
+    };
+    bool nullable { true };
+    bool owns_designated_object { true };
+    bool deallocate_releases_storage { true };
+    bool reclaim_when_unreachable { };
+    bool simulation_lifetime { true };
+};
+
+struct VhdlPhysicalUnitMetadata {
+    std::string name;
+    std::optional<std::int64_t> scale_factor;
+    frontend::SourceSpan span;
+};
+
+struct VhdlPhysicalMetadata {
+    std::vector<VhdlPhysicalUnitMetadata> units;
+    std::optional<frontend::IntegerRange> resolved_range;
+};
+
+/// Concrete type metadata retained across elaboration and DesignIR
+/// construction. It contains recursive layout and source identity, but cannot
+/// own syntax expressions, statements, or parser type nodes.
+struct PackedTypeMetadata {
+    frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+    std::string spelling;
+    frontend::SystemVerilogScalarKind systemverilog_scalar {
+        frontend::SystemVerilogScalarKind::None
+    };
+    std::string systemverilog_net_type;
+    std::string systemverilog_resolution_function;
+    std::optional<frontend::PackedRange> packed_range;
+    bool is_signed { };
+    std::string named_type;
+    frontend::SourceSpan named_type_span;
+    std::optional<frontend::IntegerRange> integer_range;
+    std::optional<frontend::IntegerRange> integer_base_range;
+    std::uint8_t vhdl_integer_storage_width { };
+    std::string nominal_type;
+    std::string vhdl_type_declaration;
+    std::string vhdl_resolution_function;
+    std::vector<std::string> enumeration_literals;
+    std::optional<frontend::EnumerationRange> enumeration_range;
+    std::optional<frontend::EnumerationRange> enumeration_base_range;
+    std::shared_ptr<VhdlArrayMetadata> vhdl_array;
+    std::shared_ptr<VhdlAccessMetadata> vhdl_access;
+    std::shared_ptr<VhdlPhysicalMetadata> vhdl_physical;
+    std::vector<PackedMemberMetadata> packed_members;
+    frontend::PackedAggregateKind packed_aggregate {
+        frontend::PackedAggregateKind::None
+    };
+
+    PackedTypeMetadata() = default;
+    PackedTypeMetadata(
+        const frontend::ValueDomain domain_value,
+        std::string spelling_value,
+        std::optional<frontend::PackedRange> range_value,
+        const bool signed_value)
+        : domain(domain_value)
+        , spelling(std::move(spelling_value))
+        , packed_range(std::move(range_value))
+        , is_signed(signed_value)
+    {
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> width() const noexcept
+    {
+        if (systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::ShortReal) {
+            return 32U;
+        }
+        if (systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Real
+            || systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Realtime
+            || systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Time
+            || systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Chandle) {
+            return 64U;
+        }
+        if (vhdl_array && vhdl_array->flat_width) {
+            return vhdl_array->flat_width;
+        }
+        if (packed_range) {
+            return packed_range->width();
+        }
+        if (vhdl_array || !packed_members.empty()) {
+            return std::nullopt;
+        }
+        switch (domain) {
+        case frontend::ValueDomain::Bit2:
+        case frontend::ValueDomain::Logic4:
+        case frontend::ValueDomain::Logic9:
+        case frontend::ValueDomain::Boolean:
+            return 1U;
+        case frontend::ValueDomain::Integer:
+            return vhdl_integer_storage_width != 0U
+                ? std::optional<std::uint64_t> {
+                      vhdl_integer_storage_width }
+                : std::optional<std::uint64_t> { 32U };
+        case frontend::ValueDomain::String:
+        case frontend::ValueDomain::Unknown:
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+};
+
+inline std::optional<std::uint64_t>
+PackedMemberMetadata::width() const noexcept
+{
+    if (!nested_types.empty()) {
+        return nested_types.front().width();
+    }
+    if (packed_range) {
+        return packed_range->width();
+    }
+    switch (domain) {
+    case frontend::ValueDomain::Bit2:
+    case frontend::ValueDomain::Logic4:
+    case frontend::ValueDomain::Logic9:
+    case frontend::ValueDomain::Boolean:
+        return 1U;
+    case frontend::ValueDomain::Integer:
+        return 32U;
+    case frontend::ValueDomain::String:
+    case frontend::ValueDomain::Unknown:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 struct ExternalPort {
     std::uint64_t handle { };
     std::string name;
-    frontend::Type type;
+    PackedTypeMetadata type;
     frontend::PortDirection direction {
         frontend::PortDirection::Unknown
     };
@@ -65,14 +260,14 @@ struct ExternalProcess {
 struct ExternalInternalSignal {
     std::uint64_t handle { };
     std::string name;
-    frontend::Type type;
+    PackedTypeMetadata type;
     runtime::PackedLogic4 initial_value;
 };
 
 struct ExternalExport {
     std::uint64_t handle { };
     std::string name;
-    frontend::Type type;
+    PackedTypeMetadata type;
     std::uint64_t bound_object { };
     bool writable { true };
 };
@@ -151,34 +346,13 @@ public:
         std::string& error) = 0;
 };
 
+/// Parser-free compiled-HIR elaboration. Unsupported residual structures are
+/// diagnosed instead of being reconstructed as syntax nodes.
 [[nodiscard]] ElaborationResult elaborate(
-    const frontend::ParsedDesign& parsed, std::string_view top);
+    const semantic::CompiledDesign& compiled,
+    std::string_view top);
 [[nodiscard]] ElaborationResult elaborate(
-    const frontend::ParsedDesign& parsed,
-    std::string_view top,
-    std::span<const Binding> bindings);
-[[nodiscard]] ElaborationResult elaborate(
-    const frontend::ParsedDesign& parsed,
-    std::string_view top,
-    std::span<const Binding> bindings,
-    std::span<const SystemCInstanceDescription> systemc_instances);
-[[nodiscard]] ElaborationResult elaborate(
-    const frontend::ParsedDesign& parsed,
-    std::string_view top,
-    std::span<const Binding> bindings,
-    std::span<const SystemCInstanceDescription> systemc_instances,
-    SystemCFactoryProvider* systemc_provider);
-[[nodiscard]] ElaborationResult elaborate(
-    const frontend::ParsedDesign& parsed,
-    std::string_view top,
-    std::span<const Binding> bindings,
-    std::span<const SystemCInstanceDescription> systemc_instances,
-    SystemCFactoryProvider* systemc_provider,
-    // The parent library is prepended and duplicates are removed at their
-    // first occurrence for each lazy unqualified lookup.
-    std::span<const std::string> search_libraries);
-[[nodiscard]] ElaborationResult elaborate(
-    const frontend::ParsedDesign& parsed,
+    const semantic::CompiledDesign& compiled,
     std::span<const Root> roots,
     std::span<const Binding> bindings,
     std::span<const SystemCInstanceDescription> systemc_instances,
@@ -230,10 +404,10 @@ struct SignalInfo {
     // one KiB) and absent from the overwhelmingly common scalar/SV signal.
     // Box it so every SignalInfo does not reserve storage for inactive
     // language-specific alternatives.
-    std::shared_ptr<frontend::VhdlArrayInfo> vhdl_array;
-    std::shared_ptr<frontend::VhdlAccessInfo> vhdl_access;
-    std::shared_ptr<frontend::VhdlPhysicalInfo> vhdl_physical;
-    std::vector<frontend::PackedMember> packed_members;
+    std::shared_ptr<VhdlArrayMetadata> vhdl_array;
+    std::shared_ptr<VhdlAccessMetadata> vhdl_access;
+    std::shared_ptr<VhdlPhysicalMetadata> vhdl_physical;
+    std::vector<PackedMemberMetadata> packed_members;
     std::optional<frontend::IntegerRange> integer_range;
     std::string nominal_type;
     std::vector<std::string> enumeration_literals;
@@ -318,7 +492,7 @@ using VhdlProtectedObjectId = std::uint32_t;
 
 struct VhdlProtectedMemberInfo {
     std::string name;
-    frontend::Type type;
+    bool is_signed { };
     std::size_t offset { };
     std::size_t width { };
     runtime::simir::ContainerObjectId storage { };
@@ -349,6 +523,13 @@ struct SpecializationInfo {
     SpecializationId id { };
     std::string unit;
     std::string instance;
+    // Exact semantic provenance for compiled-HIR hierarchy occurrences.
+    // Transitional syntax-only callers may leave these unset while their
+    // lowering path is ported.
+    std::optional<semantic::UnitId> source_unit;
+    std::optional<semantic::InstanceId> source_instance;
+    std::optional<semantic::SourceSpanId> source_span;
+    std::optional<semantic::OriginId> origin;
     std::vector<runtime::simir::ProcessId> processes;
     std::string source;
     // Additional source roots that define this specialization's interface,
@@ -365,6 +546,13 @@ struct SpecializationInfo {
     // metadata. Empty entries fall back to parameter_values.
     std::vector<std::pair<std::string, std::string>>
         parameter_identity_values;
+    // Direct provenance for processes lowered from language HIR. Synthetic
+    // concurrent, boundary, timing, and foreign processes intentionally do
+    // not appear here; callers must not infer semantic ownership by position
+    // in `processes`. Kept trailing for source compatibility with existing
+    // aggregate descriptions.
+    std::vector<std::pair<runtime::simir::ProcessId, semantic::ProcessId>>
+        semantic_processes;
 };
 
 using UdpTableId = std::uint32_t;
@@ -471,8 +659,8 @@ struct VerilogSpecifyTerminalInfo {
 };
 
 /// One instance-local, specialization-normalized Verilog module path.
-/// Conditions and destination data-source expressions retain their substituted
-/// frontend trees until Change 9 lowers them into scheduler-owned programs.
+/// Conditions and destination data sources are retained only as
+/// parser-independent scheduler programs after specialization.
 struct VerilogSpecifyPathInfo {
     VerilogSpecifyPathId id { };
     std::string identity;
@@ -501,8 +689,6 @@ struct VerilogSpecifyPathInfo {
     std::vector<runtime::SimulationTick> pulse_reject_delays;
     std::vector<runtime::SimulationTick> pulse_error_delays;
     std::vector<runtime::SimulationTick> retain_delays;
-    frontend::Expression condition;
-    frontend::Expression destination_data_source;
     bool conditional { };
     bool ifnone { };
     std::vector<runtime::SimulationTick> delays;
@@ -541,6 +727,16 @@ struct ElaboratedDesignState {
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
+    explicit ElaboratedDesign(const std::span<const Root> roots)
+    {
+        roots_.reserve(roots.size());
+        for (const auto& root : roots) {
+            roots_.push_back(root.alias);
+        }
+        if (!roots_.empty()) {
+            top_ = roots_.front();
+        }
+    }
 
     [[nodiscard]] const std::string& top() const noexcept;
     [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
@@ -618,37 +814,6 @@ private:
         bool validation_only,
         std::vector<runtime::simir::Process>* consumed_processes = nullptr) const;
     friend class HierarchyBuilder;
-    friend ElaborationResult elaborate(
-        const frontend::ParsedDesign&, std::string_view);
-    friend ElaborationResult elaborate(
-        const frontend::ParsedDesign&,
-        std::string_view,
-        std::span<const Binding>);
-    friend ElaborationResult elaborate(
-        const frontend::ParsedDesign&,
-        std::string_view,
-        std::span<const Binding>,
-        std::span<const SystemCInstanceDescription>);
-    friend ElaborationResult elaborate(
-        const frontend::ParsedDesign&,
-        std::string_view,
-        std::span<const Binding>,
-        std::span<const SystemCInstanceDescription>,
-        SystemCFactoryProvider*);
-    friend ElaborationResult elaborate(
-        const frontend::ParsedDesign&,
-        std::string_view,
-        std::span<const Binding>,
-        std::span<const SystemCInstanceDescription>,
-        SystemCFactoryProvider*,
-        std::span<const std::string>);
-    friend ElaborationResult elaborate(
-        const frontend::ParsedDesign&,
-        std::span<const Root>,
-        std::span<const Binding>,
-        std::span<const SystemCInstanceDescription>,
-        SystemCFactoryProvider*,
-        std::span<const std::string>);
 
     std::string top_;
     std::vector<std::string> roots_;
@@ -687,9 +852,9 @@ struct ElaborationResult {
     // ordinary errors without making a successful design unavailable.
     std::vector<frontend::Diagnostic> messages;
     // Generate declarations are selected only after parameters and hierarchy
-    // are known. Return selected classes so the durable application registry
-    // matches the lowered design and excludes inactive alternatives.
-    std::vector<frontend::SystemVerilogClassDeclaration>
+    // are known. Return stable compiled-HIR identities; syntax declarations
+    // never cross the elaboration boundary.
+    std::vector<SelectedSystemVerilogClass>
         selected_systemverilog_classes;
 
     [[nodiscard]] bool ok() const noexcept
@@ -698,9 +863,9 @@ struct ElaborationResult {
     }
 };
 
-/// Elaborate one parsed VHDL entity/architecture or Verilog module.
+/// Elaborate one compiled VHDL entity/architecture or Verilog module.
 ///
-/// VHDL names are already canonicalized by the frontend. `top` accepts a
+/// VHDL names are already canonicalized in the compiled HIR. `top` accepts a
 /// simple unit name or a qualified manifest spelling such as
 /// `sv:work.counter` or `vhdl:work.counter(rtl)`.
 } // namespace fsim::elaboration

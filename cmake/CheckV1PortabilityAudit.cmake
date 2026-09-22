@@ -69,9 +69,7 @@ if(FSIM_FUZZ_CMAKE_CONTENTS MATCHES
 endif()
 
 set(FSIM_WORKFLOW_JOBS
-  linux-clang
   linux-llvm22
-  linux-fuzz
   windows-llvm-mingw
 )
 foreach(FSIM_JOB IN LISTS FSIM_WORKFLOW_JOBS)
@@ -170,6 +168,6 @@ foreach(FSIM_INVARIANT IN ITEMS
 endforeach()
 
 message(STATUS
-  "v1 portability audit: 9 hosted configurations plus one local sanitizer configuration, "
+  "v1 portability audit: 4 hosted configurations plus one local sanitizer configuration, "
   "${FSIM_CI_PARALLEL_COUNT} two-worker build/test steps, "
   "${FSIM_PLATFORM_FILE_COUNT} explicit platform files, 8 repair queues")

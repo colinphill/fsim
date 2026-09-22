@@ -219,7 +219,7 @@ void verify_directive_compilation_units(
   };
   const auto has_unit = [](const auto& checked, const std::string_view name) {
     return std::ranges::any_of(
-        checked->parsed.units,
+        checked->systemverilog_hir.units(),
         [&](const auto& unit) { return unit.name == name; });
   };
 

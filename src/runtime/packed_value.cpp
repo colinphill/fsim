@@ -914,7 +914,10 @@ PackedLogic4 PackedLogic4::extract_bits(
     if (width == 0U || offset > this->width()
         || width > this->width() - offset) {
         throw std::invalid_argument(
-            "extract range is outside its source value");
+            "extract range offset " + std::to_string(offset)
+            + " width " + std::to_string(width)
+            + " is outside source width "
+            + std::to_string(this->width()));
     }
     PackedLogic4 result(width, Logic4::zero);
     if (!is_logic9()) {

@@ -209,7 +209,7 @@ void test_display(
     assert(reference.result.time == 4);
     assert(compiled.result.time == 4);
     assert(reference.output == compiled.output);
-    assert(reference.output.size() == 47);
+    assert(reference.output.size() == 48);
     assert(reference.output[0].process == 0);
     assert(reference.output[0].text == "first\t");
     assert(!reference.output[0].newline);
@@ -280,7 +280,7 @@ void test_display(
     assert(!reference.output[23].newline);
     assert(reference.output[24].text == " q=0011");
     assert(reference.output[24].newline);
-    assert(reference.output[25].text == "post=1110");
+    assert(reference.output[25].text == "post=1110 compact-time=0");
     assert(reference.output[26].text == "1110");
     assert(reference.output[27].text == "a5");
     assert(reference.output[28].text == "245");
@@ -327,6 +327,9 @@ void test_display(
     assert(reference.output[46].text.empty());
     assert(reference.output[46].newline);
     assert(reference.output[46].time == 4);
+    assert(reference.output[47].text == "sformat-time=4");
+    assert(reference.output[47].newline);
+    assert(reference.output[47].time == 4);
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled_processes == 2);
@@ -558,6 +561,7 @@ module display_test;
   logic [3:0] q;
   logic [7:0] n;
   logic signed [7:0] s;
+  string formatted_time;
   initial begin
     q = 4'b10xz;
     n = 8'd165;
@@ -576,7 +580,7 @@ module display_test;
     $display("c=%c", 8'd65);
     $display("text=%s", 32'h74657374);
     $display("compact=%0h", 16'h00a5);
-    $strobe("post=%b", q);
+    $strobe("post=%b compact-time=%0t", q);
     $strobeb(q);
     $strobeh(n);
     $strobeo(n);
@@ -610,6 +614,8 @@ module display_test;
     $write("second");
     $write;
     $display;
+    formatted_time = $sformatf("%0t", $time);
+    $display("sformat-time=%s", formatted_time);
     $finish;
   end
   initial begin
@@ -715,6 +721,9 @@ end architecture;
             input,
             output,
             error);
+        if (result != 0) {
+            std::cerr << "display CLI failed: " << error.str();
+        }
         assert(result == 0);
         assert(error.str().empty());
         assert(
@@ -725,13 +734,14 @@ end architecture;
                 "upper=a5\nwidth=    a5\nleft=a5    !\n"
                 "zero=-00001\nmulti=0011/a5 tail=-1\n3165\n"
                 "scope=display_test q=0011\n"
-                "post=1110\n1110\na5\n245\n"
+                "post=1110 compact-time=0\n1110\na5\n245\n"
                 "mon=1110 t=                   0\n"
                 "mon=0101 t=                   1\n"
                 "mon=0111 t=                   3\ntime=0004\n"
                 "18446744073709551616\n18446744073709551616\n"
                 "-18446744073709551616\n1\n"
                 "0111\na5\n245\n0111a5245\nsecond\n"
+                "sformat-time=4\n"
                 "simulation stopped at tick 4")
             != std::string::npos);
     }

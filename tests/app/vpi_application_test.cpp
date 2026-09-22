@@ -270,6 +270,35 @@ void collect_hierarchy(
     return std::move(*project);
 }
 
+void verify_four_state_parameter_identities(
+    const fsim::app::BuiltProject& project)
+{
+    const auto require_identity = [&](const std::string_view instance,
+                                      const std::string_view parameter,
+                                      const std::string_view bits) {
+        const auto specialization = std::ranges::find_if(
+            project.design.specializations(), [&](const auto& candidate) {
+                return candidate.instance == instance;
+            });
+        assert(specialization != project.design.specializations().end());
+        const auto identity = std::ranges::find_if(
+            specialization->parameter_identity_values,
+            [&](const auto& candidate) {
+                return candidate.first == parameter;
+            });
+        assert(identity != specialization->parameter_identity_values.end());
+        const auto expected
+            = std::string { "svconst-v3:b=0:w=12:s=0:u=0:d=2:n=0::v=" }
+            + std::string { bits };
+        assert(identity->second == expected);
+    };
+    require_identity("vpi_app", "STATE_PARAM", "10xz01zx1100");
+    require_identity(
+        "vpi_app.leaf", "LEAF_STATE_PARAM", "01zx10xz0011");
+    require_identity(
+        "vpi_app.leaf_default", "LEAF_STATE_PARAM", "10xz01zx1100");
+}
+
 void test_dormant_runtime_updates(
     const fsim::project::Config& config,
     const std::string_view final_value)
@@ -306,6 +335,8 @@ Capture execute(
 {
     auto project = build_project(config);
     auto foreign_project = build_project(config);
+    verify_four_state_parameter_identities(project);
+    verify_four_state_parameter_identities(foreign_project);
     fsim::app::Simulation simulation {
         std::move(project), config.run.max_deltas, engine
     };
@@ -1112,6 +1143,7 @@ void test_systemverilog_metadata(
             return object.kind == SystemVerilogVpiObjectKind::Assertion;
         });
     assert(assertion != hierarchy.end());
+    assert(assertion->name == "$assertion");
     assert(has_2005_profile(assertion->handle));
     std::vector<fsim::runtime::SystemVerilogVpiAssertionEvent> events;
     const auto collect = [&](const SystemVerilogVpiCallbackEvent& event) {

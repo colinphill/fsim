@@ -2,16 +2,8 @@
 #pragma once
 
 #include "elaborator_internal.hpp"
-
 namespace fsim::elaboration {
 
-using frontend::AssignmentKind;
-using frontend::DesignUnit;
-using frontend::Expression;
-using frontend::ExpressionKind;
-using frontend::ProcessKind;
-using frontend::Statement;
-using frontend::StatementKind;
 using runtime::Logic4;
 using runtime::PackedLogic4;
 using namespace runtime::simir;
@@ -20,48 +12,55 @@ using namespace elaboration_detail;
 class HierarchyBuilder final {
 public:
     HierarchyBuilder(
-        const frontend::ParsedDesign& parsed,
+        semantic::ValidatedCompiledDesign compiled,
         ElaboratedDesign& design,
         std::vector<Diagnostic>& diagnostics,
-        const std::span<const Binding> bindings,
-        const std::span<const SystemCInstanceDescription>
-            systemc_instances,
+        std::span<const Binding> bindings,
+        std::span<const SystemCInstanceDescription> systemc_instances,
         SystemCFactoryProvider* systemc_provider,
         std::span<const std::string> search_libraries);
 
-    void build(const DesignUnit& root);
-
     void build(const SystemCInstanceDescription& root);
-
-    void add_root(const DesignUnit& root, std::string path);
-
+    void add_root(semantic::CompiledUnitView root, std::string path);
     void add_root(
         const SystemCInstanceDescription& root,
         std::string path);
-
-    /// Predeclare the packed signal surface of an HDL root before any root
-    /// process is lowered. SystemVerilog permits a top-level instance name in
-    /// a hierarchical reference (the conventional vendor `glbl` module is
-    /// the motivating case), so all root surfaces must exist independently
-    /// of manifest order.
-    void predeclare_root_globals(
-        const DesignUnit& root,
-        std::string path);
-
     void finalize();
 
-    [[nodiscard]] std::vector<frontend::SystemVerilogClassDeclaration>
+    [[nodiscard]] std::vector<SelectedSystemVerilogClass>
     take_selected_systemverilog_classes();
 
 private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
     using StringMap = std::unordered_map<std::string, StringObjectId>;
-    using ContainerMap = std::unordered_map<std::string, ContainerObjectId>;
+    using ContainerMap
+        = std::unordered_map<std::string, ContainerObjectId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
 
-    using PortAliases = HierarchyPortAliases;
-    using ContainerBoundaryDriver = HierarchyContainerBoundaryDriver;
-    using ConfiguredVhdlInstance = HierarchyConfiguredVhdlInstance;
+    void add_compiled_vhdl_root(
+        semantic::CompiledUnitView root,
+        std::string path);
+
+    bool instantiate_compiled_vhdl_unit(
+        semantic::CompiledUnitView architecture,
+        std::string path,
+        std::vector<semantic::SpecializedHirActualIdentity> actuals,
+        SignalMap port_aliases,
+        std::optional<semantic::InstanceId> source_instance,
+        std::optional<semantic::SpecializedHirUnit>
+            prepared_specialization = std::nullopt,
+        bool vhdl_types_validated = false);
+
+    bool instantiate_compiled_systemverilog_unit(
+        semantic::CompiledUnitView unit,
+        std::string path,
+        std::vector<semantic::SpecializedHirActualIdentity> actuals,
+        SignalMap port_aliases,
+        StringMap string_port_aliases,
+        ContainerMap container_port_aliases,
+        std::optional<semantic::InstanceId> source_instance,
+        std::optional<semantic::SpecializedHirUnit>
+            prepared_specialization = std::nullopt);
 
     struct HierarchyCheckpoint {
         std::string path;
@@ -86,6 +85,7 @@ private:
         std::size_t boundary_resolver_insertions { };
         std::size_t vhdl_resolution_kind_insertions { };
         std::size_t systemverilog_resolution_kind_insertions { };
+        std::size_t systemverilog_resolution_unit_registrations { };
         std::uint64_t next_interface_handle { };
     };
 
@@ -93,248 +93,48 @@ private:
         std::string path) const;
     void rollback_hierarchy(const HierarchyCheckpoint& checkpoint);
 
-    static std::vector<std::string> selected_name_parts(
-        const std::string_view name);
-
-    const DesignUnit* select_vhdl_configuration_root(
-        const DesignUnit& configuration);
-
-    const DesignUnit* select_systemverilog_configuration_root(
-        const DesignUnit& configuration);
-
     std::string systemverilog_configuration_identity(
-        const DesignUnit& configuration) const;
-
-    struct ConfiguredSystemVerilogInstance {
-        const DesignUnit* target { };
-        const DesignUnit* referenced_configuration { };
-        std::string configuration_identity;
-        bool applied { };
-        bool valid { true };
-    };
-
-    ConfiguredSystemVerilogInstance
-    configure_systemverilog_instance(
-        const DesignUnit& unit,
-        const frontend::Instance& instance,
-        const std::string& path,
-        bool allow_instance_rules = true);
-
-    std::vector<frontend::Instance> systemverilog_bound_instances(
-        const DesignUnit& unit,
-        const std::string& path,
-        const ConstantEnvironment& parameter_environment,
-        const ConstantDomainEnvironment& parent_domains);
-
+        const semantic::sv::Unit& configuration) const;
     void validate_systemverilog_extern_declarations();
 
-    std::string vhdl_configuration_identity(
-        const DesignUnit& configuration) const;
-
-    ConfiguredVhdlInstance bind_vhdl_direct_configuration_instance(
-        const DesignUnit& unit,
-        const frontend::Instance& instance,
-        const std::string& path);
-
-    void validate_vhdl_component_configurations(
-        const DesignUnit& unit,
-        const std::string& path);
-
-    ConfiguredVhdlInstance configure_vhdl_component_instance(
-        const DesignUnit& unit,
-        const frontend::Instance& instance,
-        const std::string& path);
-
-    ConfiguredVhdlInstance bind_vhdl_component_instance(
-        const DesignUnit& unit,
-        const frontend::Instance& instance,
-        const std::string& path,
-        const ConstantEnvironment& parent_environment,
-        const ConstantDomainEnvironment& parent_domains,
-        const NamedTypeEnvironment& parent_types,
-        const std::vector<frontend::FunctionDeclaration>&
-            parent_functions,
-        const std::vector<frontend::ProcedureDeclaration>&
-            parent_procedures,
-        const PackageEnvironment& parent_packages);
-
-    void expand_vhdl_context_references(
-        DesignUnit& unit,
-        const std::span<const frontend::VhdlContextItem> context,
-        std::vector<frontend::VhdlContextItem>& expanded,
-        std::vector<const DesignUnit*>& context_stack,
-        const std::string_view visibility_library);
-
-    void import_vhdl_package_constants(
-        DesignUnit& unit,
-        const std::span<const frontend::VhdlContextItem>
-            context,
-        std::vector<const DesignUnit*>& import_stack,
-        NamedTypeEnvironment& imported_types);
-
-    std::optional<SpecializedUnit> specialize_vhdl_package(
-        const DesignUnit& package,
-        std::vector<const DesignUnit*>& import_stack,
-        const frontend::SourceSpan& reference_span,
-        const std::vector<frontend::ParameterOverride>& overrides = { },
-        const ConstantEnvironment& parent_environment = { },
-        const ConstantDomainEnvironment& parent_domains = { },
-        const NamedTypeEnvironment& parent_types = { },
-        const std::vector<frontend::FunctionDeclaration>&
-            parent_functions = { },
-        const std::vector<frontend::ProcedureDeclaration>&
-            parent_procedures = { });
-
-    void bind_vhdl_interface_packages(
-        DesignUnit& unit,
-        std::vector<frontend::ParameterOverride>& overrides,
-        const PackageEnvironment& parent_packages,
-        const ConstantEnvironment& parent_environment,
-        const ConstantDomainEnvironment& parent_domains,
-        const NamedTypeEnvironment& parent_types,
-        const std::vector<frontend::FunctionDeclaration>&
-            parent_functions,
-        const std::vector<frontend::ProcedureDeclaration>&
-            parent_procedures,
-        frontend::Language association_language,
-        PackageEnvironment& bindings,
-        std::vector<std::pair<std::string, std::string>>&
-            identity_values);
-
-    void instantiate_vhdl_local_packages(
-        SpecializedUnit& specialized,
-        const PackageEnvironment& inherited_packages);
-
-    void materialize_vhdl_local_declarations(
-        SpecializedUnit& specialized);
-
-    void instantiate_vhdl_generic_subprograms(
-        SpecializedUnit& specialized);
-
-    void materialize_vhdl_package_binding(
-        DesignUnit& unit,
-        std::string_view prefix,
-        const PackageBinding& binding);
-
-    void import_qualified_vhdl_package_constants(
-        DesignUnit& unit,
-        std::vector<const DesignUnit*>& import_stack);
-
-    void import_qualified_vhdl_package_types(
-        DesignUnit& unit,
-        NamedTypeEnvironment& imported_types,
-        std::vector<const DesignUnit*>& import_stack);
-
-    std::optional<SpecializedUnit>
-    specialize_systemverilog_package(
-        const DesignUnit& package,
-        std::vector<const DesignUnit*>& import_stack,
-        const frontend::SourceSpan& reference_span);
-
-    const DesignUnit* find_systemverilog_package(
-        const DesignUnit& owner,
-        const std::string_view name) const;
-
-    void append_package_dependencies(
-        DesignUnit& unit,
-        const DesignUnit& package,
-        const SpecializedUnit& specialized);
-
-    void import_systemverilog_package_items(
-        DesignUnit& unit,
-        std::vector<const DesignUnit*>& import_stack,
-        NamedTypeEnvironment& type_environment);
-
-    void import_qualified_systemverilog_package_items(
-        DesignUnit& unit,
-        std::vector<const DesignUnit*>& import_stack,
-        NamedTypeEnvironment& type_environment);
-
-    void validate_systemverilog_exports(
-        const DesignUnit& declared_package,
-        const DesignUnit& effective_package);
-
     void validate_verilog_specify(
-        const DesignUnit& unit,
+        const semantic::sv::Unit& unit,
+        const semantic::SpecializedHirUnit& specialization,
         const std::string& path,
         const SignalMap& signals,
-        const ConstantEnvironment& parameter_environment);
+        SpecializationInfo& specialization_info);
 
-    std::optional<runtime::simir::ModulePathExpression>
+    void activate_compiled_systemverilog_defparams(
+        std::span<const semantic::sv::Defparam> defparams,
+        std::string_view hierarchy_prefix,
+        const semantic::SpecializedHirUnit& specialization);
+
+    [[nodiscard]] std::optional<VerilogSpecifyTerminalInfo>
+    resolve_verilog_specify_selection(
+        semantic::ExpressionId expression,
+        SignalId signal,
+        const SignalInfo& info,
+        const semantic::SpecializedHirUnit& specialization) const;
+
+    std::optional<ModulePathExpression>
     compile_verilog_specify_expression(
-        const frontend::Expression& expression,
+        semantic::ExpressionId expression,
         const SignalMap& signals,
-        const ConstantEnvironment& parameter_environment,
+        const semantic::SpecializedHirUnit& specialization,
         std::string_view role);
 
-    void qualify_interface_callable(
-        frontend::FunctionDeclaration& callable,
-        std::string_view port,
-        const frontend::DesignUnit& interface_unit);
-
-    void qualify_interface_callable(
-        frontend::TaskDeclaration& callable,
-        std::string_view port,
-        const frontend::DesignUnit& interface_unit);
-
-    void resolve_named_types(
-        DesignUnit& unit,
-        const NamedTypeEnvironment& imported_types,
-        const bool vhdl = false,
-        const bool resolve_ports = true);
-    void merge_vhdl_protected_types(DesignUnit&, const DesignUnit&);
-    void materialize_vhdl_shared_variable(
-        const frontend::VariableDeclaration&,
-        const std::string& path,
-        SignalMap& signals);
-
-    DesignUnit effective_unit(
-        const DesignUnit& selected,
-        const DesignUnit* entity_override = nullptr);
-
-    const DesignUnit& resolved_vhdl_entity_interface(
-        const DesignUnit& entity);
-
-    SpecializedUnit specialize_selected_unit(
-        const DesignUnit& selected,
-        const std::vector<frontend::ParameterOverride>& overrides,
-        const ConstantEnvironment& parent_environment,
-        const SystemVerilogConstantEnvironment&
-            parent_integral_environment,
-        const ConstantDomainEnvironment& parent_domains,
-        const NamedTypeEnvironment& parent_types,
-        const std::vector<frontend::FunctionDeclaration>& parent_functions,
-        const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
-        const PackageEnvironment& parent_packages,
-        const frontend::Language association_language);
-
-    bool prepare_vhdl_block_nonvalue_interface(
-        frontend::GenerateRegion& region,
-        frontend::GenerateBody& body,
-        const ConstantEnvironment& environment,
-        const ConstantDomainEnvironment& domains,
-        std::string_view scope,
-        GeneratedNameEnvironment& visible_names,
-        DesignUnit& unit,
-        PackageEnvironment& packages,
-        std::vector<std::pair<std::string, std::string>>& values,
-        std::vector<std::pair<std::string, std::string>>& identities);
-
-    void expand_vhdl_block_generates(SpecializedUnit& specialized);
+    void attach_verilog_specify_drivers(
+        std::size_t first_path,
+        std::span<const ProcessId> processes);
 
     void finish();
-
-    static ResolutionKind native_resolution(
-        const SignalInfo& signal);
-
-    std::optional<ResolutionKind> explicit_resolution(
-        const SignalId signal);
-
-    void register_vhdl_resolution_functions(
-        const DesignUnit& unit);
-
+    static ResolutionKind native_resolution(const SignalInfo& signal);
+    std::optional<ResolutionKind> explicit_resolution(SignalId signal);
     void register_systemverilog_resolution_functions(
-        const DesignUnit& unit);
+        const semantic::sv::Unit& unit);
+    void set_resolution(SignalId signal, ResolutionKind resolution);
+    void validate_process_drivers();
+    void canonicalize_process_operations(Process& process);
 
     struct SystemVerilogAliasConnection {
         std::string left;
@@ -350,333 +150,168 @@ private:
         std::vector<SystemVerilogAliasConnection> connections;
     };
 
-    SystemVerilogAliasPlan
-    apply_systemverilog_aliases(
-        const DesignUnit& unit,
-        std::span<const frontend::SignalDeclaration> ports,
-        const SystemVerilogConstantEnvironment& integral_environment,
-        const ConstantEnvironment& fallback_environment,
-        bool compile_connections,
-        bool diagnose);
-
     void add_systemverilog_alias_connections(
         const SystemVerilogAliasPlan& plan,
         std::string_view path,
         const SignalMap& signals,
         SpecializationInfo& specialization);
 
-    void set_resolution(
-        const SignalId signal,
-        const ResolutionKind resolution);
+    struct CompiledBoundaryPort {
+        std::string name;
+        std::string type_name;
+        std::size_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+        frontend::SystemVerilogScalarKind systemverilog_scalar {
+            frontend::SystemVerilogScalarKind::None
+        };
+        bool signed_value { };
+        bool packed_aggregate { };
+        std::shared_ptr<VhdlArrayMetadata> vhdl_array;
+        std::optional<frontend::PackedRange> packed_range;
+        std::optional<frontend::IntegerRange> integer_range;
+        frontend::PortDirection direction {
+            frontend::PortDirection::Unknown
+        };
+        frontend::SourceSpan declaration_source;
+        PackedLogic4 initial;
+    };
 
-    void validate_process_drivers();
-
-    void canonicalize_process_operations(
-        runtime::simir::Process& process);
-
-    std::optional<SignalId> add_owned_signal(
-        const frontend::SignalDeclaration& declaration,
-        const std::string_view path,
-        SignalMap& local);
-
-    std::optional<StringObjectId> add_owned_string_port(
-        const frontend::SignalDeclaration& declaration,
-        const std::string_view path,
-        StringMap& local);
-
-    std::optional<StringObjectId> connect_string_port(
-        const frontend::SignalDeclaration& port,
-        const frontend::PortConnection& connection,
+    std::optional<SignalId> connect_compiled_boundary_port(
+        const CompiledBoundaryPort& port,
+        SignalId actual,
         const std::string& path,
-        const StringMap& parent_strings,
-        const std::unordered_set<StringObjectId>&
-            parent_read_only_strings,
-        bool cross_language);
-
-    std::optional<ContainerType> container_port_type(
-        const frontend::Type& type,
-        const frontend::SourceSpan& source,
-        const ConstantEnvironment& environment);
-
-    std::optional<ContainerObjectId> add_owned_container_port(
-        const frontend::SignalDeclaration& declaration,
-        const std::string_view path,
-        ContainerMap& local,
-        const ConstantEnvironment& environment);
-
-    std::optional<ContainerObjectId> connect_container_port(
-        const frontend::SignalDeclaration& port,
-        const frontend::PortConnection& connection,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const ContainerMap& parent_containers,
-        const std::unordered_set<std::string>&
-            parent_read_only_containers,
-        bool cross_language);
-
-    std::optional<ContainerObjectId>
-    connect_cross_language_container_port(
-        const frontend::SignalDeclaration& port,
-        const frontend::PortConnection& connection,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const ContainerType& expected);
-
-    const Binding* binding_for(const std::string& path);
-
-    std::vector<UnitResolutionCandidate> resolution_candidates(
-        std::string_view library,
-        std::string_view name) const;
-
-    std::vector<UnitResolutionCandidate> resolution_candidates(
-        std::span<const std::string> libraries,
-        std::string_view name,
-        std::vector<std::string>& unavailable_libraries) const;
-
-    std::optional<UnitResolutionCandidate> inferred_target(
-        std::string_view library,
-        std::string_view name,
-        const std::string& path,
-        frontend::SourceSpan source);
-
-    const DesignUnit* bound_target(
-        const frontend::Instance& instance,
-        const DesignUnit& parent,
-        const std::string& path,
+        frontend::SourceSpan connection_source,
         const Binding* binding);
 
-    void validate_boundary_type(
-        const frontend::SignalDeclaration& port,
-        const SignalInfo& actual,
-        const std::string& path,
-        const frontend::SourceSpan& source,
-        const bool cross_language);
-
     void note_boundary_driver(
-        const SignalId signal,
+        SignalId signal,
         const Binding* binding,
         const std::string& path,
         const frontend::SourceSpan& source);
 
-    void validate_vhdl_generic_type(
-        const frontend::ParameterDeclaration& generic);
-
-    bool connect_vhdl_expression_port(
-        const frontend::SignalDeclaration& port,
-        const frontend::PortConnection& connection,
+    const Binding* binding_for(const std::string& path);
+    std::optional<UnitResolutionCandidate> compiled_instance_target(
+        std::string_view parent_library,
+        std::string_view name,
         const std::string& path,
-        const SignalMap& parent_signals,
-        PortAliases& aliases,
-        DesignUnit& dependency_owner);
-
-    bool connect_verilog_memory_word_port(
-        const frontend::SignalDeclaration& port,
-        const frontend::PortConnection& connection,
-        const std::string& path,
-        const ContainerMap& parent_containers,
-        PortAliases& aliases);
-
-    bool connect_verilog_expression_port(
-        const frontend::SignalDeclaration& port,
-        const frontend::PortConnection& connection,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        PortAliases& aliases);
-
-    PortAliases connect_ports(
-        const frontend::Instance& instance,
-        const std::vector<frontend::SignalDeclaration>& ports,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const StringMap& parent_strings,
-        const std::unordered_set<StringObjectId>&
-            parent_read_only_strings,
-        const ContainerMap& parent_containers,
-        const std::unordered_set<std::string>&
-            parent_read_only_containers,
+        frontend::SourceSpan source,
         const Binding* binding,
-        const bool cross_language,
-        const bool require_input_connections = false,
-        DesignUnit* dependency_owner = nullptr);
-
-    PortAliases connect_instance(
-        const frontend::Instance& instance,
-        DesignUnit& target,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const StringMap& parent_strings,
-        const std::unordered_set<StringObjectId>&
-            parent_read_only_strings,
-        const ContainerMap& parent_containers,
-        const std::unordered_set<std::string>&
-            parent_read_only_containers,
-        const Binding* binding,
-        const bool cross_language);
-
-    static frontend::SignalDeclaration external_port_declaration(
-        const ExternalPort& port);
-    std::pair<SignalMap, ObjectMap> connect_systemc_instance(
-        const frontend::Instance& instance,
-        const SystemCInstanceDescription& target,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const Binding* binding);
+        std::optional<semantic::CompiledUnitView> linked_target,
+        bool linked_target_authoritative = false);
 
     const SystemCInstanceDescription* systemc_description(
         const std::string& path,
-        const std::string_view target,
+        std::string_view target,
         const frontend::SourceSpan& source);
+
     const SystemCInstanceDescription* construct_systemc_description(
-        const frontend::Instance& instance,
+        const semantic::sv::Instance& instance,
+        const semantic::SpecializedHirUnit& parent,
         const std::string& path,
-        const std::string_view target,
-        const ConstantEnvironment& parent_environment,
-        const frontend::Language association_language);
+        std::string_view target);
+    const SystemCInstanceDescription* construct_systemc_description(
+        const semantic::vhdl::Instance& instance,
+        const semantic::SpecializedHirUnit& parent,
+        const std::string& path,
+        std::string_view target);
     void instantiate_systemc(
         const SystemCInstanceDescription& instance,
         const std::string& path,
         SignalMap aliases,
         ObjectMap objects,
-        const bool native_child = false);
-    void instantiate_udp(const frontend::VerilogUdpDeclaration&,
-        const frontend::Instance&, const std::string&, const SignalMap&,
-        const StringMap&, const std::unordered_set<StringObjectId>&,
-        const ContainerMap&, const std::unordered_set<std::string>&,
-        const Binding*);
+        bool native_child = false);
+
+    bool instantiate_compiled_udp(
+        const semantic::sv::UdpDeclaration& declaration,
+        const semantic::sv::Instance& instance,
+        const semantic::SpecializedHirUnit& specialization,
+        const std::string& path,
+        std::optional<std::int64_t> array_index,
+        const SignalMap& parent_signals,
+        const std::unordered_set<SignalId>& read_only_signals,
+        const StringMap& parent_strings,
+        const std::unordered_set<StringObjectId>& read_only_strings,
+        const ContainerMap& parent_containers,
+        const std::unordered_set<std::string>& read_only_containers,
+        const Binding* binding);
+    UdpTableId register_udp_table(UdpTableInfo table);
     UdpTableId normalized_udp_table(
-        const frontend::VerilogUdpDeclaration&);
-    struct ResolvedVerilogDefparam {
-        const frontend::VerilogDefparamDeclaration* declaration { };
-        std::vector<std::string> segments;
-        bool matched { };
-    };
-    void instantiate_processes_and_children(
-        DesignUnit& unit,
-        const std::string& path,
-        SignalMap& local,
-        StringMap& local_string_objects,
-        ContainerMap& local_container_objects,
-        std::unordered_set<SignalId>& read_only_signals,
-        std::unordered_set<StringObjectId>& read_only_strings,
-        std::unordered_set<std::string>& read_only_container_objects,
-        ConstantEnvironment& parameter_environment,
-        SystemVerilogConstantEnvironment& parameter_integral_environment,
-        std::vector<std::pair<std::string, std::string>>& parameter_values,
-        std::vector<std::pair<std::string, std::string>>&
-            parameter_identity_values,
-        PackageEnvironment& package_environment,
-        const NamedTypeEnvironment& parent_types,
-        const ConstantDomainEnvironment& parent_domains,
-        std::vector<ResolvedVerilogDefparam>& resolved_defparams,
-        std::unordered_map<std::string, const frontend::Type*>& visible_types,
-        std::unordered_map<std::string, const frontend::Type*>&
-            visible_type_marks,
-        const std::string& identity,
-        const SystemVerilogAliasPlan& systemverilog_alias_plan);
-    void instantiate(
-        DesignUnit& unit,
-        const std::string& path,
-        SignalMap aliases,
-        StringMap string_aliases,
-        ContainerMap container_aliases,
-        std::unordered_set<SignalId> read_only_signals,
-        std::unordered_set<StringObjectId> read_only_strings,
-        ConstantEnvironment parameter_environment,
-        SystemVerilogConstantEnvironment
-            parameter_integral_environment,
-        std::vector<std::pair<std::string, std::string>>
-            parameter_values,
-        std::vector<std::pair<std::string, std::string>>
-            parameter_identity_values,
-        PackageEnvironment package_environment);
+        const semantic::sv::UdpDeclaration& declaration);
+
     void report(
         std::string code,
         std::string message,
         frontend::SourceSpan source);
 
-    const frontend::ParsedDesign& parsed_;
+    semantic::ValidatedCompiledDesign validated_compiled_;
+    const semantic::CompiledDesign* compiled_ { };
     ElaboratedDesign& design_;
     std::vector<Diagnostic>& diagnostics_;
     std::unordered_map<std::string, const Binding*> bindings_;
     std::unordered_set<std::string> used_bindings_;
-    const DesignUnit* active_vhdl_configuration_ { };
-    std::unordered_map<std::string, const DesignUnit*>
-        vhdl_configurations_by_path_;
-    const DesignUnit* active_systemverilog_configuration_ { };
-    std::unordered_map<std::string, const DesignUnit*>
-        systemverilog_configurations_by_path_;
-    std::vector<const frontend::SystemVerilogBindDirective*>
-        compilation_unit_systemverilog_binds_;
-    std::unordered_map<
-        const frontend::SystemVerilogBindDirective*, std::string>
-        systemverilog_bind_libraries_;
-    std::unordered_map<
-        const frontend::SystemVerilogBindDirective*,
-        frontend::StandardRevision>
-        systemverilog_bind_revisions_;
-    std::unordered_map<std::string, std::string>
-        systemverilog_bound_instance_libraries_;
-    std::unordered_set<std::string>
-        systemverilog2023_bound_instances_;
-    std::unordered_set<const frontend::SystemVerilogBindDirective*>
-        used_compilation_unit_systemverilog_binds_;
-    std::string active_systemverilog_root_name_;
-    std::unordered_map<const DesignUnit*, DesignUnit>
-        resolved_vhdl_entity_interfaces_;
-    std::unordered_map<
-        std::string, const SystemCInstanceDescription*>
+
+    const semantic::sv::Unit*
+        active_compiled_systemverilog_configuration_ { };
+    std::string active_compiled_systemverilog_configuration_root_;
+    struct ActiveCompiledSystemVerilogDefparam {
+        std::string target_path;
+        std::string parameter;
+        semantic::ExpressionId expression;
+        semantic::SourceSpanId source;
+        const semantic::SpecializedHirUnit* owner { };
+        bool matched { };
+    };
+    struct ActiveCompiledSystemVerilogBind {
+        const semantic::sv::BindDirective* directive { };
+        const semantic::sv::Unit* owner { };
+    };
+    std::vector<ActiveCompiledSystemVerilogDefparam>
+        active_compiled_systemverilog_defparams_;
+    std::vector<ActiveCompiledSystemVerilogBind>
+        active_compiled_systemverilog_binds_;
+
+    const semantic::vhdl::Unit* active_compiled_vhdl_configuration_ { };
+    std::string active_compiled_vhdl_configuration_identity_;
+    std::optional<semantic::SourceSpanId>
+        active_compiled_vhdl_configuration_source_;
+    std::string active_compiled_vhdl_component_identity_;
+    std::optional<semantic::SourceSpanId>
+        active_compiled_vhdl_component_source_;
+    std::optional<semantic::SourceSpanId>
+        active_compiled_vhdl_component_declaration_source_;
+
+    std::unordered_map<std::string, const SystemCInstanceDescription*>
         systemc_instances_;
-    std::deque<SystemCInstanceDescription>
-        owned_systemc_instances_;
+    std::deque<SystemCInstanceDescription> owned_systemc_instances_;
     SystemCFactoryProvider* systemc_provider_ { };
     const std::vector<SystemCFactoryCandidate> systemc_candidates_;
     const std::vector<std::string> systemc_libraries_;
     const std::vector<std::string> search_libraries_;
     std::string active_root_;
-    SignalMap global_root_signals_;
-    std::unordered_map<std::string, SignalMap>
-        predeclared_root_signals_;
-    std::unordered_map<std::string, SpecializedUnit>
-        prepared_systemverilog_roots_;
-    std::unordered_map<std::string, SpecializedUnit>
-        specialized_unit_cache_;
-    std::vector<std::string> cached_specialization_lru_;
-    std::unordered_set<std::string>
-        seen_specialization_keys_;
-    std::vector<frontend::SystemVerilogClassDeclaration>
+
+    std::vector<SelectedSystemVerilogClass>
         selected_systemverilog_classes_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     std::unordered_map<std::string, UdpTableId> udp_table_by_identity_;
-    // Interface instances are registered by canonical hierarchy path after
-    // their member signals have been allocated. Later sibling module ports
-    // bind modport members through this exact instance identity.
-    std::unordered_map<std::string, DesignUnit>
-        systemverilog_interface_instances_;
-    // Virtual-interface values use deterministic, nonzero identities. Zero
-    // remains the language null value; identities never expose host pointers.
+
     std::unordered_map<std::string, std::uint64_t>
         systemverilog_interface_handles_;
-    // The canonical specialization identity travels with concrete instances
-    // and forwarded generic interface ports. Virtual-interface declarations
-    // with parameter actuals compare against this exact identity.
     std::unordered_map<std::string,
         std::vector<std::pair<std::string, std::string>>>
         systemverilog_interface_parameter_identities_;
+    std::unordered_map<std::string, std::string>
+        systemverilog_interface_types_;
     std::uint64_t next_systemverilog_interface_handle_ { 1 };
     std::unordered_set<std::string>
         systemverilog_interface_port_paths_;
-    // Non-empty only when a hierarchy alias exposes a restricted modport
-    // rather than the complete concrete interface instance.
     std::unordered_map<std::string, std::string>
         systemverilog_interface_modport_views_;
-    // A clocking block is a scope/object, not a signal. Modport clocking
-    // members nevertheless alias its event signal through this separate map
-    // so the signal and VPI clocking-block namespaces do not collide.
     std::unordered_map<std::string, SignalId>
         systemverilog_clocking_event_signals_;
     std::unordered_set<std::string>
         systemverilog_read_only_interface_member_paths_;
+
     std::vector<std::string> stack_;
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
@@ -690,16 +325,23 @@ private:
         systemverilog_resolution_kinds_;
     std::vector<std::string>
         systemverilog_resolution_kind_insertions_;
-    std::unordered_map<
-        ContainerObjectId,
+    std::vector<semantic::UnitId>
+        systemverilog_resolution_unit_registrations_;
+
+    struct ContainerBoundaryDriver {
+        std::string path;
+        std::optional<std::pair<std::int32_t, std::int32_t>>
+            selected_interval;
+    };
+    std::unordered_map<ContainerObjectId,
         std::vector<ContainerBoundaryDriver>>
         container_boundary_driver_paths_;
     std::unordered_map<StringObjectId, std::vector<std::string>>
         string_boundary_driver_paths_;
-    std::unordered_map<std::uint64_t,
-        std::vector<runtime::simir::ProcessId>>
+
+    std::unordered_map<std::uint64_t, std::vector<ProcessId>>
         process_operation_representatives_;
-    runtime::simir::OperationList::Storage operation_scratch_;
+    OperationList::Storage operation_scratch_;
 };
 
 } // namespace fsim::elaboration

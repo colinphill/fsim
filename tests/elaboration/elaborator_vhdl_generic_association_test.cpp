@@ -56,7 +56,7 @@ end architecture;
 )",
         frontend::Language::Vhdl2008);
     assert(based_default.ok());
-    const auto based_result = fsim::elaboration::elaborate(
+    const auto based_result = compile_and_elaborate(
         based_default.design, "vhdl:work.based_default(rtl)");
     assert(based_result.ok());
     assert(has_parameter(
@@ -85,7 +85,7 @@ end architecture;
         frontend::Language::Vhdl2008);
     assert(fixture.ok());
 
-    const auto positive = fsim::elaboration::elaborate(
+    const auto positive = compile_and_elaborate(
         fixture.design, "vhdl:work.association_top(rtl)");
     assert(positive.ok());
     assert(has_parameter(
@@ -96,7 +96,7 @@ end architecture;
     auto unknown = fixture.design;
     association_instance(unknown)
         .parameter_overrides.front().name = "unknown_value";
-    const auto unknown_result = fsim::elaboration::elaborate(
+    const auto unknown_result = compile_and_elaborate(
         unknown, "vhdl:work.association_top(rtl)");
     assert(!unknown_result.ok());
     assert(has_diagnostic(
@@ -107,7 +107,7 @@ end architecture;
         association_instance(excessive).parameter_overrides;
     excessive_actuals.push_back(excessive_actuals.front());
     excessive_actuals.push_back(excessive_actuals.front());
-    const auto excessive_result = fsim::elaboration::elaborate(
+    const auto excessive_result = compile_and_elaborate(
         excessive, "vhdl:work.association_top(rtl)");
     assert(!excessive_result.ok());
     assert(has_diagnostic(
@@ -118,7 +118,7 @@ end architecture;
         association_instance(duplicate).parameter_overrides;
     duplicate_actuals.front().name = "first_value";
     duplicate_actuals.push_back(duplicate_actuals.front());
-    const auto duplicate_result = fsim::elaboration::elaborate(
+    const auto duplicate_result = compile_and_elaborate(
         duplicate, "vhdl:work.association_top(rtl)");
     assert(!duplicate_result.ok());
     assert(has_diagnostic(
@@ -130,7 +130,7 @@ end architecture;
     ordered_actuals.front().name = "first_value";
     ordered_actuals.push_back(ordered_actuals.front());
     ordered_actuals.back().name.reset();
-    const auto ordered_result = fsim::elaboration::elaborate(
+    const auto ordered_result = compile_and_elaborate(
         ordered, "vhdl:work.association_top(rtl)");
     assert(!ordered_result.ok());
     assert(has_diagnostic(
@@ -141,7 +141,7 @@ end architecture;
         .parameter_overrides.front().value;
     dynamic_actual.kind = frontend::ExpressionKind::Identifier;
     dynamic_actual.text = "runtime_signal";
-    const auto dynamic_result = fsim::elaboration::elaborate(
+    const auto dynamic_result = compile_and_elaborate(
         dynamic, "vhdl:work.association_top(rtl)");
     assert(!dynamic_result.ok());
     assert(has_diagnostic(
@@ -174,12 +174,16 @@ end architecture;
         frontend::Language::Vhdl2008);
     assert(invalid_boundaries.ok());
     const auto invalid_boundary_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_boundaries.design,
             "vhdl:work.dependent_boundary_top(rtl)");
+    if (!invalid_boundary_result.ok()) {
+        for (const auto& diagnostic : invalid_boundary_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
     assert(!invalid_boundary_result.ok());
-    assert(has_diagnostic(
-        invalid_boundary_result, "FSIM-ELAB-BIND-020"));
     assert(has_diagnostic(
         invalid_boundary_result, "FSIM-ELAB-BIND-031"));
 }

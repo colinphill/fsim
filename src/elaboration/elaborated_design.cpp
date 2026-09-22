@@ -515,21 +515,19 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
                    return (character >= '0' && character <= '9')
                        || (character >= 'a' && character <= 'f');
                });
-        frontend::VerilogUdpDeclaration declaration;
-        declaration.language = frontend::Language::Verilog2005;
-        declaration.name = table.identity;
-        declaration.sequential = table.sequential;
-        declaration.output_reg = table.sequential;
-        declaration.initial_output = table.initial_output;
-        declaration.rows = table.rows;
-        if (!table.terminals.empty()) {
-            declaration.output = table.terminals.front();
-            declaration.inputs.assign(
-                table.terminals.begin() + 1, table.terminals.end());
+        std::unordered_set<std::string_view> terminal_names;
+        bool terminals_valid = !table.terminals.empty();
+        for (const auto& terminal : table.terminals) {
+            terminals_valid = terminals_valid && !terminal.empty()
+                && terminal_names.insert(terminal).second;
         }
         if (table.id != index || !table.identity.starts_with("udp:")
-            || !digest_is_hex
-            || !frontend::verilog_udp_declaration_well_formed(declaration)) {
+            || !digest_is_hex || !terminals_valid
+            || !frontend::verilog_udp_table_well_formed(
+                table.sequential,
+                table.terminals.size() - 1U,
+                table.initial_output,
+                table.rows)) {
             return std::nullopt;
         }
     }

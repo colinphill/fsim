@@ -208,9 +208,10 @@ void verify_analysis(const fsim::project::Config& config)
                 != std::string::npos);
         }
     }
+    const auto& hir = checked->vhdl_hir;
     std::vector<std::string> packages;
-    for (const auto& unit : checked->parsed.units) {
-        if (unit.kind == fsim::frontend::UnitKind::VhdlPackage
+    for (const auto& unit : hir.units()) {
+        if (unit.kind == fsim::semantic::vhdl::UnitKind::package
             && unit.library == "ieee" && unit.primary_name.empty()) {
             packages.push_back(unit.name);
         }
@@ -220,110 +221,127 @@ void verify_analysis(const fsim::project::Config& config)
              "std_logic_1164", "numeric_bit", "numeric_std", "math_real",
              "fixed_generic_pkg", "float_generic_pkg" }) {
         const auto declaration = std::ranges::find_if(
-            checked->parsed.units,
-            [&](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+            hir.units(),
+            [&](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
                     && unit.library == "ieee" && unit.name == package
                     && unit.primary_name.empty();
             });
-        assert(declaration != checked->parsed.units.end());
+        assert(declaration != hir.units().end());
         const auto body = std::next(declaration);
-        assert(body != checked->parsed.units.end());
-        assert(body->kind == fsim::frontend::UnitKind::VhdlPackage);
+        assert(body != hir.units().end());
+        assert(body->kind == fsim::semantic::vhdl::UnitKind::package);
         assert(body->library == "ieee" && body->name == package);
         assert(body->primary_name == package);
     }
     const auto architecture = std::ranges::find_if(
-        checked->parsed.units,
-        [](const fsim::frontend::DesignUnit& unit) {
-            return unit.kind == fsim::frontend::UnitKind::VhdlArchitecture
+        hir.units(),
+        [](const fsim::semantic::vhdl::Unit& unit) {
+            return unit.kind == fsim::semantic::vhdl::UnitKind::architecture
                 && unit.name == "rtl";
         });
-    assert(architecture != checked->parsed.units.end());
-    const auto signal_type = [&](const std::string_view name) {
-        const auto signal = std::ranges::find_if(
-            architecture->signals,
-            [&](const fsim::frontend::SignalDeclaration& candidate) {
-                return candidate.name == name;
+    assert(architecture != hir.units().end());
+    const auto signal_type = [&](const std::string_view name)
+        -> const fsim::semantic::vhdl::SubtypeIndication& {
+        const auto signal_id = std::ranges::find_if(
+            architecture->declarations,
+            [&](const auto id) {
+                const auto& candidate = hir.declarations()[id.value()];
+                return candidate.form
+                        == fsim::semantic::vhdl::DeclarationForm::signal
+                    && candidate.name == name;
             });
-        assert(signal != architecture->signals.end());
-        return signal->type;
+        assert(signal_id != architecture->declarations.end());
+        const auto& signal = hir.declarations()[signal_id->value()];
+        assert(signal.subtype);
+        return *signal.subtype;
     };
     assert(signal_type("numeric_logic").domain
-        == fsim::frontend::ValueDomain::Logic9);
+        == fsim::semantic::vhdl::ValueDomain::logic9);
     assert(signal_type("numeric_bits").domain
-        == fsim::frontend::ValueDomain::Bit2);
-    assert(signal_type("fixed_rounded").spelling == "ufixed");
-    assert(signal_type("float_sum").spelling == "float");
-    assert(signal_type("vital_transition").spelling
+        == fsim::semantic::vhdl::ValueDomain::bit2);
+    assert(signal_type("fixed_rounded").type_mark.spelling == "ufixed");
+    assert(signal_type("float_sum").type_mark.spelling == "float");
+    assert(signal_type("vital_transition").type_mark.spelling
         == "vitaltransitiontype");
-    assert(signal_type("vital_delays").spelling == "vitaldelaytype01");
-    assert(signal_type("vital_map").spelling == "vitalresultmaptype");
-    assert(signal_type("vital_table").spelling == "vitaltruthtabletype");
+    assert(signal_type("vital_delays").type_mark.spelling
+        == "vitaldelaytype01");
+    assert(signal_type("vital_map").type_mark.spelling
+        == "vitalresultmaptype");
+    assert(signal_type("vital_table").type_mark.spelling
+        == "vitaltruthtabletype");
     const auto package_type = [&](const std::string_view package,
-                                  const std::string_view name) {
+                                  const std::string_view name)
+        -> const fsim::semantic::vhdl::TypeDefinition& {
         const auto declaration = std::ranges::find_if(
-            checked->parsed.units,
-            [&](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+            hir.units(),
+            [&](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
                     && unit.library == "ieee" && unit.name == package
                     && unit.primary_name.empty();
             });
-        assert(declaration != checked->parsed.units.end());
-        const auto alias = std::ranges::find_if(
-            declaration->type_aliases,
-            [&](const fsim::frontend::TypeAliasDeclaration& candidate) {
-                return candidate.name == name;
+        assert(declaration != hir.units().end());
+        const auto definition = std::ranges::find_if(
+            hir.types(),
+            [&](const fsim::semantic::vhdl::TypeDefinition& candidate) {
+                return candidate.name == name
+                    && hir.declarations()[candidate.declaration.value()].scope
+                        == declaration->scope;
             });
-        assert(alias != declaration->type_aliases.end());
-        return alias->type;
+        assert(definition != hir.types().end());
+        return *definition;
     };
-    const auto transition = package_type(
+    const auto& transition = package_type(
         "vital_timing", "vitaltransitiontype");
     assert(transition.enumeration_literals.size() == 12);
-    assert(transition.width() == 4);
-    const auto delays = package_type("vital_timing", "vitaldelaytype01");
-    assert(delays.width() == 128);
-    assert(delays.vhdl_array);
-    assert(delays.vhdl_array->dimensions.size() == 1);
-    assert(delays.vhdl_array->dimensions.front().range);
-    assert(delays.vhdl_array->dimensions.front().range->left == 0);
-    assert(delays.vhdl_array->dimensions.front().range->right == 1);
-    const auto map = package_type("vital_timing", "vitalresultmaptype");
-    assert(map.width() == 4);
-    const auto table = package_type(
+    assert(transition.base.executable_width == 4);
+    const auto& delays = package_type("vital_timing", "vitaldelaytype01");
+    assert(delays.base.executable_width == 128);
+    assert(delays.form == fsim::semantic::vhdl::TypeForm::array);
+    assert(delays.array_dimensions.size() == 1);
+    assert(delays.array_dimensions.front().constraint);
+    assert(delays.array_dimensions.front().constraint->left == 0);
+    assert(delays.array_dimensions.front().constraint->right == 1);
+    const auto& map = package_type("vital_timing", "vitalresultmaptype");
+    assert(map.base.executable_width == 4);
+    const auto& table = package_type(
         "vital_primitives", "vitaltruthtabletype");
-    assert(!table.width());
-    assert(table.vhdl_array);
-    assert(table.vhdl_array->dimensions.size() == 2);
-    const auto time_array = package_type("vital_timing", "vitaltimearrayt");
-    assert(time_array.vhdl_array && !time_array.width());
-    const auto time_access = package_type(
+    assert(!table.base.executable_width);
+    assert(table.form == fsim::semantic::vhdl::TypeForm::array);
+    assert(table.array_dimensions.size() == 2);
+    const auto& time_array = package_type("vital_timing", "vitaltimearrayt");
+    assert(time_array.form == fsim::semantic::vhdl::TypeForm::array
+        && !time_array.base.executable_width);
+    const auto& time_access = package_type(
         "vital_timing", "vitaltimearraypt");
-    assert(time_access.vhdl_access && time_access.width() == 32);
-    const auto logic_access = package_type(
+    assert(time_access.form == fsim::semantic::vhdl::TypeForm::access
+        && time_access.base.executable_width == 32);
+    const auto& logic_access = package_type(
         "vital_timing", "vitallogicarraypt");
-    assert(logic_access.vhdl_access && logic_access.width() == 32);
-    const auto timing_data = package_type(
+    assert(logic_access.form == fsim::semantic::vhdl::TypeForm::access
+        && logic_access.base.executable_width == 32);
+    const auto& timing_data = package_type(
         "vital_timing", "vitaltimingdatatype");
-    assert(timing_data.packed_members.size() == 11);
-    assert(timing_data.packed_members.front().name == "notfirstflag");
-    assert(timing_data.packed_members.back().name == "setupena");
-    assert(timing_data.width() == 261);
-    const auto period_data = package_type(
+    assert(timing_data.record_elements.size() == 11);
+    assert(timing_data.record_elements.front().name == "notfirstflag");
+    assert(timing_data.record_elements.back().name == "setupena");
+    assert(timing_data.base.executable_width == 261);
+    const auto& period_data = package_type(
         "vital_timing", "vitalperioddatatype");
-    assert(period_data.packed_members.size() == 4);
-    assert(period_data.width() == 130);
-    const auto glitch_kind = package_type(
+    assert(period_data.record_elements.size() == 4);
+    assert(period_data.base.executable_width == 130);
+    const auto& glitch_kind = package_type(
         "vital_timing", "vitalglitchkindtype");
     const std::vector<std::string> glitch_literals {
         "onevent", "ondetect", "vitalinertial", "vitaltransport"
     };
-    assert(glitch_kind.enumeration_literals == glitch_literals);
-    const auto glitch_data = package_type(
+    assert(std::ranges::equal(
+        glitch_kind.enumeration_literals, glitch_literals, {},
+        &fsim::semantic::vhdl::EnumerationLiteral::spelling));
+    const auto& glitch_data = package_type(
         "vital_timing", "vitalglitchdatatype");
-    assert(glitch_data.packed_members.size() == 4);
-    assert(glitch_data.width() == 130);
+    assert(glitch_data.record_elements.size() == 4);
+    assert(glitch_data.base.executable_width == 130);
     for (const auto& [record_name, array_name, width] : {
              std::tuple {
                  "vitalpathtype", "vitalpatharraytype", std::uint64_t { 129 } },
@@ -333,63 +351,72 @@ void verify_analysis(const fsim::project::Config& config)
              std::tuple {
                  "vitalpath01ztype", "vitalpatharray01ztype",
                  std::uint64_t { 449 } } }) {
-        const auto record = package_type("vital_timing", record_name);
-        assert(record.packed_members.size() == 3U);
-        assert(record.packed_members[0].name == "inputchangetime");
-        assert(record.packed_members[1].name == "pathdelay");
-        assert(record.packed_members[2].name == "pathcondition");
-        assert(record.width() == width);
-        const auto array = package_type("vital_timing", array_name);
-        assert(array.vhdl_array && !array.width());
-        assert(array.vhdl_array->element_types.size() == 1U);
-        assert(array.vhdl_array->element_types.front().width() == width);
+        const auto& record = package_type("vital_timing", record_name);
+        assert(record.record_elements.size() == 3U);
+        assert(record.record_elements[0].name == "inputchangetime");
+        assert(record.record_elements[1].name == "pathdelay");
+        assert(record.record_elements[2].name == "pathcondition");
+        assert(record.base.executable_width == width);
+        const auto& array = package_type("vital_timing", array_name);
+        assert(array.form == fsim::semantic::vhdl::TypeForm::array
+            && !array.base.executable_width);
+        assert(array.element_subtype);
+        assert(array.element_subtype->executable_width == width);
     }
-    const auto skew_data = package_type(
+    const auto& skew_data = package_type(
         "vital_timing", "vitalskewdatatype");
-    assert(skew_data.packed_members.size() == 5);
-    assert(skew_data.width() == 259);
-    const auto memory_arc = package_type(
+    assert(skew_data.record_elements.size() == 5);
+    assert(skew_data.base.executable_width == 259);
+    const auto& memory_arc = package_type(
         "vital_memory", "vitalmemoryarctype");
-    assert((memory_arc.enumeration_literals == std::vector<std::string> { "parallelarc", "crossarc", "subwordarc" }));
-    const auto memory_schedule = package_type(
+    const std::vector<std::string> memory_arc_literals {
+        "parallelarc", "crossarc", "subwordarc"
+    };
+    assert(std::ranges::equal(
+        memory_arc.enumeration_literals, memory_arc_literals, {},
+        &fsim::semantic::vhdl::EnumerationLiteral::spelling));
+    const auto& memory_schedule = package_type(
         "vital_memory", "vitalmemoryscheduledatatype");
-    assert(memory_schedule.packed_members.size() == 8);
-    assert(memory_schedule.packed_members[1].name == "numbitspersubword");
-    assert(memory_schedule.width() == 291);
-    const auto memory_timing = package_type(
+    assert(memory_schedule.record_elements.size() == 8);
+    assert(memory_schedule.record_elements[1].name == "numbitspersubword");
+    assert(memory_schedule.base.executable_width == 291);
+    const auto& memory_timing = package_type(
         "vital_memory", "vitalmemorytimingdatatype");
-    assert(memory_timing.packed_members.size() == 13);
-    assert(memory_timing.packed_members[9].name == "reflasta");
-    assert(memory_timing.width() == 325);
-    const auto port_state = package_type(
+    assert(memory_timing.record_elements.size() == 13);
+    assert(memory_timing.record_elements[9].name == "reflasta");
+    assert(memory_timing.base.executable_width == 325);
+    const auto& port_state = package_type(
         "vital_memory", "vitalportstatetype");
     assert(port_state.enumeration_literals.size() == 5);
-    const auto port_flag = package_type(
+    const auto& port_flag = package_type(
         "vital_memory", "vitalportflagtype");
-    assert(port_flag.packed_members.size() == 5);
-    assert(port_flag.width() == 13);
-    const auto memory_word_ptr = package_type(
+    assert(port_flag.record_elements.size() == 5);
+    assert(port_flag.base.executable_width == 13);
+    const auto& memory_word_ptr = package_type(
         "vital_memory", "memorywordptr");
-    assert(memory_word_ptr.vhdl_access && memory_word_ptr.width() == 32);
-    const auto memory_data = package_type(
+    assert(memory_word_ptr.form == fsim::semantic::vhdl::TypeForm::access
+        && memory_word_ptr.base.executable_width == 32);
+    const auto& memory_data = package_type(
         "vital_memory", "vitalmemorydatatype");
-    assert(memory_data.vhdl_access && memory_data.width() == 32);
-    assert(memory_data.vhdl_access->designated_types.size() == 1);
-    assert(memory_data.vhdl_access->designated_types.front().width() == 160);
-    const auto memory_symbol = package_type(
+    assert(memory_data.form == fsim::semantic::vhdl::TypeForm::access
+        && memory_data.base.executable_width == 32);
+    assert(memory_data.designated_subtype);
+    assert(memory_data.designated_subtype->executable_width == 160);
+    const auto& memory_symbol = package_type(
         "vital_memory", "vitalmemorysymboltype");
     assert(memory_symbol.enumeration_literals.size() == 40);
-    const auto memory_table = package_type(
+    const auto& memory_table = package_type(
         "vital_memory", "vitalmemorytabletype");
-    assert(memory_table.vhdl_array);
-    assert(memory_table.vhdl_array->dimensions.size() == 2);
-    const auto violation_table = package_type(
+    assert(memory_table.form == fsim::semantic::vhdl::TypeForm::array);
+    assert(memory_table.array_dimensions.size() == 2);
+    const auto& violation_table = package_type(
         "vital_memory", "vitalmemoryviolationtabletype");
-    assert(violation_table.vhdl_array);
-    assert(violation_table.vhdl_array->dimensions.size() == 2);
-    const auto address_vector = package_type(
+    assert(violation_table.form == fsim::semantic::vhdl::TypeForm::array);
+    assert(violation_table.array_dimensions.size() == 2);
+    const auto& address_vector = package_type(
         "vital_memory", "vitaladdressvaluevectortype");
-    assert(address_vector.vhdl_array && !address_vector.width());
+    assert(address_vector.form == fsim::semantic::vhdl::TypeForm::array
+        && !address_vector.base.executable_width);
 }
 
 void verify_revision_environments(const std::filesystem::path& directory)
@@ -450,14 +477,16 @@ void verify_revision_environments(const std::filesystem::path& directory)
             }
         }
         assert(checked && !diagnostics.has_error());
+        const auto& hir = checked->vhdl_hir;
         const auto architecture = std::ranges::find_if(
-            checked->parsed.units,
-            [&](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlArchitecture
+            hir.units(),
+            [&](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind
+                        == fsim::semantic::vhdl::UnitKind::architecture
                     && unit.name == "rtl" && unit.primary_name == unit_name;
             });
-        assert(architecture != checked->parsed.units.end());
-        const auto& environment = architecture->vhdl_predefined_environment;
+        assert(architecture != hir.units().end());
+        const auto& environment = architecture->predefined_environment;
         assert(environment.identity
             == "ieee-1076-standard:" + std::string { expected.year }
                 + ":fsim-v3");
@@ -478,14 +507,14 @@ void verify_revision_environments(const std::filesystem::path& directory)
         assert(environment.default_time_unit == "fs");
 
         const auto logic_package = std::ranges::find_if(
-            checked->parsed.units,
-            [](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+            hir.units(),
+            [](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
                     && unit.library == "ieee" && unit.name == "std_logic_1164"
                     && unit.primary_name.empty();
             });
-        assert(logic_package != checked->parsed.units.end());
-        assert(logic_package->vhdl_standard == architecture->vhdl_standard);
+        assert(logic_package != hir.units().end());
+        assert(logic_package->standard == architecture->standard);
         assert(logic_package->standard_package_operator_profiles.size()
             == expected.logic_operators);
         const auto has_export = [&](const std::string_view name) {
@@ -500,9 +529,10 @@ void verify_revision_environments(const std::filesystem::path& directory)
 
         const auto package_unit = [&](const std::string_view name) {
             return std::ranges::find_if(
-                checked->parsed.units,
-                [&](const fsim::frontend::DesignUnit& unit) {
-                    return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+                hir.units(),
+                [&](const fsim::semantic::vhdl::Unit& unit) {
+                    return unit.kind
+                            == fsim::semantic::vhdl::UnitKind::package
                         && unit.library == "ieee" && unit.name == name
                         && unit.primary_name.empty();
                 });
@@ -523,15 +553,15 @@ void verify_revision_environments(const std::filesystem::path& directory)
         const auto signed_package = package_unit("std_logic_signed");
         const auto unsigned_package = package_unit("std_logic_unsigned");
         const auto misc = package_unit("std_logic_misc");
-        assert(arith != checked->parsed.units.end());
-        assert(signed_package != checked->parsed.units.end());
-        assert(unsigned_package != checked->parsed.units.end());
-        assert(misc != checked->parsed.units.end());
+        assert(arith != hir.units().end());
+        assert(signed_package != hir.units().end());
+        assert(unsigned_package != hir.units().end());
+        assert(misc != hir.units().end());
         const auto numeric_package = package_unit("numeric_std");
-        assert((numeric_package != checked->parsed.units.end())
+        assert((numeric_package != hir.units().end())
             == (expected.year != "1987"));
         for (const auto package : { arith, signed_package, unsigned_package, misc }) {
-            assert(package->vhdl_standard == architecture->vhdl_standard);
+            assert(package->standard == architecture->standard);
             assert(package->standard_package_revision.starts_with(
                 "synopsys-legacy-ieee:1990-1992:"
                 "fsim-synopsys-ieee-compat-v2:"));

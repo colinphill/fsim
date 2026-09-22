@@ -427,16 +427,14 @@ void test_fsm_relations_values_and_iterators()
             return std::nullopt;
         },
         [](const auto&) { return 1; }, limits);
-    require(bounded.publish_fsm({
-                module.value,
-                expression.value,
-                "bounded",
-                {
-                    { "zero", state_value("0") },
-                    { "one", state_value("1") },
-                },
-            })
-                .error
+    SystemVerilogVpiCoverageFsmDescriptor bounded_descriptor;
+    bounded_descriptor.instance = module.value;
+    bounded_descriptor.state_expression = expression.value;
+    bounded_descriptor.name = "bounded";
+    bounded_descriptor.states.push_back({ "zero", state_value("0") });
+    bounded_descriptor.states.push_back({ "one", state_value("1") });
+    const auto bounded_result = bounded.publish_fsm(bounded_descriptor);
+    require(bounded_result.error
             == SystemVerilogVpiCoverageError::ResourceLimit
         && bounded.fsm_count() == 0U,
         "FSM resource failure publishes no partial machine");
@@ -448,23 +446,21 @@ void test_fsm_relations_values_and_iterators()
             return std::nullopt;
         },
         [](const auto&) { return 1; }, limits);
-    const auto first = cumulative.publish_fsm({
-        module.value,
-        expression.value,
-        "first",
-        {
-            { "zero", state_value("00") },
-            { "one", state_value("01") },
-        },
-    });
+    SystemVerilogVpiCoverageFsmDescriptor first_descriptor;
+    first_descriptor.instance = module.value;
+    first_descriptor.state_expression = expression.value;
+    first_descriptor.name = "first";
+    first_descriptor.states.push_back({ "zero", state_value("00") });
+    first_descriptor.states.push_back({ "one", state_value("01") });
+    const auto first = cumulative.publish_fsm(first_descriptor);
+    SystemVerilogVpiCoverageFsmDescriptor second_descriptor;
+    second_descriptor.instance = module.value;
+    second_descriptor.state_expression = second_expression.value;
+    second_descriptor.name = "second";
+    second_descriptor.states.push_back({ "two", state_value("10") });
+    const auto second = cumulative.publish_fsm(second_descriptor);
     require(static_cast<bool>(first)
-            && cumulative.publish_fsm({
-                   module.value,
-                   second_expression.value,
-                   "second",
-                   { { "two", state_value("10") } },
-               })
-                    .error
+            && second.error
                 == SystemVerilogVpiCoverageError::ResourceLimit
             && cumulative.fsm_count() == 1U
             && cumulative.state_count() == 2U,

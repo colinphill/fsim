@@ -33,7 +33,7 @@ fsim::elaboration::ElaborationResult elaborate_text(
     const auto parsed = fsim::frontend::parse_text(
         name, source, fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
-    return fsim::elaboration::elaborate(parsed.design, top);
+    return compile_and_elaborate(parsed.design, top);
 }
 
 }  // namespace
@@ -68,7 +68,7 @@ end architecture;
     invalid_port_order.design.units.back()
         .instances.front().connections.back().port.reset();
     const auto invalid_port_order_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_port_order.design,
             "vhdl:work.order_top(rtl)");
     assert(!invalid_port_order_result.ok());
@@ -163,7 +163,7 @@ end architecture;
     assert(foreign.ok() && foreign_parent.ok());
     append_design(
         foreign.design, std::move(foreign_parent.design));
-    const auto cross_language = fsim::elaboration::elaborate(
+    const auto cross_language = compile_and_elaborate(
         foreign.design,
         "vhdl:work.foreign_default_parent(rtl)");
     assert(cross_language.ok());
@@ -217,7 +217,7 @@ end architecture;
         }
     }
     assert(mode_view_port.ok());
-    const auto mode_view_elaborated = fsim::elaboration::elaborate(
+    const auto mode_view_elaborated = compile_and_elaborate(
         mode_view_port.design, "vhdl:work.view_port_top(rtl)");
     if (!mode_view_elaborated.ok()) {
         for (const auto& diagnostic : mode_view_elaborated.diagnostics) {
@@ -301,7 +301,7 @@ end architecture;
         fsim::frontend::VhdlStandard::Vhdl2019);
     assert(illegal_mode_view_write.ok());
     const auto illegal_mode_view_write_elaborated =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             illegal_mode_view_write.design,
             "vhdl:work.illegal_view_write_top(rtl)");
     assert(!illegal_mode_view_write_elaborated.ok());
@@ -367,7 +367,7 @@ end architecture;
         }
     }
     assert(nested_mode_view_port.ok());
-    const auto nested_mode_view_elaborated = fsim::elaboration::elaborate(
+    const auto nested_mode_view_elaborated = compile_and_elaborate(
         nested_mode_view_port.design,
         "vhdl:work.nested_view_top(rtl)");
     if (!nested_mode_view_elaborated.ok()) {
@@ -465,7 +465,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl2019);
     assert(invalid_mode_view_port.ok());
-    const auto invalid_mode_view_elaborated = fsim::elaboration::elaborate(
+    const auto invalid_mode_view_elaborated = compile_and_elaborate(
         invalid_mode_view_port.design,
         "vhdl:work.invalid_view_port_top(rtl)");
     assert(!invalid_mode_view_elaborated.ok());
@@ -508,7 +508,7 @@ end architecture;)";
             fsim::frontend::Language::Vhdl2008,
             standard);
         assert(parsed.ok());
-        return fsim::elaboration::elaborate(
+        return compile_and_elaborate(
             parsed.design, "vhdl:work.revision_port_top(rtl)");
     };
     const auto rejected_expression_port = elaborate_expression_port(
@@ -566,7 +566,7 @@ end architecture;)";
         }
     }
     assert(vhdl93_parsed.ok());
-    const auto vhdl93_elaborated = fsim::elaboration::elaborate(
+    const auto vhdl93_elaborated = compile_and_elaborate(
         vhdl93_parsed.design,
         "vhdl:work.revision_statement_top(rtl)");
     assert(vhdl93_elaborated.ok());

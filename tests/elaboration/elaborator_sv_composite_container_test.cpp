@@ -31,7 +31,7 @@ endmodule
     }
   }
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "composite_container_types");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -105,7 +105,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(unsupported.ok());
-  const auto rejected = fsim::elaboration::elaborate(
+  const auto rejected = compile_and_elaborate(
       unsupported.design,
       "composite_container_operations_invalid");
   assert(!rejected.ok());
@@ -151,7 +151,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(invalid_patterns.ok());
-  const auto invalid_pattern_result = fsim::elaboration::elaborate(
+  const auto invalid_pattern_result = compile_and_elaborate(
       invalid_patterns.design,
       "composite_container_patterns_invalid");
   assert(!invalid_pattern_result.ok());

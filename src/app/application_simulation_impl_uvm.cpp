@@ -12,23 +12,27 @@ Simulation::Impl::execute_uvm_function_phase(
     const auto invoke_callback =
         [&](const runtime::SystemVerilogClassHandle component,
             const std::string_view method_name) {
-            const auto* method = source_method_named(component, method_name);
-            if (method == nullptr)
+            if (const auto* method
+                = class_hir_execution.method_named(component, method_name)) {
+                if (method->kind
+                        != semantic::sv::ClassMethodKind::function
+                    || method->static_method || method->formals.size() > 1U) {
+                    throw std::invalid_argument {
+                        "UVM function-phase callback has an unsupported HIR profile"
+                    };
+                }
+                std::vector<runtime::PackedLogic4> actuals;
+                if (method->formals.size() == 1U)
+                    actuals.push_back(runtime::PackedLogic4(64U));
+                std::vector<std::string> string_actuals(actuals.size());
+                const auto before = packed_class_snapshot();
+                const auto static_before = packed_static_snapshot();
+                (void)class_hir_execution.invoke_function(
+                    *method, component, actuals, string_actuals, { }, { });
+                notify_class_changes(before);
+                notify_static_changes(static_before);
                 return;
-            if (method->kind != frontend::SystemVerilogClassMethodKind::Function || method->is_static || method->arguments.size() > 1U) {
-                throw std::invalid_argument {
-                    "UVM function-phase callback has an unsupported profile"
-                };
             }
-            std::vector<runtime::PackedLogic4> actuals;
-            if (method->arguments.size() == 1U) {
-                actuals.push_back(runtime::PackedLogic4(64));
-            }
-            const auto before = packed_class_snapshot();
-            const auto static_before = packed_static_snapshot();
-            (void)invoke_source_profile(*method, component, actuals, { }, { });
-            notify_class_changes(before);
-            notify_static_changes(static_before);
         };
     return uvm_phases.execute_function_phase(
         phase_handle,
@@ -72,22 +76,28 @@ Simulation::Impl::execute_uvm_task_phase(const runtime::SystemVerilogUvmPhaseHan
                 : callback == runtime::SystemVerilogUvmPhaseCallbackKind::PhaseReadyToEnd
                 ? std::string_view { "phase_ready_to_end" }
                 : std::string_view { "phase_ended" };
-            const auto* method = source_method_named(component, method_name);
-            if (method != nullptr) {
-                if (method->kind != frontend::SystemVerilogClassMethodKind::Function || method->is_static || method->arguments.size() > 1U) {
+            if (const auto* method
+                = class_hir_execution.method_named(component, method_name)) {
+                if (method->kind
+                        != semantic::sv::ClassMethodKind::function
+                    || method->static_method || method->formals.size() > 1U) {
                     throw std::invalid_argument {
-                        "UVM task-phase hook has an unsupported profile"
+                        "UVM task-phase hook has an unsupported HIR profile"
                     };
                 }
                 std::vector<runtime::PackedLogic4> actuals;
-                if (method->arguments.size() == 1U) {
-                    actuals.push_back(runtime::PackedLogic4(64));
-                }
+                if (method->formals.size() == 1U)
+                    actuals.push_back(runtime::PackedLogic4(64U));
+                std::vector<std::string> string_actuals(actuals.size());
                 const auto before = packed_class_snapshot();
                 const auto static_before = packed_static_snapshot();
-                (void)invoke_source_profile(*method, component, actuals, { }, { });
+                (void)class_hir_execution.invoke_function(
+                    *method, component, actuals, string_actuals, { }, { });
                 notify_class_changes(before);
                 notify_static_changes(static_before);
+                uvm_sequences.dispatch_role_function(
+                    component, phase_handle, callback);
+                return;
             }
             uvm_sequences.dispatch_role_function(component, phase_handle, callback);
         };
@@ -96,20 +106,20 @@ Simulation::Impl::execute_uvm_task_phase(const runtime::SystemVerilogUvmPhaseHan
         [&](const runtime::SystemVerilogClassHandle component,
             const runtime::SystemVerilogUvmPhaseHandle callback_phase,
             const runtime::SystemVerilogUvmPhaseProcessHandle process) {
-            const auto* method = source_method_named(component, phase_snapshot.identity + "_phase");
-            if (method != nullptr) {
-                if (method->kind != frontend::SystemVerilogClassMethodKind::Task || method->is_static || method->arguments.size() > 1U) {
+            if (const auto* method = class_hir_execution.method_named(
+                    component, phase_snapshot.identity + "_phase")) {
+                if (method->kind != semantic::sv::ClassMethodKind::task
+                    || method->static_method || method->formals.size() > 1U) {
                     throw std::invalid_argument {
-                        "UVM task-phase callback has an unsupported profile"
+                        "UVM task-phase callback has an unsupported HIR profile"
                     };
                 }
                 std::vector<runtime::PackedLogic4> actuals;
-                if (method->arguments.size() == 1U) {
-                    actuals.push_back(runtime::PackedLogic4(64));
-                }
+                if (method->formals.size() == 1U)
+                    actuals.push_back(runtime::PackedLogic4(64U));
                 const auto before = packed_class_snapshot();
                 const auto static_before = packed_static_snapshot();
-                invoke_source_task_profile(*method, component, actuals);
+                class_hir_execution.invoke_task(*method, component, actuals);
                 notify_class_changes(before);
                 notify_static_changes(static_before);
             }

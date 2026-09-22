@@ -979,7 +979,7 @@ end architecture;
              std::nullopt},
         };
     const auto generated_sv_true =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_true",
             generated_sv_binding);
@@ -1003,7 +1003,7 @@ end architecture;
             .to_msb_string()
         == "1001");
     const auto generated_sv_false =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_false");
     assert(generated_sv_false.ok());
@@ -1033,7 +1033,7 @@ end architecture;
              std::nullopt},
         };
     const auto generated_vhdl_top =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_top(rtl)",
             generated_vhdl_binding);
@@ -1073,7 +1073,7 @@ end architecture;
              std::nullopt},
         };
     const auto generated_sv_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_loop",
             generated_sv_loop_bindings);
@@ -1120,7 +1120,7 @@ end architecture;
     assert(!empty_loop_unit->parameters.empty());
     empty_loop_unit->parameters.front().default_value.text = "0";
     const auto empty_generated_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             empty_generated_loop_design,
             "sv:work.generated_sv_loop");
     assert(empty_generated_loop.ok());
@@ -1139,7 +1139,7 @@ end architecture;
              std::nullopt},
         };
     const auto generated_vhdl_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_loop_top(rtl)",
             generated_vhdl_loop_bindings);
@@ -1187,7 +1187,7 @@ end architecture;
              std::nullopt},
         };
     const auto generated_sv_case =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_case_selected",
             generated_sv_case_binding);
@@ -1217,7 +1217,7 @@ end architecture;
         == "1000");
 
     const auto generated_sv_case_default =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_case_default");
     assert(generated_sv_case_default.ok());
@@ -1248,7 +1248,7 @@ end architecture;
              std::nullopt},
         };
     const auto generated_vhdl_case =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_case_top(rtl)",
             generated_vhdl_case_binding);
@@ -1286,7 +1286,7 @@ end architecture;
         == "0111");
 
     const auto generated_vhdl_enum_case =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_enum_case(rtl)");
     assert(generated_vhdl_enum_case.ok());
@@ -1315,7 +1315,7 @@ end architecture;
         generated_vhdl_enum_case.design->processes().size() == 2);
 
     const auto generated_vhdl_enum_overlap =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_enum_overlap(rtl)");
     assert(!generated_vhdl_enum_overlap.ok());
@@ -1324,7 +1324,7 @@ end architecture;
         "FSIM-ELAB-GEN-010"));
 
     const auto generated_vhdl_enum_bad_choice =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_enum_bad_choice(rtl)");
     assert(!generated_vhdl_enum_bad_choice.ok());
@@ -1333,7 +1333,7 @@ end architecture;
         "FSIM-ELAB-GEN-009"));
 
     const auto generated_vhdl_enum_wrong_domain =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_enum_wrong_domain(rtl)");
     assert(!generated_vhdl_enum_wrong_domain.ok());
@@ -1342,7 +1342,7 @@ end architecture;
         "FSIM-ELAB-GEN-009"));
 
     const auto generated_vhdl_overlapping_ranges =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_overlapping_ranges(rtl)");
     assert(!generated_vhdl_overlapping_ranges.ok());
@@ -1351,7 +1351,7 @@ end architecture;
         "FSIM-ELAB-GEN-010"));
 
     const auto generated_vhdl_bad_range =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_bad_range(rtl)");
     assert(!generated_vhdl_bad_range.ok());
@@ -1360,7 +1360,7 @@ end architecture;
         "FSIM-ELAB-GEN-009"));
 
     const auto generated_sv_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_behavior");
     assert(generated_sv_behavior.ok());
@@ -1388,7 +1388,7 @@ end architecture;
         == "0110");
 
     const auto generated_vhdl_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_behavior(rtl)");
     assert(generated_vhdl_behavior.ok());
@@ -1426,7 +1426,7 @@ end architecture;
         == "0111");
 
     const auto generated_sv_loop_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_loop_behavior");
     assert(generated_sv_loop_behavior.ok());
@@ -1454,7 +1454,7 @@ end architecture;
     }
 
     const auto generated_sv_typed =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_typed");
     for (const auto& diagnostic : generated_sv_typed.diagnostics) {
@@ -1484,7 +1484,7 @@ end architecture;
         == "011");
 
     const auto generated_vhdl_loop_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_loop_behavior(rtl)");
     for (const auto& diagnostic :
@@ -1540,7 +1540,7 @@ end architecture;
     }
 
     const auto generated_sv_implicit_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_implicit_behavior");
     assert(generated_sv_implicit_behavior.ok());
@@ -1573,7 +1573,7 @@ end architecture;
         == "0111");
 
     const auto generated_sv_direct_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_direct_behavior");
     assert(generated_sv_direct_behavior.ok());
@@ -1614,7 +1614,7 @@ end architecture;
         == "0100");
 
     const auto generated_vhdl_block_behavior =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_block_behavior(rtl)");
     assert(generated_vhdl_block_behavior.ok());
@@ -1646,7 +1646,7 @@ end architecture;
             .to_msb_string()
         == "1000");
 
-    const auto block_interface = fsim::elaboration::elaborate(
+    const auto block_interface = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_block_interface(rtl)");
     for (const auto& diagnostic : block_interface.diagnostics) {
@@ -1689,7 +1689,7 @@ end architecture;
         block_interpreter->signal_value(*default_result).to_msb_string()
         == "0011");
 
-    const auto block_nonvalue = fsim::elaboration::elaborate(
+    const auto block_nonvalue = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_block_nonvalue(rtl)");
     for (const auto& diagnostic : block_nonvalue.diagnostics) {
@@ -1741,7 +1741,7 @@ end architecture;
                   != std::string::npos;
         }));
 
-    const auto bad_block_nonvalue = fsim::elaboration::elaborate(
+    const auto bad_block_nonvalue = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_bad_block_nonvalue(rtl)");
     assert(!bad_block_nonvalue.ok());
@@ -1753,26 +1753,26 @@ end architecture;
       assert(has_diagnostic(bad_block_nonvalue, code));
     }
 
-    const auto bad_block_generic = fsim::elaboration::elaborate(
+    const auto bad_block_generic = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_bad_block_generic(rtl)");
     assert(!bad_block_generic.ok());
     assert(has_diagnostic(
         bad_block_generic, "FSIM-ELAB-VHBLOCK-001"));
-    const auto bad_block_port = fsim::elaboration::elaborate(
+    const auto bad_block_port = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_bad_block_port(rtl)");
     assert(!bad_block_port.ok());
     assert(has_diagnostic(
         bad_block_port, "FSIM-ELAB-VHBLOCK-002"));
-    const auto bad_block_profile = fsim::elaboration::elaborate(
+    const auto bad_block_profile = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_bad_block_profile(rtl)");
     assert(!bad_block_profile.ok());
     assert(has_diagnostic(
         bad_block_profile, "FSIM-ELAB-VHBLOCK-003"));
 
-    const auto guarded = fsim::elaboration::elaborate(
+    const auto guarded = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_guarded_behavior(rtl)");
     assert(guarded.ok());
@@ -1805,14 +1805,14 @@ end architecture;
             == expected);
     }
 
-    const auto bad_guard = fsim::elaboration::elaborate(
+    const auto bad_guard = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_bad_guard(rtl)");
     assert(!bad_guard.ok());
     assert(has_diagnostic(bad_guard, "FSIM-ELAB-GEN-013"));
 
     const auto generated_sv_bad_constant =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_bad_constant");
     assert(!generated_sv_bad_constant.ok());
@@ -1824,7 +1824,7 @@ end architecture;
         }));
 
     const auto generated_sv_wide_constant =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_wide_constant");
     assert(!generated_sv_wide_constant.ok());
@@ -1836,19 +1836,19 @@ end architecture;
         }));
 
     const auto generated_sv_wide_function_constant =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_wide_function_constant");
     assert(generated_sv_wide_function_constant.ok());
 
     const auto generated_sv_zero_replication =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_zero_replication");
     assert(generated_sv_zero_replication.ok());
 
     const auto generated_sv_inactive_constant_function =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_inactive_constant_function");
     assert(generated_sv_inactive_constant_function.ok());
@@ -1859,7 +1859,7 @@ end architecture;
         == "generated_sv_inactive_constant_function.selected.child");
 
     const auto generated_sv_local_function_after_genvar =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_local_function_after_genvar");
     assert(generated_sv_local_function_after_genvar.ok());

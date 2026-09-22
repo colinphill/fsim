@@ -6,6 +6,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+
+void run_compiled_design_tests();
 
 int main() {
     using namespace fsim::semantic;
@@ -138,5 +141,38 @@ int main() {
     }
     assert(rejected);
 
+    auto records = std::move(model).take_records();
+    assert(model.valid());
+    assert(model.source_files().empty());
+    assert(model.expansions().empty());
+    assert(model.source_spans().empty());
+    assert(model.origins().empty());
+    assert(model.scopes().empty());
+    assert(model.units().empty());
+    assert(model.types().empty());
+    assert(model.values().empty());
+    assert(model.instances().empty());
+    assert(model.declarations().empty());
+    assert(model.expression_identities().empty());
+    assert(model.statement_identities().empty());
+    assert(model.process_identities().empty());
+    assert(model.intern_source_file("reused.sv").value() == 0);
+
+    auto rebuilt = Model::from_records(std::move(records));
+    assert(rebuilt && rebuilt->valid());
+    assert(rebuilt->source_files().size() == 1);
+    assert(rebuilt->expansions().size() == 2);
+    assert(rebuilt->source_spans().size() == 1);
+    assert(rebuilt->origins().size() == 2);
+    assert(rebuilt->units().size() == 1);
+    assert(rebuilt->types().size() == 1);
+    assert(rebuilt->values().size() == 1);
+    assert(rebuilt->instances().size() == 1);
+    assert(rebuilt->declarations().size() == 1);
+    assert(rebuilt->expression_identities().size() == 1);
+    assert(rebuilt->statement_identities().size() == 1);
+    assert(rebuilt->process_identities().size() == 1);
+
+    run_compiled_design_tests();
     std::cout << "semantic identity and provenance tests passed\n";
 }

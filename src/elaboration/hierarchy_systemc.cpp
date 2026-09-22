@@ -1,10 +1,78 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
 
+#include <cctype>
+
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
+
+namespace {
+
+bool valid_systemc_construction_value(
+    const fsim_sc_construction_type_v1 type,
+    const std::int64_t value)
+{
+    switch (type) {
+    case FSIM_SC_CONSTRUCTION_INTEGER:
+        return true;
+    case FSIM_SC_CONSTRUCTION_NATURAL:
+        return value >= 0;
+    case FSIM_SC_CONSTRUCTION_POSITIVE:
+        return value > 0;
+    case FSIM_SC_CONSTRUCTION_BOOLEAN:
+    case FSIM_SC_CONSTRUCTION_BIT:
+        return value == 0 || value == 1;
+    }
+    return false;
+}
+
+bool systemc_construction_name_equal(
+    const std::string_view left,
+    const std::string_view right,
+    const frontend::Language language)
+{
+    if (language != frontend::Language::Vhdl2008) {
+        return left == right;
+    }
+    return left.size() == right.size()
+        && std::ranges::equal(left, right, [](const char lhs,
+                                             const char rhs) {
+               return std::tolower(static_cast<unsigned char>(lhs))
+                   == std::tolower(static_cast<unsigned char>(rhs));
+           });
+}
+
+frontend::SourceSpan compiled_systemc_source_span(
+    const semantic::CompiledDesign& compiled,
+    const semantic::SourceSpanId source)
+{
+    frontend::SourceSpan result;
+    const auto& spans = compiled.semantics.source_spans();
+    if (!source.valid() || source.value() >= spans.size()) {
+        return result;
+    }
+    const auto& span = spans[source.value()];
+    result.source_name = span.logical_name;
+    result.begin = {
+        static_cast<std::size_t>(span.begin.offset),
+        span.begin.line,
+        span.begin.column,
+    };
+    result.end = {
+        static_cast<std::size_t>(span.end.offset),
+        span.end.line,
+        span.end.column,
+    };
+    const auto& files = compiled.semantics.source_files();
+    if (span.file.valid() && span.file.value() < files.size()) {
+        result.physical_source_name = files[span.file.value()].physical_name;
+    }
+    return result;
+}
+
+} // namespace
 
 
 
@@ -37,93 +105,374 @@ using namespace elaboration_detail;
         return found->second;
     }
 
-    const SystemCInstanceDescription* HierarchyBuilder::construct_systemc_description(
-        const frontend::Instance& instance,
+    const SystemCInstanceDescription*
+    HierarchyBuilder::construct_systemc_description(
+        const semantic::sv::Instance& instance,
+        const semantic::SpecializedHirUnit& parent,
         const std::string& path,
-        const std::string_view target,
-        const ConstantEnvironment& parent_environment,
-        const frontend::Language association_language) {
+        const std::string_view target)
+    {
+        const auto instance_source = compiled_ != nullptr
+            ? compiled_systemc_source_span(*compiled_, instance.source)
+            : frontend::SourceSpan { };
         if (systemc_provider_ == nullptr) {
-            if (!instance.parameter_overrides.empty()) {
+            if (!instance.parameters.empty()) {
                 report(
-                    association_language
-                            == frontend::Language::Vhdl2008
-                        ? "FSIM-ELAB-GENERIC-001"
-                        : "FSIM-ELAB-PARAM-001",
-                    "HDL generic or parameter actuals require a live "
-                    "SystemC factory schema provider",
-                    instance.parameter_overrides.front().span);
+                    "FSIM-ELAB-PARAM-001",
+                    "HDL parameter actuals require a live SystemC "
+                    "factory schema provider",
+                    instance_source);
                 return nullptr;
             }
-            return systemc_description(path, target, instance.span);
+            return systemc_description(path, target, instance_source);
         }
 
         std::string error;
-        auto schema = systemc_provider_->schema(target, error);
+        const auto schema = systemc_provider_->schema(target, error);
         if (!schema) {
             report(
                 "FSIM-ELAB-SC-PARAM-007",
                 "cannot inspect SystemC construction schema for '"
-                    + std::string{target} + "': " + error,
-                instance.span);
+                    + std::string { target } + "': " + error,
+                instance_source);
             return nullptr;
         }
-        auto values = specialize_systemc_construction(
-            *schema,
-            instance.parameter_overrides,
-            parent_environment,
-            association_language,
-            diagnostics_);
-        if (!values) {
+
+        std::vector<std::optional<std::int64_t>> actuals(schema->size());
+        std::size_t next_positional { };
+        bool saw_named { };
+        bool saw_positional { };
+        const auto diagnostics_before = diagnostics_.size();
+        for (const auto& association : instance.parameters) {
+            const auto source = compiled_ != nullptr
+                ? compiled_systemc_source_span(
+                    *compiled_, association.source)
+                : instance_source;
+            if (association.kind
+                    != semantic::sv::ActualKind::expression
+                || !association.expression) {
+                report(
+                    "FSIM-ELAB-SC-PARAM-004",
+                    "SystemC construction actual must be one integral "
+                    "compiled-HIR expression",
+                    source);
+                continue;
+            }
+            const auto value = parent.evaluate_integral_expression(
+                *association.expression);
+            if (!value) {
+                report(
+                    "FSIM-ELAB-SC-PARAM-004",
+                    "cannot evaluate SystemC construction actual from "
+                    "compiled HIR",
+                    source);
+                continue;
+            }
+            std::optional<std::size_t> index;
+            if (association.formal) {
+                saw_named = true;
+                const auto found = std::ranges::find(
+                    *schema, *association.formal,
+                    &SystemCConstructionParameter::name);
+                if (found == schema->end()) {
+                    report(
+                        "FSIM-ELAB-SC-PARAM-001",
+                        "unknown SystemC construction parameter '"
+                            + *association.formal + "'",
+                        source);
+                    continue;
+                }
+                index = static_cast<std::size_t>(
+                    std::distance(schema->begin(), found));
+            } else {
+                saw_positional = true;
+                if (next_positional >= schema->size()) {
+                    report(
+                        "FSIM-ELAB-SC-PARAM-001",
+                        "too many positional SystemC construction "
+                        "actuals",
+                        source);
+                    continue;
+                }
+                index = next_positional++;
+            }
+            if (actuals[*index]) {
+                report(
+                    "FSIM-ELAB-SC-PARAM-002",
+                    "duplicate SystemC construction actual for '"
+                        + schema->at(*index).name + "'",
+                    source);
+                continue;
+            }
+            actuals[*index] = *value;
+        }
+        if (saw_named && saw_positional) {
+            report(
+                "FSIM-ELAB-SC-PARAM-003",
+                "named and positional SystemC construction actuals "
+                "cannot be mixed",
+                instance_source);
+        }
+
+        std::vector<std::pair<std::string, std::int64_t>> values;
+        values.reserve(schema->size());
+        for (std::size_t index { }; index < schema->size(); ++index) {
+            const auto value = actuals[index]
+                ? actuals[index]
+                : schema->at(index).default_value;
+            if (!value) {
+                report(
+                    "FSIM-ELAB-SC-PARAM-001",
+                    "SystemC construction parameter '"
+                        + schema->at(index).name + "' requires an actual",
+                    instance_source);
+                continue;
+            }
+            if (!valid_systemc_construction_value(
+                    schema->at(index).type, *value)) {
+                report(
+                    "FSIM-ELAB-SC-PARAM-005",
+                    "SystemC construction parameter '"
+                        + schema->at(index).name
+                        + "' violates its declared scalar subtype",
+                    instance_source);
+                continue;
+            }
+            values.emplace_back(schema->at(index).name, *value);
+        }
+        if (diagnostics_.size() != diagnostics_before) {
             return nullptr;
         }
+
         auto constructed = systemc_provider_->instantiate(
-            path, target, *values, error);
+            path, target, values, error);
         if (!constructed) {
             report(
                 "FSIM-ELAB-SC-PARAM-008",
-                "cannot construct SystemC instance '" + path
-                    + "': " + error,
-                instance.span);
+                "cannot construct SystemC instance '" + path + "': "
+                    + error,
+                instance_source);
             return nullptr;
         }
         if (constructed->path != path
             || constructed->target != target) {
             report(
                 "FSIM-ELAB-SC-PARAM-008",
-                "SystemC factory provider returned inconsistent "
-                "instance identity for '" + path + "'",
-                instance.span);
+                "SystemC factory provider returned inconsistent instance "
+                "identity for '" + path + "'",
+                instance_source);
             return nullptr;
         }
         constructed->construction_identity_values.clear();
-        constructed->construction_identity_values.reserve(values->size());
-        for (std::size_t index = 0; index < values->size(); ++index) {
+        constructed->construction_identity_values.reserve(values.size());
+        for (std::size_t index { }; index < values.size(); ++index) {
             constructed->construction_identity_values.emplace_back(
-                values->at(index).first,
+                values[index].first,
                 "systemcconst-v1:type="
-                    + std::to_string(
-                        static_cast<unsigned>(schema->at(index).type))
-                    + ";value="
-                    + std::to_string(values->at(index).second));
+                    + std::to_string(static_cast<unsigned>(
+                        schema->at(index).type))
+                    + ";value=" + std::to_string(values[index].second));
         }
-        owned_systemc_instances_.push_back(
-            std::move(*constructed));
-        const auto* description =
-            &owned_systemc_instances_.back();
-        if (!systemc_instances_
-                 .emplace(path, description)
-                 .second) {
+        owned_systemc_instances_.push_back(std::move(*constructed));
+        const auto* description = &owned_systemc_instances_.back();
+        if (!systemc_instances_.emplace(path, description).second) {
             report(
                 "FSIM-ELAB-BIND-032",
-                "duplicate constructed SystemC instance path '"
-                    + path + "'",
-                instance.span);
+                "duplicate constructed SystemC instance path '" + path
+                    + "'",
+                instance_source);
             return nullptr;
         }
         used_systemc_instances_.insert(path);
         return description;
     }
+
+const SystemCInstanceDescription*
+HierarchyBuilder::construct_systemc_description(
+    const semantic::vhdl::Instance& instance,
+    const semantic::SpecializedHirUnit& parent,
+    const std::string& path,
+    const std::string_view target)
+{
+    const auto instance_source = compiled_ != nullptr
+        ? compiled_systemc_source_span(*compiled_, instance.source)
+        : frontend::SourceSpan { };
+    if (systemc_provider_ == nullptr) {
+        if (!instance.generic_map.empty()) {
+            report(
+                "FSIM-ELAB-GENERIC-001",
+                "HDL generic actuals require a live SystemC factory "
+                "schema provider",
+                compiled_ != nullptr
+                    ? compiled_systemc_source_span(
+                          *compiled_, instance.generic_map.front().source)
+                    : instance_source);
+            return nullptr;
+        }
+        return systemc_description(path, target, instance_source);
+    }
+
+    std::string error;
+    const auto schema = systemc_provider_->schema(target, error);
+    if (!schema) {
+        report(
+            "FSIM-ELAB-SC-PARAM-007",
+            "cannot inspect SystemC construction schema for '"
+                + std::string { target } + "': " + error,
+            instance_source);
+        return nullptr;
+    }
+
+    std::vector<std::optional<std::int64_t>> actuals(schema->size());
+    std::size_t next_positional { };
+    bool saw_named { };
+    bool saw_positional { };
+    const auto diagnostics_before = diagnostics_.size();
+    for (const auto& association : instance.generic_map) {
+        const auto source = compiled_ != nullptr
+            ? compiled_systemc_source_span(
+                  *compiled_, association.source)
+            : instance_source;
+        if (association.kind
+                != semantic::vhdl::AssociationKind::expression
+            || !association.expression) {
+            report(
+                "FSIM-ELAB-SC-PARAM-004",
+                "SystemC construction actual must be one integral "
+                "compiled-HIR expression",
+                source);
+            continue;
+        }
+        const auto value = parent.evaluate_integral_expression(
+            *association.expression);
+        if (!value) {
+            report(
+                "FSIM-ELAB-SC-PARAM-004",
+                "cannot evaluate SystemC construction actual from "
+                "compiled HIR",
+                source);
+            continue;
+        }
+        std::optional<std::size_t> index;
+        if (association.formal) {
+            saw_named = true;
+            const auto found = std::ranges::find_if(
+                *schema, [&](const auto& parameter) {
+                    return systemc_construction_name_equal(
+                        parameter.name, association.formal->spelling,
+                        frontend::Language::Vhdl2008);
+                });
+            if (found == schema->end()) {
+                report(
+                    "FSIM-ELAB-GENERIC-001",
+                    "unknown SystemC construction parameter '"
+                        + association.formal->spelling + "'",
+                    source);
+                continue;
+            }
+            index = static_cast<std::size_t>(
+                std::distance(schema->begin(), found));
+        } else {
+            saw_positional = true;
+            if (next_positional >= schema->size()) {
+                report(
+                    "FSIM-ELAB-GENERIC-001",
+                    "too many positional SystemC construction actuals",
+                    source);
+                continue;
+            }
+            index = next_positional++;
+        }
+        if (actuals[*index]) {
+            report(
+                "FSIM-ELAB-GENERIC-002",
+                "duplicate SystemC construction actual for '"
+                    + schema->at(*index).name + "'",
+                source);
+            continue;
+        }
+        actuals[*index] = *value;
+    }
+    if (saw_named && saw_positional) {
+        report(
+            "FSIM-ELAB-GENERIC-003",
+            "named and positional SystemC construction actuals "
+            "cannot be mixed",
+            instance_source);
+    }
+
+    std::vector<std::pair<std::string, std::int64_t>> values;
+    values.reserve(schema->size());
+    for (std::size_t index { }; index < schema->size(); ++index) {
+        const auto value = actuals[index]
+            ? actuals[index]
+            : schema->at(index).default_value;
+        if (!value) {
+            report(
+                "FSIM-ELAB-GENERIC-001",
+                "SystemC construction parameter '"
+                    + schema->at(index).name + "' requires an actual",
+                instance_source);
+            continue;
+        }
+        if (!valid_systemc_construction_value(
+                schema->at(index).type, *value)) {
+            report(
+                "FSIM-ELAB-GENERIC-008",
+                "SystemC construction parameter '"
+                    + schema->at(index).name
+                    + "' violates its declared scalar subtype",
+                instance_source);
+            continue;
+        }
+        values.emplace_back(schema->at(index).name, *value);
+    }
+    if (diagnostics_.size() != diagnostics_before) {
+        return nullptr;
+    }
+
+    auto constructed = systemc_provider_->instantiate(
+        path, target, values, error);
+    if (!constructed) {
+        report(
+            "FSIM-ELAB-SC-PARAM-008",
+            "cannot construct SystemC instance '" + path + "': "
+                + error,
+            instance_source);
+        return nullptr;
+    }
+    if (constructed->path != path
+        || constructed->target != target) {
+        report(
+            "FSIM-ELAB-SC-PARAM-008",
+            "SystemC factory provider returned inconsistent instance "
+            "identity for '" + path + "'",
+            instance_source);
+        return nullptr;
+    }
+    constructed->construction_identity_values.clear();
+    constructed->construction_identity_values.reserve(values.size());
+    for (std::size_t index { }; index < values.size(); ++index) {
+        constructed->construction_identity_values.emplace_back(
+            values[index].first,
+            "systemcconst-v1:type="
+                + std::to_string(static_cast<unsigned>(
+                    schema->at(index).type))
+                + ";value=" + std::to_string(values[index].second));
+    }
+    owned_systemc_instances_.push_back(std::move(*constructed));
+    const auto* description = &owned_systemc_instances_.back();
+    if (!systemc_instances_.emplace(path, description).second) {
+        report(
+            "FSIM-ELAB-BIND-032",
+            "duplicate constructed SystemC instance path '" + path
+                + "'",
+            instance_source);
+        return nullptr;
+    }
+    used_systemc_instances_.insert(path);
+    return description;
+}
 
     void HierarchyBuilder::instantiate_systemc(
         const SystemCInstanceDescription& instance,
@@ -169,6 +518,86 @@ using namespace elaboration_detail;
             std::nullopt,
             {}});
 
+        const auto add_external_signal = [&](
+            const std::string& name,
+            const PackedTypeMetadata& type,
+            const frontend::PortDirection direction,
+            const bool is_port) -> std::optional<SignalId> {
+            if (const auto existing = aliases.find(name);
+                existing != aliases.end()) {
+                return existing->second;
+            }
+            const auto width = type.width();
+            if (type.domain == frontend::ValueDomain::Unknown
+                || !width || *width == 0U
+                || *width > std::numeric_limits<std::size_t>::max()) {
+                report(
+                    "FSIM-ELAB-TYPE-001",
+                    "SystemC object '" + path + "." + name
+                        + "' has no executable packed layout",
+                    {});
+                return std::nullopt;
+            }
+            if (design_.signals_.size()
+                > std::numeric_limits<SignalId>::max()) {
+                report(
+                    "FSIM-ELAB-011",
+                    "the design has too many signals for dense 32-bit IDs",
+                    {});
+                return std::nullopt;
+            }
+
+            const auto id = static_cast<SignalId>(design_.signals_.size());
+            const auto full_name = path + "." + name;
+            aliases.emplace(name, id);
+            aliases.emplace(full_name, id);
+            design_.signal_by_name_.emplace(full_name, id);
+            if (design_.roots_.size() == 1U && path == active_root_) {
+                design_.signal_by_name_.emplace(name, id);
+            }
+
+            SignalInfo info;
+            info.id = id;
+            info.name = full_name;
+            info.width = static_cast<std::size_t>(*width);
+            info.type_name = type.spelling;
+            info.source_domain = type.domain;
+            info.systemverilog_scalar = type.systemverilog_scalar;
+            info.systemverilog_net_type = type.systemverilog_net_type;
+            info.is_signed = type.is_signed;
+            info.packed_range = type.packed_range;
+            info.vhdl_array = type.vhdl_array;
+            info.vhdl_access = type.vhdl_access;
+            info.vhdl_physical = type.vhdl_physical;
+            info.packed_members = type.packed_members;
+            info.integer_range = type.integer_range;
+            info.nominal_type = type.nominal_type;
+            info.enumeration_literals = type.enumeration_literals;
+            info.enumeration_range = type.enumeration_range;
+            info.is_port = is_port;
+            info.direction = direction;
+            design_.signal_info_.push_back(std::move(info));
+
+            auto initial = is_two_state_domain(type.domain)
+                ? Logic4::zero
+                : Logic4::x;
+            if (!type.systemverilog_net_type.empty()) {
+                initial = Logic4::z;
+            }
+            design_.signals_.push_back({
+                full_name,
+                PackedLogic4 { static_cast<std::size_t>(*width), initial },
+                ResolutionKind::none,
+                value_kind(type.domain),
+                std::nullopt,
+                { StrengthRank::pull, StrengthRank::pull },
+                std::nullopt,
+                std::nullopt,
+                type.systemverilog_scalar,
+            });
+            return id;
+        };
+
         std::unordered_set<std::uint64_t> connected_ports;
         for (const auto& port : instance.ports) {
             if (objects.contains(port.handle)) {
@@ -192,10 +621,8 @@ using namespace elaboration_detail;
 
         for (const auto& port : instance.ports) {
             if (!aliases.contains(port.name)) {
-                const auto declaration =
-                    external_port_declaration(port);
-                const auto signal =
-                    add_owned_signal(declaration, path, aliases);
+                const auto signal = add_external_signal(
+                    port.name, port.type, port.direction, true);
                 if (signal) {
                     objects.emplace(port.handle, *signal);
                 }
@@ -266,14 +693,9 @@ using namespace elaboration_detail;
                 }
                 continue;
             }
-            const frontend::SignalDeclaration declaration{
-                signal.name,
-                signal.type,
-                frontend::PortDirection::Unknown,
-                false,
-                {}};
-            const auto runtime_signal =
-                add_owned_signal(declaration, path, aliases);
+            const auto runtime_signal = add_external_signal(
+                signal.name, signal.type,
+                frontend::PortDirection::Unknown, false);
             if (runtime_signal) {
                 design_.signals_.at(*runtime_signal).initial_value =
                     signal.initial_value;
@@ -584,8 +1006,91 @@ using namespace elaboration_detail;
                 if (signal == objects.end()) {
                     continue;
                 }
+                const auto formal_width = port.type.width();
+                if (!formal_width
+                    || *formal_width
+                        > std::numeric_limits<std::size_t>::max()
+                    || signal->second >= design_.signal_info_.size()) {
+                    report(
+                        "FSIM-ELAB-TYPE-001",
+                        "native SystemC child port '" + child.path + "."
+                            + port.name
+                            + "' has no executable binding metadata",
+                        {});
+                    continue;
+                }
+                const auto& actual_info
+                    = design_.signal_info_[signal->second];
+                const auto width = static_cast<std::size_t>(
+                    *formal_width);
+                bool incompatible { };
+                if (width != actual_info.width) {
+                    report(
+                        "FSIM-ELAB-BIND-020",
+                        "width mismatch on native SystemC child port '"
+                            + child.path + "." + port.name + "': "
+                            + std::to_string(width) + " versus "
+                            + std::to_string(actual_info.width),
+                        {});
+                    incompatible = true;
+                }
+                if (width > 1U
+                    && port.type.is_signed != actual_info.is_signed) {
+                    report(
+                        "FSIM-ELAB-BIND-021",
+                        "signedness mismatch on native SystemC child port '"
+                            + child.path + "." + port.name + "'",
+                        {});
+                    incompatible = true;
+                }
+                const bool state_domain_alias
+                    = (port.type.domain
+                            == frontend::ValueDomain::Logic4
+                          && actual_info.source_domain
+                              == frontend::ValueDomain::Logic9)
+                    || (port.type.domain
+                            == frontend::ValueDomain::Logic9
+                        && actual_info.source_domain
+                            == frontend::ValueDomain::Logic4);
+                if (port.type.domain != actual_info.source_domain
+                    && !state_domain_alias) {
+                    report(
+                        "FSIM-ELAB-BIND-019",
+                        "value-domain mismatch on native SystemC child "
+                        "port '" + child.path + "." + port.name + "'",
+                        {});
+                    incompatible = true;
+                }
+                if (incompatible) {
+                    continue;
+                }
                 child_aliases.emplace(port.name, signal->second);
                 child_objects.emplace(port.handle, signal->second);
+                if (state_domain_alias) {
+                    design_.boundary_conversions_.push_back(
+                        BoundaryConversionInfo {
+                            BoundaryConversionKind::state_domain_alias,
+                            child.path + "." + port.name,
+                            signal->second,
+                            signal->second,
+                            std::nullopt,
+                            port.direction,
+                            width,
+                            actual_info.width,
+                            port.type.domain,
+                            actual_info.source_domain,
+                            port.type.is_signed,
+                            actual_info.is_signed,
+                            true,
+                            port.type.packed_range,
+                            actual_info.packed_range,
+                            port.type.integer_range,
+                            actual_info.integer_range,
+                            {},
+                            {},
+                            actual_info.declaration_span,
+                        });
+                }
             }
             instantiate_systemc(
                 child,
@@ -601,30 +1106,6 @@ using namespace elaboration_detail;
 
 
 
-    std::pair<HierarchyBuilder::SignalMap, HierarchyBuilder::ObjectMap>
-    HierarchyBuilder::connect_systemc_instance(
-        const frontend::Instance& instance,
-        const SystemCInstanceDescription& target,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const Binding* binding) {
-        std::vector<frontend::SignalDeclaration> ports;
-        ports.reserve(target.ports.size());
-        for (const auto& port : target.ports) {
-            ports.push_back(external_port_declaration(port));
-        }
-        auto aliases = connect_ports(
-            instance, ports, path, parent_signals, {}, {}, {}, {},
-            binding, true);
-        ObjectMap objects;
-        for (const auto& port : target.ports) {
-            if (const auto signal = aliases.signals.find(port.name);
-                signal != aliases.signals.end()) {
-                objects.emplace(port.handle, signal->second);
-            }
-        }
-        return {std::move(aliases.signals), std::move(objects)};
-    }
 
     void HierarchyBuilder::report(
         std::string code,

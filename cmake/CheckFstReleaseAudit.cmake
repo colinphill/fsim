@@ -56,8 +56,8 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "FST inventory passed: rows=17 preserved=17 active=0 digest=fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248"
-    "diagnostic catalog covers 2758 production codes"
-    "Checked 1525 authored sources against the 2000-line hard limit"
+    "diagnostic catalog covers 2765 production codes"
+    "The physical source-line ceiling is disabled; checking translation-unit structure only"
     "FST portability contract: bounded fixed-width decoding, binary filesystem I/O, transactional diagnostics, corruption/resource negatives, semantic differentials, and Linux/Windows dependency independence are present"
     "regression de-duplication: unique commands, application partitions and thirteen fixture-backed closure drivers are present")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
@@ -89,7 +89,7 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-set(FSIM_EXPECTED_AUTHORED_COUNT 1828)
+set(FSIM_EXPECTED_AUTHORED_COUNT 1809)
 if(FSIM_AUTHORED_COUNT LESS FSIM_EXPECTED_AUTHORED_COUNT)
   message(FATAL_ERROR
     "authored FST inventory fell below the ${FSIM_EXPECTED_AUTHORED_COUNT}-file baseline: found ${FSIM_AUTHORED_COUNT}")

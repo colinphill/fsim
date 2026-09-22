@@ -61,6 +61,11 @@ class VhdlExecutableBuilder final {
     return model_.scopes()[scope.value()].parent;
   }
 
+  [[nodiscard]] semantic::UnitId scope_unit(
+      const semantic::ScopeId scope) const noexcept {
+    return model_.scopes()[scope.value()].unit;
+  }
+
   [[nodiscard]] vh::Name name(
       const std::string_view spelling,
       const frontend::SourceSpan& span,
@@ -127,66 +132,94 @@ class VhdlExecutableBuilder final {
         return vh::ExpressionKind::default_choice;
       case frontend::ExpressionKind::Conditional:
         return vh::ExpressionKind::conditional;
-    }
-    return vh::ExpressionKind::invalid;
+      }
+      return vh::ExpressionKind::invalid;
   }
 
   [[nodiscard]] std::optional<semantic::ExpressionId> expression(
       const frontend::Expression& input,
       const semantic::ScopeId scope,
-      const semantic::OriginId parent) {
-    if (input.kind == frontend::ExpressionKind::Invalid) {
-      return std::nullopt;
-    }
-    const auto expression_source = source(input.span);
-    const auto expression_origin = origin(
-        expression_source, parent, "VHDL expression");
-    const auto id = model_.add_expression_identity(
-        scope, expression_source, expression_origin);
-    vh::Expression output;
-    output.id = id;
-    output.scope = scope;
-    output.kind = expression_kind(input);
-    output.text = input.text;
-    output.source = expression_source;
-    output.origin = expression_origin;
-    output.nominal_type = input.nominal_type;
-    output.decoded_string = input.decoded_string;
-    if (input.kind == frontend::ExpressionKind::Identifier
-        || input.kind == frontend::ExpressionKind::Call) {
-      output.referenced_name = name(input.text, input.span, scope);
-    }
-    output.argument_names = input.call_argument_names;
-    for (const auto& operand : input.operands) {
-      if (const auto operand_id = expression(
-              operand, scope, expression_origin)) {
-        output.operands.push_back(*operand_id);
+      const semantic::OriginId parent)
+  {
+      if (input.kind == frontend::ExpressionKind::Invalid) {
+          return std::nullopt;
       }
-    }
-    if (input.kind == frontend::ExpressionKind::Aggregate) {
-      for (std::size_t index = 0; index < output.operands.size(); ++index) {
-        vh::AggregateAssociation association;
-        association.value = output.operands[index];
-        association.source = index < input.operands.size()
-            ? source(input.operands[index].span)
-            : expression_source;
-        if (index < input.aggregate_choices.size()) {
-          association.choice_spelling = input.aggregate_choices[index];
-        }
-        if (index < input.aggregate_choice_expressions.size()) {
-          for (const auto& choice :
-               input.aggregate_choice_expressions[index]) {
-            if (const auto choice_id = expression(
-                    choice, scope, expression_origin)) {
-              association.choices.push_back(*choice_id);
-            }
+      const auto expression_source = source(input.span);
+      const auto expression_origin = origin(
+          expression_source, parent, "VHDL expression");
+      const auto id = model_.add_expression_identity(
+          scope, expression_source, expression_origin);
+      vh::Expression output;
+      output.id = id;
+      output.scope = scope;
+      output.kind = expression_kind(input);
+      if (input.kind == frontend::ExpressionKind::Identifier
+          && (input.text == "std.env.pslassertfailed"
+              || input.text == "std.env.psliscovered"
+              || input.text == "std.env.getpslcoverassert"
+              || input.text == "std.env.pslisassertcovered")) {
+          // VHDL permits a parameterless function call without parentheses.
+          // Retain these standardized PSL queries as calls so type profiling
+          // and executable lowering do not confuse them with constants.
+          output.kind = vh::ExpressionKind::call;
+      }
+      output.text = input.text;
+      output.source = expression_source;
+      output.origin = expression_origin;
+      output.nominal_type = input.nominal_type;
+      if (input.kind == frontend::ExpressionKind::Call
+          && input.text == "@vhdl-external"
+          && input.operands.size() == 2U
+          && input.operands[1].call_result_width != 0U) {
+          output.nominal_type = "@fsim-vhdl-external:"
+              + std::to_string(input.operands[1].call_result_width) + ":"
+              + std::to_string(static_cast<unsigned>(
+                  input.operands[1].call_result_domain));
+      }
+      output.decoded_string = input.decoded_string;
+      if (input.kind == frontend::ExpressionKind::Identifier
+          || input.kind == frontend::ExpressionKind::LogicLiteral
+          || input.kind == frontend::ExpressionKind::Call
+          || input.kind == frontend::ExpressionKind::Unary
+          || input.kind == frontend::ExpressionKind::Binary) {
+          constexpr auto qualified_prefix
+              = std::string_view { "@vhdl-qualified:" };
+          const auto spelling = input.text.starts_with(qualified_prefix)
+              ? std::string_view { input.text }.substr(qualified_prefix.size())
+              : std::string_view { input.text };
+          output.referenced_name = name(spelling, input.span, scope);
+      }
+      output.argument_names = input.call_argument_names;
+      for (const auto& operand : input.operands) {
+          if (const auto operand_id = expression(
+                  operand, scope, expression_origin)) {
+              output.operands.push_back(*operand_id);
           }
-        }
-        output.associations.push_back(std::move(association));
       }
-    }
-    hir_.mutable_expressions().push_back(std::move(output));
-    return id;
+      if (input.kind == frontend::ExpressionKind::Aggregate) {
+          for (std::size_t index = 0; index < output.operands.size(); ++index) {
+              vh::AggregateAssociation association;
+              association.value = output.operands[index];
+              association.source = index < input.operands.size()
+                  ? source(input.operands[index].span)
+                  : expression_source;
+              if (index < input.aggregate_choices.size()) {
+                  association.choice_spelling = input.aggregate_choices[index];
+              }
+              if (index < input.aggregate_choice_expressions.size()) {
+                  for (const auto& choice :
+                      input.aggregate_choice_expressions[index]) {
+                      if (const auto choice_id = expression(
+                              choice, scope, expression_origin)) {
+                          association.choices.push_back(*choice_id);
+                      }
+                  }
+              }
+              output.associations.push_back(std::move(association));
+          }
+      }
+      hir_.mutable_expressions().push_back(std::move(output));
+      return id;
   }
 
   [[nodiscard]] vh::DelayValue delay_value(
@@ -197,8 +230,10 @@ class VhdlExecutableBuilder final {
       const frontend::SourceSpan& span,
       const semantic::ScopeId scope,
       const semantic::OriginId parent) {
+    // Parser delay records use zero as the literal default. An expression is
+    // independently evaluated, so its retained tick multiplier is one.
     return {
-        magnitude,
+        input_expression && magnitude == 0U ? 1U : magnitude,
         divisor,
         unit,
         input_expression
@@ -239,14 +274,7 @@ class VhdlExecutableBuilder final {
     output.typical = alternative(input.typical);
     output.maximum = alternative(input.maximum);
     for (const auto& additional : input.additional_values) {
-      output.additional.push_back(delay_value(
-          additional.magnitude,
-          additional.divisor,
-          additional.unit,
-          additional.expression,
-          additional.span,
-          scope,
-          parent));
+      output.additional.push_back(delay(additional, scope, parent));
     }
     return output;
   }
@@ -292,6 +320,10 @@ class VhdlExecutableBuilder final {
         return vh::StatementKind::wait_statement;
       case frontend::StatementKind::Block:
         return vh::StatementKind::block;
+      case frontend::StatementKind::Force:
+        return vh::StatementKind::force;
+      case frontend::StatementKind::Release:
+        return vh::StatementKind::release;
       default:
         return vh::StatementKind::null_statement;
     }
@@ -330,6 +362,93 @@ class VhdlExecutableBuilder final {
         target = found->id;
       }
       visible_scope = parent_scope(*visible_scope);
+    }
+    const auto separator = spelling.rfind('.');
+    if (!target.valid() && separator != std::string::npos) {
+      const auto member = std::string_view {spelling}.substr(separator + 1U);
+      const auto package_type = [&](std::string_view package_name) {
+        auto library = std::string_view {"work"};
+        if (const auto owner = std::ranges::find(
+                hir_.units(), scope_unit(scope), &vh::Unit::id);
+            owner != hir_.units().end() && !owner->library.empty()) {
+          library = owner->library;
+        }
+        if (const auto selected_separator = package_name.rfind('.');
+            selected_separator != std::string_view::npos) {
+          library = package_name.substr(0U, selected_separator);
+          package_name.remove_prefix(selected_separator + 1U);
+        }
+        const auto normalized_library = [](const std::string_view value) {
+          return value.empty() ? std::string_view {"work"} : value;
+        };
+        semantic::TypeId selected;
+        for (const auto& unit : hir_.units()) {
+          if (unit.kind != vh::UnitKind::package
+              || !unit.primary_name.empty()
+              || canonical_vhdl_name(unit.name)
+                  != canonical_vhdl_name(std::string {package_name})
+              || canonical_vhdl_name(
+                     std::string {normalized_library(unit.library)})
+                  != canonical_vhdl_name(
+                     std::string {normalized_library(library)})) {
+            continue;
+          }
+          for (const auto& type : model_.types()) {
+            if (type.scope != unit.scope
+                || canonical_vhdl_name(type.name)
+                    != canonical_vhdl_name(std::string {member})) {
+              continue;
+            }
+            if (selected.valid() && selected != type.id) {
+              return semantic::TypeId { };
+            }
+            selected = type.id;
+          }
+        }
+        return selected;
+      };
+
+      const auto qualifier = std::string_view {spelling}.substr(
+          0U, separator);
+      visible_scope = scope;
+      while (visible_scope && !target.valid()) {
+        std::optional<semantic::TypeId> selected;
+        bool ambiguous { };
+        for (const auto& declaration : hir_.declarations()) {
+          if (declaration.scope != *visible_scope
+              || (declaration.form != vh::DeclarationForm::package_instance
+                  && declaration.form
+                      != vh::DeclarationForm::generic_package)
+              || canonical_vhdl_name(declaration.name)
+                  != canonical_vhdl_name(std::string {qualifier})
+              || !declaration.package) {
+            continue;
+          }
+          const auto& reference = declaration.package->template_name;
+          const auto candidate = package_type(
+              reference.canonical.empty()
+                  ? std::string_view {reference.spelling}
+                  : std::string_view {reference.canonical});
+          if (!candidate.valid()) {
+            continue;
+          }
+          if (selected && *selected != candidate) {
+            ambiguous = true;
+            break;
+          }
+          selected = candidate;
+        }
+        if (!ambiguous && selected) {
+          target = *selected;
+        }
+        if (ambiguous) {
+          break;
+        }
+        visible_scope = parent_scope(*visible_scope);
+      }
+      if (!target.valid()) {
+        target = package_type(qualifier);
+      }
     }
     return {target, source(fallback), spelling};
   }
@@ -376,6 +495,62 @@ class VhdlExecutableBuilder final {
       output.initializer = expression(
           *input.initializer, scope, variable_origin);
     }
+    if (input.vhdl_file_open_kind) {
+      output.file_open_kind = expression(
+          *input.vhdl_file_open_kind, scope, variable_origin);
+    }
+    hir_.mutable_declarations().push_back(std::move(output));
+    return declaration_id;
+  }
+
+  [[nodiscard]] semantic::DeclarationId loop_parameter(
+      const std::string_view name,
+      const frontend::SourceSpan& span,
+      const semantic::ScopeId scope,
+      const semantic::OriginId parent) {
+    const auto parameter_source = source(span);
+    const auto parameter_origin = origin(
+        parameter_source, parent, name);
+    const auto declaration_id = model_.add_declaration(
+        scope,
+        semantic::DeclarationKind::constant,
+        std::string{name},
+        parameter_source,
+        parameter_origin);
+    frontend::Type integer_type;
+    integer_type.domain = frontend::ValueDomain::Integer;
+    integer_type.spelling = "integer";
+    integer_type.is_signed = true;
+
+    vh::Declaration output;
+    output.id = declaration_id;
+    output.scope = scope;
+    output.form = vh::DeclarationForm::constant;
+    output.name = name;
+    output.source = parameter_source;
+    output.origin = parameter_origin;
+    output.object_class = vh::ObjectClass::constant;
+    vh::SubtypeIndication subtype;
+    subtype.type_mark = type_reference(integer_type, span, scope);
+    subtype.domain = vh::ValueDomain::integer;
+    subtype.signed_value = true;
+    const auto owner = std::ranges::find(
+        hir_.units(), scope_unit(scope), &vh::Unit::id);
+    const auto integer_width = owner != hir_.units().end()
+            && owner->standard == "vhdl-2019"
+        ? 64U
+        : 32U;
+    subtype.executable_width = integer_width;
+    subtype.integer_storage_width = static_cast<std::uint8_t>(
+        integer_width);
+    output.subtype = subtype;
+    output.declared_value = model_.add_value(
+        scope,
+        semantic::ValueKind::constant,
+        std::string{name},
+        subtype.type_mark,
+        parameter_source,
+        parameter_origin);
     hir_.mutable_declarations().push_back(std::move(output));
     return declaration_id;
   }
@@ -398,7 +573,23 @@ class VhdlExecutableBuilder final {
     output.source = statement_source;
     output.origin = statement_origin;
     auto child_scope = enclosing_scope;
-    if (input.kind == frontend::StatementKind::Block) {
+    const bool declares_loop_parameter
+        = input.kind == frontend::StatementKind::Loop
+        && !input.loop_variable.empty();
+    if (declares_loop_parameter) {
+      child_scope = model_.add_scope(
+          scope_unit(enclosing_scope),
+          enclosing_scope,
+          "<loop>",
+          statement_source,
+          statement_origin);
+      output.nested_scope = child_scope;
+      output.declarations.push_back(loop_parameter(
+          input.loop_variable,
+          input.span,
+          child_scope,
+          statement_origin));
+    } else if (input.kind == frontend::StatementKind::Block) {
       const auto scope_name = input.label.empty() ? "<block>" : input.label;
       const auto found_scope = std::ranges::find_if(
           model_.scopes(), [&](const semantic::Scope& candidate) {
@@ -419,8 +610,15 @@ class VhdlExecutableBuilder final {
     }
     output.target = expression(input.target, child_scope, statement_origin);
     output.value = expression(input.value, child_scope, statement_origin);
-    output.condition = expression(
-        input.condition, child_scope, statement_origin);
+    const auto indefinite_wait
+        = output.kind == vh::StatementKind::wait_statement
+        && input.sensitivities.empty() && !input.delay
+        && input.condition.kind == frontend::ExpressionKind::BooleanLiteral
+        && canonical_vhdl_name(input.condition.text) == "true";
+    if (!indefinite_wait) {
+      output.condition = expression(
+          input.condition, child_scope, statement_origin);
+    }
     output.procedure = name(
         input.procedure_name, input.span, child_scope);
     for (const auto& association : input.procedure_arguments) {
@@ -441,10 +639,13 @@ class VhdlExecutableBuilder final {
     output.loop_variable = input.loop_variable;
     output.loop_label = input.loop_label;
     output.loop_control_label = input.loop_control_label;
+    const auto loop_range_scope = declares_loop_parameter
+        ? enclosing_scope
+        : child_scope;
     output.loop_initial = expression(
-        input.loop_initial, child_scope, statement_origin);
+        input.loop_initial, loop_range_scope, statement_origin);
     output.loop_limit = expression(
-        input.loop_limit, child_scope, statement_origin);
+        input.loop_limit, loop_range_scope, statement_origin);
     output.loop_descending = input.loop_descending;
     if (input.delay) {
       output.delay = delay(*input.delay, child_scope, statement_origin);
@@ -457,7 +658,14 @@ class VhdlExecutableBuilder final {
       output.rejection_limit = delay(
           *input.vhdl_rejection_limit, child_scope, statement_origin);
     }
+    output.force_driving_value = input.vhdl_force_driving_value;
     output.postponed = input.vhdl_postponed;
+    output.conditional_assignment = input.vhdl_conditional_assignment;
+    output.matching_case
+        = input.case_match_kind == frontend::CaseMatchKind::VhdlMatching;
+    output.guarded_assignment = input.vhdl_guarded_assignment;
+    output.guard = expression(
+        input.vhdl_guard, child_scope, statement_origin);
     if (input.vhdl_disconnection_delay) {
       output.disconnection_delay = delay(
           *input.vhdl_disconnection_delay,
@@ -465,8 +673,21 @@ class VhdlExecutableBuilder final {
           statement_origin);
     }
     for (const auto& waveform : input.vhdl_waveform) {
-      const auto value = expression(
-          waveform.value, child_scope, statement_origin);
+      // A null waveform has no frontend value expression, but it is still a
+      // complete waveform element: its delay controls when the guarded driver
+      // disconnects.  Keep a source-backed placeholder expression so the HIR's
+      // required value identity remains valid; consumers select the resolved
+      // high-impedance value whenever `disconnect` is set.
+      const auto value = waveform.disconnect
+          ? expression(
+                frontend::Expression{
+                    frontend::ExpressionKind::LogicLiteral,
+                    "'Z'",
+                    {},
+                    waveform.span},
+                child_scope,
+                statement_origin)
+          : expression(waveform.value, child_scope, statement_origin);
       if (!value) {
         continue;
       }
@@ -710,6 +931,23 @@ class VhdlExecutableBuilder final {
   void fill_generate(
       const frontend::GenerateRegion& input,
       vh::GenerateRegion& output) {
+    if (output.kind == vh::GenerateKind::block
+        && input.condition.valid()) {
+      frontend::Statement driver;
+      driver.kind = frontend::StatementKind::Assignment;
+      driver.assignment_kind = frontend::AssignmentKind::Continuous;
+      driver.target = frontend::Expression{
+          frontend::ExpressionKind::Identifier,
+          "guard",
+          {},
+          input.condition.span};
+      driver.value = input.condition;
+      driver.vhdl_delay_mechanism =
+          frontend::VhdlDelayMechanism::ImplicitInertial;
+      driver.span = input.condition.span;
+      output.concurrent_statements.push_back(statement(
+          driver, output.scope, output.origin));
+    }
     fill_generate_body(input.then_body, output);
     for (const auto& alternative : input.alternatives) {
       const auto alternative_source = source(alternative.span);
@@ -783,27 +1021,271 @@ class VhdlExecutableBuilder final {
   }
 
   void resolve_expression_names() {
-    for (auto& expression : hir_.mutable_expressions()) {
-      if (!expression.referenced_name) {
-        continue;
-      }
-      auto visible_scope = std::optional<semantic::ScopeId>{expression.scope};
+    const auto overload_in_scope = [&](const semantic::ScopeId scope,
+                                       const std::string_view name)
+        -> const vh::OverloadSet* {
+      const auto found = std::ranges::find_if(
+          hir_.overload_sets(), [&](const vh::OverloadSet& overload) {
+            return overload.scope == scope
+                && overload.canonical_name == name;
+          });
+      return found == hir_.overload_sets().end() ? nullptr : &*found;
+    };
+    const auto lexical_declaration = [&](const semantic::ScopeId scope,
+                                         const std::string_view name)
+        -> std::optional<semantic::DeclarationId> {
+      auto visible_scope = std::optional<semantic::ScopeId>{scope};
       while (visible_scope) {
-        const auto found = std::ranges::find_if(
-            hir_.overload_sets(), [&](const vh::OverloadSet& overload) {
-              return overload.scope == *visible_scope
-                  && overload.canonical_name
-                      == expression.referenced_name->canonical;
-            });
-        if (found != hir_.overload_sets().end()) {
-          expression.referenced_name->overloads = found->declarations;
+        if (const auto* found = overload_in_scope(*visible_scope, name)) {
           if (found->declarations.size() == 1) {
-            expression.referenced_name->selected =
-                found->declarations.front();
+            return found->declarations.front();
           }
-          break;
+          return std::nullopt;
         }
         visible_scope = parent_scope(*visible_scope);
+      }
+      const auto semantic_scope = std::ranges::find(
+          model_.scopes(), scope, &semantic::Scope::id);
+      const auto owner = semantic_scope == model_.scopes().end()
+          ? hir_.units().end()
+          : std::ranges::find(
+                hir_.units(), semantic_scope->unit, &vh::Unit::id);
+      if (owner != hir_.units().end()
+          && (owner->kind == vh::UnitKind::architecture
+              || (owner->kind == vh::UnitKind::package
+                  && !owner->primary_name.empty()))) {
+        const auto primary = std::ranges::find_if(
+            hir_.units(), [&](const vh::Unit& unit) {
+              const auto expected_kind
+                  = owner->kind == vh::UnitKind::architecture
+                  ? vh::UnitKind::entity
+                  : vh::UnitKind::package;
+              return unit.kind == expected_kind
+                  && (expected_kind != vh::UnitKind::package
+                      || unit.primary_name.empty())
+                  && canonical_vhdl_name(unit.library)
+                      == canonical_vhdl_name(owner->library)
+                  && canonical_vhdl_name(unit.name)
+                      == canonical_vhdl_name(owner->primary_name);
+            });
+        if (primary != hir_.units().end()) {
+          if (const auto* found = overload_in_scope(primary->scope, name);
+              found != nullptr && found->declarations.size() == 1U) {
+            return found->declarations.front();
+          }
+        }
+      }
+      return std::nullopt;
+    };
+    const auto package_unit = [&](std::string_view selected)
+        -> const vh::Unit* {
+      if (selected.ends_with(".all")) {
+        selected.remove_suffix(4U);
+      }
+      auto library = std::string_view { "work" };
+      auto package = selected;
+      if (const auto separator = selected.rfind('.');
+          separator != std::string_view::npos) {
+        library = selected.substr(0U, separator);
+        package = selected.substr(separator + 1U);
+      }
+      const auto found = std::ranges::find_if(
+          hir_.units(), [&](const vh::Unit& unit) {
+            return unit.kind == vh::UnitKind::package
+                && unit.primary_name.empty()
+                && canonical_vhdl_name(unit.library)
+                    == canonical_vhdl_name(std::string { library })
+                && canonical_vhdl_name(unit.name)
+                    == canonical_vhdl_name(std::string { package });
+          });
+      return found == hir_.units().end() ? nullptr : &*found;
+    };
+    const auto context_unit = [&](const std::string_view selected)
+        -> const vh::Unit* {
+      auto library = std::string_view { "work" };
+      auto context = selected;
+      if (const auto separator = selected.rfind('.');
+          separator != std::string_view::npos) {
+        library = selected.substr(0U, separator);
+        context = selected.substr(separator + 1U);
+      }
+      const auto found = std::ranges::find_if(
+          hir_.units(), [&](const vh::Unit& unit) {
+            return unit.kind == vh::UnitKind::context
+                && canonical_vhdl_name(unit.library)
+                    == canonical_vhdl_name(std::string { library })
+                && canonical_vhdl_name(unit.name)
+                    == canonical_vhdl_name(std::string { context });
+          });
+      return found == hir_.units().end() ? nullptr : &*found;
+    };
+    const auto package_from_prefix = [&](const semantic::ScopeId scope,
+                                         const std::string_view prefix)
+        -> const vh::Unit* {
+      if (const auto declaration_id = lexical_declaration(scope, prefix)) {
+        const auto declaration = std::ranges::find(
+            hir_.declarations(), *declaration_id,
+            &vh::Declaration::id);
+        if (declaration != hir_.declarations().end()
+            && declaration->package) {
+          const auto& target = declaration->package->template_name;
+          return package_unit(target.canonical.empty()
+                  ? std::string_view { target.spelling }
+                  : std::string_view { target.canonical });
+        }
+      }
+      return package_unit(prefix);
+    };
+    const auto owner_unit = [&](const semantic::ScopeId scope)
+        -> const vh::Unit* {
+      const auto semantic_scope = std::ranges::find(
+          model_.scopes(), scope, &semantic::Scope::id);
+      if (semantic_scope == model_.scopes().end()) {
+        return nullptr;
+      }
+      const auto unit = std::ranges::find(
+          hir_.units(), semantic_scope->unit, &vh::Unit::id);
+      return unit == hir_.units().end() ? nullptr : &*unit;
+    };
+    const auto append_package_member = [&](vh::Name& name,
+                                           const vh::Unit& package,
+                                           const std::string_view member) {
+      if (const auto* overload = overload_in_scope(
+              package.scope, member)) {
+        name.overloads.insert(name.overloads.end(),
+            overload->declarations.begin(), overload->declarations.end());
+      }
+    };
+    const auto resolve_name = [&](vh::Name& name,
+                                  const semantic::ScopeId scope) {
+      auto prior_overloads = std::move(name.overloads);
+      const auto prior_selected = name.selected;
+      name.overloads.clear();
+      name.selected.reset();
+      if (const auto separator = name.canonical.rfind('.');
+          separator != std::string::npos) {
+        const auto prefix = std::string_view { name.canonical }.substr(
+            0U, separator);
+        const auto member = std::string_view { name.canonical }.substr(
+            separator + 1U);
+        if (const auto* package = package_from_prefix(scope, prefix)) {
+          append_package_member(name, *package, member);
+        } else {
+          // A flat selected record name retains its root object identity;
+          // elaboration walks the remaining member path from its subtype.
+          const auto root_separator = name.canonical.find('.');
+          const auto root = std::string_view { name.canonical }.substr(
+              0U, root_separator);
+          if (const auto declaration = lexical_declaration(scope, root)) {
+            const auto record = std::ranges::find(
+                hir_.declarations(), *declaration,
+                &vh::Declaration::id);
+            if (record != hir_.declarations().end()
+                && record->subtype) {
+              name.overloads.push_back(*declaration);
+            }
+          }
+        }
+      } else {
+        auto visible_scope = std::optional<semantic::ScopeId> { scope };
+        while (visible_scope) {
+          if (const auto* overload = overload_in_scope(
+                  *visible_scope, name.canonical)) {
+            name.overloads = overload->declarations;
+            break;
+          }
+          visible_scope = parent_scope(*visible_scope);
+        }
+        if (name.overloads.empty()) {
+          if (const auto declaration = lexical_declaration(
+                  scope, name.canonical)) {
+            name.overloads.push_back(*declaration);
+          }
+        }
+        if (name.overloads.empty()) {
+          if (const auto* unit = owner_unit(scope)) {
+            const auto append_context = [&](const vh::Unit& initial) {
+              std::vector<const vh::Unit*> pending { &initial };
+              std::set<semantic::UnitId> visited;
+              while (!pending.empty()) {
+                const auto* context_owner = pending.back();
+                pending.pop_back();
+                if (!visited.insert(context_owner->id).second) {
+                  continue;
+                }
+                for (const auto& context : context_owner->context) {
+                  for (const auto& selected : context.selected_names) {
+                    const auto spelling = selected.canonical.empty()
+                        ? std::string_view { selected.spelling }
+                        : std::string_view { selected.canonical };
+                    if (context.kind == vh::ContextKind::context_reference) {
+                      if (const auto* referenced = context_unit(spelling)) {
+                        pending.push_back(referenced);
+                      }
+                      continue;
+                    }
+                    if (context.kind != vh::ContextKind::use_clause
+                        || !spelling.ends_with(".all")) {
+                      continue;
+                    }
+                    if (const auto* package = package_unit(spelling)) {
+                      append_package_member(
+                          name, *package, name.canonical);
+                    }
+                  }
+                }
+              }
+            };
+            append_context(*unit);
+            if (unit->kind == vh::UnitKind::architecture
+                || (unit->kind == vh::UnitKind::package
+                    && !unit->primary_name.empty())) {
+              const auto primary_kind
+                  = unit->kind == vh::UnitKind::architecture
+                  ? vh::UnitKind::entity
+                  : vh::UnitKind::package;
+              const auto primary = std::ranges::find_if(
+                  hir_.units(), [&](const vh::Unit& candidate) {
+                    return candidate.kind == primary_kind
+                        && (primary_kind != vh::UnitKind::package
+                            || candidate.primary_name.empty())
+                        && canonical_vhdl_name(candidate.library)
+                            == canonical_vhdl_name(unit->library)
+                        && canonical_vhdl_name(candidate.name)
+                            == canonical_vhdl_name(unit->primary_name);
+                  });
+              if (primary != hir_.units().end()) {
+                append_context(*primary);
+              }
+            }
+          }
+        }
+      }
+      if (name.overloads.empty()) {
+        name.overloads = std::move(prior_overloads);
+        name.selected = prior_selected;
+        return;
+      }
+      std::ranges::sort(name.overloads,
+          [](const semantic::DeclarationId left,
+             const semantic::DeclarationId right) {
+            return left.value() < right.value();
+          });
+      const auto duplicate = std::ranges::unique(name.overloads);
+      name.overloads.erase(duplicate.begin(), duplicate.end());
+      if (name.overloads.size() == 1U) {
+        name.selected = name.overloads.front();
+      }
+    };
+
+    for (auto& expression : hir_.mutable_expressions()) {
+      if (expression.referenced_name) {
+        resolve_name(*expression.referenced_name, expression.scope);
+      }
+    }
+    for (auto& statement : hir_.mutable_statements()) {
+      if (statement.kind == vh::StatementKind::procedure_call) {
+        resolve_name(statement.procedure, statement.scope);
       }
     }
     const auto find_declaration = [&](const semantic::DeclarationId id)
@@ -815,6 +1297,71 @@ class VhdlExecutableBuilder final {
           });
       return found == hir_.declarations().end() ? nullptr : &*found;
     };
+    const auto indexed_object = [](const vh::DeclarationForm form) {
+      switch (form) {
+        case vh::DeclarationForm::generic_constant:
+        case vh::DeclarationForm::port:
+        case vh::DeclarationForm::signal:
+        case vh::DeclarationForm::constant:
+        case vh::DeclarationForm::variable:
+        case vh::DeclarationForm::alias:
+          return true;
+        default:
+          return false;
+      }
+    };
+    std::vector<vh::Expression> indexed_prefixes;
+    for (auto& expression : hir_.mutable_expressions()) {
+      if (expression.kind != vh::ExpressionKind::call
+          || expression.operands.size() != 1U
+          || !expression.argument_names.empty()
+          || !expression.referenced_name
+          || !expression.referenced_name->selected) {
+        continue;
+      }
+      const auto* declaration = find_declaration(
+          *expression.referenced_name->selected);
+      if (declaration == nullptr || !declaration->subtype
+          || !indexed_object(declaration->form)) {
+        continue;
+      }
+      auto designator = std::string_view { expression.text };
+      if (const auto separator = designator.find_last_of(".:");
+          separator != std::string_view::npos) {
+        designator.remove_prefix(separator + 1U);
+      }
+      if (canonical_vhdl_name(std::string { designator })
+          != canonical_vhdl_name(declaration->name)) {
+        // A selected-name method with one actual can resolve its receiver as
+        // an object while callable overload resolution is still pending. It
+        // is not an indexed name merely because that receiver is indexable.
+        continue;
+      }
+
+      const auto prefix_origin = origin(
+          expression.source, expression.origin, "VHDL indexed-name prefix");
+      const auto prefix_id = model_.add_expression_identity(
+          expression.scope, expression.source, prefix_origin);
+      vh::Expression prefix;
+      prefix.id = prefix_id;
+      prefix.scope = expression.scope;
+      prefix.kind = vh::ExpressionKind::name;
+      prefix.text = expression.text;
+      prefix.source = expression.source;
+      prefix.origin = prefix_origin;
+      prefix.referenced_name = expression.referenced_name;
+      indexed_prefixes.push_back(std::move(prefix));
+
+      expression.kind = vh::ExpressionKind::index;
+      expression.text = "index";
+      expression.referenced_name.reset();
+      expression.operands.insert(expression.operands.begin(), prefix_id);
+      expression.argument_names.clear();
+    }
+    hir_.mutable_expressions().insert(
+        hir_.mutable_expressions().end(),
+        std::make_move_iterator(indexed_prefixes.begin()),
+        std::make_move_iterator(indexed_prefixes.end()));
     const auto find_expression = [&](const semantic::ExpressionId id)
         -> const vh::Expression* {
       const auto found = std::ranges::find_if(
@@ -854,8 +1401,14 @@ class VhdlExecutableBuilder final {
       std::vector<std::pair<semantic::DeclarationId,
                             std::vector<std::string>>> inferred_candidates;
       bool has_unspecified_candidate = false;
-      for (const auto candidate_id :
-           expression.referenced_name->overloads) {
+      auto candidate_ids = expression.referenced_name->overloads;
+      if (expression.referenced_name->selected
+          && std::ranges::find(candidate_ids,
+                 *expression.referenced_name->selected)
+              == candidate_ids.end()) {
+        candidate_ids.push_back(*expression.referenced_name->selected);
+      }
+      for (const auto candidate_id : candidate_ids) {
         const auto* candidate = find_declaration(candidate_id);
         if (candidate == nullptr || !candidate->callable
             || !candidate->callable->function

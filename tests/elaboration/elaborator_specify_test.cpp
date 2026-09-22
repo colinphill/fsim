@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+namespace {
+
+template <typename T>
+concept RetainsSpecifyExpressionAst = requires(T value) {
+    value.condition;
+    value.destination_data_source;
+};
+
+static_assert(!RetainsSpecifyExpressionAst<
+    fsim::elaboration::VerilogSpecifyPathInfo>);
+
+}
+
 namespace fsim::tests::elaboration {
 
 void test_verilog_specify_specialization()
@@ -28,7 +41,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(parsed.ok());
-    auto elaborated = fsim::elaboration::elaborate(
+    auto elaborated = compile_and_elaborate(
         parsed.design,
         "specify_top");
     if (!elaborated.ok()) {
@@ -107,7 +120,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(selected.ok());
-    const auto selected_result = fsim::elaboration::elaborate(
+    const auto selected_result = compile_and_elaborate(
         selected.design, "selected_specify");
     assert(selected_result.ok());
     const auto& selected_path = selected_result.design->verilog_specify_paths().front();
@@ -141,7 +154,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(conditional.ok());
-    const auto conditional_result = fsim::elaboration::elaborate(
+    const auto conditional_result = compile_and_elaborate(
         conditional.design, "conditional_specify");
     assert(conditional_result.ok());
     const auto& conditional_paths = conditional_result.design->verilog_specify_paths();
@@ -158,6 +171,25 @@ endmodule
     assert(conditional_paths[0].pulse_reject_limit == 1);
     assert(conditional_paths[0].pulse_error_limit == 4);
     assert(conditional_result.design->create_interpreter());
+    const auto conditional_restored =
+        fsim::elaboration::ElaboratedDesign::from_state(
+            conditional_result.design->state());
+    assert(conditional_restored);
+    const auto& restored_conditional_paths =
+        conditional_restored->verilog_specify_paths();
+    assert(restored_conditional_paths.size() == conditional_paths.size());
+    assert(!restored_conditional_paths[0].condition_program.empty());
+    assert(!restored_conditional_paths[0].data_source_program.empty());
+    assert(restored_conditional_paths[0].condition_program.root
+        == conditional_paths[0].condition_program.root);
+    assert(restored_conditional_paths[0].condition_program.nodes.size()
+        == conditional_paths[0].condition_program.nodes.size());
+    assert(restored_conditional_paths[0].data_source_program.root
+        == conditional_paths[0].data_source_program.root);
+    assert(restored_conditional_paths[0].data_source_program.nodes.size()
+        == conditional_paths[0].data_source_program.nodes.size());
+    assert(restored_conditional_paths[0].source
+        == conditional_paths[0].source);
 
     const auto compound = fsim::frontend::parse_text(
         "compound-specify.v",
@@ -181,7 +213,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(compound.ok());
-    const auto compound_result = fsim::elaboration::elaborate(
+    const auto compound_result = compile_and_elaborate(
         compound.design, "compound_specify");
     if (!compound_result.ok()) {
         for (const auto& diagnostic : compound_result.diagnostics) {
@@ -217,7 +249,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(dynamic.ok());
-    const auto rejected = fsim::elaboration::elaborate(
+    const auto rejected = compile_and_elaborate(
         dynamic.design, "dynamic_specparam");
     assert(!rejected.ok());
     assert(has_diagnostic(rejected, "FSIM-ELAB-SVSPEC-001"));
@@ -239,7 +271,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(invalid_terminals.ok());
-    const auto invalid_result = fsim::elaboration::elaborate(
+    const auto invalid_result = compile_and_elaborate(
         invalid_terminals.design, "invalid_specify_terminals");
     assert(!invalid_result.ok());
     assert(has_diagnostic(invalid_result, "FSIM-ELAB-SVSPEC-003"));
@@ -273,7 +305,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(invalid_timing.ok());
-    const auto invalid_timing_result = fsim::elaboration::elaborate(
+    const auto invalid_timing_result = compile_and_elaborate(
         invalid_timing.design, "invalid_specify_timing");
     assert(!invalid_timing_result.ok());
     assert(has_diagnostic(

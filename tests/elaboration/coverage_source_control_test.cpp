@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/verilog_coverage_points.hpp"
-#include "fsim/elaboration/vhdl_coverage_points.hpp"
+#include "fsim/frontend/verilog_coverage_points.hpp"
+#include "fsim/frontend/vhdl_coverage_points.hpp"
 #include "fsim/frontend/coverage_source_control.hpp"
 #include "fsim/frontend/parser.hpp"
 
@@ -120,10 +120,10 @@ endmodule
     const elaboration::VerilogCoverageSource controlled_source {
         "controlled.sv", identity, source
     };
-    const auto baseline = elaboration::discover_verilog_statement_points(
+    const auto baseline = frontend::discover_verilog_statement_points(
         statements, frontend::Language::SystemVerilog2017,
         std::span { &baseline_source, 1U });
-    const auto controlled = elaboration::discover_verilog_statement_points(
+    const auto controlled = frontend::discover_verilog_statement_points(
         statements, frontend::Language::SystemVerilog2017,
         std::span { &controlled_source, 1U });
     assert(baseline.ok() && controlled.ok());
@@ -147,7 +147,7 @@ endmodule
         "controlled.sv", identity, source.substr(0U, source.size() - 1U)
     };
     const auto unauthenticated
-        = elaboration::discover_verilog_statement_points(statements,
+        = frontend::discover_verilog_statement_points(statements,
             frontend::Language::SystemVerilog2017,
             std::span { &unauthenticated_source, 1U });
     assert(unauthenticated.error
@@ -186,11 +186,11 @@ end rtl;
     const elaboration::VhdlCoverageSource controlled_source {
         "controlled.vhd", identity, source
     };
-    const auto baseline = elaboration::discover_vhdl_statement_points(
+    const auto baseline = frontend::discover_vhdl_statement_points(
         statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008,
         std::span { &baseline_source, 1U });
-    const auto controlled = elaboration::discover_vhdl_statement_points(
+    const auto controlled = frontend::discover_vhdl_statement_points(
         statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008,
         std::span { &controlled_source, 1U });
@@ -279,7 +279,7 @@ endmodule
         invalid_control
     };
     const auto rejected
-        = fsim::elaboration::discover_verilog_statement_points(
+        = fsim::frontend::discover_verilog_statement_points(
             invalid_parsed.design.units.front().processes.front().statements,
             Language::SystemVerilog2017,
             std::span { &invalid_source, 1U });

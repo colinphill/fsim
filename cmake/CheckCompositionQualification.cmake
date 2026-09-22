@@ -74,13 +74,13 @@ fsim_require_tokens(
   "cache.hits")
 
 fsim_require_tokens(
-  tests/library/library_artifact_test.cpp
-  "source-hidden.fsimlib"
-  "producer-absolute"
-  "identity_relocation_diagnostics"
-  "missing_relocation_diagnostics"
-  "assert(fsim::library::relocate_unit_sources("
-  "assert(!fsim::library::relocate_unit_sources(")
+  tests/app/compiled_hir_cache_application_test.cpp
+  "SourceNameMapping"
+  "relocate_compiled_design_sources("
+  "collision_diagnostics"
+  "conflicting_diagnostics"
+  "relocated_project->cache_key == cold_key"
+  "mapped_warm->cache_hit")
 
 fsim_require_tokens(
   tests/CMakeLists.txt

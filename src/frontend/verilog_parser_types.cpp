@@ -239,15 +239,11 @@ Type VerilogParser::parse_systemverilog_enum_type(
             unsupported,
             "FSIM-SV-UNSUPPORTED-026",
             "an enum base type must be integral");
-        type.domain = ValueDomain::Integer;
-        type.spelling = "int";
-        type.is_signed = true;
+        (void)apply_systemverilog_integral_type(type, "int");
     } else if (at(TokenKind::Identifier)) {
         type = parse_named_type();
     } else {
-        type.domain = ValueDomain::Integer;
-        type.spelling = "int";
-        type.is_signed = true;
+        (void)apply_systemverilog_integral_type(type, "int");
     }
     expect(
         TokenKind::LeftBrace,

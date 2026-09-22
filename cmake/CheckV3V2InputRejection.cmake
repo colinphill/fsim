@@ -10,8 +10,8 @@ set(FSIM_LEDGER
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_v2_input_rejection_inventory.tsv")
 file(STRINGS "${FSIM_LEDGER}" FSIM_LINES ENCODING UTF-8)
 list(LENGTH FSIM_LINES FSIM_LINE_COUNT)
-if(NOT FSIM_LINE_COUNT EQUAL 17)
-  message(FATAL_ERROR "v3 v2-input rejection inventory must contain 15 rows")
+if(NOT FSIM_LINE_COUNT EQUAL 16)
+  message(FATAL_ERROR "v3 v2-input rejection inventory must contain 14 rows")
 endif()
 list(GET FSIM_LINES 0 FSIM_LICENSE)
 list(GET FSIM_LINES 1 FSIM_HEADER)
@@ -30,7 +30,6 @@ set(FSIM_EXPECTED_IDS
   V3REJECT-RUNTIME
   V3REJECT-SEMANTIC
   V3REJECT-DESIGN-IR
-  V3REJECT-CLASS
   V3REJECT-CONSTRAINT
   V3REJECT-COVERAGE
   V3REJECT-UVM
@@ -38,9 +37,16 @@ set(FSIM_EXPECTED_IDS
   V3REJECT-CACHE
   V3REJECT-PLUGIN)
 set(FSIM_EXPECTED_FAMILIES manifest object design checkpoint cache plugin)
+set(FSIM_BATCH_188A_IDS
+  V3REJECT-OBJECT
+  V3REJECT-PORTABLE
+  V3REJECT-DESIGN
+  V3REJECT-LIBRARY
+  V3REJECT-CONSTRAINT
+  V3REJECT-VHDL-HIR)
 set(FSIM_IDS)
 set(FSIM_FAMILIES)
-foreach(FSIM_INDEX RANGE 2 16)
+foreach(FSIM_INDEX RANGE 2 15)
   list(GET FSIM_LINES ${FSIM_INDEX} FSIM_LINE)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_LINE}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -54,10 +60,15 @@ foreach(FSIM_INDEX RANGE 2 16)
   list(GET FSIM_FIELDS 4 FSIM_EVIDENCE_RELATIVE)
   list(GET FSIM_FIELDS 5 FSIM_CONTAINMENT)
   list(GET FSIM_FIELDS 6 FSIM_OWNER)
+  if(FSIM_ID IN_LIST FSIM_BATCH_188A_IDS)
+    set(FSIM_EXPECTED_OWNER "B188A-C19")
+  else()
+    set(FSIM_EXPECTED_OWNER "B188-C03")
+  endif()
   if(FSIM_ID IN_LIST FSIM_IDS OR NOT FSIM_ID IN_LIST FSIM_EXPECTED_IDS OR
      NOT FSIM_FAMILY IN_LIST FSIM_EXPECTED_FAMILIES OR
      FSIM_V2_IDENTITY STREQUAL "" OR FSIM_V3_IDENTITY STREQUAL "" OR
-     NOT FSIM_OWNER STREQUAL "B188-C03")
+     NOT FSIM_OWNER STREQUAL "${FSIM_EXPECTED_OWNER}")
     message(FATAL_ERROR "v3 v2-input rejection row is malformed: ${FSIM_ID}")
   endif()
   if(IS_ABSOLUTE "${FSIM_EVIDENCE_RELATIVE}" OR
@@ -103,10 +114,11 @@ fsim_require_v2_rejection_tokens(tests/artifact/object_artifact_test.cpp
   "store_u32(v2_header, 8U, 6U)"
   "store_u32(v2_header, 12U, 10U)"
   "v2-object-repeat"
-  "format 6 and portable-unit schema 10")
+  "format 6, portable-unit schema 10, and compiled-HIR schema 1")
 fsim_require_v2_rejection_tokens(tests/library/library_artifact_test.cpp
-  "v2_unit[8] = static_cast<char>(26U)"
-  "portable owning unit\", \"schema 26\""
+  "units/stage.fsimir"
+  "units/invert.fsimudp"
+  "units/fixture.fsimclass"
   "v2-library-repeat.toml"
   "portable-unit schema 10")
 fsim_require_v2_rejection_tokens(tests/artifact/design_artifact_test.cpp
@@ -123,7 +135,6 @@ fsim_require_v2_rejection_tokens(tests/app/application_test_non_project_cli.cpp
   "v2-semantics"
   "v2-design-ir")
 fsim_require_v2_rejection_tokens(tests/app/application_test_classes.cpp
-  "{ 10U, fsim::app::kClassStateSchema + 1U }"
   "{ 6U, fsim::app::kSystemVerilogConstraintHirStateSchema + 1U }"
   "incompatible-sv-constraint-hir.bin")
 fsim_require_v2_rejection_tokens(src/compiler/llvm_jit_cache_key.cpp
@@ -165,10 +176,10 @@ fsim_require_v2_rejection_tokens(tests/CMakeLists.txt
   "CheckV3V2InputRejection.cmake")
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 set(FSIM_EXPECTED_DIGEST
-  "59e448c6f0c448e329a59810eb4c4b0c4b621056b147dcb1408f6b04f83b0a0e")
+  "87effc6360402a0e595d134d8fa9c197410ea28300aeb12d52f7172633d55915")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 v2-input rejection digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")
 endif()
 message(STATUS
-  "v3 v2-input rejection passed: rows=15 families=6 direct-readers=14 cache=v116-to-v168 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 v2-input rejection passed: rows=14 families=6 direct-readers=13 cache=v116-to-v168 digest=${FSIM_LEDGER_DIGEST}")

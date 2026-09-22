@@ -11,6 +11,7 @@ VhdlHirBuilder::VhdlHirBuilder(semantic::Model& model, vh::Hir& hir)
 
 void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
 {
+    profile_compatible_ = parsed.vhdl_profile_compatible;
     for (std::size_t index = 0; index < parsed.units.size(); ++index) {
         const auto& unit = parsed.units[index];
         if (unit.language == frontend::Language::Vhdl2008) {
@@ -20,448 +21,6 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     compose_vhdl_mode_views(hir_);
     link_deferred_package_constants(parsed);
     rebuild_overload_sets();
-}
-
-[[nodiscard]] semantic::SourceSpanId VhdlHirBuilder::source(
-    const frontend::SourceSpan& span)
-{
-    return intern_semantic_span(model_, span);
-}
-
-[[nodiscard]] semantic::OriginId VhdlHirBuilder::origin(
-    const semantic::SourceSpanId span,
-    const semantic::OriginId parent,
-    const std::string_view detail)
-{
-    return model_.add_origin(
-        semantic::OriginKind::parsed, span, parent, std::string { detail });
-}
-
-[[nodiscard]] semantic::UnitId VhdlHirBuilder::scope_unit(
-    const semantic::ScopeId scope) const
-{
-    return model_.scopes()[scope.value()].unit;
-}
-
-[[nodiscard]] vh::Name VhdlHirBuilder::name(
-    const std::string_view spelling,
-    const frontend::SourceSpan& span,
-    const semantic::ScopeId scope)
-{
-    vh::Name result {
-        std::string { spelling }, canonical_vhdl_name(std::string { spelling }),
-        source(span), std::nullopt, { }
-    };
-    for (const auto& declaration : hir_.declarations()) {
-        if (declaration.scope == scope
-            && canonical_vhdl_name(declaration.name) == result.canonical) {
-            result.overloads.push_back(declaration.id);
-        }
-    }
-    if (result.overloads.size() == 1) {
-        result.selected = result.overloads.front();
-    }
-    return result;
-}
-
-[[nodiscard]] std::optional<semantic::ExpressionId> VhdlHirBuilder::expression(
-    const frontend::Expression& value,
-    const semantic::ScopeId scope,
-    const semantic::OriginId parent)
-{
-    if (value.kind == frontend::ExpressionKind::Invalid) {
-        return std::nullopt;
-    }
-    const auto span = source(value.span);
-    const auto expression_origin = origin(span, parent, "VHDL expression");
-    const auto id = model_.add_expression_identity(
-        scope, span, expression_origin);
-    vh::Expression output;
-    output.id = id;
-    output.scope = scope;
-    output.kind = expression_kind(value);
-    output.text = value.text;
-    output.source = span;
-    output.origin = expression_origin;
-    output.nominal_type = value.nominal_type;
-    output.decoded_string = value.decoded_string;
-    if (value.kind == frontend::ExpressionKind::Identifier
-        || value.kind == frontend::ExpressionKind::Call) {
-        output.referenced_name = name(value.text, value.span, scope);
-    }
-    output.argument_names = value.call_argument_names;
-    for (const auto& operand : value.operands) {
-        if (const auto operand_id = expression(
-                operand, scope, expression_origin)) {
-            output.operands.push_back(*operand_id);
-        }
-    }
-    if (value.kind == frontend::ExpressionKind::Aggregate) {
-        for (std::size_t index = 0; index < output.operands.size(); ++index) {
-            vh::AggregateAssociation association;
-            association.value = output.operands[index];
-            association.source = index < value.operands.size()
-                ? source(value.operands[index].span)
-                : span;
-            if (index < value.aggregate_choices.size()) {
-                association.choice_spelling = value.aggregate_choices[index];
-            }
-            if (index < value.aggregate_choice_expressions.size()) {
-                for (const auto& choice :
-                    value.aggregate_choice_expressions[index]) {
-                    if (const auto choice_id = expression(
-                            choice, scope, expression_origin)) {
-                        association.choices.push_back(*choice_id);
-                    }
-                }
-            }
-            output.associations.push_back(std::move(association));
-        }
-    }
-    hir_.mutable_expressions().push_back(std::move(output));
-    return id;
-}
-
-[[nodiscard]] vh::ExpressionKind VhdlHirBuilder::expression_kind(
-    const frontend::Expression& expression) const noexcept
-{
-    switch (expression.kind) {
-    case frontend::ExpressionKind::Invalid:
-        return vh::ExpressionKind::invalid;
-    case frontend::ExpressionKind::Identifier:
-        return vh::ExpressionKind::name;
-    case frontend::ExpressionKind::IntegerLiteral:
-        return expression.systemverilog_scalar_kind
-                == frontend::SystemVerilogScalarKind::Real
-            ? vh::ExpressionKind::real_literal
-            : vh::ExpressionKind::integer_literal;
-    case frontend::ExpressionKind::BooleanLiteral:
-        return vh::ExpressionKind::boolean_literal;
-    case frontend::ExpressionKind::LogicLiteral:
-        return vh::ExpressionKind::logic_literal;
-    case frontend::ExpressionKind::StringLiteral:
-        return vh::ExpressionKind::string_literal;
-    case frontend::ExpressionKind::Unary:
-        return vh::ExpressionKind::unary;
-    case frontend::ExpressionKind::Update:
-        return vh::ExpressionKind::update;
-    case frontend::ExpressionKind::Binary:
-        return vh::ExpressionKind::binary;
-    case frontend::ExpressionKind::Call:
-        return vh::ExpressionKind::call;
-    case frontend::ExpressionKind::Index:
-        return vh::ExpressionKind::index;
-    case frontend::ExpressionKind::Slice:
-        return vh::ExpressionKind::slice;
-    case frontend::ExpressionKind::Aggregate:
-        return vh::ExpressionKind::aggregate;
-    case frontend::ExpressionKind::Concatenation:
-        return vh::ExpressionKind::concatenation;
-    case frontend::ExpressionKind::Replication:
-        return vh::ExpressionKind::replication;
-    case frontend::ExpressionKind::DefaultChoice:
-        return vh::ExpressionKind::default_choice;
-    case frontend::ExpressionKind::Conditional:
-        return vh::ExpressionKind::conditional;
-    }
-    return vh::ExpressionKind::invalid;
-}
-
-[[nodiscard]] semantic::TypeId VhdlHirBuilder::find_type(
-    const semantic::ScopeId scope,
-    const std::string_view name_value,
-    const std::optional<semantic::SourceSpanId> exact_source)
-    const noexcept
-{
-    const auto canonical = canonical_vhdl_name(std::string { name_value });
-    for (const auto& type : model_.types()) {
-        if (type.scope == scope
-            && canonical_vhdl_name(type.name) == canonical
-            && (!exact_source || type.source == *exact_source)) {
-            return type.id;
-        }
-    }
-    return { };
-}
-
-[[nodiscard]] semantic::ValueId VhdlHirBuilder::find_value(
-    const semantic::ScopeId scope,
-    const std::string_view name_value,
-    const semantic::SourceSpanId exact_source) const noexcept
-{
-    const auto canonical = canonical_vhdl_name(std::string { name_value });
-    for (const auto& value : model_.values()) {
-        if (value.scope == scope && value.source == exact_source
-            && canonical_vhdl_name(value.name) == canonical) {
-            return value.id;
-        }
-    }
-    return { };
-}
-
-[[nodiscard]] semantic::TypeReference VhdlHirBuilder::type_reference(
-    const frontend::Type& type,
-    const frontend::SourceSpan& fallback,
-    const semantic::ScopeId scope)
-{
-    const auto& type_span = type.named_type.empty()
-        ? fallback
-        : type.named_type_span;
-    const auto spelling = !type.vhdl_type_declaration.empty()
-        ? type.vhdl_type_declaration
-        : (!type.named_type.empty() ? type.named_type : type.spelling);
-    auto target = find_type(scope, spelling);
-    if (!target.valid() && !type.nominal_type.empty()) {
-        target = find_type(scope, type.nominal_type);
-    }
-    return { target, source(type_span), spelling };
-}
-
-[[nodiscard]] vh::RangeConstraint VhdlHirBuilder::concrete_range(
-    const frontend::IntegerRange& range,
-    const vh::RangeKind kind,
-    const semantic::SourceSpanId span) const
-{
-    return {
-        kind, range.left, range.right, std::nullopt, std::nullopt,
-        range.descending, false, span
-    };
-}
-
-[[nodiscard]] vh::RangeConstraint VhdlHirBuilder::concrete_range(
-    const frontend::EnumerationRange& range,
-    const semantic::SourceSpanId span) const
-{
-    return {
-        vh::RangeKind::enumeration,
-        range.left,
-        range.right,
-        std::nullopt,
-        std::nullopt,
-        range.descending,
-        false,
-        span
-    };
-}
-
-[[nodiscard]] vh::SubtypeIndication VhdlHirBuilder::subtype(
-    const frontend::Type& type,
-    const frontend::SourceSpan& fallback,
-    const semantic::ScopeId scope,
-    const semantic::OriginId parent)
-{
-    vh::SubtypeIndication result;
-    result.type_mark = type_reference(type, fallback, scope);
-    switch (type.vhdl_predefined_subtype_attribute) {
-    case frontend::VhdlPredefinedSubtypeAttribute::Index:
-        result.predefined_attribute = vh::PredefinedAttribute::index;
-        break;
-    case frontend::VhdlPredefinedSubtypeAttribute::DesignatedSubtype:
-        result.predefined_attribute = vh::PredefinedAttribute::designated_subtype;
-        break;
-    case frontend::VhdlPredefinedSubtypeAttribute::None:
-        break;
-    }
-    if (type.vhdl_predefined_subtype_attribute_dimension) {
-        result.predefined_attribute_dimension = expression(
-            *type.vhdl_predefined_subtype_attribute_dimension,
-            scope,
-            parent);
-    }
-    if (!type.vhdl_resolution_function.empty()) {
-        result.resolution_function = name(
-            type.vhdl_resolution_function, fallback, scope);
-    }
-    result.signed_value = type.is_signed;
-    result.unconstrained = type.vhdl_array
-        && type.vhdl_array->unconstrained;
-    result.integer_storage_width = type.vhdl_integer_storage_width;
-    if (type.vhdl_unspecified) {
-        const auto unspecified_class = [](
-                                           const frontend::VhdlUnspecifiedTypeClass input) {
-            using Frontend = frontend::VhdlUnspecifiedTypeClass;
-            switch (input) {
-            case Frontend::Private:
-                return vh::UnspecifiedTypeClass::private_type;
-            case Frontend::Scalar:
-                return vh::UnspecifiedTypeClass::scalar;
-            case Frontend::Discrete:
-                return vh::UnspecifiedTypeClass::discrete;
-            case Frontend::Integer:
-                return vh::UnspecifiedTypeClass::integer;
-            case Frontend::Physical:
-                return vh::UnspecifiedTypeClass::physical;
-            case Frontend::Floating:
-                return vh::UnspecifiedTypeClass::floating;
-            case Frontend::Array:
-                return vh::UnspecifiedTypeClass::array;
-            case Frontend::Access:
-                return vh::UnspecifiedTypeClass::access;
-            case Frontend::File:
-                return vh::UnspecifiedTypeClass::file;
-            case Frontend::None:
-                return vh::UnspecifiedTypeClass::none;
-            }
-            return vh::UnspecifiedTypeClass::none;
-        };
-        result.unspecified_class = unspecified_class(
-            type.vhdl_unspecified->type_class);
-        result.unspecified_array_index_count = type.vhdl_unspecified->array_index_count;
-        result.unspecified_inference_identity = type.vhdl_unspecified->inference_identity;
-        for (const auto& component :
-            type.vhdl_unspecified->component_types) {
-            result.unspecified_component_classes.push_back(
-                component.vhdl_unspecified
-                    ? unspecified_class(
-                          component.vhdl_unspecified->type_class)
-                    : vh::UnspecifiedTypeClass::none);
-            result.unspecified_component_type_marks.push_back(
-                component.spelling);
-        }
-    }
-    if (type.integer_range) {
-        result.constraints.push_back(concrete_range(
-            *type.integer_range, vh::RangeKind::integer, source(fallback)));
-    } else if (type.integer_range_expression) {
-        result.constraints.push_back(expression_range(
-            *type.integer_range_expression,
-            vh::RangeKind::integer,
-            scope,
-            parent));
-    } else if (type.enumeration_range) {
-        result.constraints.push_back(
-            concrete_range(*type.enumeration_range, source(fallback)));
-    } else if (type.enumeration_range_expression) {
-        result.constraints.push_back(expression_range(
-            *type.enumeration_range_expression,
-            vh::RangeKind::enumeration,
-            scope,
-            parent));
-    } else if (type.discrete_range_expression) {
-        result.constraints.push_back(expression_range(
-            *type.discrete_range_expression,
-            vh::RangeKind::discrete,
-            scope,
-            parent));
-    }
-    for (const auto& constraint : type.vhdl_array_constraints) {
-        result.constraints.push_back(expression_range(
-            constraint, vh::RangeKind::array_index, scope, parent));
-    }
-    return result;
-}
-
-[[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_declaration_record(
-    const semantic::ScopeId scope,
-    const vh::DeclarationForm form,
-    const semantic::DeclarationKind common_kind,
-    const std::string_view declaration_name,
-    const frontend::SourceSpan& frontend_span,
-    const semantic::OriginId parent)
-{
-    const auto span = source(frontend_span);
-    const auto declaration_origin = origin(span, parent, declaration_name);
-    const auto id = model_.add_declaration(
-        scope,
-        common_kind,
-        std::string { declaration_name },
-        span,
-        declaration_origin);
-    vh::Declaration declaration_record;
-    declaration_record.id = id;
-    declaration_record.scope = scope;
-    declaration_record.form = form;
-    declaration_record.name = declaration_name;
-    declaration_record.source = span;
-    declaration_record.origin = declaration_origin;
-    hir_.mutable_declarations().push_back(std::move(declaration_record));
-    return id;
-}
-
-[[nodiscard]] vh::Declaration& VhdlHirBuilder::declaration(
-    const semantic::DeclarationId id)
-{
-    auto& declarations = hir_.mutable_declarations();
-    const auto found = std::find_if(
-        declarations.begin(), declarations.end(),
-        [&](const vh::Declaration& candidate) {
-            return candidate.id == id;
-        });
-    if (found == declarations.end()) {
-        throw std::logic_error { "missing VHDL HIR declaration" };
-    }
-    return *found;
-}
-
-[[nodiscard]] semantic::TypeId VhdlHirBuilder::ensure_type(
-    const std::string_view type_name,
-    const semantic::ScopeId scope,
-    const semantic::TypeKind kind,
-    const vh::SubtypeIndication& base,
-    const semantic::SourceSpanId span,
-    const semantic::OriginId declaration_origin)
-{
-    auto id = find_type(scope, type_name, span);
-    if (!id.valid()) {
-        id = model_.add_type(
-            scope,
-            kind,
-            std::string { type_name },
-            base.type_mark,
-            span,
-            declaration_origin);
-    }
-    return id;
-}
-
-[[nodiscard]] semantic::ValueId VhdlHirBuilder::ensure_value(
-    const std::string_view value_name,
-    const semantic::ScopeId scope,
-    const semantic::ValueKind kind,
-    const vh::SubtypeIndication& value_type,
-    const semantic::SourceSpanId span,
-    const semantic::OriginId declaration_origin)
-{
-    auto id = find_value(scope, value_name, span);
-    if (!id.valid()) {
-        id = model_.add_value(
-            scope,
-            kind,
-            std::string { value_name },
-            value_type.type_mark,
-            span,
-            declaration_origin);
-    }
-    return id;
-}
-
-[[nodiscard]] vh::TypeForm VhdlHirBuilder::type_form(
-    const frontend::TypeDeclarationKind kind) const noexcept
-{
-    switch (kind) {
-    case frontend::TypeDeclarationKind::VhdlEnumeration:
-        return vh::TypeForm::enumeration;
-    case frontend::TypeDeclarationKind::VhdlArray:
-        return vh::TypeForm::array;
-    case frontend::TypeDeclarationKind::VhdlAccess:
-        return vh::TypeForm::access;
-    case frontend::TypeDeclarationKind::VhdlFile:
-        return vh::TypeForm::file;
-    case frontend::TypeDeclarationKind::VhdlProtected:
-        return vh::TypeForm::protected_type;
-    case frontend::TypeDeclarationKind::VhdlProtectedBody:
-        return vh::TypeForm::protected_body;
-    case frontend::TypeDeclarationKind::VhdlPhysical:
-        return vh::TypeForm::physical;
-    case frontend::TypeDeclarationKind::VhdlRecord:
-        return vh::TypeForm::record;
-    case frontend::TypeDeclarationKind::VhdlSubtype:
-        return vh::TypeForm::subtype;
-    case frontend::TypeDeclarationKind::Alias:
-        return vh::TypeForm::alias;
-    default:
-        return vh::TypeForm::unresolved;
-    }
 }
 
 [[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_parameter(
@@ -538,6 +97,13 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         profile.function = true;
         profile.pure = input.function_profile->pure;
         profile.defined = false;
+        if (input.function_profile->default_name) {
+            profile.default_callable = name(
+                *input.function_profile->default_name,
+                input.function_profile->span,
+                scope);
+        }
+        profile.default_box = input.function_profile->default_box;
         profile.return_type = subtype(
             input.function_profile->return_type,
             input.function_profile->span,
@@ -559,6 +125,13 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         vh::CallableProfile profile;
         profile.function = false;
         profile.defined = false;
+        if (input.procedure_profile->default_name) {
+            profile.default_callable = name(
+                *input.procedure_profile->default_name,
+                input.procedure_profile->span,
+                scope);
+        }
+        profile.default_box = input.procedure_profile->default_box;
         for (const auto& argument : input.procedure_profile->arguments) {
             profile.formals.push_back(add_procedure_argument(
                 argument, profile_scope, parameter_origin));
@@ -625,6 +198,11 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         input.initializer);
     declaration(id).shared = input.vhdl_shared;
     declaration(id).local = input.vhdl_private;
+    if (input.vhdl_file_open_kind) {
+        declaration(id).file_open_kind = expression(
+            *input.vhdl_file_open_kind, scope,
+            declaration(id).origin);
+    }
     return id;
 }
 
@@ -676,6 +254,47 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         result.push_back(std::move(output));
     }
     return result;
+}
+
+[[nodiscard]] semantic::InstanceId VhdlHirBuilder::add_instance(
+    const frontend::Instance& input,
+    const semantic::ScopeId scope,
+    const semantic::OriginId parent)
+{
+    const auto instance_source = source(input.span);
+    semantic::InstanceId id;
+    for (const auto& instance : model_.instances()) {
+        if (instance.scope == scope && instance.source == instance_source
+            && instance.name == input.name) {
+            id = instance.id;
+            break;
+        }
+    }
+    const auto instance_origin = origin(
+        instance_source, parent, input.name);
+    if (!id.valid()) {
+        id = model_.add_instance(scope, input.name, input.unit_name,
+            instance_source, instance_origin);
+    }
+    if (std::ranges::find(hir_.instances(), id, &vh::Instance::id)
+        != hir_.instances().end()) {
+        return id;
+    }
+    vh::Instance output;
+    output.id = id;
+    output.scope = scope;
+    output.target = name(input.unit_name, input.span, scope);
+    output.name = input.name;
+    output.generic_map = associations(
+        input.parameter_overrides, scope, instance_origin);
+    output.port_map = associations(
+        input.connections, scope, instance_origin);
+    output.component = input.vhdl_component_instance;
+    output.configuration = input.vhdl_configuration_instance;
+    output.source = instance_source;
+    output.origin = instance_origin;
+    hir_.mutable_instances().push_back(std::move(output));
+    return id;
 }
 
 [[nodiscard]] std::vector<vh::Association> VhdlHirBuilder::associations(
@@ -1054,6 +673,31 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         output.components.push_back(component_configuration(
             component, scope, parent));
     }
+    // Preserve the label set that an `others` choice excluded when this
+    // configuration was compiled.  Besides retaining the source semantics,
+    // this lets the bundle validator distinguish an intentionally broad
+    // `others` rule from a damaged bundle whose explicit sibling rule was
+    // removed after compilation.
+    for (auto& component : output.components) {
+        if (component.selection != vh::InstanceSelection::others) {
+            continue;
+        }
+        const auto component_name = canonical_vhdl_name(
+            component.component.spelling);
+        for (const auto& sibling : output.components) {
+            if (sibling.selection != vh::InstanceSelection::labels
+                || canonical_vhdl_name(sibling.component.spelling)
+                    != component_name) {
+                continue;
+            }
+            component.labels.insert(component.labels.end(),
+                sibling.labels.begin(), sibling.labels.end());
+        }
+        std::ranges::sort(component.labels, {}, canonical_vhdl_name);
+        const auto duplicate = std::ranges::unique(
+            component.labels, {}, canonical_vhdl_name);
+        component.labels.erase(duplicate.begin(), component.labels.end());
+    }
     for (const auto& block : input.block_configurations) {
         output.blocks.push_back(block_configuration(block, scope, parent));
     }
@@ -1135,16 +779,14 @@ void VhdlHirBuilder::add_generate_body(
 {
     queue_body_declarations(
         input, output.scope, output.origin, output.declarations);
+    add_disconnection_specifications(
+        input.vhdl_disconnections,
+        output.scope,
+        output.origin,
+        output.disconnection_specifications);
     for (const auto& instance : input.instances) {
-        const auto instance_source = source(instance.span);
-        const auto instance_origin = origin(
-            instance_source, output.origin, instance.name);
-        output.instances.push_back(model_.add_instance(
-            output.scope,
-            instance.name,
-            instance.unit_name,
-            instance_source,
-            instance_origin));
+        output.instances.push_back(add_instance(
+            instance, output.scope, output.origin));
     }
     for (const auto& process : input.processes) {
         output.processes.push_back(add_process_skeleton(
@@ -1300,6 +942,16 @@ void VhdlHirBuilder::add_generate_body(
         output.declarations.push_back(add_signal(
             port, output.scope, declaration_origin));
     }
+    if (output.kind == vh::GenerateKind::block
+        && input.condition.valid()) {
+        frontend::SignalDeclaration guard;
+        guard.name = "guard";
+        guard.type.spelling = "boolean";
+        guard.type.domain = frontend::ValueDomain::Boolean;
+        guard.span = input.condition.span;
+        output.declarations.push_back(add_signal(
+            guard, output.scope, declaration_origin));
+    }
     add_generate_body(input.then_body, output);
 
     if (!input.else_scope.empty()
@@ -1317,6 +969,26 @@ void VhdlHirBuilder::add_generate_body(
             synthetic, output.scope, declaration_origin));
     }
     for (const auto& alternative : input.alternatives) {
+        vh::GenerateRegion::Alternative retained;
+        retained.scope = output.scope;
+        retained.label = alternative.scope;
+        retained.is_default = alternative.is_default;
+        retained.source = source(alternative.span);
+        for (const auto& input_choice : alternative.choices) {
+            const auto left = expression(
+                input_choice.left, output.scope, declaration_origin);
+            if (!left) {
+                continue;
+            }
+            retained.choices.push_back({ *left,
+                input_choice.right
+                    ? expression(*input_choice.right, output.scope,
+                          declaration_origin)
+                    : std::nullopt,
+                input_choice.descending,
+                source(input_choice.span) });
+        }
+        output.alternatives.push_back(std::move(retained));
         frontend::GenerateRegion synthetic;
         synthetic.kind = frontend::GenerateKind::StaticBlock;
         synthetic.then_scope = alternative.scope.empty()
@@ -1460,9 +1132,32 @@ void VhdlHirBuilder::add_unit(
     output.kind = vhdl_unit_kind(input.kind);
     output.library = input.library;
     output.name = input.name;
+    output.extended_name = input.vhdl_extended_name;
     output.primary_name = input.primary_name;
+    output.extended_primary_name = input.vhdl_extended_primary_name;
     output.source = common_unit.source;
     output.origin = common_unit.origin;
+    output.compilation_unit_identity = input.compilation_unit_identity;
+    output.standard = std::string { frontend::to_string(
+        input.vhdl_standard) };
+    output.compatibility_profile = input.vhdl_compatibility_profile;
+    output.profile_compatible = profile_compatible_;
+    output.predefined_environment = vh::PredefinedEnvironment {
+        input.vhdl_predefined_environment.identity,
+        input.vhdl_predefined_environment.working_library,
+        input.vhdl_predefined_environment.implicit_libraries,
+        input.vhdl_predefined_environment.implicit_packages,
+        input.vhdl_predefined_environment.declarations,
+        input.vhdl_predefined_environment.operator_profiles,
+        input.vhdl_predefined_environment.time_units,
+        input.vhdl_predefined_environment.default_time_unit,
+        input.vhdl_predefined_environment.attributes};
+    output.standard_package_revision = input.standard_package_revision;
+    output.standard_package_declarations
+        = input.standard_package_declarations;
+    output.standard_package_operator_profiles
+        = input.standard_package_operator_profiles;
+    output.source_dependencies = input.source_dependencies;
     for (const auto& item : input.vhdl_context) {
         vh::ContextItem converted;
         switch (item.kind) {
@@ -1483,6 +1178,7 @@ void VhdlHirBuilder::add_unit(
         }
         output.context.push_back(std::move(converted));
     }
+    current_unit_ = &output;
     if (input.vhdl_psl_verification_unit) {
         vh::PslVerificationUnit converted;
         switch (input.vhdl_psl_verification_unit->kind) {
@@ -1572,6 +1268,15 @@ void VhdlHirBuilder::add_unit(
         output.psl_directives.push_back(std::move(converted));
     }
     add_unit_declarations(input, output);
+    add_disconnection_specifications(
+        input.vhdl_disconnections,
+        output.scope,
+        output.origin,
+        output.disconnection_specifications);
+    for (const auto& instance : input.instances) {
+        output.instances.push_back(add_instance(
+            instance, output.scope, output.origin));
+    }
     for (const auto& generate : input.generate_regions) {
         output.generates.push_back(add_generate(
             generate, output.scope, output.origin));
@@ -1589,6 +1294,7 @@ void VhdlHirBuilder::add_unit(
         output.configuration = block_configuration(
             input.vhdl_configuration->block, output.scope, output.origin);
     }
+    current_unit_ = nullptr;
     hir_.mutable_units().push_back(std::move(output));
 }
 

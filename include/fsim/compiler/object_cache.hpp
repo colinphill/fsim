@@ -76,6 +76,12 @@ private:
     std::filesystem::path root_;
 };
 
+/// The largest payload that fits inside one governed object-cache envelope.
+/// The envelope itself is included in the 256 MiB cache-entry budget.
+[[nodiscard]] std::uintmax_t maximum_object_cache_payload_bytes() noexcept;
+[[nodiscard]] bool object_cache_payload_fits(
+    std::uintmax_t payload_bytes) noexcept;
+
 [[nodiscard]] bool valid_cache_key(std::string_view key) noexcept;
 
 } // namespace fsim::compiler

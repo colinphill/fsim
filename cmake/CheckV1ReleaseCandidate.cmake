@@ -154,9 +154,9 @@ string(SHA256 FSIM_EVIDENCE_DIGEST "${FSIM_EVIDENCE_CANONICAL}\n")
 set(FSIM_EXPECTED_VALUES
   FSIM_ROW_COUNT 1296
   FSIM_EVIDENCE_SLOT_COUNT 5184
-  FSIM_EVIDENCE_PATH_COUNT 631
-  FSIM_TEST_EVIDENCE_COUNT 281
-  FSIM_PRODUCTION_EVIDENCE_COUNT 324
+  FSIM_EVIDENCE_PATH_COUNT 571
+  FSIM_TEST_EVIDENCE_COUNT 282
+  FSIM_PRODUCTION_EVIDENCE_COUNT 263
   FSIM_RELEASE_EVIDENCE_COUNT 26)
 while(FSIM_EXPECTED_VALUES)
   list(POP_FRONT FSIM_EXPECTED_VALUES FSIM_VALUE_NAME FSIM_VALUE_EXPECTED)
@@ -168,9 +168,9 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "72ffbd202b8f0d995de037bed421f2164bc09e3b6c11d40924bb72be5de38331")
+  "ea16cca77bcbb35486ba877c7c20d63917f9e149422dc8a6e8b056b978a995d5")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
-  "2b4328fab98b00201142d0b10e00cc1f8f4f43f29013f40ddeb209932d0c3d64")
+  "9ab422e246b4771fec494f7272f76f89687bd5c664e5196d05435340a2ad3118")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
     OR NOT FSIM_EVIDENCE_DIGEST STREQUAL FSIM_EXPECTED_EVIDENCE_DIGEST)
   message(FATAL_ERROR
@@ -182,15 +182,15 @@ foreach(FSIM_TOKEN IN ITEMS
     "matrix-rows: 1296"
     "matrix-sha256: ${FSIM_MATRIX_DIGEST}"
     "evidence-slots: 5184"
-    "evidence-paths: 631"
+    "evidence-paths: 571"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
     "verilog-gap-sha256: ${FSIM_VERILOG_GAP_DIGEST}"
     "verilog-width-sha256: ${FSIM_VERILOG_WIDTH_DIGEST}"
     "verilog-closure-sha256: ${FSIM_VERILOG_CLOSURE_DIGEST}"
-    "test-evidence-paths: 281"
-    "production-evidence-paths: 324"
+    "test-evidence-paths: 282"
+    "production-evidence-paths: 263"
     "release-evidence-paths: 26"
-    "runtime-evidence-paths: 146"
+    "runtime-evidence-paths: 147"
     "corpus-ctests: 36"
     "required-status: execute"
     "B130-T9-ROWS"
@@ -213,5 +213,5 @@ endif()
 
 message(STATUS
   "final release candidate: 1296 execute rows, 5184 linked evidence cells, "
-  "631 exact paths (281 test, 324 production, 26 release), 146 runtime files, "
+  "570 exact paths (281 test, 263 production, 26 release), 146 runtime files, "
   "and 36 corpus CTests")

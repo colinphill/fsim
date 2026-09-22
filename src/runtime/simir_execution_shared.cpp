@@ -133,8 +133,10 @@ namespace fsim::runtime::simir {
 [[nodiscard]] bool is_immediate_process_boundary(const Operation& operation)
 {
     const auto* read = operation_get_if<ReadSignal>(&operation);
+    const auto* report = operation_get_if<Report>(&operation);
     const auto* disable_fork = operation_get_if<DisableFork>(&operation);
     return (read && read->kind != SignalReadKind::current)
+        || (report && report->severity == AssertionSeverity::failure)
         || (disable_fork && disable_fork->site)
         || operation_holds<ProcessSelf>(operation)
         || operation_holds<ProcessStatusQuery>(operation)

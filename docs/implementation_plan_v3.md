@@ -23,6 +23,12 @@ starts on branch codex/v3 from clean v2 checkpoint
   are green.
 - Batch 180 and Batch 190 remain tenth-batch sanitizer and hosted-CI
   boundaries.
+- Replacement Batch 188A is a one-time, exactly twenty-change detour between
+  Batch 188 and Batch 189. It replaces the AST-backed compilation and
+  elaboration handoff with compiled HIR without renumbering Batches 189-197.
+  Its Change 20 owns one four-lane, LLVM-enabled-only hosted matrix: Linux
+  Debug/Release and Windows Debug/Release. It does not repeat sanitizers before
+  Batch 190 and creates no release tag.
 - Whenever the governing cadence authorizes a new hosted CI run, inspect the
   most recent applicable run first, including the status and failing job logs,
   and identify existing errors before triggering the new run. Resolve known
@@ -48,7 +54,7 @@ starts on branch codex/v3 from clean v2 checkpoint
 
 | Release | Closing batch | Included work |
 | --- | ---: | --- |
-| v3.0.0 | 188 | HDL coverage, IEEE TF/ACC PLI, VHDL-2019, and SystemVerilog-2023 |
+| v3.0.0 work line (tag withheld) | 188A | HDL coverage, IEEE TF/ACC PLI, VHDL-2019, SystemVerilog-2023, and AST-free compiled HIR |
 | v3.1.0 | 191 | Deterministic and throughput-oriented parallel elaboration and simulation |
 | v3.2.0 | 193 | Explicit compiled-LLVM performance lowering |
 | v3.3.0 | 195 | LLDB native-plugin debugging on Linux and Windows |
@@ -601,7 +607,7 @@ starts on branch codex/v3 from clean v2 checkpoint
    seconds at 190,060 KiB peak RSS with zero swaps; its retained log SHA-256
    is a395b80e1683fc9a93b2dc0c4dadd430d96330f6e54e41be1b69382cf7a2ee9a.
    COVBASE-C02 through COVBASE-C18 are preserved at normalized SHA-256
-   06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234;
+   e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814;
    the regenerated source manifest contains 1,571 paths at SHA-256
    e45bb9ac875ae03ce24bc31ac876c80217ce89505be9ea523593a0f7fc17d92f.
    No Release, sanitizer, hosted-CI, clean-first, commit, or push action ran.
@@ -620,7 +626,7 @@ starts on branch codex/v3 from clean v2 checkpoint
    and covered/uncovered aggregation assertions. With Change 19 complete all
    seventeen COVBASE-C02 through COVBASE-C18 rows and every declared evidence
    owner exist at normalized SHA-256
-   06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234.
+   e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814.
    The regenerated source manifest contains 1,572 paths at SHA-256
    d3ce8dc4beef96671f495f6585920e50880d311ece86ecf20deba6e271a0ab96.
    The accumulated exact-LLVM warnings-as-errors Debug Change 2-19 slice
@@ -654,7 +660,7 @@ starts on branch codex/v3 from clean v2 checkpoint
    sources, 1,507 SPDX-owned files, 454 conformance test/control files, and
    656 FST test/control files. All seventeen COVBASE-C02 through COVBASE-C18
    rows remain preserved at normalized SHA-256
-   06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234;
+   e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814;
    the 1,572-path source manifest remains at SHA-256
    d3ce8dc4beef96671f495f6585920e50880d311ece86ecf20deba6e271a0ab96.
    Batch 178 is not a sanitizer or hosted-CI boundary, so those lanes remain
@@ -1234,7 +1240,7 @@ starts on branch codex/v3 from clean v2 checkpoint
     inference-side resource propagation, and every standalone resource
     ceiling. COVMET-C02-C18 are all preserved and zero rows remain active. The
     normalized ledger SHA-256 is
-    e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443,
+    9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113,
     and the 1,618-path source manifest SHA-256 is
     30ca495468c5079caaff91c6964cbdc9605585be2c3640aa48c1eded6d3dbac6.
     The public inference-model change passes a 129-step, eight-worker,
@@ -1264,7 +1270,7 @@ starts on branch codex/v3 from clean v2 checkpoint
     rejected deterministically, while disabled identity remains `none`.
     Engine, aggregation, and artifact evidence owners for every COVMET row are
     now required to exist. The normalized seventeen-row ledger remains
-    `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`;
+    `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`;
     the source manifest contains 1,621 ordered paths at SHA-256
     `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
     The 334-step warnings-as-errors Debug impact build completes with eight
@@ -1277,7 +1283,7 @@ starts on branch codex/v3 from clean v2 checkpoint
     The complete broad-metric surface is frozen with all seventeen
     COVMET-C02-C18 rows preserved, zero active rows, and normalized ledger
     SHA-256
-    `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
+    `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
     MC/DC remains explicitly outside Batch 179, and the 1,621-path source
     manifest remains
     `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
@@ -5925,7 +5931,7 @@ starts on branch codex/v3 from clean v2 checkpoint
 
     S23-B187-C19 is preserved, leaving zero active and all 56 independently
     worded SystemVerilog-2023 inventory rows preserved at normalized SHA-256
-    `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+    `69f7d088e4d0a1f1acd09e1b675423dcf6240294c889b45fb2a518e819053cc9`.
     The inventory validator retains exact one-to-one ownership across Batches
     185-187 and rejects forbidden private-reference tokens, missing owners,
     duplicate identities, profile drift, and any reopened row.
@@ -5955,7 +5961,7 @@ starts on branch codex/v3 from clean v2 checkpoint
     3,149 build steps, and the full Debug suite passes 408/408 in 527.08 wall
     seconds. Full SystemVerilog-2023 support is therefore declared complete
     with zero active and 56 preserved inventory rows at normalized SHA-256
-    `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+    `69f7d088e4d0a1f1acd09e1b675423dcf6240294c889b45fb2a518e819053cc9`.
     Batch 187 is not a sanitizer or hosted-CI boundary, so neither lane ran.
 
     The mandatory pre-push CI inspection found the preceding Batch 186 run
@@ -6290,6 +6296,94 @@ starts on branch codex/v3 from clean v2 checkpoint
     then require every Linux and Windows lane in the replacement hosted run to
     pass before creating the exact annotated `v3.0.0` tag or publishing
     artifacts.
+
+### Batch 188A - AST-free compiled HIR handoff
+
+The compilation and elaboration boundary is:
+
+`parse/check -> build and fold HIR -> destroy AST -> link HIR -> specialize HIR -> lower to SimIR -> build DesignIR`
+
+DesignIR remains the post-specialization hierarchy representation. Batch 188A
+adds no template hierarchy, recipe IR, persistent specialization cache,
+compile-time process inlining, symbolic SimIR format, or user-visible switch.
+Compilation owns every operation independent of hierarchy actuals and retains
+source/origin identity when folding. Elaboration owns root/library/
+configuration/bind selection, actual application, dependent generate
+selection, associations, global identities, aliases, drivers, sensitivities,
+SDF matching, foreign construction, and final lowering after specialization.
+
+1. **Complete.** Register Batch 188A, the AST lifetime boundary, phase
+   ownership, validation gates, milestone progress audits, and WebKit-style
+   source requirement in the authoritative plan and resume documents.
+2. **Complete.** Introduce `semantic::CompiledDesign`, owning the semantic model, VHDL HIR,
+   SystemVerilog HIR, and dependency/link metadata, with only non-owning
+   language-dispatch accessors.
+3. **Complete.** Complete the existing language HIRs with associations, instances, generate
+   alternatives, package/configuration/bind references, `defparam`, timing,
+   UDP, assertion, coverage, and source-origin metadata currently present only
+   in syntax nodes.
+4. **Complete.** Make every checking path construct semantic state and both applicable HIRs
+   exactly once; remove the object-compilation HIR skip.
+5. **Complete.** Confine parsing to a compile-local workspace and destroy every syntax node
+   before returning `CheckedProject`.
+6. **Complete.** Add HIR normalization and folding for dependency-independent names, types,
+   constants, ranges, defaults, pure constant calls, aggregates, and ROM
+   initializers while retaining source origins.
+7. **Complete.** Annotate residual expressions and generates with parameter, generic, type,
+   package, and hierarchy dependencies without adding a recipe IR.
+8. **Complete.** Define compiled-HIR bundle schema 1 by reusing the semantic and language-HIR
+   codecs.
+9. **Complete.** Publish and load `.fsimobj` format 8 as compiled-HIR bundles; remove owning
+   syntax-unit payloads.
+10. **Complete.** Use the identical compiled-HIR bundle for mapped-library format 6 and the
+    ordinary compilation cache.
+11. **Complete.** Add deterministic object-local ID relocation and external-reference
+    linking for packages, imports, entity/architecture pairs, modules, classes,
+    configurations, and binds.
+12. **Complete.** Route direct-source, explicit-object, cached, and mapped-library inputs
+    through the one HIR linker; linking may resolve HIR references and may not
+    reconstruct HIR from syntax.
+13. **Complete.** Port unit, declaration, package, callable, type, and target lookup from
+    `ParsedDesign` to compiled HIR.
+14. **Complete.** Port parameter, generic, type-parameter, package-value, and constant
+    evaluation to HIR, retaining the existing specialization key and evaluating
+    residual dependencies once per unique specialization.
+15. **Complete.** Port dependent generates, configurations, binds, and `defparam` processing
+    to specialized HIR.
+16. **Complete.** Port instance creation, port association, interfaces, aliases,
+    sensitivities, drivers, and mixed-language association to HIR IDs and
+    records.
+17. **Complete.** Port expression, statement, callable, and process lowering directly to HIR,
+    including recursive and dynamic constructs retained through specialization.
+18. **Complete.** Port UDP, specify/timing, SDF/VITAL, assertions, coverage, debug,
+    DPI/PLI/VPI/VHPI, and SystemC paths; emit direct semantic origin mappings
+    for DesignIR and remove all AST-based elaborator APIs and rebuild paths.
+19. **Complete.** Add differential, corruption, determinism, compatibility, and AST-lifetime
+    evidence. Bump only `.fsimobj` 8, mapped library 6, portable schema 15,
+    compiled-HIR bundle 1, SystemVerilog HIR 8, VHDL HIR 5, and
+    `.fsimdesign` 13. Compiled HIR reconstructs coverage declarations and
+    instances, while the existing coverage payload restores only mutable
+    sampling state.
+    Retain semantic, DesignIR, and runtime-state schemas unless their
+    serialized layouts change, and reject earlier object/library formats.
+20. Run clean warnings-as-errors Release then Debug builds and complete suites
+    with eight workers, representative pure-SystemVerilog and mixed-language
+    compile/elaborate measurements, and one four-lane, LLVM-enabled-only hosted
+    matrix: Linux Debug/Release and Windows Debug/Release. Do not repeat
+    sanitizers before Batch 190. Commit and push once, monitor the replacement
+    matrix, and correct in-scope CI failures. Do not create a release tag for
+    Batch 188A.
+
+Acceptance requires elaboration from a decoded bundle after parser storage has
+been destroyed; no elaboration interface, owner, cache entry, or specialized
+unit may contain syntax `ParsedDesign`, `DesignUnit`, expression, statement,
+process, generate, or instance nodes. Direct source, object, mapped-library,
+cache, and design-artifact paths must have identical diagnostics and results.
+Artifacts must be byte-identical across checkout relocation and 1/2/4/8 compile
+workers. Relative to baseline `a867847c`, representative cold compile plus
+elaborate time and peak RSS may regress by no more than five percent, with
+compile and elaboration timings reported separately. Work proceeds in four
+cohesive waves with focused validation only at wave boundaries.
 
 ## v3.1.0
 

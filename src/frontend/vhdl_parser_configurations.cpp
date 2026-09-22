@@ -250,6 +250,8 @@ DesignUnit VhdlParser::parse_vhdl_configuration(
   const auto name =
       expect_identifier("configuration name");
   unit.name = vhdl_name(name.text);
+  unit.vhdl_extended_name = name.text.size() >= 2U
+      && name.text.front() == '\\' && name.text.back() == '\\';
   expect_keyword(
       "of", true, "FSIM-VHDL-PARSE-204");
   const auto entity_name =

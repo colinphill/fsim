@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
 #include "path_test_support.hpp"
+
+#include "../../src/app/application_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -73,6 +76,230 @@ fsim::project::Config make_config(
   return config;
 }
 
+fsim::elaboration::ElaborationResult elaborate_compiled(
+    const fsim::semantic::CompiledDesign& compiled) {
+  const std::array<fsim::elaboration::Root, 1> roots{{{
+      "vhdl:work.runtime_configuration",
+      "runtime_configuration"}}};
+  return fsim::elaboration::elaborate(
+      compiled,
+      roots,
+      std::span<const fsim::elaboration::Binding>{},
+      std::span<const fsim::elaboration::SystemCInstanceDescription>{},
+      nullptr,
+      std::span<const std::string>{});
+}
+
+std::vector<std::pair<std::string, std::string>> selected_units(
+    const fsim::elaboration::ElaborationResult& result) {
+  assert(result.ok());
+  std::vector<std::pair<std::string, std::string>> selected;
+  for (const auto& item : result.design->specializations()) {
+    selected.emplace_back(item.instance, item.unit);
+  }
+  return selected;
+}
+
+const fsim::elaboration::SpecializationInfo& elaborated_specialization(
+    const fsim::elaboration::ElaborationResult& result,
+    const std::string_view path) {
+  const auto found = std::ranges::find_if(
+      result.design->specializations(),
+      [&](const auto& candidate) {
+        return candidate.instance == path;
+      });
+  if (found == result.design->specializations().end()) {
+    std::cerr << "missing specialization '" << path << "'; available:";
+    for (const auto& candidate : result.design->specializations()) {
+      std::cerr << "\n  " << candidate.instance;
+    }
+    std::cerr << '\n';
+  }
+  assert(found != result.design->specializations().end());
+  return *found;
+}
+
+bool has_diagnostic(
+    const fsim::elaboration::ElaborationResult& result,
+    const std::string_view code) {
+  return std::ranges::any_of(
+      result.diagnostics,
+      [&](const auto& diagnostic) {
+        return diagnostic.code == code;
+      });
+}
+
+std::string identity_value(
+    const fsim::elaboration::SpecializationInfo& specialization,
+    const std::string_view name) {
+  const auto found = std::ranges::find_if(
+      specialization.parameter_identity_values,
+      [&](const auto& value) {
+        return value.first == name;
+      });
+  assert(found != specialization.parameter_identity_values.end());
+  return found->second;
+}
+
+void verify_compiled_hir_handoff(
+    const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  const auto compiled = fsim::app::check_project(config, diagnostics);
+  assert(compiled && !diagnostics.has_error());
+  auto corrupt_ownership = *compiled;
+  const auto corrupt_unit = std::ranges::find_if(
+      corrupt_ownership.vhdl_hir.mutable_units(),
+      [](const auto& unit) {
+        return !unit.instances.empty();
+      });
+  assert(corrupt_unit
+         != corrupt_ownership.vhdl_hir.mutable_units().end());
+  corrupt_unit->instances.clear();
+  corrupt_ownership.refresh_lookup_indexes();
+  fsim::diagnostic::Engine corrupt_diagnostics;
+  assert(!fsim::app::serialize_compiled_hir_bundle(
+      corrupt_ownership, corrupt_diagnostics));
+  assert(corrupt_diagnostics.has_error());
+  auto corrupt_generate_ownership = *compiled;
+  const auto generate_owner = std::ranges::find_if(
+      corrupt_generate_ownership.vhdl_hir.mutable_units(),
+      [](const auto& unit) {
+        return std::ranges::any_of(
+            unit.generates,
+            [](const auto& generate) {
+              return !generate.instances.empty();
+            });
+      });
+  assert(generate_owner
+         != corrupt_generate_ownership.vhdl_hir.mutable_units().end());
+  const auto corrupt_generate = std::ranges::find_if(
+      generate_owner->generates,
+      [](const auto& generate) {
+        return !generate.instances.empty();
+      });
+  assert(corrupt_generate != generate_owner->generates.end());
+  corrupt_generate->instances.clear();
+  corrupt_generate_ownership.refresh_lookup_indexes();
+  fsim::diagnostic::Engine corrupt_generate_diagnostics;
+  assert(!fsim::app::serialize_compiled_hir_bundle(
+      corrupt_generate_ownership, corrupt_generate_diagnostics));
+  assert(corrupt_generate_diagnostics.has_error());
+  const auto direct = elaborate_compiled(*compiled);
+  if (!direct.ok()) {
+    for (const auto& diagnostic : direct.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(direct.ok());
+  assert(
+      elaborated_specialization(
+          direct, "runtime_configuration.configured_child").unit
+      == "vhdl:work.configuration_leaf(fast)");
+  assert(
+      elaborated_specialization(
+          direct, "runtime_configuration.remaining_child").unit
+      == "vhdl:work.configuration_leaf(rtl)");
+  assert(
+      elaborated_specialization(
+          direct,
+          "runtime_configuration.outer.block.extended.child")
+          .unit
+      == "vhdl:work.configuration_marker(fast)");
+  assert(
+      elaborated_specialization(
+          direct, "runtime_configuration.loop_gen[1].generated_marker")
+          .unit
+      == "vhdl:work.configuration_marker(fast)");
+
+  auto portable = *compiled;
+  const auto source_mappings
+      = fsim::app::application_detail::compiled_cache_source_mappings(
+          *compiled, config.base_directory, diagnostics);
+  assert(source_mappings);
+  assert(fsim::app::application_detail::relocate_compiled_design_sources(
+      portable, *source_mappings, diagnostics));
+  const auto bytes = fsim::app::serialize_compiled_hir_bundle(
+      portable, diagnostics);
+  if (!bytes) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
+  assert(bytes && !diagnostics.has_error());
+  auto decoded = fsim::app::deserialize_compiled_hir_bundle(
+      *bytes, "vhdl-configuration-handoff", diagnostics);
+  assert(decoded && !diagnostics.has_error());
+  std::vector<fsim::library::SourceNameMapping> consumer_mappings;
+  consumer_mappings.reserve(source_mappings->size());
+  for (const auto& mapping : *source_mappings) {
+    consumer_mappings.push_back(
+        { mapping.logical_name, mapping.producer_name });
+  }
+  assert(fsim::app::application_detail::relocate_compiled_design_sources(
+      *decoded, consumer_mappings, diagnostics));
+  const auto restored = elaborate_compiled(*decoded);
+  assert(restored.ok());
+  assert(selected_units(restored) == selected_units(direct));
+
+  auto missing_rule_design = *compiled;
+  const auto missing_configuration = std::ranges::find_if(
+      missing_rule_design.vhdl_hir.mutable_units(),
+      [](const auto& unit) {
+        return unit.kind
+                == fsim::semantic::vhdl::UnitKind::configuration
+            && unit.name == "runtime_configuration";
+      });
+  assert(missing_configuration
+         != missing_rule_design.vhdl_hir.mutable_units().end());
+  assert(missing_configuration->configuration);
+  auto& missing_rules = missing_configuration->configuration->components;
+  assert(!missing_rules.empty());
+  missing_rules.erase(missing_rules.begin());
+  missing_rule_design.refresh_lookup_indexes();
+  const auto missing = elaborate_compiled(missing_rule_design);
+  assert(!missing.ok());
+  assert(has_diagnostic(missing, "FSIM-ELAB-VHCONFIG-016"));
+
+  auto distinct_identity = *compiled;
+  const auto configuration_unit = std::ranges::find_if(
+      distinct_identity.vhdl_hir.mutable_units(),
+      [](const auto& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::configuration
+            && unit.name == "runtime_configuration";
+      });
+  assert(configuration_unit
+         != distinct_identity.vhdl_hir.mutable_units().end());
+  assert(configuration_unit->configuration);
+  auto& bindings = configuration_unit->configuration->components;
+  const auto expression = std::ranges::find_if(
+      bindings,
+      [](const auto& rule) {
+        return !rule.binding.generic_map.empty()
+            && rule.binding.generic_map.front().expression.has_value();
+      });
+  assert(expression != bindings.end());
+  const auto expression_id =
+      *expression->binding.generic_map.front().expression;
+  const auto expression_record = std::ranges::find(
+      distinct_identity.vhdl_hir.mutable_expressions(),
+      expression_id,
+      &fsim::semantic::vhdl::Expression::id);
+  assert(expression_record
+         != distinct_identity.vhdl_hir.mutable_expressions().end());
+  expression_record->argument_names.push_back("identity-discriminator");
+  distinct_identity.refresh_lookup_indexes();
+  const auto distinct = elaborate_compiled(distinct_identity);
+  assert(distinct.ok());
+  assert(
+      identity_value(
+          elaborated_specialization(
+              direct, "runtime_configuration.configured_child"),
+          "__component")
+      != identity_value(
+          elaborated_specialization(
+              distinct, "runtime_configuration.configured_child"),
+          "__component"));
+}
+
 const fsim::elaboration::SpecializationInfo&
 specialization(
     const fsim::app::BuiltProject& project,
@@ -115,7 +342,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 12);
+  assert(project->design.specializations().size() == 15);
   assert(
       specialization(
           *project,
@@ -342,6 +569,15 @@ architecture rtl of configuration_resolved_leaf is
 begin
   output_value <= input_value;
 end architecture;
+
+entity configuration_marker is
+end entity;
+architecture rtl of configuration_marker is
+begin
+end architecture;
+architecture fast of configuration_marker is
+begin
+end architecture;
 )";
     assert(output.good());
   }
@@ -398,8 +634,12 @@ architecture rtl of configuration_top is
   end component;
   component configuration_wrapper is
   end component;
+  component configuration_marker is
+  end component;
   for wrapper_child : configuration_wrapper
     use configuration work.wrapper_configuration;
+  for all : configuration_marker
+    use entity work.configuration_marker(rtl);
 begin
   configured_child: configuration_leaf
     generic map (component_amount => 3)
@@ -436,6 +676,15 @@ begin
     port map (
       input_value => '1',
       output_value => resolved_sub_elements(1));
+  \outer.block\: block
+  begin
+    \extended.child\: configuration_marker
+      port map ();
+  end block;
+  loop_gen: for index in 0 to 1 generate
+    generated_marker: configuration_marker
+      port map ();
+  end generate;
 end architecture;
 )";
     assert(output.good());
@@ -468,25 +717,46 @@ end configuration;
         output << R"(
 configuration runtime_configuration of configuration_top is
   for rtl
-    for configured_child : configuration_leaf
+    for CONFIGURED_CHILD : CONFIGURATION_LEAF
       use entity work.configuration_leaf()"
                << (fast_configured ? "fast" : "rtl")
                << R"()
-        generic map (amount => component_amount)
+        generic map (AMOUNT => COMPONENT_AMOUNT)
         port map (
-          input_value => component_input,
-          output_value => component_output);
+          INPUT_VALUE => COMPONENT_INPUT,
+          OUTPUT_VALUE => COMPONENT_OUTPUT);
     end for;
     for others : configuration_leaf
       use entity work.configuration_leaf()"
                << (fast_configured ? "rtl" : "fast")
                << R"();
     end for;
+    for \outer.block\
+      for all : configuration_marker
+        use entity work.configuration_marker(fast);
+      end for;
+    end for;
+    for loop_gen(16#1#)
+      for all : configuration_marker
+        use entity work.configuration_marker(fast);
+      end for;
+    end for;
   end for;
 end configuration;
 )";
         assert(output.good());
       };
+
+  write_wrapper_configuration(true);
+  write_configuration(true);
+  verify_compiled_hir_handoff(make_config(
+      directory.path,
+      leaf,
+      wrapper_hierarchy,
+      wrapper_configuration,
+      top_hierarchy,
+      configuration,
+      fsim::project::Optimization::o0));
 
   for (const auto optimization :
        {fsim::project::Optimization::o0,

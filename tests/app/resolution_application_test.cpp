@@ -623,7 +623,7 @@ void verify_strength_artifacts_and_mapping(
     const auto source = directory / "strength-artifact.v";
     const auto object = directory / "strength-artifact.fsimobj";
     const auto design = directory / "strength-artifact.fsimdesign";
-    const std::string source_text = R"(`timescale 1ns/1ns
+    const std::string source_text = R"(`timescale 1ns/1ps
 module strength_artifact_top;
   reg drive;
   wire conflict;
@@ -670,6 +670,20 @@ endmodule
     sources.file_patterns = { source };
     sources.files = { source };
     compile_config.source_sets.push_back(std::move(sources));
+    auto direct_config = compile_config;
+    direct_config.project.name = "strength-artifact-direct";
+    direct_config.project.top = "verilog:vendor.strength_artifact_top";
+    direct_config.project.time_resolution = "auto";
+    direct_config.build.cache_path = directory / "strength-direct-cache";
+    std::string direct_resolution;
+    {
+        fsim::diagnostic::Engine direct_diagnostics;
+        const auto direct = fsim::app::build_project(
+            direct_config, direct_diagnostics);
+        assert(direct && !direct_diagnostics.has_error());
+        direct_resolution = direct->time_resolution;
+    }
+    assert(direct_resolution == "1ps");
     fsim::diagnostic::Engine compile_diagnostics;
     assert(fsim::app::compile_artifact(
         compile_config, object, compile_diagnostics));
@@ -689,9 +703,22 @@ endmodule
     elaborate_config.project.name = "strength-artifact-elaborate";
     elaborate_config.project.tops.push_back(
         { "verilog:vendor.strength_artifact_top", "dut" });
-    elaborate_config.project.time_resolution = "1ns";
+    elaborate_config.project.time_resolution = "auto";
     elaborate_config.build.cache_path = directory / "strength-artifact-cache";
     const std::array objects { object };
+    auto coarse_object_config = elaborate_config;
+    coarse_object_config.project.time_resolution = "10ps";
+    fsim::diagnostic::Engine coarse_object_diagnostics;
+    assert(!fsim::app::build_objects(
+        coarse_object_config, objects, coarse_object_diagnostics));
+    const auto coarse_precision = std::ranges::find_if(
+        coarse_object_diagnostics.diagnostics(),
+        [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-TIME-0004";
+        });
+    assert(coarse_precision != coarse_object_diagnostics.diagnostics().end());
+    assert(std::filesystem::path { coarse_precision->span.path }.filename()
+        == source.filename());
     fsim::diagnostic::Engine elaborate_diagnostics;
     assert(fsim::app::elaborate_artifact(
         elaborate_config, objects, design, elaborate_diagnostics));
@@ -707,6 +734,7 @@ endmodule
         fsim::diagnostic::Engine diagnostics;
         auto loaded = fsim::app::load_design_artifact(artifact, diagnostics);
         assert(loaded && !diagnostics.has_error());
+        assert(loaded->time_resolution == direct_resolution);
         const auto conflict = loaded->design.find_signal("dut.conflict");
         const auto switch_target = loaded->design.find_signal("dut.switch_target");
         const auto vector_target = loaded->design.find_signal("dut.vector_target");
@@ -720,7 +748,7 @@ endmodule
         const auto cache = simulation.native_cache_statistics();
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);
-        assert(result.time == 4);
+        assert(result.time == 4000);
         return std::pair {
             std::array {
                 simulation.read_signal(*conflict).to_msb_string(),
@@ -825,7 +853,7 @@ endmodule
     auto export_config = compile_config;
     export_config.project.name = "strength-library-export";
     export_config.project.top = "verilog:vendor.strength_artifact_top";
-    export_config.project.time_resolution = "1ns";
+    export_config.project.time_resolution = "auto";
     export_config.build.cache_path = directory / "strength-library-cache";
     fsim::diagnostic::Engine export_diagnostics;
     const auto exported = fsim::app::export_library(
@@ -854,7 +882,7 @@ endmodule
     consumer_config.base_directory = directory;
     consumer_config.project.name = "mapped-strength-consumer";
     consumer_config.project.top = "verilog:consumer.mapped_strength_consumer";
-    consumer_config.project.time_resolution = "1ns";
+    consumer_config.project.time_resolution = "auto";
     consumer_config.build.cache_path = directory / "mapped-strength-cache";
     fsim::project::SourceSet consumer_sources;
     consumer_sources.language = fsim::project::Language::verilog;
@@ -874,6 +902,7 @@ endmodule
             }
         }
         assert(consumer && !diagnostics.has_error());
+        assert(consumer->time_resolution == direct_resolution);
         assert(std::ranges::any_of(
             consumer->design.specializations(), [](const auto& entry) {
                 return entry.instance == "mapped_strength_consumer.imported"
@@ -893,6 +922,7 @@ endmodule
         const auto cache = simulation.native_cache_statistics();
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);
+        assert(result.time == 4000);
         std::array<std::string, signals.size()> values;
         std::ranges::transform(
             signals,

@@ -150,6 +150,20 @@ void verify(
       {"base!", true, 0, 0},
       {decorated, true, 0, 0},
   };
+  if (capture.output != expected_output) {
+    const auto dump = [](const std::string_view label,
+                          const std::vector<OutputEvent>& events) {
+      std::cerr << label << " output (" << events.size() << "):\n";
+      for (const auto& event : events) {
+        std::cerr << "  text='" << event.text
+                  << "' newline=" << event.newline
+                  << " time=" << event.time
+                  << " delta=" << event.delta << '\n';
+      }
+    };
+    dump("expected", expected_output);
+    dump("actual", capture.output);
+  }
   assert(capture.output == expected_output);
   const std::vector<ReportEvent> expected_reports{
       {"base", fsim::runtime::simir::AssertionSeverity::note, 0, 0},

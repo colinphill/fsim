@@ -17,7 +17,7 @@ endfunction()
 set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/mixed_toolchain_install_contract.tsv")
 set(FSIM_EXPECTED_DIGEST
-  "728dfff671a198543bbd60474cafed1a40c2a99d345cab016388324f95abb116")
+  "0afe42d8119edce1e36309f787f2a95cb655041a5924eaf3eedfdb3afbdbd6ee")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR

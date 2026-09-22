@@ -721,6 +721,10 @@ void expect_build_failure(
     const std::string_view expected_code) {
   fsim::diagnostic::Engine diagnostics;
   const auto project = fsim::app::build_project(config, diagnostics);
+  if (project) {
+    std::cerr << "expected build failure for project '"
+              << config.project.name << "'\n";
+  }
   assert(!project);
   assert(std::ranges::any_of(
       diagnostics.diagnostics(),
@@ -776,6 +780,8 @@ int main() {
       directory.path / "nested_composite_failure.vhd";
   const auto boundary_shape_failure_source =
       directory.path / "boundary_shape_failure.vhd";
+  const auto boundary_bounds_failure_source =
+      directory.path / "boundary_bounds_failure.vhd";
   const auto component_shape_failure_source =
       directory.path / "component_shape_failure.vhd";
   const auto callable_shape_failure_source =
@@ -1675,6 +1681,45 @@ end architecture;
           boundary_shape_failure_source,
           "vhdl-boundary-shape-failure",
           "vhdl:work.boundary_shape_top(rtl)"),
+      "FSIM-ELAB-BIND-031");
+
+  {
+    std::ofstream output{boundary_bounds_failure_source};
+    output << R"(
+package Boundary_Bounds_Types is
+  type Matrix_T is array
+    (natural range <>, positive range <>) of bit;
+end package;
+
+use work.boundary_bounds_types.all;
+entity Boundary_Bounds_Child is
+  port (Value : in Matrix_T(0 to 1, 3 downto 1));
+end entity;
+
+architecture rtl of Boundary_Bounds_Child is
+begin
+end architecture;
+
+use work.boundary_bounds_types.all;
+entity Boundary_Bounds_Top is
+end entity;
+
+use work.boundary_bounds_types.all;
+architecture rtl of Boundary_Bounds_Top is
+  signal Value : Matrix_T(1 to 2, 3 downto 1);
+begin
+  child : entity work.Boundary_Bounds_Child(rtl)
+    port map (Value => Value);
+end architecture;
+)";
+    assert(output.good());
+  }
+  expect_build_failure(
+      make_failure_config(
+          directory.path,
+          boundary_bounds_failure_source,
+          "vhdl-boundary-bounds-failure",
+          "vhdl:work.boundary_bounds_top(rtl)"),
       "FSIM-ELAB-BIND-031");
 
   {

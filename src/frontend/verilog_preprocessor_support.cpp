@@ -318,3 +318,19 @@ namespace fsim::frontend::preprocessor_detail {
 
 
 } // namespace fsim::frontend::preprocessor_detail
+
+namespace fsim::frontend {
+
+std::string systemverilog_string_literal_spelling(
+    const std::string_view value)
+{
+    return preprocessor_detail::string_literal_spelling(value);
+}
+
+std::optional<std::string> decode_systemverilog_string_literal(
+    const std::string_view spelling)
+{
+    return preprocessor_detail::decode_string_literal(spelling);
+}
+
+} // namespace fsim::frontend

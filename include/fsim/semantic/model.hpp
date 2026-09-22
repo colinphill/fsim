@@ -78,6 +78,21 @@ using ProcessId = Id<ProcessTag>;
 using PortId = Id<PortTag>;
 using DriverId = Id<DriverTag>;
 
+/// Semantic inputs which prevent an HIR expression or generate region from
+/// being folded before hierarchy specialization. Empty sets are completely
+/// compile-time evaluable. `hierarchy` covers names whose meaning depends on
+/// an occurrence path rather than a declaration identity.
+struct ResidualDependencies {
+    std::vector<DeclarationId> parameters;
+    std::vector<DeclarationId> generics;
+    std::vector<TypeId> types;
+    std::vector<UnitId> packages;
+    bool hierarchy { };
+
+    friend bool operator==(const ResidualDependencies&,
+        const ResidualDependencies&) = default;
+};
+
 struct SourcePosition {
     std::uint64_t offset{};
     std::uint32_t line{1};
@@ -145,6 +160,7 @@ enum class UnitKind : std::uint8_t {
     vhdl_psl_verification_unit,
     systemverilog_configuration,
     systemverilog_bind,
+    systemverilog_compilation_unit,
 };
 
 enum class TypeKind : std::uint8_t {
@@ -198,6 +214,9 @@ struct TypeReference {
     std::string spelling;
 
     [[nodiscard]] bool resolved() const noexcept { return target.valid(); }
+
+    friend bool operator==(
+        const TypeReference&, const TypeReference&) = default;
 };
 
 struct ValueReference {
@@ -315,6 +334,7 @@ class Model final {
 public:
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] ModelRecords records() const;
+    [[nodiscard]] ModelRecords take_records() && noexcept;
     [[nodiscard]] static std::optional<Model> from_records(
         ModelRecords records);
 

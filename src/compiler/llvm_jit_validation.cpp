@@ -1221,12 +1221,10 @@ using namespace runtime::simir;
                 } else if constexpr (std::is_same_v<OperationType, Pause>) {
                     if (operation.status) {
                         record_use(*operation.status, index);
-                        constrain_width(*operation.status, 64U, index);
                     }
                 } else if constexpr (std::is_same_v<OperationType, Stop>) {
                     if (operation.status) {
                         record_use(*operation.status, index);
-                        constrain_width(*operation.status, 64U, index);
                     }
                 }
             },
@@ -1261,10 +1259,29 @@ using namespace runtime::simir;
                 } else if constexpr (
                     std::is_same_v<OperationType, IntegerCheck>) {
                     const auto width = result.register_widths[operation.source];
-                    if (width != 32U && width != 64U) {
+                    if (width == 0U || width > 64U) {
                         reject(
                             process, index,
-                            "IntegerCheck requires a 32- or 64-bit operand");
+                            "IntegerCheck requires an operand no wider than 64 bits");
+                    }
+                    if (!process.register_value_kinds.empty()
+                        && process.register_value_kinds[operation.source]
+                            == ValueKind::logic9) {
+                        reject(
+                            process, index,
+                            "IntegerCheck does not accept a Logic9 operand");
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, Pause>
+                    || std::is_same_v<OperationType, Stop>) {
+                    if (operation.status) {
+                        const auto width
+                            = result.register_widths[*operation.status];
+                        if (width == 0U || width > 64U) {
+                            reject(
+                                process, index,
+                                "simulator status requires an operand no wider than 64 bits");
+                        }
                     }
                 }
             },

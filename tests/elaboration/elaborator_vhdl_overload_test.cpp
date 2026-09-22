@@ -26,7 +26,7 @@ end architecture;
 )",
         frontend::Language::Vhdl2008);
     assert(unconstrained_result.ok());
-    const auto unconstrained_elaboration = fsim::elaboration::elaborate(
+    const auto unconstrained_elaboration = compile_and_elaborate(
         unconstrained_result.design,
         "vhdl:work.unconstrained_function_result(rtl)");
     assert(unconstrained_elaboration.ok());
@@ -260,7 +260,7 @@ end architecture;
     }
   }
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design,
       "vhdl:work.callable_overload_top(rtl)");
   if (!elaborated.ok()) {
@@ -271,7 +271,7 @@ end architecture;
   }
   assert(elaborated.ok());
 
-  const auto context_result = fsim::elaboration::elaborate(
+  const auto context_result = compile_and_elaborate(
       parsed.design,
       "vhdl:work.context_overload_top(rtl)");
   if (!context_result.ok()) {
@@ -282,7 +282,7 @@ end architecture;
   }
   assert(context_result.ok());
 
-  const auto generic_result = fsim::elaboration::elaborate(
+  const auto generic_result = compile_and_elaborate(
       parsed.design,
       "vhdl:work.generic_overload_top(rtl)");
   if (!generic_result.ok()) {
@@ -358,7 +358,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(cross_package.ok());
-  const auto cross_package_result = fsim::elaboration::elaborate(
+  const auto cross_package_result = compile_and_elaborate(
       cross_package.design,
       "vhdl:work.cross_package_overloads(rtl)");
   if (!cross_package_result.ok()) {
@@ -432,7 +432,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(hiding.ok());
-  const auto hiding_result = fsim::elaboration::elaborate(
+  const auto hiding_result = compile_and_elaborate(
       hiding.design, "vhdl:work.overload_hiding(rtl)");
   if (!hiding_result.ok()) {
     for (const auto& diagnostic : hiding_result.diagnostics) {
@@ -500,7 +500,7 @@ end architecture;
       fsim::frontend::Language::Vhdl2008);
   assert(imported_homographs.ok());
   const auto imported_homograph_result =
-      fsim::elaboration::elaborate(
+      compile_and_elaborate(
           imported_homographs.design,
           "vhdl:work.imported_homographs(rtl)");
   assert(!imported_homograph_result.ok());
@@ -540,7 +540,7 @@ end architecture;
       fsim::frontend::Language::Vhdl2008);
   assert(nonconforming_bodies.ok());
   const auto nonconforming_body_result =
-      fsim::elaboration::elaborate(
+      compile_and_elaborate(
           nonconforming_bodies.design,
           "vhdl:work.broken_body_top(rtl)");
   assert(!nonconforming_body_result.ok());
@@ -588,13 +588,13 @@ architecture rtl of redeclared_constant_top is begin end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(deferred_constants.ok());
-  const auto missing_constant_result = fsim::elaboration::elaborate(
+  const auto missing_constant_result = compile_and_elaborate(
       deferred_constants.design,
       "vhdl:work.missing_constant_top(rtl)");
-  const auto mismatched_constant_result = fsim::elaboration::elaborate(
+  const auto mismatched_constant_result = compile_and_elaborate(
       deferred_constants.design,
       "vhdl:work.mismatched_constant_top(rtl)");
-  const auto redeclared_constant_result = fsim::elaboration::elaborate(
+  const auto redeclared_constant_result = compile_and_elaborate(
       deferred_constants.design,
       "vhdl:work.redeclared_constant_top(rtl)");
   assert(has_diagnostic(
@@ -639,7 +639,7 @@ end architecture;
     }
   }
   assert(purity.ok());
-  const auto purity_result = fsim::elaboration::elaborate(
+  const auto purity_result = compile_and_elaborate(
       purity.design, "vhdl:work.pure_legality(rtl)");
   assert(!purity_result.ok());
   assert(has_diagnostic(
@@ -675,7 +675,7 @@ end architecture;
       fsim::frontend::Language::Vhdl2008);
   assert(default_legality.ok());
   const auto default_legality_result =
-      fsim::elaboration::elaborate(
+      compile_and_elaborate(
           default_legality.design,
           "vhdl:work.default_legality(rtl)");
   assert(!default_legality_result.ok());
@@ -722,7 +722,7 @@ end architecture;
       fsim::frontend::Language::Vhdl2008);
   assert(resolution_legality.ok());
   const auto resolution_legality_result =
-      fsim::elaboration::elaborate(
+      compile_and_elaborate(
           resolution_legality.design,
           "vhdl:work.resolution_legality(rtl)");
   assert(!resolution_legality_result.ok());
@@ -767,7 +767,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(no_match.ok());
-  const auto no_match_result = fsim::elaboration::elaborate(
+  const auto no_match_result = compile_and_elaborate(
       no_match.design, "vhdl:work.callable_no_match(rtl)");
   assert(!no_match_result.ok());
   assert(has_diagnostic(
@@ -811,7 +811,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(ambiguous.ok());
-  const auto ambiguous_result = fsim::elaboration::elaborate(
+  const auto ambiguous_result = compile_and_elaborate(
       ambiguous.design, "vhdl:work.callable_ambiguous(rtl)");
   assert(!ambiguous_result.ok());
   assert(has_diagnostic(
@@ -850,7 +850,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(duplicate.ok());
-  const auto duplicate_result = fsim::elaboration::elaborate(
+  const auto duplicate_result = compile_and_elaborate(
       duplicate.design, "vhdl:work.callable_duplicate(rtl)");
   assert(!duplicate_result.ok());
   assert(has_diagnostic(
@@ -897,7 +897,7 @@ end architecture;
   }
   assert(unspecified_homographs.ok());
   const auto unspecified_homograph_result =
-      fsim::elaboration::elaborate(
+      compile_and_elaborate(
           unspecified_homographs.design,
           "vhdl:work.unspecified_homographs(rtl)");
   assert(!unspecified_homograph_result.ok());
@@ -935,7 +935,7 @@ end architecture;
           fsim::frontend::VhdlStandard::Vhdl2019);
   assert(unspecified_body_conformance.ok());
   const auto unspecified_body_result =
-      fsim::elaboration::elaborate(
+      compile_and_elaborate(
           unspecified_body_conformance.design,
           "vhdl:work.unspecified_body_conformance(rtl)");
   if (!unspecified_body_result.ok()) {
@@ -977,7 +977,7 @@ end architecture;
       fsim::frontend::Language::Vhdl2008,
       fsim::frontend::VhdlStandard::Vhdl2019);
   assert(mapped_homographs.ok());
-  const auto mapped_homograph_result = fsim::elaboration::elaborate(
+  const auto mapped_homograph_result = compile_and_elaborate(
       mapped_homographs.design,
       "vhdl:work.mapped_homographs(rtl)");
   if (mapped_homograph_result.ok()
@@ -1035,7 +1035,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(name_legality.ok());
-  const auto name_legality_result = fsim::elaboration::elaborate(
+  const auto name_legality_result = compile_and_elaborate(
       name_legality.design,
       "vhdl:work.overload_name_legality(rtl)");
   assert(!name_legality_result.ok());
@@ -1074,7 +1074,7 @@ end architecture;
     }
   }
   assert(static_legality.ok());
-  const auto static_legality_result = fsim::elaboration::elaborate(
+  const auto static_legality_result = compile_and_elaborate(
       static_legality.design,
       "vhdl:work.static_overload_legality(rtl)");
   assert(!static_legality_result.ok());

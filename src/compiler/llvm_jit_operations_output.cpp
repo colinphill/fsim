@@ -90,11 +90,11 @@ void OutputOperationLowerer::lower(
               if (operation.severity
                   == runtime::simir::AssertionSeverity::failure) {
                 return_result(
-                    FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
+                    FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
                     instruction,
                     0,
-                    FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
-                    instruction);
+                    FSIM_JIT_FRAME_STATE_READY,
+                    instruction + 1U);
               } else {
                 branch_to_next();
               }

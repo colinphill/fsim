@@ -3,36 +3,173 @@
 
 namespace fsim::elaboration {
 namespace {
-
-    std::string_view normalized_library(const DesignUnit& unit)
+    std::string_view normalized_library(const semantic::sv::Unit& unit)
     {
         return unit.library.empty() ? std::string_view { "work" }
                                     : std::string_view { unit.library };
     }
 
-    bool selectable_systemverilog_unit(const DesignUnit& unit)
+    frontend::SourceSpan compiled_source_span(
+        const semantic::CompiledDesign& compiled,
+        const semantic::SourceSpanId source)
     {
-        return !unit.systemverilog_extern
-            && (unit.kind == frontend::UnitKind::VerilogModule
-                || unit.kind == frontend::UnitKind::SystemVerilogInterface
-                || unit.kind == frontend::UnitKind::SystemVerilogProgram);
-    }
-
-    std::pair<std::string_view, std::string_view> qualified_cell(
-        const std::string_view spelling)
-    {
-        if (const auto dot = spelling.find('.'); dot != std::string_view::npos) {
-            return { spelling.substr(0, dot), spelling.substr(dot + 1U) };
+        frontend::SourceSpan result;
+        const auto& spans = compiled.semantics.source_spans();
+        if (!source.valid() || source.value() >= spans.size()) {
+            return result;
         }
-        return { { }, spelling };
+        const auto& span = spans[source.value()];
+        result.source_name = span.logical_name;
+        result.begin = { static_cast<std::size_t>(span.begin.offset),
+            span.begin.line, span.begin.column };
+        result.end = { static_cast<std::size_t>(span.end.offset),
+            span.end.line, span.end.column };
+        const auto& files = compiled.semantics.source_files();
+        if (span.file.valid() && span.file.value() < files.size()) {
+            result.physical_source_name
+                = files[span.file.value()].physical_name;
+        }
+        const auto& expansions = compiled.semantics.expansions();
+        auto expansion = span.expansion;
+        while (expansion && expansion->valid()
+            && expansion->value() < expansions.size()) {
+            const auto& record = expansions[expansion->value()];
+            result.expansion_stack.push_back(record.description);
+            expansion = record.parent;
+        }
+        std::ranges::reverse(result.expansion_stack);
+        return result;
     }
 
-    bool same_extern_type(
-        const frontend::Type& prototype,
-        const frontend::Type& definition)
+    bool same_compiled_extern_expression(
+        const semantic::CompiledDesign& compiled,
+        const semantic::ExpressionId prototype,
+        const semantic::ExpressionId definition,
+        const std::size_t depth = 0U)
     {
-        return systemverilog_type_identity(prototype)
-            == systemverilog_type_identity(definition);
+        if (depth > compiled.semantics.expression_identities().size()) {
+            return false;
+        }
+        const auto left = compiled.find_expression(prototype);
+        const auto right = compiled.find_expression(definition);
+        if (!left || !right || left->systemverilog == nullptr
+            || right->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& left_expression = *left->systemverilog;
+        const auto& right_expression = *right->systemverilog;
+        if (left_expression.kind != right_expression.kind
+            || left_expression.text != right_expression.text
+            || left_expression.argument_names
+                != right_expression.argument_names
+            || left_expression.nominal_type
+                != right_expression.nominal_type
+            || left_expression.class_identity
+                != right_expression.class_identity
+            || left_expression.class_member_identity
+                != right_expression.class_member_identity
+            || left_expression.operands.size()
+                != right_expression.operands.size()) {
+            return false;
+        }
+        for (std::size_t index = 0U;
+            index < left_expression.operands.size(); ++index) {
+            if (!same_compiled_extern_expression(compiled,
+                    left_expression.operands[index],
+                    right_expression.operands[index], depth + 1U)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool same_compiled_extern_range(
+        const semantic::CompiledDesign& compiled,
+        const semantic::sv::PackedRange& prototype,
+        const semantic::sv::PackedRange& definition)
+    {
+        const auto same_expression = [&](const std::optional<
+                                             semantic::ExpressionId>& left,
+                                         const std::optional<
+                                             semantic::ExpressionId>& right) {
+            return (!left && !right)
+                || (left && right
+                    && same_compiled_extern_expression(
+                        compiled, *left, *right));
+        };
+        return prototype.left == definition.left
+            && prototype.right == definition.right
+            && prototype.descending == definition.descending
+            && same_expression(
+                prototype.left_expression, definition.left_expression)
+            && same_expression(
+                prototype.right_expression, definition.right_expression);
+    }
+
+    bool same_compiled_extern_type(
+        const semantic::CompiledDesign& compiled,
+        const semantic::sv::TypeReference& prototype,
+        const semantic::sv::TypeReference& definition)
+    {
+        if (prototype.target.spelling != definition.target.spelling
+            || prototype.value_form != definition.value_form
+            || prototype.class_identity != definition.class_identity
+            || prototype.systemverilog_net_type
+                != definition.systemverilog_net_type
+            || prototype.systemverilog_resolution_function
+                != definition.systemverilog_resolution_function
+            || prototype.signed_value != definition.signed_value
+            || prototype.container_form != definition.container_form
+            || prototype.executable_width != definition.executable_width
+            || prototype.four_state != definition.four_state
+            || prototype.unpacked_dimensions.size()
+                != definition.unpacked_dimensions.size()
+            || prototype.container_element_types.size()
+                != definition.container_element_types.size()
+            || prototype.packed_range.has_value()
+                != definition.packed_range.has_value()
+            || prototype.associative_index.has_value()
+                != definition.associative_index.has_value()) {
+            return false;
+        }
+        if (prototype.packed_range
+            && !same_compiled_extern_range(compiled,
+                *prototype.packed_range, *definition.packed_range)) {
+            return false;
+        }
+        if (prototype.associative_index
+            && prototype.associative_index->spelling
+                != definition.associative_index->spelling) {
+            return false;
+        }
+        for (std::size_t index = 0U;
+            index < prototype.unpacked_dimensions.size(); ++index) {
+            if (!same_compiled_extern_range(compiled,
+                    prototype.unpacked_dimensions[index],
+                    definition.unpacked_dimensions[index])) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0U;
+            index < prototype.container_element_types.size(); ++index) {
+            if (!same_compiled_extern_type(compiled,
+                    prototype.container_element_types[index],
+                    definition.container_element_types[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool same_compiled_extern_type(
+        const semantic::CompiledDesign& compiled,
+        const std::optional<semantic::sv::TypeReference>& prototype,
+        const std::optional<semantic::sv::TypeReference>& definition)
+    {
+        return (!prototype && !definition)
+            || (prototype && definition
+                && same_compiled_extern_type(
+                    compiled, *prototype, *definition));
     }
 
     void append_identity_field(
@@ -49,30 +186,115 @@ namespace {
 
 void HierarchyBuilder::validate_systemverilog_extern_declarations()
 {
-    for (const auto& prototype : parsed_.units) {
-        if (!prototype.systemverilog_extern) {
+    const auto declarations = [&](const semantic::sv::Unit& unit,
+                                  const bool parameters) {
+        std::vector<const semantic::sv::Declaration*> result;
+        for (const auto declaration_id : unit.declarations) {
+            const auto declaration
+                = compiled_->find_declaration(declaration_id);
+            if (!declaration
+                || declaration->systemverilog == nullptr) {
+                result.push_back(nullptr);
+                continue;
+            }
+            const auto& record = *declaration->systemverilog;
+            const bool parameter
+                = record.form
+                        == semantic::sv::DeclarationForm::parameter
+                || record.form
+                        == semantic::sv::DeclarationForm::local_parameter
+                || record.form
+                        == semantic::sv::DeclarationForm::type_parameter;
+            if ((parameters && parameter)
+                || (!parameters
+                    && record.form
+                        == semantic::sv::DeclarationForm::port)) {
+                result.push_back(&record);
+            }
+        }
+        return result;
+    };
+    const auto validate_compiled_header
+        = [&](const semantic::sv::Unit& prototype,
+              const semantic::sv::Unit& definition) {
+        const auto prototype_parameters
+            = declarations(prototype, true);
+        const auto definition_parameters
+            = declarations(definition, true);
+        const auto prototype_ports = declarations(prototype, false);
+        const auto definition_ports = declarations(definition, false);
+        bool matches = prototype_parameters.size()
+                == definition_parameters.size()
+            && prototype_ports.size() == definition_ports.size();
+        for (std::size_t index = 0U;
+            matches && index < prototype_parameters.size(); ++index) {
+            const auto* left = prototype_parameters[index];
+            const auto* right = definition_parameters[index];
+            matches = left != nullptr && right != nullptr
+                && left->name == right->name
+                && left->form == right->form
+                && same_compiled_extern_type(
+                    *compiled_, left->type, right->type)
+                && same_compiled_extern_type(
+                    *compiled_, left->default_type,
+                    right->default_type);
+        }
+        for (std::size_t index = 0U;
+            matches && index < prototype_ports.size(); ++index) {
+            const auto* left = prototype_ports[index];
+            const auto* right = definition_ports[index];
+            matches = left != nullptr && right != nullptr
+                && left->name == right->name
+                && left->direction == right->direction
+                && left->interface_type == right->interface_type
+                && left->modport == right->modport
+                && same_compiled_extern_type(
+                    *compiled_, left->type, right->type);
+        }
+        if (!matches) {
+            report(
+                "FSIM-ELAB-SVEXTERN-002",
+                "extern declaration '" + prototype.name
+                    + "' does not match its definition header",
+                compiled_source_span(*compiled_, prototype.source));
+        }
+    };
+    for (const auto& prototype_unit :
+        compiled_->systemverilog_units()) {
+        if (!prototype_unit.external) {
             continue;
         }
-        const DesignUnit* definition = nullptr;
+        const auto prototype = compiled_->find_unit(prototype_unit.id);
+        if (!prototype || prototype->identity == nullptr) {
+            report(
+                "FSIM-ELAB-SVEXTERN-001",
+                "extern declaration '" + prototype_unit.name
+                    + "' has no matching definition",
+                compiled_source_span(
+                    *compiled_, prototype_unit.source));
+            continue;
+        }
+        const semantic::sv::Unit* definition = nullptr;
         bool ambiguous = false;
-        for (const auto& candidate : parsed_.units) {
-            if (candidate.systemverilog_extern
-                || candidate.kind != prototype.kind
-                || candidate.name != prototype.name
-                || normalized_library(candidate)
-                    != normalized_library(prototype)) {
+        for (const auto candidate : compiled_->find_units(
+                 prototype->identity->kind,
+                 normalized_library(prototype_unit),
+                 prototype_unit.name)) {
+            if (candidate.systemverilog == nullptr
+                || candidate.systemverilog->external) {
                 continue;
             }
             if (definition != nullptr) {
                 report(
                     "FSIM-ELAB-SVEXTERN-001",
-                    "extern declaration '" + prototype.name
+                    "extern declaration '" + prototype_unit.name
                         + "' matches multiple definitions",
-                    prototype.span);
+                    compiled_source_span(
+                        *compiled_, prototype_unit.source));
                 ambiguous = true;
                 break;
             }
-            definition = &candidate;
+            definition = candidate.systemverilog;
         }
         if (ambiguous) {
             continue;
@@ -80,50 +302,26 @@ void HierarchyBuilder::validate_systemverilog_extern_declarations()
         if (definition == nullptr) {
             report(
                 "FSIM-ELAB-SVEXTERN-001",
-                "extern declaration '" + prototype.name
+                "extern declaration '" + prototype_unit.name
                     + "' has no matching definition",
-                prototype.span);
+                compiled_source_span(
+                    *compiled_, prototype_unit.source));
             continue;
         }
-        bool matches = prototype.parameters.size()
-                == definition->parameters.size()
-            && prototype.ports.size() == definition->ports.size();
-        for (std::size_t index = 0;
-            matches && index < prototype.parameters.size(); ++index) {
-            const auto& left = prototype.parameters[index];
-            const auto& right = definition->parameters[index];
-            matches = left.name == right.name && left.kind == right.kind
-                && same_extern_type(left.type, right.type);
-        }
-        for (std::size_t index = 0;
-            matches && index < prototype.ports.size(); ++index) {
-            const auto& left = prototype.ports[index];
-            const auto& right = definition->ports[index];
-            matches = left.name == right.name
-                && left.direction == right.direction
-                && left.is_port == right.is_port
-                && same_extern_type(left.type, right.type);
-        }
-        if (!matches) {
-            report(
-                "FSIM-ELAB-SVEXTERN-002",
-                "extern declaration '" + prototype.name
-                    + "' does not match its definition header",
-                prototype.span);
-        }
+        validate_compiled_header(prototype_unit, *definition);
     }
 }
 
 std::string HierarchyBuilder::systemverilog_configuration_identity(
-    const DesignUnit& configuration) const
+    const semantic::sv::Unit& configuration) const
 {
     std::string identity { "sv-config-v1;" };
     append_identity_field(identity, normalized_library(configuration));
     append_identity_field(identity, configuration.name);
-    if (!configuration.systemverilog_configuration) {
+    if (!configuration.configuration) {
         return identity;
     }
-    const auto& declaration = *configuration.systemverilog_configuration;
+    const auto& declaration = *configuration.configuration;
     for (const auto& design : declaration.designs) {
         append_identity_field(identity, design.library);
         append_identity_field(identity, design.cell);
@@ -132,16 +330,14 @@ std::string HierarchyBuilder::systemverilog_configuration_identity(
         append_identity_field(identity, library);
     }
     for (const auto& rule : declaration.rules) {
-        append_identity_field(
-            identity,
-            rule.kind == frontend::SystemVerilogConfigurationRuleKind::Instance
+        append_identity_field(identity,
+            rule.kind == semantic::sv::ConfigurationRuleKind::instance
                 ? "instance"
                 : "cell");
         append_identity_field(identity, rule.selector);
-        append_identity_field(
-            identity,
+        append_identity_field(identity,
             rule.selection
-                    == frontend::SystemVerilogConfigurationSelectionKind::Use
+                    == semantic::sv::ConfigurationSelectionKind::use
                 ? "use"
                 : "liblist");
         append_identity_field(identity, rule.use_library);
@@ -153,364 +349,6 @@ std::string HierarchyBuilder::systemverilog_configuration_identity(
         }
     }
     return identity;
-}
-
-const DesignUnit* HierarchyBuilder::select_systemverilog_configuration_root(
-    const DesignUnit& configuration)
-{
-    if (!configuration.systemverilog_configuration
-        || configuration.systemverilog_configuration->designs.size() != 1U) {
-        report(
-            "FSIM-ELAB-SVCONFIG-001",
-            "configuration '" + configuration.name
-                + "' selected as one root must contain exactly one design top",
-            configuration.span);
-        return nullptr;
-    }
-    const auto& design = configuration.systemverilog_configuration->designs.front();
-    const auto library = design.library.empty()
-        ? normalized_library(configuration)
-        : std::string_view { design.library };
-    const DesignUnit* selected = nullptr;
-    for (const auto& candidate : parsed_.units) {
-        if (!selectable_systemverilog_unit(candidate)
-            || normalized_library(candidate) != library
-            || candidate.name != design.cell) {
-            continue;
-        }
-        if (selected != nullptr) {
-            report(
-                "FSIM-ELAB-SVCONFIG-002",
-                "configuration design top '" + std::string { library }
-                    + "." + design.cell + "' is ambiguous",
-                design.span);
-            return nullptr;
-        }
-        selected = &candidate;
-    }
-    if (selected == nullptr) {
-        report(
-            "FSIM-ELAB-SVCONFIG-002",
-            "configuration design top '" + std::string { library }
-                + "." + design.cell + "' was not found",
-            design.span);
-    }
-    return selected;
-}
-
-HierarchyBuilder::ConfiguredSystemVerilogInstance
-HierarchyBuilder::configure_systemverilog_instance(
-    const DesignUnit& unit,
-    const frontend::Instance& instance,
-    const std::string& path,
-    const bool allow_instance_rules)
-{
-    ConfiguredSystemVerilogInstance result;
-    if (unit.language != frontend::Language::SystemVerilog2017
-        && unit.language != frontend::Language::Verilog2005) {
-        return result;
-    }
-
-    auto parent_path = path;
-    if (const auto dot = parent_path.rfind('.'); dot != std::string::npos) {
-        parent_path.resize(dot);
-    }
-    const DesignUnit* configuration = active_systemverilog_configuration_;
-    std::string base_path = active_root_;
-    for (const auto& [configured_path, candidate] :
-        systemverilog_configurations_by_path_) {
-        if ((parent_path == configured_path
-                || (parent_path.size() > configured_path.size()
-                    && parent_path.starts_with(configured_path)
-                    && parent_path[configured_path.size()] == '.'))
-            && configured_path.size() >= base_path.size()) {
-            configuration = candidate;
-            base_path = configured_path;
-        }
-    }
-    if (configuration == nullptr
-        || !configuration->systemverilog_configuration
-        || configuration->systemverilog_configuration->designs.empty()) {
-        return result;
-    }
-    const auto& declaration = *configuration->systemverilog_configuration;
-    const auto& design = declaration.designs.front();
-    auto logical_path = design.cell;
-    if (path.size() > base_path.size() && path.starts_with(base_path)) {
-        logical_path += path.substr(base_path.size());
-    }
-
-    const frontend::SystemVerilogConfigurationRule* selected_rule = nullptr;
-    if (allow_instance_rules) {
-        for (const auto& rule : declaration.rules) {
-            if (rule.kind
-                    == frontend::SystemVerilogConfigurationRuleKind::Instance
-                && rule.selector == logical_path) {
-                selected_rule = &rule;
-                break;
-            }
-        }
-    }
-    if (selected_rule == nullptr) {
-        for (const auto& rule : declaration.rules) {
-            if (rule.kind
-                != frontend::SystemVerilogConfigurationRuleKind::Cell) {
-                continue;
-            }
-            const auto [rule_library, rule_cell] = qualified_cell(rule.selector);
-            const auto instance_library = normalized_library(unit);
-            if (rule_cell == instance.unit_name
-                && (rule_library.empty()
-                    || rule_library == instance_library)) {
-                selected_rule = &rule;
-                break;
-            }
-        }
-    }
-
-    const auto find_target = [&](const std::string_view library,
-                                 const std::string_view cell,
-                                 const frontend::SourceSpan span)
-        -> const DesignUnit* {
-        const DesignUnit* selected = nullptr;
-        for (const auto& candidate : parsed_.units) {
-            if (!selectable_systemverilog_unit(candidate)
-                || normalized_library(candidate) != library
-                || candidate.name != cell) {
-                continue;
-            }
-            if (selected != nullptr) {
-                report(
-                    "FSIM-ELAB-SVCONFIG-003",
-                    "configured cell '" + std::string { library } + "."
-                        + std::string { cell } + "' is ambiguous",
-                    span);
-                return nullptr;
-            }
-            selected = &candidate;
-        }
-        return selected;
-    };
-    const auto select_from_liblist = [&](const auto& libraries,
-                                         const frontend::SourceSpan span)
-        -> const DesignUnit* {
-        for (const auto& library : libraries) {
-            if (const auto* selected = find_target(library, instance.unit_name, span)) {
-                return selected;
-            }
-        }
-        return nullptr;
-    };
-
-    result.applied = selected_rule != nullptr
-        || !declaration.default_liblist.empty();
-    if (!result.applied) {
-        return result;
-    }
-    if (selected_rule != nullptr
-        && selected_rule->selection
-            == frontend::SystemVerilogConfigurationSelectionKind::Use) {
-        const auto library = selected_rule->use_library.empty()
-            ? normalized_library(*configuration)
-            : std::string_view { selected_rule->use_library };
-        if (selected_rule->use_configuration) {
-            for (const auto& candidate : parsed_.units) {
-                if (candidate.kind
-                        == frontend::UnitKind::SystemVerilogConfiguration
-                    && normalized_library(candidate) == library
-                    && candidate.name == selected_rule->use_cell) {
-                    result.referenced_configuration = &candidate;
-                    result.target = select_systemverilog_configuration_root(candidate);
-                    break;
-                }
-            }
-        } else {
-            result.target = find_target(
-                library, selected_rule->use_cell, selected_rule->span);
-        }
-    } else if (selected_rule != nullptr) {
-        result.target = select_from_liblist(selected_rule->liblist, selected_rule->span);
-    } else {
-        result.target = select_from_liblist(
-            declaration.default_liblist, declaration.span);
-    }
-    if (result.target == nullptr) {
-        report(
-            "FSIM-ELAB-SVCONFIG-003",
-            "configuration '" + configuration->name
-                + "' cannot select target for instance '" + path + "'",
-            selected_rule != nullptr ? selected_rule->span : declaration.span);
-        result.valid = false;
-        return result;
-    }
-    result.configuration_identity = systemverilog_configuration_identity(
-        result.referenced_configuration != nullptr
-            ? *result.referenced_configuration
-            : *configuration);
-    return result;
-}
-
-std::vector<frontend::Instance>
-HierarchyBuilder::systemverilog_bound_instances(
-    const DesignUnit& unit,
-    const std::string& path,
-    const ConstantEnvironment& parameter_environment,
-    const ConstantDomainEnvironment& parent_domains)
-{
-    if (unit.language != frontend::Language::SystemVerilog2017
-        && unit.language != frontend::Language::Verilog2005) {
-        return { };
-    }
-    auto logical_path = active_systemverilog_root_name_;
-    if (path.size() > active_root_.size() && path.starts_with(active_root_)) {
-        logical_path += path.substr(active_root_.size());
-    }
-    std::vector<frontend::Instance> result;
-    for (const auto* directive : compilation_unit_systemverilog_binds_) {
-        if (directive == nullptr) {
-            continue;
-        }
-        const bool instance_target = directive->target == path
-            || directive->target == logical_path;
-        bool scope_target = directive->target == unit.name;
-        const auto revision = systemverilog_bind_revisions_.find(directive);
-        const auto owner = systemverilog_bind_libraries_.find(directive);
-        if (!instance_target && scope_target
-            && revision != systemverilog_bind_revisions_.end()
-            && revision->second
-                == frontend::StandardRevision::SystemVerilog2023
-            && owner != systemverilog_bind_libraries_.end()) {
-            auto selected_library = owner->second;
-            auto selected_cell = directive->target;
-            const DesignUnit* configuration =
-                active_systemverilog_configuration_;
-            std::string base_path = active_root_;
-            for (const auto& [configured_path, candidate] :
-                systemverilog_configurations_by_path_) {
-                if ((path == configured_path
-                        || (path.size() > configured_path.size()
-                            && path.starts_with(configured_path)
-                            && path[configured_path.size()] == '.'))
-                    && configured_path.size() >= base_path.size()) {
-                    configuration = candidate;
-                    base_path = configured_path;
-                }
-            }
-            const auto selectable_cell = [&](const std::string_view library,
-                                             const std::string_view cell) {
-                return std::ranges::any_of(
-                    parsed_.units,
-                    [&](const DesignUnit& candidate) {
-                        return selectable_systemverilog_unit(candidate)
-                            && normalized_library(candidate) == library
-                            && candidate.name == cell;
-                    });
-            };
-            if (configuration != nullptr
-                && configuration->systemverilog_configuration) {
-                const auto& declaration =
-                    *configuration->systemverilog_configuration;
-                const frontend::SystemVerilogConfigurationRule*
-                    selected_rule = nullptr;
-                for (const auto& rule : declaration.rules) {
-                    if (rule.kind
-                            != frontend::SystemVerilogConfigurationRuleKind::Cell) {
-                        continue;
-                    }
-                    const auto [rule_library, rule_cell] =
-                        qualified_cell(rule.selector);
-                    if (rule_cell == directive->target
-                        && (rule_library.empty()
-                            || rule_library == owner->second)) {
-                        selected_rule = &rule;
-                        break;
-                    }
-                }
-                const auto select_from_liblist = [&](const auto& libraries) {
-                    for (const auto& library : libraries) {
-                        if (selectable_cell(library, directive->target)) {
-                            selected_library = library;
-                            selected_cell = directive->target;
-                            return;
-                        }
-                    }
-                    if (!libraries.empty()) {
-                        selected_library = libraries.front();
-                        selected_cell = directive->target;
-                    }
-                };
-                if (selected_rule != nullptr
-                    && selected_rule->selection
-                        == frontend::SystemVerilogConfigurationSelectionKind::Use) {
-                    selected_library = selected_rule->use_library.empty()
-                        ? std::string { normalized_library(*configuration) }
-                        : selected_rule->use_library;
-                    selected_cell = selected_rule->use_cell;
-                    if (selected_rule->use_configuration) {
-                        const auto selected_configuration =
-                            std::ranges::find_if(
-                                parsed_.units,
-                                [&](const DesignUnit& candidate) {
-                                    return candidate.kind
-                                            == frontend::UnitKind::SystemVerilogConfiguration
-                                        && normalized_library(candidate)
-                                            == selected_library
-                                        && candidate.name == selected_cell;
-                                });
-                        if (selected_configuration != parsed_.units.end()
-                            && selected_configuration
-                                ->systemverilog_configuration
-                            && selected_configuration
-                                   ->systemverilog_configuration
-                                   ->designs.size() == 1U) {
-                            const auto& design = selected_configuration
-                                ->systemverilog_configuration->designs.front();
-                            selected_library = design.library.empty()
-                                ? std::string {
-                                      normalized_library(
-                                          *selected_configuration) }
-                                : design.library;
-                            selected_cell = design.cell;
-                        }
-                    }
-                } else if (selected_rule != nullptr) {
-                    select_from_liblist(selected_rule->liblist);
-                } else {
-                    select_from_liblist(declaration.default_liblist);
-                }
-            }
-            scope_target =
-                (unit.kind == frontend::UnitKind::VerilogModule
-                    || unit.kind
-                        == frontend::UnitKind::SystemVerilogInterface)
-                && normalized_library(unit) == selected_library
-                && unit.name == selected_cell;
-        }
-        if (!instance_target && !scope_target) {
-            continue;
-        }
-        used_compilation_unit_systemverilog_binds_.insert(directive);
-        for (const auto& instance : directive->instances) {
-            if (owner != systemverilog_bind_libraries_.end()) {
-                systemverilog_bound_instance_libraries_.insert_or_assign(
-                    path + "." + instance.name, owner->second);
-            }
-            if (revision != systemverilog_bind_revisions_.end()
-                && revision->second
-                    == frontend::StandardRevision::SystemVerilog2023) {
-                systemverilog2023_bound_instances_.insert(
-                    path + "." + instance.name);
-            }
-        }
-        result.insert(
-            result.end(), directive->instances.begin(), directive->instances.end());
-    }
-    substitute_parameters(
-        result,
-        parameter_environment,
-        parent_domains,
-        unit.language);
-    return result;
 }
 
 } // namespace fsim::elaboration

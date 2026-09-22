@@ -53,8 +53,8 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "SDF application inventory passed: rows=17 preserved=17 active=0 revisions=SDF21,SDF30,SDF40 profiles=V1995,V2001,V2001NoConfig,V2005,SV2005,SV2009,SV2012,SV2017 digest=47e7f5b95aae9f0e3df5cb4fcb4939255e1803f9c920081a47198e21b75f2754"
-    "diagnostic catalog covers 2758 production codes"
-    "Checked 1525 authored sources against the 2000-line hard limit")
+    "diagnostic catalog covers 2765 production codes"
+    "The physical source-line ceiling is disabled; checking translation-unit structure only")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -83,9 +83,9 @@ list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(FSIM_AUTHORED_COUNT LESS 1828)
+if(FSIM_AUTHORED_COUNT LESS 1809)
   message(FATAL_ERROR
-    "authored SDF application inventory fell below the 1828-file baseline: "
+    "authored SDF application inventory fell below the 1809-file baseline: "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)

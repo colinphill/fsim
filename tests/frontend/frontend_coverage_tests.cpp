@@ -342,6 +342,9 @@ module coverage_user;
 endmodule
 )",
         Language::SystemVerilog2017);
+    std::vector<Diagnostic> class_diagnostics;
+    const auto classes_resolved = resolve_systemverilog_classes(
+        resolved_instances.design, class_diagnostics);
     std::vector<Diagnostic> instance_diagnostics;
     const auto instances_resolved = resolve_systemverilog_covergroups(
         resolved_instances.design, instance_diagnostics);
@@ -354,6 +357,8 @@ endmodule
     }
     require(
         resolved_instances.ok()
+            && classes_resolved
+            && class_diagnostics.empty()
             && instances_resolved
             && instance_diagnostics.empty(),
         "package-qualified covergroup instances and sample calls resolve"
@@ -377,13 +382,17 @@ endmodule
         "package type, sample/constructor formals, and cross operands resolve");
     require(
         resolved_instances.design.systemverilog_covergroup_instances.size() == 1
+            && resolved_instances.design
+                    .systemverilog_covergroup_instance_syntax.size()
+                == 1
             && resolved_instances.design.systemverilog_covergroup_instances[0]
                     .name
                 == "monitor"
             && resolved_instances.design.systemverilog_covergroup_instances[0]
                     .declaration_identity
                 == resolved_type.canonical_identity
-            && resolved_instances.design.systemverilog_covergroup_instances[0]
+            && resolved_instances.design
+                    .systemverilog_covergroup_instance_syntax[0]
                     .constructor_actuals.size()
                 == 1
             && resolved_instances.design.systemverilog_covergroup_instances[0]
@@ -396,10 +405,12 @@ endmodule
             && resolved_instances.design.systemverilog_covergroup_instances[0]
                     .runtime_identity.find("monitor@")
                 != std::string::npos
-            && resolved_instances.design.systemverilog_covergroup_instances[0]
+            && resolved_instances.design
+                    .systemverilog_covergroup_instance_syntax[0]
                     .sample_calls.size()
                 == 1
-            && resolved_instances.design.systemverilog_covergroup_instances[0]
+            && resolved_instances.design
+                    .systemverilog_covergroup_instance_syntax[0]
                     .sample_calls[0]
                     .actuals.size()
                 == 1,
@@ -425,11 +436,19 @@ endmodule
             && class_resolution_diagnostics.empty()
             && std::ranges::any_of(
                 parsed.design.systemverilog_covergroup_instances,
-                [](const SystemVerilogCovergroupInstance& instance) {
+                [&](const SystemVerilogCovergroupInstance& instance) {
                     return instance.class_member_template
                         && instance.name == "class_group"
                         && instance.runtime_identity.ends_with("<object>")
-                        && instance.sample_calls.size() == 1;
+                        && std::ranges::any_of(
+                            parsed.design
+                                .systemverilog_covergroup_instance_syntax,
+                            [&](const SystemVerilogCovergroupInstanceSyntax&
+                                    syntax) {
+                                return syntax.runtime_identity
+                                        == instance.runtime_identity
+                                    && syntax.sample_calls.size() == 1;
+                            });
                 }),
         "class-owned covergroups retain deterministic per-object templates "
         "and method sample calls");

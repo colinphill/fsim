@@ -5,14 +5,13 @@
 #include "fsim/artifact/coverage_identity.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/elaborator.hpp"
-#include "fsim/frontend/class_specialization.hpp"
-#include "fsim/frontend/coverage_persistence.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/systemverilog_chandle.hpp"
+#include "fsim/runtime/systemverilog_coverage_state.hpp"
 #include "fsim/runtime/uvm_activity.hpp"
 #include "fsim/runtime/uvm_callback.hpp"
 #include "fsim/runtime/uvm_checkpoint.hpp"
@@ -38,6 +37,8 @@
 #include "fsim/runtime/vhpi_object.hpp"
 #include "fsim/runtime/vpi_callback.hpp"
 #include "fsim/runtime/vpi_control.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/runtime/vpi_coverage.hpp"
 #include "fsim/runtime/vpi_data_read.hpp"
 #include "fsim/runtime/vpi_object.hpp"
@@ -108,7 +109,7 @@ struct SystemVerilogUvmProvenance {
         const SystemVerilogUvmProvenance&) = default;
 };
 
-struct CheckedProject {
+struct CheckedProject : semantic::CompiledDesign {
     struct ObjectProvenance {
         std::filesystem::path directory;
         std::string metadata_digest;
@@ -136,17 +137,9 @@ struct CheckedProject {
         std::filesystem::path systemc_plugin;
         std::vector<std::filesystem::path> systemc_sources;
     };
-    frontend::ParsedDesign parsed;
-    std::vector<frontend::SystemVerilogClassSpecialization>
-        systemverilog_class_specializations;
-    /// Parser-independent semantic identities and owned source provenance in
-    /// deterministic manifest/declaration order. No record retains an address
-    /// into `parsed`.
-    semantic::Model semantics;
-    /// Owning VHDL semantic HIR linked exclusively through `semantics` IDs.
-    semantic::vhdl::Hir vhdl_hir;
-    /// Owning Verilog/SystemVerilog semantic HIR linked by shared IDs.
-    semantic::sv::Hir systemverilog_hir;
+    /// Parser-independent class specializations owned with the compiled HIR.
+    std::vector<semantic::sv::ClassSpecialization>
+        compiled_systemverilog_class_specializations;
     /// HDL roots named by the project manifest, in manifest order.
     std::vector<CheckedSource> hdl_sources;
     /// SystemC translation-unit roots named by the manifest. These participate
@@ -239,12 +232,14 @@ struct BuiltProject {
     /// Content-only identity of a loaded standalone design artifact. Project
     /// builds leave this empty; standalone native-cache keys include it.
     std::string artifact_identity;
-    /// Owning class specialization metadata used to construct the shared
-    /// simulation heap, static state, and method-dispatch services.
-    std::vector<frontend::SystemVerilogClassSpecialization>
-        systemverilog_class_specializations;
-    /// Owning coverage declarations, mutable state, reports, and observer events.
-    frontend::SystemVerilogCoverageState systemverilog_coverage;
+    /// Parser-independent specialization records retained with their owning
+    /// semantic model and SystemVerilog HIR. No syntax-backed class payload is
+    /// retained after compilation.
+    std::vector<semantic::sv::ClassSpecialization>
+        compiled_systemverilog_class_specializations;
+    /// Mutable ID-keyed coverage state. Declaration structure remains owned
+    /// exactly once by `systemverilog_hir`.
+    runtime::SystemVerilogCoverageState systemverilog_coverage;
     /// Versioned, pointer-free UVM bootstrap state loaded from a portable design.
     std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
         systemverilog_uvm_checkpoint;
@@ -367,6 +362,16 @@ struct NativeCacheStatistics {
     friend bool operator==(
         NativeCacheStatistics,
         NativeCacheStatistics) = default;
+};
+
+/// In-memory execution-path telemetry for executable SystemVerilog class
+/// bodies. A nonzero frontend_adapter_fallbacks count identifies an attempted
+/// path which has not yet been implemented by the compiled-HIR evaluator.
+struct SystemVerilogClassExecutionStatistics {
+    std::size_t hir_constructors { };
+    std::size_t hir_functions { };
+    std::size_t hir_tasks { };
+    std::size_t frontend_adapter_fallbacks { };
 };
 
 struct ClassPackedTraceValue {
@@ -613,6 +618,8 @@ public:
     using OutputHook = runtime::simir::Interpreter::OutputHook;
     using ReportHook = runtime::simir::Interpreter::ReportHook;
     using SystemCommandHook = runtime::simir::Interpreter::SystemCommandHook;
+    using SystemVerilogDpiFunctionHook
+        = runtime::simir::Interpreter::DpiFunctionCallHook;
     using VcdControlHook = runtime::simir::Interpreter::VcdControlHook;
     using ConcurrentAssertionHook = std::function<void(const ConcurrentAssertionEvent&)>;
     using VhdlPslAttemptHook = runtime::VhdlPslCompletionHook;
@@ -700,8 +707,10 @@ public:
     read_container_object(
         runtime::simir::ContainerObjectId object) const;
     [[nodiscard]] const std::vector<
-        frontend::SystemVerilogClassSpecialization>&
+        semantic::sv::ClassSpecialization>&
     class_specializations() const noexcept;
+    [[nodiscard]] SystemVerilogClassExecutionStatistics
+    class_execution_statistics() const noexcept;
     [[nodiscard]] runtime::SystemVerilogClassHeap& class_heap() noexcept;
     [[nodiscard]] const runtime::SystemVerilogClassHeap&
     class_heap() const noexcept;
@@ -870,7 +879,7 @@ public:
     concurrent_assertion_events() const noexcept;
     /// Mutable simulation-owned functional coverage state, including exact
     /// arbitrary-width hits, callbacks, trace events, and derived reports.
-    [[nodiscard]] const frontend::SystemVerilogCoverageState&
+    [[nodiscard]] const runtime::SystemVerilogCoverageState&
     systemverilog_coverage() const noexcept;
     [[nodiscard]] const std::vector<runtime::VhdlPslAttemptSnapshot>&
     vhdl_psl_attempts() const noexcept;
@@ -987,6 +996,10 @@ public:
     /// Replace the host executor for IEEE $system calls. The default invokes
     /// C system(); an empty hook makes the service unavailable at execution.
     void set_system_command_hook(SystemCommandHook hook);
+    /// Install the imported DPI function boundary used by compiled-HIR calls.
+    /// The callback receives the C linkage name and mutable copy-out actuals.
+    void set_systemverilog_dpi_function_hook(
+        SystemVerilogDpiFunctionHook hook);
     void set_vcd_control_hook(VcdControlHook hook);
     void set_output_hook(OutputHook hook);
     void set_report_hook(ReportHook hook);

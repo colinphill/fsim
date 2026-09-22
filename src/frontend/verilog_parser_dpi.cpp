@@ -97,6 +97,7 @@ void VerilogParser::parse_dpi_declaration(
       "FSIM-SV-PARSE-351");
   SystemVerilogDpiDeclaration declaration;
   declaration.standard_revision = standard_revision_;
+  declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.direction = direction;
   declaration.owner_kind = owner_kind;
   declaration.owner_identity = std::move(owner_identity);

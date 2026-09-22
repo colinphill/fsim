@@ -24,6 +24,8 @@ set(FSIM_LIBRARY_TEST
   "${FSIM_SOURCE_DIR}/tests/library/library_artifact_test.cpp")
 set(FSIM_PHASE_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
+set(FSIM_SV_CONFORMANCE_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/sv_conformance_application_test.cpp")
 set(FSIM_TEST_BUILD "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CONTRACT}"
@@ -36,6 +38,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_DESIGN_TEST}"
     "${FSIM_LIBRARY_TEST}"
     "${FSIM_PHASE_TEST}"
+    "${FSIM_SV_CONFORMANCE_TEST}"
     "${FSIM_TEST_BUILD}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "design/library freeze input is missing: ${FSIM_INPUT}")
@@ -47,15 +50,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "238084297c9ba6cdc04487c9ef07e86d98d183960495cd9dd2e03a8d0c8a3737")
+  "37e5952d296dcde73aa5888f17fbc7e68a1124ff9ec88386230ebaaceba783fa")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "design/library contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 51)
-  message(FATAL_ERROR "design/library contract requires SPDX, header and 49 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 54)
+  message(FATAL_ERROR "design/library contract requires SPDX, header and 52 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -63,7 +66,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
    NOT FSIM_HEADER STREQUAL "kind\tname\tcontract")
   message(FATAL_ERROR "design/library contract header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 50)
+foreach(FSIM_INDEX RANGE 2 53)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -83,13 +86,18 @@ function(fsim_require_design_library_tokens path)
 endfunction()
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
-  "kDesignFormatVersion = 12"
+  "kDesignFormatVersion = 13"
   "kDesignMetadataFilename = \"fsim-design.bin\""
   "std::string scv_compatibility"
   "Producer paths are deliberately")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_HEADER}"
-  "kFormatVersion = 5"
-  "kPortableSchemaVersion = 14"
+  "kFormatVersion = 6"
+  "kPortableSchemaVersion = 15"
+  "kCompiledHirSchemaVersion = 1"
+  "std::filesystem::path compiled_hir_artifact"
+  "std::string compiled_hir_checksum"
+  "struct AuxiliaryArtifact"
+  "std::vector<AuxiliaryArtifact> auxiliary_artifacts"
   "Empty when an exporter intentionally omits source text"
   "enough producer identity to make admission an exact"
   "Opens only fsim-library.toml")
@@ -105,15 +113,26 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_CODEC}"
   "invalid design metadata supplied for publication"
   "design payload set is incomplete")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_CODEC}"
+  "compiled_hir_schema = "
+  "compiled_hir_artifact = "
+  "compiled_hir_checksum = "
+  "[[auxiliary]]"
   "unsupported_artifact_identity("
   "\".fsimlib\""
   "portable-unit schema"
+  "compiled-HIR schema"
   "either no payload or a contained"
   "kind-specific compatibility fields"
   "load_metadata("
   "portable payload set does not cover every indexed unit")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_ADMISSION}"
+  "serialize_compiled_hir_bundle("
+  "deserialize_compiled_hir_bundle("
+  "\"compiled-hir\""
+  "has_verilog_design_unit_provenance("
+  "semantic::UnitKind::systemverilog_compilation_unit"
+  "non-design semantic unit"
   "validate_scv_artifact_compatibility("
   "load_incremental_plugin_metadata("
   "embedded SystemC plug-in metadata disagrees with design provenance"
@@ -126,7 +145,7 @@ fsim_require_design_library_tokens("${FSIM_LIBRARY_ADMISSION}"
   "library::load_metadata(")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
-  "kDesignFormatVersion == 12U"
+  "kDesignFormatVersion == 13U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "runtime_abi_version == 1U"
@@ -141,7 +160,11 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
   "oversized-root"
   "rejected-plugin")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_TEST}"
-  "kFormatVersion == 5"
+  "kFormatVersion == 6"
+  "kPortableSchemaVersion == 15"
+  "kCompiledHirSchemaVersion == 1"
+  "invalid-auxiliary.fsimlib"
+  "duplicate-auxiliary.fsimlib"
   "source-hidden.fsimlib"
   "stale.toml"
   "stale-portable.toml"
@@ -154,9 +177,14 @@ fsim_require_design_library_tokens("${FSIM_PHASE_TEST}"
   ".fsimdesign"
   ".fsimlib"
   "producer-hidden")
+fsim_require_design_library_tokens("${FSIM_SV_CONFORMANCE_TEST}"
+  "fsim::semantic::sv::UnitKind::module"
+  "fsim::semantic::sv::UnitKind::compilation_unit"
+  "design_metadata->verilog_unit_provenance.front().unit"
+  "== module_unit->id.value()")
 fsim_require_design_library_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.design-library-schema-freeze"
   "CheckDesignLibraryFreeze.cmake")
 
 message(STATUS
-  "design/library schema freeze passed: rows=49 digest=${FSIM_CONTRACT_DIGEST}")
+  "design/library schema freeze passed: rows=52 digest=${FSIM_CONTRACT_DIGEST}")

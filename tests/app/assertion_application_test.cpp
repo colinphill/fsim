@@ -507,10 +507,30 @@ ConcurrentCapture capture_concurrent_assertions(
     const std::uint64_t max_deltas,
     const fsim::app::SimulationEngine engine)
 {
+    ConcurrentCapture capture;
+    for (const auto& process : project.design.processes()) {
+        if (!process.observed) {
+            continue;
+        }
+        for (std::size_t instruction { };
+            instruction < process.operations.size(); ++instruction) {
+            const auto* fork = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Fork>(
+                    &process.operations[instruction]);
+            if (fork == nullptr) {
+                continue;
+            }
+            ++capture.action_handoffs;
+            assert(std::ranges::all_of(
+                fork->branches,
+                [instruction](const auto branch) {
+                    return branch > instruction + 1U;
+                }));
+        }
+    }
     fsim::app::Simulation simulation {
         std::move(project), max_deltas, engine
     };
-    ConcurrentCapture capture;
     capture.compiled_processes = simulation.compiled_process_count();
     capture.native_cache = simulation.native_cache_statistics();
     simulation.set_safe_point_hook(
@@ -699,6 +719,8 @@ endmodule
     assert(compiled.current_signal_reads == 0);
     assert(reference.reactive_waits != 0);
     assert(reference.reactive_waits == compiled.reactive_waits);
+    assert(reference.action_handoffs != 0);
+    assert(reference.action_handoffs == compiled.action_handoffs);
     assert(std::ranges::find(
                reference.phases, fsim::runtime::SchedulerPhase::observed)
         != reference.phases.end());
@@ -857,6 +879,7 @@ endmodule
         assert(capture->coverage == reference.coverage);
         assert(capture->events == reference.events);
         assert(capture->callback_events == capture->events);
+        assert(capture->action_handoffs == reference.action_handoffs);
     }
 #if defined(FSIM_HAS_LLVM)
     assert(artifact_compiled_cold.compiled_processes >= 5);

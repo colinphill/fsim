@@ -51,8 +51,8 @@ void test_systemverilog_preprocessor()
 {
     require(
         verilog_preprocessor_cache_version
-            == "fsim-verilog-preprocessor-v8-protected-envelopes",
-        "the preprocessor cache identity must invalidate pre-opaque-envelope diagnostics");
+            == "fsim-verilog-preprocessor-v9-generated-text-origin",
+        "the preprocessor cache identity must invalidate untagged generated text");
     const auto directory = make_test_directory("verilog-preprocessor");
     const auto include_directory = directory / "include";
     const auto root = directory / "root.sv";
@@ -113,6 +113,30 @@ module also_inactive_bad(;
         "root and two transitive include snapshots");
     require(preprocessed.dependencies[1].path.filename() == "definitions.svh" && preprocessed.dependencies[2].path.filename() == "values.svh",
         "dependencies retain deterministic first-use order");
+    require(
+        std::ranges::count(
+            preprocessed.lexed.tokens,
+            GeneratedTextKind::systemverilog_file_macro,
+            &Token::generated_text)
+            == 1,
+        "`__FILE__ tokens retain direct generated-text provenance");
+
+    const auto provenance_include = include_directory / "provenance.svh";
+    const auto provenance_root = directory / "provenance-root.sv";
+    write_text(provenance_include,
+        "`define INCLUDED_PROVENANCE provenance_marker\n"
+        "`INCLUDED_PROVENANCE\n");
+    write_text(provenance_root, "`include \"provenance.svh\"\n");
+    const auto provenance = preprocess_verilog_file(
+        provenance_root, Language::SystemVerilog2017, options);
+    const auto provenance_token = std::ranges::find(
+        provenance.lexed.tokens, "provenance_marker", &Token::text);
+    require(
+        provenance.ok() && provenance_token != provenance.lexed.tokens.end()
+            && provenance_token->expansion_stack.size() == 2
+            && provenance_token->span.expansion_stack
+                == provenance_token->expansion_stack,
+        "final token spans retain include and macro expansion ancestry");
 
     const auto parsed = parse_verilog(std::move(preprocessed.lexed), true);
     require(parsed.ok(), "preprocessed SystemVerilog must parse");
@@ -136,7 +160,12 @@ module also_inactive_bad(;
                                         .else_statements.front()
                                         .output_text }
                 .filename()
-            == "root.sv",
+                == "root.sv"
+            && unit.processes.front()
+                       .statements[5]
+                       .else_statements.front()
+                       .output_generated_text
+                == GeneratedTextKind::systemverilog_file_macro,
         "`__FILE__ expands to the normalized source name");
 
     const auto compilation_first = directory / "shared-first.sv";
@@ -470,11 +499,13 @@ endmodule
 
     const auto preprocess_revision = [](SourceText source,
         const StandardRevision revision) {
-        PreprocessorOptions options;
-        options.standard_revision = revision;
-        auto preprocessed = preprocess_verilog(
-            std::move(source), Language::SystemVerilog2017, options);
-        return parse_verilog(std::move(preprocessed.lexed), true);
+        PreprocessorOptions revision_options;
+        revision_options.standard_revision = revision;
+        auto revision_preprocessed = preprocess_verilog(
+            std::move(source), Language::SystemVerilog2017,
+            revision_options);
+        return parse_verilog(
+            std::move(revision_preprocessed.lexed), true);
     };
     const auto boolean_conditionals = preprocess_revision(
         SourceText {

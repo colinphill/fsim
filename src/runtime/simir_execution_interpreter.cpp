@@ -401,8 +401,13 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, ClassStaticMethodCall>) {
-                    if (!class_static_method_call_hook) {
-                        fail(process, "class static method service is unavailable");
+                    const auto dpi = std::string_view { op.method_identity }
+                        .starts_with(systemverilog_dpi_function_prefix);
+                    if ((dpi && !dpi_function_call_hook)
+                        || (!dpi && !class_static_method_call_hook)) {
+                        fail(process, dpi
+                            ? "SystemVerilog DPI function service is unavailable"
+                            : "class static method service is unavailable");
                     }
                     std::vector<PackedLogic4> actuals;
                     std::vector<std::string> string_actuals;
@@ -420,12 +425,23 @@ void Interpreter::Impl::execute(ProcessId id)
                                 ? get_string_register(process, op.actuals[index])
                                 : std::string { });
                     }
-                    get_register(process, op.destination) = class_static_method_call_hook(
-                        op.method_identity,
-                        actuals,
-                        string_actuals,
-                        op.actual_names,
-                        op.actual_directions);
+                    const auto identity = dpi
+                        ? std::string_view { op.method_identity }.substr(
+                              systemverilog_dpi_function_prefix.size())
+                        : std::string_view { op.method_identity };
+                    get_register(process, op.destination) = dpi
+                        ? dpi_function_call_hook(
+                              identity,
+                              actuals,
+                              string_actuals,
+                              op.actual_names,
+                              op.actual_directions)
+                        : class_static_method_call_hook(
+                              identity,
+                              actuals,
+                              string_actuals,
+                              op.actual_names,
+                              op.actual_directions);
                     for (std::size_t index = 0; index < actuals.size(); ++index) {
                         const auto string_actual = !op.actual_kinds.empty()
                             && op.actual_kinds[index] == 1U;
@@ -906,7 +922,27 @@ void Interpreter::Impl::execute(ProcessId id)
                             op.lower,
                             op.upper);
                     } catch (const std::invalid_argument& error) {
-                        fail(process, error.what());
+                        auto message = std::string { error.what() };
+                        if (message
+                            == "VHDL integer operand contains an unknown or high-impedance value") {
+                            const auto& value = get_register(
+                                process, op.source);
+                            auto bits = value.to_msb_string();
+                            constexpr std::size_t maximum_bits { 128U };
+                            if (bits.size() > maximum_bits) {
+                                bits = bits.substr(
+                                    0U, maximum_bits) + "...";
+                            }
+                            message += " [process=" + process.program.name
+                                + ", register="
+                                + std::to_string(op.source)
+                                + ", width="
+                                + std::to_string(value.width())
+                                + ", value=" + bits + ", range="
+                                + std::to_string(op.lower) + ".."
+                                + std::to_string(op.upper) + "]";
+                        }
+                        fail(process, message);
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ConditionalSelect>) {
@@ -1549,10 +1585,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         execute_vhdl_report(
                             process, process.pc, message, severity,
                             op.source, op.standalone);
-                        ++process.pc;
-                        return;
-                    }
-                    if (severity == AssertionSeverity::failure) {
+                    } else if (severity == AssertionSeverity::failure) {
                         if (op.standalone && report_hook) {
                             report_hook(
                                 process.program.id,
@@ -1573,8 +1606,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             severity,
                             op.source,
                             op.standalone);
-                    }
-                    if (report_hook) {
+                    } else if (report_hook) {
                         report_hook(
                             process.program.id,
                             message,
@@ -1866,10 +1898,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         execute_vhdl_report(
                             process, process.pc, op.message, op.severity,
                             op.source, true);
-                        ++process.pc;
-                        return;
-                    }
-                    if (report_hook) {
+                    } else if (report_hook) {
                         report_hook(
                             process.program.id,
                             op.message,
@@ -1878,7 +1907,8 @@ void Interpreter::Impl::execute(ProcessId id)
                             scheduler.now(),
                             scheduler.delta());
                     }
-                    if (op.severity == AssertionSeverity::failure) {
+                    if (process.program.language_standard != "2019"
+                        && op.severity == AssertionSeverity::failure) {
                         throw AssertionError(
                             process.program.id,
                             process.pc,

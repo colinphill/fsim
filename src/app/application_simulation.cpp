@@ -396,7 +396,7 @@ Simulation::concurrent_assertion_events() const noexcept
     return impl_->concurrent_assertion_events;
 }
 
-const frontend::SystemVerilogCoverageState&
+const runtime::SystemVerilogCoverageState&
 Simulation::systemverilog_coverage() const noexcept
 {
     return impl_->built.systemverilog_coverage;
@@ -566,6 +566,12 @@ void Simulation::set_systemverilog_plusargs(
 void Simulation::set_system_command_hook(SystemCommandHook hook)
 {
     impl_->interpreter->set_system_command_hook(std::move(hook));
+}
+
+void Simulation::set_systemverilog_dpi_function_hook(
+    SystemVerilogDpiFunctionHook hook)
+{
+    impl_->interpreter->set_dpi_function_call_hook(std::move(hook));
 }
 
 void Simulation::set_vcd_control_hook(VcdControlHook hook)

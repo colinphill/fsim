@@ -385,6 +385,10 @@ void Interpreter::Impl::handle_boundary(
         execute_sampled_read(process, *read);
         return;
     }
+    if (const auto* report = operation_get_if<Report>(&operation);
+        report && report->severity == AssertionSeverity::failure) {
+        return;
+    }
     if (const auto* sample
         = fsim::runtime::simir::operation_get_if<CoverageSample>(&operation)) {
         if (!coverage_sample_hook) {
@@ -1881,8 +1885,13 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassStaticMethodCall>(
             &operation)) {
-        if (!class_static_method_call_hook) {
-            fail(process, "class static method service is unavailable");
+        const auto dpi = std::string_view { method->method_identity }
+            .starts_with(systemverilog_dpi_function_prefix);
+        if ((dpi && !dpi_function_call_hook)
+            || (!dpi && !class_static_method_call_hook)) {
+            fail(process, dpi
+                ? "SystemVerilog DPI function service is unavailable"
+                : "class static method service is unavailable");
         }
         std::vector<PackedLogic4> actuals;
         std::vector<std::string> string_actuals;
@@ -1899,16 +1908,27 @@ void Interpreter::Impl::handle_boundary(
                     ? process.executor->read_string_register(actual)
                     : std::string { });
         }
+        const auto identity = dpi
+            ? std::string_view { method->method_identity }.substr(
+                  systemverilog_dpi_function_prefix.size())
+            : std::string_view { method->method_identity };
         write_process_register(
             process,
             method->destination,
             resize_class_value(
-                class_static_method_call_hook(
-                    method->method_identity,
-                    actuals,
-                    string_actuals,
-                    method->actual_names,
-                    method->actual_directions),
+                dpi
+                    ? dpi_function_call_hook(
+                          identity,
+                          actuals,
+                          string_actuals,
+                          method->actual_names,
+                          method->actual_directions)
+                    : class_static_method_call_hook(
+                          identity,
+                          actuals,
+                          string_actuals,
+                          method->actual_names,
+                          method->actual_directions),
                 method->result_width));
         for (std::size_t index = 0; index < actuals.size(); ++index) {
             const auto string_actual = !method->actual_kinds.empty()

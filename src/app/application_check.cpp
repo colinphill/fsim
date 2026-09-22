@@ -3,6 +3,8 @@
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/class_inheritance.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app {
@@ -83,12 +85,64 @@ bool validate_uvm_api_release(
   return matches;
 }
 
+bool link_mapped_compiled_designs(
+    CompilationWorkspace& checked,
+    diagnostic::Engine& diagnostics)
+{
+  std::vector<std::string> mapped_libraries;
+  mapped_libraries.reserve(checked.mapped_libraries.size());
+  const auto append_mapped_library = [&](std::string library) {
+    if (!library.empty()
+        && std::ranges::find(mapped_libraries, library)
+            == mapped_libraries.end()) {
+      mapped_libraries.push_back(std::move(library));
+    }
+  };
+  for (const auto& mapped : checked.mapped_libraries) {
+    append_mapped_library(mapped.library);
+    for (const auto& dependency : mapped.vhdl_package_dependencies) {
+      const auto separator = dependency.package.find('.');
+      append_mapped_library(
+          dependency.package.substr(0, separator));
+    }
+  }
+  std::vector<semantic::CompiledDesign> inputs;
+  inputs.reserve(1U + checked.mapped_compiled_designs.size());
+  for (auto& mapped : checked.mapped_compiled_designs) {
+    inputs.push_back(std::move(mapped));
+  }
+  if (mapped_libraries.empty()) {
+    inputs.push_back(std::move(
+        static_cast<semantic::CompiledDesign&>(checked)));
+  } else {
+    auto local = semantic::exclude_compiled_libraries(
+        checked, mapped_libraries);
+    if (!local.ok()) {
+      diagnostics.error("FSIM-SEM-0003", local.error);
+      return false;
+    }
+    inputs.push_back(std::move(*local.design));
+  }
+  const auto linked = install_linked_compiled_design(
+      checked, std::move(inputs));
+  if (!linked.ok()) {
+    diagnostics.error(
+        linked.diagnostic_code.empty()
+            ? "FSIM-SEM-0003"
+            : linked.diagnostic_code,
+        linked.error);
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
-static std::optional<CheckedProject> check_project_impl(
+static std::optional<CompilationWorkspace> check_project_impl(
     const project::Config& config,
     diagnostic::Engine& diagnostics,
-    const bool build_semantic_projection) {
+    const bool complete_vhdl_environment = false,
+    const bool allow_external_vhdl_architecture_primary = false) {
   const auto uvm_release = selected_uvm_release(config, diagnostics);
   if (!uvm_release) {
     return std::nullopt;
@@ -152,6 +206,7 @@ static std::optional<CheckedProject> check_project_impl(
             group.standard_revision = standard_revision;
             group.standard = source_set.standard;
             group.compatibility_profile = compatibility_profile;
+            group.base_directory = config.base_directory;
             group.include_directories = source_set.include_directories;
             group.defines = source_set.defines;
             group.inputs.push_back(
@@ -165,6 +220,7 @@ static std::optional<CheckedProject> check_project_impl(
         group.standard_revision = standard_revision;
         group.standard = source_set.standard;
         group.compatibility_profile = compatibility_profile;
+        group.base_directory = config.base_directory;
         append_files(group);
         groups.push_back(std::move(group));
     } else {
@@ -178,6 +234,7 @@ static std::optional<CheckedProject> check_project_impl(
             group.standard_revision = standard_revision;
             group.standard = source_set.standard;
             group.compatibility_profile = compatibility_profile;
+            group.base_directory = config.base_directory;
             groups.push_back(std::move(group));
             found = combined_groups.emplace(key, index).first;
         }
@@ -228,7 +285,7 @@ static std::optional<CheckedProject> check_project_impl(
     worker.get();
   }
 
-  CheckedProject checked;
+  CompilationWorkspace checked;
   checked.source_count = hdl_source_count + systemc_source_count;
   if (const auto request = systemc_request(config)) {
     checked.systemc_sources.reserve(request->sources.size());
@@ -261,8 +318,10 @@ static std::optional<CheckedProject> check_project_impl(
       compiler::CacheKeyBuilder key;
       key.add(
           "compilation-unit-snapshot-schema",
-          "fsim-systemc-compilation-unit-v1");
-      key.add("input-path", fsim::support::path_to_utf8(source.path));
+          "fsim-systemc-compilation-unit-v2-relocatable");
+      key.add(
+          "input-path",
+          stable_cache_source_name(source.path, config.base_directory));
       key.add("input-content", source.content_digest);
       source.compilation_unit_digest = key.finish();
       checked.systemc_sources.push_back(std::move(source));
@@ -349,6 +408,27 @@ static std::optional<CheckedProject> check_project_impl(
         && result.design.vhdl_profile_compatible;
     for (const auto& frontend_diagnostic : result.diagnostics) {
       import_diagnostic(diagnostics, frontend_diagnostic);
+    }
+    for (auto& function : result.design.functions) {
+      checked.parsed.functions.push_back(std::move(function));
+    }
+    for (auto& task : result.design.tasks) {
+      checked.parsed.tasks.push_back(std::move(task));
+    }
+    for (auto& declaration :
+        result.design.systemverilog_dpi_declarations) {
+      checked.parsed.systemverilog_dpi_declarations.push_back(
+          std::move(declaration));
+    }
+    for (auto& instance :
+        result.design.systemverilog_covergroup_instances) {
+      checked.parsed.systemverilog_covergroup_instances.push_back(
+          std::move(instance));
+    }
+    for (auto& syntax :
+        result.design.systemverilog_covergroup_instance_syntax) {
+      checked.parsed.systemverilog_covergroup_instance_syntax.push_back(
+          std::move(syntax));
     }
     for (std::size_t unit_index = 0;
          unit_index < result.design.units.size(); ++unit_index) {
@@ -604,7 +684,8 @@ static std::optional<CheckedProject> check_project_impl(
   }
   (void)validate_vhdl_profile_compatibility(
       checked.parsed, diagnostics);
-  inject_vhdl_standard_libraries(checked, diagnostics);
+  inject_vhdl_standard_libraries(
+      checked, diagnostics, complete_vhdl_environment);
   for (const auto& mapped : checked.mapped_libraries) {
     if (!validate_vhdl_package_dependencies(
             mapped.vhdl_package_dependencies,
@@ -612,7 +693,9 @@ static std::optional<CheckedProject> check_project_impl(
       return std::nullopt;
     }
   }
-  validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
+  validate_vhdl_analysis_order(
+      checked.parsed.units, diagnostics,
+      allow_external_vhdl_architecture_primary);
   validate_vhdl_simulator_api(checked.parsed.units, diagnostics);
   validate_vhdl_mode_view_interfaces(checked.parsed.units, diagnostics);
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics);
@@ -649,29 +732,41 @@ static std::optional<CheckedProject> check_project_impl(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
-  if (build_semantic_projection) {
-    checked.semantics = build_semantic_model(
-        checked.parsed,
-        checked.hdl_sources,
-        checked.systemc_sources,
-        checked.standard_sources);
-    checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
-    (void)validate_vhdl_mode_view_hir(
-        checked.vhdl_hir, diagnostics);
-    checked.systemverilog_hir = build_systemverilog_hir(
-        checked.parsed,
-        checked.semantics,
-        checked.systemverilog_class_specializations);
-    if (diagnostics.has_error()) {
-      return std::nullopt;
-    }
-    if (!checked.semantics.valid()) {
-      diagnostics.error(
-          "FSIM-SEM-0001",
-          "source analysis produced an invalid owning semantic projection");
-      return std::nullopt;
-    }
+  checked.semantics = build_semantic_model(
+      checked.parsed,
+      checked.hdl_sources,
+      checked.systemc_sources,
+      checked.standard_sources);
+  checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
+  checked.systemverilog_hir = build_systemverilog_hir(
+      checked.parsed,
+      checked.semantics,
+      checked.systemverilog_class_specializations);
+  if (diagnostics.has_error()) {
+    return std::nullopt;
   }
+  if (!link_mapped_compiled_designs(checked, diagnostics)) {
+    return std::nullopt;
+  }
+  (void)validate_vhdl_mode_view_hir(
+      checked.vhdl_hir, diagnostics);
+  if (diagnostics.has_error()) {
+    return std::nullopt;
+  }
+  if (!checked.semantics.valid()) {
+    diagnostics.error(
+        "FSIM-SEM-0001",
+        "source analysis produced an invalid owning semantic projection");
+    return std::nullopt;
+  }
+  semantic::refresh_compiled_design_metadata(checked);
+  if (!semantic::normalize_compiled_design(checked)) {
+    diagnostics.error(
+        "FSIM-SEM-0002",
+        "source analysis produced invalid compiled-HIR dependencies");
+    return std::nullopt;
+  }
+  install_compiled_class_specializations(checked);
   checked.systemverilog_uvm_provenance.release = *uvm_release;
   checked.systemverilog_uvm_provenance.source_identity =
       uvm_source_identity(*uvm_release, checked.hdl_sources);
@@ -682,14 +777,35 @@ std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics)
 {
-  return check_project_impl(config, diagnostics, true);
+  auto workspace = check_project_impl(config, diagnostics);
+  if (!workspace) {
+    return std::nullopt;
+  }
+  return release_compiled_project(std::move(*workspace));
 }
 
-std::optional<CheckedProject> application_detail::check_project_for_object(
+std::optional<application_detail::CompilationWorkspace>
+application_detail::check_project_for_object(
     const project::Config& config,
     diagnostic::Engine& diagnostics)
 {
-  return check_project_impl(config, diagnostics, false);
+  return check_project_impl(config, diagnostics, false, true);
+}
+
+std::optional<application_detail::CompilationWorkspace>
+application_detail::check_project_workspace(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    const bool complete_vhdl_environment)
+{
+  return check_project_impl(
+      config, diagnostics, complete_vhdl_environment);
+}
+
+CheckedProject application_detail::release_compiled_project(
+    CompilationWorkspace&& workspace)
+{
+  return std::move(static_cast<CheckedProject&>(workspace));
 }
 
 

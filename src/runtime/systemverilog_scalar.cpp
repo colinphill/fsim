@@ -602,6 +602,15 @@ SystemVerilogPackedScalarResult systemverilog_scalar_binary_payload(
     const auto lhs = decode_systemverilog_scalar_payload(left, left_kind);
     if (!lhs)
         return { PackedLogic4 { }, lhs.error };
+    if (operation == SystemVerilogScalarBinaryOperator::Convert) {
+        const auto converted = convert_systemverilog_scalar(
+            lhs.value, result_kind);
+        return converted
+            ? encode_systemverilog_scalar_payload(converted.value)
+            : SystemVerilogPackedScalarResult {
+                  PackedLogic4 { }, converted.error
+              };
+    }
     const auto rhs = decode_systemverilog_scalar_payload(right, right_kind);
     if (!rhs)
         return { PackedLogic4 { }, rhs.error };

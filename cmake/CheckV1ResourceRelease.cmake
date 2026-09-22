@@ -41,7 +41,7 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "v1 portability audit: 9 hosted configurations plus one local sanitizer configuration, 5 two-worker build/test steps, 14 explicit platform files, 8 repair queues"
+    "v1 portability audit: 4 hosted configurations plus one local sanitizer configuration, 5 two-worker build/test steps, 14 explicit platform files, 8 repair queues"
     "resource portability contract: five two-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks"
     "MSVC Debug contract: /bigobj covers every target and the common 128 MiB stack policy covers C/C++ test hosts"
     "MSVC Release contract: assertions stay live"
@@ -66,10 +66,10 @@ string(REGEX MATCHALL
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_120_MINUTE_TIMEOUTS FSIM_120_MINUTE_TIMEOUT_COUNT)
 list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
-if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 4
+if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 2
     OR NOT FSIM_120_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
   message(FATAL_ERROR
-    "expected all four hosted job timeouts to be 120 minutes")
+    "expected both hosted job timeouts to be 120 minutes")
 endif()
 foreach(FSIM_COMPILER IN ITEMS
     "-DCMAKE_C_COMPILER=clang-22"
@@ -103,5 +103,5 @@ foreach(FSIM_REVIEW_ID IN ITEMS
 endforeach()
 
 message(STATUS
-  "final resource audit: 9 hosted configurations, two-worker Windows CI, "
+  "final resource audit: 4 hosted configurations, two-worker Windows CI, "
   "eight-link local pool, bounded stacks/timeouts, traces, and 20 portability rows")

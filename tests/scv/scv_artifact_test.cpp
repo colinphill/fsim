@@ -59,10 +59,14 @@ int main()
     std::filesystem::create_directories(root);
 
     const std::string native_bytes = "bounded SCV native image fixture";
+    const std::string compiled_hir_bytes
+        = "bounded SCV compiled-HIR fixture";
     fsim::library::Metadata metadata;
     metadata.library = "scv_models";
     metadata.producer = "fsim test";
     metadata.runtime_schema = fsim::runtime_abi_version;
+    metadata.compiled_hir_artifact = "compiled/scv-models.fsimhir";
+    metadata.compiled_hir_checksum = checksum(compiled_hir_bytes);
     metadata.sources.push_back({
         "models.cpp", { }, { }, "systemc", { }, "none" });
     metadata.native_artifacts.push_back({
@@ -73,7 +77,7 @@ int main()
         { }, { }, { } });
 
     const auto serialized = fsim::library::serialize_metadata(metadata);
-    assert(serialized.starts_with("format = 5\n"));
+    assert(serialized.starts_with("format = 6\n"));
     assert(serialized.find("scv_compatibility = \"") != std::string::npos);
     fsim::diagnostic::Engine parse_diagnostics;
     const auto parsed = fsim::library::parse_metadata(
@@ -88,7 +92,8 @@ int main()
 
     const auto published = root / "scv-models.fsimlib";
     const std::vector<fsim::library::PortablePayload> payloads {
-        { metadata.native_artifacts.front().artifact, native_bytes }
+        { metadata.native_artifacts.front().artifact, native_bytes },
+        { metadata.compiled_hir_artifact, compiled_hir_bytes }
     };
     fsim::diagnostic::Engine publish_diagnostics;
     assert(fsim::library::publish(

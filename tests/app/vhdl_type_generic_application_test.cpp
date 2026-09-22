@@ -146,6 +146,14 @@ void verify_capture(
       capture.result.status
       == fsim::runtime::RunStatus::completed);
   assert(capture.result.time == 0);
+  if (capture.values
+      != std::array<std::string, 3>{
+          std::string{word_value}, "1101", "1"}) {
+    std::cerr << "unexpected VHDL type-generic values: "
+              << capture.values[0] << ", "
+              << capture.values[1] << ", "
+              << capture.values[2] << '\n';
+  }
   assert((
       capture.values
       == std::array<std::string, 3>{
@@ -223,7 +231,7 @@ void verify_vhdl_hir(const fsim::project::Config& config) {
   }
   const auto retained_unit_id = unit->id;
   const auto retained_unit_name = unit->name;
-  checked->parsed.units.clear();
+  // The public compilation result is already parser-independent.
   assert(unit->id == retained_unit_id);
   assert(unit->name == retained_unit_name);
   assert(packet_type->record_elements[1].name == "payload");
@@ -471,7 +479,7 @@ architecture rtl of mode_view_hir_top is begin end architecture;
       == fsim::semantic::vhdl::Direction::output);
 
   const auto retained_view = *bus_view->mode_view;
-  checked->parsed.units.clear();
+  // Retained HIR records own every mode-view identity.
   assert(retained_view.elements.size() == 2);
   assert(retained_view.elements.front().elements.size() == 2);
   assert(retained_view.elements.front().elements.front().elements.size()

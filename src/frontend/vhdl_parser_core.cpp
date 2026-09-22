@@ -269,6 +269,8 @@ DesignUnit VhdlParser::parse_context_declaration(const Token& start)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("context name");
     unit.name = vhdl_name(name.text);
+    unit.vhdl_extended_name = name.text.size() >= 2U
+        && name.text.front() == '\\' && name.text.back() == '\\';
     expect_keyword("is", true, "FSIM-VHDL-PARSE-090");
     while (!at_end() && !keyword("end", 0, true)) {
         if (any_keyword({ "library", "use", "context" }, true)) {
@@ -306,11 +308,14 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("package name");
     unit.name = vhdl_name(name.text);
+    unit.vhdl_extended_name = name.text.size() >= 2U
+        && name.text.front() == '\\' && name.text.back() == '\\';
     if (body) {
         // Package bodies share the package design-unit kind so existing package
         // lookup stays stable; primary_name distinguishes the secondary body
         // unit until elaboration merges its bounded subprogram bodies.
         unit.primary_name = unit.name;
+        unit.vhdl_extended_primary_name = unit.vhdl_extended_name;
     }
     expect_keyword("is", true, "FSIM-VHDL-PARSE-086");
     while (!at_end() && !keyword("end", 0, true)) {
@@ -444,6 +449,8 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("entity name");
     unit.name = vhdl_name(name.text);
+    unit.vhdl_extended_name = name.text.size() >= 2U
+        && name.text.front() == '\\' && name.text.back() == '\\';
     expect_keyword("is", true, "FSIM-VHDL-PARSE-002");
 
     while (!at_end() && !keyword("begin", 0, true)
@@ -1291,9 +1298,13 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("architecture name");
     unit.name = vhdl_name(name.text);
+    unit.vhdl_extended_name = name.text.size() >= 2U
+        && name.text.front() == '\\' && name.text.back() == '\\';
     expect_keyword("of", true, "FSIM-VHDL-PARSE-014");
     const auto entity = expect_identifier("entity name");
     unit.primary_name = vhdl_name(entity.text);
+    unit.vhdl_extended_primary_name = entity.text.size() >= 2U
+        && entity.text.front() == '\\' && entity.text.back() == '\\';
     expect_keyword("is", true, "FSIM-VHDL-PARSE-015");
 
     while (!at_end() && !keyword("begin", 0, true)) {

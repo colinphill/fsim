@@ -8,6 +8,9 @@ history in their existing plan and resume documents.
 Before triggering any hosted CI run authorized by the governing batch cadence,
 inspect the most recent applicable run, its conclusion, and its failing job
 logs. Identify and resolve known actionable errors before starting the new run.
+Batch 188A's replacement hosted matrix contains exactly four LLVM-enabled
+lanes: Linux Debug/Release and Windows Debug/Release. Non-LLVM and fuzz presets
+remain available for local development but are not hosted jobs.
 
 ## Batch 178 planned restart checkpoint - before Change 1
 
@@ -1217,7 +1220,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    `a395b80e1683fc9a93b2dc0c4dadd430d96330f6e54e41be1b69382cf7a2ee9a`.
 9. COVBASE-C02 through COVBASE-C18 are preserved. The normalized ledger
    SHA-256 is
-   `06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234`.
+   `e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814`.
    The regenerated source manifest contains 1,571 paths at SHA-256
    `e45bb9ac875ae03ce24bc31ac876c80217ce89505be9ea523593a0f7fc17d92f`.
 10. No Release qualification, clean-first build, sanitizer, hosted-CI
@@ -1264,7 +1267,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    `4d1f569e0d68ba5424b8a022004dc9cb86ddff88786dbb9565a961861aa6c524`.
 8. All seventeen COVBASE-C02 through COVBASE-C18 rows are preserved and every
    declared evidence owner exists. The normalized ledger SHA-256 remains
-   `06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234`.
+   `e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814`.
    The regenerated source manifest contains 1,572 paths at SHA-256
    `d3ce8dc4beef96671f495f6585920e50880d311ece86ecf20deba6e271a0ab96`.
 9. No Release qualification, clean-first build, sanitizer, hosted-CI
@@ -1293,7 +1296,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    authored sources, 1,507 SPDX-owned files, 454 conformance test/control
    files, and 656 FST test/control files. All seventeen COVBASE-C02 through
    COVBASE-C18 rows are preserved at normalized SHA-256
-   `06039618ff2c8530265b14e3250578f3fd0aa77d6e9b2a53a8049e7b760e8234`.
+   `e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814`.
    The source manifest contains 1,572 paths at SHA-256
    `d3ce8dc4beef96671f495f6585920e50880d311ece86ecf20deba6e271a0ab96`.
 4. The clean warnings-as-errors exact-LLVM Debug build completes 2,497/2,497
@@ -2304,7 +2307,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    valid fallback preservation.
 8. All seventeen COVMET-C02-C18 rows are preserved and zero remain active.
    The normalized matrix SHA-256 is
-   `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
+   `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
    The source manifest contains 1,618 ordered paths at SHA-256
    `30ca495468c5079caaff91c6964cbdc9605585be2c3640aa48c1eded6d3dbac6`.
 9. The public inference-model change passes a 129-step, eight-worker,
@@ -2352,7 +2355,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    directly versioned at 3.
 6. All seventeen COVMET-C02-C18 rows remain preserved and zero are active. The
    normalized ledger SHA-256 remains
-   `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
+   `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
    The source manifest contains 1,621 ordered paths at SHA-256
    `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
 7. The artifact-identity propagation passes a 334-step, eight-worker,
@@ -2381,7 +2384,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    separate state/transition results, and mixed-language engine equivalence.
 2. All seventeen COVMET-C02-C18 rows are preserved and zero remain active.
    The normalized ledger SHA-256 is
-   `e145b9139cf58989ddbd683ff5b478c966d473944684ea11b60cde661dba7443`.
+   `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
    MC/DC remains explicitly excluded from Batch 179. The source manifest
    contains 1,621 ordered paths at SHA-256
    `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
@@ -8360,7 +8363,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    and 24 preserved rows at normalized SHA-256
    `00ab93ec0544f7e8d863fd49c19262be5bf6cf28057862a85da2a136df88dd8f`.
    The path-only VHDL-2019 inventory is frozen at normalized SHA-256
-   `1c2070126ab673efb71eda606b2fd80c3042c4e8456222bbae56a1ac575fcb3b`.
+   `895808a7d68642d217e4f5655e15ece0878c954d33fcd4000b0cb36ae3fd391a`.
    The source manifest has 1,875 paths at SHA-256
    `e61fb3d76659dcc645bc67a2c5206d5b0ac30b1bfe692ef72333deda0793d5b5`.
 8. Exact Clang warnings-as-errors Debug frontend, database, artifact, library,
@@ -9461,7 +9464,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
    closure.
 2. All 56 independently worded SystemVerilog-2023 delta rows are preserved and
    zero remain active. The normalized inventory SHA-256 is
-   `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+   `69f7d088e4d0a1f1acd09e1b675423dcf6240294c889b45fb2a518e819053cc9`.
 3. The governed SystemVerilog closure selection passes 29/29 in 90.28 wall
    seconds. Its 26 witnesses plus inventory, audit, and matrix completion cover
    semantics, frontend, elaboration, libraries/artifacts, interpreter/LLVM,
@@ -9500,7 +9503,7 @@ logs. Identify and resolve known actionable errors before starting the new run.
 5. Full SystemVerilog-2023 support is declared complete: all 56 independently
    worded delta rows are preserved and zero remain active at normalized
    SHA-256
-   `74e34451638573dfbd7e31bf7c163b20a3e7e8c390f75bf3e9623fbffe1af7bf`.
+   `69f7d088e4d0a1f1acd09e1b675423dcf6240294c889b45fb2a518e819053cc9`.
    The source-package manifest contains 1,896 paths at SHA-256
    `077c3da9a3937c99745aad917b5c65f200375171a7f2aa516cbfef69ba28a72a`.
 6. Batch 187 is not a sanitizer or hosted-CI boundary, so neither lane ran.
@@ -10009,3 +10012,1904 @@ logs. Identify and resolve known actionable errors before starting the new run.
    this repair diff, push once, then monitor and fix every required hosted lane
    until green. Do not create or push `v3.0.0`, publish release artifacts, or
    begin Batch 189 before hosted closure is green.
+
+## Batch 188A Change 1 checkpoint
+
+1. Replacement Batch 188A is now authoritative and consists of exactly twenty
+   changes between Batch 188 and Batch 189. It creates no release tag and does
+   not renumber Batches 189-197. This supersedes the earlier Batch 188 tag and
+   publication direction. The accepted handoff is `parse/check -> build and
+   fold HIR -> destroy AST -> link HIR -> specialize HIR -> lower to SimIR ->
+   build DesignIR`; DesignIR remains post-specialization hierarchy state.
+2. The live starting point is clean, synchronized `codex/v3` commit
+   `a867847cec10ac831e10674f7dc9de17ba294916`. The source tree and local/remote
+   refs matched when Change 1 began. This commit is also the performance/RSS
+   baseline for the replacement batch.
+3. Compilation must return one `semantic::CompiledDesign` and no reachable
+   parser or AST storage. Existing VHDL and SystemVerilog HIRs are the only
+   owning compilation IRs. Shared elaboration may use non-owning dispatch views;
+   specialization may own a unit-scoped HIR copy or overlay cached by the
+   existing in-memory key. No persistent specialization cache, template
+   hierarchy, recipe IR, symbolic SimIR, or new CLI switch is allowed.
+4. Work is split into four cohesive waves: Changes 2-5 establish ownership;
+   Changes 6-10 fold and persist compiled HIR; Changes 11-15 link and
+   specialize; Changes 16-20 cut hierarchy/lowering over and close
+   compatibility. Run focused tests only at wave boundaries. Change 20 owns
+   clean eight-worker Release then Debug suites, representative measurements,
+   and one four-lane, LLVM-enabled-only hosted matrix: Linux Debug/Release and
+   Windows Debug/Release. Do not repeat sanitizers before Batch 190, and
+   commit/push only once after local qualification.
+5. Audit net progress at meaningful seam and validation boundaries. Hourly
+   checkpoint recording is no longer required. If work churns, execute the
+   shortest remaining dependency here. Preserve repository WebKit style and
+   use cohesive helpers, translation-unit partitioning, deduplication, or
+   obsolete-code deletion rather than compressed lines. The 2,000-line ceiling
+   is waived for this batch and its gate is not a Batch 188A closure condition.
+6. Proceed to Change 2: introduce `semantic::CompiledDesign` and its minimal
+   non-owning language-dispatch accessors. Do not begin HIR completion from
+   Change 3 in the same bounded slice.
+
+## Batch 188A 2026-09-16 11:53 MDT progress audit
+
+1. Net progress is positive rather than churn. `CheckedProject` now carries one
+   `semantic::CompiledDesign` owner; the prior independent semantic, SV-HIR,
+   and VHDL-HIR members are gone. Both HIRs retain instance/association,
+   generate, defparam, bind, timing, UDP, coverage, source, and compilation
+   provenance needed by the next cutover slices.
+2. Compilation and object-check paths construct both HIR projections instead
+   of skipping object HIR. A deterministic compiled-HIR bundle codec reuses the
+   semantic and language codecs at bundle schema 1, SV-HIR schema 8, and
+   VHDL-HIR schema 5. Its corruption and deterministic round-trip coverage is
+   green in `fsim.application.systemverilog_hir`.
+3. The normalization pass annotates residual expression, generate, and
+   defparam dependencies and marks dependency-independent HIR expressions.
+   The single linker relocates every semantic/HIR dense ID, rejects logical
+   unit collisions, rebuilds dependency/reference metadata, and normalizes the
+   merged result. Focused SV and VHDL projected tests pass.
+4. The AST lifetime boundary is not yet closed: `CheckedProject::parsed`, the
+   public `ParsedDesign` elaboration overloads, and `SpecializedUnit::unit`
+   remain. Therefore Changes 2-3, 6-8, and 11 have implemented foundations but
+   are not accepted as complete, and no later change is claimed complete.
+5. The shortest remaining dependency is the HIR-native elaboration ownership
+   seam: change public/internal hierarchy lookup and specialization state to
+   consume `const semantic::CompiledDesign&` and unit-scoped HIR records. Only
+   after that seam is executable may object/cache publication switch to the
+   bundle and compile-local AST storage be destroyed.
+
+## Batch 188A 2026-09-17 08:46 MDT progress audit
+
+1. Net progress remains positive. Public `check_project()` and `load_objects()`
+   now return an AST-free `CheckedProject`; parser ownership lives only in an
+   internal `CompilationWorkspace`, and moving out the compiled-project base
+   destroys that workspace before either public API returns. CLI and Tcl unit
+   counts, plus the focused HIR lifetime tests, now inspect semantic/HIR state.
+2. `.fsimobj` format 8 and portable schema 15 now publish one deterministic
+   compiled-HIR bundle, restore and relocate its logical source identities,
+   and route decoded bundles through the common linker. The legacy AST unit
+   payloads remain temporarily beside the bundle solely for the not-yet-ported
+   internal elaborator; they are no longer the public compilation result.
+3. Warnings-as-errors `fsim_application` builds pass with eight workers.
+   `fsim.application.systemverilog_hir`,
+   `fsim.application.vhdl_projected`, and
+   `fsim.application.artifact_phases` pass after the ownership and object
+   persistence changes. `git diff --check` is clean.
+4. No completion claim is made for Changes 5, 9, 10, or 12: internal build,
+   library export/import, and elaboration still retain or reconstruct AST
+   storage. The object format currently carries both the authoritative bundle
+   and transitional syntax payloads, so the prohibition on owning AST payloads
+   is not yet satisfied.
+5. The shortest remaining dependency is mapped-library parity: publish and
+   restore the identical compiled-HIR bundle under library format 6, then make
+   the linked bundle authoritative while keeping the transitional AST sidecar
+   isolated. After that wave boundary, cut the elaborator API and
+   `SpecializedUnit` ownership over to HIR.
+
+## Batch 188A 2026-09-17 09:48 MDT progress audit
+
+1. Net progress remains positive. Library format 6 now publishes and decodes
+   compiled-HIR bundle schema 1, and the checker excludes the compatibility
+   syntax projection for every mapped logical library before linking those
+   decoded bundles into the public `CompiledDesign`.
+2. Public application tests no longer inspect `CheckedProject` syntax. The HIR
+   now retains SystemVerilog scheduling and standard-package provenance plus
+   complete VHDL predefined-environment, standard-package, value-domain,
+   executable-width, and static range metadata needed by those consumers.
+3. The build phase no longer discards the checked semantic/HIR product and
+   rebuilds it after AST elaboration. The compiled design remains the stable
+   owner through specialization and lowering; the legacy syntax adapter is
+   still isolated inside the internal build workspace and is not yet removed.
+4. The first broad Debug application run exposed representation-boundary
+   defects. Fixes in flight canonicalize HIR standard spellings, retain static
+   VHDL range bounds, reject post-link HIR validation errors, complete
+   structural SystemVerilog expression records, and index the `.fsimobj`
+   compiled bundle separately from design units.
+5. The shortest remaining dependency is still the HIR-native hierarchy seam:
+   finish this wave's focused regression repair, then change unit lookup and
+   specialization ownership from `ParsedDesign`/`DesignUnit` to compiled HIR.
+   Transitional AST sidecars and the internal AST elaborator remain explicit
+   blockers; no cutover or batch-completion claim is made.
+
+## Batch 188A 2026-09-17 10:48 MDT progress audit
+
+1. Net progress remains positive. Root, library, configuration, package,
+   entity, port-surface, and mixed-language target selection now begin from
+   `semantic::CompiledDesign`; syntax records are obtained only after HIR
+   identity selection as a temporary lowering adapter.
+2. The combined warnings-as-errors application target builds with eight
+   workers. The 86-test application boundary reached 85 passes and one
+   localized UDP transition-delay regression; validating the synthetic UDP
+   lowering profile against the compiled UDP record fixed it, and the focused
+   transition-delay test is green again.
+3. The next hierarchy wave is deliberately broad: VHDL component binding,
+   SystemVerilog interface lookup, and builder package/bind/extern registry
+   initialization are proceeding in parallel before another combined build.
+   This keeps compile/test iterations at cohesive subsystem boundaries.
+4. Source changes remain WebKit-style and `git diff --check` was clean at the
+   preceding wave boundary. No line-count target is being met through compressed
+   expressions or declarations.
+5. The shortest remaining dependency is specialization ownership. After the
+   current lookup wave, replace `SpecializedUnit`'s `DesignUnit` copy with a
+   unit-scoped HIR working representation and move residual parameter,
+   generate, callable, and process lowering onto HIR. Transitional AST object
+   and library sidecars remain explicit blockers, so no completion claim is
+   made.
+
+## Batch 188A 2026-09-17 11:48 MDT progress audit
+
+1. Net progress remains positive. The linker now validates and relocates the
+   complete semantic and language-HIR identity surface deterministically, and
+   shared non-owning declaration, type, expression, statement, process, and
+   instance dispatch begins from `semantic::CompiledDesign`.
+2. Project resolution and declared-precision validation are authoritative from
+   compiled HIR for direct source, decoded objects, and mapped libraries. The
+   visitor covers retained SystemVerilog timing, UDP, clocking, declaration,
+   statement, and instance delays plus VHDL waveform, rejection, and nested
+   disconnection delays while preserving configured minimum, typical, and
+   maximum selection. AST delay mutation remains isolated as a temporary
+   lowering adapter.
+3. Parser-independent specialization overlays now validate declaration
+   ownership, retain residual expression and generate dependencies, include
+   VHDL primary-entity generics, prefer canonical identities, fall back per
+   declaration when necessary, and ignore local parameter, specparam, and
+   local-package bookkeeping that is not part of the specialization surface.
+4. SystemVerilog HIR now retains typed DPI, clocking, assertion, checker, and
+   complete covergroup declaration and initial-instance state. VHDL HIR now
+   retains unit and nested-generate disconnection specifications. The SV and
+   VHDL builders were split into cohesive translation units below the source
+   line ceiling; the compiled-HIR codec is being partitioned next. All current
+   static and whitespace checks are clean.
+5. Broad builds from the individual lanes were deliberately deferred so one
+   eight-worker warnings-as-errors build can validate this complete wave. The
+   shortest remaining dependency after that boundary is still AST-free
+   specialization and lowering: evaluate residual HIR once per specialization
+   and remove `SpecializedUnit::unit`, then remove object/library AST sidecars
+   and every `ParsedDesign` elaborator API. No later change or batch completion
+   is claimed.
+
+## Batch 188A 2026-09-17 12:48 MDT progress audit
+
+1. Net progress remains positive. The combined eight-worker Debug
+   warnings-as-errors boundary rebuilt and linked the semantic, elaboration,
+   application, and all three test executables after the HIR, codec, and
+   specialization partitions. Semantic and elaboration suites pass.
+2. Focused application testing exposed four representation-boundary
+   regressions. Full nested minimum/typical/maximum delay information is now
+   retained for every additional HIR delay component, restoring established
+   1 ns, 1 ps, and 1 fs automatic-resolution behavior. Distinct file-unit
+   classes now publish collision-free canonical VPI identities, and class
+   constructor execution accepts bounded sized packed literals.
+3. The new class case and the original transition-delay resolution assertion
+   now pass. Artifact, mapped-library resolution, UDP artifact, and later class
+   artifact paths converge on one remaining diagnostic: SystemVerilog HIR
+   instance ID 0 does not match its semantic identity after projection. A
+   single linker/identity repair owns that common failure.
+4. Source-budget work remains WebKit-style: SV and VHDL HIR builders, the
+   design-artifact codec, hierarchy/class resolution, and specialization are
+   split into cohesive translation units with clean whitespace and line-length
+   checks. No compressed-source workaround was introduced.
+5. After the instance-identity repair and one authoritative grouped rerun, the
+   shortest remaining architectural dependency is a parser-independent
+   `SpecializedHirUnit`: overlay-first specialized records, selected generates,
+   deterministic synthetic hierarchy records, and HIR-native final lowering.
+   Sidecar publication cannot be deleted first because current specialization,
+   hierarchy materialization, coverage, UDP, and final lowering still consume
+   the AST adapter. No batch-completion claim is made.
+
+## Batch 188A 2026-09-17 13:43 MDT progress audit
+
+1. Net progress remains positive. The common linker now compares complete
+   relocated origin chains instead of object-local numeric origin IDs, and the
+   explicit semantic/SystemVerilog compilation-unit plus nested-class scopes
+   eliminate the class-only coverage crash. The combined Debug build was green
+   before these latest partitions; artifact-phase coverage passes, and the DPI
+   follow-up corrected an import-profile test expectation rather than changing
+   HIR semantics.
+2. `SpecializedHirUnit` now owns deterministic, unit-scoped replacement records
+   for declarations, types, expressions, statements, processes, and instances,
+   selected-generate IDs, and canonical actual metadata with immutable
+   `CompiledDesign` fallback. The existing specialization cache retains this
+   working HIR owner; its `DesignUnit` remains explicitly isolated as the
+   temporary unported lowering adapter.
+3. UDP declaration validation and resource limits are enforced at compiled-HIR
+   validation, codec, and linker boundaries. Compiled candidates now drive UDP
+   table/profile construction and hierarchy dispatch. Object and mapped-library
+   publication/loading no longer emit or consume `.fsimudp`; primitive metadata
+   inventory is validated against the authoritative bundle while established
+   collision diagnostics and inspect output remain stable.
+4. VHDL configuration root, block-chain, rule, binding, instance-ID, identity,
+   and validation selection is HIR-authoritative, including a decoded-bundle
+   parity test that reorders the compatibility AST. Its large implementation is
+   being split at the selection/association boundary before the root-owned
+   build. Ordinary-cache ownership is under a separate graph-first audit.
+5. The shortest remaining dependency is executable class HIR: parameters,
+   relations, member and callable ID links, per-member origins, and generated
+   classes are being added to the existing HIR stores. After that representation
+   is validated, move class specialization/execution and final HIR-to-SimIR
+   lowering off the AST adapter, delete `.fsimclass` and residual UDP codec
+   surfaces, then remove every `ParsedDesign` elaborator API. No acceptance or
+   batch-completion claim is made.
+
+## Batch 188A 2026-09-17 14:38 MDT progress audit
+
+1. Net progress remains positive. Class HIR now retains parameters, relations,
+   typedef/member links, property initializers, callable declarations and body
+   statement IDs, per-member origins, nested classes, and generate-alternative
+   ownership in the existing semantic/HIR stores. A five-defect adversarial
+   review then drove repairs for case-choice dependencies, alternative identity,
+   class ownership/body closure, and recursive external-reference discovery.
+2. VHDL configuration selection is HIR-authoritative and split into bounded
+   selection/application and validation translation units. UDP execution now
+   selects the compiled declaration directly, and object/mapped-library flows
+   retain only metadata inventory plus the compiled bundle; production no
+   longer publishes or reads `.fsimudp`.
+3. The ordinary cache now stores the raw compiled-HIR bundle before
+   specialization/elaboration under the existing checksum-framed ObjectCache
+   V1 envelope. Its cache key validates the compiled-HIR schema, governed
+   producer revision, and bijective role/ordinal source
+   relocation, and canonical equality with the fresh compilation before using
+   the temporary AST lowering adapter. Valid wrong bundles self-heal as misses,
+   and honest oversized bundles bypass caching. The coordinated ABI/schema
+   reference and governed digest pass their standalone check.
+4. The first direct HIR-to-SimIR lowering slice is implemented in four bounded
+   translation units for scalar expressions, structured statements, and simple
+   processes without reconstructing syntax. Independent review found seven
+   correctness blockers before the integrated build: unresolved bindings could
+   drop operations, residual expressions were not specialized, signed/context
+   semantics and VHDL equality were incomplete, wildcard first-execution was
+   wrong, and several unsupported update/loop/sensitivity forms passed the
+   capability gate. Transactional fallback and stricter gating are in repair.
+5. The shortest remaining dependency is to finish that direct-lowering repair,
+   then run one eight-worker warnings-as-errors build and grouped semantic,
+   elaboration, application, object, and library tests across the complete
+   class/configuration/UDP/cache/lowering wave. After evidence-backed repairs,
+   port the remaining callable/timing/assertion/class consumers, remove
+   `.fsimclass`, legacy UDP codecs, `SpecializedUnit::unit`, and every
+   `ParsedDesign` elaborator API. No acceptance or batch-completion claim is
+   made.
+
+## Batch 188A 2026-09-17 15:28 MDT progress audit
+
+1. Net progress remains positive. The first consolidated eight-worker Debug
+   warnings-as-errors build across the semantic, elaboration, and application
+   test executables completed all 575 steps. Two partition-boundary compile
+   defects in the VHDL configuration helper were repaired before the green
+   build; no source compression or single-edit build loop was introduced.
+2. Direct test execution exposed two integration defects not visible to the
+   compiler: one class-closure corruption test assumed a diagnostic ordering,
+   and compiled VHDL configuration validation ran against a SystemVerilog root.
+   The expectation now matches the first precise ownership failure and the
+   validation entry point is language-gated. The grouped runtime suites remain
+   pending until the current parallel repair wave rejoins.
+3. Independent audits found a real compiled-bundle allocation-amplification
+   path in the shared codec reader and redundant frontend expression ownership
+   in post-elaboration specify records. Separate agents now own the aggregate
+   decode-budget/exception boundary and specify-state cleanup, allowing those
+   changes to proceed without overlapping the hierarchy/configuration files.
+4. The AST-lifetime audit confirms the central acceptance blocker: the public
+   compiled elaborator still requires a `ParsedDesign` lowering adapter,
+   `HierarchyBuilder` retains it, and specialization caches retain owning
+   `DesignUnit` copies. Timing HIR, class executable bodies, exact expression
+   type semantics, and production population of specialization replacements
+   remain data dependencies for a complete cutover.
+5. The shortest remaining dependency is to rejoin and verify the decode and
+   post-elaboration cleanup lanes, then remove `.fsimclass` through the
+   compiled class HIR before broadening direct HIR lowering. After that, replace
+   the specialized-unit AST owner and delete `ParsedDesign` elaborator APIs.
+   No acceptance or batch-completion claim is made.
+
+## Batch 188A 2026-09-17 16:20 MDT progress audit
+
+1. Net progress remains positive. The consolidated warnings-as-errors Debug
+   build completed all 1,255 steps after one missing test include was repaired.
+   The first grouped verification wave then reduced sixteen observed failures
+   to a small set of shared identity, relocation, and stale-fixture causes.
+2. Valid repeated semantic source identities are no longer rejected as
+   relocation collisions. Relocation still rejects distinct original
+   path-and-digest identities that converge on one portable name; the cache,
+   object, mapped-library, and affected application routes have focused passing
+   evidence for the repaired boundary.
+3. Artifact metadata round trips and stale-schema expectations are aligned with
+   `.fsimobj` 8, mapped-library 6, portable schema 15, compiled-HIR bundle 1,
+   and `.fsimdesign` 13. Direct VHDL HIR equality lowering now has a valid
+   non-name expression fixture and the elaboration suite passes.
+4. The user has explicitly waived the 2,000-line source ceiling ahead of its
+   removal in the next batch. Batch 188A will not run or restructure code for
+   `fsim.source-line-budget`; normal readable WebKit-style formatting remains
+   required, and no compressed-line workaround is permitted.
+5. The shortest remaining dependency is to rejoin the HIR ownership and bundle
+   portability fixture repairs, rerun the grouped wave once, then resume the
+   AST-ownership cutover at the class sidecar/runtime and public elaborator
+   seams. `SpecializedUnit::unit`, the lowering adapter, `.fsimclass`, and
+   `ParsedDesign` elaborator APIs remain acceptance blockers. No acceptance or
+   batch-completion claim is made.
+
+## Batch 188A 2026-09-17 17:26 MDT progress audit
+
+1. Net progress remains positive. The repaired baseline completed a 442-step
+   eight-worker Debug warnings-as-errors build and passed 19 of the 20 focused
+   semantic, elaboration, application, object, library, cache, and ABI tests.
+   The remaining extern-module collision exposed a linker distinction between
+   prototypes and definitions rather than a broad pipeline regression.
+2. `SpecializedUnit` is now an HIR-only cache owner keyed by the existing
+   specialization key. Owning `DesignUnit` state is isolated in a transient
+   `LegacyAstSpecializationWorkspace`, and prepared SystemVerilog roots no
+   longer retain AST specializations between predeclaration and instantiation.
+3. Runtime class constructor, instance/static function, and UVM function/task
+   dispatch now prefer semantic class specializations and executable HIR. An
+   explicit counter records executable frontend-adapter fallback; heap layout,
+   UVM registration metadata, randomization, and constraints remain named
+   adapter dependencies instead of being represented as a second owning IR.
+4. The linker now permits repeated extern prototypes and exactly one concrete
+   definition, with compiled lookup selecting the concrete definition. The
+   integrated 826/418-step rebuilds found one local Werror defect and then
+   passed. A 22-test gate exposed four focused regressions: Logic4 was promoted
+   to Logic9 in the new evaluator, provisional root specialization duplicated
+   delay diagnostics, language-based unit lookup lacked definition preference,
+   and covergroup resolution ignored class-qualified `@sv-new:<type>` calls.
+   All four repairs are staged for one consolidated rebuild.
+5. The shortest remaining dependency is to rebuild and rerun that 22-test gate
+   once, then implement the compiled hierarchy identity/instance/port slice.
+   The hierarchy audit counted 65 direct `HierarchyBuilder::parsed_` uses
+   across 17 translation units, so deletion must follow real HIR lookup and
+   port-association cutovers rather than replacing the owner with another AST
+   view. No acceptance or batch-completion claim is made.
+
+## Batch 188A 2026-09-17 18:26 MDT progress audit
+
+1. Net progress remains positive. The prior consolidated eight-worker Debug
+   warnings-as-errors build completed 128 steps and the 23-test semantic,
+   elaboration, runtime, application, object, library, cache, and ABI gate
+   passed 23/23 before the current hierarchy wave began.
+2. Decoded compiled-HIR lifetime coverage now destroys the compile-local parser
+   workspace before bundle decode and verifies semantic unit, process, source,
+   and origin identity through relocation and execution. Public checked-design
+   ownership has a compile-time no-`parsed` guard; the transient structural
+   lowering adapter remains the explicit acceptance blocker.
+3. Specialized HIR now exposes deterministic direct and recursively generated
+   instance records, selected-generate instance sets, compiled port and actual
+   association views, exact linked child UnitIds, and direct child occurrence
+   source/origin provenance. Generated compatibility occurrences use exact HIR
+   source identity and reject ambiguous alternative matches rather than
+   selecting by spelling.
+4. SystemVerilog configuration designs, default liblists, instance/cell rules,
+   use/config selections, origins, and linked targets are retained by HIR 8,
+   validated by the bundle codec and linker, and preferred by root/child
+   configuration selection. Direct HIR lowering also covers runtime packed
+   bit and indexed part reads plus conservative selected local/signal writes.
+5. The merged 1,163-step build reached the new hierarchy/configuration units
+   and stopped on two identical C++20 lambda syntax defects in the dynamic
+   selection preflight; both are repaired for the resumed grouped build. The
+   shortest remaining dependency is that build plus the focused gate, followed
+   by HIR-native dependent-generate selection and association/specialization
+   application. The waived source-line gate was not run. No acceptance or
+   batch-completion claim is made.
+
+## Batch 188A 2026-09-17 19:23 MDT progress audit
+
+1. Net progress remains positive. The repaired hierarchy/configuration wave
+   completed an eight-worker Debug warnings-as-errors build and the expanded
+   semantic, elaboration, runtime, application, object, library, cache, and ABI
+   gate passed 23/23 before the next two HIR execution tranches began.
+2. Exact child provenance no longer assumes that semantic occurrence origins
+   and language-HIR origins are identical. Generated compatibility occurrences
+   accept a uniquely qualified leaf with exact source identity, and VHDL
+   32/64-bit integer process locals are accepted as dynamic HIR indices without
+   widening the supported signal domain.
+3. Compiled-design validation now checks generated-instance ownership, linker
+   relocation includes those instances, and canonical input ordering makes
+   link records deterministic. The semantic regression target and suite pass.
+4. A decoded compiled-HIR bundle can now enter the public elaborator without a
+   parser or compatibility AST for a flat SystemVerilog root. That path creates
+   unit signals, retains direct unit/process/source/origin provenance, and
+   lowers processes from HIR; its lifetime test passed after a 314-action
+   eight-worker warnings-as-errors build.
+5. Dependent-generate selection and callable invocation gates are in flight.
+   The shortest remaining dependency is to merge and validate them once, then
+   apply compiled associations and extend the parser-free hierarchy beyond the
+   flat-root slice. The source-line gate remains waived and was not run. Public
+   `ParsedDesign` overloads and the transient AST specialization workspace are
+   still acceptance blockers; no completion claim is made.
+
+## Batch 188A 2026-09-17 20:30 MDT progress audit
+
+1. Net progress remains positive. Four disjoint tranches landed together:
+   compiled named/positional/default/open association specialization,
+   parser-free flat VHDL roots and concurrent statements, generated-class HIR
+   identity handoff, and compiled-bundle-only object/mapped-library unit
+   publication with `.fsimir` removed.
+2. All stale workers were stopped before validation. The consolidated
+   eight-worker Debug warnings-as-errors build completed after two narrow
+   integration repairs: private VHDL name helpers were replaced by the shared
+   configuration comparison and two shadowed association locals were renamed.
+   The resumed build passed all 957 actions.
+3. The focused semantic, elaboration, HIR, cache, object, library, and schema
+   gate passed 10/12 initially. All five previously stale schema contracts now
+   pass at object 8, mapped library 6, portable 15, compiled-HIR bundle 1,
+   Design 13, SV HIR 8, and VHDL HIR 5.
+4. The generated-class lifetime failure is repaired by conservatively allowing
+   class-only generate HIR in parser-free SystemVerilog roots and returning
+   stable selected class identities; its focused test now passes after the
+   compilation workspace is destroyed.
+5. The shortest remaining dependency is parser-free structural child creation
+   and port association for decoded object/library bundles. Removing `.fsimir`
+   correctly exposed this boundary as `FSIM-ELAB-HIR-001` for a simple SV leaf
+   instance. The next cohesive edit is direct HIR child specialization, signal
+   association, process/concurrent lowering, and recursive occurrence
+   provenance. The source-line gate remains waived and was not run; no
+   completion claim is made.
+
+## Batch 188A 2026-09-17 21:30 MDT progress audit
+
+1. Net progress remains positive. Parser-free recursive SystemVerilog and VHDL
+   child hierarchy creation now covers compiled target resolution, parameter
+   or generic identity, port aliases and open outputs, selected instance
+   generates, direct process or concurrent lowering, exact occurrence
+   provenance, and cycle guards from decoded bundles.
+2. The owning `.fsimclass`, `.fsimir`, and `.fsimudp` sidecar codecs are now
+   absent from production sources and public headers. Their structural-AST
+   round-trip tests were deleted, source relocation metadata moved to a
+   syntax-free header, and object/library metadata retains explicit negative
+   rejection coverage for all three legacy suffixes.
+3. The portable object, stale-schema, producer-diagnostic, and aggregate v3
+   schema freezes now describe the single `FSIMCHIR` compiled-design bundle;
+   their direct checks pass at object 8, portable 15, compiled-HIR bundle 1,
+   mapped library 6, and Design 13. The broader resource/composition contracts
+   are being updated to the same owner before the joined build.
+4. Mutable string storage and assignment plus class instance/static method
+   argument binding and packed/string copyout are static-ready in direct HIR
+   lowering. All agent work has stopped for consolidation; completed agent
+   records cannot be deleted by the collaboration API, but no stale worker is
+   executing.
+5. The shortest remaining dependency is the joined eight-worker build and
+   `fsim.application.classes` gate. Its predicted next boundary is ordinary
+   module callable output/inout/ref binding, followed by containers and
+   randomization. The waived source-line gate was not run; no acceptance or
+   batch-completion claim is made.
+
+## Batch 188A 2026-09-17 22:30 MDT progress audit
+
+1. Net progress remains positive. Compiled-HIR constant references, preserved
+   SystemVerilog value forms, checked class casts, packed class properties,
+   recursive child hierarchy, and the single-bundle artifact path now compose
+   in one warnings-as-errors application build.
+2. Class task calls now use the existing automatic callable frame directly
+   from decoded HIR, including instance receivers, packed input/output/inout
+   formals, copyout, task returns, and deferred callable-body lowering. A
+   normalized constant HIR delay emits `WaitFor`, preserving suspension and
+   simulation time without reconstructing syntax.
+3. The 137-action eight-worker Debug warnings-as-errors application build
+   passed. The focused class artifact advanced past the task/delay boundary to
+   the next unsupported records: class-handle container access. Fixed,
+   dynamic, queue, and associative handle read/write, resize, push, pop, and
+   size hooks are now implemented as one HIR-to-SimIR tranche and await the
+   joined validation cycle.
+4. No stale agent is executing. The collaboration API retains completed and
+   interrupted records but exposes no delete operation; the sole historical
+   worker still marked active was interrupted before this cycle.
+5. The shortest remaining dependency is to validate the class-container
+   tranche, then follow the first remaining decoded-bundle residual rather
+   than widening unrelated paths. Public `ParsedDesign` elaboration overloads
+   and the transient AST specialization workspace remain acceptance blockers.
+   The waived source-line gate was not run; no completion claim is made.
+
+## Batch 188A 2026-09-17 23:25 MDT progress audit
+
+1. Net progress remains positive. The direct compiled-HIR class path now
+   passes all three execution engines, its native-cache rerun, and object and
+   design-artifact elaboration after adding class built-ins, defaulted and
+   named callable actuals, width normalization, immediate assertions, event
+   controls, and inline randomize-constraint preservation.
+2. Inline constraints now remain HIR associations through compilation,
+   linking, specialization, artifact encoding, and final ClassMethodCall
+   lowering. Callable debug locals are unit-qualified, eliminating collisions
+   between independently lowered methods.
+3. The latest 146-action eight-worker Debug warnings-as-errors application
+   build passed. The class regression now reaches the relocated-design
+   inspection and reports an intentionally empty legacy frontend class
+   specialization vector while the compiled class HIR and SimIR remain in the
+   artifact.
+4. No stale agent is executing. Completed and interrupted records cannot be
+   deleted by the collaboration API; all available historical workers remain
+   stopped. The source-line gate remains waived and was not run.
+5. The shortest remaining dependency is the HIR-only class runtime metadata
+   cutover: remove the relocated-artifact test and Simulation dependency on
+   AST-owning frontend specializations, derive runtime class behavior from
+   compiled HIR and SimIR, then validate the entire class gate once. Public
+   ParsedDesign elaboration overloads and the transient AST specialization
+   workspace remain later acceptance blockers; no completion claim is made.
+
+## Batch 188A 2026-09-18 00:25 MDT progress audit
+
+1. Net progress remains positive. The HIR-only class runtime metadata path now
+   supplies semantic class descriptors, UVM registration, bounded class-handle
+   queues, and randomize callback validation without requiring a frontend
+   class specialization in a relocated design artifact.
+2. Direct interpreter, debug-interpreter, LLVM, native-cache, object, and
+   design-artifact class execution reach the relocated artifact constructor.
+   The remaining failure is localized to `class_top.source_accumulator`: its
+   serialized two-state integer initializer is known zero, but hierarchy
+   construction incorrectly assigns `sv_wire` resolution and converts the live
+   value to high impedance before VPI publication.
+3. Temporary broad lowering diagnostics have been removed. The retained VPI
+   diagnostic now reports the published path, runtime signal identity, and
+   signal name, making artifact metadata failures actionable without exposing
+   parser or AST ownership.
+4. No stale agent is executing. The collaboration API retains stopped records
+   and provides no delete operation; the active roster contains only the root
+   agent. The source-line gate remains waived and was not run.
+5. The shortest remaining dependency is to trace the incorrect variable/net
+   resolution metadata through compiled-HIR projection, correct it, remove the
+   temporary test probe, and run one joined eight-worker build plus the full
+   class gate. Public `ParsedDesign` APIs and transient AST specialization
+   ownership remain later acceptance blockers; no completion claim is made.
+
+## Batch 188A 2026-09-18 01:24 MDT progress audit
+
+1. Net progress remains positive. The public application build now invokes
+   only the compiled-design elaboration API after projecting coverage and
+   destroying compile-local AST storage; HIR delay selection and normalization
+   run after that lifetime boundary.
+2. Coverage reconstruction and SystemVerilog/VHDL delay normalization now
+   consume compiled HIR directly. The joined 465-action, eight-worker Debug
+   warnings-as-errors build passed for the application and UVM targets, and
+   the dedicated compiled-HIR cache regression passed.
+3. A focused HIR-lowering test no longer reparses sources to manufacture an
+   AST lowering adapter. Its first parser-free run exposed a VHDL signal
+   construction rollback defect for a bit-vector default; metadata creation is
+   now transactional and bit-string constant evaluation is the active repair.
+4. No stale agent is executing. Completed records cannot be deleted by the
+   collaboration API; only the root agent is active. The waived source-line
+   gate was not run.
+5. The shortest remaining dependency is to complete VHDL bit-string folding,
+   rerun the three compiled-HIR regressions, then address the first failure in
+   the class/artifact/time focused gate. Internal legacy AST test adapters and
+   broader AST-based elaborator ownership remain acceptance blockers; no
+   completion claim is made.
+
+## Batch 188A 2026-09-18 02:24 MDT progress audit
+
+1. Net progress remains positive. Decoded VHDL default generics now select
+   dependent generates, root defaults participate in specialization identity,
+   and direct SystemVerilog HIR lowering has advanced through bounded loops,
+   named-block disable, Verilog source provenance, static memories, residual
+   specialization evaluation, and canonical wide parameter identities.
+2. The parser-free HIR lowering regression passes. The SystemVerilog HIR gate
+   now reaches the nettype/alias/let fixture after passing interface classes,
+   DesignIR construction, loops, named disable, cache provenance, static
+   memory simulation, and VPI canonical-parameter checks.
+3. One cohesive ownership slice is active: generate-local aliases and lets are
+   retained in HIR, selected generate declarations/processes/statements are
+   routed to lowering, and HIR aliases are compiled into whole-signal identity
+   groups or bidirectional slice transfers. Its joined build and execution
+   gate are pending; no intermediate success is claimed.
+4. The active workers have accurate lanes for compiled-let lowering and VHDL
+   hierarchy regression. Artifact/cache and class-runtime workers completed
+   their gates and stopped; there are no stale running workers. The source-line
+   gate remains waived and was not run.
+5. The shortest remaining dependency is to make the nettype/alias/let fixture
+   pass from a decoded bundle, then rerun the generated-class and VHDL gates
+   against the same integrated hierarchy path. Broader timing/assertion/bind
+   and final AST-ownership closure remain later blockers; no completion claim
+   is made.
+
+## Batch 188A 2026-09-18 03:30 MDT progress audit
+
+1. Net progress remains positive. The production elaboration entry point now
+   constructs hierarchy from `semantic::CompiledDesign` directly, production
+   `ParsedDesign` overloads are gone, and the legacy syntax route is isolated
+   behind test support while the remaining internal AST ownership is audited.
+2. A joined eight-worker Debug warnings-as-errors build completed all 712
+   remaining actions successfully after one pointer-shadowing compile repair.
+   The focused compiled-HIR matrix passes 8 of 18 gates, including direct HIR
+   lowering, classes through relocated artifacts, cache, object, design
+   artifact, library artifact, semantic class specialization, and UVM.
+3. The ten remaining focused failures have been reduced to four concrete
+   implementation lanes: resolved-net driver classification, VHDL
+   process/concurrent/configuration capability, class static storage across
+   multiple roots, and iterative-generate occurrence specialization. The
+   first three have accurately named active workers; the root owns the fourth.
+4. No stale or unused agent is running. Completed and interrupted records are
+   inert and cannot be deleted through the collaboration API. The source-line
+   gate remains waived at the user's direction and was not run.
+5. The shortest remaining dependency is to represent each selected iterative
+   generate occurrence in specialized HIR so its declarations, processes,
+   concurrent statements, instance actuals, and genvar-dependent values reach
+   hierarchy construction without reconstructing syntax. One joined build and
+   focused execution matrix will follow this cohesive source wave.
+
+## Batch 188A 2026-09-18 04:30 MDT progress audit
+
+1. Net progress remains positive. A complete 913-action Debug
+   warnings-as-errors build passed before the current source wave, and the
+   focused compiled-HIR matrix then passed 9 of 18 gates. The class multi-root
+   static-storage failure is closed; the remaining failures are localized to
+   generated hierarchy materialization, VHDL direct-HIR capability, and one
+   stale-layout elaboration executable.
+2. The cohesive hierarchy wave now materializes separate SystemVerilog and
+   VHDL generate occurrences with hierarchy-local identities, paths, signals,
+   processes, concurrent statements, aliases, and instances. VHDL constant
+   input actuals and SystemVerilog dependent typedef widths are resolved from
+   the occurrence specialization without rebuilding syntax.
+3. VHDL executable-HIR resolution now covers architecture/entity and package
+   declaration/body scopes, inherited use clauses, selected generic-package
+   members, procedure names, enumeration attributes, and scalar unary `not`.
+   The joined 405-action eight-worker Debug rebuild is currently running; no
+   result from this source wave is claimed yet.
+4. The stale `fsim.elaboration` crash was traced under GDB to a deliberate
+   mixed object layout after `Lowerer` changed; no speculative source patch was
+   made. All implementation workers have stopped. One accurately named,
+   read-only worker is auditing the remaining AST ownership cutover; there are
+   no stale running workers. The waived source-line gate was not run.
+5. The shortest remaining dependency is to finish the joined build, run the
+   18-test focused matrix once, and repair only the newly exposed first-order
+   residuals. After that gate, the next cohesive slice is deletion of the
+   legacy AST ownership surfaces identified by the audit; no completion claim
+   is made.
+
+## Batch 188A 2026-09-18 05:30 MDT progress audit
+
+1. Net progress remains positive. Two joined Debug warnings-as-errors rebuilds
+   completed successfully after integration repairs; the latest 135-action
+   rebuild includes the second focused hierarchy/lowering repair wave.
+2. The compiled-HIR path now covers occurrence-specialized generates, direct
+   HIR processes/callables, selected VHDL port adapters, linked package and
+   callable provenance, context-imported generic defaults, configuration-rule
+   exclusions, imported SystemVerilog nettypes, and retained HIR timing
+   controls. Dynamic integral evaluation no longer folds mutable variables.
+3. The last executed nine-test matrix preceded the latest repair wave and
+   therefore remains 0/9. Each failure has since received a targeted source
+   fix, but those tests have not yet been rerun; no pass claim is made.
+4. All implementation workers have handed off and were stopped. One debugger
+   probe hung while calling an inferior method, and both debugger and inferior
+   were explicitly terminated; the latest process audit shows no GDB, test,
+   or Ninja process. The waived source-line gate remains unrun.
+5. The shortest remaining dependency is to rerun the nine-test matrix against
+   the successful joined build, repair any residuals as one cohesive wave,
+   then execute the broader focused and full validation gates. Internal legacy
+   AST ownership remains the principal architectural acceptance blocker after
+   functional closure.
+
+## Batch 188A 2026-09-18 06:33 MDT progress audit
+
+1. Net progress remains positive. One complete 404-action Debug
+   warnings-as-errors build and the subsequent 277-action consolidated
+   elaboration/application rebuild both passed with eight workers.
+2. The nine-test compiled-HIR matrix improved from 0/9 to 5/9 before the
+   latest wave. The generated-class SystemVerilog gate now passes, and the
+   VHDL configuration gate passes after canonicalizing object-index actuals;
+   the VHDL type-generic gate now reaches its later predefined-attribute
+   coverage instead of failing its earlier unspecified-type and mode-view
+   cases.
+3. Direct compiled-HIR specialization now retains configuration-cell
+   identity, implicit net drive semantics, declaration-order parameter and
+   localparam metadata, and more integral system-function coercions. The HIR
+   lowerer also gained static string-object initialization plus direct display,
+   formatted/string output, file-close/flush, and monitor-control operations.
+4. A new per-fixture elaboration selector allowed all 70 legacy elaboration
+   fixtures to run in eight parallel processes. Four currently pass; the
+   failures cluster around explicit unported HIR declaration, statement,
+   callable, file, and composite-layout adapters rather than parser ownership
+   or nondeterministic crashes. One concurrent-build stale-object race was
+   found, so workers now hand off source-only waves and the root owns joined
+   builds. No GDB, test, CMake, or Ninja process remains after the latest
+   probes, and the waived source-line gate remains unrun.
+5. The shortest remaining dependency is the active three-part source wave:
+   close the later VHDL predefined-attribute layout case, normalize the
+   remaining signed/sized SystemVerilog specialization metadata, and identify
+   the first unsupported string-process HIR construct. Then rerun the focused
+   gates and repartition the refreshed fixture inventory before deleting the
+   remaining internal legacy-AST ownership surfaces.
+
+## Batch 188A 2026-09-18 07:36 MDT progress audit
+
+1. Net progress remains positive. Multiple consolidated Debug
+   warnings-as-errors rebuilds completed successfully with eight workers; the
+   latest completed joined elaboration/application build finished all 279
+   actions before the current source-only wave.
+2. Direct compiled-HIR lowering now covers SystemVerilog file calls and memory
+   transfer, automatic string callables, conditional string expressions,
+   string generate selection, fixed-array runtime containers, VHDL
+   predefined enumeration attributes, and accumulated parameter-association
+   diagnostics. The focused gates have advanced beyond each of their earlier
+   failures to later, independently identified boundaries.
+3. The current cohesive source wave adds direct string-port object aliasing
+   and driver validation, parser-free `$sformatf` negative diagnostics, VHDL
+   type-actual inference, and packed-structure/packed-union width recovery for
+   process-local HIR declarations. These edits have not yet received their
+   joined build or execution gate, so no result from this wave is claimed.
+4. Completed source workers were stopped after handoff; one accurately named
+   VHDL type-actual worker remains active. A live process audit found no GDB,
+   LLDB, CMake, or Ninja process. The waived source-line gate remains unrun as
+   directed.
+5. The shortest remaining dependency is to finish the VHDL handoff, build the
+   four-lane source wave once, and rerun the VHDL type-generic, SystemVerilog
+   specialization, string, and file gates together. The refreshed failures
+   will determine the next broad HIR-lowering partition; legacy AST ownership
+   remains the architectural acceptance blocker after functional closure.
+
+## Batch 188A 2026-09-18 08:36 MDT progress audit
+
+1. Net progress remains positive. The latest joined Debug
+   warnings-as-errors elaboration/application rebuild completed all 273
+   actions with eight workers after two missing-field initializer warnings
+   were repaired.
+2. Four of the six immediate focused gates pass: direct string lowering,
+   direct file lowering, VHDL configurations, and SystemVerilog preprocessor
+   generates. The VHDL type-generic and SystemVerilog specialization gates
+   advanced to later HIR-only failures; targeted layout and cast/replication
+   fixes are present in the current unbuilt source wave.
+3. A refreshed eight-process fixture inventory records 5 of 69 elaboration
+   fixtures passing in `/tmp/fsim-elab-inventory.H8xaN9`, improving the prior
+   snapshot by closing the string and file clusters. The remaining failures
+   are concentrated in process/callable HIR coverage, hierarchy target
+   resolution, composite layout, and structural syntax-adapter removal.
+4. The compiled root no longer retains an AST unit pointer, obsolete
+   ParsedDesign test-adapter coverage has been removed, and the ownership
+   audit identifies the mixed `Lowerer` and legacy `HierarchyBuilder` forest
+   as the remaining production AST reachability. All source agents have been
+   stopped after handoff except one accurately named read-only VHDL gap audit;
+   no stale GDB remains. The waived source-line gate remains unrun as directed.
+5. The shortest remaining dependency is one joined eight-worker build of the
+   current VHDL layout, SystemVerilog cast/case/configuration, mixed-language,
+   and test-adapter wave, followed by the focused matrix and a refreshed
+   inventory. The next source partition will be selected from those results.
+
+## Batch 188A 2026-09-18 09:48 MDT progress audit
+
+1. Net progress remains positive. The joined Debug warnings-as-errors build
+   for the direct-HIR process/case, compiled hierarchy/layout, and public
+   AST-lifetime wave completed all 684 actions successfully with eight
+   workers.
+2. The corrected focused matrix now passes 8 of 18 gates. VHDL
+   configurations, SystemVerilog preprocessor generates, strings, files, case
+   qualifiers, direct HIR lowering, and multi-library resolution pass; the
+   compiled-HIR cache and VHDL type-generic gates now fail only their later
+   specialization-identity assertions.
+3. The remaining execution failures are partitioned into SystemVerilog
+   residual expression/case lowering, VHDL concurrent and edge-sensitive
+   execution, specialization identity stability, and configuration/driver
+   diagnostics. The identity and configuration source waves have handed off;
+   the SystemVerilog source wave remains active while the VHDL failure shapes
+   are being isolated without overlapping its files.
+4. Public lifetime coverage now verifies that elaboration accepts only
+   `CompiledDesign`, rejects `ParsedDesign`, and that published object and
+   mapped-library artifacts contain one compiled-HIR bundle with no legacy
+   per-unit syntax payloads. Completed workers are inert, no GDB, LLDB, CMake,
+   or Ninja process remains, and the waived source-line gate remains unrun.
+5. The shortest remaining dependency is to complete the two active lowering
+   seams, join-build the four-part source wave once, and rerun the focused
+   matrix plus the 69-fixture inventory. Functional closure will then unblock
+   deletion of the remaining mixed `Lowerer` and legacy `HierarchyBuilder`
+   AST ownership forest.
+
+## Batch 188A 2026-09-18 10:50 MDT progress audit
+
+1. Net progress remains positive. The association/binding, direct-HIR
+   statement/expression/callable, declaration/layout, and structural-unit
+   waves have all handed off. Direct compiled-HIR UDP lowering is integrated,
+   and the latest joined Debug warnings-as-errors build completed all 477
+   remaining actions successfully with eight workers.
+2. The joined build first exposed missing equality support for the new
+   specialized SystemVerilog and VHDL type payloads plus four local UDP
+   warnings/errors. Those integration faults were repaired together; no
+   execution result from this wave is claimed until the focused gates run.
+3. The UDP path now constructs its SimIR process directly from the compiled
+   declaration, including sequential state, edge tables, instance-array
+   slicing, strengths, delays, source origins, and specialization provenance.
+   It does not rebuild a frontend design unit or process for the compiled
+   path.
+4. The public `CheckedProject` lifetime boundary remains compiled-only; the
+   remaining `parsed` state is held by the compile-local
+   `CompilationWorkspace` and is discarded when the compiled project is
+   released. Two read-only agents are mapping the structured timing-HIR seam
+   and the remaining internal elaboration AST ownership. No GDB or LLDB was
+   started, and the waived source-line gate remains unrun.
+5. The shortest remaining dependency is to run the focused UDP,
+   specialization, mixed-language, and VHDL gates against this clean build,
+   repair any residuals as one cohesive wave, then implement structured
+   specify/timing HIR and its direct consumer before deleting the remaining
+   legacy elaboration ownership forest.
+
+## Batch 188A 2026-09-18 11:45 MDT progress audit
+
+1. Net progress remains positive. The joined Debug warnings-as-errors build
+   completed all 700 actions successfully with eight workers, covering the
+   elaboration and application targets after the direct-HIR UDP, process,
+   hierarchy, association, and timing source waves were joined.
+2. The compiled-HIR cache plus object, mapped-library, ordinary-cache,
+   relocation, restartability, corruption-isolation, and deterministic
+   artifact gates pass 8/8. The focused execution matrix exposed later
+   residuals rather than artifact or lifetime regressions: 3 of its initial
+   16 selectors passed, while the broader selector inventory concentrated
+   failures in shared process/callable lowering, association/type layout,
+   specify timing, and generated-scope handling.
+3. The current cohesive source wave fixes deterministic wildcard and
+   case-folded associations, VHDL constrained layouts and configured
+   positional components, SystemVerilog packed-member/type-parameter layout,
+   direct process/callable and switch metadata, structured timing values, and
+   generated `defparam` ownership. The generate occurrence path now uses the
+   selected region label instead of its sibling alternative label. These
+   current edits have not yet received their joined build, so no execution
+   result from them is claimed.
+4. The completed association worker was stopped immediately after handoff.
+   Three accurately named source workers remain active for process/callable
+   closure, timing/generated-`defparam` closure, and removal of syntax-capable
+   frontend type objects from DesignIR metadata. A live process audit found no
+   GDB or LLDB process. The waived source-line gate remains unrun as directed.
+5. The shortest remaining dependency is to finish those three handoffs, apply
+   the narrow selected-generate `defparam` activation seam, run one joined
+   eight-worker build, and rerun the full elaboration selector inventory plus
+   the application and artifact gates. Functional closure then unblocks the
+   remaining legacy `HierarchyBuilder`, mixed `Lowerer`, coverage, and foreign
+   AST ownership removal.
+
+## Batch 188A 2026-09-18 12:41 MDT progress audit
+
+1. Net progress remains positive. The joined Debug warnings-as-errors build
+   completed all 1,214 actions successfully with eight workers after the
+   association, timing, generated-`defparam`, packed-type, coverage inventory,
+   foreign provenance, procedural assignment, and constant-effect waves were
+   combined.
+2. The compiled bundle, object/design artifact, mapped-library, ordinary
+   cache, corruption, relocation, restartability, determinism, and schema
+   lanes pass 20 of 22 focused tests. The two failures are later
+   generated-class ownership and VHDL specialization-display regressions;
+   every persistence and format contract in those lanes passes. The coverage,
+   foreign, SystemC, class, and procedural lane passes 28 of 33 tests.
+3. The broad direct-HIR elaboration inventory currently passes 8 of 52
+   selectors. Twenty-one failures share process or concurrent-statement
+   capability gaps; the remaining failures concentrate in generated-class
+   identity, specialization/type metadata, configuration selection, composite
+   default layout, and expected-diagnostic transitions. Three source workers
+   now own those non-overlapping root-cause groups.
+4. Public elaboration accepts only `CompiledDesign`, and `SpecializedUnit`
+   owns only `SpecializedHirUnit`. The refreshed ownership audit still finds
+   the internal `LegacyAstSpecializationWorkspace` owning a `DesignUnit`, the
+   legacy `HierarchyBuilder`/mixed `Lowerer` forest, and frontend coverage
+   state retained by `BuiltProject`; these remain architectural acceptance
+   blockers after functional closure. All batch GDB probes exited, no GDB or
+   LLDB process remains, and the waived source-line gate remains unrun.
+5. The shortest remaining dependency is to finish the active generated-class
+   and class/UVM, VHDL specialization/layout, and direct process/concurrent
+   handoffs, run one joined eight-worker build, and rerun the failing focused
+   lanes. That result will define the next large deletion/cutover wave for the
+   legacy elaboration AST forest and frontend coverage adapter.
+
+## Batch 188A 2026-09-18 13:38 MDT progress audit
+
+1. Net progress remains positive. The first joined Debug warnings-as-errors
+   build completed all 579 remaining actions with eight workers after two
+   local integration repairs. The focused persistence, coverage, foreign,
+   class, and process lane then passed 31 of 38 tests. The expanded direct-HIR
+   inventory now contains 69 selectors and passed 13 before the next source
+   wave; this supersedes the earlier 8-of-52 snapshot.
+2. The completed wave fixes generated-class alternative duplication, stale
+   class-expression pointer memoization, VHDL scalar identity expectations,
+   direct-HIR static unpacked-array access, procedural concatenation copy-out,
+   coverage task emission, scoped VHDL named-type and protected-object
+   materialization, specialized packed layouts, constant-function lexical
+   lookup, inactive-generate traversal, local-parameter `defparam`
+   diagnostics, and recursive SystemVerilog container metadata.
+3. Runtime and artifact ownership advanced independently: persistent coverage
+   state is HIR-native, class/UVM execution is HIR-only, the dead frontend
+   class-property runtime overload and obsolete disabled coverage-codec test
+   are deleted, and the design-artifact codec no longer declares frontend AST
+   archive traits. `git diff --check` passes across the joined worktree.
+4. The next eight-worker build reached action 475 of 1,197 and intentionally
+   stopped where `ElaboratedDesignState::SignalInfo` still embeds syntax-
+   capable `frontend::PackedMember`, `Type`, and `Expression` metadata. This
+   is now an explicit architectural blocker rather than a hidden codec
+   fallback. Parallel workers own its syntax-free metadata replacement, the
+   remaining coverage-analysis AST APIs, and removal of the test-only
+   `ParsedDesign` elaborator overload. No GDB or LLDB process remains, and the
+   waived source-line gate remains unrun.
+5. The shortest remaining dependency is to finish the syntax-free
+   `SignalInfo`/DesignIR metadata cutover, resume the same joined build, and
+   rerun the seven focused failures plus the 69-selector inventory. Functional
+   deltas will then drive the HIR-only `Lowerer` split and deletion of the
+   legacy hierarchy/specialization AST forest.
+
+## Batch 188A 2026-09-18 14:30 MDT progress audit
+
+1. Net progress remains positive. Four large ownership waves have joined the
+   worktree: production `ParsedDesign` compatibility removal, test-only
+   compile-and-elaborate isolation, syntax-free DesignIR signal/type metadata,
+   and relocation of structural coverage analysis into the compile-local
+   frontend. A fifth wave replaced the artifact coverage codec's frontend AST
+   payload with canonical runtime state reconstructed and validated against
+   compiled SystemVerilog HIR.
+2. Production elaboration no longer references `ParsedDesign`,
+   `legacy_parsed`, or `compatibility_unit`. Direct compiled paths use the new
+   compact HIR-only `Lowerer` constructor for root/package and UDP lowering;
+   the full legacy lowerer remains internally available and is still an
+   acceptance blocker.
+3. The joined Debug warnings-as-errors build passed the elaboration and
+   application library boundaries, including the new coverage-state codec.
+   Integration repairs removed one stale root-port variable, one dead
+   configuration helper, adapted VHDL array-shape metadata, and qualified the
+   new test-only compilation helper. The resumed eight-worker build is still
+   running, so no focused execution result is claimed yet.
+4. The standalone coverage-state layout genuinely changed and therefore uses
+   schema 8; its freeze, stale-schema, v2-rejection, documentation, and
+   determinism evidence moved with it. `git diff --check` passed before this
+   resumed build. No GDB or LLDB process remains, and the waived source-line
+   gate remains unrun.
+5. The shortest remaining dependency is to finish the current build and run
+   the grouped persistence/coverage/process, VHDL, and 69-selector direct-HIR
+   suites. Their functional deltas, together with the read-only residual AST
+   partition audit, will select the next large hierarchy/lowerer deletion
+   wave.
+
+## Batch 188A 2026-09-18 15:23 MDT progress audit
+
+1. Net progress remains strongly positive. The hierarchy, SystemVerilog and
+   VHDL specialization, shared specialization, and lowerer ownership waves
+   removed the legacy AST elaboration forest in one cohesive cutover. The
+   worktree now deletes more than 100,000 obsolete source lines while retaining
+   eight HIR-only lowerer partitions and the compiled hierarchy paths.
+2. A static acceptance scan now finds no `ParsedDesign`, `DesignUnit`, or
+   prohibited structural expression, statement, process, generate, instance,
+   parameter-override, or type AST in production elaboration headers or
+   sources. A separate declaration/definition audit found no retained Lowerer,
+   HierarchyBuilder, target, or VHDL configuration linkage gaps, and all
+   retained translation units are present in the build and package manifests.
+3. The first post-cutover Debug warnings-as-errors build exposed and repaired
+   six mechanical deletion seams: obsolete constant-function memoization,
+   compiled unit-candidate resolution, two truncated namespace boundaries,
+   packed-index support, and the HIR literal carrier. The resumed eight-worker
+   build now compiles the elaboration library and is progressing through the
+   application layer.
+4. `git diff --check` and the prohibited-AST scan passed before the resumed
+   build. No GDB or LLDB process remains. The intentionally waived source-line
+   gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+5. The shortest remaining dependency is to complete this joined build, repair
+   any downstream compiled-HIR integration failures as a group, then rerun the
+   57-test focused lane and 69-selector direct-HIR inventory. Those results
+   will drive the next functional HIR-lowering wave rather than restoring any
+   deleted AST path.
+
+## Batch 188A 2026-09-18 16:06 MDT progress audit
+
+1. Net progress remains positive. The complete post-cutover Debug
+   warnings-as-errors build passed, then the joined hierarchy, executable-HIR,
+   and coverage wave rebuilt all 108 affected actions with eight workers.
+   VHDL inferred-type and nested-configuration regressions now pass, and the
+   expression selector advances beyond the prior arbitrary-width and power
+   sizing failures.
+2. The current wave adds SystemVerilog signedness intrinsics, arbitrary-width
+   constants, VHDL aggregate/member/stride-aware lowering, type-parameter and
+   type-generic forwarding, package dependency closure, configuration suffix
+   reconstruction, and transactional coverage-object materialization. The
+   remaining coverage failure was reduced to a copied mutable HIR vector; its
+   finder now retains a reference instead of returning a dangling pointer.
+3. The focused regression run passed two of three tests. Coverage remains to
+   be rebuilt and rerun after the pointer repair. The expression selector now
+   reaches its VHDL negative-exponent diagnostic; the HIR path restores the
+   locally-static nonnegative exponent check and `FSIM-ELAB-091` diagnostic.
+4. Three independent source waves are active for VHDL composite/runtime
+   lowering, SystemVerilog specialization/process lowering, and unified
+   artifact/cache plus AST-lifetime closure. Their edit ownership is
+   partitioned so the next compile/test iteration can validate a materially
+   larger joined change. `git diff --check` passed before these waves, no GDB
+   or LLDB process remains, and the waived line gate and sanitizer lanes remain
+   unrun.
+5. The shortest remaining dependency is to join those three waves, run one
+   eight-worker Debug build, and rerun the focused application lane plus the
+   69-selector direct-HIR inventory. Their residual failures will select the
+   next cohesive lowering wave.
+
+## Batch 188A 2026-09-18 16:54 MDT progress audit
+
+1. Net progress remains positive despite the deliberately broader regression
+   inventory. The latest joined warnings-as-errors Debug build passed all 175
+   affected actions. The 57-test focused lane now exposes the remaining HIR
+   execution surface directly: six pass and 51 fail, while the 69-selector
+   direct inventory has 16 confirmed passes. These results replace the earlier
+   narrow partial counts and are being used as the active repair baseline.
+2. The current large wave has repaired canonical SystemVerilog child-value
+   forwarding, compile-time declaration storage, VHDL composite aggregates and
+   dynamic member access, mixed-language construction, SystemC boundary
+   metadata, and unified `.fsimdesign` compiled-HIR persistence. A further
+   mixed/SystemC wave has joined fixes for VHDL component defaults, alias
+   subtype validation, and native child Logic4/Logic9 bindings.
+3. The `.fsimobj` failure was traced to an architectural violation in object
+   loading: compiler-supplied VHDL libraries were reparsed to reconstruct HIR.
+   The active repair persists the complete selected compiler-package HIR in the
+   same object bundle, projects primary and dependency libraries after decode,
+   and links them without syntax reconstruction. Object compilation selects a
+   complete standard environment so independently compiled VHDL units share a
+   deterministic dependency bundle.
+4. The coverage crash is no longer a lifetime failure. Batch GDB showed the
+   HIR hierarchy path materialized `real` declarations as ordinary packed
+   signals with scalar kind `None`; the active repair derives scalar metadata
+   from the specialized HIR type and creates a canonical zero scalar payload.
+   All batch debugger processes exited, `git diff --check` passes, and the
+   waived line gate and pre-Batch-190 sanitizer lanes remain unrun.
+5. Two executable-HIR waves remain active for VHDL callable/process storage and
+   SystemVerilog callable/string/fork/case behavior, with a test-only worker
+   adding multi-object dependency-bundle regressions. The shortest remaining
+   dependency is to join those waves with the object and scalar repairs, run
+   one eight-worker Debug build, then rerun the artifact, coverage, focused,
+   and direct-HIR lanes before selecting the next large residual cluster.
+
+## Batch 188A 2026-09-18 17:44 MDT progress audit
+
+1. Net progress remains positive. The latest integrated warnings-as-errors
+   Debug build completed all 922 actions with eight workers. The joined
+   callable, scalar-metadata, object-bundle, and mapped-library wave repaired
+   the SystemVerilog line-directive and real-valued coverage paths; the
+   artifact-library, coverage, and line-directive focused tests now pass.
+2. `.fsimobj` compilation and loading no longer reconstruct compiler packages
+   from syntax. Each object persists its primary library plus the complete
+   selected compiler dependency environment, loading projects both from the
+   decoded bundle, verifies dependency identity, and links one shared
+   environment. Library projection now retains only the closed semantic source,
+   span, origin, and expansion provenance required by selected records, making
+   compiler-library bundle bytes independent of the compiling object source.
+3. The new two-object VHDL cache regression compiles separate work libraries,
+   deletes both sources, and successfully loads and links both decoded bundles.
+   Its last assertion was corrected to compare the loaded
+   `ieee.std_logic_1164` records with one projected IEEE bundle because the
+   model intentionally represents the package declaration and package body as
+   two units; this is not a duplicated dependency environment.
+4. The remaining selected-lane failure is `artifact_phases`: one VHDL
+   architecture still reaches the structural-adapter guard, while the
+   SystemVerilog residuals are now isolated to the `scalar_artifact` initial
+   process and the `container_alias_artifact` callable process. Dedicated
+   VHDL, SystemVerilog, and projection-integrity workers are active on those
+   independent seams. No GDB or LLDB process remains, and the waived line gate
+   and pre-Batch-190 sanitizer lanes remain unrun.
+5. The shortest remaining dependency is to join those three cohesive repairs,
+   run one eight-worker build, and rerun the five selected artifact/cache lanes.
+   After that boundary passes, the 57-test focused lane and 69-selector direct
+   inventory will establish the next broad functional cluster.
+
+## Batch 188A 2026-09-18 18:44 MDT progress audit
+
+1. Net progress remains positive. The latest integrated warnings-as-errors
+   Debug build completed all 132 affected actions with eight workers. In the
+   six-test artifact/cache/semantic boundary, compiled-HIR cache, library
+   artifact, coverage, and line-directive tests pass; the artifact and semantic
+   tests now fail at later, independently diagnosed seams.
+2. Multi-input compiled-HIR linking now carries every top-level SystemVerilog
+   collection. The linker had projected the covergroup instance into the
+   `.fsimobj` correctly but omitted DPI and covergroup records when appending a
+   non-leading bundle. Append, relocation, and structural range validation now
+   cover both collections, with a regression that forces nonzero relocation
+   and verifies their source, origin, profile, and expression identities.
+3. `artifact_phases` advanced past its coverage-state assertions. Its next VPI
+   failure exposed an implicit interface-port direction left as `unknown` by
+   the HIR handoff. Declaration-aware hierarchy materialization now applies the
+   SystemVerilog effective `inout` direction to interface ports, and the test
+   advanced again to an LLVM `WaitSensitivity` lowering guard in the retained
+   VHDL attribute-stimulus process.
+4. Focused workers are repairing the VHDL association-resolution regression,
+   the LLVM wait-sensitivity lowering gap, and incomplete top-level HIR
+   corruption validation. A collection audit confirmed that all 11
+   SystemVerilog and eight VHDL owning collections now traverse codec,
+   projection, relocation, and link append; it separately identified an
+   included-file ownership weakness for global DPI and covergroup records.
+5. The shortest remaining dependency is to join the association, wait, and
+   validation repairs, rerun the six-test boundary, then fix explicit
+   projection ownership for included-file auxiliary SystemVerilog records
+   before the broader 57-test and direct-HIR inventories. No GDB or LLDB
+   process remains; the waived line gate and pre-Batch-190 sanitizer lanes
+   remain unrun.
+
+## Batch 188A 2026-09-18 19:40 MDT progress audit
+
+1. Net progress remains positive. The joined ownership wave completed a clean
+   warnings-as-errors Debug rebuild of all 737 affected actions with eight
+   workers. Six of the seven semantic, HIR, artifact, cache, coverage, and
+   line-directive boundary tests passed immediately; only the relocation-cache
+   assertion exposed a new source-provenance canonicalization gap.
+2. Top-level SystemVerilog DPI declarations and covergroup instances now carry
+   explicit semantic owner scopes. Frontend grouping assigns included-file
+   declarations to their compilation unit or declaring scope, the linker
+   projects and relocates them by that ownership, and validators reject absent,
+   cross-language, or owner-kind-inconsistent scope identities.
+3. Direct, cached, object, and mapped-library regressions now compile a shared
+   header containing global DPI plus package, class, and module covergroups.
+   They verify header provenance and owner retention after each persistence
+   path, including selected-library projection and link relocation.
+4. The cache relocation failure was traced to preprocessor include ancestry:
+   absolute producer paths were embedded inside expansion descriptions rather
+   than stored as standalone source names. The active repair relocates bounded
+   embedded references, relocates semantic expansion records, and removes the
+   redundant expansion-description copy from HIR source tokens so the semantic
+   origin graph remains the single authority. Its focused rebuild is running.
+5. The shortest remaining dependency is to finish that rebuild, require the
+   canonical bundle to contain no checkout path, and rerun the seven-test
+   boundary. The broader 57-test lane and exact 69-selector inventory follow
+   only after this boundary is green. The waived line gate and pre-Batch-190
+   sanitizer lanes remain unrun, and all debugger sessions used for diagnosis
+   exited.
+
+## Batch 188A 2026-09-18 20:49 MDT progress audit
+
+1. Net progress remains positive. The joined provenance, ownership, and HIR
+   lowering wave completed a warnings-as-errors Debug rebuild of all 1,298
+   affected actions with eight workers. Seven of the nine focused frontend,
+   semantic, HIR, artifact, cache, coverage, assertion, line-directive, and
+   library tests passed on the first boundary run.
+2. Compiled-HIR validation now treats `SourceToken` and generated-text metadata
+   as structural provenance: token kinds, source IDs, and generated-text enums
+   are range checked, and malformed residual expansion data is rejected.
+   Concurrent assertion metadata now carries source tokens instead of owning
+   detached spellings, preserving origin identities through bundle round trips.
+3. Direct `` `__FILE__ `` expansions and stringify/concatenation derivatives
+   now retain generated-text provenance through preprocessing, parsing, HIR,
+   persistence, relocation, and assertion-action lowering. The cache regression
+   has advanced to an include-plus-macro ancestry loss caused by frontend token
+   and source-span expansion stacks diverging at the preprocessing boundary.
+4. Deferred immediate assertion lowering now captures action arguments before
+   transferring execution into the reactive or postponed scheduler region,
+   matching the prior runtime ordering. The assertion regression advanced past
+   that case and now isolates unsupported HIR lowering for assertion-control
+   system tasks in the concurrent-assertion fixture.
+5. The shortest remaining dependencies are to make the finalized source span
+   authoritative for include-plus-macro ancestry and port assertion-control
+   task lowering to HIR. Those independent fixes are partitioned between two
+   focused workers; the root will join them into one eight-worker rebuild and
+   rerun the two failing tests, then the nine-test boundary. No GDB or LLDB
+   process remains; the waived line gate and pre-Batch-190 sanitizer lanes
+   remain unrun.
+
+## Batch 188A 2026-09-18 21:38 MDT progress audit
+
+1. Net progress remains positive. The source-span ancestry and cache-relocation
+   boundary is green, including include-plus-macro provenance. The VHDL package
+   constant repair completed an eight-worker semantic rebuild, and both the
+   base semantic and SystemVerilog class-specialization tests pass.
+2. Concurrent assertion controls and materialized checker processes now remain
+   entirely in compiled HIR. Checker-instance records are retained as compile
+   provenance rather than rejected as residual structure, while VPI publishes
+   each process-owned assertion under a noncolliding `$assertion` child and
+   preserves the source assertion name as an alias.
+3. The SystemVerilog executable projection now distinguishes same-span sibling
+   expressions by kind, text, type, decoded value, and generated-text metadata.
+   This repairs synthetic gate-array terminal indices without reconstructing
+   syntax; the transition regression requires four static slice writes and
+   rejects the erroneous dynamic-index form.
+4. The current lowering wave adds direct compiled-HIR support for `$system`,
+   `$isunknown`, and the random functions, plus one captured packed-lvalue path
+   for compound and prefix/postfix updates across delay and event controls.
+   String static arrays now bypass scalar-string materialization and become
+   fixed container objects usable by both memory-read and memory-write tasks.
+5. VHDL resolver and imported package-type reconstruction is the final active
+   worker in this wave. The shortest remaining dependency is to join that
+   repair, run one warnings-as-errors Debug build with eight workers, and rerun
+   the direct-HIR, assertion, specialization, transition, procedural, random,
+   system-command, VPI, VHDL-overload, resolution, and file lanes. No GDB or
+   LLDB process remains; the waived line gate and pre-Batch-190 sanitizer lanes
+   remain unrun.
+
+## Batch 188A 2026-09-18 22:25 MDT progress audit
+
+1. Net progress remains positive. The joined compiled-HIR projection and
+   lowering wave completed a clean warnings-as-errors Debug rebuild of all 121
+   affected actions with eight workers. Four of the fourteen focused boundary
+   tests passed: direct HIR lowering, call safe points, system command, and the
+   core non-project CLI lane.
+2. Generated and package-dependent unresolved names now have a guarded
+   specialization-time constant fallback without folding writable runtime
+   bindings. Direct call debug points cover signed conversions, system calls,
+   unknown checks, and random calls. The fresh run confirmed the call-safe-point
+   lane is green and advanced VPI, VHDL package specialization, and random
+   lowering to narrower failures.
+3. The remaining focused failures have been partitioned by ownership. Verilog
+   resistive-switch lowering now accepts a legal literal MOS source without
+   inventing bidirectional topology; VPI four-state parameter identities are
+   normalized as canonical `svconst-v3` values; and imported VHDL simple type
+   names are resolved through explicit or `.all` package context.
+4. Process materialization now places concurrent drivers before lexical
+   initial processes, restoring the time-zero continuous-driver transition.
+   The transition regression confirms that ordering but exposed missing
+   gate-array occurrence names in the HIR process projection. A separate
+   concurrent-assertion fork-layout repair is active after VPI publication
+   advanced into runtime validation.
+5. The shortest remaining dependency is to join the active assertion repair
+   with the strength, VPI, VHDL type, nested-selection assignment, and formatted
+   display fixes, then rerun one eight-worker build and the focused boundary.
+   No GDB or LLDB process remains; the waived line gate and pre-Batch-190
+   sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-18 23:13 MDT progress audit
+
+1. Net progress remains positive. The combined direct-HIR wave completed a
+   warnings-as-errors Debug build of all 979 actions with eight workers. The
+   fourteen-test focused boundary still has four green lanes, while every
+   remaining failure advanced to a narrower post-cutover semantic or lowering
+   defect instead of an AST ownership fallback.
+2. Transition-delay selection now discards the unselected minimum, typical,
+   and maximum alternatives before time normalization, so the chosen delay no
+   longer inherits representability diagnostics from inactive variants. HIR
+   signal declarations also retain net delay, drive strength, charge strength,
+   and charge decay for trireg runtime construction.
+3. Repeated event controls now lower their compiled-HIR repeat count instead
+   of collapsing assertion cycle delays to a single wait. Runtime signals
+   recover the SystemVerilog event-variable marker from their linked HIR type,
+   restoring named-event trigger routing for VPI callbacks.
+4. Imported VHDL array-type adaptation now evaluates predefined type
+   attributes through linked HIR declarations and retained dimensions. The
+   completed VHDL wait repair also removes the empty trailing sensitivity wait
+   when an explicit or transitively called wait already suspends the process.
+5. The shortest remaining dependency is the active SystemVerilog statement
+   repair for empty and residual block kinds. Once joined, the root will run a
+   single eight-worker build and repeat the fourteen-test focused boundary,
+   then repartition only the independently remaining failures. No GDB or LLDB
+   process remains; the waived line gate and pre-Batch-190 sanitizer lanes
+   remain unrun.
+
+## Batch 188A 2026-09-19 00:09 MDT progress audit
+
+1. Net progress remains positive. The joined HIR lowering wave completed a
+   warnings-as-errors Debug rebuild of all 105 affected actions with eight
+   workers. VPI callback routing and parameter specialization are now green;
+   the focused boundary has five passing lanes and nine narrower failures.
+2. Named-event runtime signals now initialize to a concrete zero state and
+   mixed event-control lists retain per-term baselines and IEEE edge matching.
+   Runtime loop lowering, `$srandom`, file-call debug points, and componentwise
+   declaration-plus-continuous delay composition are present in the compiled
+   HIR path, with the fresh failures identifying their remaining edge cases.
+3. Imported VHDL callable aggregate actuals now carry the formal linked subtype
+   into expression lowering, including residual bounds evaluated from HIR. A
+   fresh statement-kind-zero failure isolates the remaining contextual path
+   without reopening AST ownership.
+4. The hydrated class regression was traced through the compiled callable body
+   to `type_owner::access_t`. Named HIR type resolution now searches a unique
+   class-owned typedef after package lookup, but the full class-type regression
+   still needs one more specialization-time resolution repair.
+5. The shortest remaining dependency is the active SystemVerilog statement
+   and VHDL aggregate repair pair, while the root isolates class type,
+   transition/resolution delay, VPI alias, and file-debug identity failures for
+   the next combined build. No GDB or LLDB process remains; the waived line
+   gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 01:09 MDT progress audit
+
+1. Net progress remains positive despite one validator-churn iteration. The
+   prior focused boundary advanced from seven to nine passing lanes, and the
+   latest five-failure wave completed a clean warnings-as-errors Debug rebuild
+   of all 110 affected actions with eight workers.
+2. SystemVerilog procedural continuous-assignment drivers are now transferred
+   from the HIR lowerer into the owning specialization, and anonymous process
+   VPI objects remain direct instance children when a synthetic debug scope has
+   the same path. HIR timing controls also emit debugger wait points before
+   suspension, and object inspection reports the compiled-HIR bundle checksum
+   for metadata-only units.
+3. The first root-scoped HIR package/type validator restored the missing
+   diagnostic families but was intentionally not accepted as complete: the
+   focused run exposed false positives for built-in net and aggregate names,
+   valid packed members, replication, and dynamic selections. The repair is
+   active and is being narrowed to invalid retained-HIR states only.
+4. VHDL overload resolution now matches package specification and body
+   profiles by linked nominal type identity before anonymous layout fallback.
+   The aggregate-call regression still fails after that repair, isolating a
+   deeper contextual aggregate-actual typing edge without reopening AST
+   ownership.
+5. The shortest remaining dependency is to finish those two active validator
+   and aggregate-context repairs, then repeat one eight-worker build and the
+   fourteen-test boundary. No GDB or LLDB process remains; the waived line gate
+   and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 02:06 MDT progress audit
+
+1. Net progress remains positive. The joined validator, procedural-call, and
+   VHDL residual wave completed a clean warnings-as-errors Debug rebuild of
+   all 108 affected actions with eight workers. The fourteen-test boundary
+   remains at nine passing lanes, but the validator failures now reach later
+   package-selection and runtime-verification assertions.
+2. Hydrated SystemVerilog type references can recover valid type identity from
+   identical source provenance, and packed selection validation now honors
+   declared coordinates such as `[7:4]`. The transition regression therefore
+   reaches simulation with every expected value; its only mismatch is two
+   unnecessary scalar UDP input-adapter processes.
+3. Retained executable SystemVerilog calls no longer use residual return-value
+   substitution. Fresh SimIR inspection found one earlier constant-selection
+   classifier still hiding calls used as dynamic indices; that focused repair
+   is active together with the package-selection residual.
+4. VHDL file and TextIO state is now retained and lowered from HIR, and
+   standard severity literals plus aggregate formal types have direct HIR
+   handling. The unchanged statement-kind failures show that both predicates
+   still have a narrower preflight or dispatch rejection, now under rebuilt
+   debugger inspection.
+5. The shortest remaining dependency is to join those three active residual
+   repairs with direct scalar UDP input aliasing, then run one eight-worker
+   build and repeat the focused boundary. No GDB or LLDB process remains; the
+   waived line gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 03:04 MDT progress audit
+
+1. Net progress remains positive. The joined package/context, callable, file,
+   and overload wave completed a warnings-as-errors Debug rebuild of all 101
+   resumed actions with eight workers after correcting three validator API
+   mismatches against the live compiled-HIR types.
+2. The five-test focused boundary has two green lanes: procedural assignments
+   and transition delays. The three remaining lanes all advanced: package and
+   context diagnostics reach generic legality, VHDL overload execution reaches
+   package-constant validation, and file handling reaches a nested packed
+   selection of a Verilog static-array element.
+3. The compiled-HIR package/context validator now covers missing, malformed,
+   ambiguous, cyclic, unevaluable, and range-invalid package/context states.
+   Valid residual callable and overloaded-operator constants are being
+   distinguished from genuinely invalid constant expressions without
+   consulting parser storage.
+4. VHDL unary and binary HIR expressions retain callable identity and dispatch
+   through the existing overload resolver only when it selects a callable;
+   intrinsic operators remain on their direct lowering path. File interface
+   handles use reference semantics so close/open status changes copy back to
+   the caller.
+5. The shortest remaining dependency is to join generic-diagnostic legality,
+   package-constant deferral, and nested static-array packed-write lowering in
+   one eight-worker rebuild, then repeat the five-test boundary. Direct AST
+   ownership checks remain clean across public elaboration and CheckedProject;
+   no GDB or LLDB process remains, and the waived line gate and pre-Batch-190
+   sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 04:05 MDT progress audit
+
+1. Net progress remains positive. Two joined warnings-as-errors Debug
+   rebuilds completed all 100 affected actions with eight workers. The
+   fourteen-test boundary advanced to thirteen passing lanes; only
+   `fsim.elaboration` remains, and its first missing nominal-type diagnostic
+   has advanced from parameter defaults through direct assignments to callable
+   arguments.
+2. Nested packed-member offsets, VHDL null-array layout, and native wide
+   container-write cache eligibility now pass their focused runtime lanes.
+   HIR-only nominal parameter defaults and assignments now reject distinct
+   enum and aggregate identities while preserving same-type casts and
+   contextual patterns.
+3. The live ownership audit found no structural frontend syntax owner in
+   public elaboration, `CheckedProject`, `BuiltProject`, cache payloads, or
+   `SpecializedHirUnit`; the only owning parser workspace remains compile
+   local and is destroyed before elaboration. `.fsimdesign` correctly decodes
+   its already-linked bundle directly because it is a post-link,
+   post-specialization artifact and reconstructs no syntax.
+4. The Change 19 audit found concrete closure work beyond the current
+   behavioral regression: add one five-path diagnostic/runtime differential,
+   real relocated 1/2/4/8-worker artifact-byte generation, direct bundle and
+   mapped-library compiled-HIR schema rejection, and a durable AST ownership
+   source gate. Performance baselines, clean Release/Debug qualification, and
+   the replacement hosted matrix remain Change 20 work.
+5. The shortest remaining dependency is the current cohesive nominal-type
+   validator expansion covering callable arguments and returns, task copyout,
+   nested patterns, equality, casts, and ports. Rebuild once, restore the full
+   fourteen-test boundary, then implement the missing Change 19 gates before
+   full qualification. No GDB or LLDB process remains; the waived line gate
+   and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 05:38 MDT progress audit
+
+1. Net progress remains positive, but repeated first-failure iterations in
+   `fsim.elaboration` created avoidable churn. The active debugging strategy
+   now evaluates and reports the complete wide-constant cluster in one pass,
+   and the next compile/test boundary is deferred until the whole parameter
+   handoff category is repaired.
+2. A parser-independent arbitrary-width SystemVerilog constant evaluator now
+   covers literals, four-state arithmetic and comparisons, selections,
+   concatenation and streaming, array queries, casts, assignment patterns,
+   package constants, and retained-HIR constant functions. The diagnostic
+   sweep confirms the named-type cast, selected function assignments, enum
+   values, and all local wide results together.
+3. Untyped parameter defaults retain their self-determined widths by using
+   the compiled `implicit` type marker, while explicitly typed defaults are
+   converted through HIR type metadata. Wide localparams are evaluated for
+   specialization reporting without becoming specialization-key actuals.
+4. Batch debugger evidence isolated the remaining instance-boundary mismatch:
+   the new evaluator and association canonical identity were correct, but the
+   legacy scalar display path re-evaluated a 128-bit actual as zero. Canonical
+   `svconst-v3` actuals now take precedence when materializing specialization
+   metadata, and HIR evaluation is primary for parameter associations.
+5. The shortest remaining dependency is to complete this single cohesive
+   evaluator/handoff build, remove the temporary diagnostic sweep, and restore
+   `fsim.elaboration` plus the fourteen-test boundary. Change 19 artifact and
+   ownership gates and Change 20 clean qualification remain afterward. The
+   batch GDB session exited and an exact process check was clean; the waived
+   line gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 06:45 MDT progress audit
+
+1. Net progress remains positive. One broad scalar-HIR category repair replaced
+   the prior first-failure loop: exact scalar kind and decimal/time literal
+   metadata now survive syntax destruction, serialization, linking,
+   specialization, boundary construction, and final lowering.
+2. HIR-native scalar specialization now covers package values, defaults,
+   overrides, source-order dependencies, `real`, `shortreal`, `realtime`,
+   `time`, and `chandle`. It emits the existing parameter diagnostics for
+   invalid defaults and actuals while retaining deterministic specialization
+   identities.
+3. Scalar port compatibility and residual runtime lowering now diagnose type
+   mismatches, nonfinite or out-of-range literals, and unsupported scalar
+   operators. The complete `test_systemverilog_typed_constants` function is
+   green, including inherited and overridden actuals, package values, time
+   rounding, chandle identity, boundary rejection, and negative lowering cases.
+4. Temporary constant, signal, runtime, and negative-case diagnostic sweeps have
+   been removed in one cleanup edit. No worker remains active, completed worker
+   records expose no deletion operation, and exact `gdb` and `lldb` process
+   checks are clean.
+5. The shortest remaining dependency is one eight-worker rebuild followed by
+   the typed-constant and specialization functions, `fsim.elaboration`, and the
+   fourteen-test boundary. Only after that boundary is green will work proceed
+   to the missing Change 19 differential, determinism, schema-rejection, and
+   ownership gates, then Change 20 clean qualification. The waived line gate
+   and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 08:33 MDT progress audit
+
+1. Net progress is positive after replacing single-assertion iterations with
+   parallel seam ownership and grouped selector sweeps. Static-array callable
+   slices, static-array port slices and selected-word adapters, and the full
+   SystemVerilog type-parameter/type-operator matrix now pass together.
+2. The compiled-HIR hierarchy path now owns container-port aliases, validates
+   every invalid association in one elaboration, preserves slice direction and
+   copyback, and constructs scalar adapters for selected container elements.
+   Four-state defaults now use resolved HIR domains, including named enums and
+   `time`, while reachable qualified package types participate in post-link
+   validation.
+3. VHDL file and TextIO diagnostics now cover object class, element subtype,
+   writable targets, and implicit `SIDE` literals without syntax. The combined
+   assertion/type selector has advanced past the file matrix to a later VHDL
+   record-statement lowering seam.
+4. The common packed-selection validator no longer treats HIR-encoded dynamic
+   constructors or case-match bindings as ordinary packed nets. The affected
+   container and `case matches` selectors now reach their actual residual
+   statement lowering. One eight-worker warnings-as-errors Debug link passed;
+   exact bounded debugger invocations exited and no debugger remains resident.
+5. The shortest remaining dependency is the cohesive container/aggregate
+   lowering seam: packed-structure element widths, dynamic/queue/associative
+   whole patterns, queue mutation, static-slice ordering keys, and the two
+   downstream container/case statements. After one grouped selector boundary,
+   finish the remaining Change 19 artifact, determinism, schema, and ownership
+   gates before Change 20 qualification. The waived line gate and
+   pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 09:35 MDT progress audit
+
+1. Net progress remains positive across the grouped elaboration seams. The
+   compiled-HIR artifact codec and AST-lifetime governance gates are in place,
+   VHDL nested record-member slice and index assignments now lower without
+   syntax, and SystemVerilog static-container ordering predicates retain their
+   iterator and index bindings.
+2. The ordinary SystemVerilog container-method family is now routed through a
+   shared HIR lowering path: runtime size queries, reductions, locators,
+   ordering, element selection, and queue mutation no longer depend on the AST
+   method nodes. The main container selector has advanced through its initial
+   dynamic-array assertions to signed static-pattern key normalization.
+3. All previously active seam workers have completed and are no longer being
+   reused; the remaining work proceeds in the primary agent as requested. One
+   eight-worker warnings-as-errors Debug link passed, every debugger invocation
+   remained timeout-bounded, and exact `gdb` and `lldb` process checks were
+   clean.
+4. The shortest remaining dependency is to close the container selector as one
+   semantic category, then fix the shared `case matches` packed-layout seam and
+   the remaining VHDL aggregate/dynamic-slice/composite selectors before a
+   single full elaboration inventory.
+5. Change 19 closure still requires the grouped differential, corruption,
+   determinism, compatibility, and AST-lifetime suites. Change 20 clean Debug
+   and Release qualification, performance comparison, hosted Linux/Windows
+   matrix and final commit/push remain afterward. This checkpoint's earlier
+   conditional-tag expectation is superseded: Batch 188A creates no release
+   tag.
+   The waived line gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 10:37 MDT progress audit
+
+1. Net progress remains positive after replacing the container first-failure
+   loop with one diagnostic-recovery sweep. The complete SystemVerilog
+   container selector and static-slice ordering selector are now green,
+   including invalid methods, queries, patterns, slices, and port bindings.
+2. The shared HIR recovery seam now retains a typed zero placeholder after an
+   expected diagnostic, allowing one elaboration to collect all independent
+   failures without a generic statement abort. Iterator/index predicates,
+   associative indices, constructor/delete legality, memory transfer, and
+   read-only slice copyout use their specific diagnostic families.
+3. The VHDL nested record-member slice/index repair and the compiled-bundle
+   codec and AST-lifetime governance gates remain integrated. All workers are
+   completed and will not be reused; the remaining work proceeds in the
+   primary agent. Exact `gdb` and `lldb` process checks remain clean.
+4. The shortest remaining dependency is the tagged-union packed-member layout
+   used by `case matches`. It will be repaired and validated with the already
+   green container selectors in one boundary, followed by a grouped VHDL
+   aggregate, dynamic-slice, and recursive-composite layout wave.
+5. Change 19 still requires the full differential, corruption, determinism,
+   compatibility, and AST-lifetime boundary. Change 20 clean Release and
+   Debug qualification, performance comparison, hosted Linux/Windows matrix,
+   final commit/push remain afterward. This checkpoint's earlier
+   conditional-tag expectation is superseded: Batch 188A creates no release
+   tag. The
+   waived line gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 11:37 MDT progress audit
+
+1. Net progress remains positive after assigning independent VHDL composite
+   and aggregate-diagnostic seams to focused workers and retaining the
+   SystemVerilog constant evaluator on the primary thread. The case-matches
+   selector is now fully green across folded functions, pattern bindings,
+   guards, tagged patterns, lazy conditionals, and wide conditional sizing.
+2. Recursive VHDL composite defaults and nested enumeration aggregates now use
+   flattened HIR record widths. The recursive-composite and dynamic-slice
+   selectors are green, and object layout validation collects unconstrained,
+   recursive, and unresolved composite-type diagnostics without syntax.
+3. HIR statement-list lowering now continues after independent failures, so
+   the invalid aggregate matrix emits all expected `VHAGG` diagnostics in one
+   pass. Its remaining malformed-metadata regression is being converted from
+   a post-parse AST mutation to a direct compiled-HIR mutation.
+4. A broad elaboration run advanced to the package-specialization selector and
+   exposed packed member slices being classified as unpacked-array slices. The
+   classifier now requires an actual HIR container binding; this repair and
+   the completed composite wave are intentionally awaiting one joined
+   eight-worker build.
+5. The shortest remaining dependency is to finish the AST-free malformed-HIR
+   fixture, then run the case, container, aggregate, dynamic-slice, recursive-
+   composite, and package-specialization selectors as one boundary before the
+   next full elaboration inventory. Change 19 artifact/determinism/compatibility
+   closure and Change 20 clean qualification remain afterward. Exact debugger
+   process checks are clean; the waived line gate and pre-Batch-190 sanitizer
+   lanes remain unrun.
+
+## Batch 188A 2026-09-19 12:38 MDT progress audit
+
+1. Net progress remains positive across one joined diagnostic and lowering
+   wave. A 432-step, eight-worker Debug elaboration rebuild passed, and the
+   complete case-inside selector is now green with its malformed cases driven
+   by normalized `CompiledDesign` HIR rather than post-parse AST mutation.
+2. SystemVerilog HIR now preserves `ref`, `const ref`, and `ref static`
+   callable-formal qualifiers. Function/task association and streaming
+   diagnostics consume those retained records directly, and the focused
+   selectors advance past their former diagnostic failures to executable HIR
+   lowering seams.
+3. VHDL signal-attribute diagnostics and current-process driving checks are
+   HIR-native. The configuration scope validator has also been ported to HIR:
+   it checks static generate indices, duplicate sibling scopes, and retained
+   instance/generate occurrences before hierarchy mutation. Its malformed
+   scope regression now mutates normalized compiled HIR directly.
+4. The remaining active lowering seam is grouped rather than assertion-sized:
+   wide streaming, fixed-array callable returns, process/task statements, and
+   VHDL-standard propagation are being closed together before one shared
+   rebuild. The exact `gdb` and `lldb-22` process audit is clean.
+5. The shortest remaining dependency is that joined eight-worker build and
+   selector boundary, followed by a fresh full elaboration inventory. Change
+   19 differential, corruption, determinism, compatibility, and AST-lifetime
+   closure and Change 20 clean Debug/Release qualification, measurements,
+   hosted matrix, and commit/push remain. Batch 188A creates no release tag;
+   its replacement hosted matrix must be monitored and in-scope CI failures
+   corrected before closure. The waived line gate and pre-Batch-190 sanitizer
+   lanes remain unrun.
+
+## Batch 188A 2026-09-19 13:37 MDT progress audit
+
+1. Net progress remains positive across the joined callable, process-control,
+   and VHDL expression/configuration wave. The last complete eight-worker
+   Debug elaboration rebuild passed, fixed-array function returns are fully
+   green, and nonstatic container-function lowering has advanced to four
+   shared-profile failures rather than assertion-by-assertion repairs.
+2. SystemVerilog function results now retain container working storage through
+   automatic frames, recursive calls, conditional selection, copyout, and
+   debug metadata. The remaining associative failures were traced to one
+   common reconstruction bug: a retained `int` index profile was lowered as
+   one bit. The common HIR type seam now restores the 32-bit builtin profile.
+3. The process worker completed a cohesive HIR-native repair for malformed
+   assignment control, two-state coercion, scoped debug locals, duplicate
+   declarations, and same-language child boundary drivers. Its final VHDL
+   signal-attribute call-point edit is awaiting the joined build. Exact `gdb`
+   and `lldb-22` process audits are clean.
+4. The shortest remaining dependency is to receive the VHDL worker handoff,
+   finish the one dynamic-container conditional case, and run one coordinated
+   eight-worker build across all three seams. The focused callable, process,
+   selection, expression, and configuration selectors will then run as one
+   boundary before a fresh complete elaboration inventory.
+5. Change 19 differential, corruption, determinism, compatibility, and
+   AST-lifetime closure and Change 20 clean Debug/Release qualification,
+   measurements, final commit/push, and hosted Linux/Windows correction loop
+   remain. Batch 188A creates no release tag. The waived line gate and the
+   pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 14:37 MDT progress audit
+
+1. Net progress remains positive across three coordinated seam-closure
+   waves. The warnings-as-errors Debug elaboration target has rebuilt cleanly
+   after each joined handoff, and the complete case/expression and
+   SystemVerilog task selectors are now green. Function, process, selection,
+   and VHDL configuration selectors have each advanced through several later
+   regression groups rather than cycling on their prior assertions.
+2. Direct HIR lowering now covers mixed signedness, packed query functions,
+   nonstatic container calls and indexing, imported and qualified package
+   tasks, transitive callable sensitivity, mutable strings, named-event
+   aliases, malformed event expressions, wildcard event dependencies, and
+   task-suspension restrictions. The former AST diagnostics for container
+   conditional/equality/mutation profiles are emitted from retained origins.
+3. VHDL configuration validation now accumulates invalid clause matrices,
+   distinguishes component generic/port maps, missing entities, architecture
+   selection, and recursive hierarchy cycles from retained HIR. Exact `gdb`
+   and `lldb-22` process audits remain clean, and no stale debugger is running.
+4. The shortest remaining dependency is the current joined build for four
+   newly exposed seams: nonstatic function return/argument profiles,
+   oversize strings, VHDL sequential loops, and recursive configuration
+   classification. After those focused selectors pass, run a fresh complete
+   elaboration inventory and close any remaining common HIR seams in batches.
+5. Change 19 differential, corruption, determinism, compatibility, and
+   AST-lifetime closure and Change 20 clean Debug/Release qualification,
+   representative measurements, one commit/push, and the hosted Linux/Windows
+   monitor-and-correct loop remain. Batch 188A creates no release tag. The
+   waived line gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-19 15:37 MDT progress audit
+
+1. Net progress remains positive across the compiled-HIR foundation and three
+   parallel VHDL seams. The semantic, language-HIR, cache, object, library,
+   design-artifact, deterministic-artifact, compatibility, schema, source
+   manifest, retained-profile, and AST-lifetime gates are green. The complete
+   SystemVerilog function-lowering selector is also green.
+2. Generate specialization now evaluates VHDL enumeration generic defaults and
+   selector-typed enumeration choices from retained HIR, diagnoses overlapping
+   and invalid choices, preserves logic-literal references, and publishes
+   generated-scope aliases. The generate selector has advanced to a later
+   generated VHDL callable/statement-lowering seam.
+3. Sequential loop lowering now executes residual nonconstant loops through HIR
+   and restores orphan and labeled loop-control diagnostics, including jumps to
+   labeled outer VHDL loops. Protected-object type linking is repaired, and the
+   protected/reflection worker has restored a warnings-clean shared build while
+   continuing the missing executable HIR paths.
+4. The application artifact failure is independently localized to real-family
+   assignment conversion: a 64-bit real value assigned to a shortreal target is
+   generically truncated instead of converted, leaving the immediate comparison
+   with zero. Exact debugger process checks are clean after the bounded trace.
+5. The shortest remaining dependency is the joined loop and generate selector
+   boundary, followed by protected/reflection completion and a fresh full
+   elaboration inventory. Resource portability and diagnostic-catalog closure,
+   remaining Change 19 differential gates, and Change 20 clean Debug/Release
+   qualification, measurements, one commit/push, and hosted Linux/Windows
+   monitor-and-correct work remain. Batch 188A creates no release tag; the
+   waived line gate and pre-Batch-190 sanitizer lanes remain unrun.
+
+## Batch 188A 2026-09-21 clean-context restart checkpoint
+
+1. Live repository state is authoritative. The branch is `codex/v3`; local
+   `HEAD` and `origin/codex/v3` are both
+   `a867847cec10ac831e10674f7dc9de17ba294916`. The complete Batch 188A
+   implementation remains intentionally uncommitted in the large dirty and
+   untracked worktree. Do not reset, clean, discard, or split that worktree.
+   Preserve the user-owned `phase.fst` file.
+2. The latest cohesive optimization wave is present in the worktree:
+   - `CompiledDesign` now has non-owning declaration indexes for both
+     SystemVerilog and VHDL scopes and a case-correct VHDL package-member
+     index covering declarations, enumeration literals, and physical units.
+   - The one `CompiledDesignResolver` consumes those indexes and retains its
+     complete-scan fallback while indexes are stale. No duplicate VHDL or
+     SystemVerilog resolver was introduced.
+   - `HierarchyBuilder` reuses successful SystemVerilog resolution-function
+     registration per compiled unit and records that reuse in hierarchy
+     checkpoints so rollback removes both the inserted resolution names and
+     their registration marker.
+   - `SpecializedHirUnit` uses direct dense record indexes on the normal
+     immutable path and now falls back to the complete `CompiledDesign`
+     lookup whenever a mutable test or tool invalidates those indexes.
+   - The shared design-artifact codec reserves a bounded structural capacity
+     estimate, capped at 8 MiB, for in-memory serialization. Encoded bytes,
+     stream/checksum writers, and schemas are unchanged.
+   - `tests/semantic/compiled_design_test.cpp` covers VHDL basic-name folding,
+     extended-name case sensitivity, enumeration/physical package members,
+     stale-index fallback and refresh, copy/move `string_view` lifetime, and
+     specialized direct/fallback lookup.
+3. Release compilation evidence after those edits is current. This command
+   completed successfully with eight workers and linked `fsim` plus all named
+   tests:
+
+   ```text
+   cmake --build build/ci-linux-release --target fsim fsim_semantic_tests fsim_design_artifact_tests fsim_application_tests fsim_application_tests_1 fsim_application_tests_2 fsim_application_tests_3 --parallel 8
+   ```
+
+   A later bounded rebuild of `fsim` and `fsim_semantic_tests` also completed
+   after the stale-index repair. Therefore
+   `build/ci-linux-release/fsim` contains every current source edit.
+4. Focused validation after the joined build produced:
+   - `fsim.artifact.design`: PASS.
+   - `fsim.application.compiled_hir_cache`: PASS.
+   - `fsim.semantic`: initially exposed the stale-index association bug, then
+     PASS after the complete-HIR fallback repair.
+   The artifact/cache pair has not yet been rerun after the final semantic-only
+   repair. The complete Change 19 evidence suite and clean Change 20 suites
+   must be rerun after all remaining implementation edits.
+5. The newest official seven-sample performance evidence is
+   `/tmp/fsim-batch188a-perf.yrx9rjgd/qualification.json`. Pure SystemVerilog
+   passes at a 0.420949 total-wall ratio and mixed-language peak RSS passes at
+   0.394216. Mixed compile is 0.956348 of baseline, but mixed elaboration is
+   1.240071 and mixed compile-plus-elaborate is 1.099552, so the required 1.05
+   wall-time gate remains open. The immediately preceding evidence is
+   `/tmp/fsim-batch188a-perf.z8kk3kjk` at 1.096611; the serializer reservation
+   did not produce a measurable gate improvement.
+6. The current 50-run native profile is
+   `/tmp/fsim-batch188a-mixed-current.perf.data`. Its main leaf costs include
+   `memcmp` 3.62%, hardware SHA-256 3.43%, codec `Writer::raw` 3.10%, allocator
+   and movement costs, `SpecializedHirUnit::find_declaration` 2.55%, codec
+   `Reader::read_exact` 2.37%, and
+   `CompiledDesign::lookup_indexes_current` 1.64%. The last item is the
+   shortest safe next performance dependency: validated elaboration already
+   proves the compiled design immutable, so carry that proof into
+   `SpecializedHirUnit` and skip repeated revision/owner checks only for units
+   created from `ValidatedCompiledDesign`. Keep the checked fallback for the
+   public unvalidated factory. Ensure token creation rejects stale indexes or
+   otherwise proves their current revisions before enabling the fast path.
+7. A live requirement audit found one substantive Change 6 gap. The current
+   `compiled_design_normalization.cpp` folds only dependency-free host-sized
+   integer/boolean unary and binary expressions. The planned dependency-
+   independent name/type/range/default, pure constant-call, aggregate, and ROM
+   initializer folding is not proved and appears absent; the current
+   normalization test covers only scalar unary/binary cases. This must be
+   implemented and tested rather than marking Change 6 complete.
+8. Changes 2-5 and 7-18 have strong implementation evidence, and Change 19's
+   differential, corruption, determinism, schema rejection, and AST-lifetime
+   tests/gates exist. Closure is not yet proved after the latest edits. The
+   authoritative plan still marks only Change 1 complete and must not be
+   updated to claim later changes until their current evidence passes.
+9. After the validated-specialization fast path, rebuild once with eight
+   workers, rerun `fsim.semantic`, `fsim.artifact.design`, and
+   `fsim.application.compiled_hir_cache`, then rerun the seven-sample
+   qualifier. If the mixed wall gate remains above 1.05, profile the new binary
+   and attack a measured aggregate seam rather than resuming assertion-sized
+   churn. Then close the missing normalization categories and run the complete
+   Change 19 boundary.
+10. Change 20 remains fully open: clean warnings-as-errors Release followed by
+    Debug builds and complete suites with eight workers, final representative
+    measurements, diff/source-manifest audit, one commit and push, and the
+    four-lane LLVM-only hosted Linux/Windows monitor-and-correct loop. Do not
+    run sanitizers before Batch 190 and do not create a release tag for Batch
+    188A. Keep exactly one top-level build, test, debugger, or profiler active
+    at a time. The final process audit at this checkpoint found no build, test,
+    debugger, or profiler process, and no worker agent remains active.
+
+## Batch 188A 2026-09-21 15:24 MDT clean-context handoff
+
+1. This handoff supplements the immediately preceding restart checkpoint; all
+   repository, validation, performance, and no-go state recorded there remains
+   current. Live `codex/v3` `HEAD` and `origin/codex/v3` are still
+   `a867847cec10ac831e10674f7dc9de17ba294916`. The large dirty and untracked
+   worktree is intentional Batch 188A work. Preserve it in full, including
+   `phase.fst`; do not reset, clean, discard, or split it.
+2. Three workers were used only for bounded discovery after the preceding
+   checkpoint. They made no edits and started no build, test, debugger, or
+   profiler. The normalization and specialization workers completed; the
+   read-only performance worker was interrupted for this clean restart. No
+   worker remains active. Root also made no implementation edit after the
+   preceding checkpoint; this handoff text is the only new repository change.
+3. The validated-specialization fast path is ready as one cohesive patch.
+   `ValidatedCompiledDesign` currently proves only `design.valid()`, while all
+   six `SpecializedHirUnit::find_*` paths repeat
+   `lookup_indexes_current()`. Make validation reject stale lookup indexes,
+   carry a private validated-index fast-path flag through
+   `SpecializedHirUnitFactory`, `working_specialization()`, construction, and
+   the two derived-specialization methods, and skip the revision/owner check
+   only when that flag is set. Keep complete-HIR fallback for public
+   unvalidated factories. Extend
+   `test_compiled_design_indexed_lookup_contract()` with validated lookup,
+   stale unvalidated fallback, and stale validation rejection cases.
+4. Change 6 requires a larger cohesive normalization wave, not a scalar-only
+   patch. `fold_expression()` presently covers only dependency-free host-sized
+   integer/boolean unary and binary expressions. Extend dependency traversal
+   through aggregate/assignment-pattern and call associations; substitute
+   dependency-free constant names from declaration initializers while
+   preserving the consuming expression identity and origin; materialize folded
+   bounds in SystemVerilog `PackedRange` and VHDL `RangeConstraint` records;
+   mark structural aggregates folded only when all choices and values fold;
+   evaluate only explicitly pure, defined, side-effect-free constant callables
+   in the supported scalar subset; and apply the contract to defaults,
+   declaration/type/member initializers, and ROM aggregates. Retain parameter,
+   generic, package, hierarchy, recursive, impure, unresolved, or otherwise
+   dependent constructs as residual.
+5. Expand `test_compiled_design_normalization()` with positive and residual
+   cases for constant names, types/ranges/defaults, pure calls, structural
+   aggregates, and ROM initializers, plus source/origin preservation and
+   second-pass determinism. Existing tests cover scalar arithmetic/boolean
+   folding, overflow and divide-by-zero retention, hierarchy dependencies,
+   determinism, and origins only. The existing application ROM case proves
+   only scalar `FEATURE_ROM_WORD_0 = 2 + 3`, not aggregate ROM folding.
+6. Resume by assigning the specialization and normalization waves to separate
+   workers. Root should inspect the existing writer/profile evidence and own
+   any independent codec optimization. Join all edits before one eight-worker
+   build; never run overlapping top-level builds. First rebuild `fsim` and
+   `fsim_semantic_tests`, run `fsim.semantic`, then rebuild/run
+   `fsim.artifact.design` and `fsim.application.compiled_hir_cache` if their
+   sources changed. Rerun the seven-sample performance qualifier only after
+   the joined focused boundary is green.
+7. If mixed compile-plus-elaborate remains above 1.05, collect a new profile
+   from the joined executable and choose a measured aggregate seam. Do not
+   infer a win from the earlier capacity reservation. The last authoritative
+   profile and qualifier paths remain
+   `/tmp/fsim-batch188a-mixed-current.perf.data` and
+   `/tmp/fsim-batch188a-perf.yrx9rjgd/qualification.json` respectively; the
+   baseline executable remains
+   `/tmp/fsim-batch188a-baseline.0kq0Um/build/ci-linux-release/fsim`.
+8. After normalization and the performance gate close, run the complete Change
+   19 boundary, then Change 20 clean Release and Debug warnings-as-errors builds
+   and full suites with eight workers, measurements, diff/source-manifest
+   audit, one commit and push, and the four LLVM-only hosted Linux/Windows
+   monitor-and-correct loop. Do not run sanitizers before Batch 190 and do not
+   create a Batch 188A release tag.
+9. The complete Change 19 evidence boundary has one direct CTest selector,
+   `batch188a-change19`, over an explicit 29-test inventory. Configuration
+   fails if the inventory count changes, contains a duplicate, or names an
+   unregistered test; the selector adds a label to the existing tests and does
+   not introduce a wrapper or duplicate their execution. After the joined
+   build, run the exact boundary with eight CTest workers:
+
+   ```text
+   ctest --test-dir build/ci-linux-release --output-on-failure --parallel 8 -L '^batch188a-change19$'
+   ```
+
+   This handoff records the selector registration only; that boundary has not
+   been executed after the latest implementation edits.
+
+## Batch 188A 2026-09-21 closure qualification checkpoint
+
+1. This checkpoint supersedes the open work in the preceding handoffs. Changes
+   2-19 are implemented and marked complete in the authoritative plan. The
+   compiled-design boundary owns semantic state plus the two language HIRs;
+   parser workspaces are destroyed before checked compilation returns, and
+   elaboration, specialization, linking, lowering, artifacts, caches, and
+   mapped libraries consume compiled HIR rather than reconstructing it from
+   syntax. The consolidated `CompiledDesignResolver` remains the only shared
+   resolver for both languages.
+2. Change 19 closure is green: the independent elaboration inventory passes
+   69/69 cases, and the exact `batch188a-change19` selector passes 29/29.
+   Differential direct/object/cache/library/design paths, corruption and old-
+   format rejection, relocation and worker-count determinism, schema checks,
+   and AST-lifetime governance are all represented. The required formats are
+   `.fsimobj` 8, mapped library 6, portable schema 15, compiled-HIR bundle 1,
+   SystemVerilog HIR 8, VHDL HIR 5, and `.fsimdesign` 13; semantic, DesignIR,
+   and runtime-state schemas remain unchanged.
+3. The last correctness seam was an unsound construction-time VHDL signal
+   specialization in LLVM setup. Removing that `ReadSignal`-to-constant
+   rewrite restored mutable mixed-language signal behavior without changing
+   the specialization boundary. Focused LLVM and mixed-language tests pass,
+   and both warnings-as-errors LLVM-enabled configurations built successfully
+   with eight workers.
+4. Performance work used Callgrind and `perf`, not inference. Baseline/current
+   instruction counts were 68,788,912/71,381,059 for VHDL compilation,
+   274,467,662/252,206,248 for SystemVerilog compilation, and
+   955,334,421/871,832,393 for elaboration. `perf stat` then localized the
+   remaining wall delta to extra minor faults and encode-side ownership churn.
+   Replacing temporary owning HIR codec states with non-owning spans reduced
+   the compile profiles to 71,145,500 and 251,278,662 instructions and retained
+   byte-identical SV and VHDL compiled-HIR payload hashes.
+5. The final alternating seven-sample evidence is
+   `/tmp/fsim-batch188a-perf.lu1ar5o2/qualification.json`. Relative to
+   `a867847c`, pure-SystemVerilog compile/elaborate total wall is 0.961110 and
+   peak RSS is 0.954706; mixed-language total wall is 1.037303 and peak RSS is
+   0.991303. Reported mixed subphases are 1.089256 compile and 1.006031
+   elaborate. Both gated totals are below 1.05, and baseline/current simulation
+   output equivalence passes in every sample.
+6. Current full-suite qualification covers all 423 registered tests in both
+   LLVM-enabled warnings-as-errors configurations. Release passed 422 tests in
+   the complete parallel run and its sole source-anchor inventory miss passed
+   immediately after the reviewed anchor update. Debug likewise passed 422 in
+   the complete run and its sole digest audit miss passed immediately after
+   synchronizing the reviewed inventory digest. All runtime, LLVM, compiled-
+   HIR, artifact, AST-lifetime, and Change 19 tests passed in the complete
+   runs. No sanitizer was run, as required before Batch 190.
+7. Change 20 remains open only for the final diff/process/governance audit, the
+   single Batch 188A commit and push, and monitoring/correcting the four hosted
+   LLVM-only lanes: Linux Debug/Release and Windows Debug/Release. Do not create
+   a Batch 188A release tag. Preserve `phase.fst`, and do not clean or reset the
+   intentional accumulated worktree.

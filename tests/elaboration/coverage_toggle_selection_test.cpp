@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/coverage_toggle_selection.hpp"
+#include "fsim/frontend/coverage_toggle_selection.hpp"
 #include "fsim/frontend/coverage_source_identity.hpp"
 
 #include <algorithm>
@@ -180,7 +180,7 @@ void test_explicit_reasons_and_identity()
     using Reason = elaboration::CoverageToggleExclusionReason;
     const auto source = make_source(checkout_root("reasons"));
     const auto unit = semantic_unit(source);
-    const auto built = elaboration::make_default_coverage_toggle_selection(
+    const auto built = frontend::make_default_coverage_toggle_selection(
         unit, unit.ports, owner_for(source), std::span { &source, 1U });
     require(built.ok() && built.selection->exclusions.size() == 7U,
         "every default-excluded local, memory, and array must remain explicit");
@@ -233,10 +233,10 @@ void test_relocation_order_and_hierarchy()
     const auto source_b = make_source(checkout_root("relocated-b"));
     auto unit_a = semantic_unit(source_a);
     auto unit_b = semantic_unit(source_b);
-    const auto first = elaboration::make_default_coverage_toggle_selection(
+    const auto first = frontend::make_default_coverage_toggle_selection(
         unit_a, unit_a.ports, owner_for(source_a),
         std::span { &source_a, 1U });
-    const auto relocated = elaboration::make_default_coverage_toggle_selection(
+    const auto relocated = frontend::make_default_coverage_toggle_selection(
         unit_b, unit_b.ports, owner_for(source_b),
         std::span { &source_b, 1U });
     require(first.ok() && relocated.ok()
@@ -244,12 +244,12 @@ void test_relocation_order_and_hierarchy()
         "default exclusions must be checkout-location independent");
     std::ranges::reverse(unit_a.variables);
     std::ranges::reverse(unit_a.processes);
-    const auto reordered = elaboration::make_default_coverage_toggle_selection(
+    const auto reordered = frontend::make_default_coverage_toggle_selection(
         unit_a, unit_a.ports, owner_for(source_a),
         std::span { &source_a, 1U });
     require(reordered.ok() && reordered.selection == first.selection,
         "exclusion order must not depend on semantic declaration containers");
-    const auto sibling = elaboration::make_default_coverage_toggle_selection(
+    const auto sibling = frontend::make_default_coverage_toggle_selection(
         unit_a, unit_a.ports, owner_for(source_a, "top.v", 6U),
         std::span { &source_a, 1U });
     require(sibling.ok()
@@ -290,7 +290,7 @@ void test_vhdl_array_defaults()
     const elaboration::CoverageInventoryOwner owner { 3U, "root",
         frontend::Language::Vhdl2008, source.source_name, { }, "work",
         "vhdl:work.semantic(rtl)", { } };
-    const auto built = elaboration::make_default_coverage_toggle_selection(
+    const auto built = frontend::make_default_coverage_toggle_selection(
         unit, { }, owner, std::span { &source, 1U });
     require(built.ok() && built.selection->exclusions.size() == 2U
             && find_exclusion(*built.selection, ".matrix").reasons
@@ -310,7 +310,7 @@ void test_rejections_and_resource_limits()
     const auto invoke = [&](const frontend::DesignUnit& input,
                             const elaboration::CoverageInventoryOwner& input_owner,
                             const elaboration::CoverageToggleSelectionLimits limits = { }) {
-        return elaboration::make_default_coverage_toggle_selection(input,
+        return frontend::make_default_coverage_toggle_selection(input,
             input.ports, input_owner, std::span { &source, 1U }, limits);
     };
     auto wrong = owner;

@@ -3695,7 +3695,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 39. Batch 174 Change 19 is complete in the same intentionally dirty worktree.
     All eighteen ABI/schema ledger rows are preserved with zero active at
     normalized SHA-256
-    `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`.
+    `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`.
     The 198-cell matrix, normative ABI/schema reference, README, architecture,
     diagnostics, installed-package, relocation and deduplication contracts are
     synchronized. Current static inventory baselines are 2,548 diagnostics,
@@ -3730,7 +3730,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     qualification ran. No sanitizer or hosted-CI execution/monitoring ran. No
     formatting-only public-header work was performed. The eighteen-row ledger
     remains zero-active at SHA-256
-    `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`.
+    `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`.
     Release, sanitizer, release-gate and hosted-CI work remains deferred to
     final Batch 177. The accumulated batch is ready for its single commit and
     single push; verify the live pushed hash before beginning Batch 175.
@@ -3746,7 +3746,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    schemas, exact native producer identity, and the absence of any legacy
    reader, downgrade, dual writer or in-place migration path.
 3. Preserve the zero-active eighteen-row ledger at SHA-256
-   `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`,
+   `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`,
    the 32-row ABI/reference contract at SHA-256
    `0153c03838b7ba675797b9fa36a6873cede0b0683f0633969cdabfb862a1d9dc`,
    and the 198-cell evidence matrix at SHA-256

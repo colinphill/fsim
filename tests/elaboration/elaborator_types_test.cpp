@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -23,7 +24,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_assertion.ok());
-    const auto rejected_vhdl_assertion = fsim::elaboration::elaborate(
+    const auto rejected_vhdl_assertion = compile_and_elaborate(
         invalid_vhdl_assertion.design,
         "vhdl:work.invalid_assertion(rtl)");
     assert(!rejected_vhdl_assertion.ok());
@@ -50,7 +51,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(concurrent_vhdl_assertion.ok());
-    const auto elaborated_concurrent_vhdl_assertion = fsim::elaboration::elaborate(
+    const auto elaborated_concurrent_vhdl_assertion = compile_and_elaborate(
         concurrent_vhdl_assertion.design,
         "vhdl:work.concurrent_assertion(rtl)");
     assert(elaborated_concurrent_vhdl_assertion.ok());
@@ -101,7 +102,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(vector_assertion.ok());
-    const auto elaborated_vector_assertion = fsim::elaboration::elaborate(
+    const auto elaborated_vector_assertion = compile_and_elaborate(
         vector_assertion.design,
         "sv:work.vector_assertion");
     assert(elaborated_vector_assertion.ok());
@@ -148,7 +149,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(dynamic_vhdl_reports.ok());
-    const auto dynamic_vhdl_result = fsim::elaboration::elaborate(
+    const auto dynamic_vhdl_result = compile_and_elaborate(
         dynamic_vhdl_reports.design,
         "vhdl:work.dynamic_reports(rtl)");
     if (!dynamic_vhdl_result.ok()) {
@@ -209,7 +210,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_reports.ok());
-    const auto invalid_vhdl_report_result = fsim::elaboration::elaborate(
+    const auto invalid_vhdl_report_result = compile_and_elaborate(
         invalid_vhdl_reports.design,
         "vhdl:work.invalid_reports(rtl)");
     assert(!invalid_vhdl_report_result.ok());
@@ -249,12 +250,14 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_files.ok());
-    const auto vhdl_file_result = fsim::elaboration::elaborate(
+    const auto vhdl_file_result = compile_and_elaborate(
         vhdl_files.design, "vhdl:work.vhdl_files(rtl)");
     if (!vhdl_file_result.ok()) {
         for (const auto& diagnostic : vhdl_file_result.diagnostics) {
             std::cerr << diagnostic.code << ": "
-                      << diagnostic.message << '\n';
+                      << diagnostic.message << " at "
+                      << diagnostic.span.begin.line << ':'
+                      << diagnostic.span.begin.column << '\n';
         }
     }
     assert(vhdl_file_result.ok());
@@ -319,7 +322,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_files.ok());
-    const auto invalid_vhdl_file_result = fsim::elaboration::elaborate(
+    const auto invalid_vhdl_file_result = compile_and_elaborate(
         invalid_vhdl_files.design,
         "vhdl:work.invalid_vhdl_files(rtl)");
     assert(!invalid_vhdl_file_result.ok());
@@ -357,7 +360,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(named_event_source.ok());
-    const auto named_event_design = fsim::elaboration::elaborate(
+    const auto named_event_design = compile_and_elaborate(
         named_event_source.design, "sv:work.named_event");
     assert(named_event_design.ok());
     const auto event_signal = named_event_design.design->find_signal("fired");
@@ -420,7 +423,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_event_source.ok());
-    const auto invalid_event_design = fsim::elaboration::elaborate(
+    const auto invalid_event_design = compile_and_elaborate(
         invalid_event_source.design, "sv:work.invalid_event");
     assert(!invalid_event_design.ok());
     assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-100"));
@@ -446,7 +449,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(display_source.ok());
-    const auto display_design = fsim::elaboration::elaborate(
+    const auto display_design = compile_and_elaborate(
         display_source.design, "sv:work.display");
     assert(display_design.ok());
     const auto& display_operations = display_design.design->processes().front().operations;
@@ -540,7 +543,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_record_source.ok());
-    const auto vhdl_record_design = fsim::elaboration::elaborate(
+    const auto vhdl_record_design = compile_and_elaborate(
         vhdl_record_source.design,
         "vhdl:work.record_execution(rtl)");
     if (!vhdl_record_design.ok()) {
@@ -636,7 +639,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_record_aggregate_source.ok());
-    const auto vhdl_record_aggregate_design = fsim::elaboration::elaborate(
+    const auto vhdl_record_aggregate_design = compile_and_elaborate(
         vhdl_record_aggregate_source.design,
         "vhdl:work.record_aggregate_execution(rtl)");
     if (!vhdl_record_aggregate_design.ok()) {
@@ -743,7 +746,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_record_aggregates.ok());
-    const auto invalid_aggregate_design = fsim::elaboration::elaborate(
+    const auto invalid_aggregate_design = compile_and_elaborate(
         invalid_vhdl_record_aggregates.design,
         "vhdl:work.invalid_record_aggregate_execution(rtl)");
     const auto has_aggregate_diagnostic =
@@ -779,15 +782,30 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(malformed_aggregate_source.ok());
-    auto& malformed_expression = malformed_aggregate_source.design.units.back()
-                                     .concurrent_statements.front()
-                                     .value;
+    auto malformed_aggregate_compiled = compile_test_design(
+        std::move(malformed_aggregate_source.design));
+    assert(fsim::semantic::normalize_compiled_design(
+        malformed_aggregate_compiled));
+    auto& malformed_expressions = malformed_aggregate_compiled
+                                      .mutable_vhdl()
+                                      .mutable_expressions();
+    const auto malformed_expression = std::ranges::find_if(
+        malformed_expressions,
+        [](const auto& expression) {
+            return expression.kind
+                == fsim::semantic::vhdl::ExpressionKind::aggregate;
+        });
     assert(
-        malformed_expression.kind
-        == fsim::frontend::ExpressionKind::Aggregate);
-    malformed_expression.aggregate_choices.pop_back();
+        malformed_expression != malformed_expressions.end()
+        && malformed_expression->associations.size() == 2U
+        && malformed_expression->associations.back()
+               .choice_spelling.empty()
+        && malformed_expression->associations.back().choices.empty());
+    malformed_expression->associations.back().choice_spelling = "right";
+    malformed_aggregate_compiled.refresh_lookup_indexes();
+    assert(malformed_aggregate_compiled.valid());
     const auto malformed_aggregate_design = fsim::elaboration::elaborate(
-        malformed_aggregate_source.design,
+        malformed_aggregate_compiled,
         "vhdl:work.malformed_record_aggregate_metadata(rtl)");
     assert(
         !malformed_aggregate_design.ok()
@@ -849,7 +867,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(package_record_source.ok());
-    const auto package_record_design = fsim::elaboration::elaborate(
+    const auto package_record_design = compile_and_elaborate(
         package_record_source.design,
         "vhdl:work.package_record_hierarchy(rtl)");
     if (!package_record_design.ok()) {
@@ -918,7 +936,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(unknown_record_type.ok());
-    const auto rejected_unknown_record_type = fsim::elaboration::elaborate(
+    const auto rejected_unknown_record_type = compile_and_elaborate(
         unknown_record_type.design,
         "vhdl:work.unknown_record_type(rtl)");
     assert(!rejected_unknown_record_type.ok());
@@ -944,7 +962,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing_imported_record_type.ok());
-    const auto rejected_missing_imported_record_type = fsim::elaboration::elaborate(
+    const auto rejected_missing_imported_record_type = compile_and_elaborate(
         missing_imported_record_type.design,
         "vhdl:work.missing_imported_record_type(rtl)");
     assert(!rejected_missing_imported_record_type.ok());
@@ -969,7 +987,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing_selected_record_type.ok());
-    const auto rejected_missing_selected_record_type = fsim::elaboration::elaborate(
+    const auto rejected_missing_selected_record_type = compile_and_elaborate(
         missing_selected_record_type.design,
         "vhdl:work.missing_selected_record_type(rtl)");
     assert(!rejected_missing_selected_record_type.ok());
@@ -1001,7 +1019,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(conflicting_record_types.ok());
-    const auto rejected_conflicting_record_types = fsim::elaboration::elaborate(
+    const auto rejected_conflicting_record_types = compile_and_elaborate(
         conflicting_record_types.design,
         "vhdl:work.conflicting_record_types(rtl)");
     assert(!rejected_conflicting_record_types.ok());
@@ -1030,7 +1048,7 @@ endmodule
                 "vhdl:work.record_child(rtl)",
                 std::nullopt },
         };
-    const auto rejected_package_record_boundary = fsim::elaboration::elaborate(
+    const auto rejected_package_record_boundary = compile_and_elaborate(
         package_record_boundary,
         "sv:work.package_record_parent",
         package_record_binding);
@@ -1049,7 +1067,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_monitor_source.ok());
-    const auto invalid_monitor_design = fsim::elaboration::elaborate(
+    const auto invalid_monitor_design = compile_and_elaborate(
         invalid_monitor_source.design,
         "sv:work.invalid_monitor");
     assert(!invalid_monitor_design.ok());
@@ -1097,6 +1115,7 @@ architecture rtl of Array_Dut is
   signal Attribute_Aggregate : Logic_Bus_T;
   signal Attribute_Slice : std_logic_vector(3 downto 0);
   signal Dynamic_Read : std_logic;
+  signal Dynamic_Local_Result : Logic_Bus_T;
   signal Dynamic_Result : Logic_Bus_T;
 begin
   Result <= Source;
@@ -1146,6 +1165,7 @@ begin
         Logic_Bus_T'high downto Logic_Bus_T'high - 3);
     Dynamic_Read <= Dynamic_Local(Dynamic_Index);
     Dynamic_Local(Dynamic_Index) := 'H';
+    Dynamic_Local_Result <= Dynamic_Local;
     Dynamic_Result <= (others => '0');
     Dynamic_Result(Dynamic_Index) <= 'H';
     wait;
@@ -1154,7 +1174,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(array_source.ok());
-    const auto array_design = fsim::elaboration::elaborate(
+    const auto array_design = compile_and_elaborate(
         array_source.design, "vhdl:work.array_dut(rtl)");
     if (!array_design.ok()) {
         for (const auto& diagnostic : array_design.diagnostics) {
@@ -1183,6 +1203,8 @@ end architecture;
     const auto attribute_slice_signal = array_design.design->find_signal(
         "attribute_slice");
     const auto dynamic_read_signal = array_design.design->find_signal("dynamic_read");
+    const auto dynamic_local_result_signal =
+        array_design.design->find_signal("dynamic_local_result");
     const auto dynamic_result_signal = array_design.design->find_signal("dynamic_result");
     assert(
         array_source_signal && array_result_signal
@@ -1193,20 +1215,27 @@ end architecture;
         && attribute_ascending_signal && range_order_signal
         && reverse_order_signal && attribute_aggregate_signal
         && attribute_slice_signal && dynamic_read_signal
+        && dynamic_local_result_signal
         && dynamic_result_signal);
-    bool found_dynamic_extract = false;
-    bool found_dynamic_insert = false;
+    bool found_dynamic_read = false;
+    bool found_dynamic_local_write = false;
     bool found_dynamic_write = false;
     for (const auto& process :
         array_design.design->processes()) {
         for (const auto& operation : process.operations) {
-            found_dynamic_extract = found_dynamic_extract
+            found_dynamic_read = found_dynamic_read
                 || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::DynamicExtract>(
+                    operation)
+                || fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::DynamicPartSelect>(
                     operation);
-            found_dynamic_insert = found_dynamic_insert
+            found_dynamic_local_write = found_dynamic_local_write
                 || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::DynamicInsert>(
+                    operation)
+                || fsim::runtime::simir::operation_holds<
+                    fsim::runtime::simir::DynamicPartInsert>(
                     operation);
             found_dynamic_write = found_dynamic_write
                 || fsim::runtime::simir::operation_holds<
@@ -1219,8 +1248,8 @@ end architecture;
                     operation);
         }
     }
-    assert(found_dynamic_extract);
-    assert(found_dynamic_insert);
+    assert(found_dynamic_read);
+    assert(found_dynamic_local_write);
     assert(found_dynamic_write);
     const auto& array_source_info = array_design.design->signals().at(*array_source_signal);
     const auto& array_result_info = array_design.design->signals().at(*array_result_signal);
@@ -1325,6 +1354,10 @@ end architecture;
             .to_msb_string()
         == "L");
     assert(
+        array_interpreter->signal_value(*dynamic_local_result_signal)
+            .to_msb_string()
+        == "01HH10Z-");
+    assert(
         array_interpreter->signal_value(*dynamic_result_signal)
             .to_msb_string()
         == "00H00000");
@@ -1426,7 +1459,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_array_source.ok());
-    const auto invalid_array_design = fsim::elaboration::elaborate(
+    const auto invalid_array_design = compile_and_elaborate(
         invalid_array_source.design,
         "vhdl:work.invalid_arrays(rtl)");
     assert(!invalid_array_design.ok());
@@ -1504,7 +1537,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(composite_array_layout.ok());
-    const auto composite_array_design = fsim::elaboration::elaborate(
+    const auto composite_array_design = compile_and_elaborate(
         composite_array_layout.design,
         "vhdl:work.composite_array_layout(rtl)");
     if (!composite_array_design.ok()) {
@@ -1576,7 +1609,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(composite_array_aggregates.ok());
-    const auto aggregate_design = fsim::elaboration::elaborate(
+    const auto aggregate_design = compile_and_elaborate(
         composite_array_aggregates.design,
         "vhdl:work.composite_array_aggregates(rtl)");
     if (!aggregate_design.ok()) {
@@ -1684,40 +1717,140 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(malformed_array_aggregate.ok());
-    auto combined_others_aggregate = malformed_array_aggregate;
-    auto& malformed_array_expression = malformed_array_aggregate.design.units.back()
-                                           .concurrent_statements.front()
-                                           .value;
-    malformed_array_expression
-        .aggregate_choice_expressions.pop_back();
+    auto malformed_array_compiled = compile_test_design(
+        std::move(malformed_array_aggregate.design));
+    assert(fsim::semantic::normalize_compiled_design(
+        malformed_array_compiled));
+    auto combined_others_compiled = malformed_array_compiled;
+    auto& malformed_array_expressions = malformed_array_compiled
+                                            .mutable_vhdl()
+                                            .mutable_expressions();
+    const auto malformed_array_expression = std::ranges::find_if(
+        malformed_array_expressions,
+        [](const auto& expression) {
+            return expression.kind
+                == fsim::semantic::vhdl::ExpressionKind::aggregate;
+        });
+    assert(
+        malformed_array_expression
+            != malformed_array_expressions.end()
+        && malformed_array_expression->associations.size() == 1U
+        && malformed_array_expression->associations.front()
+               .choices.size()
+            == 1U);
+    malformed_array_expression->associations.front().choices.clear();
+    malformed_array_compiled.refresh_lookup_indexes();
+    assert(malformed_array_compiled.valid());
     const auto malformed_array_design = fsim::elaboration::elaborate(
-        malformed_array_aggregate.design,
+        malformed_array_compiled,
         "vhdl:work.malformed_array_aggregate(rtl)");
     assert(
         !malformed_array_design.ok()
         && has_diagnostic(
             malformed_array_design,
             "FSIM-ELAB-VHARRAYAGG-002"));
-    auto& combined_others_expression = combined_others_aggregate.design.units.back()
-                                           .concurrent_statements.front()
-                                           .value;
-    const auto combined_choice_span = combined_others_expression.span;
-    combined_others_expression
-        .aggregate_choice_expressions.front()
-        .push_back(
-            fsim::frontend::Expression {
-                fsim::frontend::ExpressionKind::IntegerLiteral,
-                "0",
-                { },
-                combined_choice_span });
+    auto& combined_others_expressions = combined_others_compiled
+                                            .mutable_vhdl()
+                                            .mutable_expressions();
+    const auto combined_others_expression = std::ranges::find_if(
+        combined_others_expressions,
+        [](const auto& expression) {
+            return expression.kind
+                == fsim::semantic::vhdl::ExpressionKind::aggregate;
+        });
+    assert(
+        combined_others_expression
+            != combined_others_expressions.end()
+        && combined_others_expression->associations.size() == 1U
+        && combined_others_expression->associations.front()
+               .choices.size()
+            == 1U);
+    auto& combined_association
+        = combined_others_expression->associations.front();
+    combined_association.choices.push_back(combined_association.value);
+    combined_others_compiled.refresh_lookup_indexes();
+    assert(combined_others_compiled.valid());
     const auto combined_others_design = fsim::elaboration::elaborate(
-        combined_others_aggregate.design,
+        combined_others_compiled,
         "vhdl:work.malformed_array_aggregate(rtl)");
     assert(
         !combined_others_design.ok()
         && has_diagnostic(
             combined_others_design,
             "FSIM-ELAB-VHARRAYAGG-008"));
+
+    const auto builtin_vector_vhdl = fsim::frontend::parse_text(
+        "builtin_vector_boundary.vhd",
+        R"(
+entity Builtin_Vector_Child is
+  port (Value : in bit_vector(3 downto 0));
+end entity;
+architecture rtl of Builtin_Vector_Child is
+begin
+end architecture;
+
+entity Builtin_Vector_Parent is
+end entity;
+architecture rtl of Builtin_Vector_Parent is
+  signal Value : bit_vector(3 downto 0);
+begin
+  Child : builtin_vector_sv_child
+    port map (Value => Value);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    const auto builtin_vector_sv = fsim::frontend::parse_text(
+        "builtin_vector_boundary.sv",
+        R"(
+module builtin_vector_sv_parent;
+  bit [3:0] value;
+  builtin_vector_child child(.value(value));
+endmodule
+
+module builtin_vector_sv_child(input bit [3:0] value);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(builtin_vector_vhdl.ok() && builtin_vector_sv.ok());
+    auto builtin_vector_design = builtin_vector_vhdl.design;
+    builtin_vector_design.units.insert(
+        builtin_vector_design.units.end(),
+        builtin_vector_sv.design.units.begin(),
+        builtin_vector_sv.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        sv_to_vhdl_vector_binding {
+            { "builtin_vector_sv_parent.child",
+                "vhdl:work.builtin_vector_child(rtl)",
+                std::nullopt }
+        };
+    const auto sv_to_vhdl_vector = compile_and_elaborate(
+        builtin_vector_design,
+        "sv:work.builtin_vector_sv_parent",
+        sv_to_vhdl_vector_binding);
+    if (!sv_to_vhdl_vector.ok()) {
+        for (const auto& diagnostic : sv_to_vhdl_vector.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(sv_to_vhdl_vector.ok());
+    const std::vector<fsim::elaboration::Binding>
+        vhdl_to_sv_vector_binding {
+            { "builtin_vector_parent.child",
+                "sv:work.builtin_vector_sv_child",
+                std::nullopt }
+        };
+    const auto vhdl_to_sv_vector = compile_and_elaborate(
+        builtin_vector_design,
+        "vhdl:work.builtin_vector_parent(rtl)",
+        vhdl_to_sv_vector_binding);
+    if (!vhdl_to_sv_vector.ok()) {
+        for (const auto& diagnostic : vhdl_to_sv_vector.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(vhdl_to_sv_vector.ok());
 
     const auto foreign_array_parent = fsim::frontend::parse_text(
         "foreign_array_parent.sv",
@@ -1740,7 +1873,7 @@ endmodule
                 "vhdl:work.invalid_array_child(rtl)",
                 std::nullopt }
         };
-    const auto rejected_foreign_array = fsim::elaboration::elaborate(
+    const auto rejected_foreign_array = compile_and_elaborate(
         mixed_array_design,
         "sv:work.foreign_array_parent",
         foreign_array_binding);
@@ -1767,7 +1900,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(random_source.ok());
-    const auto random_design = fsim::elaboration::elaborate(
+    const auto random_design = compile_and_elaborate(
         random_source.design, "sv:work.random_test");
     assert(random_design.ok());
     std::vector<fsim::runtime::simir::RandomValue> random_operations;
@@ -1807,7 +1940,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_random_source.ok());
-    const auto invalid_random_design = fsim::elaboration::elaborate(
+    const auto invalid_random_design = compile_and_elaborate(
         invalid_random_source.design,
         "sv:work.invalid_random");
     assert(!invalid_random_design.ok());
@@ -1844,7 +1977,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(verilog_random_source.ok());
-    const auto verilog_random_design = fsim::elaboration::elaborate(
+    const auto verilog_random_design = compile_and_elaborate(
         verilog_random_source.design,
         "verilog:work.verilog_random");
     assert(verilog_random_design.ok());

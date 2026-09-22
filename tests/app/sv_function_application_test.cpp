@@ -305,11 +305,16 @@ void verify(
             return point.kind
                 == fsim::runtime::simir::ExecutionPointKind::call;
         });
-    if (calls != 48) {
+    // The depth-four recursive call tree contributes 31 boundaries; the
+    // remaining direct, nested-container, and unknown-conditional calls
+    // contribute 57.  Unknown conditional container expressions execute
+    // both alternatives before the four-state merge.
+    constexpr std::size_t expected_call_points = 88U;
+    if (calls != expected_call_points) {
         std::cerr << "unexpected function call point count: "
                   << calls << '\n';
     }
-    assert(calls == 48);
+    assert(calls == expected_call_points);
     if (capture.call_operations != 43) {
         std::cerr << "unexpected lowered Call operation count: "
                   << capture.call_operations << '\n';

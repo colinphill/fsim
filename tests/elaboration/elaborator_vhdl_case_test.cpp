@@ -41,7 +41,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(positive.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       positive.design, "vhdl:work.vhdl_discrete_case(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -101,7 +101,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(invalid.ok());
-  const auto rejected = fsim::elaboration::elaborate(
+  const auto rejected = compile_and_elaborate(
       invalid.design, "vhdl:work.vhdl_invalid_case(rtl)");
   assert(!rejected.ok());
   assert(has_diagnostic(rejected, "FSIM-ELAB-VHDLCASE-001"));

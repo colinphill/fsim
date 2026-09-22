@@ -22,6 +22,7 @@ if(NOT FSIM_LICENSE STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 
 set(FSIM_EXPECTED_DOMAINS manifest abi object design checkpoint cache)
+set(FSIM_BATCH_188A_DOMAINS object design checkpoint)
 set(FSIM_IDS)
 set(FSIM_DOMAINS)
 set(FSIM_TOTAL_ROWS 0)
@@ -39,6 +40,11 @@ foreach(FSIM_INDEX RANGE 2 7)
   list(GET FSIM_FIELDS 4 FSIM_EXPECTED_DIGEST)
   list(GET FSIM_FIELDS 5 FSIM_STATE)
   list(GET FSIM_FIELDS 6 FSIM_OWNER)
+  if(FSIM_DOMAIN IN_LIST FSIM_BATCH_188A_DOMAINS)
+    set(FSIM_EXPECTED_OWNER "B188A-C19")
+  else()
+    set(FSIM_EXPECTED_OWNER "B188-C02")
+  endif()
   string(LENGTH "${FSIM_EXPECTED_DIGEST}" FSIM_DIGEST_LENGTH)
 
   if(FSIM_ID IN_LIST FSIM_IDS OR FSIM_DOMAIN IN_LIST FSIM_DOMAINS OR
@@ -50,7 +56,7 @@ foreach(FSIM_INDEX RANGE 2 7)
      NOT FSIM_EXPECTED_DIGEST MATCHES "^[0-9a-f]+$" OR
      NOT FSIM_DIGEST_LENGTH EQUAL 64 OR
      NOT FSIM_STATE STREQUAL "preserved" OR
-     NOT FSIM_OWNER STREQUAL "B188-C02")
+     NOT FSIM_OWNER STREQUAL "${FSIM_EXPECTED_OWNER}")
     message(FATAL_ERROR "v3 schema freeze row is malformed: ${FSIM_ID}")
   endif()
   if(IS_ABSOLUTE "${FSIM_CHECKER_RELATIVE}" OR
@@ -100,7 +106,7 @@ foreach(FSIM_DOMAIN IN LISTS FSIM_EXPECTED_DOMAINS)
     message(FATAL_ERROR "v3 schema freeze domain is missing: ${FSIM_DOMAIN}")
   endif()
 endforeach()
-if(NOT FSIM_TOTAL_ROWS EQUAL 267)
+if(NOT FSIM_TOTAL_ROWS EQUAL 264)
   message(FATAL_ERROR "v3 schema freeze row total changed: ${FSIM_TOTAL_ROWS}")
 endif()
 
@@ -131,26 +137,25 @@ fsim_require_schema_tokens(include/fsim/runtime/svdpi_bridge.h
 fsim_require_schema_tokens(include/fsim/runtime/acc_handle_bridge.h
   "FSIM_ACC_STANDARD_QUERY_ABI_VERSION 3u")
 fsim_require_schema_tokens(include/fsim/artifact/object.hpp
-  "kObjectFormatVersion = 7")
+  "kObjectFormatVersion = 8")
 fsim_require_schema_tokens(include/fsim/library/artifact.hpp
-  "kFormatVersion = 5"
-  "kPortableSchemaVersion = 14")
-fsim_require_schema_tokens(include/fsim/library/portable_unit.hpp
-  "kOwningUnitSchemaVersion = 32")
+  "kFormatVersion = 6"
+  "kPortableSchemaVersion = 15"
+  "kCompiledHirSchemaVersion = 1")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
-  "kDesignFormatVersion = 12")
+  "kDesignFormatVersion = 13")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
   "kRuntimeStateSchema = 62"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 4"
-  "kClassStateSchema = 12"
-  "kSystemVerilogConstraintHirStateSchema = 7"
+  "kCompiledHirBundleSchema = 1"
+  "kSystemVerilogConstraintHirStateSchema = 8"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 4")
+  "kVhdlHirStateSchema = 5")
 fsim_require_schema_tokens(src/compiler/llvm_jit_cache_key.cpp
   "fsim-llvm-native-object-v168")
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 message(STATUS
-  "v3 schema freeze passed: domains=6 owner-rows=267 manifest=3 object=7/14/32 design=12/5 checkpoint=62 cache=v168 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 schema freeze passed: domains=6 owner-rows=264 manifest=3 object=8/15/1 design=13/6 checkpoint=62/8/5 cache=v168 digest=${FSIM_LEDGER_DIGEST}")

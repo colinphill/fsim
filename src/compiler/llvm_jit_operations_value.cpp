@@ -1122,10 +1122,15 @@ void ValueOperationLowerer::lower(
                   JitGeneratedRuntimeErrorReason::
                       integer_operand_unknown,
                   "integer.check.unknown");
-              auto* value = width == 64U
-                  ? source.aval
-                  : builder.CreateSExt(
-                        builder.CreateTrunc(source.aval, i32), i64);
+              auto* value = source.aval;
+              if (width != 64U) {
+                  auto* narrowed = builder.CreateTrunc(
+                      source.aval,
+                      llvm::Type::getIntNTy(context, width));
+                  value = width == 32U || operation.lower < 0
+                      ? builder.CreateSExt(narrowed, i64)
+                      : builder.CreateZExt(narrowed, i64);
+              }
               auto* lower = llvm::ConstantInt::getSigned(
                   llvm::Type::getInt64Ty(context),
                   operation.lower);

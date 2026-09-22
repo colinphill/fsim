@@ -807,9 +807,14 @@ private:
             runtime::simir::Return>(&operation);
         const auto* read_signal = fsim::runtime::simir::operation_get_if<
             runtime::simir::ReadSignal>(&operation);
+        const auto* report = fsim::runtime::simir::operation_get_if<
+            runtime::simir::Report>(&operation);
         const auto host_boundary = (read_signal != nullptr
                                        && read_signal->kind
                                            != runtime::simir::SignalReadKind::current)
+            || (report != nullptr
+                && report->severity
+                    == runtime::simir::AssertionSeverity::failure)
             || fsim::runtime::simir::operation_holds<
                                        runtime::simir::ClassAllocate>(operation)
             || fsim::runtime::simir::operation_holds<

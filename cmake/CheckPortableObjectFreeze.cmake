@@ -12,10 +12,11 @@ set(FSIM_OBJECT_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/artifact/object.hpp")
 set(FSIM_LIBRARY_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/library/artifact.hpp")
-set(FSIM_PORTABLE_HEADER
-  "${FSIM_SOURCE_DIR}/include/fsim/library/portable_unit.hpp")
+set(FSIM_BUNDLE_HEADER
+  "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
 set(FSIM_OBJECT_CODEC "${FSIM_SOURCE_DIR}/src/artifact/object.cpp")
-set(FSIM_PORTABLE_CODEC "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
+set(FSIM_BUNDLE_CODEC
+  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_hir_codec.cpp")
 set(FSIM_OBJECT_TEST
   "${FSIM_SOURCE_DIR}/tests/artifact/object_artifact_test.cpp")
 set(FSIM_PORTABLE_TEST
@@ -29,9 +30,9 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CONTRACT}"
     "${FSIM_OBJECT_HEADER}"
     "${FSIM_LIBRARY_HEADER}"
-    "${FSIM_PORTABLE_HEADER}"
+    "${FSIM_BUNDLE_HEADER}"
     "${FSIM_OBJECT_CODEC}"
-    "${FSIM_PORTABLE_CODEC}"
+    "${FSIM_BUNDLE_CODEC}"
     "${FSIM_OBJECT_TEST}"
     "${FSIM_PORTABLE_TEST}"
     "${FSIM_PHASE_TEST}"
@@ -47,15 +48,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "059915915e53748387bb12c071996b4bd01f76e49846fb7f733c5cecc289980c")
+  "8fe1c4f19982fd277e7079c08cb12e2ee0c2c3d5d740e6722dce66c5c0199135")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable object contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 48)
-  message(FATAL_ERROR "portable object contract requires 48 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 42)
+  message(FATAL_ERROR "portable object contract requires SPDX, header and 40 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -63,7 +64,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
    NOT FSIM_HEADER STREQUAL "kind\tname\tcontract")
   message(FATAL_ERROR "portable object contract header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 47)
+foreach(FSIM_INDEX RANGE 2 41)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -83,70 +84,69 @@ function(fsim_require_portable_object_tokens path)
 endfunction()
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
-  "kObjectFormatVersion = 7"
+  "kObjectFormatVersion = 8"
   "kObjectMetadataFilename = \"fsim-object.bin\""
   "portable_schema{library::kPortableSchemaVersion}"
+  "compiled_hir_schema{library::kCompiledHirSchemaVersion}"
+  "std::filesystem::path compiled_hir_artifact"
+  "std::string compiled_hir_checksum"
   "Canonical little-endian metadata codec"
   "installed .fsimobj tree is read-only")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
-  "kPortableSchemaVersion = 14")
-fsim_require_portable_object_tokens("${FSIM_PORTABLE_HEADER}"
-  "kOwningUnitSchemaVersion = 32"
-  "kUdpDeclarationSchemaVersion = 1"
-  "Unknown schemas, truncation, trailing bytes, and out-of-range values reject")
+  "kPortableSchemaVersion = 15"
+  "kCompiledHirSchemaVersion = 1")
+fsim_require_portable_object_tokens("${FSIM_BUNDLE_HEADER}"
+  "kCompiledHirBundleSchema = 1"
+  "serialize_compiled_hir_bundle("
+  "deserialize_compiled_hir_bundle(")
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "'F', 'S', 'I', 'M', 'O', 'B', 'J', '\\0'"
   "writer.u32(kObjectFormatVersion)"
   "writer.u32(library::kPortableSchemaVersion)"
-  "fsim-object-compilation-v7-code-coverage"
+  "writer.u32(library::kCompiledHirSchemaVersion)"
+  "fsim-object-compilation-v8-compiled-hir"
   "unsupported_artifact_identity("
   "\".fsimobj\""
   "portable-unit schema"
+  "compiled-HIR schema"
+  "truncated .fsimobj compiled-HIR index"
   "trailing object metadata bytes"
   "object compilation digest does not match"
   "object output already exists or cannot be inspected")
-fsim_require_portable_object_tokens("${FSIM_PORTABLE_CODEC}"
-  "kMagic = \"FSIMUNIT\""
-  "kUdpMagic = \"FSIMUDPD\""
-  "kClassMagic = \"FSIMCLSU\""
-  "kMaximumArchiveNesting = 512"
-  "portable unit contains a cyclic owning type graph"
-  "portable string length exceeds the artifact"
-  "portable vector length exceeds the artifact"
-  "archive_fields(T& value)"
-  "frontend::Expression"
-  "frontend::Type"
-  "valid_unit_strengths"
-  "valid_unit_specify"
-  "valid_unit_hierarchy")
+fsim_require_portable_object_tokens("${FSIM_BUNDLE_CODEC}"
+  "serialize_compiled_hir_bundle("
+  "deserialize_compiled_hir_bundle("
+  "\"FSIMCHIR\", kCompiledHirBundleSchema"
+  "serialize_semantic_state("
+  "serialize_systemverilog_constraint_hir_state("
+  "serialize_vhdl_hir_state("
+  "design.dependencies().begin()"
+  "design.references().begin()"
+  "compiled HIR bundle is structurally invalid")
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
-  "kObjectFormatVersion == 7U"
+  "kObjectFormatVersion == 8U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
-  "kPortableSchemaVersion == 14U"
-  "kOwningUnitSchemaVersion == 32U"
+  "kPortableSchemaVersion == 15U"
+  "kCompiledHirSchemaVersion == 1U"
   "corrupt-magic"
   "stale-format"
   "future-format"
   "stale-portable-schema"
   "future-portable-schema"
+  "stale-compiled-hir-schema"
+  "future-compiled-hir-schema"
   "stale-publication"
   "truncated-header"
   "oversized-root"
   "inconsistent-digest")
 fsim_require_portable_object_tokens("${FSIM_PORTABLE_TEST}"
-  "stale.fsimir"
-  "future.fsimir"
-  "truncated.fsimir"
-  "oversized.fsimir"
-  "corrupt.fsimir"
-  "stale.fsimudp"
-  "future.fsimudp"
-  "stale.fsimclass"
-  "future.fsimclass"
-  "producer-absolute")
+  "units/stage.fsimir"
+  "units/invert.fsimudp"
+  "fixture.fsimclass"
+  "compiled/design.fsimhir")
 fsim_require_portable_object_tokens("${FSIM_PHASE_TEST}"
   ".fsimobj"
   "artifact-vhdl-stale.fsimobj"
@@ -158,4 +158,4 @@ fsim_require_portable_object_tokens("${FSIM_TEST_BUILD}"
   "CheckPortableObjectFreeze.cmake")
 
 message(STATUS
-  "portable .fsimobj schema freeze passed: rows=46 digest=${FSIM_CONTRACT_DIGEST}")
+  "portable .fsimobj schema freeze passed: rows=40 digest=${FSIM_CONTRACT_DIGEST}")

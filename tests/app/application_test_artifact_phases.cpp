@@ -30,11 +30,11 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     static_assert(app::kRuntimeStateSchema == 62);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 4);
-    static_assert(app::kClassStateSchema == 12);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 7);
+    static_assert(app::kCompiledHirBundleSchema == 1);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 8);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 4);
+    static_assert(app::kVhdlHirStateSchema == 5);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -435,10 +435,11 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
-                == "unsupported .fsimobj identity: found format 8 and "
-                   "portable-unit schema 14; required format 7 and "
-                   "portable-unit schema 14; regenerate .fsimobj with "
-                   "this fsim build";
+                == "unsupported .fsimobj identity: found format 9, "
+                   "portable-unit schema 15, and compiled-HIR schema 1; "
+                   "required format 8, portable-unit schema 15, and "
+                   "compiled-HIR schema 1; regenerate .fsimobj with this "
+                   "fsim build";
         }));
     output.str({ });
     error.str({ });
@@ -541,6 +542,30 @@ end architecture;
     const auto design_metadata = artifact::load_design_metadata(
         design, design_metadata_diagnostics);
     assert(design_metadata && !design_metadata_diagnostics.has_error());
+    const auto compiled_hir_payload = std::ranges::find(
+        design_metadata->payloads, std::string { "compiled-hir" },
+        &artifact::DesignPayload::kind);
+    assert(compiled_hir_payload != design_metadata->payloads.end());
+    assert(std::ranges::none_of(
+        design_metadata->payloads, [](const auto& payload) {
+            return payload.kind == "semantics"
+                || payload.kind == "sv-constraint-hir"
+                || payload.kind == "vhdl-hir";
+        }));
+    std::ifstream compiled_hir_input(
+        design / compiled_hir_payload->artifact, std::ios::binary);
+    const std::string compiled_hir_bytes {
+        std::istreambuf_iterator<char> { compiled_hir_input },
+        std::istreambuf_iterator<char> { }
+    };
+    assert(compiled_hir_input.good() || compiled_hir_input.eof());
+    assert(compiled_hir_bytes.starts_with("FSIMCHIR"));
+    diagnostic::Engine compiled_hir_diagnostics;
+    const auto compiled_hir = app::deserialize_compiled_hir_bundle(
+        compiled_hir_bytes, "standalone-design-compiled-hir",
+        compiled_hir_diagnostics);
+    assert(compiled_hir && compiled_hir->valid()
+        && !compiled_hir_diagnostics.has_error());
     const auto vhdl_design_input = std::ranges::find_if(
         design_metadata->objects,
         [](const auto& object) { return object.language == "vhdl"; });
@@ -854,7 +879,8 @@ end architecture;
 
     auto& vhdl_2019_statement
         = vhdl_2019_hir.mutable_statements().front();
-    vhdl_2019_statement.kind = semantic::vhdl::StatementKind::block;
+    vhdl_2019_statement.kind = semantic::vhdl::StatementKind::force;
+    vhdl_2019_statement.force_driving_value = true;
     vhdl_2019_statement.declarations = {
         vhdl_2019_declaration.id };
     vhdl_2019_statement.nested_scope = vhdl_2019_declaration.scope;
@@ -895,7 +921,9 @@ end architecture;
         && restored_vhdl_2019_hir->expressions().front()
                 .unspecified_type_inference_unique
         && restored_vhdl_2019_hir->statements().front().kind
-            == semantic::vhdl::StatementKind::block);
+            == semantic::vhdl::StatementKind::force
+        && restored_vhdl_2019_hir->statements().front()
+            .force_driving_value);
     diagnostic::Engine repeated_vhdl_2019_hir_diagnostics;
     assert(app::serialize_vhdl_hir_state(
                *restored_vhdl_2019_hir, coverage_checkpoint->semantics,
@@ -1103,11 +1131,12 @@ end architecture;
         corrupt_uvm_design, corrupt_uvm_diagnostics));
     assert(corrupt_uvm_diagnostics.has_error());
     std::filesystem::remove_all(corrupt_uvm_design);
-    const auto corrupt_vhdl_hir_design = directory / "artifact-corrupt-vhdl-hir.fsimdesign";
-    std::filesystem::create_directories(corrupt_vhdl_hir_design);
+    const auto corrupt_compiled_hir_design
+        = directory / "artifact-corrupt-compiled-hir.fsimdesign";
+    std::filesystem::create_directories(corrupt_compiled_hir_design);
     for (const auto& entry :
         std::filesystem::recursive_directory_iterator(active_design)) {
-        const auto destination = corrupt_vhdl_hir_design
+        const auto destination = corrupt_compiled_hir_design
             / entry.path().lexically_relative(active_design);
         if (entry.is_directory()) {
             std::filesystem::create_directories(destination);
@@ -1120,266 +1149,94 @@ end architecture;
     }
     {
         std::ofstream corrupt(
-            corrupt_vhdl_hir_design / "state" / "vhdl-hir.bin",
+            corrupt_compiled_hir_design
+                / "state" / "compiled-design.fsimhir",
             std::ios::binary | std::ios::app);
         corrupt.put('\0');
     }
-    diagnostic::Engine corrupt_vhdl_hir_diagnostics;
+    diagnostic::Engine corrupt_compiled_hir_diagnostics;
     assert(!app::load_design_artifact(
-        corrupt_vhdl_hir_design, corrupt_vhdl_hir_diagnostics));
-    assert(corrupt_vhdl_hir_diagnostics.has_error());
-    std::filesystem::remove_all(corrupt_vhdl_hir_design);
+        corrupt_compiled_hir_design, corrupt_compiled_hir_diagnostics));
+    assert(corrupt_compiled_hir_diagnostics.has_error());
+    std::filesystem::remove_all(corrupt_compiled_hir_design);
     assert(std::filesystem::remove(vhdl_source));
     auto coverage_state = coverage_checkpoint->systemverilog_coverage;
     assert(coverage_state.declarations.size() == 1);
     assert(coverage_state.instances.size() == 1);
     assert(coverage_state.reports.size() == 1);
-    const auto& coverage_declaration = coverage_state.declarations.front();
-    assert(coverage_declaration.name == "artifact_coverage");
-    assert(coverage_declaration.effective_instance_goal == 75);
-    assert(coverage_declaration.effective_merge_instances);
-    assert(coverage_declaration.coverage_declarations.size() == 1);
-    assert(coverage_declaration.coverage_declarations.front().bins.size() == 6);
-    coverage_state.declarations.front().standard_revision
-        = frontend::StandardRevision::SystemVerilog2023;
-    coverage_state.declarations.front().effective_cross_retain_auto_bins
-        = false;
-    coverage_state.declarations.front().extends_parent = true;
-    coverage_state.declarations.front().resolved_base_identity
-        = "work.coverage_base::artifact_coverage";
-    frontend::SystemVerilogCovergroupOptionAssignment retained_option;
-    retained_option.name = "cross_retain_auto_bins";
-    retained_option.evaluated_value = 0U;
-    retained_option.evaluated_real_bits = 0x3fd0000000000000ULL;
-    retained_option.inherited = true;
-    coverage_state.declarations.front().option_assignments.push_back(
-        std::move(retained_option));
-    coverage_state.declarations.front().coverage_declarations.front()
-        .origin_covergroup_identity
-        = "work.coverage_base::artifact_coverage";
-    coverage_state.declarations.front().coverage_declarations.front()
-        .inherited = true;
-    coverage_state.declarations.front().effective_real_interval_bits
-        = 0x3fd0000000000000ULL;
-    coverage_state.declarations.front().coverage_declarations.front()
-        .sampled_scalar_kind = frontend::SystemVerilogScalarKind::Real;
-    coverage_state.declarations.front().coverage_declarations.front()
-        .effective_real_interval_bits = 0x3fd0000000000000ULL;
     auto& coverage_instance = coverage_state.instances.front();
-    assert(coverage_instance.runtime_identity.find("0x") == std::string::npos);
-    auto& first_bin
-        = coverage_state.declarations.front().coverage_declarations.front().bins.front();
-    assert(!first_bin.values.empty());
-    auto& wide_bin_value = first_bin.values.front();
-    wide_bin_value.width = 137;
-    wide_bin_value.exact_value.reset();
-    wide_bin_value.range_left.reset();
-    wide_bin_value.range_right.reset();
-    wide_bin_value.exact_bits = "1" + std::string(135, '0') + "1";
-    wide_bin_value.range_left_bits = std::string(136, '0') + "1";
-    wide_bin_value.range_right_bits = "1" + std::string(136, '0');
-    wide_bin_value.wildcard_value_bits
-        = "10" + std::string(133, '0') + "01";
-    wide_bin_value.wildcard_mask_bits
-        = "01" + std::string(133, '0') + "10";
-    wide_bin_value.exact_signed = true;
-    wide_bin_value.range_left_signed = true;
-    wide_bin_value.range_right_signed = false;
-    wide_bin_value.exact_real_bits = 0x3ff8000000000000ULL;
-    wide_bin_value.range_left_real_bits = 0x3ff0000000000000ULL;
-    wide_bin_value.range_right_real_bits = 0x4000000000000000ULL;
-    wide_bin_value.range_left_inclusive = false;
-    frontend::SystemVerilogCoverageBinHit hit;
+    semantic::sv::CoverageBinHit hit;
     hit.coverage_declaration_index = 0;
-    hit.bin_declaration_index = first_bin.declaration_index;
-    hit.identity = first_bin.name;
+    hit.bin_declaration_index = 0;
+    hit.identity = "runtime-hit";
     hit.hit_count = 3;
-    hit.at_least = first_bin.at_least;
+    hit.at_least = 1;
     hit.covered = true;
     coverage_instance.bin_hits.push_back(hit);
-    auto automatic_hit = hit;
-    automatic_hit.identity = "automatic-wide";
-    automatic_hit.automatic_value = 1;
-    automatic_hit.automatic_value_bits = wide_bin_value.exact_bits;
-    automatic_hit.automatic_unknown_bits = std::string(137, '0');
-    automatic_hit.automatic_width = 137;
-    automatic_hit.automatic_signed = true;
-    coverage_instance.bin_hits.push_back(automatic_hit);
-    coverage_instance.transition_progress.push_back({ 0, 4, 0, 1, 2, 3 });
-    frontend::SystemVerilogCoveragePreviousSample previous_sample;
-    previous_sample.coverage_declaration_index = 0;
-    previous_sample.width = 137;
-    previous_sample.value_bits = wide_bin_value.exact_bits;
-    previous_sample.unknown_bits = std::string(64, '0') + "1"
-        + std::string(72, '0');
-    previous_sample.signed_value = true;
-    coverage_instance.previous_samples.push_back(previous_sample);
-    coverage_instance.cross_bin_state.push_back(
-        { 0, std::nullopt, "tuple", { first_bin.name }, 4, 1, 1, 100, 1,
-            true, false });
-    frontend::SystemVerilogCoverageIllegalBinReport illegal_report;
-    illegal_report.bin_identity = "rejected";
-    illegal_report.sampled_width = 137;
-    illegal_report.sampled_value_bits = wide_bin_value.exact_bits;
-    illegal_report.sampled_unknown_bits = previous_sample.unknown_bits;
-    illegal_report.sampled_signed = true;
-    illegal_report.sampled_scalar_kind
-        = frontend::SystemVerilogScalarKind::Real;
-    illegal_report.sampled_scalar_bits = 0x4004000000000000ULL;
-    illegal_report.span = first_bin.span;
-    coverage_instance.illegal_bin_reports.push_back(illegal_report);
     frontend::SystemVerilogCoverageCallbackEvent callback;
     callback.sequence = 9;
     callback.kind = frontend::SystemVerilogCoverageCallbackKind::Hit;
-    callback.trigger = frontend::SystemVerilogCoverageSampleTrigger::Procedural;
-    callback.mode = frontend::SystemVerilogCoverageExecutionMode::LlvmO2;
     callback.runtime_identity = coverage_instance.runtime_identity;
-    callback.bin_identity = first_bin.name;
-    callback.value = 2;
-    callback.scalar_kind = frontend::SystemVerilogScalarKind::Real;
-    callback.scalar_bits = 0x4004000000000000ULL;
+    callback.bin_identity = hit.identity;
     coverage_state.callback_events.push_back(callback);
-    coverage_state.trace_events.push_back(
-        { 9, 42, 7, "alias.coverage.hit", "coverage.hit",
-            frontend::SystemVerilogCoverageCallbackKind::Hit, 2, true });
-    coverage_state.aliases.push_back({ "alias.coverage", "coverage" });
-    frontend::refresh_systemverilog_coverage_reports(coverage_state);
+    coverage_state.reports.clear();
     diagnostic::Engine coverage_codec_diagnostics;
     const auto coverage_bytes = app::serialize_systemverilog_coverage_state(
-        coverage_state, coverage_codec_diagnostics);
+        coverage_state, coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics, coverage_codec_diagnostics);
     assert(coverage_bytes && !coverage_codec_diagnostics.has_error());
     auto restored_coverage = app::deserialize_systemverilog_coverage_state(
-        *coverage_bytes, "coverage-state.bin", coverage_codec_diagnostics);
+        *coverage_bytes, "coverage-state.bin",
+        coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics, coverage_codec_diagnostics);
     assert(restored_coverage && !coverage_codec_diagnostics.has_error());
-    assert(restored_coverage->declarations.front().standard_revision
-            == frontend::StandardRevision::SystemVerilog2023
-        && !restored_coverage->declarations.front()
-                .effective_cross_retain_auto_bins
-        && restored_coverage->declarations.front().extends_parent
-        && restored_coverage->declarations.front().resolved_base_identity
-            == "work.coverage_base::artifact_coverage"
-        && restored_coverage->declarations.front().option_assignments.back()
-                .evaluated_value
-            == 0U
-        && restored_coverage->declarations.front().option_assignments.back()
-                .evaluated_real_bits
-            == 0x3fd0000000000000ULL
-        && restored_coverage->declarations.front().option_assignments.back()
-                .inherited
-        && restored_coverage->declarations.front()
-                .coverage_declarations.front().origin_covergroup_identity
-            == "work.coverage_base::artifact_coverage"
-        && restored_coverage->declarations.front()
-                .coverage_declarations.front().inherited);
-    assert(restored_coverage->declarations.front()
-               .effective_real_interval_bits
-            == 0x3fd0000000000000ULL
-        && restored_coverage->declarations.front()
-                .coverage_declarations.front().sampled_scalar_kind
-            == frontend::SystemVerilogScalarKind::Real
-        && restored_coverage->declarations.front()
-                .coverage_declarations.front().effective_real_interval_bits
-            == 0x3fd0000000000000ULL);
-    const auto restored_bytes = app::serialize_systemverilog_coverage_state(
-        *restored_coverage, coverage_codec_diagnostics);
-    assert(restored_bytes == coverage_bytes);
-    const auto& restored_wide_bin_value = restored_coverage->declarations.front()
-                                              .coverage_declarations.front()
-                                              .bins.front()
-                                              .values.front();
-    assert(restored_wide_bin_value.width == 137);
-    assert(
-        restored_coverage->declarations.front()
-                .coverage_declarations.front()
-                .bins.front()
-                .with_tokens.size()
-            == 3U
-        && restored_coverage->declarations.front()
-                .coverage_declarations.front()
-                .bins.front()
-                .with_tokens[1]
-                .text
-            == "<=");
-    assert(restored_wide_bin_value.exact_bits == wide_bin_value.exact_bits);
-    assert(restored_wide_bin_value.range_left_bits
-        == wide_bin_value.range_left_bits);
-    assert(restored_wide_bin_value.range_right_bits
-        == wide_bin_value.range_right_bits);
-    assert(restored_wide_bin_value.wildcard_value_bits
-        == wide_bin_value.wildcard_value_bits);
-    assert(restored_wide_bin_value.wildcard_mask_bits
-        == wide_bin_value.wildcard_mask_bits);
-    assert(restored_wide_bin_value.exact_signed);
-    assert(restored_wide_bin_value.range_left_signed);
-    assert(!restored_wide_bin_value.range_right_signed);
-    assert(restored_wide_bin_value.exact_real_bits
-            == 0x3ff8000000000000ULL
-        && restored_wide_bin_value.range_left_real_bits
-            == 0x3ff0000000000000ULL
-        && restored_wide_bin_value.range_right_real_bits
-            == 0x4000000000000000ULL
-        && !restored_wide_bin_value.range_left_inclusive
-        && restored_wide_bin_value.range_right_inclusive);
-    assert(restored_coverage->instances.front().bin_hits.front().hit_count == 3);
-    assert(restored_coverage->instances.front().bin_hits.size() == 2);
-    assert(restored_coverage->instances.front().bin_hits[1].automatic_value_bits
-        == automatic_hit.automatic_value_bits);
-    assert(restored_coverage->instances.front().bin_hits[1].automatic_width
-        == 137);
-    assert(restored_coverage->instances.front().transition_progress.size() == 1);
-    assert(restored_coverage->instances.front().previous_samples.size() == 1);
-    assert(restored_coverage->instances.front()
-               .previous_samples.front()
-               .value_bits
-        == previous_sample.value_bits);
-    assert(restored_coverage->instances.front()
-               .previous_samples.front()
-               .unknown_bits
-        == previous_sample.unknown_bits);
-    assert(restored_coverage->instances.front().cross_bin_state.size() == 1);
-    assert(restored_coverage->instances.front().illegal_bin_reports.size() == 1);
-    assert(restored_coverage->instances.front()
-               .illegal_bin_reports.front()
-               .sampled_value_bits
-        == illegal_report.sampled_value_bits);
-    assert(restored_coverage->instances.front()
-               .illegal_bin_reports.front()
-               .sampled_unknown_bits
-        == illegal_report.sampled_unknown_bits);
-    assert(restored_coverage->instances.front()
-               .illegal_bin_reports.front().sampled_scalar_kind
-            == frontend::SystemVerilogScalarKind::Real
-        && restored_coverage->instances.front()
-                .illegal_bin_reports.front().sampled_scalar_bits
-            == 0x4004000000000000ULL);
+    assert(restored_coverage->declarations.front().canonical_identity
+        == coverage_state.declarations.front().canonical_identity);
+    assert(restored_coverage->instances.front().bin_hits.back().hit_count
+        == 3);
     assert(restored_coverage->callback_events.front().runtime_identity
         == coverage_instance.runtime_identity);
-    assert(restored_coverage->callback_events.front().scalar_kind
-            == frontend::SystemVerilogScalarKind::Real
-        && restored_coverage->callback_events.front().scalar_bits
-            == 0x4004000000000000ULL);
-    assert(restored_coverage->trace_events.front().time == 42);
-    assert(restored_coverage->aliases.front().canonical_root == "coverage");
-    assert(frontend::render_systemverilog_coverage_report(
-               restored_coverage->reports.front())
-        == frontend::render_systemverilog_coverage_report(
-            coverage_state.reports.front()));
+    assert(!restored_coverage->reports.empty());
+    const auto restored_bytes = app::serialize_systemverilog_coverage_state(
+        *restored_coverage, coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics, coverage_codec_diagnostics);
+    assert(restored_bytes == coverage_bytes);
+    auto mismatched_coverage = coverage_state;
+    mismatched_coverage.instances.front().owner_identity += "-mismatch";
+    diagnostic::Engine mismatched_coverage_diagnostics;
+    assert(!app::serialize_systemverilog_coverage_state(
+        mismatched_coverage, coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics, mismatched_coverage_diagnostics));
+    assert(std::ranges::any_of(
+        mismatched_coverage_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message.find(
+                       "different instance model")
+                    != std::string::npos;
+        }));
     auto future_coverage = *coverage_bytes;
     future_coverage[8]
         = static_cast<char>(app::kSystemVerilogCoverageStateSchema + 1U);
     diagnostic::Engine future_coverage_diagnostics;
     assert(!app::deserialize_systemverilog_coverage_state(
         future_coverage, "future-coverage-state.bin",
+        coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics,
         future_coverage_diagnostics));
     auto v2_coverage = *coverage_bytes;
     v2_coverage[8] = static_cast<char>(4U);
     diagnostic::Engine v2_coverage_diagnostics;
     assert(!app::deserialize_systemverilog_coverage_state(
-        v2_coverage, "v2-coverage-state.bin", v2_coverage_diagnostics));
+        v2_coverage, "v2-coverage-state.bin",
+        coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics, v2_coverage_diagnostics));
     diagnostic::Engine truncated_coverage_diagnostics;
     assert(!app::deserialize_systemverilog_coverage_state(
         coverage_bytes->substr(0, coverage_bytes->size() - 1U),
-        "truncated-coverage-state.bin", truncated_coverage_diagnostics));
+        "truncated-coverage-state.bin",
+        coverage_checkpoint->systemverilog_hir,
+        coverage_checkpoint->semantics, truncated_coverage_diagnostics));
 
     const auto missing_design = directory / "artifact-missing.fsimdesign";
     const auto missing_design_text = support::path_to_utf8(missing_design);

@@ -1334,7 +1334,10 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 marker.output_text += encode(action.output_text) + ",";
                 marker.output_text += encode(action.span.source_name) + ",";
                 marker.output_text += std::to_string(action.span.begin.line) + ",";
-                marker.output_text += std::to_string(action.span.begin.column);
+                marker.output_text += std::to_string(action.span.begin.column) + ",";
+                marker.output_text += std::to_string(
+                    static_cast<std::underlying_type_t<GeneratedTextKind>>(
+                        action.output_generated_text));
             }
             marker.span = directive.span;
             return marker;

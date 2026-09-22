@@ -201,7 +201,10 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v7-code-coverage");
+  writer.string("fsim-object-compilation-v8-compiled-hir");
+  writer.u32(metadata.compiled_hir_schema);
+  writer.path(metadata.compiled_hir_artifact);
+  writer.string(metadata.compiled_hir_checksum);
   writer.string(metadata.language);
   writer.string(metadata.standard);
   writer.string(metadata.compatibility_profile);
@@ -249,14 +252,22 @@ bool validate_metadata(
     diagnostic::Engine& diagnostics,
     const std::string& source) {
   if (metadata.format != kObjectFormatVersion
-      || metadata.portable_schema != library::kPortableSchemaVersion) {
+      || metadata.portable_schema != library::kPortableSchemaVersion
+      || metadata.compiled_hir_schema
+          != library::kCompiledHirSchemaVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
-              ".fsimobj", "format " + std::to_string(metadata.format) + " and portable-unit schema " + std::to_string(metadata.portable_schema),
+              ".fsimobj", "format " + std::to_string(metadata.format)
+                  + ", portable-unit schema "
+                  + std::to_string(metadata.portable_schema)
+                  + ", and compiled-HIR schema "
+                  + std::to_string(metadata.compiled_hir_schema),
               "format " + std::to_string(kObjectFormatVersion)
-                  + " and portable-unit schema "
-                  + std::to_string(library::kPortableSchemaVersion),
+                  + ", portable-unit schema "
+                  + std::to_string(library::kPortableSchemaVersion)
+                  + ", and compiled-HIR schema "
+                  + std::to_string(library::kCompiledHirSchemaVersion),
               ".fsimobj"),
           source);
   }
@@ -318,6 +329,17 @@ bool validate_metadata(
   }
   std::unordered_set<std::string> logical_sources;
   std::unordered_set<std::string> payload_paths;
+  const auto compiled_hir_path
+      = support::path_to_utf8(metadata.compiled_hir_artifact);
+  if (!safe_relative_path(metadata.compiled_hir_artifact)
+      || !checksum_spelling(metadata.compiled_hir_checksum)
+      || !payload_paths.insert(compiled_hir_path).second) {
+    error(
+        diagnostics, kValueCode,
+        "object compiled-HIR bundle requires a unique contained payload and "
+        "lowercase SHA-256 checksum",
+        source);
+  }
   for (const auto& item : metadata.sources) {
     const auto path = support::path_to_utf8(item.artifact);
     if (item.logical_name.empty() || !safe_relative_path(item.logical_name)
@@ -336,24 +358,22 @@ bool validate_metadata(
     }
   }
   for (const auto& item : metadata.units) {
-    const auto path = support::path_to_utf8(item.artifact);
     if (item.language != metadata.language || item.kind.empty()
-        || item.name.empty() || !safe_relative_path(item.artifact)
-        || !checksum_spelling(item.checksum)
+        || item.name.empty() || !item.artifact.empty()
+        || !item.checksum.empty()
         || item.standard != metadata.standard
-        || item.compatibility_profile != metadata.compatibility_profile
-        || !payload_paths.insert(path).second) {
+        || item.compatibility_profile != metadata.compatibility_profile) {
       error(
           diagnostics, kValueCode,
           "object units require matching language, standard, compatibility "
-          "profile, identity, unique contained payload, and lowercase SHA-256 "
-          "checksum", source);
+          "profile, identity, and metadata-only compiled-HIR inventory",
+          source);
     }
   }
   if (metadata.sources.empty() || metadata.units.empty()) {
     error(
         diagnostics, kValueCode,
-        "object metadata must index source and owning-unit payloads", source);
+        "object metadata must index source and unit inventory", source);
   }
   if (checksum_spelling(metadata.compilation_digest)
       && metadata.compilation_digest != compilation_digest(metadata)) {
@@ -479,6 +499,9 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   writer.bytes(kMagic);
   writer.u32(kObjectFormatVersion);
   writer.u32(library::kPortableSchemaVersion);
+  writer.u32(library::kCompiledHirSchemaVersion);
+  writer.path(metadata.compiled_hir_artifact);
+  writer.string(metadata.compiled_hir_checksum);
   writer.string(metadata.producer);
   writer.string(metadata.language);
   writer.string(metadata.standard);
@@ -539,25 +562,48 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
   }
   const auto read_format = canonical.u32();
   const auto read_schema = canonical.u32();
-  if (!read_format.has_value() || !read_schema.has_value()) {
+  const auto read_compiled_hir_schema = canonical.u32();
+  if (!read_format.has_value() || !read_schema.has_value()
+      || !read_compiled_hir_schema.has_value()) {
     error(diagnostics, kSchemaCode, "truncated .fsimobj metadata header", source_name);
     return std::nullopt;
   }
   metadata.format = *read_format;
   metadata.portable_schema = *read_schema;
+  metadata.compiled_hir_schema = *read_compiled_hir_schema;
   if (metadata.format != kObjectFormatVersion
-      || metadata.portable_schema != library::kPortableSchemaVersion) {
+      || metadata.portable_schema != library::kPortableSchemaVersion
+      || metadata.compiled_hir_schema
+          != library::kCompiledHirSchemaVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
-              ".fsimobj", "format " + std::to_string(metadata.format) + " and portable-unit schema " + std::to_string(metadata.portable_schema),
+              ".fsimobj", "format " + std::to_string(metadata.format)
+                  + ", portable-unit schema "
+                  + std::to_string(metadata.portable_schema)
+                  + ", and compiled-HIR schema "
+                  + std::to_string(metadata.compiled_hir_schema),
               "format " + std::to_string(kObjectFormatVersion)
-                  + " and portable-unit schema "
-                  + std::to_string(library::kPortableSchemaVersion),
+                  + ", portable-unit schema "
+                  + std::to_string(library::kPortableSchemaVersion)
+                  + ", and compiled-HIR schema "
+                  + std::to_string(library::kCompiledHirSchemaVersion),
               ".fsimobj"),
           source_name);
       return std::nullopt;
   }
+  auto read_compiled_hir_artifact = canonical.path();
+  auto read_compiled_hir_checksum = canonical.string();
+  if (!read_compiled_hir_artifact || !read_compiled_hir_checksum) {
+    error(
+        diagnostics, kSchemaCode,
+        "truncated .fsimobj compiled-HIR index", source_name);
+    return std::nullopt;
+  }
+  metadata.compiled_hir_artifact
+      = std::move(*read_compiled_hir_artifact);
+  metadata.compiled_hir_checksum
+      = std::move(*read_compiled_hir_checksum);
   const auto read_string = [&](std::string& output) {
     auto value = canonical.string();
     if (!value.has_value()) {
@@ -724,17 +770,23 @@ bool publish_object(
     return false;
   }
   if (metadata.format != kObjectFormatVersion
-      || metadata.portable_schema != library::kPortableSchemaVersion) {
+      || metadata.portable_schema != library::kPortableSchemaVersion
+      || metadata.compiled_hir_schema
+          != library::kCompiledHirSchemaVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
               ".fsimobj publication",
               "format " + std::to_string(metadata.format)
-                  + " and portable-unit schema "
-                  + std::to_string(metadata.portable_schema),
+                  + ", portable-unit schema "
+                  + std::to_string(metadata.portable_schema)
+                  + ", and compiled-HIR schema "
+                  + std::to_string(metadata.compiled_hir_schema),
               "format " + std::to_string(kObjectFormatVersion)
-                  + " and portable-unit schema "
-                  + std::to_string(library::kPortableSchemaVersion),
+                  + ", portable-unit schema "
+                  + std::to_string(library::kPortableSchemaVersion)
+                  + ", and compiled-HIR schema "
+                  + std::to_string(library::kCompiledHirSchemaVersion),
               ".fsimobj"));
       return false;
   }
@@ -757,8 +809,14 @@ bool publish_object(
     expected.emplace(support::path_to_utf8(source.artifact), source.checksum);
   }
   for (const auto& unit : metadata.units) {
+    if (unit.artifact.empty()) {
+      continue;
+    }
     expected.emplace(support::path_to_utf8(unit.artifact), unit.checksum);
   }
+  expected.emplace(
+      support::path_to_utf8(metadata.compiled_hir_artifact),
+      metadata.compiled_hir_checksum);
   std::unordered_set<std::string> supplied;
   for (const auto& payload : payloads) {
     const auto path = support::path_to_utf8(payload.path);

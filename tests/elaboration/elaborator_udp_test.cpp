@@ -21,6 +21,16 @@ module udp_parent(input d, output q);
   udp_inv selected(q, d);
 endmodule
 
+module udp_expression_parent(
+  input [3:0] data,
+  input select,
+  input [1:0] target,
+  output [3:0] q);
+  udp_inv expression(
+    q[target],
+    select ? ^data[2:0] : (data[3] & data[0]));
+endmodule
+
 primitive dff_udp (q, d, clock);
   output q; reg q; input d, clock;
   initial q = 1'b0;
@@ -121,7 +131,7 @@ endmodule
     }
     assert(parsed.ok());
 
-    const auto selected = fsim::elaboration::elaborate(
+    const auto selected = compile_and_elaborate(
         parsed.design, "sv:work.udp_parent");
     assert(selected.ok());
     assert(selected.design->specializations().size() == 2);
@@ -159,7 +169,56 @@ endmodule
         assert(interpreter->signal_value(*q).to_msb_string() == expected);
     }
 
-    const auto stateful = fsim::elaboration::elaborate(
+    const auto expression = compile_and_elaborate(
+        parsed.design, "sv:work.udp_expression_parent");
+    if (!expression.ok()) {
+        for (const auto& diagnostic : expression.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(expression.ok());
+    assert(!has_diagnostic(expression, "FSIM-ELAB-HIR-001"));
+    const auto expression_data = expression.design->find_signal("data");
+    const auto expression_select = expression.design->find_signal("select");
+    const auto expression_target = expression.design->find_signal("target");
+    const auto expression_q = expression.design->find_signal("q");
+    assert(
+        expression_data && expression_select && expression_target
+        && expression_q);
+    auto expression_interpreter = expression.design->create_interpreter();
+    expression_interpreter->deposit_signal(
+        *expression_data,
+        fsim::runtime::PackedLogic4::from_msb_string("1011"));
+    expression_interpreter->deposit_signal(
+        *expression_select,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    expression_interpreter->deposit_signal(
+        *expression_target,
+        fsim::runtime::PackedLogic4::from_msb_string("10"));
+    (void)expression_interpreter->run();
+    assert(
+        expression_interpreter->signal_value(*expression_q)
+            .to_msb_string()[1]
+        == '1');
+    expression_interpreter->deposit_signal(
+        *expression_select,
+        fsim::runtime::PackedLogic4::from_msb_string("0"));
+    (void)expression_interpreter->run();
+    assert(
+        expression_interpreter->signal_value(*expression_q)
+            .to_msb_string()[1]
+        == '0');
+    expression_interpreter->deposit_signal(
+        *expression_target,
+        fsim::runtime::PackedLogic4::from_msb_string("01"));
+    (void)expression_interpreter->run();
+    assert(
+        expression_interpreter->signal_value(*expression_q)
+            .to_msb_string()[2]
+        == '0');
+
+    const auto stateful = compile_and_elaborate(
         parsed.design, "sv:work.dff_parent");
     assert(stateful.ok());
     assert(
@@ -198,22 +257,22 @@ endmodule
     deposit_and_run(*state_clock, "1");
     assert(state_interpreter->signal_value(*state_q).to_msb_string() == "0");
 
-    const auto builtin = fsim::elaboration::elaborate(
+    const auto builtin = compile_and_elaborate(
         parsed.design, "sv:work.builtin_parent");
     assert(builtin.ok());
     assert(builtin.design->specializations().size() == 1);
 
-    const auto named = fsim::elaboration::elaborate(
+    const auto named = compile_and_elaborate(
         parsed.design, "sv:work.udp_named");
     assert(!named.ok());
     assert(has_diagnostic(named, "FSIM-ELAB-BIND-061"));
 
-    const auto parameterized = fsim::elaboration::elaborate(
+    const auto parameterized = compile_and_elaborate(
         parsed.design, "sv:work.udp_parameterized");
     assert(!parameterized.ok());
     assert(has_diagnostic(parameterized, "FSIM-ELAB-BIND-060"));
 
-    const auto forms = fsim::elaboration::elaborate(
+    const auto forms = compile_and_elaborate(
         parsed.design, "sv:work.udp_forms");
     if (!forms.ok()) {
         for (const auto& diagnostic : forms.diagnostics) {
@@ -245,7 +304,7 @@ endmodule
                 "udp_forms.$udp$");
         }));
 
-    const auto delayed = fsim::elaboration::elaborate(
+    const auto delayed = compile_and_elaborate(
         parsed.design, "sv:work.udp_delays");
     assert(delayed.ok());
     const auto delayed_q = delayed.design->find_signal("delayed");
@@ -282,7 +341,7 @@ endmodule
             {"X", 0}, {"1", 0}, {"0", 10}, {"1", 12},
             {"0", 30}, {"X", 60}}));
 
-    const auto generated = fsim::elaboration::elaborate(
+    const auto generated = compile_and_elaborate(
         parsed.design, "sv:work.udp_generate_top");
     if (!generated.ok()) {
         for (const auto& diagnostic : generated.diagnostics) {
@@ -321,7 +380,7 @@ endmodule
     const std::array roots{
         fsim::elaboration::Root{"udp_parent", "comb"},
         fsim::elaboration::Root{"dff_parent", "state"}};
-    const auto multiple_roots = fsim::elaboration::elaborate(
+    const auto multiple_roots = compile_and_elaborate(
         parsed.design, roots, {}, {}, nullptr, {});
     assert(multiple_roots.ok());
     assert((
@@ -334,7 +393,7 @@ endmodule
         declaration.library = "vendor";
     }
     const std::array<std::string, 1> vendor_search{"vendor"};
-    const auto searched = fsim::elaboration::elaborate(
+    const auto searched = compile_and_elaborate(
         searched_design,
         "sv:work.udp_wrapper",
         {},
@@ -374,7 +433,7 @@ end architecture;
     assert(wrapper != parsed.design.units.end());
     vhdl_mixed.units.push_back(*wrapper);
     vhdl_mixed.udp_declarations = parsed.design.udp_declarations;
-    const auto vhdl_boundary = fsim::elaboration::elaborate(
+    const auto vhdl_boundary = compile_and_elaborate(
         vhdl_mixed, "vhdl:work.udp_vhdl_parent(rtl)");
     if (!vhdl_boundary.ok()) {
         for (const auto& diagnostic : vhdl_boundary.diagnostics) {
@@ -400,7 +459,7 @@ end architecture;
         ambiguous.units.end(),
         module.design.units.begin(),
         module.design.units.end());
-    const auto collision = fsim::elaboration::elaborate(
+    const auto collision = compile_and_elaborate(
         ambiguous, "sv:work.udp_parent");
     assert(!collision.ok());
     assert(has_diagnostic(collision, "FSIM-ELAB-BIND-017"));
@@ -416,7 +475,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(module_strength.ok());
-    const auto rejected_module_strength = fsim::elaboration::elaborate(
+    const auto rejected_module_strength = compile_and_elaborate(
         module_strength.design, "verilog:work.ordinary_parent");
     assert(!rejected_module_strength.ok());
     assert(has_diagnostic(

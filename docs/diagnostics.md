@@ -2,10 +2,12 @@
 # Diagnostic code catalog
 
 This catalog describes every literal diagnostic code emitted by the current
-production sources. It documents the internal vertical slice, not the eventual
-complete v1 implementation. A code identifies a diagnostic class; paths,
-source locations, messages, and notes provide the instance-specific detail.
-Code spellings are the stable, machine-readable part of the current
+production sources or retained by the compiled-HIR compatibility registry
+during the AST-free elaboration cutover. A retained code returns to ordinary
+emitter ownership as soon as its compiled-HIR path is active. The registry and
+active emitters must remain disjoint. A code identifies a diagnostic class;
+paths, source locations, messages, and notes provide the instance-specific
+detail. Code spellings are the stable, machine-readable part of the current
 diagnostic interface; message wording may evolve.
 
 Unsupported ABI, schema, artifact, and native-producer diagnostics follow the
@@ -165,6 +167,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-0002` | error | More than one parsed source defines the same design-unit identity. |
 | `FSIM-FE-0003` | error | A parallel source-analysis task failed or produced no result. |
 | `FSIM-SEM-0001` | error | Source analysis or build normalization produced an internally invalid owning semantic projection. |
+| `FSIM-SEM-0002` | error | Compiled-HIR normalization found invalid dependency, ownership, or residual-expression metadata. |
+| `FSIM-SEM-0003` | error | Compiled-HIR exclusion or cross-input linking failed before elaboration. |
 | `FSIM-FE-CU-0001` | warning | A VHDL source set requested Verilog-style compilation-unit grouping; VHDL files remain independent analysis units. |
 | `FSIM-FE-STANDARD-001` | error | One physical root or included dependency is consumed under incompatible Verilog/SystemVerilog standard revisions. |
 | `FSIM-FE-STANDARD-002` | error | A Verilog/SystemVerilog design-unit identity is reanalyzed under a different standard revision. |
@@ -179,7 +183,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHORDER-008` | error | A VHDL configuration binding names a configuration that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-009` | error | A VHDL library repeats a primary entity, package, configuration, or context identity. |
 | `FSIM-FE-VHORDER-010` | error | A VHDL library repeats a secondary architecture or package-body identity. |
-| `FSIM-FE-VHORDER-011` | error | A VHDL source reanalyzes or consumes a logical-library unit under a different VHDL standard revision. |
+| `FSIM-FE-VHORDER-011` | error | A VHDL source reanalyzes or consumes, a compiled-HIR semantic link joins extracted logical-library units, or a mapped-library input supplies a logical-library unit under an incompatible VHDL standard revision or compatibility profile. |
 | `FSIM-FE-VHDECL-001` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
 | `FSIM-FE-VHDECL-002` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
 | `FSIM-FE-VHDECL-003` | error | A package body redeclares a nondeferred constant from the package declaration. |
@@ -470,7 +474,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-LIB-0003` | error | Metadata contains an unsafe, incomplete, mismatched, duplicate, reordered, or otherwise invalid source/unit provenance value. |
 | `FSIM-LIB-0004` | error | Mapped-library metadata cannot be opened or read. |
 | `FSIM-LIB-0005` | error | Transactional publication, payload validation, permissions, or atomic installation failed; non-current publication identity diagnostics name found/required formats and leave no output tree. |
-| `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, contains an invalid scalar enumeration, or retains unmapped producer-absolute source provenance; schema mismatches name found/required identities and direct `.fsimobj` regeneration. |
+| `FSIM-LIB-0006` | error | A compiled-HIR bundle is malformed, incompatible, truncated, cyclic, excessively nested, contains an invalid scalar enumeration, or retains unmapped producer-absolute source provenance; schema mismatches name found/required identities and direct `.fsimobj` regeneration. |
 | `FSIM-LIB-0007` | error | Project-library export cannot revalidate a source, serialize a unit, reproduce a portable SystemC build, compile/read a native variant, or complete publication. |
 | `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, exact unit language/standard/compatibility identity, checksum, native admission, or consumer-cache installation failed; indexed native producer mismatches name found/required host identities and direct `.fsimlib` native-payload regeneration before payload read or cache publication. |
 
@@ -1791,6 +1795,7 @@ scheduler.
 |---|---|---|
 | `FSIM-ELAB-0001` | error | No unique executable top can be inferred; set `project.top` or `--top`. |
 | `FSIM-ELAB-0002` | error | The effective programmatic or command-line root list contains an empty target, missing or unsafe alias, duplicate alias, or invalid legacy/list combination. |
+| `FSIM-ELAB-HIR-001` | error | Retained compiled HIR is malformed, incomplete, or requires a syntax adapter that is prohibited after compilation. |
 | `FSIM-ELAB-001` | error | The requested top-level design unit was not found. |
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
@@ -1925,6 +1930,7 @@ scheduler.
 | `FSIM-ELAB-VHBLOCK-001` | error | A VHDL block generic map is missing, excessive, duplicated, unknown, misordered, or selects an unavailable default. |
 | `FSIM-ELAB-VHBLOCK-002` | error | A VHDL block port map is missing, excessive, duplicated, unknown, misordered, or uses an illegal actual for the formal mode. |
 | `FSIM-ELAB-VHBLOCK-003` | error | A VHDL object or block-port alias names an unknown or profile-incompatible signal target. |
+| `FSIM-ELAB-VHENTITY-001` | error | A compiled VHDL entity contains an instance, generate, configuration, or other structural record that is not legal in an entity statement part. |
 | `FSIM-ELAB-PKG-001` | error | A bounded VHDL package import is not `library.package.all` or `library.package.constant`. |
 | `FSIM-ELAB-PKG-002` | error | A project VHDL package named by a use clause was not found in the selected library. |
 | `FSIM-ELAB-PKG-003` | error | A selected package constant or type named by a use clause does not exist. |
@@ -2139,6 +2145,7 @@ scheduler.
 | `FSIM-ELAB-VHCONFIG-013` | error | A configuration binding has a malformed configuration aspect or selects a missing configuration declaration. |
 | `FSIM-ELAB-VHCONFIG-014` | error | A configuration binding selects an ambiguous configuration declaration. |
 | `FSIM-ELAB-VHCONFIG-015` | error | A nested block/generate scope is configured more than once at the same level. |
+| `FSIM-ELAB-VHCONFIG-016` | error | A compiled configuration has no retained explicit component rule for the selected occurrence. |
 | `FSIM-ELAB-VHCOMP-001` | error | A component-style instance has no visible bounded component declaration. |
 | `FSIM-ELAB-VHCOMP-002` | error | A component-style instance ambiguously matches multiple equally visible component declarations. |
 | `FSIM-ELAB-VHCOMP-003` | error | Default component binding finds no same-library VHDL entity or architecture. |
@@ -2622,6 +2629,7 @@ scheduler.
 | `FSIM-ELAB-BIND-0002` | error | A manifest binding uses an unsupported language. |
 | `FSIM-ELAB-BIND-0003` | error | A manifest binding target unit was not found. |
 | `FSIM-ELAB-BIND-0004` | error | A manifest binding resolver is neither `std_logic` nor `sv_wire`. |
+| `FSIM-ELAB-BIND-004` | error | Retained SystemC port associations contain an unknown, duplicate, excessive, or mixed named/positional formal mapping. |
 | `FSIM-ELAB-BIND-010` | error | More than one binding names the same instance path. |
 | `FSIM-ELAB-BIND-011` | error | A binding path was not found in the elaborated hierarchy. |
 | `FSIM-ELAB-BIND-012` | error | An unqualified instance spelling has no VHDL, Verilog/SystemVerilog, or SystemC candidate in its complete effective logical-library scope. |
@@ -2805,7 +2813,8 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-ART-0003` | error | `.fsimobj` metadata or payload publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
 | `FSIM-ART-0004` | error | Explicit compilation is not one portable HDL source set, a checked source changed or became unreadable, or no owning unit was produced. |
 | `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library or language-profile ownership, or an invalid restored semantic projection. |
-| `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency. |
+| `FSIM-ART-HIR-001` | error | A compiled-HIR bundle, source-relocation map, or linked compiled design is malformed, inconsistent, or unsafe to publish or load. |
+| `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency, or an object set combines incompatible compiler-supplied VHDL package environments. |
 | `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding; identity mismatches name found/required format and ABI and direct current-build regeneration. |
 | `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL or Verilog/SystemVerilog semantic-unit provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |

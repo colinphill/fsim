@@ -28,7 +28,7 @@ end architecture rtl;
         "counter.vhd", vhdl_source, fsim::frontend::Language::Vhdl2008);
     assert(parsed_vhdl.ok());
     auto elaborated_vhdl =
-        fsim::elaboration::elaborate(parsed_vhdl.design, "counter_vhdl");
+        compile_and_elaborate(parsed_vhdl.design, "counter_vhdl");
     assert(elaborated_vhdl.ok());
 
     auto vhdl_interpreter = elaborated_vhdl.design->create_interpreter();
@@ -111,7 +111,7 @@ end architecture rtl;
     for (auto& unit : parsed_mixed_vhdl.design.units) {
         parsed_mixed_sv.design.units.push_back(std::move(unit));
     }
-    const auto inferred_mixed = fsim::elaboration::elaborate(
+    const auto inferred_mixed = compile_and_elaborate(
         parsed_mixed_sv.design, "sv:work.tb");
     if (!inferred_mixed.ok()) {
         for (const auto& diagnostic : inferred_mixed.diagnostics) {
@@ -135,7 +135,7 @@ end architecture rtl;
         {"tb.u_counter", "vhdl:work.counter(rtl)", std::nullopt},
         {"tb.u_child", "sv:work.child", std::nullopt},
     };
-    auto elaborated_mixed = fsim::elaboration::elaborate(
+    auto elaborated_mixed = compile_and_elaborate(
         parsed_mixed_sv.design, "sv:work.tb", mixed_bindings);
     if (!elaborated_mixed.ok()) {
         for (const auto& diagnostic : elaborated_mixed.diagnostics) {
@@ -229,7 +229,7 @@ endmodule
             "ordinal_vhdl_parent.child",
             "sv:work.ordinal_sv_child",
             std::nullopt}};
-    const auto elaborated_vhdl_to_sv = fsim::elaboration::elaborate(
+    const auto elaborated_vhdl_to_sv = compile_and_elaborate(
         vhdl_to_sv_design,
         "vhdl:work.ordinal_vhdl_parent(rtl)",
         vhdl_to_sv_bindings);
@@ -332,7 +332,7 @@ end architecture;
             "ordinal_sv_parent.child",
             "vhdl:work.vhdl_ordinal_child(rtl)",
             std::nullopt}};
-    const auto elaborated_sv_to_vhdl = fsim::elaboration::elaborate(
+    const auto elaborated_sv_to_vhdl = compile_and_elaborate(
         sv_to_vhdl_design,
         "sv:work.ordinal_sv_parent",
         sv_to_vhdl_bindings);
@@ -432,7 +432,7 @@ endmodule
         "width_vhdl_parent.child",
         "sv:work.width_sv_child",
         std::nullopt}};
-    const auto elaborated_vhdl_width = fsim::elaboration::elaborate(
+    const auto elaborated_vhdl_width = compile_and_elaborate(
         vhdl_width_design,
         "vhdl:work.width_vhdl_parent(rtl)",
         vhdl_width_bindings);
@@ -566,7 +566,7 @@ end architecture;
         "width_sv_parent.child",
         "vhdl:work.width_vhdl_child(rtl)",
         std::nullopt}};
-    const auto elaborated_sv_width = fsim::elaboration::elaborate(
+    const auto elaborated_sv_width = compile_and_elaborate(
         sv_width_design,
         "sv:work.width_sv_parent",
         sv_width_bindings);
@@ -651,7 +651,7 @@ endmodule
         "signed_vhdl_parent.child",
         "sv:work.signed_sv_child",
         std::nullopt}};
-    const auto elaborated_vhdl_signed = fsim::elaboration::elaborate(
+    const auto elaborated_vhdl_signed = compile_and_elaborate(
         vhdl_signed_design,
         "vhdl:work.signed_vhdl_parent(rtl)",
         vhdl_signed_bindings);
@@ -730,7 +730,7 @@ end architecture;
         "signed_sv_parent.child",
         "vhdl:work.signed_vhdl_child(rtl)",
         std::nullopt}};
-    const auto elaborated_sv_signed = fsim::elaboration::elaborate(
+    const auto elaborated_sv_signed = compile_and_elaborate(
         sv_signed_design,
         "sv:work.signed_sv_parent",
         sv_signed_bindings);
@@ -803,7 +803,7 @@ endmodule
         "width_inout.child",
         std::nullopt,
         std::string{"std_logic"}}};
-    const auto rejected_width_inout = fsim::elaboration::elaborate(
+    const auto rejected_width_inout = compile_and_elaborate(
         width_inout_design,
         "vhdl:work.width_inout(rtl)",
         width_inout_bindings);
@@ -863,7 +863,7 @@ endmodule
                 std::nullopt},
         };
     const auto elaborated_integer_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             integer_boundary_design,
             "vhdl:work.integer_boundary(rtl)",
             integer_boundary_binding);
@@ -909,7 +909,7 @@ endmodule
                 std::nullopt},
         };
     const auto checked_logic_integer_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             integer_boundary_design,
             "vhdl:work.integer_boundary(rtl)",
             lossy_integer_boundary_binding);
@@ -953,7 +953,7 @@ endmodule
                 std::nullopt},
         };
     const auto elaborated_reverse_integer =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             reverse_integer_design,
             "sv:work.sv_integer_parent",
             reverse_integer_binding);
@@ -1013,7 +1013,7 @@ end architecture;
             fsim::frontend::Language::Vhdl2008);
     assert(unsafe_integer_alias.ok());
     const auto rejected_integer_alias =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             unsafe_integer_alias.design,
             "vhdl:work.unsafe_integer_alias(rtl)");
     assert(!rejected_integer_alias.ok());
@@ -1061,7 +1061,7 @@ end architecture;
              std::nullopt},
         };
     const auto rejected_struct_boundary =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             struct_boundary_design,
             "sv:work.struct_boundary",
             struct_boundary_binding);
@@ -1105,7 +1105,7 @@ endmodule
     const std::vector<fsim::elaboration::Binding> reverse_binding{
         {"vhdl_top.u_child", "sv:work.sv_child", std::nullopt},
     };
-    auto reverse_mixed = fsim::elaboration::elaborate(
+    auto reverse_mixed = compile_and_elaborate(
         parsed_vhdl_parent.design,
         "vhdl:work.vhdl_top(rtl)",
         reverse_binding);
@@ -1152,12 +1152,12 @@ endmodule
         systemc_boundary_sv,
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed_systemc_boundary.ok());
-    fsim::frontend::Type systemc_bit{
+    fsim::elaboration::PackedTypeMetadata systemc_bit{
         fsim::frontend::ValueDomain::Bit2,
         "systemc.bit",
         std::nullopt,
         false};
-    fsim::frontend::Type systemc_unsigned{
+    fsim::elaboration::PackedTypeMetadata systemc_unsigned{
         fsim::frontend::ValueDomain::Bit2,
         "systemc.unsigned",
         fsim::frontend::PackedRange{7, 0, true},
@@ -1208,7 +1208,7 @@ endmodule
              std::nullopt},
         };
     const auto systemc_parameterized =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_systemc_parameters.design,
             "sv:work.systemc_parameter_host",
             systemc_parameter_binding,
@@ -1239,7 +1239,7 @@ endmodule
          "bridge_placeholder",
          "systemc:work.bridge_placeholder"},
     };
-    const auto inferred_systemc = fsim::elaboration::elaborate(
+    const auto inferred_systemc = compile_and_elaborate(
         parsed_systemc_parameters.design,
         "sv:work.systemc_parameter_host",
         std::span<const fsim::elaboration::Binding>{},
@@ -1255,7 +1255,7 @@ endmodule
     duplicate_systemc_provider.factory_candidates.push_back(
         duplicate_systemc_provider.factory_candidates.front());
     const auto duplicate_systemc_factory =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_systemc_parameters.design,
             "sv:work.systemc_parameter_host",
             std::span<const fsim::elaboration::Binding>{},
@@ -1276,7 +1276,7 @@ endmodule
                "systemc:models.parameter_bridge",
                std::nullopt},
           };
-          const auto result = fsim::elaboration::elaborate(
+          const auto result = compile_and_elaborate(
               parsed_systemc_parameters.design,
               top,
               binding,
@@ -1302,7 +1302,7 @@ endmodule
     unavailable_schema_provider.schema_failure =
         "intentional schema failure";
     const auto unavailable_schema =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_systemc_parameters.design,
             "sv:work.systemc_parameter_host",
             systemc_parameter_binding,
@@ -1316,7 +1316,7 @@ endmodule
     failed_construction_provider.construction_failure =
         "intentional construction failure";
     const auto failed_construction =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_systemc_parameters.design,
             "sv:work.systemc_parameter_host",
             systemc_parameter_binding,
@@ -1344,7 +1344,7 @@ endmodule
              std::nullopt},
         };
     const std::array hdl_to_systemc_instances{nested_systemc};
-    auto hdl_to_systemc = fsim::elaboration::elaborate(
+    auto hdl_to_systemc = compile_and_elaborate(
         parsed_systemc_boundary.design,
         "sv:work.systemc_parent",
         hdl_to_systemc_bindings,
@@ -1382,7 +1382,7 @@ endmodule
               nullptr,
               nullptr,
               std::move(sensitivity)}};
-          return fsim::elaboration::elaborate(
+          return compile_and_elaborate(
               parsed_systemc_boundary.design,
               "systemc:models.bridge",
               std::span<const fsim::elaboration::Binding>{},
@@ -1444,7 +1444,7 @@ end architecture rtl;
         systemc_boundary_vhdl,
         fsim::frontend::Language::Vhdl2008);
     assert(parsed_systemc_vhdl.ok());
-    fsim::frontend::Type systemc_logic{
+    fsim::elaboration::PackedTypeMetadata systemc_logic{
         fsim::frontend::ValueDomain::Logic4,
         "systemc.logic",
         std::nullopt,
@@ -1467,7 +1467,7 @@ end architecture rtl;
         };
     const std::array vhdl_systemc_instances{
         vhdl_nested_systemc};
-    auto vhdl_systemc = fsim::elaboration::elaborate(
+    auto vhdl_systemc = compile_and_elaborate(
         parsed_systemc_vhdl.design,
         "vhdl:work.systemc_vhdl_parent(rtl)",
         vhdl_systemc_bindings,
@@ -1494,7 +1494,7 @@ end architecture rtl;
          "systemc:work.bridge_placeholder"},
     };
     const auto inferred_vhdl_systemc =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_systemc_vhdl.design,
             "vhdl:work.systemc_vhdl_parent(rtl)",
             std::span<const fsim::elaboration::Binding>{},
@@ -1530,12 +1530,12 @@ end architecture rtl;
         unit.library = "work";
         colliding_sv.design.units.push_back(std::move(unit));
     }
-    auto selected_vhdl = fsim::elaboration::elaborate(
+    auto selected_vhdl = compile_and_elaborate(
         colliding_sv.design, "vhdl:work.duplicate(rtl)");
     assert(selected_vhdl.ok());
     assert(selected_vhdl.design->find_signal("vhdl_only"));
     assert(!selected_vhdl.design->find_signal("sv_only"));
-    const auto ambiguous_vhdl_top = fsim::elaboration::elaborate(
+    const auto ambiguous_vhdl_top = compile_and_elaborate(
         colliding_sv.design, "vhdl:work.duplicate");
     assert(!ambiguous_vhdl_top.ok());
     assert(has_diagnostic(ambiguous_vhdl_top, "FSIM-ELAB-004"));
@@ -1570,7 +1570,7 @@ end architecture;
             ? "other"
             : "work";
     }
-    const auto selected_library = fsim::elaboration::elaborate(
+    const auto selected_library = compile_and_elaborate(
         cross_library.design, "vhdl:work.parent(rtl)");
     assert(selected_library.ok());
     assert(selected_library.design->find_signal(
@@ -1581,7 +1581,7 @@ end architecture;
             {"tb.u_counter", "vhdl:work.counter", std::nullopt},
         };
     const auto rejected_architectureless =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parsed_mixed_sv.design,
             "sv:work.tb",
             architectureless_binding);
@@ -1637,7 +1637,7 @@ endmodule
              std::nullopt},
         };
     const auto rejected_systemc_alias =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             conflicting_systemc_alias_source.design,
             "sv:work.conflict_host",
             conflicting_systemc_bindings,
@@ -1660,7 +1660,7 @@ endmodule
     const std::array invalid_native_instances{
         invalid_native_hierarchy};
     const auto rejected_native_hierarchy =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             conflicting_systemc_alias_source.design,
             "sv:work.conflict_host",
             conflicting_systemc_bindings,
@@ -1683,7 +1683,7 @@ endmodule
     for (auto& unit : ambiguous_vhdl.design.units) {
         ambiguous_names.design.units.push_back(std::move(unit));
     }
-    const auto ambiguous_result = fsim::elaboration::elaborate(
+    const auto ambiguous_result = compile_and_elaborate(
         ambiguous_names.design, "sv:work.ambiguous_parent");
     assert(!ambiguous_result.ok());
     assert(has_diagnostic(ambiguous_result, "FSIM-ELAB-BIND-017"));
@@ -1707,7 +1707,7 @@ endmodule
         std::move(duplicate_identity_a.design.units.front()));
     duplicate_identity_parent.design.units.push_back(
         std::move(duplicate_identity_b.design.units.front()));
-    const auto duplicate_identity = fsim::elaboration::elaborate(
+    const auto duplicate_identity = compile_and_elaborate(
         duplicate_identity_parent.design,
         "sv:work.duplicate_parent");
     assert(!duplicate_identity.ok());
@@ -1728,7 +1728,7 @@ endmodule
     for (auto& unit : folded_vhdl.design.units) {
         target_case.design.units.push_back(std::move(unit));
     }
-    const auto target_case_result = fsim::elaboration::elaborate(
+    const auto target_case_result = compile_and_elaborate(
         target_case.design, "sv:work.case_parent");
     assert(!target_case_result.ok());
     assert(has_diagnostic(target_case_result, "FSIM-ELAB-BIND-012"));
@@ -1742,7 +1742,7 @@ endmodule
             folded_only.design.units.push_back(unit);
         }
     }
-    const auto folded_result = fsim::elaboration::elaborate(
+    const auto folded_result = compile_and_elaborate(
         folded_only.design, "sv:work.folded_parent");
     assert(folded_result.ok());
 }

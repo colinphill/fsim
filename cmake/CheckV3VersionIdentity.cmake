@@ -49,8 +49,6 @@ require_token(packaging/package-policy.txt
   "binary_artifacts=fsim-v3.0.0-linux-x86_64-clang22-no-llvm.zip,fsim-v3.0.0-linux-x86_64-clang22-llvm22.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip")
 require_token(packaging/v3-release-record.txt "tag_message=fsim v3.0.0")
 require_token(.github/workflows/ci.yml
-  "binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip")
-require_token(.github/workflows/ci.yml
   "binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip")
 foreach(target IN ITEMS
     packaging/targets/linux-clang22-no-llvm.txt

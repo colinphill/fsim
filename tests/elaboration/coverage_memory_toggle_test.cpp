@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/coverage_memory_toggle.hpp"
 #include "fsim/frontend/coverage_source_identity.hpp"
+#include "fsim/frontend/coverage_toggle_selection.hpp"
 #include "fsim/frontend/parser.hpp"
 
 #include <algorithm>
@@ -183,7 +184,7 @@ void test_parsed_static_memory_selection()
         frontend::Language::SystemVerilog2017, source.source_name, { },
         "work", "sv:work.mem", { } };
     const auto selected
-        = elaboration::make_default_coverage_toggle_selection(
+        = frontend::make_default_coverage_toggle_selection(
             parsed.design.units.front(), parsed.design.units.front().ports,
             owner, std::span { &source, 1U });
     require(selected.ok() && selected.selection->exclusions.size() == 1U,

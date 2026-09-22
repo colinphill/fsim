@@ -36,6 +36,7 @@ struct ConcurrentCapture {
     std::size_t sampled_signal_reads { };
     std::size_t current_signal_reads { };
     std::size_t reactive_waits { };
+    std::size_t action_handoffs { };
     bool assertion_processes_observed { true };
 };
 

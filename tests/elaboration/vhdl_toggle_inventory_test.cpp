@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/vhdl_toggle_inventory.hpp"
+#include "fsim/frontend/vhdl_toggle_inventory.hpp"
 #include "fsim/frontend/parser.hpp"
 
 #include <algorithm>
@@ -140,7 +140,7 @@ void test_selection_profiles_and_dense_outcomes()
         require(architecture.variables.size() == 1U
                 && architecture.processes.front().variables.size() == 1U,
             "only the shared architecture variable may enter retained-object selection");
-        const auto built = elaboration::make_vhdl_toggle_inventory(
+        const auto built = frontend::make_vhdl_toggle_inventory(
             architecture, ports, owner_for(source),
             std::span { &source, 1U });
         require(built.ok() && built.inventory->objects.size() == 7U
@@ -198,9 +198,9 @@ void test_hierarchy_relocation_and_order()
     auto [architecture_b, ports_b] = parsed_units(source_b);
     architecture_a.variables.push_back(shared_integer(source_a));
     architecture_b.variables.push_back(shared_integer(source_b));
-    const auto first = elaboration::make_vhdl_toggle_inventory(architecture_a,
+    const auto first = frontend::make_vhdl_toggle_inventory(architecture_a,
         ports_a, owner_for(source_a), std::span { &source_a, 1U });
-    const auto relocated = elaboration::make_vhdl_toggle_inventory(
+    const auto relocated = frontend::make_vhdl_toggle_inventory(
         architecture_b, ports_b, owner_for(source_b),
         std::span { &source_b, 1U });
     require(first.ok() && relocated.ok()
@@ -211,13 +211,13 @@ void test_hierarchy_relocation_and_order()
     std::ranges::reverse(ports_a);
     std::ranges::reverse(architecture_a.signals);
     std::ranges::reverse(architecture_a.variables);
-    const auto reordered = elaboration::make_vhdl_toggle_inventory(
+    const auto reordered = frontend::make_vhdl_toggle_inventory(
         architecture_a, ports_a, owner_for(source_a),
         std::span { &source_a, 1U });
     require(reordered.ok() && reordered.inventory == first.inventory,
         "VHDL declaration-container order must not change the inventory");
 
-    const auto sibling = elaboration::make_vhdl_toggle_inventory(
+    const auto sibling = frontend::make_vhdl_toggle_inventory(
         architecture_a, ports_a, owner_for(source_a, "top.v", 8U),
         std::span { &source_a, 1U });
     require(sibling.ok()
@@ -247,11 +247,11 @@ void test_entity_source_ownership()
     }
     const std::array sources { architecture_source, entity_source };
     auto owner = owner_for(architecture_source);
-    const auto rejected = elaboration::make_vhdl_toggle_inventory(
+    const auto rejected = frontend::make_vhdl_toggle_inventory(
         architecture, ports, owner, sources);
     const std::array dependencies { entity_source.source_name };
     owner.source_dependencies = dependencies;
-    const auto accepted = elaboration::make_vhdl_toggle_inventory(
+    const auto accepted = frontend::make_vhdl_toggle_inventory(
         architecture, ports, owner, sources);
     require(!rejected.ok()
             && rejected.error
@@ -286,11 +286,11 @@ void test_type_and_retention_selection()
     architecture.variables.push_back(physical);
     architecture.variables.push_back(shared_integer(source));
 
-    require(elaboration::is_vhdl_toggle_type(scalar)
-            && !elaboration::is_vhdl_toggle_type(protected_object.type)
-            && !elaboration::is_vhdl_toggle_type(physical.type),
+    require(frontend::is_vhdl_toggle_type(scalar)
+            && !frontend::is_vhdl_toggle_type(protected_object.type)
+            && !frontend::is_vhdl_toggle_type(physical.type),
         "only directly packed VHDL value domains may manufacture binary toggle bins");
-    const auto built = elaboration::make_vhdl_toggle_inventory(architecture,
+    const auto built = frontend::make_vhdl_toggle_inventory(architecture,
         ports, owner_for(source), std::span { &source, 1U });
     require(built.ok()
             && std::ranges::none_of(built.inventory->objects,
@@ -316,7 +316,7 @@ void test_rejections_and_limits()
                            const elaboration::CoverageInventoryOwner& owner,
                            std::span<const elaboration::VerilogCoverageSource> input_sources,
                            const elaboration::VhdlToggleInventoryLimits limits = { }) {
-        return elaboration::make_vhdl_toggle_inventory(
+        return frontend::make_vhdl_toggle_inventory(
             unit, input_ports, owner, input_sources, limits);
     };
     const auto good_owner = owner_for(source);

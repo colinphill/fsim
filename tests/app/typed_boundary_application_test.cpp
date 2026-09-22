@@ -368,7 +368,7 @@ SC_MODULE(BoundaryNative) {
 
   SC_CTOR(BoundaryNative) {
     SC_METHOD(evaluate);
-    sensitive << value;
+    sensitive << value << wide_value;
   }
 
   void evaluate() {

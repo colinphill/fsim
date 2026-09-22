@@ -119,6 +119,9 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, CoverageControl>
                 || std::is_same_v<OperationType, CoverageAccess>
                 || std::is_same_v<OperationType, CodeCoverageHit>
+                || std::is_same_v<
+                    OperationType,
+                    WriteContainerObjectElement>
                 || std::is_same_v<OperationType, ReadSignal>
                 || std::is_same_v<OperationType, WriteBlocking>
                 || std::is_same_v<OperationType, WriteBlockingSlice>
@@ -213,7 +216,11 @@ void validate_fork_operation(
     const runtime::simir::Operation& operation) noexcept
 {
     using namespace runtime::simir;
+    const auto* report
+        = fsim::runtime::simir::operation_get_if<Report>(&operation);
     return fsim::runtime::simir::operation_holds<WaitFor>(operation)
+        || (report != nullptr
+            && report->severity == AssertionSeverity::failure)
         || fsim::runtime::simir::operation_holds<CoverageSample>(operation)
         || fsim::runtime::simir::operation_holds<CoverageQuery>(operation)
         || fsim::runtime::simir::operation_holds<VhdlPslApi>(operation)
@@ -368,12 +375,15 @@ std::optional<std::string> validate_scalar_binary_metadata(
             && kind <= runtime::SystemVerilogScalarKind::Chandle;
     };
     if (operation.operation
-            > runtime::SystemVerilogScalarBinaryOperator::GreaterEqual
+            > runtime::SystemVerilogScalarBinaryOperator::Convert
         || !valid_kind(operation.lhs_kind)
         || !valid_kind(operation.rhs_kind))
         return "SystemVerilogScalarBinary metadata is invalid";
-    const bool comparison = operation.operation
-        >= runtime::SystemVerilogScalarBinaryOperator::Equal;
+    const bool comparison
+        = operation.operation
+            >= runtime::SystemVerilogScalarBinaryOperator::Equal
+        && operation.operation
+            <= runtime::SystemVerilogScalarBinaryOperator::GreaterEqual;
     if ((!comparison && !valid_kind(operation.result_kind))
         || (comparison
             && operation.result_kind

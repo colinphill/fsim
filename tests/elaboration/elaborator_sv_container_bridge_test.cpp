@@ -110,7 +110,7 @@ end architecture;
       {"container_bridge_top.child",
        "sv:work.fixed_container_bridge",
        std::nullopt}};
-  return fsim::elaboration::elaborate(
+  return compile_and_elaborate(
       parent.design,
       "vhdl:work.container_bridge_top(rtl)",
       bindings);

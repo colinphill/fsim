@@ -230,6 +230,7 @@ void verify_vhdl2019_simulator_api(const std::filesystem::path& directory)
 {
     const auto source = directory / "simulator-api.vhd";
     constexpr std::string_view source_text = R"(
+use std.env.all;
 entity simulator_api is end entity;
 architecture rtl of simulator_api is
   signal resolution_ok : boolean := false;
@@ -240,9 +241,10 @@ architecture rtl of simulator_api is
   signal conversion_ok : boolean := false;
   signal roundtrip_ok : boolean := false;
   signal current_ok : boolean := false;
+  subtype calendar_t is time_record;
 begin
   control : process
-    variable epoch_zero : std.env.time_record;
+    variable epoch_zero : calendar_t;
     variable incremented : std.env.time_record;
     variable decremented : std.env.time_record;
     variable commuted : std.env.time_record;
@@ -379,14 +381,36 @@ end architecture;
             ? std::optional<SimulatorApiCapture> { run_simulator_api(
                   config, fsim::app::SimulationEngine::interpreter, true) }
             : std::nullopt;
-        for (const auto* capture : {
-                 &reference, &cold, &warm }) {
+        for (const auto& [capture_name, capture] : {
+                 std::pair<std::string_view,
+                     const SimulatorApiCapture*> {
+                     "interpreter", &reference },
+                 std::pair<std::string_view,
+                     const SimulatorApiCapture*> {
+                     "compiled-cold", &cold },
+                 std::pair<std::string_view,
+                     const SimulatorApiCapture*> {
+                     "compiled-warm", &warm } }) {
             assert(capture->paused.status == fsim::runtime::RunStatus::stopped);
             assert(capture->paused.time == 1);
             assert(capture->paused.simulator_status == 3);
-            assert((capture->paused_values
-                == std::array<std::string, 8> {
-                    "1", "0", "0", "1", "1", "1", "1", "1" }));
+            const auto expected_paused_values
+                = std::array<std::string, 8> {
+                    "1", "0", "0", "1", "1", "1", "1", "1" };
+            bool paused_values_match = true;
+            for (std::size_t index { };
+                index < expected_paused_values.size(); ++index) {
+                if (capture->paused_values[index]
+                    == expected_paused_values[index]) {
+                    continue;
+                }
+                paused_values_match = false;
+                std::cerr << "simulator API " << capture_name
+                          << " paused_values[" << index << "] expected='"
+                          << expected_paused_values[index] << "' actual='"
+                          << capture->paused_values[index] << "'\n";
+            }
+            assert(paused_values_match);
             assert(capture->finished.status == fsim::runtime::RunStatus::stopped);
             assert(capture->finished.time == 2);
             assert(capture->finished.simulator_status == 7);
@@ -1423,8 +1447,8 @@ end architecture;
     }));
 
     std::vector<std::string> projected_packages;
-    for (const auto& unit : checked->parsed.units) {
-        if (unit.kind == fsim::frontend::UnitKind::VhdlPackage
+    for (const auto& unit : checked->vhdl_hir.units()) {
+        if (unit.kind == fsim::semantic::vhdl::UnitKind::package
             && unit.library == "ieee" && unit.primary_name.empty()
             && !unit.standard_package_revision.empty()) {
             projected_packages.push_back(unit.name);

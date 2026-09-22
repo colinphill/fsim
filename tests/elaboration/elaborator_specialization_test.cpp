@@ -18,7 +18,7 @@ endmodule
         "counter.sv", source, fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
 
-    auto elaborated = fsim::elaboration::elaborate(parsed.design, "sv:work.counter");
+    auto elaborated = compile_and_elaborate(parsed.design, "sv:work.counter");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
             std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
@@ -77,7 +77,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(directive_parsed.ok());
-    const auto directive_elaborated = fsim::elaboration::elaborate(
+    const auto directive_elaborated = compile_and_elaborate(
         directive_parsed.design, "sv:work.pulled_parent");
     assert(directive_elaborated.ok());
     const auto pulled_value = directive_elaborated.design->find_signal(
@@ -102,7 +102,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(implicit_parsed.ok());
-    const auto implicit_elaborated = fsim::elaboration::elaborate(
+    const auto implicit_elaborated = compile_and_elaborate(
         implicit_parsed.design, "sv:work.implicit_top");
     assert(implicit_elaborated.ok());
     const auto created = implicit_elaborated.design->find_signal("created");
@@ -145,11 +145,17 @@ module parameterized_top(
   parameterized #(8, 3) eight(
     .clk(clk), .q(q8)
   );
+  parameterized #(.WIDTH(4), .INCREMENT(2)) four_cache_fill(
+    .clk(clk), .q()
+  );
+  parameterized #(.WIDTH(4), .INCREMENT(2)) four_cache_hit(
+    .clk(clk), .q()
+  );
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parameterized_parsed.ok());
-    const auto parameterized_elaborated = fsim::elaboration::elaborate(
+    const auto parameterized_elaborated = compile_and_elaborate(
         parameterized_parsed.design,
         "sv:work.parameterized_top");
     if (!parameterized_elaborated.ok()) {
@@ -161,7 +167,7 @@ endmodule
     }
     assert(parameterized_elaborated.ok());
     assert(
-        parameterized_elaborated.design->specializations().size() == 3);
+        parameterized_elaborated.design->specializations().size() == 5);
     const auto& parameter_specializations = parameterized_elaborated.design->specializations();
     assert(parameter_specializations[0].parameter_values.empty());
     assert((
@@ -178,6 +184,18 @@ endmodule
             { "INCREMENT", "3" },
             { "LAST", "7" },
             { "CLOG_WIDTH", "3" } }));
+    assert(parameter_specializations[3].instance
+        == "parameterized_top.four_cache_fill");
+    assert(parameter_specializations[4].instance
+        == "parameterized_top.four_cache_hit");
+    // Repeated specializations remain behaviorally identical while the
+    // compiled path retains only its HIR specialization in the cache.
+    assert(parameter_specializations[3].parameter_values
+        == parameter_specializations[1].parameter_values);
+    assert(parameter_specializations[4].parameter_values
+        == parameter_specializations[1].parameter_values);
+    assert(parameter_specializations[3].processes
+        != parameter_specializations[4].processes);
     const auto parameter_clock = parameterized_elaborated.design->find_signal("clk");
     const auto parameter_q4 = parameterized_elaborated.design->find_signal("q4");
     const auto parameter_q8 = parameterized_elaborated.design->find_signal("q8");
@@ -264,7 +282,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(sized_parameters.ok());
-    const auto sized_elaborated = fsim::elaboration::elaborate(
+    const auto sized_elaborated = compile_and_elaborate(
         sized_parameters.design, "sv:work.sized_parameter_top");
     if (!sized_elaborated.ok()) {
         for (const auto& diagnostic : sized_elaborated.diagnostics) {
@@ -338,7 +356,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(clog2_values.ok());
-    const auto elaborated_clog2_values = fsim::elaboration::elaborate(
+    const auto elaborated_clog2_values = compile_and_elaborate(
         clog2_values.design,
         "sv:work.clog2_values_top");
     assert(elaborated_clog2_values.ok());
@@ -385,7 +403,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(verilog_clog2.ok());
-    const auto elaborated_verilog_clog2 = fsim::elaboration::elaborate(
+    const auto elaborated_verilog_clog2 = compile_and_elaborate(
         verilog_clog2.design,
         "verilog:work.verilog_clog2");
     assert(elaborated_verilog_clog2.ok());
@@ -420,7 +438,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_parameters.ok());
-    const auto rejected_parameters = fsim::elaboration::elaborate(
+    const auto rejected_parameters = compile_and_elaborate(
         invalid_parameters.design,
         "sv:work.invalid_parameter_top");
     assert(!rejected_parameters.ok());
@@ -567,7 +585,7 @@ endmodule
         systemverilog_package_design.units.end(),
         systemverilog_package_user.design.units.begin(),
         systemverilog_package_user.design.units.end());
-    const auto systemverilog_package_elaborated = fsim::elaboration::elaborate(
+    const auto systemverilog_package_elaborated = compile_and_elaborate(
         systemverilog_package_design,
         "sv:work.systemverilog_package_user");
     if (!systemverilog_package_elaborated.ok()) {
@@ -723,7 +741,7 @@ endmodule
             fsim::frontend::Language::SystemVerilog2017);
     assert(parameter_sized_constant_function.ok());
     const auto parameter_sized_constant_function_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             parameter_sized_constant_function.design,
             "parameter_sized_constant_function");
     assert(parameter_sized_constant_function_result.ok());
@@ -760,7 +778,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(imported_class_scope.ok());
-    const auto imported_class_scope_result = fsim::elaboration::elaborate(
+    const auto imported_class_scope_result = compile_and_elaborate(
         imported_class_scope.design,
         "sv:work.imported_class_scope_user");
     assert(std::ranges::none_of(
@@ -796,7 +814,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(self_qualified_package.ok());
-    const auto self_qualified_package_result = fsim::elaboration::elaborate(
+    const auto self_qualified_package_result = compile_and_elaborate(
         self_qualified_package.design,
         "sv:work.self_qualified_package_user");
     if (!self_qualified_package_result.ok()) {
@@ -823,7 +841,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(qualified_package_class.ok());
-    const auto qualified_package_class_result = fsim::elaboration::elaborate(
+    const auto qualified_package_class_result = compile_and_elaborate(
         qualified_package_class.design,
         "sv:work.qualified_package_class_user");
     if (!qualified_package_class_result.ok()) {
@@ -873,7 +891,7 @@ endmodule
     assert(fsim::frontend::resolve_systemverilog_classes(
         hydrated_class_type_scope.design,
         hydrated_class_type_scope_diagnostics));
-    const auto hydrated_class_type_scope_result = fsim::elaboration::elaborate(
+    const auto hydrated_class_type_scope_result = compile_and_elaborate(
         hydrated_class_type_scope.design,
         "sv:work.hydrated_class_type_scope_user");
     if (!hydrated_class_type_scope_result.ok()) {
@@ -972,7 +990,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_systemverilog_packages.ok());
-    const auto invalid_systemverilog_package_result = fsim::elaboration::elaborate(
+    const auto invalid_systemverilog_package_result = compile_and_elaborate(
         invalid_systemverilog_packages.design,
         "sv:work.invalid_systemverilog_package_user");
     assert(!invalid_systemverilog_package_result.ok());
@@ -1072,7 +1090,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(generic_parsed.ok());
-    const auto generic_elaborated = fsim::elaboration::elaborate(
+    const auto generic_elaborated = compile_and_elaborate(
         generic_parsed.design,
         "vhdl:work.generic_top(rtl)");
     if (!generic_elaborated.ok()) {
@@ -1233,7 +1251,7 @@ end architecture rtl;
         package_design.units.end(),
         package_user_source.design.units.begin(),
         package_user_source.design.units.end());
-    const auto package_elaborated = fsim::elaboration::elaborate(
+    const auto package_elaborated = compile_and_elaborate(
         package_design,
         "vhdl:work.package_user(rtl)");
     if (!package_elaborated.ok()) {
@@ -1305,7 +1323,7 @@ end architecture rtl;
             }
         }
     }
-    const auto cross_library_context_elaborated = fsim::elaboration::elaborate(
+    const auto cross_library_context_elaborated = compile_and_elaborate(
         cross_library_context_design,
         "vhdl:work.package_user(rtl)");
     assert(cross_library_context_elaborated.ok());
@@ -1347,7 +1365,7 @@ end architecture rtl;
         selected_package_design.units.end(),
         selected_package_user.design.units.begin(),
         selected_package_user.design.units.end());
-    const auto selected_package_elaborated = fsim::elaboration::elaborate(
+    const auto selected_package_elaborated = compile_and_elaborate(
         selected_package_design,
         "vhdl:work.selected_package_user(rtl)");
     assert(selected_package_elaborated.ok());
@@ -1406,7 +1424,7 @@ end architecture rtl;
         invalid_selected_package_design.units.end(),
         invalid_selected_package_user.design.units.begin(),
         invalid_selected_package_user.design.units.end());
-    const auto invalid_selected_package_result = fsim::elaboration::elaborate(
+    const auto invalid_selected_package_result = compile_and_elaborate(
         invalid_selected_package_design,
         "vhdl:work.invalid_selected_package_user(rtl)");
     assert(!invalid_selected_package_result.ok());
@@ -1432,7 +1450,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing_package.ok());
-    const auto missing_package_result = fsim::elaboration::elaborate(
+    const auto missing_package_result = compile_and_elaborate(
         missing_package.design,
         "vhdl:work.missing_package(rtl)");
     assert(!missing_package_result.ok());
@@ -1454,7 +1472,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing_constant.ok());
-    const auto missing_constant_result = fsim::elaboration::elaborate(
+    const auto missing_constant_result = compile_and_elaborate(
         missing_constant.design,
         "vhdl:work.missing_package_constant(rtl)");
     assert(!missing_constant_result.ok());
@@ -1480,7 +1498,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(ambiguous_constant.ok());
-    const auto ambiguous_constant_result = fsim::elaboration::elaborate(
+    const auto ambiguous_constant_result = compile_and_elaborate(
         ambiguous_constant.design,
         "vhdl:work.ambiguous_package_constant(rtl)");
     assert(!ambiguous_constant_result.ok());
@@ -1499,7 +1517,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(malformed_import.ok());
-    const auto malformed_import_result = fsim::elaboration::elaborate(
+    const auto malformed_import_result = compile_and_elaborate(
         malformed_import.design,
         "vhdl:work.malformed_package_import(rtl)");
     assert(!malformed_import_result.ok());
@@ -1522,7 +1540,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_package_values.ok());
-    const auto invalid_package_values_result = fsim::elaboration::elaborate(
+    const auto invalid_package_values_result = compile_and_elaborate(
         invalid_package_values.design,
         "vhdl:work.invalid_package_values(rtl)");
     assert(!invalid_package_values_result.ok());
@@ -1551,7 +1569,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(cyclic_packages.ok());
-    const auto cyclic_package_result = fsim::elaboration::elaborate(
+    const auto cyclic_package_result = compile_and_elaborate(
         cyclic_packages.design,
         "vhdl:work.cyclic_package_user(rtl)");
     assert(!cyclic_package_result.ok());
@@ -1577,7 +1595,7 @@ end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_contexts.ok());
-    const auto invalid_context_result = fsim::elaboration::elaborate(
+    const auto invalid_context_result = compile_and_elaborate(
         invalid_contexts.design,
         "vhdl:work.invalid_context_user(rtl)");
     assert(!invalid_context_result.ok());
@@ -1623,7 +1641,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_generics.ok());
-    const auto rejected_generics = fsim::elaboration::elaborate(
+    const auto rejected_generics = compile_and_elaborate(
         invalid_generics.design,
         "vhdl:work.invalid_generic_top(rtl)");
     assert(!rejected_generics.ok());
@@ -1729,7 +1747,7 @@ end architecture;
                 "vhdl:work.vhdl_generic_child(rtl)",
                 std::nullopt }
         };
-    const auto sv_to_vhdl_actual = fsim::elaboration::elaborate(
+    const auto sv_to_vhdl_actual = compile_and_elaborate(
         mixed_actual_design,
         "sv:work.sv_generic_host",
         sv_to_vhdl_actual_binding);
@@ -1769,7 +1787,7 @@ end architecture;
                 "sv:work.sv_parameter_child",
                 std::nullopt }
         };
-    const auto vhdl_to_sv_actual = fsim::elaboration::elaborate(
+    const auto vhdl_to_sv_actual = compile_and_elaborate(
         mixed_actual_design,
         "vhdl:work.vhdl_parameter_host(rtl)",
         vhdl_to_sv_actual_binding);
@@ -1809,7 +1827,7 @@ end architecture;
                 "sv:work.ambiguous_parameter_child",
                 std::nullopt }
         };
-    const auto ambiguous_actual = fsim::elaboration::elaborate(
+    const auto ambiguous_actual = compile_and_elaborate(
         mixed_actual_design,
         "vhdl:work.ambiguous_parameter_host(rtl)",
         ambiguous_actual_binding);
@@ -1869,7 +1887,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(nested_aggregate.ok());
-    const auto nested_elaborated = fsim::elaboration::elaborate(
+    const auto nested_elaborated = compile_and_elaborate(
         nested_aggregate.design,
         "sv:work.nested_aggregate_top");
     if (!nested_elaborated.ok()) {

@@ -14,7 +14,7 @@ fsim::elaboration::ElaborationResult elaborate_roots(
     const fsim::frontend::ParsedDesign& design,
     const std::span<const Root> roots,
     fsim::elaboration::SystemCFactoryProvider* provider = nullptr) {
-    return fsim::elaboration::elaborate(
+    return compile_and_elaborate(
         design,
         roots,
         {},

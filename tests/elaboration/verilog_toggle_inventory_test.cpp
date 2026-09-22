@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/verilog_toggle_inventory.hpp"
+#include "fsim/frontend/verilog_toggle_inventory.hpp"
 #include "fsim/frontend/parser.hpp"
 
 #include <algorithm>
@@ -192,7 +192,7 @@ void test_object_selection_and_bit_inventory()
     const auto unit = unit_for(source);
     const auto owner = owner_for(source, "top.u",
         frontend::Language::SystemVerilog2017, 7U);
-    const auto built = elaboration::make_verilog_toggle_inventory(
+    const auto built = frontend::make_verilog_toggle_inventory(
         unit, owner, std::span { &source, 1U });
     require(built.ok() && built.inventory->objects.size() == 6U
             && built.inventory->outcomes.size() == 49U,
@@ -258,7 +258,7 @@ void test_parsed_semantic_surface()
         "independently authored toggle corpus must parse into one semantic unit");
     const auto& unit = parsed.design.units.front();
     const auto owner = owner_for(source, "root");
-    const auto built = elaboration::make_verilog_toggle_inventory(
+    const auto built = frontend::make_verilog_toggle_inventory(
         unit, owner, std::span { &source, 1U });
     require(built.ok() && built.inventory->outcomes.size() == 49U,
         "the real parser semantic surface must expose every packed port, net, signal, and retained variable bit");
@@ -304,9 +304,9 @@ void test_instance_identity_relocation_and_order()
     auto unit_b = unit_for(source_b);
     const auto owner_a = owner_for(source_a, "top.u");
     const auto owner_b = owner_for(source_b, "top.u");
-    const auto first = elaboration::make_verilog_toggle_inventory(
+    const auto first = frontend::make_verilog_toggle_inventory(
         unit_a, owner_a, std::span { &source_a, 1U });
-    const auto relocated = elaboration::make_verilog_toggle_inventory(
+    const auto relocated = frontend::make_verilog_toggle_inventory(
         unit_b, owner_b, std::span { &source_b, 1U });
     require(first.ok() && relocated.ok()
             && first.inventory == relocated.inventory,
@@ -315,14 +315,14 @@ void test_instance_identity_relocation_and_order()
     std::ranges::reverse(unit_a.ports);
     std::ranges::reverse(unit_a.signals);
     std::ranges::reverse(unit_a.variables);
-    const auto reordered = elaboration::make_verilog_toggle_inventory(
+    const auto reordered = frontend::make_verilog_toggle_inventory(
         unit_a, owner_a, std::span { &source_a, 1U });
     require(reordered.ok() && reordered.inventory == first.inventory,
         "semantic declaration-container order must not affect canonical inventory order");
 
     const auto other_owner = owner_for(source_a, "top.v",
         frontend::Language::SystemVerilog2017, 1U);
-    const auto other = elaboration::make_verilog_toggle_inventory(
+    const auto other = frontend::make_verilog_toggle_inventory(
         unit_for(source_a), other_owner, std::span { &source_a, 1U });
     require(other.ok()
             && other.inventory->objects.front().source_point
@@ -351,7 +351,7 @@ void test_retained_verilog_profiles_and_unit_kinds()
     for (const auto& [language, kind] : profiles) {
         const auto unit = unit_for(source, language, kind);
         const auto owner = owner_for(source, "root", language, 0U, kind);
-        const auto built = elaboration::make_verilog_toggle_inventory(
+        const auto built = frontend::make_verilog_toggle_inventory(
             unit, owner, std::span { &source, 1U });
         require(built.ok() && built.inventory->objects.size() == 6U,
             "every retained Verilog/SystemVerilog design-unit family must share bounded toggle selection");
@@ -385,7 +385,7 @@ void test_transactional_rejections_and_limits()
                            const auto& test_sources,
                            const elaboration::VerilogToggleInventoryLimits limits
                            = { }) {
-        return elaboration::make_verilog_toggle_inventory(
+        return frontend::make_verilog_toggle_inventory(
             test_unit, test_owner, test_sources, limits);
     };
 

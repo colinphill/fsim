@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -136,19 +135,21 @@ struct CoverageToggleSelectionResult {
     }
 };
 
-[[nodiscard]] std::string_view coverage_toggle_exclusion_reason_name(
-    CoverageToggleExclusionReason reason) noexcept;
-
-// `ports` is the unit's specialized port view. For VHDL architectures it is
-// the separately resolved entity interface; for Verilog/SystemVerilog it is
-// normally unit.ports. The result describes only default exclusions and never
-// enables an excluded element (Change 11 owns explicit selection).
-[[nodiscard]] CoverageToggleSelectionResult
-make_default_coverage_toggle_selection(
-    const frontend::DesignUnit& unit,
-    std::span<const frontend::SignalDeclaration> ports,
-    const CoverageInventoryOwner& owner,
-    std::span<const VerilogCoverageSource> sources,
-    CoverageToggleSelectionLimits limits = { }) noexcept;
+[[nodiscard]] constexpr std::string_view
+coverage_toggle_exclusion_reason_name(
+    const CoverageToggleExclusionReason reason) noexcept
+{
+    switch (reason) {
+    case CoverageToggleExclusionReason::AutomaticLocal:
+        return "automatic-local";
+    case CoverageToggleExclusionReason::ProceduralLocal:
+        return "procedural-local";
+    case CoverageToggleExclusionReason::Memory:
+        return "memory";
+    case CoverageToggleExclusionReason::Array:
+        return "array";
+    }
+    return "unknown";
+}
 
 } // namespace fsim::elaboration

@@ -532,7 +532,9 @@ void Interpreter::Impl::execute_container(
     }
     std::optional<ContainerValue> missing;
     const ContainerValue* selected = nullptr;
-    if (source.type.associative) {
+    if (aggregate_box(source.type)) {
+        selected = &source;
+    } else if (source.type.associative) {
         const auto key = associative_key(
             process.program.id, process.pc, source.type,
             get_register(process, operation.index));
@@ -595,8 +597,14 @@ void Interpreter::Impl::execute_container(
             process.program.id, process.pc,
             "aggregate member write requires an unpacked aggregate container");
     }
+    auto* selected = aggregate_box(target.type)
+        ? &target
+        : static_cast<ContainerValue*>(nullptr);
     std::size_t at { };
-    if (target.type.associative) {
+    if (selected != nullptr) {
+        // An unpacked aggregate object is itself the selected value. Arrays
+        // of unpacked aggregates select an element before walking members.
+    } else if (target.type.associative) {
         const auto key = associative_key(
             process.program.id, process.pc, target.type,
             get_register(process, operation.index));
@@ -635,7 +643,9 @@ void Interpreter::Impl::execute_container(
                 "aggregate container index is out of range");
         }
     }
-    auto* selected = &target.nested_elements[at];
+    if (selected == nullptr) {
+        selected = &target.nested_elements[at];
+    }
     ContainerValue* direct_union = nullptr;
     for (std::size_t path_index = 0;
         path_index < operation.members.size(); ++path_index) {

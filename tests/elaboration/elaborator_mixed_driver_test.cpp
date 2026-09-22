@@ -53,7 +53,7 @@ endmodule
       {"recursive_driver_top.child.leaf", "sv:work.recursive_driver_leaf",
        std::nullopt},
   };
-  const auto recursive = fsim::elaboration::elaborate(
+  const auto recursive = compile_and_elaborate(
       recursive_design, "sv:work.recursive_driver_top", recursive_bindings);
   if (!recursive.ok()) {
     for (const auto& diagnostic : recursive.diagnostics) {
@@ -108,7 +108,7 @@ end architecture;
       {"sibling_driver_top.right",
        "vhdl:work.sibling_driver_writer(rtl)", std::nullopt},
   };
-  const auto siblings = fsim::elaboration::elaborate(
+  const auto siblings = compile_and_elaborate(
       sibling_design, "sv:work.sibling_driver_top", sibling_bindings);
   assert(!siblings.ok());
   assert(has_diagnostic(siblings, "FSIM-ELAB-BIND-024"));
@@ -141,7 +141,7 @@ endmodule
   const std::vector<fsim::elaboration::Binding> input_bindings{{
       "input_driver_top.child", "vhdl:work.input_driver_writer(rtl)",
       std::nullopt}};
-  const auto input_result = fsim::elaboration::elaborate(
+  const auto input_result = compile_and_elaborate(
       input_design, "sv:work.input_driver_top", input_bindings);
   assert(!input_result.ok());
   assert(has_diagnostic(input_result, "FSIM-ELAB-SVIFACE-006"));
@@ -228,7 +228,7 @@ end architecture;
         "mixed_wired_top." + std::string{name},
         "vhdl:work." + std::string{target} + "(rtl)", std::nullopt});
   }
-  const auto wired = fsim::elaboration::elaborate(
+  const auto wired = compile_and_elaborate(
       wired_design, "sv:work.mixed_wired_top", wired_bindings);
   if (!wired.ok()) {
     for (const auto& diagnostic : wired.diagnostics) {
@@ -304,7 +304,7 @@ module sv_logic_z(output logic value); assign value = 1'bz; endmodule
       {"mixed_std_logic_top.z_released", "sv:work.sv_logic_z",
        std::nullopt},
   };
-  const auto std_logic = fsim::elaboration::elaborate(
+  const auto std_logic = compile_and_elaborate(
       std_logic_design,
       "vhdl:work.mixed_std_logic_top(rtl)", logic_bindings);
   assert(std_logic.ok());

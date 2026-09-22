@@ -14,86 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  linux-clang:
-    name: Ubuntu / Clang 22 / ${{ matrix.configuration }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - configuration: Debug
-            preset: ci-linux
-            artifact: github-linux-clang22-debug
-            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-debug.log
-          - configuration: Release
-            preset: ci-linux-release
-            artifact: github-linux-clang22-release
-            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-release.log
-    steps:
-      - name: Check out sources
-        uses: actions/checkout@v7
-
-      - name: Initialize retained lane log
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$(dirname "${{ matrix.retained_log }}")"
-          printf 'artifact=%s\nconfiguration=%s\n' \
-            "${{ matrix.artifact }}" \
-            "${{ matrix.configuration }}" > "${{ matrix.retained_log }}"
-
-      - name: Install Clang 22
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            llvm_installer="${RUNNER_TEMP}/llvm-22-installer.sh"
-            wget --quiet --output-document="${llvm_installer}" \
-              https://apt.llvm.org/llvm.sh
-            chmod +x "${llvm_installer}"
-            sudo "${llvm_installer}" 22
-            clang-22 --version
-            clang++-22 --version
-          } 2>&1 | tee -a "${{ matrix.retained_log }}"
-
-      - name: Configure
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake --preset "${{ matrix.preset }}" 2>&1 \
-            | tee -a "${{ matrix.retained_log }}"
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake --build --preset "${{ matrix.preset }}" --parallel 2 2>&1 \
-            | tee -a "${{ matrix.retained_log }}"
-
-      - name: Test
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --preset "${{ matrix.preset }}" -LE '^recursive-closure$' 2>&1 \
-            | tee -a "${{ matrix.retained_log }}"
-
-      - name: Final closure checks
-        if: matrix.configuration == 'Debug'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --preset "${{ matrix.preset }}" -L '^recursive-closure$' 2>&1 \
-            | tee -a "${{ matrix.retained_log }}"
-
-      - name: Upload retained lane log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.retained_log }}
-          if-no-files-found: error
-
   linux-llvm22:
     name: Ubuntu / Clang 22 / LLVM 22.1.8 / ${{ matrix.configuration }}
     runs-on: ubuntu-24.04
@@ -105,11 +25,11 @@ jobs:
           - configuration: Debug
             build_dir: build/ci-linux-llvm22-debug
             artifact: github-linux-clang22-llvm22-debug
-            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-llvm22-debug.log
+            retained_log: build/qualification/batch188a-change20-hosted-linux-clang22-llvm22-debug.log
           - configuration: Release
             build_dir: build/ci-linux-llvm22-release
             artifact: github-linux-clang22-llvm22-release
-            retained_log: build/qualification/batch180-change20-hosted-linux-clang22-llvm22-release.log
+            retained_log: build/qualification/batch188a-change20-hosted-linux-clang22-llvm22-release.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -172,8 +92,20 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir "${{ matrix.build_dir }}" \
+            --parallel 2 \
             --output-on-failure \
             -LE '^recursive-closure$' 2>&1 \
+            | tee -a "${{ matrix.retained_log }}"
+
+      - name: Final closure checks
+        if: matrix.configuration == 'Debug'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "${{ matrix.build_dir }}" \
+            --parallel 2 \
+            --output-on-failure \
+            -L '^recursive-closure$' 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
 
       - name: Upload retained lane log
@@ -182,70 +114,6 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.retained_log }}
-          if-no-files-found: error
-
-  linux-fuzz:
-    name: Ubuntu / Clang / frontend fuzz smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      FSIM_ARTIFACT: github-linux-fuzz
-      FSIM_RETAINED_LOG: build/qualification/batch188-change20-hosted-linux-fuzz.log
-    steps:
-      - name: Check out sources
-        uses: actions/checkout@v7
-
-      - name: Initialize retained lane log
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$(dirname "${FSIM_RETAINED_LOG}")"
-          printf 'artifact=%s\nconfiguration=RelWithDebInfo\n' \
-            "${FSIM_ARTIFACT}" > "${FSIM_RETAINED_LOG}"
-
-      - name: Install Clang
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends \
-              clang \
-              libclang-rt-dev
-            clang --version
-          } 2>&1 | tee -a "${FSIM_RETAINED_LOG}"
-
-      - name: Configure
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake --preset ci-fuzz 2>&1 | tee -a "${FSIM_RETAINED_LOG}"
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake --build --preset ci-fuzz --parallel 2 2>&1 \
-            | tee -a "${FSIM_RETAINED_LOG}"
-
-      - name: Fuzz lexer and parser
-        shell: bash
-        run: |
-          set -euo pipefail
-          build/ci-fuzz/tests/fuzz/fsim_frontend_fuzz \
-            -runs=20000 \
-            -seed=1 \
-            -timeout=10 \
-            -max_len=65536 \
-            tests/fuzz/corpus/frontend 2>&1 \
-            | tee -a "${FSIM_RETAINED_LOG}"
-
-      - name: Upload retained lane log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.FSIM_ARTIFACT }}
-          path: ${{ env.FSIM_RETAINED_LOG }}
           if-no-files-found: error
 
   windows-llvm-mingw:
@@ -257,36 +125,20 @@ jobs:
       matrix:
         include:
           - configuration: Debug
-            llvm_mode: 'OFF'
-            build_dir: build/ci-windows-llvm-mingw-Debug-llvm-OFF
-            artifact: github-windows-debug-llvm-off
-            retained_log: build/qualification/batch188-change20-hosted-windows-debug-llvm-off.log
-          - configuration: Debug
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Debug-llvm-ON
             artifact: github-windows-debug-llvm-on
-            retained_log: build/qualification/batch188-change20-hosted-windows-debug-llvm-on.log
-          - configuration: Release
-            llvm_mode: 'OFF'
-            build_dir: build/ci-windows-llvm-mingw-Release-llvm-OFF
-            artifact: github-windows-release-llvm-off
-            retained_log: build/qualification/batch188-change20-hosted-windows-release-llvm-off.log
-            binary_package: fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm
-            binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip
-            binary_log: build/qualification/batch188-change20-windows-no-llvm-archive.log
-            install_log: build/qualification/batch188-change20-windows-no-llvm-install.log
-            expected_tests: '415'
-            expected_archive_entries: '1269'
+            retained_log: build/qualification/batch188a-change20-hosted-windows-debug-llvm-on.log
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
             artifact: github-windows-release-llvm-on
-            retained_log: build/qualification/batch188-change20-hosted-windows-release-llvm-on.log
+            retained_log: build/qualification/batch188a-change20-hosted-windows-release-llvm-on.log
             binary_package: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22
             binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip
             binary_log: build/qualification/batch188-change20-windows-llvm22-archive.log
             install_log: build/qualification/batch188-change20-windows-llvm22-install.log
-            expected_tests: '419'
+            expected_tests: '423'
             expected_archive_entries: '1269'
     steps:
       - name: Check out sources

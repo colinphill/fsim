@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -74,11 +73,5 @@ struct CoverageBranchResult {
         return error == CoverageBranchError::None;
     }
 };
-
-[[nodiscard]] CoverageBranchResult discover_coverage_branch_points(
-    std::span<const frontend::Statement> statements,
-    frontend::CodeCoverageLanguage language,
-    std::span<const CoverageBranchSource> sources,
-    CoverageBranchLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

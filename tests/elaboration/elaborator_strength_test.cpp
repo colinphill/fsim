@@ -44,6 +44,9 @@ module selected_topology;
   assign source = 8'ha3;
   tran selected(source[7:4], target[3:0]);
 endmodule
+module literal_resistive_source(output wire q);
+  rnmos literal_source(q, 1'b1, 1'b1);
+endmodule
 module strength_systemc_wrapper;
   wire value;
   supply1 high;
@@ -53,7 +56,7 @@ endmodule
         fsim::frontend::Language::Verilog2005);
     assert(verilog.ok());
 
-    const auto generated = fsim::elaboration::elaborate(
+    const auto generated = compile_and_elaborate(
         verilog.design, "verilog:work.generated_strength");
     assert(generated.ok());
     const auto generated_value = generated.design->find_signal("generated_strength.enabled.value");
@@ -64,7 +67,7 @@ endmodule
     assert(generated_runtime->signal_value(*generated_value).to_msb_string()
         == "1");
 
-    const auto specialized = fsim::elaboration::elaborate(
+    const auto specialized = compile_and_elaborate(
         verilog.design, "verilog:work.specialized_strength");
     assert(specialized.ok());
     const auto& specializations = specialized.design->specializations();
@@ -83,7 +86,7 @@ endmodule
             != entry.parameter_values.end();
     }));
 
-    const auto topology = fsim::elaboration::elaborate(
+    const auto topology = compile_and_elaborate(
         verilog.design, "verilog:work.topology_corner");
     assert(topology.ok());
     const auto cycle_c = topology.design->find_signal("topology_corner.cycle_c");
@@ -96,7 +99,7 @@ endmodule
     assert(topology_runtime->signal_value(*disconnected_b).to_msb_string()
         == "Z");
 
-    const auto selected = fsim::elaboration::elaborate(
+    const auto selected = compile_and_elaborate(
         verilog.design, "verilog:work.selected_topology");
     assert(selected.ok());
     const auto selected_target = selected.design->find_signal("selected_topology.target");
@@ -114,11 +117,32 @@ endmodule
     assert(selected_runtime->signal_value(*selected_target).to_msb_string()
         == "ZZZZ1010");
 
+    const auto literal_source = compile_and_elaborate(
+        verilog.design, "verilog:work.literal_resistive_source");
+    assert(literal_source.ok());
+    const auto literal_q = literal_source.design->find_signal(
+        "literal_resistive_source.q");
+    assert(literal_q);
+    assert(std::ranges::any_of(
+        literal_source.design->processes(), [](const auto& process) {
+            return process.drive_strength.zero
+                    == fsim::runtime::simir::StrengthRank::pull
+                && process.drive_strength.one
+                    == fsim::runtime::simir::StrengthRank::pull
+                && !process.switch_source
+                && !process.switch_target;
+        }));
+    auto literal_runtime = literal_source.design->create_interpreter();
+    assert(literal_runtime->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(literal_runtime->signal_value(*literal_q).to_msb_string()
+        == "1");
+
     const std::array roots {
         fsim::elaboration::Root { "strength_top", "first" },
         fsim::elaboration::Root { "strength_top", "second" }
     };
-    const auto multiple = fsim::elaboration::elaborate(
+    const auto multiple = compile_and_elaborate(
         verilog.design, roots, { }, { }, nullptr, { });
     assert(multiple.ok());
     assert((multiple.design->roots()
@@ -139,7 +163,7 @@ endmodule
         }
     }
   const std::array<std::string, 1> search_libraries{"vendor"};
-  const auto searched_result = fsim::elaboration::elaborate(
+  const auto searched_result = compile_and_elaborate(
       searched,
       "verilog:work.strength_top",
       {},
@@ -175,7 +199,7 @@ end architecture;
   auto mixed = verilog.design;
   mixed.units.insert(
       mixed.units.end(), vhdl.design.units.begin(), vhdl.design.units.end());
-  const auto vhdl_boundary = fsim::elaboration::elaborate(
+  const auto vhdl_boundary = compile_and_elaborate(
       mixed, "vhdl:work.strength_parent(rtl)");
   assert(vhdl_boundary.ok());
   assert(std::ranges::any_of(

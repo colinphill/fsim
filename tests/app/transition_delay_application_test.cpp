@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -56,11 +57,14 @@ struct Capture {
     std::vector<Change> changes;
     std::vector<std::pair<std::string, std::string>> final_values;
     std::vector<std::string> gate_array_processes;
+    std::vector<std::uint32_t> gate_array_static_offsets;
+    bool gate_array_dynamic_index { };
     std::string vcd;
     std::string debugger;
     std::string resolution;
     bool wide_dynamic_part_inertial { };
     bool wide_dynamic_part_update { };
+    bool zero_delay_driver_before_initializer { };
     std::size_t compiled_processes { };
     fsim::app::NativeCacheStatistics native_cache;
 };
@@ -108,9 +112,47 @@ Capture run_once(
 
     Capture capture;
     capture.resolution = project->time_resolution;
-    for (const auto& process : project->design.processes()) {
+    const auto zero_output = project->design.find_signal(
+        "transition_delays.zero_output");
+    assert(zero_output);
+    std::optional<std::size_t> zero_delay_driver_position;
+    std::optional<std::size_t> initializer_position;
+    const auto& processes = project->design.processes();
+    for (std::size_t position = 0U;
+        position < processes.size(); ++position) {
+        const auto& process = processes[position];
+        if (process.name.starts_with(
+                "transition_delays.process_")) {
+            initializer_position = position;
+        }
+        if (std::ranges::any_of(
+                process.operations,
+                [&](const fsim::runtime::simir::Operation& operation) {
+                    const auto* write
+                        = fsim::runtime::simir::operation_get_if<
+                            fsim::runtime::simir::WriteInertial>(
+                            &operation);
+                    return write != nullptr
+                        && write->signal == *zero_output;
+                })) {
+            zero_delay_driver_position = position;
+        }
         if (process.name.find("gate_array[") != std::string::npos) {
             capture.gate_array_processes.push_back(process.name);
+            for (const auto& operation : process.operations) {
+                if (const auto* write
+                    = fsim::runtime::simir::operation_get_if<
+                        fsim::runtime::simir::WriteInertialSlice>(
+                        &operation)) {
+                    capture.gate_array_static_offsets.push_back(
+                        write->offset);
+                }
+                capture.gate_array_dynamic_index
+                    = capture.gate_array_dynamic_index
+                    || fsim::runtime::simir::operation_holds<
+                        fsim::runtime::simir::
+                            WriteInertialDynamicSlice>(operation);
+            }
         }
         capture.wide_dynamic_part_inertial = capture.wide_dynamic_part_inertial
             || std::ranges::any_of(
@@ -129,6 +171,9 @@ Capture run_once(
                             WriteUpdateDynamicPartSlice>(operation);
                 });
     }
+    assert(zero_delay_driver_position && initializer_position);
+    capture.zero_delay_driver_before_initializer
+        = *zero_delay_driver_position < *initializer_position;
     fsim::app::Simulation simulation {
         std::move(*project), config.run.max_deltas, engine
     };
@@ -251,6 +296,7 @@ void verify_mode(
     assert(reference.resolution == "1ps");
     assert(reference.wide_dynamic_part_inertial);
     assert(reference.wide_dynamic_part_update);
+    assert(reference.zero_delay_driver_before_initializer);
     const std::vector<std::pair<
         std::string,
         fsim::runtime::SimulationTick>>
@@ -384,17 +430,32 @@ void verify_mode(
         && reference.debugger.find(
                "transition_delays.same_value_output = 1")
             != std::string::npos);
-    assert((
-        reference.gate_array_processes == std::vector<std::string> { "transition_delays.gate_array[3]", "transition_delays.gate_array[2]", "transition_delays.gate_array[1]", "transition_delays.gate_array[0]" }));
+    assert((reference.gate_array_processes
+        == std::vector<std::string> {
+            "transition_delays.gate_array[3]",
+            "transition_delays.gate_array[2]",
+            "transition_delays.gate_array[1]",
+            "transition_delays.gate_array[0]",
+        }));
+    assert((reference.gate_array_static_offsets
+        == std::vector<std::uint32_t> { 3U, 2U, 1U, 0U }));
+    assert(!reference.gate_array_dynamic_index);
 
     for (const auto* actual : { &cold, &warm }) {
         assert(reference.result.status == actual->result.status);
         assert(reference.result.time == actual->result.time);
         assert(reference.changes == actual->changes);
         assert(reference.final_values == actual->final_values);
+        assert(actual->zero_delay_driver_before_initializer);
         assert(
             reference.gate_array_processes
             == actual->gate_array_processes);
+        assert(
+            reference.gate_array_static_offsets
+            == actual->gate_array_static_offsets);
+        assert(
+            reference.gate_array_dynamic_index
+            == actual->gate_array_dynamic_index);
         assert(
             reference.wide_dynamic_part_inertial
             == actual->wide_dynamic_part_inertial);
@@ -848,6 +909,26 @@ endmodule
     assert(std::ranges::find(
                object_inspection->units, "verilog:vendor.artifact_udp")
         != object_inspection->units.end());
+    assert(std::ranges::none_of(
+        object_inspection->digests,
+        [](const auto& digest) { return digest.empty(); }));
+    fsim::diagnostic::Engine object_metadata_diagnostics;
+    const auto object_metadata = fsim::artifact::load_object_metadata(
+        object, object_metadata_diagnostics);
+    assert(object_metadata && !object_metadata_diagnostics.has_error());
+    assert(std::ranges::count(
+        object_metadata->units, std::string { "primitive" },
+        &fsim::library::UnitIndexEntry::kind) == 3);
+    assert(std::ranges::all_of(
+        object_metadata->units, [](const auto& entry) {
+            return entry.kind != "primitive"
+                || (entry.artifact.empty() && entry.checksum.empty());
+        }));
+    assert(std::ranges::none_of(
+        std::filesystem::recursive_directory_iterator { object },
+        [](const auto& entry) {
+            return entry.path().extension() == ".fsimudp";
+        }));
 
     const auto duplicate_source = directory / "udp-duplicate.v";
     const auto duplicate_object = directory / "udp-duplicate.fsimobj";
@@ -912,11 +993,8 @@ endprimitive
     const auto corrupt_metadata = fsim::artifact::load_object_metadata(
         hidden_object, corrupt_metadata_diagnostics);
     assert(corrupt_metadata && !corrupt_metadata_diagnostics.has_error());
-    const auto primitive_payload = std::ranges::find(
-        corrupt_metadata->units,
-        "primitive", &fsim::library::UnitIndexEntry::kind);
-    assert(primitive_payload != corrupt_metadata->units.end());
-    const auto corrupt_payload = hidden_object / primitive_payload->artifact;
+    const auto corrupt_payload
+        = hidden_object / corrupt_metadata->compiled_hir_artifact;
     std::filesystem::permissions(
         corrupt_payload,
         std::filesystem::perms::owner_write,
@@ -1079,6 +1157,23 @@ endprimitive
     }
     assert(exported);
     assert(!export_diagnostics.has_error());
+    fsim::diagnostic::Engine library_metadata_diagnostics;
+    const auto library_metadata = fsim::library::load_metadata(
+        library, "vendor", library_metadata_diagnostics);
+    assert(library_metadata && !library_metadata_diagnostics.has_error());
+    assert(std::ranges::count(
+        library_metadata->units, std::string { "primitive" },
+        &fsim::library::UnitIndexEntry::kind) == 3);
+    assert(std::ranges::all_of(
+        library_metadata->units, [](const auto& entry) {
+            return entry.kind != "primitive"
+                || (entry.artifact.empty() && entry.checksum.empty());
+        }));
+    assert(std::ranges::none_of(
+        std::filesystem::recursive_directory_iterator { library },
+        [](const auto& entry) {
+            return entry.path().extension() == ".fsimudp";
+        }));
 
     const auto consumer_source = directory / "udp-consumer.v";
     {
@@ -1127,6 +1222,32 @@ endmodule
     assert(
         mapped_run.status == fsim::runtime::RunStatus::stopped
         && mapped_run.time == 8);
+
+    const auto corrupt_library_payload
+        = library / library_metadata->compiled_hir_artifact;
+    std::filesystem::permissions(
+        corrupt_library_payload,
+        std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::add);
+    {
+        std::ofstream output(
+            corrupt_library_payload, std::ios::binary | std::ios::app);
+        output.put('x');
+        assert(output.good());
+    }
+    auto corrupt_consumer_config = consumer_config;
+    corrupt_consumer_config.build.cache_path
+        = directory / "udp-corrupt-library-cache";
+    fsim::diagnostic::Engine corrupt_library_diagnostics;
+    assert(!fsim::app::build_project(
+        corrupt_consumer_config, corrupt_library_diagnostics));
+    assert(std::ranges::any_of(
+        corrupt_library_diagnostics.diagnostics(),
+        [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-LIB-0008"
+                && diagnostic.message.find("checksum mismatch")
+                    != std::string::npos;
+        }));
 }
 
 ParameterizedCapture run_parameterized(

@@ -96,7 +96,7 @@ endmodule
       "boolean_vhdl_parent.child",
       "sv:work.boolean_sv_child",
       std::nullopt}};
-  const auto elaborated_vhdl_parent = fsim::elaboration::elaborate(
+  const auto elaborated_vhdl_parent = compile_and_elaborate(
       vhdl_parent_design,
       "vhdl:work.boolean_vhdl_parent(rtl)",
       vhdl_bindings);
@@ -168,7 +168,7 @@ end architecture;
       "boolean_sv_parent.child",
       "vhdl:work.boolean_vhdl_child(rtl)",
       std::nullopt}};
-  const auto elaborated_sv_parent = fsim::elaboration::elaborate(
+  const auto elaborated_sv_parent = compile_and_elaborate(
       sv_parent_design,
       "sv:work.boolean_sv_parent",
       sv_bindings);
@@ -223,7 +223,7 @@ end architecture;
       "invalid_boolean_sv_parent.child",
       "vhdl:work.boolean_sink(rtl)",
       std::nullopt}};
-  const auto invalid_boolean = fsim::elaboration::elaborate(
+  const auto invalid_boolean = compile_and_elaborate(
       invalid_design,
       "sv:work.invalid_boolean_sv_parent",
       invalid_bindings);
@@ -281,7 +281,7 @@ endmodule
       "integer_vhdl_parent.child",
       "sv:work.integer_sv_child",
       std::nullopt}};
-  const auto elaborated_integer_vhdl = fsim::elaboration::elaborate(
+  const auto elaborated_integer_vhdl = compile_and_elaborate(
       integer_vhdl_design,
       "vhdl:work.integer_vhdl_parent(rtl)",
       integer_vhdl_bindings);
@@ -387,7 +387,7 @@ end architecture;
       "integer_sv_parent.child",
       "vhdl:work.integer_vhdl_child(rtl)",
       std::nullopt}};
-  const auto elaborated_integer_sv = fsim::elaboration::elaborate(
+  const auto elaborated_integer_sv = compile_and_elaborate(
       integer_sv_design,
       "sv:work.integer_sv_parent",
       integer_sv_bindings);
@@ -444,7 +444,7 @@ end architecture;
           "unsigned_integer_sv_parent.child",
           "vhdl:work.integer_vhdl_sink(rtl)",
           std::nullopt}};
-  const auto rejected_unsigned_integer = fsim::elaboration::elaborate(
+  const auto rejected_unsigned_integer = compile_and_elaborate(
       unsigned_integer_design,
       "sv:work.unsigned_integer_sv_parent",
       unsigned_integer_bindings);
@@ -502,7 +502,7 @@ endmodule
       "bit_vhdl_parent.child",
       "sv:work.bit_sv_child",
       std::nullopt}};
-  const auto elaborated_bit_vhdl = fsim::elaboration::elaborate(
+  const auto elaborated_bit_vhdl = compile_and_elaborate(
       bit_vhdl_design,
       "vhdl:work.bit_vhdl_parent(rtl)",
       bit_vhdl_bindings);
@@ -605,7 +605,7 @@ end architecture;
       "bit_sv_parent.child",
       "vhdl:work.bit_vhdl_child(rtl)",
       std::nullopt}};
-  const auto elaborated_bit_sv = fsim::elaboration::elaborate(
+  const auto elaborated_bit_sv = compile_and_elaborate(
       bit_sv_design,
       "sv:work.bit_sv_parent",
       bit_sv_bindings);
@@ -676,7 +676,7 @@ endmodule
       "lossy_bit_vhdl_parent.child",
       "sv:work.lossy_bit_sv_child",
       std::nullopt}};
-  const auto rejected_lossy_bits = fsim::elaboration::elaborate(
+  const auto rejected_lossy_bits = compile_and_elaborate(
       lossy_bit_design,
       "vhdl:work.lossy_bit_vhdl_parent(rtl)",
       lossy_bit_bindings);
@@ -717,7 +717,7 @@ end architecture;
           "lossy_bit_sv_parent.child",
           "vhdl:work.bit_vhdl_sink(rtl)",
           std::nullopt}};
-  const auto rejected_lossy_bit_input = fsim::elaboration::elaborate(
+  const auto rejected_lossy_bit_input = compile_and_elaborate(
       lossy_bit_reverse_design,
       "sv:work.lossy_bit_sv_parent",
       lossy_bit_reverse_bindings);
@@ -797,7 +797,7 @@ endmodule
       "logic9_vhdl_parent.child",
       "sv:work.logic4_sv_child",
       std::nullopt}};
-  const auto elaborated_logic9_vhdl = fsim::elaboration::elaborate(
+  const auto elaborated_logic9_vhdl = compile_and_elaborate(
       logic9_vhdl_design,
       "vhdl:work.logic9_vhdl_parent(rtl)",
       logic9_vhdl_bindings);
@@ -884,7 +884,7 @@ end architecture;
       "logic4_sv_parent.child",
       "vhdl:work.logic9_vhdl_child(rtl)",
       std::nullopt}};
-  const auto elaborated_logic4_sv = fsim::elaboration::elaborate(
+  const auto elaborated_logic4_sv = compile_and_elaborate(
       logic4_sv_design,
       "sv:work.logic4_sv_parent",
       logic4_sv_bindings);
@@ -960,7 +960,7 @@ endmodule
       "wide_vhdl_parent.child",
       "sv:work.wide_sv_child",
       std::nullopt}};
-  const auto elaborated_wide = fsim::elaboration::elaborate(
+  const auto elaborated_wide = compile_and_elaborate(
       wide_boundary_design,
       "vhdl:work.wide_vhdl_parent(rtl)",
       wide_bindings);
@@ -1021,7 +1021,7 @@ endmodule
       "lossy_logic9_vhdl_parent.child",
       "sv:work.bit_sv_sink",
       std::nullopt}};
-  const auto rejected_lossy_logic9 = fsim::elaboration::elaborate(
+  const auto rejected_lossy_logic9 = compile_and_elaborate(
       lossy_logic9_design,
       "vhdl:work.lossy_logic9_vhdl_parent(rtl)",
       lossy_logic9_bindings);

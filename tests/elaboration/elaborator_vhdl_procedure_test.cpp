@@ -146,7 +146,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.procedure_top(rtl)");
     if (!elaborated.ok()) {
@@ -155,6 +155,7 @@ end architecture;
                       << diagnostic.message << '\n';
         }
     }
+    assert(!has_diagnostic(elaborated, "FSIM-ELAB-HIR-001"));
     assert(elaborated.ok());
     assert(elaborated.design->specializations().size() == 7);
     const auto nested = std::ranges::find_if(
@@ -190,7 +191,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing.ok());
-    const auto missing_result = fsim::elaboration::elaborate(
+    const auto missing_result = compile_and_elaborate(
         missing.design, "vhdl:work.missing(rtl)");
     assert(!missing_result.ok());
     assert(has_diagnostic(
@@ -266,7 +267,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto invalid_result = fsim::elaboration::elaborate(
+    const auto invalid_result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid_top(rtl)");
     assert(!invalid_result.ok());
     assert(has_diagnostic(
@@ -302,7 +303,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(illegal_call.ok());
-    const auto illegal_call_result = fsim::elaboration::elaborate(
+    const auto illegal_call_result = compile_and_elaborate(
         illegal_call.design,
         "vhdl:work.illegal_call(rtl)");
     assert(!illegal_call_result.ok());
@@ -334,7 +335,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(recursive.ok());
-    const auto recursive_result = fsim::elaboration::elaborate(
+    const auto recursive_result = compile_and_elaborate(
         recursive.design, "vhdl:work.recursive_top(rtl)");
     assert(recursive_result.ok());
 
@@ -375,7 +376,7 @@ end architecture;
     delay.kind = fsim::frontend::StatementKind::Delay;
     delay.span = top_architecture->procedures.front().span;
     top_architecture->procedures.front().statements.push_back(delay);
-    const auto timed_result = fsim::elaboration::elaborate(
+    const auto timed_result = compile_and_elaborate(
         timed.design, "vhdl:work.timed_top(rtl)");
     assert(!timed_result.ok());
     assert(has_diagnostic(
@@ -412,7 +413,7 @@ end architecture;
         cross_language_binding { { "cross_language_procedure.child",
             "vhdl:work.foreign_target(rtl)",
             std::nullopt } };
-    const auto cross_language_result = fsim::elaboration::elaborate(
+    const auto cross_language_result = compile_and_elaborate(
         cross_language_parent.design,
         "sv:work.cross_language_procedure",
         cross_language_binding);

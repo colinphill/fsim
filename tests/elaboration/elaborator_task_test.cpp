@@ -49,7 +49,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.task_runtime");
     assert(elaborated.ok());
     const auto result = elaborated.design->find_signal("result");
@@ -96,7 +96,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(association_error.ok());
-    const auto rejected_association = fsim::elaboration::elaborate(
+    const auto rejected_association = compile_and_elaborate(
         association_error.design,
         "sv:work.task_association_error");
     assert(
@@ -120,7 +120,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(ref_signal.ok());
-    const auto elaborated_ref_signal = fsim::elaboration::elaborate(
+    const auto elaborated_ref_signal = compile_and_elaborate(
         ref_signal.design, "sv:work.task_ref_signal");
     assert(elaborated_ref_signal.ok());
     auto ref_signal_interpreter = elaborated_ref_signal.design->create_interpreter();
@@ -152,7 +152,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(ref_literal.ok());
-    const auto rejected_ref_literal = fsim::elaboration::elaborate(
+    const auto rejected_ref_literal = compile_and_elaborate(
         ref_literal.design, "sv:work.task_ref_literal");
     assert(
         !rejected_ref_literal.ok()
@@ -171,7 +171,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(static_suspension.ok());
-    const auto elaborated_static_suspension = fsim::elaboration::elaborate(
+    const auto elaborated_static_suspension = compile_and_elaborate(
         static_suspension.design,
         "sv:work.static_task_suspension");
     assert(elaborated_static_suspension.ok());
@@ -195,7 +195,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(static_container.ok());
-    const auto elaborated_static_container = fsim::elaboration::elaborate(
+    const auto elaborated_static_container = compile_and_elaborate(
         static_container.design,
         "sv:work.static_task_container");
     assert(elaborated_static_container.ok());
@@ -219,7 +219,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(qualified.ok());
-    const auto qualified_elaborated = fsim::elaboration::elaborate(
+    const auto qualified_elaborated = compile_and_elaborate(
         qualified.design, "sv:work.qualified_task");
     assert(qualified_elaborated.ok());
     auto qualified_interpreter = qualified_elaborated.design->create_interpreter();
@@ -283,7 +283,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(suspending.ok());
-    const auto elaborated_suspending = fsim::elaboration::elaborate(
+    const auto elaborated_suspending = compile_and_elaborate(
         suspending.design, "sv:work.suspending_task");
     if (!elaborated_suspending.ok()) {
         for (const auto& diagnostic :
@@ -369,7 +369,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(forbidden_suspension.ok());
-    const auto rejected_suspension = fsim::elaboration::elaborate(
+    const auto rejected_suspension = compile_and_elaborate(
         forbidden_suspension.design,
         "sv:work.forbidden_suspending_task");
     assert(
@@ -393,7 +393,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(event_process.ok());
     assert(
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             event_process.design, "sv:work.event_process_task")
             .ok());
 
@@ -409,7 +409,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(recursive.ok());
-    const auto recursive_result = fsim::elaboration::elaborate(
+    const auto recursive_result = compile_and_elaborate(
         recursive.design, "sv:work.recursive_task");
     assert(recursive_result.ok());
     const auto& recursive_operations = recursive_result.design->processes().front().operations;
@@ -431,7 +431,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(wrong_arity.ok());
-    const auto rejected_arity = fsim::elaboration::elaborate(
+    const auto rejected_arity = compile_and_elaborate(
         wrong_arity.design, "sv:work.task_arity");
     assert(
         !rejected_arity.ok()

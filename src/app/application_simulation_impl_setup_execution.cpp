@@ -106,62 +106,11 @@ void Simulation::Impl::setup_execution(
         }
         std::vector<const runtime::simir::Process*> processes;
         processes.reserve(built.design_ir.processes().size());
-        std::vector<bool> constant_specialized_processes(
-            built.design_ir.processes().size(), false);
-        std::vector<bool> written_signals(
-            built.design.signals().size(), false);
         for (std::size_t process = 0;
             process < built.design_ir.processes().size(); ++process) {
             const auto& program = interpreter->process_program(
                 static_cast<runtime::simir::ProcessId>(process));
-            for (const auto& region : program.driver_regions) {
-                written_signals.at(region.signal) = true;
-            }
-        }
-        std::vector<bool> static_vhdl_arrays(
-            built.design.signals().size(), false);
-        for (const auto& signal : built.design.signals()) {
-            static_vhdl_arrays.at(signal.id) = static_cast<bool>(signal.vhdl_array)
-                && !signal.is_port && !written_signals.at(signal.id);
-        }
-        for (std::size_t process = 0;
-            process < built.design_ir.processes().size(); ++process) {
-            const auto& program = interpreter->process_program(
-                static_cast<runtime::simir::ProcessId>(process));
-            std::unique_ptr<runtime::simir::Process> specialized;
-            if (engine != SimulationEngine::debug) {
-                for (std::size_t operation_index = 0;
-                    operation_index < program.operations.size();
-                    ++operation_index) {
-                    const auto& operation
-                        = program.operations[operation_index];
-                    const auto* read
-                        = runtime::simir::operation_get_if<
-                            runtime::simir::ReadSignal>(&operation);
-                    if (read == nullptr
-                        || read->kind
-                            != runtime::simir::SignalReadKind::current
-                        || !static_vhdl_arrays.at(read->signal)) {
-                        continue;
-                    }
-                    if (!specialized) {
-                        specialized = std::make_unique<
-                            runtime::simir::Process>(program);
-                    }
-                    specialized->operations.replace(
-                        operation_index,
-                        runtime::simir::LoadConstant {
-                            read->destination,
-                            interpreter->signal_value(read->signal) });
-                }
-            }
-            if (specialized) {
-                constant_specialized_processes.at(process) = true;
-                processes.push_back(specialized.get());
-                jit_specialized_processes.push_back(std::move(specialized));
-            } else {
-                processes.push_back(&program);
-            }
+            processes.push_back(&program);
         }
         struct AdaptiveCompilationGate {
             std::atomic_uint64_t interpreted_operations { };
@@ -714,6 +663,7 @@ void Simulation::Impl::setup_execution(
                                 || std::is_same_v<Type, runtime::simir::Jump>
                                 || std::is_same_v<Type, runtime::simir::Binary>
                                 || std::is_same_v<Type, runtime::simir::Assert>
+                                || std::is_same_v<Type, runtime::simir::Report>
                                 || std::is_same_v<Type, runtime::simir::UnaryNot>
                                 || std::is_same_v<Type, runtime::simir::LogicalNot>
                                 || std::is_same_v<Type, runtime::simir::LogicalBinary>
@@ -952,6 +902,13 @@ void Simulation::Impl::setup_execution(
                                 && left.severity == right->severity;
                         } else if constexpr (std::is_same_v<
                                                  Type,
+                                                 runtime::simir::Report>) {
+                            // The callback reads candidate-local text and
+                            // source metadata at this instruction. Native
+                            // control flow depends only on severity.
+                            compatible = left.severity == right->severity;
+                        } else if constexpr (std::is_same_v<
+                                                 Type,
                                                  runtime::simir::LogicalNot>) {
                             compatible = left.destination == right->destination
                                 && left.source == right->source;
@@ -1055,9 +1012,44 @@ void Simulation::Impl::setup_execution(
                     = specialization.processes[specialization_process];
                 const auto runtime_id = built.design_ir.processes()[process_id.value()].runtime_index;
                 const auto& process = *processes.at(runtime_id);
-                const bool constant_specialized
-                    = constant_specialized_processes.at(runtime_id);
                 if (process_filter && !process_filter->contains(process.id)) {
+                    ++retained_process_count;
+                    retained_operation_count += process.operations.size();
+                    continue;
+                }
+                const bool debug_string_class_copyout
+                    = engine == SimulationEngine::debug
+                    && std::ranges::any_of(
+                        process.operations,
+                        [](const runtime::simir::Operation& operation) {
+                            const auto has_string_actual
+                                = [](const auto& call) {
+                                      return std::ranges::find(
+                                          call.actual_kinds, 1U)
+                                          != call.actual_kinds.end();
+                                  };
+                            if (const auto* call
+                                = runtime::simir::operation_get_if<
+                                    runtime::simir::ClassMethodCall>(
+                                    &operation)) {
+                                return has_string_actual(*call);
+                            }
+                            if (const auto* call
+                                = runtime::simir::operation_get_if<
+                                    runtime::simir::ClassStaticMethodCall>(
+                                    &operation)) {
+                                return has_string_actual(*call);
+                            }
+                            return false;
+                        });
+                if (debug_string_class_copyout) {
+                    // A class-call boundary copies output and inout strings
+                    // into executor-owned registers. Source-level suspension
+                    // immediately before that boundary must not split the
+                    // copyout from the following WriteStringObject. Retain the
+                    // reference executor for this uncommon debug-only shape;
+                    // it supplies the same execution points without crossing
+                    // the native register handoff.
                     ++retained_process_count;
                     retained_operation_count += process.operations.size();
                     continue;
@@ -1217,7 +1209,6 @@ void Simulation::Impl::setup_execution(
                               << " value=" << shareable << '\n';
                 }
                 if (selective_large_design_compilation && !shareable
-                    && !constant_specialized
                     && process.operations.size()
                         < minimum_large_design_jit_operations) {
                     ++retained_process_count;

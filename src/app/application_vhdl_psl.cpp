@@ -960,6 +960,46 @@ namespace {
         return result;
     }
 
+    std::uint32_t stable_psl_source_identity(
+        const semantic::Model& semantics,
+        const semantic::SourceSpanId source) noexcept
+    {
+        if (!source.valid()
+            || source.value() >= semantics.source_spans().size()) {
+            return 0U;
+        }
+        const auto& span = semantics.source_spans()[source.value()];
+        std::uint32_t hash { 2'166'136'261U };
+        const auto append_byte = [&](const std::uint8_t byte) {
+            hash ^= byte;
+            hash *= 16'777'619U;
+        };
+        const auto& files = semantics.source_files();
+        const auto stable_file = span.file.valid()
+                && span.file.value() < files.size()
+                && !files[span.file.value()].content_digest.empty()
+            ? std::string_view { files[span.file.value()].content_digest }
+            : std::string_view { span.logical_name };
+        for (const auto byte : stable_file) {
+            append_byte(static_cast<std::uint8_t>(byte));
+        }
+        append_byte(0U);
+        const auto append_position = [&](const auto value) {
+            const auto widened = static_cast<std::uint64_t>(value);
+            for (unsigned shift { 56U }; shift <= 56U; shift -= 8U) {
+                append_byte(static_cast<std::uint8_t>(widened >> shift));
+                if (shift == 0U) {
+                    break;
+                }
+            }
+        };
+        append_position(span.begin.line);
+        append_position(span.begin.column);
+        append_position(span.end.line);
+        append_position(span.end.column);
+        return hash == 0U ? 1U : hash;
+    }
+
 } // namespace
 
 struct VhdlPslExecution::Impl {
@@ -977,6 +1017,7 @@ struct VhdlPslExecution::Impl {
     };
 
     Impl(const semantic::vhdl::Hir& hir,
+        const semantic::Model& semantics,
         const elaboration::ElaboratedDesign& design,
         const semantic::design::DesignIr& design_ir,
         SignalReader input_reader)
@@ -1049,7 +1090,9 @@ struct VhdlPslExecution::Impl {
                     plan.instance_identity = occurrence.empty()
                         ? unit.library + ":" + unit.name
                         : occurrence;
-                    plan.source_span = directive.source.value();
+                    const auto source_identity = stable_psl_source_identity(
+                        semantics, directive.source);
+                    plan.source_span = source_identity;
                     plan.slot = static_cast<std::uint32_t>(index);
                     plan.directive_kind = directive_kind(directive.kind);
                     plan.clock_identity = clock_identity;
@@ -1116,7 +1159,7 @@ struct VhdlPslExecution::Impl {
                     item.instance_identity = item.process;
                     item.kind = coverage_kind(directive_kind(directive.kind));
                     item.slot = static_cast<std::uint32_t>(index);
-                    item.source_span = directive.source.value();
+                    item.source_span = source_identity;
                     directive_kinds.push_back(directive_kind(directive.kind));
                     goals_reached.push_back(false);
                     coverage.push_back(std::move(item));
@@ -1199,10 +1242,11 @@ struct VhdlPslExecution::Impl {
 };
 
 VhdlPslExecution::VhdlPslExecution(const semantic::vhdl::Hir& hir,
+    const semantic::Model& semantics,
     const elaboration::ElaboratedDesign& design,
     const semantic::design::DesignIr& design_ir, SignalReader reader)
     : impl_(std::make_unique<Impl>(
-          hir, design, design_ir, std::move(reader)))
+          hir, semantics, design, design_ir, std::move(reader)))
 {
 }
 

@@ -696,11 +696,11 @@ lower_systemverilog_solve_before(
   return result;
 }
 
-void configure_systemverilog_class_constraints(
+void configure_class_constraints(
     runtime::SystemVerilogConstraintSolver& solver,
     const runtime::SystemVerilogClassRandomizeVariables& variables,
     const semantic::sv::Hir& hir,
-    const frontend::SystemVerilogClassSpecialization& specialization,
+    const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled) {
   const auto declaration = std::ranges::find(
       hir.classes(), specialization.declaration_identity,
@@ -777,6 +777,16 @@ void configure_systemverilog_class_constraints(
       solver.add_clause(std::move(clause));
     }
   }
+}
+
+void configure_systemverilog_class_constraints(
+    runtime::SystemVerilogConstraintSolver& solver,
+    const runtime::SystemVerilogClassRandomizeVariables& variables,
+    const semantic::sv::Hir& hir,
+    const semantic::sv::ClassSpecialization& specialization,
+    const std::function<bool(std::string_view)>& constraint_enabled) {
+  configure_class_constraints(
+      solver, variables, hir, specialization, constraint_enabled);
 }
 
 }  // namespace fsim::app::application_detail

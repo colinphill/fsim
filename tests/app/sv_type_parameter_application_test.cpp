@@ -81,7 +81,7 @@ Capture run_once(
   capture.keys = project->specialization_cache_keys;
   const auto find_class = [&](const std::string_view suffix) {
     return std::ranges::find_if(
-        project->systemverilog_class_specializations,
+        project->compiled_systemverilog_class_specializations,
         [&](const auto& specialization) {
           return specialization.declaration_identity.ends_with(suffix);
         });
@@ -91,19 +91,47 @@ Capture run_once(
   const auto diamond_contract = find_class("::DiamondContract");
   assert(
       logic_contract
-              != project->systemverilog_class_specializations.end()
+              != project->compiled_systemverilog_class_specializations.end()
           && reg_contract
-              != project->systemverilog_class_specializations.end()
+              != project->compiled_systemverilog_class_specializations.end()
           && diamond_contract
-              != project->systemverilog_class_specializations.end()
-          && logic_contract->base_specialization_identity
-              == reg_contract->base_specialization_identity
-          && diamond_contract->interface_specialization_identities.size()
-              == 1);
+              != project->compiled_systemverilog_class_specializations.end());
+  const auto diamond_typed_contract = std::ranges::find_if(
+      diamond_contract->interfaces,
+      [](const auto& relation) {
+        return relation.declaration_identity.ends_with("::TypedContract");
+      });
+  const auto diamond_logic_contract = std::ranges::find_if(
+      diamond_contract->interfaces,
+      [](const auto& relation) {
+        return relation.declaration_identity.ends_with("::LogicContract");
+      });
+  const auto diamond_reg_contract = std::ranges::find_if(
+      diamond_contract->interfaces,
+      [](const auto& relation) {
+        return relation.declaration_identity.ends_with("::RegContract");
+      });
+  const auto diamond_typed_count = std::ranges::count_if(
+      diamond_contract->interfaces,
+      [](const auto& relation) {
+        return relation.declaration_identity.ends_with("::TypedContract");
+      });
+  assert(
+      logic_contract->interfaces.size() == 1
+          && reg_contract->interfaces.size() == 1
+          && logic_contract->interfaces.front().specialization_identity
+              == reg_contract->interfaces.front().specialization_identity
+          && diamond_contract->interfaces.size() == 3
+          && diamond_logic_contract != diamond_contract->interfaces.end()
+          && diamond_reg_contract != diamond_contract->interfaces.end()
+          && diamond_typed_contract != diamond_contract->interfaces.end()
+          && diamond_typed_count == 1
+          && diamond_typed_contract->specialization_identity
+              == logic_contract->interfaces.front().specialization_identity);
   capture.class_relations = {
-      logic_contract->base_specialization_identity,
-      reg_contract->base_specialization_identity,
-      diamond_contract->interface_specialization_identities.front()};
+      logic_contract->interfaces.front().specialization_identity,
+      reg_contract->interfaces.front().specialization_identity,
+      diamond_typed_contract->specialization_identity};
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
   capture.compiled_processes =

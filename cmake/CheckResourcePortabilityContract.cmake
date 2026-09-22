@@ -98,23 +98,23 @@ set(FSIM_CODE_COVERAGE_POINT_TEST
 set(FSIM_VERILOG_COVERAGE_POINTS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/verilog_coverage_points.hpp")
 set(FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/verilog_coverage_points.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_coverage_points.cpp")
 set(FSIM_VERILOG_COVERAGE_POINTS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_coverage_points_test.cpp")
 set(FSIM_VERILOG_COVERAGE_CONDITIONS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/verilog_coverage_conditions.hpp")
 set(FSIM_VERILOG_COVERAGE_CONDITIONS_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/verilog_coverage_conditions.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_coverage_conditions.cpp")
 set(FSIM_VERILOG_COVERAGE_CONDITIONS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_coverage_conditions_test.cpp")
 set(FSIM_COVERAGE_CONDITIONS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_conditions.hpp")
 set(FSIM_COVERAGE_CONDITIONS_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_conditions.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_conditions.cpp")
 set(FSIM_VHDL_COVERAGE_CONDITIONS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/vhdl_coverage_conditions.hpp")
 set(FSIM_VHDL_COVERAGE_CONDITIONS_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/vhdl_coverage_conditions.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/vhdl_coverage_conditions.cpp")
 set(FSIM_VHDL_COVERAGE_CONDITIONS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/vhdl_coverage_conditions_test.cpp")
 set(FSIM_COVERAGE_CONDITION_EVALUATION
@@ -144,19 +144,19 @@ set(FSIM_COVERAGE_TOGGLE_TEST
 set(FSIM_VERILOG_TOGGLE_INVENTORY
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/verilog_toggle_inventory.hpp")
 set(FSIM_VERILOG_TOGGLE_INVENTORY_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/verilog_toggle_inventory.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_toggle_inventory.cpp")
 set(FSIM_VERILOG_TOGGLE_INVENTORY_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_toggle_inventory_test.cpp")
 set(FSIM_VHDL_TOGGLE_INVENTORY
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/vhdl_toggle_inventory.hpp")
 set(FSIM_VHDL_TOGGLE_INVENTORY_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/vhdl_toggle_inventory.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/vhdl_toggle_inventory.cpp")
 set(FSIM_VHDL_TOGGLE_INVENTORY_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/vhdl_toggle_inventory_test.cpp")
 set(FSIM_COVERAGE_TOGGLE_SELECTION
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_toggle_selection.hpp")
 set(FSIM_COVERAGE_TOGGLE_SELECTION_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_toggle_selection.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_toggle_selection.cpp")
 set(FSIM_COVERAGE_TOGGLE_SELECTION_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_toggle_selection_test.cpp")
 set(FSIM_COVERAGE_MEMORY_TOGGLE
@@ -168,13 +168,13 @@ set(FSIM_COVERAGE_MEMORY_TOGGLE_TEST
 set(FSIM_COVERAGE_FSM_INFERENCE
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_fsm_inference.hpp")
 set(FSIM_COVERAGE_FSM_INFERENCE_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_fsm_inference.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_fsm_inference.cpp")
 set(FSIM_COVERAGE_FSM_INFERENCE_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_inference_test.cpp")
 set(FSIM_COVERAGE_FSM_HINTS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_fsm_hints.hpp")
 set(FSIM_COVERAGE_FSM_HINTS_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_fsm_hints.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_fsm_hints.cpp")
 set(FSIM_COVERAGE_FSM_HINTS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_hints_test.cpp")
 set(FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION
@@ -198,13 +198,13 @@ set(FSIM_VERILOG_PARSER_CORE
 set(FSIM_VHDL_COVERAGE_POINTS
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/vhdl_coverage_points.hpp")
 set(FSIM_VHDL_COVERAGE_POINTS_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/vhdl_coverage_points.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/vhdl_coverage_points.cpp")
 set(FSIM_VHDL_COVERAGE_POINTS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/vhdl_coverage_points_test.cpp")
 set(FSIM_COVERAGE_BRANCHES
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/coverage_branches.hpp")
 set(FSIM_COVERAGE_BRANCHES_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/coverage_branches.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/coverage_branches.cpp")
 set(FSIM_COVERAGE_BRANCHES_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_branches_test.cpp")
 set(FSIM_COVERAGE_LINE_STATE
@@ -266,7 +266,7 @@ set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PREPROCESSOR
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_PARSER
   "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp")
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression_system.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_OPERATIONS
   "${FSIM_SOURCE_DIR}/include/fsim/runtime/simir_operations_extended.hpp")
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_RUNTIME
@@ -359,6 +359,8 @@ set(FSIM_SYSTEMVERILOG_2023_ANNEX_HIERARCHY
   "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_hierarchy.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESSES
   "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp")
+set(FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESS_HELPERS
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_process_helpers.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ANNEX_FRONTEND_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_sv_conformance_tests.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ANNEX_APPLICATION_TEST
@@ -450,9 +452,9 @@ set(FSIM_SYSTEMVERILOG_2023_ASSERTION_API_APPLICATION_TEST
 set(FSIM_SYSTEMVERILOG_2023_IMMEDIATE_ASSERTION_PARSER
   "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_assertions.cpp")
 set(FSIM_SYSTEMVERILOG_2023_IMMEDIATE_ASSERTION_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_assert.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_SYSTEMVERILOG_2023_IMMEDIATE_ASSERTION_TASK_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_tasks.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_SYSTEMVERILOG_2023_IMMEDIATE_ASSERTION_RUNTIME
   "${FSIM_SOURCE_DIR}/src/runtime/simir_fork.cpp")
 set(FSIM_SYSTEMVERILOG_2023_IMMEDIATE_ASSERTION_BOUNDARIES
@@ -502,7 +504,7 @@ set(FSIM_SYSTEMVERILOG_2023_RANDOM_HIR
 set(FSIM_SYSTEMVERILOG_2023_RANDOM_RESOLUTION
   "${FSIM_SOURCE_DIR}/src/frontend/class_expression_resolution.cpp")
 set(FSIM_SYSTEMVERILOG_2023_RANDOM_INLINE_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression_unary.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_SYSTEMVERILOG_2023_RANDOM_CLASS_LOWERING
   "${FSIM_SOURCE_DIR}/src/app/application_constraint_lowering.cpp")
 set(FSIM_SYSTEMVERILOG_2023_RANDOM_MODEL
@@ -542,15 +544,15 @@ set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_ARTIFACT
 set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_ARTIFACT_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_HIERARCHY
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_instantiate_processes_and_children.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_CONTROL
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_control.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_EXPRESSION
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_PROCESS
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process_part2.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_process.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_PROCESS_CORE
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_process.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_STATE
   "${FSIM_SOURCE_DIR}/src/runtime/simir_state.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSERTION_EXECUTION_SCHEDULER
@@ -568,15 +570,15 @@ set(FSIM_SYSTEMVERILOG_2023_ASSIGNMENT_MODEL
 set(FSIM_SYSTEMVERILOG_2023_ASSIGNMENT_CONTEXT
   "${FSIM_SOURCE_DIR}/src/runtime/simir_execution_context.hpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSIGNMENT_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_assignment.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSIGNMENT_CAST
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_SYSTEMVERILOG_2023_ASSIGNMENT_TEST
   "${FSIM_SOURCE_DIR}/tests/app/sv_conformance_application_test.cpp")
 set(FSIM_SYSTEMVERILOG_2023_STREAM_CONTROL
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_control.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_SYSTEMVERILOG_2023_STREAM_EXPRESSION
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression_system.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_SYSTEMVERILOG_2023_OPERATOR_TOKENS
   "${FSIM_SOURCE_DIR}/include/fsim/frontend/token.hpp")
 set(FSIM_SYSTEMVERILOG_2023_OPERATOR_LEXER
@@ -584,27 +586,27 @@ set(FSIM_SYSTEMVERILOG_2023_OPERATOR_LEXER
 set(FSIM_SYSTEMVERILOG_2023_OPERATOR_PARSER
   "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp")
 set(FSIM_SYSTEMVERILOG_2023_OPERATOR_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_expression_membership.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CALLABLE_MODEL
   "${FSIM_SOURCE_DIR}/include/fsim/frontend/design_core.hpp")
 set(FSIM_SYSTEMVERILOG_2023_CALLABLE_PARSER
   "${FSIM_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CALLABLE_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_callables.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CALLABLE_PORTABLE
-  "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
+  "${FSIM_SOURCE_DIR}/src/app/application_systemverilog_hir_projection.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CALLABLE_SCHEMA
-  "${FSIM_SOURCE_DIR}/include/fsim/library/portable_unit.hpp")
+  "${FSIM_SOURCE_DIR}/include/fsim/semantic/systemverilog_hir.hpp")
 set(FSIM_SYSTEMVERILOG_2023_CALLABLE_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_declaration_tests.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CLOCKING_TIME
   "${FSIM_SOURCE_DIR}/src/app/application_time.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CLOCKING_CONSTANTS
-  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_sv_constant_services.cpp")
+  "${FSIM_SOURCE_DIR}/src/semantic/compiled_design_normalization.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CLOCKING_ELABORATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_instantiate_processes_and_children.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_SYSTEMVERILOG_2023_CLOCKING_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_process.cpp")
 set(FSIM_SYSTEMVERILOG_2023_SYNCHRONIZATION_RUNTIME
   "${FSIM_SOURCE_DIR}/src/runtime/simir_synchronization.cpp")
 set(FSIM_SYSTEMVERILOG_2023_SYNCHRONIZATION_TEST
@@ -628,7 +630,7 @@ set(FSIM_VHDL_2019_ANALYSIS_IDENTITY
 set(FSIM_VHDL_2019_CLI_IDENTITY
   "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
 set(FSIM_VHDL_2019_PORTABLE_IDENTITY
-  "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 set(FSIM_VHDL_2019_CONDITIONAL_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/frontend/vhdl_conditional_analysis.cpp")
 set(FSIM_VHDL_2019_CONDITIONAL_INTERNAL
@@ -656,9 +658,9 @@ set(FSIM_VHDL_HIR_STATEMENT_BUILDERS
 set(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_EXECUTABLE_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_executable_hir.cpp")
 set(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_condition.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_TYPES
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_overloads.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_FRONTEND_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_vhdl_type_tests.cpp")
 set(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_FRONTEND_TEST_PART2
@@ -670,15 +672,15 @@ set(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_APPLICATION_TEST
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_PARSER
   "${FSIM_SOURCE_DIR}/src/frontend/vhdl_parser_functions.cpp")
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_functions.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_LOWERING_PART2
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_functions_part2.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_STORAGE
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_process.cpp")
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_VARIABLES
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_types.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_capability.cpp")
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_VARIABLES_PART2
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_types_part2.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_capability.cpp")
 set(FSIM_VHDL_2019_RESULT_SUBTYPE_ELABORATION_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/elaborator_vhdl_function_test.cpp")
 set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_MODEL
@@ -692,9 +694,9 @@ set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_HIR
 set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_EXECUTABLE_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_executable_hir.cpp")
 set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_LOWERING_PART2
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process_part2.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_FRONTEND_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_vhdl_statement_tests.cpp")
 set(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_APPLICATION_TEST
@@ -712,9 +714,9 @@ set(FSIM_VHDL_2019_SIMULATOR_API_ANALYSIS
 set(FSIM_VHDL_2019_SIMULATOR_API_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_executable_hir.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_FUNCTION_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_functions.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_PROCEDURE_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_procedures.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_RUNTIME_MODEL
   "${FSIM_SOURCE_DIR}/include/fsim/runtime/simir_operations_extended.hpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_RUNTIME
@@ -726,11 +728,11 @@ set(FSIM_VHDL_2019_SIMULATOR_API_JIT_VALIDATION
 set(FSIM_VHDL_2019_SIMULATOR_API_EXECUTOR
   "${FSIM_SOURCE_DIR}/src/app/application_executors.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_STRING_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_sv_strings.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_TYPE_INFERENCE
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_vhdl_array_selection.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_INTEGER_INFERENCE
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_types.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_capability.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_TIME_NORMALIZATION
   "${FSIM_SOURCE_DIR}/src/app/application_time.cpp")
 set(FSIM_VHDL_2019_SIMULATOR_API_APPLICATION
@@ -740,7 +742,7 @@ set(FSIM_VHDL_2019_SIMULATOR_API_TEST
 set(FSIM_VHDL_2019_ASSERT_API_RUNTIME
   "${FSIM_SOURCE_DIR}/src/runtime/simir_execution_part2.cpp")
 set(FSIM_VHDL_2019_ASSERT_API_TEXTIO
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_vhdl_textio.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_file.cpp")
 set(FSIM_VHDL_2019_ASSERT_API_EXECUTOR
   "${FSIM_SOURCE_DIR}/src/app/application_executor_services.cpp")
 set(FSIM_VHDL_2019_ASSERT_API_VALIDATION
@@ -748,7 +750,7 @@ set(FSIM_VHDL_2019_ASSERT_API_VALIDATION
 set(FSIM_VHDL_2019_REFLECTION_PARSER
   "${FSIM_SOURCE_DIR}/src/frontend/vhdl_parser_core.cpp")
 set(FSIM_VHDL_2019_REFLECTION_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_vhdl_protected.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_vhdl_special.cpp")
 set(FSIM_VHDL_2019_REFLECTION_RUNTIME
   "${FSIM_SOURCE_DIR}/src/runtime/simir_execution_part2.cpp")
 set(FSIM_VHDL_2019_REFLECTION_CACHE_KEY
@@ -812,7 +814,7 @@ set(FSIM_VHDL_2019_PSL_API_INTERPRETER
 set(FSIM_VHDL_2019_PSL_API_TEST
   "${FSIM_SOURCE_DIR}/tests/app/vhdl_psl_application_test.cpp")
 set(FSIM_VHDL_2019_COVERAGE_POINTS
-  "${FSIM_SOURCE_DIR}/src/elaboration/vhdl_coverage_points.cpp")
+  "${FSIM_SOURCE_DIR}/src/frontend/vhdl_coverage_points.cpp")
 set(FSIM_VHDL_2019_COVERAGE_POINTS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/vhdl_coverage_points_test.cpp")
 set(FSIM_VHDL_2019_PSL_COVERAGE_DATABASE
@@ -840,11 +842,11 @@ set(FSIM_VHDL_2019_ATTRIBUTE_HIR_TYPES
 set(FSIM_VHDL_2019_ATTRIBUTE_MODE_VIEW
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_mode_view.cpp")
 set(FSIM_VHDL_2019_ATTRIBUTE_TYPE_RESOLUTION
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_type_resolution.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_ATTRIBUTE_TYPE_INFERENCE
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_types.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_capability.cpp")
 set(FSIM_VHDL_2019_ATTRIBUTE_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_vhdl_attributes.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_expression.cpp")
 set(FSIM_VHDL_2019_ATTRIBUTE_CODEC
   "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec.cpp")
 set(FSIM_VHDL_2019_ATTRIBUTE_FRONTEND_TEST
@@ -856,19 +858,19 @@ set(FSIM_VHDL_2019_OVERLOAD_MODEL
 set(FSIM_VHDL_2019_OVERLOAD_COMMON
   "${FSIM_SOURCE_DIR}/src/frontend/common.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_FUNCTIONS
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_functions.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_PROCEDURES
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_procedures.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_RESOLUTION
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_overloads.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_PACKAGES
   "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_PROTECTED
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_vhdl_protected.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_GENERIC_SUBPROGRAMS
-  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_vhdl_subprograms.cpp")
+  "${FSIM_SOURCE_DIR}/src/semantic/compiled_design_specialization.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_TYPE_SPECIALIZATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_type_generics.cpp")
+  "${FSIM_SOURCE_DIR}/src/semantic/compiled_design_specialization.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_executable_hir.cpp")
 set(FSIM_VHDL_2019_OVERLOAD_TEST
@@ -900,15 +902,15 @@ set(FSIM_VHDL_2019_PROFILE_LEGACY_APPLICATION_TEST
 set(FSIM_VHDL_2019_ARTIFACT_LIBRARY_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/library/artifact.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_PORTABLE_HEADER
-  "${FSIM_SOURCE_DIR}/include/fsim/library/portable_unit.hpp")
+  "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_DESIGN_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_PORTABLE_CODEC
-  "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
+  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec_internal.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_DESIGN_CODEC
-  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec.cpp")
+  "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_hir_codec.cpp")
 set(FSIM_VHDL_2019_ARTIFACT_PORTABLE_TEST
-  "${FSIM_SOURCE_DIR}/tests/library/library_artifact_test.cpp")
+  "${FSIM_SOURCE_DIR}/tests/app/compiled_hir_cache_application_test.cpp")
 set(FSIM_VHDL_2019_ARTIFACT_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 set(FSIM_VHDL_2019_ARTIFACT_PORTABLE_CONTRACT
@@ -926,17 +928,17 @@ set(FSIM_VHDL_2019_ACCESS_PARSER
 set(FSIM_VHDL_2019_ACCESS_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_hir_types.cpp")
 set(FSIM_VHDL_2019_ACCESS_SPECIALIZATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_type_generics.cpp")
+  "${FSIM_SOURCE_DIR}/src/semantic/compiled_design_specialization.cpp")
 set(FSIM_VHDL_2019_ACCESS_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_vhdl_access.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_vhdl_access.cpp")
 set(FSIM_VHDL_2019_ACCESS_ASSIGNMENT
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_assignment.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_VHDL_2019_ACCESS_PROCESS
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_process.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_process.cpp")
 set(FSIM_VHDL_2019_ACCESS_FUNCTIONS
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_functions.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_ACCESS_PROCEDURES
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_procedures.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_ACCESS_TEST
   "${FSIM_SOURCE_DIR}/tests/app/vhdl_advanced_type_application_test.cpp")
 set(FSIM_VHDL_LEGACY_ACCESS_TEST
@@ -949,8 +951,10 @@ set(FSIM_VHDL_2019_PROTECTED_CORE_MODEL
   "${FSIM_SOURCE_DIR}/include/fsim/frontend/design_core.hpp")
 set(FSIM_VHDL_2019_PROTECTED_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_hir.cpp")
+set(FSIM_VHDL_2019_PROTECTED_LOWERING
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_vhdl_special.cpp")
 set(FSIM_VHDL_2019_PROTECTED_MERGE
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_vhdl_protected.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_PROTECTED_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_vhdl_type_tests.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_PARSER
@@ -964,13 +968,13 @@ set(FSIM_VHDL_2019_UNSPECIFIED_HIR
 set(FSIM_VHDL_2019_UNSPECIFIED_EXECUTABLE_HIR
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_executable_hir.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_RESOLUTION
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_type_resolution.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_PORT_INFERENCE
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_instantiate_processes_and_children.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_overloads.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_callable.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_GENERIC
-  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_type_generics.cpp")
+  "${FSIM_SOURCE_DIR}/src/semantic/compiled_design_specialization.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_FRONTEND_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_vhdl_type_tests.cpp")
 set(FSIM_VHDL_2019_UNSPECIFIED_APPLICATION_TEST
@@ -1004,7 +1008,7 @@ set(FSIM_VHDL_2019_MODE_VIEW_HIR
 set(FSIM_VHDL_2019_MODE_VIEW_COMPOSITION
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_mode_view.cpp")
 set(FSIM_VHDL_2019_MODE_VIEW_RESOLUTION
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_type_resolution.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_MODE_VIEW_FRONTEND_TEST
   "${FSIM_SOURCE_DIR}/tests/frontend/frontend_vhdl_type_tests.cpp")
 set(FSIM_VHDL_2019_MODE_VIEW_APPLICATION_TEST
@@ -1018,13 +1022,17 @@ set(FSIM_VHDL_2019_VIEW_PORT_SEMANTIC
 set(FSIM_VHDL_2019_VIEW_PORT_ANALYSIS
   "${FSIM_SOURCE_DIR}/src/app/application_vhdl_analysis.cpp")
 set(FSIM_VHDL_2019_VIEW_PORT_ELABORATION
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_types.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_VIEW_PORT_ELABORATION_FRAGMENT
-  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_connect_ports.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_packages.cpp")
 set(FSIM_VHDL_2019_VIEW_PORT_COMPONENT_BINDING
-  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_vhdl_components.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/elaboration_vhdl_configuration_hir.cpp")
 set(FSIM_VHDL_2019_VIEW_PORT_MODEL
   "${FSIM_SOURCE_DIR}/include/fsim/elaboration/elaborator.hpp")
+set(FSIM_VHDL_2019_VIEW_PORT_DIAGNOSTICS
+  "${FSIM_SOURCE_DIR}/src/diagnostic/compiled_hir_compatibility_codes.inc")
+set(FSIM_VHDL_2019_VIEW_PORT_STATE_VALIDATION
+  "${FSIM_SOURCE_DIR}/src/elaboration/elaborated_design.cpp")
 set(FSIM_VHDL_2019_VIEW_PORT_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/elaborator_vhdl_component_test.cpp")
 set(FSIM_VHDL_2019_VIEW_PORT_TEST_CLOSURE
@@ -1032,9 +1040,9 @@ set(FSIM_VHDL_2019_VIEW_PORT_TEST_CLOSURE
 set(FSIM_VHDL_2019_VIEW_EXECUTION
   "${FSIM_SOURCE_DIR}/tests/app/vhdl_composite_operation_application_test.cpp")
 set(FSIM_VHDL_2019_VIEW_EXECUTION_LOWERING
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_assignment.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_VHDL_2019_VIEW_EXECUTION_LOWERING_SUPPORT
-  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_assignment_support.cpp")
+  "${FSIM_SOURCE_DIR}/src/elaboration/lowerer_hir_statement.cpp")
 set(FSIM_VHDL_2019_VIEW_EXECUTION_DRIVERS
   "${FSIM_SOURCE_DIR}/src/elaboration/hierarchy_resolution.cpp")
 set(FSIM_VHDL_2019_FRONTEND_TEST
@@ -1951,6 +1959,8 @@ file(READ "${FSIM_SYSTEMVERILOG_2023_ANNEX_HIERARCHY}"
   FSIM_SYSTEMVERILOG_2023_ANNEX_HIERARCHY_CONTENTS)
 file(READ "${FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESSES}"
   FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESSES_CONTENTS)
+file(READ "${FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESS_HELPERS}"
+  FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESS_HELPERS_CONTENTS)
 file(READ "${FSIM_SYSTEMVERILOG_2023_ANNEX_FRONTEND_TEST}"
   FSIM_SYSTEMVERILOG_2023_ANNEX_FRONTEND_TEST_CONTENTS)
 file(READ "${FSIM_SYSTEMVERILOG_2023_ANNEX_APPLICATION_TEST}"
@@ -2549,6 +2559,8 @@ file(READ "${FSIM_VHDL_2019_PROTECTED_CORE_MODEL}"
   FSIM_VHDL_2019_PROTECTED_CORE_MODEL_CONTENTS)
 file(READ "${FSIM_VHDL_2019_PROTECTED_HIR}"
   FSIM_VHDL_2019_PROTECTED_HIR_CONTENTS)
+file(READ "${FSIM_VHDL_2019_PROTECTED_LOWERING}"
+  FSIM_VHDL_2019_PROTECTED_LOWERING_CONTENTS)
 file(READ "${FSIM_VHDL_2019_PROTECTED_MERGE}"
   FSIM_VHDL_2019_PROTECTED_MERGE_CONTENTS)
 file(READ "${FSIM_VHDL_2019_PROTECTED_TEST}"
@@ -2635,6 +2647,10 @@ file(READ "${FSIM_VHDL_2019_VIEW_PORT_COMPONENT_BINDING}"
   FSIM_VHDL_2019_VIEW_PORT_COMPONENT_BINDING_CONTENTS)
 file(READ "${FSIM_VHDL_2019_VIEW_PORT_MODEL}"
   FSIM_VHDL_2019_VIEW_PORT_MODEL_CONTENTS)
+file(READ "${FSIM_VHDL_2019_VIEW_PORT_DIAGNOSTICS}"
+  FSIM_VHDL_2019_VIEW_PORT_DIAGNOSTICS_CONTENTS)
+file(READ "${FSIM_VHDL_2019_VIEW_PORT_STATE_VALIDATION}"
+  FSIM_VHDL_2019_VIEW_PORT_STATE_VALIDATION_CONTENTS)
 file(READ "${FSIM_VHDL_2019_VIEW_PORT_TEST}"
   FSIM_VHDL_2019_VIEW_PORT_TEST_CONTENTS)
 file(READ "${FSIM_VHDL_2019_VIEW_PORT_TEST_CLOSURE}"
@@ -3143,10 +3159,10 @@ string(REGEX MATCHALL
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_120_MINUTE_TIMEOUTS FSIM_120_MINUTE_TIMEOUT_COUNT)
 list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
-if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 4
+if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 2
     OR NOT FSIM_120_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
   message(FATAL_ERROR
-    "expected all four hosted job timeouts to be 120 minutes")
+    "expected both hosted job timeouts to be 120 minutes")
 endif()
 
 foreach(FSIM_FOOTPRINT_POLICY IN ITEMS
@@ -4212,15 +4228,15 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "static_reference"
     "FSIM-ELAB-SVFUNC-013"
     "FSIM-ELAB-SVTASK-015"
-    "kOwningUnitSchemaVersion = 32"
+    "kCompiledHirBundleSchema = 1"
     "visit_clocking_delays"
     "FSIM-ELAB-CLOCK-008"
     "FSIM-ELAB-CLOCK-009"
     "WaitRegion { runtime::SchedulerPhase::reactive }"
     "an observed deferred immediate assertion"
     "an observed deferred assertion action must be null or a single subroutine call"
-    "WaitRegion{*deferred_assertion_action_phase_}"
-    "DisableFork{*pass_fork}"
+    "WaitRegion { *deferred_assertion_action_phase_ }"
+    "DisableFork { *pass_handoff }"
     "disable_fork && disable_fork->site"
     "targeted_cancellation_suspends == 0"
     "final failure sampled"
@@ -4296,7 +4312,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
   string(APPEND FSIM_SYSTEMVERILOG_2023_CONTENTS_LOWER
     "${FSIM_SYSTEMVERILOG_2023_STANDARD_PACKAGE_CONTENTS_LOWER}")
   string(TOLOWER
-    "${FSIM_SYSTEMVERILOG_2023_ANNEX_MODEL_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_POLICY_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_KEYWORDS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_COMPATIBILITY_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_EXPRESSIONS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_ASSERTIONS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_HIERARCHY_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESSES_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_FRONTEND_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_APPLICATION_TEST_CONTENTS}${FSIM_DIAGNOSTICS_CONTENTS}"
+    "${FSIM_SYSTEMVERILOG_2023_ANNEX_MODEL_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_POLICY_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_KEYWORDS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_COMPATIBILITY_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_EXPRESSIONS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_ASSERTIONS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_HIERARCHY_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESSES_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_PROCESS_HELPERS_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_FRONTEND_TEST_CONTENTS}${FSIM_SYSTEMVERILOG_2023_ANNEX_APPLICATION_TEST_CONTENTS}${FSIM_DIAGNOSTICS_CONTENTS}"
     FSIM_SYSTEMVERILOG_2023_ANNEX_CONTENTS_LOWER)
   string(APPEND FSIM_SYSTEMVERILOG_2023_CONTENTS_LOWER
     "${FSIM_SYSTEMVERILOG_2023_ANNEX_CONTENTS_LOWER}")
@@ -4630,7 +4646,7 @@ foreach(FSIM_VHDL_2019_REFLECTION_POLICY IN ITEMS
     "access_heap"
     "designated_value"
     "execute_vhdl_reflection_api"
-    "lower_vhdl_reflection_expression"
+    "lower_hir_vhdl_reflection_expression"
     "enumeration_literal"
     "get_file_logical_name"
     "verify_vhdl_2019_reflection"
@@ -4772,8 +4788,8 @@ foreach(FSIM_VHDL_2019_SIMULATOR_API_POLICY IN ITEMS
     "validate_vhdl_simulator_api"
     "FSIM-FE-VHENV-002"
     "output.procedure = name"
-    "lower_vhdl_simulator_procedure_call"
-    "lower_vhdl_simulator_function_expression"
+    "lower_hir_vhdl_procedure_call"
+    "lower_hir_function_call"
     "std::optional<RegisterId> status"
     "capture_simulator_status"
     "synchronize_uses_to_frame"
@@ -4838,7 +4854,7 @@ foreach(FSIM_VHDL_2019_ENVIRONMENT_API_POLICY IN ITEMS
     "std.env.tool_name"
     "std.env.tool_edition"
     "std.env.tool_version"
-    "vhdl_environment_getenv_call"
+    "lower_hir_string_expression"
     "fsim::support::environment_variable(name)"
     "STD.ENV GETENV result exceeds the bounded string limit"
     "VhdlEnvironmentGetenv>(operation)"
@@ -4890,7 +4906,7 @@ foreach(FSIM_VHDL_2019_UNSPECIFIED_POLICY IN ITEMS
     "VhdlUnspecifiedTypeClass"
     "parse_vhdl_unspecified_type"
     "vhdl_unspecified_type_accepts"
-    "adapt_vhdl_unspecified_port_types"
+    "inferred_vhdl_port_types"
     "unspecified_type_inference_unique"
     "FSIM-VHDL-PARSE-286"
     "FSIM-ELAB-VHUNSPEC-001"
@@ -4936,7 +4952,7 @@ foreach(FSIM_VHDL_2019_MODE_VIEW_POLICY IN ITEMS
     "FSIM-VHDL-PARSE-287"
     "FSIM-VHDL-SEM-107"
     "FSIM-VHDL-SEM-108"
-    "Mode view declarations remain declarations rather than types"
+    "mode view declarations stay isolated from VHDL-2008"
     "test_vhdl_2019_mode_view_declarations")
   string(FIND
     "${FSIM_VHDL_2019_MODE_VIEW_MODEL_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_PARSER_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_HIR_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_RESOLUTION_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_FRONTEND_TEST_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_APPLICATION_TEST_CONTENTS}"
@@ -4977,17 +4993,17 @@ foreach(FSIM_VHDL_2019_VIEW_PORT_POLICY IN ITEMS
     "FSIM-VHDL-PARSE-288"
     "FSIM-VHDL-SEM-109"
     "FSIM-ELAB-VHVIEW-001"
-    "mode_view_profile_matches"
+    "compiled_vhdl_mode_view_layout"
     "VhdlModeViewBinding"
     "vhdl_mode_view_bindings"
     "view_port_top.child.channel.request"
-    "materialize_vhdl_mode_view_endpoints"
-    "maximum_vhdl_mode_view_endpoints"
+    "declaration.interface_view->composition"
+    "binding.elements.size() > 65'536U"
     "FSIM-ELAB-VHVIEW-006"
     "nested_view_top.child.channel"
     "endpoint.lsb_offset == expected_offsets[index]")
   string(FIND
-    "${FSIM_VHDL_2019_MODE_VIEW_MODEL_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_HIR_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_RESOLUTION_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_PARSER_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_COMPONENT_PARSER_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_SEMANTIC_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_ANALYSIS_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_ELABORATION_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_COMPONENT_BINDING_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_MODEL_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_TEST_CONTENTS}"
+    "${FSIM_VHDL_2019_MODE_VIEW_MODEL_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_HIR_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_RESOLUTION_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_PARSER_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_COMPONENT_PARSER_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_SEMANTIC_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_ANALYSIS_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_ELABORATION_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_COMPONENT_BINDING_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_MODEL_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_DIAGNOSTICS_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_STATE_VALIDATION_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_VIEW_PORT_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -4996,9 +5012,9 @@ foreach(FSIM_VHDL_2019_VIEW_PORT_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_VHDL_2019_VIEW_EXECUTION_POLICY IN ITEMS
-    "validate_vhdl_mode_view_write"
+    "lower_hir_statement"
     "FSIM-ELAB-VHVIEW-007"
-    "endpoint.direction == frontend::PortDirection::Input"
+    "fsim::frontend::PortDirection::Input"
     "!info.vhdl_mode_view_bindings.empty()"
     "staged.request := staged.response"
     "view_reference.value == \"11\""
@@ -5019,8 +5035,8 @@ foreach(FSIM_VHDL_2019_COMPLEX_VIEW_POLICY IN ITEMS
     "validate_vhdl_mode_view_hir"
     "FSIM-VHDL-SEM-110"
     "FSIM-VHDL-SEM-111"
-    "compatible_vhdl_types"
-    "ModeViewMapState"
+    "compatible_subtype"
+    "ModeViewCompositionState"
     "FSIM-ELAB-VHVIEW-003"
     "FSIM-ELAB-VHVIEW-004"
     "wrong_record_view"
@@ -5044,10 +5060,12 @@ foreach(FSIM_VHDL_2019_PROTECTED_POLICY IN ITEMS
     "method_aliases"
     "vhdl_private"
     "output.alias_target"
-    "public_info.variables.insert"
+    "output.protected_members"
+    "lower_hir_vhdl_protected_expression"
+    "lower_hir_vhdl_protected_statement"
     "private becomes reserved only in the VHDL-2019 lexical profile")
   string(FIND
-    "${FSIM_VHDL_2019_PROTECTED_PARSER_CONTENTS}${FSIM_VHDL_2019_PROTECTED_MODEL_CONTENTS}${FSIM_VHDL_2019_PROTECTED_CORE_MODEL_CONTENTS}${FSIM_VHDL_2019_PROTECTED_HIR_CONTENTS}${FSIM_VHDL_2019_PROTECTED_MERGE_CONTENTS}${FSIM_VHDL_2019_PROTECTED_TEST_CONTENTS}"
+    "${FSIM_VHDL_2019_PROTECTED_PARSER_CONTENTS}${FSIM_VHDL_2019_PROTECTED_MODEL_CONTENTS}${FSIM_VHDL_2019_PROTECTED_CORE_MODEL_CONTENTS}${FSIM_VHDL_2019_PROTECTED_HIR_CONTENTS}${FSIM_VHDL_2019_PROTECTED_LOWERING_CONTENTS}${FSIM_VHDL_2019_PROTECTED_MERGE_CONTENTS}${FSIM_VHDL_2019_PROTECTED_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_PROTECTED_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -5095,12 +5113,12 @@ endforeach()
 foreach(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_POLICY IN ITEMS
     "ExpressionKind::Conditional"
     "vh::ExpressionKind::conditional"
-    "lower_vhdl_conditional_expression"
-    "a first-class conditional expression requires VHDL-2019"
-    "FSIM-ELAB-VHCOND-001"
+    "source.conditional && source.operands.size() == 3U"
+    "select VHDL-2019 or rewrite it as a conditional statement"
+    "FSIM-VHDL-PARSE-115"
     "FSIM-ELAB-VHCOND-002"
     "FSIM-ELAB-VHCOND-003"
-    "vhdl_expression_matches_type(expression.operands[1], formal)"
+    "const auto value_width = expected_width != 0U"
     "first-class conditional expressions stay isolated from VHDL-2008"
     "selected(7) when choose else selected(9)"
     "1 / divisor"
@@ -5119,13 +5137,13 @@ foreach(FSIM_VHDL_2019_RESULT_SUBTYPE_POLICY IN ITEMS
     "FSIM-VHDL-SEM-112"
     "FSIM-ELAB-VHRESULT-001"
     "FSIM-ELAB-VHRESULT-002"
-    ":function-specialization:"
-    "@callable-"
+    "frame.declaration.value()"
+    "@hir-callable-"
     "result_t'length"
     "narrow <= fill('1')"
     "wide <= fill('0')")
   string(FIND
-    "${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_MODEL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_HIR_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_EXECUTABLE_HIR_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_PARSER_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_LOWERING_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_STORAGE_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_VARIABLES_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_ELABORATION_TEST_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_APPLICATION_TEST_CONTENTS}"
+    "${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_MODEL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_HIR_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_EXECUTABLE_HIR_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_PARSER_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_LOWERING_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_STORAGE_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_VARIABLES_CONTENTS}${FSIM_VHDL_2019_RESULT_SUBTYPE_ELABORATION_TEST_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_APPLICATION_TEST_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_DIAGNOSTICS_CONTENTS}"
     "${FSIM_VHDL_2019_RESULT_SUBTYPE_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -5143,10 +5161,10 @@ foreach(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_POLICY IN ITEMS
     "input.kind == frontend::StatementKind::Block"
     "add_statement_regions"
     "missing VHDL sequential block scope"
-    "void Lowerer::lower_block"
-    "route_returns_through_cleanup"
-    "function_returns_begin"
-    "procedure_returns_begin"
+    "const auto lower_block = [&](const std::string_view label)"
+    "const auto restore_scope = [&]"
+    "hir_process_scope_ = nested_scope.value_or(hir_process_scope_)"
+    "local_scope_.push_back(scope_name)"
     "outer.constants.size() == 1U"
     "outer->declarations.size() == 3U"
     "verify_sequential_block_runtime"
@@ -5181,7 +5199,7 @@ foreach(FSIM_VHDL_2019_ATTRIBUTE_POLICY IN ITEMS
     "invalid_predefined_attribute_top"
     "consumer->mode_view->converse_of")
   string(FIND
-    "${FSIM_VHDL_2019_ATTRIBUTE_MODEL_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_TYPE_PARSER_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_EXPRESSION_PARSER_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_ALIAS_PARSER_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_HIR_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_HIR_TYPES_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_MODE_VIEW_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_TYPE_RESOLUTION_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_TYPE_INFERENCE_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_LOWERING_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_CODEC_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_FRONTEND_TEST_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_APPLICATION_TEST_CONTENTS}"
+    "${FSIM_VHDL_2019_ATTRIBUTE_MODEL_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_TYPE_PARSER_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_EXPRESSION_PARSER_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_ALIAS_PARSER_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_HIR_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_HIR_TYPES_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_MODE_VIEW_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_TYPE_RESOLUTION_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_TYPE_INFERENCE_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_LOWERING_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_CODEC_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_FRONTEND_TEST_CONTENTS}${FSIM_VHDL_2019_ATTRIBUTE_APPLICATION_TEST_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_DIAGNOSTICS_CONTENTS}"
     "${FSIM_VHDL_2019_ATTRIBUTE_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -5193,9 +5211,9 @@ foreach(FSIM_VHDL_2019_OVERLOAD_POLICY IN ITEMS
     "vhdl_base_type_profiles_match"
     "vhdl_parameter_type_profiles_match"
     "vhdl_subtype_indications_conform"
-    "std::ranges::stable_sort"
-    "retain_pre_mapping_homograph_classes"
-    "vhdl-mapped-callable-v1"
+    "std::ranges::sort"
+    "vhdl_declaration_identity("
+    "vhdl-generic-subprogram-v1;"
     "FSIM-ELAB-VHOVER-003"
     "FSIM-ELAB-VHOVER-006"
     "vhdl-2019-unspecified-homographs.vhd"
@@ -5254,18 +5272,18 @@ foreach(FSIM_VHDL_2019_FRONTEND_CORPUS_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
-    "kPortableSchemaVersion = 14"
-    "kOwningUnitSchemaVersion = 32"
+    "kPortableSchemaVersion = 15"
+    "kCompiledHirBundleSchema = 1"
     "kRuntimeStateSchema = 62"
-    "kVhdlHirStateSchema = 4"
-    "value.vhdl_predefined_subtype_attribute"
-    "value.default_value, value.vhdl_mode_view"
+    "kVhdlHirStateSchema = 5"
+    "vhdl_2019_type.base.predefined_attribute"
+    "vhdl_2019_declaration.interface_view.emplace()"
     "DeclarationForm::mode_view"
     "ModeViewCompositionState::recursive"
     "vhdl-2019-round-trip"
     "vhdl-2019-hir.bin"
     "vhdl_mode_view_bindings"
-    "portable-unit schema 14")
+    "compiled-HIR schema 1")
   string(FIND
     "${FSIM_VHDL_2019_ARTIFACT_LIBRARY_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_NESTED_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_STALE_CONTRACT_CONTENTS}"
     "${FSIM_VHDL_2019_ARTIFACT_POLICY}" FSIM_INDEX)
@@ -5280,17 +5298,17 @@ foreach(FSIM_VHDL_2019_ACCESS_POLICY IN ITEMS
     "reclaim_when_unreachable"
     "vhdl_standard_ >= VhdlStandard::Vhdl2019"
     "access.simulation_lifetime = false"
-    "if (type->vhdl_access->deallocate_releases_storage)"
-    "emit_vhdl_access_reclamation"
-    "emit_vhdl_access_scope_cleanup"
-    "std::ranges::sort(roots)"
+    "if (type->deallocate_releases_storage)"
+    "emit_hir_vhdl_access_reclamation"
+    "for (const auto& [declaration_value, root]"
+    "BinaryOperator::bit_or"
     "DeleteContainer"
     "Alias_Value <= Saved.all"
     "Saved := null"
     "maximum_objects = 1"
     "!type.deallocate_releases_storage"
-    "info.vhdl_access->deallocate_releases_storage"
-    "!info.vhdl_access->reclaim_when_unreachable")
+    "type.deallocate_releases_storage"
+    "type.reclaim_when_unreachable")
   string(FIND
     "${FSIM_VHDL_2019_ACCESS_MODEL_CONTENTS}${FSIM_VHDL_2019_ACCESS_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_ACCESS_PARSER_CONTENTS}${FSIM_VHDL_2019_ACCESS_HIR_CONTENTS}${FSIM_VHDL_2019_ACCESS_SPECIALIZATION_CONTENTS}${FSIM_VHDL_2019_ACCESS_LOWERING_CONTENTS}${FSIM_VHDL_2019_ACCESS_ASSIGNMENT_CONTENTS}${FSIM_VHDL_2019_ACCESS_PROCESS_CONTENTS}${FSIM_VHDL_2019_ACCESS_FUNCTIONS_CONTENTS}${FSIM_VHDL_2019_ACCESS_PROCEDURES_CONTENTS}${FSIM_VHDL_2019_ACCESS_TEST_CONTENTS}${FSIM_VHDL_LEGACY_ACCESS_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_ACCESS_POLICY}" FSIM_INDEX)
@@ -5305,7 +5323,7 @@ foreach(FSIM_VHDL_2019_IDENTITY_POLICY IN ITEMS
     "vhdl_2019"
     "vhdl-2019"
     "19/2019"
-    "value == frontend::StandardRevision::Vhdl2019"
+    "vhdl_2019_hir.mutable_declarations().front()"
     "vhdl_2019_metadata->standard == \"2019\""
     "vhdl_2008_identity->cache_key != vhdl_2019_identity->cache_key"
     "vhdl_2008_identity->specialization_cache_keys"

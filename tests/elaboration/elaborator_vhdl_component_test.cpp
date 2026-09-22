@@ -33,7 +33,7 @@ fsim::elaboration::ElaborationResult elaborate_text(
     const auto parsed = fsim::frontend::parse_text(
         name, source, fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
-    return fsim::elaboration::elaborate(parsed.design, top);
+    return compile_and_elaborate(parsed.design, top);
 }
 
 }  // namespace
@@ -93,7 +93,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(leaf.ok() && top.ok());
     append_design(leaf.design, std::move(top.design));
-    const auto positive = fsim::elaboration::elaborate(
+    const auto positive = compile_and_elaborate(
         leaf.design, "vhdl:work.component_top(rtl)");
     if (!positive.ok()) {
         for (const auto& diagnostic : positive.diagnostics) {
@@ -346,7 +346,7 @@ end architecture;
         visible_profiles.design,
         std::move(visible_hierarchy.design));
     const auto visible_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             visible_profiles.design,
             "vhdl:work.visible_component_top(rtl)");
     if (!visible_result.ok()) {
@@ -537,7 +537,7 @@ end architecture;
         composite_types.design,
         std::move(composite_hierarchy.design));
     const auto composite_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             composite_types.design,
             "vhdl:work.composite_component_top(rtl)");
     if (!composite_result.ok()) {
@@ -735,7 +735,7 @@ end architecture;
         nonvalue_template.design,
         std::move(nonvalue_top.design));
     const auto nonvalue_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             nonvalue_template.design,
             "vhdl:work.nonvalue_component_top(rtl)");
     if (!nonvalue_result.ok()) {
@@ -1221,7 +1221,7 @@ end architecture;
     auto& duplicate_architecture = duplicate_hir.design.units.back();
     duplicate_architecture.vhdl_component_declarations.push_back(
         duplicate_architecture.vhdl_component_declarations.front());
-    const auto duplicate_result = fsim::elaboration::elaborate(
+    const auto duplicate_result = compile_and_elaborate(
         duplicate_hir.design,
         "vhdl:work.duplicate_component_top(rtl)");
     assert(!duplicate_result.ok());

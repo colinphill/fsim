@@ -33,7 +33,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(positive.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       positive.design, "vhdl:work.vhdl_matching(rtl)");
   assert(elaborated.ok());
   assert(elaborated.design);
@@ -72,7 +72,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(overlap.ok());
-  const auto rejected_overlap = fsim::elaboration::elaborate(
+  const auto rejected_overlap = compile_and_elaborate(
       overlap.design, "vhdl:work.vhdl_matching_overlap(rtl)");
   assert(!rejected_overlap.ok());
   assert(has_diagnostic(
@@ -91,7 +91,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(integer_selector.ok());
-  const auto rejected_integer = fsim::elaboration::elaborate(
+  const auto rejected_integer = compile_and_elaborate(
       integer_selector.design,
       "vhdl:work.vhdl_matching_integer(rtl)");
   assert(!rejected_integer.ok());

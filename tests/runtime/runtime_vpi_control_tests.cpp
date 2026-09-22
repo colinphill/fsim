@@ -424,7 +424,7 @@ void test_systemverilog_vpi_assertion_api() {
                   SystemVerilogVpiAssertionOutcome::Aborted},
       "assertion API retains exact non-disabled attempts and per-outcome counts");
 
-  for (const auto [name, kind] : {
+  for (const auto& [name, kind] : {
            std::pair{"assumption", SystemVerilogVpiAssertionKind::Assumption},
            std::pair{"cover", SystemVerilogVpiAssertionKind::Cover},
            std::pair{"restriction",

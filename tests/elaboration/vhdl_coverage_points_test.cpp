@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/vhdl_coverage_points.hpp"
+#include "fsim/frontend/vhdl_coverage_points.hpp"
 
 #include "fsim/frontend/parser.hpp"
 
@@ -136,11 +136,11 @@ end rtl;
         require(architecture.processes.size() == 1U
                 && architecture.concurrent_statements.size() == 2U,
             "VHDL process and concurrent statement ownership must be retained");
-        const auto process = elaboration::discover_vhdl_statement_points(
+        const auto process = frontend::discover_vhdl_statement_points(
             architecture.processes.front().statements,
             frontend::Language::Vhdl2008, standard,
             std::span { &source, 1U });
-        const auto concurrent = elaboration::discover_vhdl_statement_points(
+        const auto concurrent = frontend::discover_vhdl_statement_points(
             architecture.concurrent_statements,
             frontend::Language::Vhdl2008, standard,
             std::span { &source, 1U });
@@ -206,13 +206,13 @@ end rtl;
         }
     }
 
-    require(elaboration::is_executable_vhdl_statement_kind(
+    require(frontend::is_executable_vhdl_statement_kind(
                 frontend::StatementKind::Assert)
-            && !elaboration::is_executable_vhdl_statement_kind(
+            && !frontend::is_executable_vhdl_statement_kind(
                 frontend::StatementKind::Block)
-            && !elaboration::is_executable_vhdl_statement_kind(
+            && !frontend::is_executable_vhdl_statement_kind(
                 frontend::StatementKind::Null)
-            && !elaboration::is_executable_vhdl_statement_kind(
+            && !frontend::is_executable_vhdl_statement_kind(
                 frontend::StatementKind::TaskCall),
         "VHDL execution kinds must exclude blocks, nulls, and SV-only forms");
 }
@@ -246,11 +246,11 @@ end rtl;
         = parsed_a.design.units.back().processes.front().statements;
     const auto& statements_b
         = parsed_b.design.units.back().processes.front().statements;
-    const auto first = elaboration::discover_vhdl_statement_points(statements_a,
+    const auto first = frontend::discover_vhdl_statement_points(statements_a,
         frontend::Language::Vhdl2008, frontend::VhdlStandard::Vhdl2008,
         std::span { &source_a, 1U });
     const auto relocated
-        = elaboration::discover_vhdl_statement_points(statements_b,
+        = frontend::discover_vhdl_statement_points(statements_b,
             frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source_b, 1U });
@@ -307,7 +307,7 @@ end architecture;
         = parsed.design.units.back().processes.front().statements;
     require(!statements.empty(),
         "the VHDL-2019 coverage fixture must retain process statements");
-    const auto discovered = elaboration::discover_vhdl_statement_points(
+    const auto discovered = frontend::discover_vhdl_statement_points(
         statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2019, std::span { &source, 1U });
     require(discovered.ok() && discovered.points.size() == 5U,
@@ -335,7 +335,7 @@ end architecture;
         frontend::VhdlStandard::Vhdl2019);
     require(relocated_parse.ok(),
         "the relocated VHDL-2019 block coverage fixture must parse");
-    const auto relocated = elaboration::discover_vhdl_statement_points(
+    const auto relocated = frontend::discover_vhdl_statement_points(
         relocated_parse.design.units.back().processes.front().statements,
         frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2019,
@@ -358,12 +358,12 @@ void test_rejections_and_limits()
     statement.span = span(source.source_name, 1U, 4U);
     const std::vector statements { statement };
 
-    const auto empty = elaboration::discover_vhdl_statement_points({ },
+    const auto empty = frontend::discover_vhdl_statement_points({ },
         frontend::Language::Vhdl2008, frontend::VhdlStandard::Vhdl1987, { });
     require(empty.ok() && empty.points.empty(),
         "an empty VHDL statement forest must be a valid empty inventory");
     const auto wrong_language
-        = elaboration::discover_vhdl_statement_points(statements,
+        = frontend::discover_vhdl_statement_points(statements,
             frontend::Language::SystemVerilog2017,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &source, 1U });
@@ -372,7 +372,7 @@ void test_rejections_and_limits()
                 == elaboration::VhdlCoveragePointError::InvalidLanguage,
         "non-VHDL input must not enter VHDL statement discovery");
     const auto wrong_standard
-        = elaboration::discover_vhdl_statement_points(statements,
+        = frontend::discover_vhdl_statement_points(statements,
             frontend::Language::Vhdl2008,
             static_cast<frontend::VhdlStandard>(255U),
             std::span { &source, 1U });
@@ -384,7 +384,7 @@ void test_rejections_and_limits()
     auto invalid_source = source;
     ++invalid_source.identity.content_bytes;
     const auto unauthenticated
-        = elaboration::discover_vhdl_statement_points(statements,
+        = frontend::discover_vhdl_statement_points(statements,
             frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008,
             std::span { &invalid_source, 1U });
@@ -394,7 +394,7 @@ void test_rejections_and_limits()
         "unauthenticated VHDL source metadata must fail transactionally");
     const std::vector duplicate_sources { source, source };
     const auto duplicate_source
-        = elaboration::discover_vhdl_statement_points(statements,
+        = frontend::discover_vhdl_statement_points(statements,
             frontend::Language::Vhdl2008,
             frontend::VhdlStandard::Vhdl2008, duplicate_sources);
     require(!duplicate_source.ok()
@@ -404,7 +404,7 @@ void test_rejections_and_limits()
 
     auto unknown_statement = statement;
     unknown_statement.span.source_name = "unknown.vhd";
-    const auto unknown = elaboration::discover_vhdl_statement_points(
+    const auto unknown = frontend::discover_vhdl_statement_points(
         std::span { &unknown_statement, 1U }, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U });
     require(!unknown.ok()
@@ -413,7 +413,7 @@ void test_rejections_and_limits()
         "an unmapped VHDL statement source must be rejected");
     auto outside_statement = statement;
     outside_statement.span.end.offset = contents.size() + 1U;
-    const auto outside = elaboration::discover_vhdl_statement_points(
+    const auto outside = frontend::discover_vhdl_statement_points(
         std::span { &outside_statement, 1U }, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U });
     require(!outside.ok()
@@ -422,18 +422,18 @@ void test_rejections_and_limits()
         "an out-of-source VHDL statement span must be rejected");
 
     const std::vector duplicate_statements { statement, statement };
-    const auto duplicate = elaboration::discover_vhdl_statement_points(
+    const auto duplicate = frontend::discover_vhdl_statement_points(
         duplicate_statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U });
     require(!duplicate.ok() && duplicate.points.empty()
             && duplicate.error
                 == elaboration::VhdlCoveragePointError::DuplicatePoint,
         "duplicate VHDL points must not publish partial output");
-    const auto source_limit = elaboration::discover_vhdl_statement_points(
+    const auto source_limit = frontend::discover_vhdl_statement_points(
         statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U },
         { 0U, 1U, 1U });
-    const auto statement_limit = elaboration::discover_vhdl_statement_points(
+    const auto statement_limit = frontend::discover_vhdl_statement_points(
         statements, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U },
         { 1U, 0U, 1U });
@@ -446,7 +446,7 @@ void test_rejections_and_limits()
     frontend::Statement block;
     block.kind = frontend::StatementKind::Block;
     block.statements.push_back(statement);
-    const auto nesting_limit = elaboration::discover_vhdl_statement_points(
+    const auto nesting_limit = frontend::discover_vhdl_statement_points(
         std::span { &block, 1U }, frontend::Language::Vhdl2008,
         frontend::VhdlStandard::Vhdl2008, std::span { &source, 1U },
         { 1U, 2U, 1U });

@@ -2,8 +2,8 @@
 #include "../../src/app/application_internal.hpp"
 
 #include "fsim/elaboration/coverage_inventory.hpp"
-#include "fsim/elaboration/verilog_coverage_points.hpp"
-#include "fsim/elaboration/vhdl_coverage_points.hpp"
+#include "fsim/frontend/verilog_coverage_points.hpp"
+#include "fsim/frontend/vhdl_coverage_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/runtime/coverage_aggregation.hpp"
 
@@ -114,7 +114,7 @@ DiscoveredSourcePoint discover_verilog(
         : frontend::parse_text(source.source_name, contents, language);
     assert(parsed.ok() && parsed.design.units.size() == 1U
         && parsed.design.units.front().processes.size() == 1U);
-    const auto discovered = elaboration::discover_verilog_statement_points(
+    const auto discovered = frontend::discover_verilog_statement_points(
         parsed.design.units.front().processes.front().statements,
         language, std::span { &source, 1U });
     assert(discovered.ok() && discovered.points.size() == 1U);
@@ -140,7 +140,7 @@ DiscoveredSourcePoint discover_vhdl()
         frontend::VhdlStandard::Vhdl2008);
     assert(parsed.ok() && parsed.design.units.size() == 2U
         && parsed.design.units.back().processes.size() == 1U);
-    const auto discovered = elaboration::discover_vhdl_statement_points(
+    const auto discovered = frontend::discover_vhdl_statement_points(
         parsed.design.units.back().processes.front().statements,
         frontend::Language::Vhdl2008, frontend::VhdlStandard::Vhdl2008,
         std::span { &source, 1U });

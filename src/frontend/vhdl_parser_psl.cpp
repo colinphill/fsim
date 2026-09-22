@@ -300,6 +300,8 @@ DesignUnit VhdlParser::parse_vhdl_psl_verification_unit(
     if (at(TokenKind::Identifier)) {
         const auto name = advance();
         unit.name = vhdl_name(name.text);
+        unit.vhdl_extended_name = name.text.size() >= 2U
+            && name.text.front() == '\\' && name.text.back() == '\\';
     } else {
         error(current(), "FSIM-VHDL-PSL-001",
             "a PSL verification unit requires a name");

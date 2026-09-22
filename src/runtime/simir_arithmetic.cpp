@@ -731,8 +731,28 @@ void check_integer_range(
     const PackedLogic4& source,
     const std::int64_t lower,
     const std::int64_t upper) {
-  const auto value = checked_integer_operand(source);
-  if (value < lower || value > upper) {
+  if (source.width() == 0U || source.width() > 64U) {
+    throw std::invalid_argument(
+        "VHDL integer range check requires an operand no wider than 64 bits");
+  }
+  std::optional<std::int64_t> value;
+  if (source.width() == 32U || source.width() == 64U) {
+    value = checked_integer_operand(source);
+  } else if (lower < 0) {
+    value = source.known_signed_value();
+  } else if (const auto ordinal = source.known_unsigned_value();
+             ordinal
+             && *ordinal
+                 <= static_cast<std::uint64_t>(
+                     std::numeric_limits<std::int64_t>::max())) {
+    value = static_cast<std::int64_t>(*ordinal);
+  }
+  if (!value) {
+    throw std::invalid_argument(
+        "VHDL integer operand contains an unknown or "
+        "high-impedance value");
+  }
+  if (*value < lower || *value > upper) {
     throw std::invalid_argument(
         "VHDL integer subtype range check failed");
   }

@@ -326,24 +326,25 @@ std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedDependency>& inputs,
     const std::string_view language,
     const std::string_view standard,
-    const std::string_view compatibility_profile)
+    const std::string_view compatibility_profile,
+    const std::filesystem::path& base_directory)
 {
     compiler::CacheKeyBuilder key;
     key.add(
         "compilation-unit-snapshot-schema",
-        "fsim-hdl-compilation-unit-v3-standard-compatibility");
+        "fsim-hdl-compilation-unit-v4-relocatable");
     key.add("language", language);
     key.add("standard", standard);
     key.add("compatibility-profile", compatibility_profile);
     for (const auto& root : roots) {
         key.add(
             "root-path",
-            fsim::support::path_to_utf8(root.path.lexically_normal()));
+            stable_cache_source_name(root.path, base_directory));
     }
     for (const auto& input : inputs) {
         key.add(
             "input-path",
-            fsim::support::path_to_utf8(input.path.lexically_normal()));
+            stable_cache_source_name(input.path, base_directory));
         key.add(
             "input-content",
             support::Sha256::hex(
@@ -372,6 +373,19 @@ void assign_class_source_metadata(
     }
 }
 
+void assign_dpi_source_metadata(
+    frontend::SystemVerilogDpiDeclaration& declaration,
+    const std::string_view library,
+    const std::string_view compilation_unit_identity,
+    const frontend::StandardRevision standard_revision,
+    const std::string_view compatibility_profile)
+{
+    declaration.library = library;
+    declaration.compilation_unit_identity = compilation_unit_identity;
+    declaration.standard_revision = standard_revision;
+    declaration.verilog_compatibility_profile = compatibility_profile;
+}
+
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   if (group.language == frontend::Language::Verilog2005
       || group.language == frontend::Language::SystemVerilog2017) {
@@ -393,7 +407,8 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         group.language == frontend::Language::Verilog2005
             ? std::string_view { "verilog" }
             : std::string_view { "systemverilog" },
-        group.standard, group.compatibility_profile);
+        group.standard, group.compatibility_profile,
+        group.base_directory);
     snapshot.sources.reserve(preprocessed.roots.size());
     for (std::size_t root_index = 0;
          root_index < preprocessed.roots.size(); ++root_index) {
@@ -456,6 +471,11 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
             assign_class_source_metadata(
                 declaration, unit.library, unit_digest, group.standard_revision);
         }
+        for (auto& declaration : unit.systemverilog_dpi_declarations) {
+            assign_dpi_source_metadata(
+                declaration, unit.library, unit_digest,
+                group.standard_revision, group.compatibility_profile);
+        }
         snapshot.unit_source_orders.push_back(source_order);
     }
     for (auto& udp : snapshot.result.design.udp_declarations) {
@@ -510,6 +530,13 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         }
         return std::pair { std::move(library), source_order };
     };
+    for (auto& declaration :
+        snapshot.result.design.systemverilog_dpi_declarations) {
+        auto library = source_metadata(declaration.span).first;
+        assign_dpi_source_metadata(
+            declaration, library, unit_digest, group.standard_revision,
+            group.compatibility_profile);
+    }
     for (auto& declaration :
         snapshot.result.design.systemverilog_classes) {
         auto [library, source_order] = source_metadata(declaration.span);
@@ -572,12 +599,12 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   compiler::CacheKeyBuilder key;
   key.add(
       "compilation-unit-snapshot-schema",
-      "fsim-hdl-compilation-unit-v2");
+      "fsim-hdl-compilation-unit-v3-relocatable");
   key.add("language", source.language);
   key.add("standard", source.standard);
   key.add(
       "input-path",
-      fsim::support::path_to_utf8(input.path.lexically_normal()));
+      stable_cache_source_name(input.path, group.base_directory));
   key.add("input-content", source.content_digest);
   source.compilation_unit_digest = key.finish();
   snapshot.result = frontend::parse(
@@ -593,6 +620,11 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
               declaration, input.library, source.compilation_unit_digest,
               input.standard_revision);
       }
+      for (auto& declaration : unit.systemverilog_dpi_declarations) {
+          assign_dpi_source_metadata(
+              declaration, input.library, source.compilation_unit_digest,
+              input.standard_revision, group.compatibility_profile);
+      }
       snapshot.unit_source_orders.push_back(input.source_order);
   }
   for (auto& udp : snapshot.result.design.udp_declarations) {
@@ -606,6 +638,12 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
           declaration, input.library, source.compilation_unit_digest,
           input.standard_revision);
       snapshot.class_source_orders.push_back(input.source_order);
+  }
+  for (auto& declaration :
+      snapshot.result.design.systemverilog_dpi_declarations) {
+      assign_dpi_source_metadata(
+          declaration, input.library, source.compilation_unit_digest,
+          input.standard_revision, group.compatibility_profile);
   }
   for (auto& method :
       snapshot.result.design.systemverilog_class_method_definitions) {
@@ -749,9 +787,243 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
   return {};
 }
 
+std::vector<library::UnitIndexEntry> compiled_unit_metadata_entries(
+    const semantic::CompiledDesign& design,
+    const std::string_view expected_library)
+{
+    std::vector<library::UnitIndexEntry> result;
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        const auto library = unit.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { unit.library };
+        if (library != expected_library
+            || unit.kind == semantic::sv::UnitKind::compilation_unit) {
+            continue;
+        }
+        const auto identity = design.find_unit(unit.id);
+        if (!identity || identity->identity == nullptr) {
+            continue;
+        }
+        const auto language
+            = identity->identity->language == semantic::Language::verilog
+            ? std::string { "verilog" }
+            : std::string { "systemverilog" };
+        const auto kind = [&]() -> std::string {
+            switch (unit.kind) {
+            case semantic::sv::UnitKind::module:
+                return "module";
+            case semantic::sv::UnitKind::package:
+                return "package";
+            case semantic::sv::UnitKind::interface:
+                return "interface";
+            case semantic::sv::UnitKind::program:
+                return "program";
+            case semantic::sv::UnitKind::configuration:
+                return "configuration";
+            case semantic::sv::UnitKind::bind:
+                return "bind";
+            case semantic::sv::UnitKind::compilation_unit:
+                break;
+            }
+            return { };
+        }();
+        result.push_back({ language, kind, unit.name, { }, { }, { }, { },
+            unit.standard, unit.compatibility_profile });
+    }
+    for (const auto& unit : design.vhdl_hir.units()) {
+        const auto library = unit.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { unit.library };
+        if (library != expected_library) {
+            continue;
+        }
+        const auto kind = [&]() -> std::string {
+            switch (unit.kind) {
+            case semantic::vhdl::UnitKind::entity:
+                return "entity";
+            case semantic::vhdl::UnitKind::architecture:
+                return "architecture";
+            case semantic::vhdl::UnitKind::configuration:
+                return "configuration";
+            case semantic::vhdl::UnitKind::package:
+                return "package";
+            case semantic::vhdl::UnitKind::context:
+                return "context";
+            case semantic::vhdl::UnitKind::psl_verification_unit:
+                return "psl-verification-unit";
+            }
+            return { };
+        }();
+        result.push_back({ "vhdl", kind, unit.name, unit.primary_name,
+            unit.kind == semantic::vhdl::UnitKind::architecture
+                ? unit.name
+                : std::string { },
+            { }, { }, unit.standard, unit.compatibility_profile });
+    }
+    return result;
+}
+
+std::string compiled_unit_metadata_key(
+    const library::UnitIndexEntry& entry,
+    const std::string_view library)
+{
+    return entry.language + ':' + std::string { library } + ':' + entry.kind
+        + ':' + entry.primary_name + ':' + entry.name + ':'
+        + entry.architecture;
+}
+
+std::string compiled_udp_key(
+    const semantic::sv::UdpDeclaration& declaration)
+{
+    const auto& library = declaration.library.empty()
+        ? std::string { "work" }
+        : declaration.library;
+    return "udp:" + library + "." + declaration.name;
+}
+
+std::string_view compiled_udp_standard(
+    const semantic::sv::UdpDeclaration& declaration)
+{
+    const auto prefix = declaration.language == semantic::Language::verilog
+        ? std::string_view { "verilog-" }
+        : std::string_view { "systemverilog-" };
+    return declaration.standard.starts_with(prefix)
+        ? std::string_view { declaration.standard }.substr(prefix.size())
+        : std::string_view { declaration.standard };
+}
+
+bool compiled_udp_metadata_matches(
+    const library::UnitIndexEntry& entry,
+    const semantic::sv::UdpDeclaration& declaration,
+    const std::string_view expected_library)
+{
+    const auto library = declaration.library.empty()
+        ? std::string_view { "work" }
+        : std::string_view { declaration.library };
+    const auto language = declaration.language == semantic::Language::verilog
+        ? std::string_view { "verilog" }
+        : std::string_view { "systemverilog" };
+    return library == expected_library
+        && entry.language == language && entry.kind == "primitive"
+        && entry.name == declaration.name && entry.primary_name.empty()
+        && entry.architecture.empty()
+        && entry.artifact.empty() && entry.checksum.empty()
+        && entry.standard == compiled_udp_standard(declaration)
+        && entry.compatibility_profile == declaration.compatibility_profile;
+}
+
+const semantic::sv::UdpDeclaration* find_compiled_udp(
+    const semantic::CompiledDesign& design,
+    const std::string_view library,
+    const std::string_view name)
+{
+    const semantic::sv::UdpDeclaration* result = nullptr;
+    for (const auto& declaration : design.systemverilog_hir.udps()) {
+        const auto declaration_library = declaration.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { declaration.library };
+        if (declaration_library != library || declaration.name != name) {
+            continue;
+        }
+        if (result != nullptr) {
+            return nullptr;
+        }
+        result = &declaration;
+    }
+    return result;
+}
+
+const semantic::sv::Unit* compiled_class_owner(
+    const semantic::CompiledDesign& design,
+    const semantic::sv::ClassDeclaration& declaration)
+{
+    if (!declaration.scope.valid()
+        || declaration.scope.value() >= design.semantics.scopes().size()) {
+        return nullptr;
+    }
+    const auto unit = design.find_unit(
+        design.semantics.scopes()[declaration.scope.value()].unit);
+    return unit && unit->systemverilog != nullptr
+        ? unit->systemverilog
+        : nullptr;
+}
+
+const semantic::sv::ClassDeclaration* find_compiled_class(
+    const semantic::CompiledDesign& design,
+    const std::string_view library,
+    const std::string_view canonical_identity)
+{
+    const semantic::sv::ClassDeclaration* result { };
+    for (const auto& declaration : design.systemverilog_hir.classes()) {
+        if (semantic::sv::class_declaration_identity(declaration)
+            != canonical_identity) {
+            continue;
+        }
+        const auto* owner = compiled_class_owner(design, declaration);
+        const auto owner_library = owner == nullptr || owner->library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { owner->library };
+        if (owner == nullptr || owner_library != library) {
+            continue;
+        }
+        if (result != nullptr) {
+            return nullptr;
+        }
+        result = &declaration;
+    }
+    return result;
+}
+
+std::optional<library::UnitIndexEntry> compiled_class_metadata_entry(
+    const semantic::CompiledDesign& design,
+    const semantic::sv::ClassDeclaration& declaration,
+    const std::string_view expected_library)
+{
+    const auto* owner = compiled_class_owner(design, declaration);
+    if (owner == nullptr) {
+        return std::nullopt;
+    }
+    const auto owner_library = owner->library.empty()
+        ? std::string_view { "work" }
+        : std::string_view { owner->library };
+    if (owner_library != expected_library || owner->standard.empty()
+        || owner->compatibility_profile.empty()) {
+        return std::nullopt;
+    }
+    return library::UnitIndexEntry {
+        "systemverilog", "class",
+        semantic::sv::class_declaration_identity(declaration),
+        owner->compilation_unit_identity, { }, { }, { }, owner->standard,
+        owner->compatibility_profile
+    };
+}
+
+bool compiled_class_metadata_matches(
+    const library::UnitIndexEntry& entry,
+    const semantic::CompiledDesign& design,
+    const semantic::sv::ClassDeclaration& declaration,
+    const std::string_view expected_library)
+{
+    const auto expected = compiled_class_metadata_entry(
+        design, declaration, expected_library);
+    return expected && entry == *expected;
+}
+
+void install_compiled_class_specializations(CheckedProject& checked)
+{
+    auto specialized = semantic::sv::specialize_classes(checked);
+    checked.compiled_systemverilog_class_specializations
+        = std::move(specialized.specializations);
+    // This inventory is the parser-independent migration seam, not yet the
+    // runtime's authority. Keep every specialization the compiled HIR can
+    // currently materialize, while the explicit frontend runtime adapter
+    // continues to cover residual class constructs. The standalone semantic
+    // API retains its strict errors for callers which require full coverage.
+}
+
 std::vector<project::ProjectSection::TopLevel> selected_tops(
     const project::Config& config,
-    const frontend::ParsedDesign& parsed,
+    const semantic::CompiledDesign& compiled,
     diagnostic::Engine& diagnostics)  {
   const auto default_alias = [](const std::string_view target) {
     auto spelling = target;
@@ -781,13 +1053,23 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
   }
   if (selected.empty()) {
     std::vector<std::string> candidates;
-    for (const auto& unit : parsed.units) {
-      if (unit.kind == frontend::UnitKind::VerilogModule) {
+    for (const auto& unit : compiled.systemverilog_hir.units()) {
+      if (unit.kind == semantic::sv::UnitKind::module
+          && !unit.external) {
+        const auto library = unit.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { unit.library };
         candidates.push_back(
-            "sv:" + unit.library + "." + unit.name);
-      } else if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
+            "sv:" + std::string { library } + "." + unit.name);
+      }
+    }
+    for (const auto& unit : compiled.vhdl_hir.units()) {
+      if (unit.kind == semantic::vhdl::UnitKind::architecture) {
+        const auto library = unit.library.empty()
+            ? std::string_view { "work" }
+            : std::string_view { unit.library };
         candidates.push_back(
-            "vhdl:" + unit.library + "." + unit.primary_name
+            "vhdl:" + std::string { library } + "." + unit.primary_name
             + "(" + unit.name + ")");
       }
     }
@@ -877,10 +1159,10 @@ frontend::PortDirection systemc_direction(
   return frontend::PortDirection::Unknown;
 }
 
-frontend::Type systemc_type(
+elaboration::PackedTypeMetadata systemc_type(
     const fsim_sc_value_encoding_v1 encoding,
     const std::uint32_t width)  {
-  frontend::Type result;
+  elaboration::PackedTypeMetadata result;
   switch (encoding) {
     case FSIM_SC_BIT2:
       result.domain = frontend::ValueDomain::Bit2;
@@ -1127,7 +1409,7 @@ construct_systemc_instances(
 
 void validate_bindings(
     const project::Config& config,
-    const frontend::ParsedDesign& parsed,
+    const semantic::CompiledDesign& compiled,
     const std::span<const SystemCLibraryRegistry> systemc_registries,
     diagnostic::Engine& diagnostics)  {
   for (const auto& binding : config.bindings) {
@@ -1144,13 +1426,17 @@ void validate_bindings(
     }
     bool found = false;
     if (target->language == "sv" || target->language == "verilog") {
-      found = parsed.find(frontend::UnitKind::VerilogModule, target->unit)
-              != nullptr;
+      found = std::ranges::any_of(
+          compiled.systemverilog_hir.units(),
+          [&](const semantic::sv::Unit& unit) {
+            return unit.kind == semantic::sv::UnitKind::module
+                && !unit.external && unit.name == target->unit;
+          });
     } else if (target->language == "vhdl") {
-      found = std::any_of(
-          parsed.units.begin(), parsed.units.end(),
-          [&](const frontend::DesignUnit& unit) {
-            return unit.kind == frontend::UnitKind::VhdlArchitecture
+      found = std::ranges::any_of(
+          compiled.vhdl_hir.units(),
+          [&](const semantic::vhdl::Unit& unit) {
+            return unit.kind == semantic::vhdl::UnitKind::architecture
                 && unit.primary_name == target->unit;
           });
     } else if (target->language == "systemc") {

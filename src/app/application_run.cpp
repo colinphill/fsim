@@ -3,6 +3,7 @@
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/path.hpp"
@@ -63,6 +64,23 @@ namespace {
 
 } // namespace
 
+void add_compiled_hir_cache_key_identity(
+    compiler::CacheKeyBuilder& key,
+    const std::uint32_t producer_revision)
+{
+    key.add("ordinary-cache-payload", "fsim-compiled-hir-bundle-v1");
+    key.add("compiled-hir-cache-producer-revision",
+        std::to_string(producer_revision));
+    key.add(
+        "compiled-hir-bundle-schema",
+        std::to_string(kCompiledHirBundleSchema));
+    key.add("semantic-state-schema", std::to_string(kSemanticStateSchema));
+    key.add(
+        "systemverilog-hir-state-schema",
+        std::to_string(kSystemVerilogConstraintHirStateSchema));
+    key.add("vhdl-hir-state-schema", std::to_string(kVhdlHirStateSchema));
+}
+
 std::string make_cache_key(
     const project::Config& config,
     const CheckedProject& checked,
@@ -72,6 +90,7 @@ std::string make_cache_key(
     diagnostic::Engine& diagnostics)
 {
     compiler::CacheKeyBuilder key;
+    add_compiled_hir_cache_key_identity(key);
     key.add("fsim-version", version);
     key.add("runtime-abi", std::to_string(runtime_abi_version));
     key.add("target", target_name());
@@ -122,6 +141,7 @@ std::string make_cache_key(
         }
     }
     std::size_t hdl_source_index = 0;
+    std::size_t systemc_source_index = 0;
     for (const auto& set : config.source_sets) {
         key.add("language", project::to_string(set.language));
         key.add("standard", set.standard);
@@ -129,27 +149,44 @@ std::string make_cache_key(
             "compatibility-profile",
             project::compatibility_profile(set.compatibility_switches));
         key.add("library", set.library);
+        key.add("compilation-unit", set.compilation_unit);
         key.add("uvm-release", project::to_string(set.uvm_release));
         for (const auto& define : set.defines) {
             key.add("define", define);
         }
         for (const auto& include : set.include_directories) {
-            key.add("include", fsim::support::path_to_utf8(include));
+            key.add(
+                "include",
+                stable_cache_source_name(
+                    include, config.base_directory));
         }
         for (const auto& file : set.files) {
             key.add(
                 "source-path",
-                fsim::support::path_to_utf8(file.lexically_normal()));
+                stable_cache_source_name(
+                    file, config.base_directory));
             if (set.language == project::Language::systemc) {
-                std::error_code error;
-                if (!key.add_file("source-content", file, error)) {
+                if (systemc_source_index
+                        >= checked.systemc_sources.size()
+                    || !same_source_path(
+                        checked.systemc_sources[systemc_source_index].path,
+                        file)) {
                     diagnostics.error(
                         "FSIM-CACHE-0001",
-                        "cannot hash source file '"
+                        "checked SystemC source identity is inconsistent for '"
                             + fsim::support::path_to_utf8(file)
-                            + "': " + error.message());
+                            + "'");
                     return { };
                 }
+                key.add(
+                    "source-content",
+                    checked.systemc_sources[systemc_source_index]
+                        .content_digest);
+                key.add(
+                    "source-compilation-unit",
+                    checked.systemc_sources[systemc_source_index]
+                        .compilation_unit_digest);
+                ++systemc_source_index;
                 continue;
             }
             if (hdl_source_index >= checked.hdl_sources.size()
@@ -172,8 +209,8 @@ std::string make_cache_key(
                 checked.hdl_sources[hdl_source_index].dependencies) {
                 key.add(
                     "dependency-path",
-                    fsim::support::path_to_utf8(
-                        dependency.path.lexically_normal()));
+                    stable_cache_source_name(
+                        dependency.path, config.base_directory));
                 key.add(
                     "dependency-content",
                     dependency.content_digest);
@@ -207,14 +244,15 @@ std::string make_cache_key(
         const auto& source = checked.hdl_sources[hdl_source_index];
         key.add(
             "mapped-source-path",
-            fsim::support::path_to_utf8(source.path.lexically_normal()));
+            stable_cache_source_name(
+                source.path, config.base_directory));
         key.add("mapped-source-content", source.content_digest);
         key.add("mapped-source-compilation-unit", source.compilation_unit_digest);
     }
     for (const auto& source : checked.standard_sources) {
         key.add(
-            "standard-source-path",
-            fsim::support::path_to_utf8(source.path.lexically_normal()));
+            "standard-source-name",
+            fsim::support::path_to_utf8(source.path.filename()));
         key.add("standard-source-content", source.content_digest);
         key.add(
             "standard-source-compilation-unit",
@@ -255,19 +293,77 @@ make_specialization_cache_keys(
         -> std::optional<SourceSettings> {
         const auto source_path = fsim::support::path_from_utf8(source)
                                      .lexically_normal();
+        if (specialization.language == semantic::Language::vhdl
+            && !require_specialization_library) {
+            std::string_view transported_content_digest;
+            for (const auto& candidate : checked.hdl_sources) {
+                if (same_source_path(candidate.path, source_path)) {
+                    transported_content_digest = candidate.content_digest;
+                    break;
+                }
+            }
+            const CheckedSource* standard_dependency = nullptr;
+            bool ambiguous_standard_dependency { };
+            for (const auto& candidate : checked.standard_sources) {
+                if (candidate.path.filename() != source_path.filename()
+                    || (!transported_content_digest.empty()
+                        && candidate.content_digest
+                            != transported_content_digest)) {
+                    continue;
+                }
+                if (standard_dependency != nullptr) {
+                    if (standard_dependency->content_digest
+                        != candidate.content_digest) {
+                        ambiguous_standard_dependency = true;
+                        break;
+                    }
+                    continue;
+                }
+                standard_dependency = &candidate;
+            }
+            if (!ambiguous_standard_dependency
+                && standard_dependency != nullptr) {
+                return SourceSettings {
+                    &standard_source_set, standard_dependency
+                };
+            }
+        }
         const CheckedSource* checked_source = nullptr;
         for (const auto& candidate : checked.hdl_sources) {
-            if (same_source_path(candidate.path, source_path)
-                || std::any_of(
-                    candidate.dependencies.begin(),
-                    candidate.dependencies.end(),
-                    [&](const CheckedSource::Dependency& dependency) {
-                        return same_source_path(
-                            dependency.path, source_path);
-                    })) {
+            if (same_source_path(candidate.path, source_path)) {
                 checked_source = &candidate;
                 break;
             }
+            const auto dependency = std::ranges::find_if(
+                candidate.dependencies,
+                [&](const CheckedSource::Dependency& item) {
+                    return same_source_path(item.path, source_path);
+                });
+            if (dependency == candidate.dependencies.end()) {
+                continue;
+            }
+            const CheckedSource* standard_dependency = nullptr;
+            bool ambiguous_standard_dependency { };
+            for (const auto& standard : checked.standard_sources) {
+                if (standard.content_digest != dependency->content_digest) {
+                    continue;
+                }
+                if (standard_dependency != nullptr) {
+                    continue;
+                }
+                standard_dependency = &standard;
+            }
+            if (!ambiguous_standard_dependency
+                && standard_dependency != nullptr
+                && specialization.language == semantic::Language::vhdl
+                && (!require_specialization_library
+                    || specialization.library == "ieee")) {
+                return SourceSettings {
+                    &standard_source_set, standard_dependency
+                };
+            }
+            checked_source = &candidate;
+            break;
         }
         if (checked_source != nullptr) {
             for (const auto& source_set : config.source_sets) {
@@ -383,6 +479,123 @@ make_specialization_cache_keys(
                                   .first;
         return inserted->second;
     };
+    struct CompiledSourceIdentity {
+        const semantic::SourceFile* source { };
+        std::string_view compilation_unit;
+        std::string_view standard;
+        std::string_view compatibility_profile;
+        std::string_view library;
+    };
+    const auto resolve_compiled_source_identity =
+        [&](const semantic::Language language,
+            const std::string_view source)
+        -> std::optional<CompiledSourceIdentity> {
+        const auto source_path = fsim::support::path_from_utf8(source)
+                                     .lexically_normal();
+        auto source_record = std::ranges::find_if(
+            checked.semantics.source_files(),
+            [&](const semantic::SourceFile& candidate) {
+                return same_source_path(
+                    fsim::support::path_from_utf8(
+                        candidate.physical_name),
+                    source_path);
+            });
+        if (source_record == checked.semantics.source_files().end()) {
+            const CheckedSource* standard_source = nullptr;
+            bool ambiguous { };
+            for (const auto& candidate : checked.standard_sources) {
+                if (candidate.path.filename() != source_path.filename()) {
+                    continue;
+                }
+                if (standard_source != nullptr) {
+                    if (standard_source->content_digest
+                        != candidate.content_digest) {
+                        ambiguous = true;
+                        break;
+                    }
+                    continue;
+                }
+                standard_source = &candidate;
+            }
+            if (!ambiguous && standard_source != nullptr) {
+                auto matching_source
+                    = checked.semantics.source_files().end();
+                for (auto candidate
+                     = checked.semantics.source_files().begin();
+                     candidate != checked.semantics.source_files().end();
+                     ++candidate) {
+                    if (candidate->content_digest
+                        != standard_source->content_digest) {
+                        continue;
+                    }
+                    if (matching_source
+                        != checked.semantics.source_files().end()) {
+                        matching_source
+                            = checked.semantics.source_files().end();
+                        break;
+                    }
+                    matching_source = candidate;
+                }
+                source_record = matching_source;
+            }
+        }
+        if (source_record == checked.semantics.source_files().end()) {
+            return std::nullopt;
+        }
+        const auto source_matches = [&](const auto& candidate) {
+            if (!candidate.source.valid()
+                || candidate.source.value()
+                    >= checked.semantics.source_spans().size()) {
+                return false;
+            }
+            return checked.semantics.source_spans()[
+                       candidate.source.value()].file
+                == source_record->id;
+        };
+        if (language == semantic::Language::vhdl) {
+            const auto unit = std::ranges::find_if(
+                checked.vhdl_hir.units(), source_matches);
+            if (unit != checked.vhdl_hir.units().end()) {
+                return CompiledSourceIdentity {
+                    &*source_record, unit->compilation_unit_identity,
+                    unit->standard, unit->compatibility_profile,
+                    unit->library
+                };
+            }
+        } else {
+            const auto unit = std::ranges::find_if(
+                checked.systemverilog_hir.units(), source_matches);
+            if (unit != checked.systemverilog_hir.units().end()) {
+                return CompiledSourceIdentity {
+                    &*source_record, unit->compilation_unit_identity,
+                    unit->standard, unit->compatibility_profile,
+                    unit->library
+                };
+            }
+        }
+        return std::nullopt;
+    };
+    std::unordered_map<
+        std::string, std::optional<CompiledSourceIdentity>>
+        compiled_source_cache;
+    const auto compiled_source_identity =
+        [&](const semantic::Language language,
+            const std::string_view source)
+        -> std::optional<CompiledSourceIdentity> {
+        std::string key = std::to_string(
+            static_cast<unsigned>(language));
+        key.push_back('\0');
+        key.append(fsim::support::path_to_utf8(
+            fsim::support::path_from_utf8(source).lexically_normal()));
+        if (const auto found = compiled_source_cache.find(key);
+            found != compiled_source_cache.end()) {
+            return found->second;
+        }
+        const auto inserted = compiled_source_cache.emplace(
+            std::move(key),
+            resolve_compiled_source_identity(language, source));
+        return inserted.first->second;
+    };
 
 #if defined(FSIM_HAS_LLVM)
     const auto llvm_native_host_fingerprint = compiler::LlvmJit::native_host_identity(
@@ -413,7 +626,7 @@ make_specialization_cache_keys(
         compiler::CacheKeyBuilder key;
         key.add(
             "specialization-provenance-schema",
-            "fsim-specialization-provenance-v9-standard-compatibility");
+            "fsim-specialization-provenance-v10-compiled-source-identity");
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
         add_systemverilog_standard_package_identities(key, checked);
@@ -448,31 +661,83 @@ make_specialization_cache_keys(
                 key.add("elaboration-search-library", library);
             }
         }
-        key.add(
-            "source-path",
-            fsim::support::path_to_utf8(
-                settings->checked_source->path.lexically_normal()));
+        const auto compiled_source = compiled_source_identity(
+            specialization.language, source_name);
+        if (!compiled_source || compiled_source->compilation_unit.empty()) {
+            diagnostics.error(
+                "FSIM-CACHE-0001",
+                "cannot associate elaborated specialization '"
+                    + specialization.name
+                    + "' with a compiled-HIR source identity");
+            return std::nullopt;
+        }
         key.add(
             "source-content",
             settings->checked_source->content_digest);
         key.add(
             "source-compilation-unit",
-            settings->checked_source->compilation_unit_digest);
-        for (const auto& dependency :
-            settings->checked_source->dependencies) {
-            key.add(
-                "dependency-path",
-                fsim::support::path_to_utf8(
-                    dependency.path.lexically_normal()));
-            key.add(
-                "dependency-content",
-                dependency.content_digest);
-        }
+            compiled_source->compilation_unit);
         for (const auto& dependency_source :
             specialization.source_dependencies) {
             const auto dependency_settings = settings_for(
                 specialization, dependency_source, false);
             if (!dependency_settings) {
+                const CheckedSource* standard_source = nullptr;
+                bool ambiguous_standard_source { };
+                const auto dependency_filename
+                    = fsim::support::path_from_utf8(dependency_source)
+                          .filename();
+                for (const auto& candidate : checked.standard_sources) {
+                    if (candidate.path.filename()
+                        != dependency_filename) {
+                        continue;
+                    }
+                    if (standard_source != nullptr) {
+                        if (standard_source->content_digest
+                            != candidate.content_digest) {
+                            ambiguous_standard_source = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    standard_source = &candidate;
+                }
+                const auto dependency_compiled_source
+                    = compiled_source_identity(
+                        semantic::Language::vhdl,
+                        standard_source != nullptr
+                                && !ambiguous_standard_source
+                            ? fsim::support::path_to_utf8(
+                                  standard_source->path)
+                            : dependency_source);
+                if (dependency_compiled_source) {
+                    key.add(
+                        "semantic-dependency-source-content",
+                        standard_source != nullptr
+                                && !ambiguous_standard_source
+                            ? standard_source->content_digest
+                            : dependency_compiled_source->source
+                                  ->content_digest);
+                    key.add(
+                        "semantic-dependency-source-compilation-unit",
+                        dependency_compiled_source->compilation_unit);
+                    key.add(
+                        "semantic-dependency-language", "vhdl");
+                    key.add(
+                        "semantic-dependency-standard",
+                        dependency_compiled_source->standard);
+                    key.add(
+                        "semantic-dependency-compatibility-profile",
+                        vhdl_compatibility_profile());
+                    key.add(
+                        "semantic-dependency-library",
+                        dependency_compiled_source->library);
+                    key.add(
+                        "semantic-dependency-compilation-unit", "file");
+                    key.add(
+                        "semantic-dependency-uvm-release", "none");
+                    continue;
+                }
                 diagnostics.error(
                     "FSIM-CACHE-0001",
                     "cannot associate elaborated specialization dependency '"
@@ -480,33 +745,52 @@ make_specialization_cache_keys(
                         + specialization.name + "' with a checked source");
                 return std::nullopt;
             }
-            key.add(
-                "semantic-dependency-source-path",
-                fsim::support::path_to_utf8(
-                    dependency_settings->checked_source->path
-                        .lexically_normal()));
+            const auto dependency_language
+                = dependency_settings->source_set->language
+                        == project::Language::vhdl
+                ? semantic::Language::vhdl
+                : dependency_settings->source_set->language
+                        == project::Language::verilog
+                ? semantic::Language::verilog
+                : semantic::Language::system_verilog;
+            const auto dependency_compiled_source
+                = compiled_source_identity(
+                    dependency_language,
+                    fsim::support::path_to_utf8(
+                        dependency_settings->checked_source->path));
+            if (!dependency_compiled_source
+                || dependency_compiled_source
+                       ->compilation_unit.empty()) {
+                diagnostics.error(
+                    "FSIM-CACHE-0001",
+                    "cannot associate elaborated specialization dependency '"
+                        + dependency_source + "' for '"
+                        + specialization.name
+                        + "' with a compiled-HIR source identity");
+                return std::nullopt;
+            }
             key.add(
                 "semantic-dependency-source-content",
-                dependency_settings->checked_source->content_digest);
+                dependency_compiled_source->source->content_digest);
             key.add(
                 "semantic-dependency-source-compilation-unit",
-                dependency_settings->checked_source
-                    ->compilation_unit_digest);
+                dependency_compiled_source->compilation_unit);
             key.add(
                 "semantic-dependency-language",
                 project::to_string(
                     dependency_settings->source_set->language));
             key.add(
                 "semantic-dependency-standard",
-                dependency_settings->source_set->standard);
+                dependency_compiled_source->standard);
             key.add(
                 "semantic-dependency-compatibility-profile",
-                project::compatibility_profile(
-                    dependency_settings->source_set
-                        ->compatibility_switches));
+                dependency_language == semantic::Language::vhdl
+                        && dependency_compiled_source->library == "ieee"
+                    ? vhdl_compatibility_profile()
+                    : dependency_compiled_source->compatibility_profile);
             key.add(
                 "semantic-dependency-library",
-                dependency_settings->source_set->library);
+                dependency_compiled_source->library);
             key.add(
                 "semantic-dependency-compilation-unit",
                 dependency_settings->source_set->compilation_unit);
@@ -524,16 +808,6 @@ make_specialization_cache_keys(
                 key.add(
                     "semantic-dependency-include",
                     fsim::support::path_to_utf8(include.lexically_normal()));
-            }
-            for (const auto& dependency :
-                dependency_settings->checked_source->dependencies) {
-                key.add(
-                    "semantic-dependency-transitive-path",
-                    fsim::support::path_to_utf8(
-                        dependency.path.lexically_normal()));
-                key.add(
-                    "semantic-dependency-transitive-content",
-                    dependency.content_digest);
             }
         }
         key.add(

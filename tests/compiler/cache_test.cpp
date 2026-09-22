@@ -12,6 +12,7 @@
 #include <future>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -178,6 +179,12 @@ int main() {
     assert(replaced);
     assert(std::equal(
         replaced->begin(), replaced->end(), replacement.begin(), replacement.end()));
+
+    const auto maximum_payload
+        = fsim::compiler::maximum_object_cache_payload_bytes();
+    assert(fsim::compiler::object_cache_payload_fits(maximum_payload));
+    assert(!fsim::compiler::object_cache_payload_fits(
+        maximum_payload + 1U));
 
     // Corrupt and truncated entries are isolated as cache misses with a stable
     // data-integrity error. A subsequent publisher can replace either entry.

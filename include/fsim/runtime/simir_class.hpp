@@ -56,3 +56,10 @@ struct ClassStaticMethodCall {
   std::uint32_t result_width{};
   std::vector<std::uint8_t> actual_kinds{};
 };
+
+// Imported DPI functions intentionally use the existing mutable static-call
+// boundary. This keeps native/interpreter handoff and copy-out semantics in a
+// single SimIR operation while reserving an identity namespace that cannot
+// collide with a SystemVerilog class method.
+inline constexpr std::string_view systemverilog_dpi_function_prefix {
+    "@dpi:" };

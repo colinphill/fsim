@@ -535,11 +535,7 @@ void Interpreter::Impl::execute_vhdl_assert_api(
             : get_register(process, id);
     };
     const auto write_packed = [&](const RegisterId id, PackedLogic4 value) {
-        if (process.executor) {
-            process.executor->write_register(id, value);
-        } else {
-            get_register(process, id) = std::move(value);
-        }
+        write_process_register(process, id, value);
     };
     const auto string_value = [&](const StringRegisterId id) {
         return process.executor
@@ -699,6 +695,9 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         if (!operation.destination || value.width() != operation.result_width) {
             fail(process, "VHDL reflection packed result is invalid");
         }
+        value = coerce_value_kind(
+            std::move(value),
+            register_value_kind(process, *operation.destination));
         if (process.executor) {
             process.executor->write_register(*operation.destination, value);
         } else {

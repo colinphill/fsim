@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/verilog_coverage_points.hpp"
+#include "fsim/frontend/verilog_coverage_points.hpp"
 
 #include "fsim/frontend/parser.hpp"
 
@@ -102,7 +102,7 @@ endmodule
             && parsed.design.units.front().processes.size() == 1U,
         "independently authored SystemVerilog statement corpus must parse");
 
-    const auto discovered = elaboration::discover_verilog_statement_points(
+    const auto discovered = frontend::discover_verilog_statement_points(
         parsed.design.units.front().processes.front().statements,
         frontend::Language::SystemVerilog2017,
         std::span { &source, 1U });
@@ -155,15 +155,15 @@ endmodule
                         && point.span.end_offset <= declaration_end;
                 }),
         "A procedural declaration must not manufacture an executable point");
-    require(elaboration::is_executable_verilog_statement_kind(
+    require(frontend::is_executable_verilog_statement_kind(
                 frontend::StatementKind::If)
-            && !elaboration::is_executable_verilog_statement_kind(
+            && !frontend::is_executable_verilog_statement_kind(
                 frontend::StatementKind::Block)
-            && !elaboration::is_executable_verilog_statement_kind(
+            && !frontend::is_executable_verilog_statement_kind(
                 frontend::StatementKind::Null),
         "blocks, declarations, and null statements must not become points");
 
-    const auto as_verilog = elaboration::discover_verilog_statement_points(
+    const auto as_verilog = frontend::discover_verilog_statement_points(
         parsed.design.units.front().processes.front().statements,
         frontend::Language::Verilog2005, std::span { &source, 1U });
     require(as_verilog.ok() && as_verilog.points.size() == discovered.points.size()
@@ -207,9 +207,9 @@ void test_relocation_and_root_order()
         = parsed_b.design.units.front().processes.front().statements;
     require(roots_a.size() == 2U && roots_b.size() == 2U,
         "the Verilog corpus must retain two source statements");
-    const auto first = elaboration::discover_verilog_statement_points(roots_a,
+    const auto first = frontend::discover_verilog_statement_points(roots_a,
         frontend::Language::Verilog2005, std::span { &source_a, 1U });
-    const auto relocated = elaboration::discover_verilog_statement_points(roots_b,
+    const auto relocated = frontend::discover_verilog_statement_points(roots_b,
         frontend::Language::Verilog2005, std::span { &source_b, 1U });
     require(first.ok() && relocated.ok()
             && point_ids(first) == point_ids(relocated),
@@ -218,7 +218,7 @@ void test_relocation_and_root_order()
     std::vector<frontend::Statement> reordered {
         roots_a[1], roots_a[0]
     };
-    const auto reversed = elaboration::discover_verilog_statement_points(
+    const auto reversed = frontend::discover_verilog_statement_points(
         reordered, frontend::Language::Verilog2005,
         std::span { &source_a, 1U });
     auto first_ids = point_ids(first);
@@ -246,11 +246,11 @@ void test_rejections_and_limits()
     statement.span = span(source.source_name, 1U, 4U);
     const std::vector statements { statement };
 
-    const auto empty = elaboration::discover_verilog_statement_points(
+    const auto empty = frontend::discover_verilog_statement_points(
         { }, frontend::Language::Verilog2005, { });
     require(empty.ok() && empty.points.empty(),
         "an empty statement forest must be a valid empty inventory");
-    const auto vhdl = elaboration::discover_verilog_statement_points(statements,
+    const auto vhdl = frontend::discover_verilog_statement_points(statements,
         frontend::Language::Vhdl2008, std::span { &source, 1U });
     require(!vhdl.ok()
             && vhdl.error
@@ -260,7 +260,7 @@ void test_rejections_and_limits()
     auto invalid_source = source;
     ++invalid_source.identity.content_bytes;
     const auto unauthenticated
-        = elaboration::discover_verilog_statement_points(statements,
+        = frontend::discover_verilog_statement_points(statements,
             frontend::Language::SystemVerilog2017,
             std::span { &invalid_source, 1U });
     require(!unauthenticated.ok() && unauthenticated.points.empty()
@@ -270,7 +270,7 @@ void test_rejections_and_limits()
 
     auto unnamed_source = source;
     unnamed_source.source_name.clear();
-    const auto unnamed = elaboration::discover_verilog_statement_points(
+    const auto unnamed = frontend::discover_verilog_statement_points(
         statements, frontend::Language::SystemVerilog2017,
         std::span { &unnamed_source, 1U });
     require(!unnamed.ok()
@@ -280,7 +280,7 @@ void test_rejections_and_limits()
 
     const std::vector duplicate_sources { source, source };
     const auto duplicate_source
-        = elaboration::discover_verilog_statement_points(statements,
+        = frontend::discover_verilog_statement_points(statements,
             frontend::Language::SystemVerilog2017, duplicate_sources);
     require(!duplicate_source.ok()
             && duplicate_source.error
@@ -289,7 +289,7 @@ void test_rejections_and_limits()
 
     auto unknown_statement = statement;
     unknown_statement.span.source_name = "unknown.sv";
-    const auto unknown = elaboration::discover_verilog_statement_points(
+    const auto unknown = frontend::discover_verilog_statement_points(
         std::span { &unknown_statement, 1U },
         frontend::Language::SystemVerilog2017,
         std::span { &source, 1U });
@@ -300,7 +300,7 @@ void test_rejections_and_limits()
 
     auto outside_statement = statement;
     outside_statement.span.end.offset = contents.size() + 1U;
-    const auto outside = elaboration::discover_verilog_statement_points(
+    const auto outside = frontend::discover_verilog_statement_points(
         std::span { &outside_statement, 1U },
         frontend::Language::SystemVerilog2017,
         std::span { &source, 1U });
@@ -310,7 +310,7 @@ void test_rejections_and_limits()
         "a statement span outside authenticated source bytes must be rejected");
 
     const std::vector duplicate_statements { statement, statement };
-    const auto duplicate = elaboration::discover_verilog_statement_points(
+    const auto duplicate = frontend::discover_verilog_statement_points(
         duplicate_statements, frontend::Language::SystemVerilog2017,
         std::span { &source, 1U });
     require(!duplicate.ok() && duplicate.points.empty()
@@ -319,7 +319,7 @@ void test_rejections_and_limits()
         "duplicate statement points must fail without publishing partial output");
 
     const auto statement_limit
-        = elaboration::discover_verilog_statement_points(statements,
+        = frontend::discover_verilog_statement_points(statements,
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U }, { 1U, 0U, 1U });
     require(!statement_limit.ok()
@@ -327,7 +327,7 @@ void test_rejections_and_limits()
                 == elaboration::VerilogCoveragePointError::ResourceLimit,
         "the statement-count ceiling must be enforced before allocation");
     const auto source_limit
-        = elaboration::discover_verilog_statement_points(statements,
+        = frontend::discover_verilog_statement_points(statements,
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U }, { 0U, 1U, 1U });
     require(!source_limit.ok()
@@ -339,7 +339,7 @@ void test_rejections_and_limits()
     block.kind = frontend::StatementKind::Block;
     block.statements.push_back(statement);
     const auto nesting_limit
-        = elaboration::discover_verilog_statement_points(
+        = frontend::discover_verilog_statement_points(
             std::span { &block, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U }, { 1U, 2U, 1U });

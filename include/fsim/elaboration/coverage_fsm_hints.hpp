@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/frontend/design.hpp"
 #include "fsim/project/project.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -70,16 +68,5 @@ struct CoverageFsmHintResult {
         return hints.has_value() && error == CoverageFsmHintError::None;
     }
 };
-
-// Recognized VHDL source attributes are string-typed declarations named
-// fsm_current_state, fsm_next_state, and fsm_legal_states. Specifications
-// apply to exact signal/variable names. The current marker is "true"; next is
-// one retained object name; legal states are a comma-separated list.
-// Manifest entries use [[coverage.fsm]] with exact instance/current_state,
-// optional next_state, and optional legal_states fields.
-[[nodiscard]] CoverageFsmHintResult make_coverage_fsm_hints(
-    const frontend::DesignUnit& unit,
-    std::span<const project::CoverageFsmHintEntry> manifest_hints = { },
-    CoverageFsmHintLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

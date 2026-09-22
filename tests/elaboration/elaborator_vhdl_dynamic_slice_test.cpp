@@ -77,7 +77,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(source.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       source.design, "vhdl:work.dynamic_slices(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -147,7 +147,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(sensitivity_source.ok());
-  const auto sensitivity = fsim::elaboration::elaborate(
+  const auto sensitivity = compile_and_elaborate(
       sensitivity_source.design,
       "vhdl:work.dynamic_target_sensitivity(rtl)");
   assert(sensitivity.ok());
@@ -192,11 +192,11 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(invalid.ok());
-  const auto bad_direction = fsim::elaboration::elaborate(
+  const auto bad_direction = compile_and_elaborate(
       invalid.design, "vhdl:work.bad_direction(rtl)");
   assert(!bad_direction.ok());
   assert(has_diagnostic(bad_direction, "FSIM-ELAB-VHSLICE-001"));
-  const auto bad_bound = fsim::elaboration::elaborate(
+  const auto bad_bound = compile_and_elaborate(
       invalid.design, "vhdl:work.bad_bound(rtl)");
   assert(!bad_bound.ok());
   assert(has_diagnostic(bad_bound, "FSIM-ELAB-VHSLICE-002"));
@@ -245,7 +245,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(failing.ok());
-  const auto elaborated_failing = fsim::elaboration::elaborate(
+  const auto elaborated_failing = compile_and_elaborate(
       failing.design, "vhdl:work.failing_dynamic_slice(rtl)");
   assert(elaborated_failing.ok());
   auto failing_interpreter =

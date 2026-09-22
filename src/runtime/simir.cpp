@@ -624,6 +624,14 @@ bool share_process_operations(
                             { static_cast<InstructionIndex>(index),
                                 Operation { *right } });
                     }
+                } else if constexpr (std::is_same_v<Type, Report>) {
+                    compatible = left.severity == right->severity;
+                    if (left.message != right->message
+                        || left.source != right->source) {
+                        operation_overrides.push_back(
+                            { static_cast<InstructionIndex>(index),
+                                Operation { *right } });
+                    }
                 } else if constexpr (std::is_same_v<Type, Reduction>) {
                     compatible = left.operation == right->operation
                         && left.destination == right->destination
@@ -774,6 +782,7 @@ bool process_operations_shareable(const Process& process)
                         || std::is_same_v<Type, Jump>
                         || std::is_same_v<Type, Binary>
                         || std::is_same_v<Type, Assert>
+                        || std::is_same_v<Type, Report>
                         || std::is_same_v<Type, UnaryNot>
                         || std::is_same_v<Type, LogicalNot>
                         || std::is_same_v<Type, LogicalBinary>

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "application_class_execution.hpp"
+#include "application_class_hir_execution.hpp"
 #include "application_internal.hpp"
 #include "application_uvm_registry.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -150,11 +151,7 @@ struct Simulation::Impl {
         const PackedLogic4& value,
         const std::string_view operation) const;
 
-    using ConstructorEnvironment = application_detail::SystemVerilogClassExecution::ConstructorEnvironment;
-
-    using SourceStringEnvironment = std::map<std::string, std::string, std::less<>>;
-
-    [[nodiscard]] const frontend::SystemVerilogClassSpecialization&
+    [[nodiscard]] const semantic::sv::ClassSpecialization&
     class_specialization(const std::string_view identity) const;
 
     [[nodiscard]] runtime::SystemVerilogUvmRootHandle component_root(
@@ -195,71 +192,6 @@ struct Simulation::Impl {
     [[nodiscard]] static std::pair<std::string_view, std::string_view>
     static_property_parts(const std::string_view identity);
 
-    [[nodiscard]] std::optional<runtime::PackedLogic4>
-    evaluate_constructor_expression(
-        const frontend::Expression& expression,
-        const runtime::SystemVerilogClassHandle handle,
-        ConstructorEnvironment& environment);
-
-    [[nodiscard]] ConstructorEnvironment bind_constructor_actuals(
-        const frontend::SystemVerilogClassMethodProfile& constructor,
-        const runtime::SystemVerilogClassHandle handle,
-        const std::span<const runtime::PackedLogic4> actuals,
-        const std::span<const std::string> actual_names);
-
-    void execute_constructor_statements(
-        const std::span<const frontend::Statement> statements,
-        const runtime::SystemVerilogClassHandle handle,
-        ConstructorEnvironment& environment,
-        const bool native_uvm_library);
-
-    [[nodiscard]] const frontend::SystemVerilogClassMethodProfile&
-    source_method(
-        const runtime::SystemVerilogClassHandle handle,
-        const std::string_view canonical_identity,
-        const bool virtual_dispatch) const;
-
-    [[nodiscard]] const frontend::SystemVerilogClassMethodProfile*
-    source_method_named(
-        const runtime::SystemVerilogClassHandle handle,
-        const std::string_view name) const;
-
-    struct SourceFunctionResult {
-        bool returned { };
-        runtime::PackedLogic4 value;
-    };
-
-    [[nodiscard]] static std::optional<std::string>
-    evaluate_source_string_expression(
-        const frontend::Expression& expression,
-        const SourceStringEnvironment& environment);
-
-    [[nodiscard]] SourceFunctionResult execute_source_function_statements(
-        const std::span<const frontend::Statement> statements,
-        const runtime::SystemVerilogClassHandle handle,
-        ConstructorEnvironment& environment,
-        SourceStringEnvironment& string_environment);
-
-    [[nodiscard]] runtime::PackedLogic4 invoke_source_profile(
-        const frontend::SystemVerilogClassMethodProfile& method,
-        const runtime::SystemVerilogClassHandle handle,
-        std::vector<runtime::PackedLogic4>& actuals,
-        std::vector<std::string>& string_actuals,
-        const std::span<const std::string> actual_names,
-        const std::span<const std::uint8_t> actual_directions);
-
-    [[nodiscard]] runtime::PackedLogic4 invoke_source_profile(
-        const frontend::SystemVerilogClassMethodProfile& method,
-        const runtime::SystemVerilogClassHandle handle,
-        std::vector<runtime::PackedLogic4>& actuals,
-        const std::span<const std::string> actual_names,
-        const std::span<const std::uint8_t> actual_directions);
-
-    void invoke_source_task_profile(
-        const frontend::SystemVerilogClassMethodProfile& method,
-        const runtime::SystemVerilogClassHandle handle,
-        std::vector<runtime::PackedLogic4>& actuals);
-
     [[nodiscard]] runtime::PackedLogic4 invoke_source_function(
         const runtime::SystemVerilogClassHandle handle,
         const std::string_view canonical_identity,
@@ -269,9 +201,6 @@ struct Simulation::Impl {
         const std::span<const std::uint8_t> actual_directions,
         const bool virtual_dispatch);
 
-    [[nodiscard]] const frontend::SystemVerilogClassMethodProfile&
-    source_static_method(const std::string_view canonical_identity) const;
-
     [[nodiscard]] runtime::PackedLogic4 invoke_source_static_function(
         const std::string_view canonical_identity,
         std::vector<runtime::PackedLogic4>& actuals,
@@ -280,7 +209,7 @@ struct Simulation::Impl {
         const std::span<const std::uint8_t> actual_directions);
 
     void invoke_source_constructor(
-        const frontend::SystemVerilogClassSpecialization& specialization,
+        const semantic::sv::ClassSpecialization& specialization,
         const runtime::SystemVerilogClassHandle handle,
         const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const std::string> actual_names);
@@ -468,6 +397,11 @@ struct Simulation::Impl {
 
     application_detail::SystemVerilogClassExecution class_execution;
 
+    /// Parser-independent executable class-body path. The adjacent
+    /// class_execution object is the explicitly bounded frontend adapter for
+    /// heap layout, UVM services, constraints, and unsupported residuals.
+    application_detail::SystemVerilogClassHirExecution class_hir_execution;
+
 #if defined(FSIM_HAS_LLVM)
     // Shared by every compiled executor. It is fully populated before executor
     // installation and outlives the interpreter that owns those executors.
@@ -478,11 +412,6 @@ struct Simulation::Impl {
 
     std::vector<runtime::simir::ResolutionKind>
         signal_resolutions;
-
-    // Optimized executors may use elaboration-proven constant signal values.
-    // Keep their process programs alive alongside the JIT and interpreter.
-    std::vector<std::unique_ptr<runtime::simir::Process>>
-        jit_specialized_processes;
 
     // Ordinary compiled execution deliberately omits source restart points.
     // Retain exactly the LLVM-owned process IDs so a pre-start execution-point
@@ -693,8 +622,6 @@ struct Simulation::Impl {
     ClassPropertyChangeHook class_property_change_hook;
 
     ClassStaticPropertyChangeHook class_static_property_change_hook;
-
-    std::size_t source_method_depth_ { };
 
     Lifecycle lifecycle { Lifecycle::ready };
 

@@ -18,7 +18,7 @@ set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_reference_contract.tsv")
 set(FSIM_REFERENCE "${FSIM_SOURCE_DIR}/docs/abi-schema-reference.md")
 set(FSIM_EXPECTED_DIGEST
-  "0153c03838b7ba675797b9fa36a6873cede0b0683f0633969cdabfb862a1d9dc")
+  "c39ff42df97e48e209c4671aac15b9c0ecbd8526942eb2ccd050f4c4aa1a8a5b")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -28,8 +28,8 @@ endif()
 
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 34)
-  message(FATAL_ERROR "ABI/schema reference requires SPDX, header and 32 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 33)
+  message(FATAL_ERROR "ABI/schema reference requires SPDX, header and 31 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -40,7 +40,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 
 set(FSIM_IDS)
-foreach(FSIM_INDEX RANGE 2 33)
+foreach(FSIM_INDEX RANGE 2 32)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -88,12 +88,13 @@ foreach(FSIM_TOKEN IN ITEMS
     "`SCV::scv`"
     "| SystemC | ABI 4 |"
     "project schema 3"
-    "format 7, portable schema 14"
-    "format 12, runtime ABI 1"
+    "format 8, portable schema 15, compiled-HIR bundle 1"
+    "format 13, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"
-    "format 5, portable schema 14"
+    "format 6, portable schema 15, compiled-HIR bundle 1"
     "format 2, runtime ABI 1, SystemC ABI 4"
     "runtime 62"
+    "FSIM-OBJECT-CACHE-V1"
     "There is no supported in-place migration command"
     "intentionally provides no fallback reader")
   string(FIND "${FSIM_REFERENCE_TEXT}" "${FSIM_TOKEN}" FSIM_OFFSET)
@@ -127,4 +128,4 @@ foreach(FSIM_OWNER IN ITEMS README.md docs/architecture.md docs/diagnostics.md)
 endforeach()
 
 message(STATUS
-  "ABI/schema reference passed: rows=32 symbols=31 digest=${FSIM_ACTUAL_DIGEST}")
+  "ABI/schema reference passed: rows=31 symbols=31 digest=${FSIM_ACTUAL_DIGEST}")

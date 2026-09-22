@@ -83,10 +83,18 @@ namespace fsim::app::application_detail {
         parent);
     auto& output = declaration(id);
     auto declared_subtype = input.type;
-    if (subtype_form) {
+    auto declaration_identity = canonical_vhdl_name(
+        declared_subtype.vhdl_type_declaration);
+    if (const auto separator = declaration_identity.find_last_of(".:");
+        separator != std::string::npos) {
+        declaration_identity.erase(0U, separator + 1U);
+    }
+    if (subtype_form
+        && declaration_identity == canonical_vhdl_name(input.name)) {
         // The declaration identity names this new subtype; its HIR
         // base must continue to reference the subtype indication
-        // written after `is`.
+        // written after `is`.  Preserve an explicit, distinct base marker
+        // used by synthesized standard-library declarations.
         declared_subtype.vhdl_type_declaration.clear();
     }
     output.subtype = subtype(
@@ -110,6 +118,7 @@ namespace fsim::app::application_detail {
     definition.source = output.source;
     definition.origin = output.origin;
     if (input.type.vhdl_access) {
+        definition.maximum_objects = input.type.vhdl_access->maximum_objects;
         definition.deallocate_releases_storage = input.type.vhdl_access->deallocate_releases_storage;
         definition.reclaim_when_unreachable = input.type.vhdl_access->reclaim_when_unreachable;
     }
@@ -138,12 +147,18 @@ void VhdlHirBuilder::add_type_payload(
             literal.span,
             parent);
         auto& literal_declaration = declaration(literal_id);
-        literal_declaration.subtype = output.base;
+        auto literal_subtype = output.base;
+        literal_subtype.type_mark.target = output.id;
+        literal_declaration.subtype = literal_subtype;
+        literal_declaration.initializer = expression(
+            literal.value,
+            scope,
+            literal_declaration.origin);
         literal_declaration.declared_value = ensure_value(
             literal.name,
             scope,
             semantic::ValueKind::enumeration_literal,
-            output.base,
+            literal_subtype,
             literal_declaration.source,
             literal_declaration.origin);
         output.enumeration_literals.push_back({ literal_id,
@@ -294,7 +309,8 @@ void VhdlHirBuilder::add_array_payload(
                 *dimension.range,
                 vh::RangeKind::array_index,
                 converted.source);
-            converted.constraint->null = dimension.null;
+            converted.constraint->null
+                = converted.constraint->null || dimension.null;
         } else if (dimension.constraint) {
             converted.constraint = expression_range(
                 *dimension.constraint,

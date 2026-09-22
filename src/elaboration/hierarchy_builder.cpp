@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
 
+#include <algorithm>
+
 namespace fsim::elaboration {
 
 HierarchyBuilder::HierarchyBuilder(
-    const frontend::ParsedDesign& parsed,
+    const semantic::ValidatedCompiledDesign compiled,
     ElaboratedDesign& design,
     std::vector<Diagnostic>& diagnostics,
     const std::span<const Binding> bindings,
     const std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider,
     const std::span<const std::string> search_libraries)
-    : parsed_(parsed),
+    : validated_compiled_(compiled),
+      compiled_(&compiled.design()),
       design_(design),
       diagnostics_(diagnostics),
       systemc_provider_(systemc_provider),
@@ -52,17 +55,9 @@ HierarchyBuilder::HierarchyBuilder(
                 {});
         }
     }
-    for (const auto& unit : parsed_.units) {
-        if (unit.kind == frontend::UnitKind::SystemVerilogPackage) {
+    for (const auto& unit : compiled_->systemverilog_units()) {
+        if (unit.kind == semantic::sv::UnitKind::package) {
             register_systemverilog_resolution_functions(unit);
-        }
-        for (const auto& directive : unit.systemverilog_binds) {
-            compilation_unit_systemverilog_binds_.push_back(&directive);
-            systemverilog_bind_libraries_.insert_or_assign(
-                &directive,
-                unit.library.empty() ? std::string { "work" } : unit.library);
-            systemverilog_bind_revisions_.insert_or_assign(
-                &directive, unit.standard_revision);
         }
     }
     validate_systemverilog_extern_declarations();

@@ -169,6 +169,9 @@ namespace {
             }
             output_.push_back(
                 Token { TokenKind::EndOfFile, { }, std::move(eof_span), { } });
+            for (auto& token : output_) {
+                token.span.expansion_stack = token.expansion_stack;
+            }
             return {
                 LexResult { std::move(output_), std::move(diagnostics_) },
                 std::move(roots_),
@@ -566,7 +569,9 @@ namespace {
                         ++index;
                         continue;
                     }
-                    auto expanded = expand_invocation(mapped_tokens, index, 0, { });
+                    auto expanded = expand_invocation(
+                        mapped_tokens, index, 0,
+                        mapped_tokens[index].expansion_stack);
                     output_.insert(
                         output_.end(),
                         std::make_move_iterator(expanded.begin()),
@@ -1460,6 +1465,13 @@ namespace {
                     result.back().text = joined;
                     result.back().span = invocation.span;
                     result.back().expansion_stack = expansion_stack;
+                    if (result.back().generated_text
+                            != GeneratedTextKind::none
+                        || tokens[index + 2].generated_text
+                            != GeneratedTextKind::none) {
+                        result.back().generated_text
+                            = GeneratedTextKind::systemverilog_file_macro_derived;
+                    }
                     index += 2;
                     continue;
                 }
@@ -1479,8 +1491,12 @@ namespace {
                 if (tokens[index].kind == TokenKind::Backtick
                     && index + 1 < tokens.size()
                     && tokens[index + 1].kind == TokenKind::Identifier) {
+                    const auto& inherited_stack
+                        = expansion_stack.empty()
+                        ? tokens[index].expansion_stack
+                        : expansion_stack;
                     auto expanded = expand_invocation(
-                        tokens, index, depth, expansion_stack);
+                        tokens, index, depth, inherited_stack);
                     result.insert(
                         result.end(),
                         std::make_move_iterator(expanded.begin()),
@@ -1645,7 +1661,9 @@ namespace {
             return selected;
         }
 
-        [[nodiscard]] std::optional<std::string> stringify_replacement(
+        [[nodiscard]] std::optional<
+            std::pair<std::string, GeneratedTextKind>>
+        stringify_replacement(
             const std::string_view body,
             const Macro& macro,
             const std::vector<std::vector<Token>>& arguments,
@@ -1654,6 +1672,13 @@ namespace {
             const std::vector<std::string>& expansion_stack)
         {
             std::string result { "\"" };
+            auto generated_text = GeneratedTextKind::none;
+            const auto retain_generated_text = [&](const Token& token) {
+                if (token.generated_text != GeneratedTextKind::none) {
+                    generated_text
+                        = GeneratedTextKind::systemverilog_file_macro_derived;
+                }
+            };
             const auto append_escaped = [&](const std::string_view spelling) {
                 for (const char character : spelling) {
                     if (character == '\\' || character == '"') {
@@ -1685,6 +1710,7 @@ namespace {
                         result.push_back(' ');
                     }
                     append_escaped(arguments[parameter][index].text);
+                    retain_generated_text(arguments[parameter][index]);
                 }
             };
 
@@ -1720,6 +1746,7 @@ namespace {
                         nested, nested_index, depth + 1, expansion_stack);
                     for (const auto& token : expanded) {
                         append_escaped(token.text);
+                        retain_generated_text(token);
                     }
                     index = name_end;
                     continue;
@@ -1745,7 +1772,7 @@ namespace {
                 result.push_back(body[index++]);
             }
             result.push_back('"');
-            return result;
+            return std::pair { std::move(result), generated_text };
         }
 
         [[nodiscard]] std::vector<Token> expand_invocation(
@@ -1801,6 +1828,8 @@ namespace {
                     invocation_span,
                     inherited_stack
                 };
+                token.generated_text
+                    = GeneratedTextKind::systemverilog_file_macro;
                 return { std::move(token) };
             }
             if (name_token.text == "__LINE__") {
@@ -1906,9 +1935,10 @@ namespace {
                                 macro, expanded_arguments, invocation_span, depth,
                                 expansion_stack)) {
                             substituted.push_back({ TokenKind::StringLiteral,
-                                std::move(*stringified),
+                                std::move(stringified->first),
                                 invocation_span,
-                                expansion_stack });
+                                expansion_stack,
+                                stringified->second });
                             ++replacement_index;
                             continue;
                         }

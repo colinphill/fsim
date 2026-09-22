@@ -249,10 +249,16 @@ Simulation::read_container_object(
     return impl_->interpreter->container_object_value(object);
 }
 
-const std::vector<frontend::SystemVerilogClassSpecialization>&
+const std::vector<semantic::sv::ClassSpecialization>&
 Simulation::class_specializations() const noexcept
 {
-    return impl_->built.systemverilog_class_specializations;
+    return impl_->built.compiled_systemverilog_class_specializations;
+}
+
+SystemVerilogClassExecutionStatistics
+Simulation::class_execution_statistics() const noexcept
+{
+    return impl_->class_hir_execution.statistics();
 }
 
 runtime::SystemVerilogClassHeap& Simulation::class_heap() noexcept

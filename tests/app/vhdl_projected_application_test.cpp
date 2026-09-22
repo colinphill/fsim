@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -605,6 +606,152 @@ void verify_executable_hir(const fsim::project::Config& config) {
             && unit.primary_name == "vhdl_projected";
       });
   assert(architecture != checked->vhdl_hir.units().end());
+  assert(architecture->disconnection_specifications.size() == 3);
+  const auto& named_disconnection
+      = architecture->disconnection_specifications[0];
+  assert(
+      named_disconnection.selection
+          == fsim::semantic::vhdl::DisconnectionSelection::explicit_names
+      && named_disconnection.signals.size() == 2
+      && named_disconnection.signals[0].canonical == "default_drive"
+      && named_disconnection.signals[1].canonical == "explicit_drive"
+      && named_disconnection.type_mark.canonical == "std_logic"
+      && named_disconnection.delay.primary.expression
+      && named_disconnection.source.valid()
+      && named_disconnection.origin.valid());
+  assert(
+      architecture->disconnection_specifications[1].selection
+          == fsim::semantic::vhdl::DisconnectionSelection::all
+      && architecture->disconnection_specifications[1]
+             .delay.primary.magnitude == 3
+      && architecture->disconnection_specifications[1]
+             .delay.primary.unit == "ps");
+  assert(
+      architecture->disconnection_specifications[2].selection
+          == fsim::semantic::vhdl::DisconnectionSelection::others
+      && architecture->disconnection_specifications[2]
+             .delay.primary.magnitude == 4
+      && architecture->disconnection_specifications[2]
+             .delay.primary.unit == "ps");
+
+  const auto generated_disconnections = std::ranges::find(
+      architecture->generates,
+      std::string { "retained_disconnections" },
+      &fsim::semantic::vhdl::GenerateRegion::label);
+  assert(generated_disconnections != architecture->generates.end());
+  assert(
+      generated_disconnections->disconnection_specifications.size() == 1
+      && generated_disconnections->disconnection_specifications.front()
+             .selection
+          == fsim::semantic::vhdl::DisconnectionSelection::all
+      && generated_disconnections->disconnection_specifications.front()
+             .delay.primary.expression);
+  const auto nested_disconnections = std::ranges::find(
+      generated_disconnections->nested,
+      std::string { "nested_disconnections" },
+      &fsim::semantic::vhdl::GenerateRegion::label);
+  assert(nested_disconnections != generated_disconnections->nested.end());
+  assert(
+      nested_disconnections->disconnection_specifications.size() == 1
+      && nested_disconnections->disconnection_specifications.front()
+             .selection
+          == fsim::semantic::vhdl::DisconnectionSelection::others);
+  const auto alternative_disconnections = std::ranges::find_if(
+      generated_disconnections->nested,
+      [](const auto& region) {
+        return region.disconnection_specifications.size() == 1
+            && region.disconnection_specifications.front().selection
+                == fsim::semantic::vhdl::DisconnectionSelection::
+                    explicit_names;
+      });
+  assert(alternative_disconnections
+      != generated_disconnections->nested.end());
+  assert(
+      alternative_disconnections->disconnection_specifications.front()
+          .signals.front().canonical == "alternative_guarded");
+
+  fsim::diagnostic::Engine codec_diagnostics;
+  const auto encoded = fsim::app::serialize_vhdl_hir_state(
+      checked->vhdl_hir, checked->semantics, codec_diagnostics);
+  assert(encoded && !codec_diagnostics.has_error());
+  auto restored = fsim::app::deserialize_vhdl_hir_state(
+      *encoded, "vhdl-disconnection-hir.bin", checked->semantics,
+      codec_diagnostics);
+  assert(restored && !codec_diagnostics.has_error());
+  const auto restored_architecture = std::ranges::find_if(
+      restored->units(), [](const auto& unit) {
+        return unit.kind
+                   == fsim::semantic::vhdl::UnitKind::architecture
+            && unit.name == "rtl"
+            && unit.primary_name == "vhdl_projected";
+      });
+  assert(restored_architecture != restored->units().end());
+  assert(
+      restored_architecture->disconnection_specifications.size() == 3
+      && restored_architecture->disconnection_specifications.front()
+             .delay.primary.expression
+          == named_disconnection.delay.primary.expression);
+  assert(fsim::app::serialize_vhdl_hir_state(
+             *restored, checked->semantics, codec_diagnostics)
+      == encoded);
+  auto invalid = *restored;
+  auto invalid_architecture = std::ranges::find_if(
+      invalid.mutable_units(), [](const auto& unit) {
+        return unit.kind
+                   == fsim::semantic::vhdl::UnitKind::architecture
+            && unit.name == "rtl"
+            && unit.primary_name == "vhdl_projected";
+      });
+  assert(invalid_architecture != invalid.mutable_units().end());
+  invalid_architecture->disconnection_specifications.front().selection
+      = static_cast<fsim::semantic::vhdl::DisconnectionSelection>(255);
+  fsim::diagnostic::Engine invalid_codec_diagnostics;
+  assert(!fsim::app::serialize_vhdl_hir_state(
+      invalid, checked->semantics, invalid_codec_diagnostics));
+  assert(invalid_codec_diagnostics.has_error());
+
+  const auto reject_top_level_hir_corruption = [&](auto mutate) {
+    auto corrupted = *restored;
+    mutate(corrupted);
+    fsim::diagnostic::Engine corruption_diagnostics;
+    assert(!fsim::app::serialize_vhdl_hir_state(
+        corrupted, checked->semantics, corruption_diagnostics));
+    assert(corruption_diagnostics.has_error());
+  };
+  auto instance_semantics = checked->semantics;
+  auto instance_hir = *restored;
+  const auto instance_id = instance_semantics.add_instance(
+      architecture->scope, "validation_instance", "vhdl_projected",
+      architecture->source, architecture->origin);
+  fsim::semantic::vhdl::Instance validation_instance;
+  validation_instance.id = instance_id;
+  validation_instance.scope = architecture->scope;
+  validation_instance.target.spelling = "vhdl_projected";
+  validation_instance.target.canonical = "vhdl_projected";
+  validation_instance.name = "validation_instance";
+  validation_instance.source = architecture->source;
+  validation_instance.origin = architecture->origin;
+  instance_hir.mutable_instances().push_back(validation_instance);
+  fsim::diagnostic::Engine instance_diagnostics;
+  assert(fsim::app::serialize_vhdl_hir_state(
+      instance_hir, instance_semantics, instance_diagnostics));
+  assert(!instance_diagnostics.has_error());
+  instance_hir.mutable_instances().push_back(validation_instance);
+  fsim::diagnostic::Engine duplicate_instance_diagnostics;
+  assert(!fsim::app::serialize_vhdl_hir_state(
+      instance_hir, instance_semantics, duplicate_instance_diagnostics));
+  assert(duplicate_instance_diagnostics.has_error());
+  assert(!restored->overload_sets().empty());
+  reject_top_level_hir_corruption([](auto& hir) {
+    hir.mutable_overload_sets().push_back(hir.overload_sets().front());
+  });
+  reject_top_level_hir_corruption([](auto& hir) {
+    hir.mutable_overload_sets().front().canonical_name.clear();
+  });
+  reject_top_level_hir_corruption([](auto& hir) {
+    auto& overload = hir.mutable_overload_sets().front();
+    overload.declarations.push_back(overload.declarations.front());
+  });
   assert(architecture->processes.size() == 5);
   assert(std::ranges::any_of(
       checked->vhdl_hir.processes(),
@@ -670,7 +817,7 @@ void verify_executable_hir(const fsim::project::Config& config) {
       == checked->vhdl_hir.processes().size());
   const auto retained_statement = waveform->id;
   const auto retained_expression = waveform->waveform.front().value;
-  checked->parsed.units.clear();
+  // check_project() returned after destroying compile-local parser storage.
   assert(waveform->id == retained_statement);
   assert(waveform->waveform.front().value == retained_expression);
 }
@@ -722,6 +869,10 @@ architecture rtl of vhdl_projected is
   signal guarded_value : std_logic;
   constant rejection_limit : time := 2 ps;
   constant projected_delay : time := 5 ps;
+  disconnect default_drive, explicit_drive : std_logic
+    after projected_delay;
+  disconnect all : boolean after 3 ps;
+  disconnect others : std_logic_vector after 4 ps;
   procedure observe_settled(value : in std_logic) is
   begin
     null;
@@ -761,6 +912,21 @@ begin
   begin
     guarded_driver: guarded_value <= guarded '1';
   end block guarded_scope;
+
+  retained_disconnections: if true generate
+    signal generated_guarded : std_logic;
+    disconnect all : std_logic after projected_delay;
+  begin
+    nested_disconnections: block is
+      signal nested_guarded : std_logic;
+      disconnect others : std_logic after 5 ps;
+    begin
+    end block nested_disconnections;
+  else generate
+    signal alternative_guarded : std_logic;
+    disconnect alternative_guarded : std_logic after 6 ps;
+  begin
+  end generate retained_disconnections;
 
   settled_concurrent_observer: postponed assert
       not delta_source'event or delta_source = '0'

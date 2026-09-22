@@ -99,7 +99,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.typed_top");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -187,7 +187,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(missing_parsed.ok());
-    const auto missing = fsim::elaboration::elaborate(
+    const auto missing = compile_and_elaborate(
         missing_parsed.design, "sv:work.missing_top");
     assert(
         !missing.ok()
@@ -208,7 +208,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mismatch_parsed.ok());
-    const auto mismatch = fsim::elaboration::elaborate(
+    const auto mismatch = compile_and_elaborate(
         mismatch_parsed.design, "sv:work.mismatch_top");
     assert(
         !mismatch.ok()
@@ -251,7 +251,7 @@ endmodule
          "sv:work.foreign_child",
          std::nullopt},
     }};
-    const auto boundary = fsim::elaboration::elaborate(
+    const auto boundary = compile_and_elaborate(
         boundary_vhdl.design,
         "vhdl:work.type_boundary_top(rtl)",
         bindings);
@@ -314,7 +314,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(type_operator_parsed.ok());
-    const auto type_operator = fsim::elaboration::elaborate(
+    const auto type_operator = compile_and_elaborate(
         type_operator_parsed.design, "sv:work.type_operator_top");
     if (!type_operator.ok()) {
         for (const auto& diagnostic : type_operator.diagnostics) {
@@ -373,7 +373,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_type_operator_parsed.ok());
-    const auto invalid_type_operator = fsim::elaboration::elaborate(
+    const auto invalid_type_operator = compile_and_elaborate(
         invalid_type_operator_parsed.design,
         "sv:work.invalid_type_operator");
     assert(
@@ -398,7 +398,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(resolved_union_parsed.ok());
-    const auto resolved_union = fsim::elaboration::elaborate(
+    const auto resolved_union = compile_and_elaborate(
         resolved_union_parsed.design,
         "sv:work.resolved_union_width");
     assert(

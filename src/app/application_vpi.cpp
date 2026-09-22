@@ -67,16 +67,40 @@ namespace {
         const semantic::design::Specialization& specialization)
     {
         auto identity = specialization.library + "::" + specialization.name;
-        if (specialization.unit.value()
-            < project.systemverilog_hir.units().size()) {
-            const auto& unit = project.systemverilog_hir.units().at(
-                specialization.unit.value());
-            identity = unit.library + "::" + unit.name;
+        const auto unit = std::ranges::find(
+            project.systemverilog_hir.units(), specialization.unit,
+            &semantic::sv::Unit::id);
+        if (unit != project.systemverilog_hir.units().end()) {
+            identity = unit->library + "::" + unit->name;
         }
         const auto found = project.verilog_unit_revisions.find(identity);
         return found == project.verilog_unit_revisions.end()
             ? vpi_profile_language(specialization.language)
             : vpi_profile_language(found->second);
+    }
+
+    void apply_vpi_source(
+        runtime::SystemVerilogVpiTypeInfo& type,
+        const BuiltProject& project,
+        const std::optional<semantic::SourceSpanId> source)
+    {
+        if (!source || !source->valid()
+            || source->value() >= project.semantics.source_spans().size()) {
+            return;
+        }
+        type.source_id = source->value();
+        const auto& span = project.semantics.source_spans().at(
+            source->value());
+        type.source_line = span.begin.line;
+        type.source_column = span.begin.column;
+        if (!span.logical_name.empty()) {
+            type.source_path = span.logical_name;
+        } else if (span.file.valid()
+            && span.file.value()
+                < project.semantics.source_files().size()) {
+            type.source_path = project.semantics.source_files().at(
+                span.file.value()).physical_name;
+        }
     }
 
     void apply_vpi_unit_provenance(
@@ -105,19 +129,22 @@ namespace {
         type.semantic_unit = std::string { identity };
         type.standard = frontend::to_string(revision->second);
         type.compatibility_profile = profile->second;
-        if (unit->source.value() < project.semantics.source_spans().size()) {
-            const auto& span = project.semantics.source_spans().at(
-                unit->source.value());
-            type.source_line = span.begin.line;
-            type.source_column = span.begin.column;
-            if (!span.logical_name.empty()) {
-                type.source_path = span.logical_name;
-            } else if (span.file.value()
-                       < project.semantics.source_files().size()) {
-                type.source_path = project.semantics.source_files().at(
-                    span.file.value()).physical_name;
-            }
+        apply_vpi_source(type, project, unit->source);
+    }
+
+    void apply_vpi_specialization_provenance(
+        runtime::SystemVerilogVpiTypeInfo& type,
+        const BuiltProject& project,
+        const semantic::design::Specialization& specialization)
+    {
+        auto identity = specialization.library + "::" + specialization.name;
+        const auto unit = std::ranges::find(
+            project.systemverilog_hir.units(), specialization.unit,
+            &semantic::sv::Unit::id);
+        if (unit != project.systemverilog_hir.units().end()) {
+            identity = unit->library + "::" + unit->name;
         }
+        apply_vpi_unit_provenance(type, project, identity);
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiObjectKind vpi_instance_kind(
@@ -152,6 +179,9 @@ namespace {
         case semantic::sv::UnitKind::package:
             return runtime::SystemVerilogVpiObjectKind::Package;
         case semantic::sv::UnitKind::module:
+        case semantic::sv::UnitKind::configuration:
+        case semantic::sv::UnitKind::bind:
+        case semantic::sv::UnitKind::compilation_unit:
             return runtime::SystemVerilogVpiObjectKind::Module;
         }
         return runtime::SystemVerilogVpiObjectKind::Module;
@@ -1088,11 +1118,42 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             {occurrence.path, owner->second});
     }
 
+    std::map<std::string, std::vector<fsim_vpi_handle_v1>, std::less<>>
+        published_classes;
     for (const auto& source : project.systemverilog_hir.classes()) {
+        const auto declaration_identity
+            = semantic::sv::class_declaration_identity(source);
+        if (source.generate_owner
+            && std::ranges::none_of(
+                project.compiled_systemverilog_class_specializations,
+                [&](const auto& specialization) {
+                    return specialization.declaration_identity
+                        == declaration_identity;
+                })) {
+            continue;
+        }
+        if (!source.scope.valid()
+            || source.scope.value() >= project.semantics.scopes().size()) {
+            throw std::logic_error {
+                "VPI class has no owning semantic scope"
+            };
+        }
+        const auto unit_id
+            = project.semantics.scopes()[source.scope.value()].unit;
+        if (!unit_id.valid()
+            || unit_id.value() >= project.semantics.units().size()) {
+            throw std::logic_error {
+                "VPI class has no owning semantic unit"
+            };
+        }
+        const auto& semantic_unit
+            = project.semantics.units()[unit_id.value()];
+        const auto unit_identity = semantic_unit.library + "::"
+            + semantic_unit.name;
         auto class_profile
             = runtime::SystemVerilogVpiLanguage::SystemVerilog2017;
         if (const auto revision = project.verilog_unit_revisions.find(
-                source.enclosing_identity);
+                unit_identity);
             revision != project.verilog_unit_revisions.end()) {
             class_profile = vpi_profile_language(revision->second);
         }
@@ -1102,9 +1163,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         class_descriptor.category
             = runtime::SystemVerilogVpiValueCategory::None;
         class_descriptor.width = 0U;
-        class_descriptor.nominal_name = source.canonical_identity.empty()
-            ? source.name
-            : source.canonical_identity;
+        class_descriptor.nominal_name = declaration_identity;
         for (const auto& property : source.properties) {
             class_descriptor.children.push_back(
                 vpi_hir_type_descriptor(property.type));
@@ -1114,12 +1173,15 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto publish_class = [&](fsim_vpi_handle_v1 parent) {
             runtime::SystemVerilogVpiObjectDescriptor descriptor;
             descriptor.kind = runtime::SystemVerilogVpiObjectKind::Class;
-            descriptor.name = source.name;
+            descriptor.name = parent == 0U
+                ? class_descriptor.nominal_name
+                : source.name;
             descriptor.parent = parent;
             descriptor.type = vpi_descriptor_type(class_descriptor);
             descriptor.type->language = class_profile;
             apply_vpi_unit_provenance(
-                *descriptor.type, project, source.enclosing_identity);
+                *descriptor.type, project, unit_identity);
+            apply_vpi_source(*descriptor.type, project, source.source);
             const auto class_handle = create_checked(*result.registry,
                 std::move(descriptor), class_descriptor.nominal_name);
             for (std::size_t index = 0;
@@ -1132,19 +1194,35 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 property.type = vpi_descriptor_type(
                     class_descriptor.children[index]);
                 property.type->language = class_profile;
+                apply_vpi_unit_provenance(
+                    *property.type, project, unit_identity);
+                apply_vpi_source(
+                    *property.type, project, source.properties[index].source);
                 (void)create_checked(*result.registry, std::move(property),
                     class_descriptor.nominal_name + "::"
                         + source.properties[index].name);
             }
+            return class_handle;
         };
+        if (const auto enclosing
+            = published_classes.find(source.enclosing_identity);
+            enclosing != published_classes.end()) {
+            auto& handles = published_classes[declaration_identity];
+            for (const auto parent : enclosing->second) {
+                handles.push_back(publish_class(parent));
+            }
+            continue;
+        }
         if (const auto package = packages.find(source.enclosing_identity);
             package != packages.end()) {
-            publish_class(package->second);
+            published_classes[declaration_identity].push_back(
+                publish_class(package->second));
             continue;
         }
         const auto owners = unit_instances.find(source.enclosing_identity);
         if (owners == unit_instances.end()) {
-            publish_class({ });
+            published_classes[declaration_identity].push_back(
+                publish_class({ }));
             continue;
         }
         auto relative_name = source.canonical_identity;
@@ -1180,7 +1258,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     runtime::SystemVerilogVpiTypeInfo scope_type;
                     scope_type.language = class_profile;
                     apply_vpi_unit_provenance(
-                        scope_type, project, source.enclosing_identity);
+                        scope_type, project, unit_identity);
                     scope.type = scope_type;
                     parent = create_checked(
                         *result.registry, std::move(scope), scope_path);
@@ -1191,7 +1269,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 }
                 begin = separator + 1U;
             }
-            publish_class(parent);
+            published_classes[declaration_identity].push_back(
+                publish_class(parent));
         }
     }
     for (const auto& specialization : project.design_ir.specializations()) {
@@ -1248,6 +1327,10 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             descriptor.type = std::move(decoded->type);
             descriptor.type->language
                 = vpi_profile_language(project, specialization);
+            apply_vpi_specialization_provenance(
+                *descriptor.type, project, specialization);
+            apply_vpi_source(
+                *descriptor.type, project, declaration->source);
             const auto path = instance.path + '.' + parameter.name;
             const auto handle = create_checked(
                 *result.registry, std::move(descriptor), path);
@@ -1329,14 +1412,17 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         vpi_objects.push_back(&object);
     }
     std::ranges::stable_sort(vpi_objects, [](const auto* lhs, const auto* rhs) {
+        // Aliases name their canonical DesignIR object through parent_object.
+        // Publish every canonical signal before considering path depth so an
+        // alias that shadows a generated instance scope can reuse its handle.
+        if (lhs->parent_object.has_value()
+            != rhs->parent_object.has_value()) {
+            return !lhs->parent_object.has_value();
+        }
         const auto lhs_depth = std::ranges::count(lhs->path, '.');
         const auto rhs_depth = std::ranges::count(rhs->path, '.');
         if (lhs_depth != rhs_depth) {
             return lhs_depth < rhs_depth;
-        }
-        if (lhs->parent_object.has_value()
-            != rhs->parent_object.has_value()) {
-            return !lhs->parent_object.has_value();
         }
         return lhs->path < rhs->path;
     });
@@ -1483,12 +1569,25 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             direction);
         descriptor.type->language
             = vpi_profile_language(project, specialization);
+        apply_vpi_specialization_provenance(
+            *descriptor.type, project, specialization);
+        apply_vpi_source(*descriptor.type, project, object.source);
         const auto handle = create_checked(
             *result.registry, std::move(descriptor), path);
         if (category != runtime::SystemVerilogVpiValueCategory::Event) {
-            const auto bound = result.registry->bind_value(handle,
-                systemverilog_vpi_signal_value(value,
-                    signal_info.systemverilog_scalar, category));
+            runtime::SystemVerilogVpiStoredValue stored;
+            try {
+                stored = systemverilog_vpi_signal_value(
+                    value, signal_info.systemverilog_scalar, category);
+            } catch (const std::logic_error& error) {
+                throw std::logic_error {
+                    "cannot publish live VPI value '" + path + "': "
+                    + error.what() + " (runtime signal "
+                    + std::to_string(signal) + " '" + signal_info.name + "')"
+                };
+            }
+            const auto bound = result.registry->bind_value(
+                handle, std::move(stored));
             if (bound != runtime::SystemVerilogVpiValueError::None) {
                 throw std::logic_error {
                     "failed to bind live VPI value '" + path
@@ -1602,6 +1701,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         descriptor.type = memory_type(specialization.language, type);
         descriptor.type->language
             = vpi_profile_language(project, specialization);
+        apply_vpi_specialization_provenance(
+            *descriptor.type, project, specialization);
+        apply_vpi_source(*descriptor.type, project, object.source);
         const auto memory = create_checked(
             *result.registry, std::move(descriptor), path);
         objects.emplace(object.id.value(), memory);
@@ -1617,6 +1719,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             word.type = container_word_type(specialization.language, type);
             word.type->language
                 = vpi_profile_language(project, specialization);
+            apply_vpi_specialization_provenance(
+                *word.type, project, specialization);
+            apply_vpi_source(*word.type, project, object.source);
             const auto word_handle = create_checked(*result.registry,
                 std::move(word), path + memory_word_name(type, ordinal));
             const auto bound = result.registry->bind_value(word_handle,
@@ -1647,20 +1752,20 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             specialization.instance.value());
         const auto path = occurrence_path(instance.path, process.name);
         const semantic::sv::ConcurrentAssertion* assertion_source { };
+        const auto unit = std::ranges::find(
+            project.systemverilog_hir.units(), specialization.unit,
+            &semantic::sv::Unit::id);
         if (specialization.language
                 == semantic::Language::system_verilog
-            && specialization.unit.value()
-                < project.systemverilog_hir.units().size()) {
-            const auto& unit = project.systemverilog_hir.units().at(
-                specialization.unit.value());
+            && unit != project.systemverilog_hir.units().end()) {
             const auto process_leaf = process.name.find_last_of('.');
             const auto local_name = process_leaf == std::string::npos
                 ? std::string_view { process.name }
                 : std::string_view { process.name }.substr(process_leaf + 1U);
             const auto found = std::ranges::find(
-                unit.concurrent_assertions, local_name,
+                unit->concurrent_assertions, local_name,
                 &semantic::sv::ConcurrentAssertion::name);
-            if (found != unit.concurrent_assertions.end()) {
+            if (found != unit->concurrent_assertions.end()) {
                 assertion_source = &*found;
             }
         }
@@ -1673,7 +1778,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             : path.substr(leaf + 1U);
         if (const auto matching_scope = published_scopes.find(path);
             matching_scope != published_scopes.end()) {
-            descriptor.parent = matching_scope->second;
+            if (descriptor.name != "<process>") {
+                descriptor.parent = matching_scope->second;
+            }
             descriptor.name
                 = "$process_" + std::to_string(process.runtime_index);
         } else if (leaf != std::string::npos) {
@@ -1693,6 +1800,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         runtime::SystemVerilogVpiTypeInfo process_type;
         process_type.language = vpi_profile_language(project, specialization);
+        apply_vpi_specialization_provenance(
+            process_type, project, specialization);
+        apply_vpi_source(process_type, project, process.source);
         descriptor.type = process_type;
         auto published_name = descriptor.name;
         for (std::uint32_t collision = 0U;; ++collision) {
@@ -1728,12 +1838,16 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             assertion.kind
                 = runtime::SystemVerilogVpiObjectKind::Assertion;
             assertion.parent = process_handle;
-            assertion.name = assertion_source == nullptr
-                ? "$assertion"
-                : assertion_source->name;
+            assertion.name = "$assertion";
             runtime::SystemVerilogVpiTypeInfo assertion_type;
             assertion_type.language
                 = vpi_profile_language(project, specialization);
+            apply_vpi_specialization_provenance(
+                assertion_type, project, specialization);
+            apply_vpi_source(assertion_type, project,
+                assertion_source == nullptr
+                    ? process.source
+                    : std::optional { assertion_source->source });
             assertion.type = assertion_type;
             const auto assertion_handle = create_checked(
                 *result.registry, std::move(assertion),

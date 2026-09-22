@@ -43,8 +43,12 @@ bool verilog_udp_table_within_resource_budget(
       && row_count <= maximum_udp_table_storage_bytes / row_bytes;
 }
 
-bool verilog_udp_declaration_well_formed(
-    const VerilogUdpDeclaration& declaration) noexcept {
+bool verilog_udp_table_well_formed(
+    const bool sequential,
+    const std::size_t input_count,
+    const std::optional<VerilogUdpOutputSymbol> initial_output,
+    const std::span<const VerilogUdpTableRow> rows) noexcept
+{
   const auto valid_level = [](const VerilogUdpLevelSymbol symbol) {
     switch (symbol) {
     case VerilogUdpLevelSymbol::Zero:
@@ -79,27 +83,17 @@ bool verilog_udp_declaration_well_formed(
     }
     return false;
   };
-  if (!udp_language_revision_matches(
-          declaration.language, declaration.standard_revision)
-      || declaration.verilog_compatibility_profile.empty()
-      || declaration.name.empty() || declaration.output.empty()
-      || declaration.inputs.empty() || declaration.rows.empty()
-      || declaration.sequential != declaration.output_reg
+  if (input_count == 0U || rows.empty()
       || !verilog_udp_table_within_resource_budget(
-          declaration.inputs.size(), declaration.rows.size())) {
+          input_count, rows.size())) {
     return false;
   }
-  if (declaration.initial_output
-      && (!declaration.sequential
-          || !valid_output(*declaration.initial_output)
-          || *declaration.initial_output
+  if (initial_output
+      && (!sequential
+          || !valid_output(*initial_output)
+          || *initial_output
               == VerilogUdpOutputSymbol::NoChange)) {
     return false;
-  }
-  std::unordered_set<std::string> terminals;
-  terminals.insert(declaration.output);
-  for (const auto& input : declaration.inputs) {
-    if (input.empty() || !terminals.insert(input).second) return false;
   }
   const auto same_pattern = [](const VerilogUdpInputPattern& left,
                                const VerilogUdpInputPattern& right) {
@@ -107,13 +101,13 @@ bool verilog_udp_declaration_well_formed(
         && left.previous == right.previous
         && left.current == right.current;
   };
-  for (std::size_t index = 0; index < declaration.rows.size(); ++index) {
-    const auto& row = declaration.rows[index];
-    if (row.inputs.size() != declaration.inputs.size()
-        || row.current_state.has_value() != declaration.sequential
+  for (std::size_t index = 0; index < rows.size(); ++index) {
+    const auto& row = rows[index];
+    if (row.inputs.size() != input_count
+        || row.current_state.has_value() != sequential
         || (row.current_state && !valid_level(*row.current_state))
         || !valid_output(row.output)
-        || (!declaration.sequential
+        || (!sequential
             && row.output == VerilogUdpOutputSymbol::NoChange)) {
       return false;
     }
@@ -125,12 +119,12 @@ bool verilog_udp_declaration_well_formed(
       }
       edges += input.edge != VerilogUdpEdgeSymbol::None;
     }
-    if ((!declaration.sequential && edges != 0)
-        || (declaration.sequential && edges > 1)) {
+    if ((!sequential && edges != 0)
+        || (sequential && edges > 1)) {
       return false;
     }
     for (std::size_t prior = 0; prior < index; ++prior) {
-      const auto& earlier = declaration.rows[prior];
+      const auto& earlier = rows[prior];
       if (row.current_state == earlier.current_state
           && row.inputs.size() == earlier.inputs.size()
           && std::ranges::equal(
@@ -140,6 +134,27 @@ bool verilog_udp_declaration_well_formed(
     }
   }
   return true;
+}
+
+bool verilog_udp_declaration_well_formed(
+    const VerilogUdpDeclaration& declaration) noexcept
+{
+  if (!udp_language_revision_matches(
+          declaration.language, declaration.standard_revision)
+      || declaration.verilog_compatibility_profile.empty()
+      || declaration.name.empty() || declaration.output.empty()
+      || declaration.inputs.empty()
+      || declaration.sequential != declaration.output_reg) {
+    return false;
+  }
+  std::unordered_set<std::string> terminals;
+  terminals.insert(declaration.output);
+  for (const auto& input : declaration.inputs) {
+    if (input.empty() || !terminals.insert(input).second) return false;
+  }
+  return verilog_udp_table_well_formed(
+      declaration.sequential, declaration.inputs.size(),
+      declaration.initial_output, declaration.rows);
 }
 
 bool verilog_udp_level_matches(

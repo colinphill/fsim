@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -36,7 +37,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.function_runtime");
     assert(elaborated.ok());
     const auto select = elaborated.design->find_signal("select");
@@ -147,7 +148,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(closure.ok());
-    const auto closure_elaborated = fsim::elaboration::elaborate(
+    const auto closure_elaborated = compile_and_elaborate(
         closure.design, "sv:work.callable_closure");
     if (!closure_elaborated.ok()) {
         for (const auto& diagnostic : closure_elaborated.diagnostics) {
@@ -156,6 +157,23 @@ endmodule
         }
     }
     assert(closure_elaborated.ok());
+    const auto copied_signal
+        = closure_elaborated.design->find_signal("copied");
+    assert(copied_signal);
+    assert(std::ranges::any_of(
+        closure_elaborated.design->processes(),
+        [&](const auto& process) {
+            return std::ranges::any_of(
+                process.operations,
+                [&](const auto& operation) {
+                    const auto* write
+                        = fsim::runtime::simir::operation_get_if<
+                            fsim::runtime::simir::WriteBlocking>(
+                            &operation);
+                    return write != nullptr
+                        && write->signal == *copied_signal;
+                });
+        }));
     auto closure_interpreter = closure_elaborated.design->create_interpreter();
     assert(
         closure_interpreter->run().status
@@ -194,18 +212,30 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(association_error.ok());
-    const auto rejected_association = fsim::elaboration::elaborate(
+    const auto rejected_association = compile_and_elaborate(
         association_error.design,
         "sv:work.function_association_error");
     assert(
         !rejected_association.ok()
         && has_diagnostic(
             rejected_association, "FSIM-ELAB-SVFUNC-010"));
-    auto malformed_association = association_error.design;
-    malformed_association.units.front().processes.front().statements.front().value.call_argument_names.pop_back();
+    auto malformed_association = compile_test_design(
+        association_error.design);
+    assert(semantic::normalize_compiled_design(malformed_association));
+    auto& malformed_expressions
+        = malformed_association.mutable_systemverilog().mutable_expressions();
+    auto malformed_call = std::ranges::find_if(
+        malformed_expressions,
+        [](const semantic::sv::Expression& expression) {
+            return expression.kind == semantic::sv::ExpressionKind::call
+                && expression.text == "selected";
+        });
+    assert(malformed_call != malformed_expressions.end());
+    assert(!malformed_call->argument_names.empty());
+    malformed_call->argument_names.pop_back();
+    malformed_association.refresh_lookup_indexes();
     const auto rejected_malformed = fsim::elaboration::elaborate(
-        malformed_association,
-        "sv:work.function_association_error");
+        malformed_association, "sv:work.function_association_error");
     assert(
         !rejected_malformed.ok()
         && has_diagnostic(
@@ -225,7 +255,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(ref_signal.ok());
-    const auto elaborated_ref_signal = fsim::elaboration::elaborate(
+    const auto elaborated_ref_signal = compile_and_elaborate(
         ref_signal.design, "sv:work.function_ref_signal");
     assert(elaborated_ref_signal.ok());
     auto ref_signal_interpreter = elaborated_ref_signal.design->create_interpreter();
@@ -258,12 +288,99 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(ref_literal.ok());
-    const auto rejected_ref_literal = fsim::elaboration::elaborate(
+    const auto rejected_ref_literal = compile_and_elaborate(
         ref_literal.design, "sv:work.function_ref_literal");
     assert(
         !rejected_ref_literal.ok()
         && has_diagnostic(
             rejected_ref_literal, "FSIM-ELAB-SVFUNC-012"));
+
+    const auto static_reference = fsim::frontend::parse_verilog(
+        fsim::frontend::SourceText {
+            "static_reference_actuals.sv",
+            R"(
+module function_static_reference(output int result);
+  int anchor;
+  function automatic int revise(
+      const ref static int function_observation,
+      ref static int function_destination);
+    function_destination = function_destination + function_observation;
+    return function_destination;
+  endfunction
+  function automatic int invalid_caller();
+    int transient;
+    return revise(anchor, transient);
+  endfunction
+  initial result = invalid_caller();
+endmodule
+
+module task_static_reference(output int result);
+  int anchor;
+  task automatic update(ref static int task_destination);
+    task_destination = task_destination + anchor;
+  endtask
+  task automatic invalid_caller();
+    int transient;
+    update(transient);
+  endtask
+  initial invalid_caller();
+endmodule
+)" },
+        fsim::frontend::StandardRevision::SystemVerilog2023);
+    assert(static_reference.ok());
+    auto compiled_static_reference = compile_test_design(
+        static_reference.design);
+    assert(semantic::normalize_compiled_design(compiled_static_reference));
+    const auto& static_reference_declarations
+        = compiled_static_reference.systemverilog_hir.declarations();
+    const auto function_observation = std::ranges::find_if(
+        static_reference_declarations,
+        [](const semantic::sv::Declaration& declaration) {
+            return declaration.name == "function_observation";
+        });
+    const auto function_destination = std::ranges::find_if(
+        static_reference_declarations,
+        [](const semantic::sv::Declaration& declaration) {
+            return declaration.name == "function_destination";
+        });
+    const auto task_destination = std::ranges::find_if(
+        static_reference_declarations,
+        [](const semantic::sv::Declaration& declaration) {
+            return declaration.name == "task_destination";
+        });
+    assert(
+        function_observation != static_reference_declarations.end()
+        && function_observation->direction
+            == semantic::sv::Direction::ref
+        && function_observation->const_reference
+        && function_observation->static_reference);
+    assert(
+        function_destination != static_reference_declarations.end()
+        && function_destination->direction
+            == semantic::sv::Direction::ref
+        && !function_destination->const_reference
+        && function_destination->static_reference);
+    assert(
+        task_destination != static_reference_declarations.end()
+        && task_destination->direction == semantic::sv::Direction::ref
+        && !task_destination->const_reference
+        && task_destination->static_reference);
+    const auto rejected_function_static_reference
+        = fsim::elaboration::elaborate(
+            compiled_static_reference,
+            "sv:work.function_static_reference");
+    assert(
+        !rejected_function_static_reference.ok()
+        && has_diagnostic(rejected_function_static_reference,
+            "FSIM-ELAB-SVFUNC-013"));
+    const auto rejected_task_static_reference
+        = fsim::elaboration::elaborate(
+            compiled_static_reference,
+            "sv:work.task_static_reference");
+    assert(
+        !rejected_task_static_reference.ok()
+        && has_diagnostic(rejected_task_static_reference,
+            "FSIM-ELAB-SVTASK-015"));
 
     const auto static_container = fsim::frontend::parse_text(
         "static_function_container.sv",
@@ -279,7 +396,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(static_container.ok());
-    const auto elaborated_static_container = fsim::elaboration::elaborate(
+    const auto elaborated_static_container = compile_and_elaborate(
         static_container.design,
         "sv:work.static_function_container");
     assert(elaborated_static_container.ok());
@@ -309,7 +426,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(recursive.ok());
-    const auto recursive_result = fsim::elaboration::elaborate(
+    const auto recursive_result = compile_and_elaborate(
         recursive.design, "sv:work.recursive_function");
     assert(recursive_result.ok());
     const auto& recursive_operations = recursive_result.design->processes().front().operations;
@@ -339,7 +456,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(wrong_arity.ok());
-    const auto rejected_arity = fsim::elaboration::elaborate(
+    const auto rejected_arity = compile_and_elaborate(
         wrong_arity.design, "sv:work.function_arity");
     assert(
         !rejected_arity.ok()
@@ -370,7 +487,7 @@ endmodule
     for (const auto top :
         { "sv:work.imported_function",
             "sv:work.qualified_function" }) {
-        const auto package_elaborated = fsim::elaboration::elaborate(packages.design, top);
+        const auto package_elaborated = compile_and_elaborate(packages.design, top);
         assert(package_elaborated.ok());
         const auto package_result = package_elaborated.design->find_signal("result");
         assert(package_result);
@@ -406,7 +523,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(constant.ok());
-    const auto constant_elaborated = fsim::elaboration::elaborate(
+    const auto constant_elaborated = compile_and_elaborate(
         constant.design, "sv:work.constant_function");
     if (!constant_elaborated.ok()) {
         for (const auto& diagnostic : constant_elaborated.diagnostics) {
@@ -448,7 +565,7 @@ endmodule
 )",
         fsim::frontend::Language::Verilog2005);
     assert(wide_constant.ok());
-    const auto wide_constant_elaborated = fsim::elaboration::elaborate(
+    const auto wide_constant_elaborated = compile_and_elaborate(
         wide_constant.design, "verilog:work.wide_constant_function");
     if (!wide_constant_elaborated.ok()) {
         for (const auto& diagnostic : wide_constant_elaborated.diagnostics) {
@@ -554,7 +671,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(fixed_returns.ok());
-    const auto fixed_elaborated = fsim::elaboration::elaborate(
+    const auto fixed_elaborated = compile_and_elaborate(
         fixed_returns.design,
         "sv:work.fixed_function_returns");
     if (!fixed_elaborated.ok()) {
@@ -771,7 +888,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(nonstatic_returns.ok());
-    const auto nonstatic_elaborated = fsim::elaboration::elaborate(
+    const auto nonstatic_elaborated = compile_and_elaborate(
         nonstatic_returns.design,
         "sv:work.nonstatic_function_returns");
     if (!nonstatic_elaborated.ok()) {
@@ -930,7 +1047,7 @@ endmodule
                 source,
                 fsim::frontend::Language::SystemVerilog2017);
             assert(candidate.ok());
-            const auto rejected_result = fsim::elaboration::elaborate(
+            const auto rejected_result = compile_and_elaborate(
                 candidate.design, top);
             if (rejected_result.ok()
                 || !has_diagnostic(rejected_result, code)) {
@@ -954,7 +1071,7 @@ endmodule
                 source,
                 fsim::frontend::Language::SystemVerilog2017);
             assert(candidate.ok());
-            const auto accepted_result = fsim::elaboration::elaborate(
+            const auto accepted_result = compile_and_elaborate(
                 candidate.design, top);
             assert(accepted_result.ok());
         };

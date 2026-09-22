@@ -5,6 +5,7 @@
 
 int main() {
   fsim::test::ApplicationTestFixture fixture;
+  fixture.test_hir_first_class_visibility();
   fixture.test_class_simulation_integration();
   std::cout << "application class integration tests passed\n";
   return 0;

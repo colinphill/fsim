@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -171,31 +170,5 @@ struct CoverageFsmInferenceResult {
             && error == CoverageFsmInferenceError::None;
     }
 };
-
-// `ports` is the already resolved specialized entity interface for VHDL and
-// normally unit.ports for Verilog/SystemVerilog. Next-state objects require a
-// direct compatible retained-object assignment, an exact SystemVerilog FSM
-// description pragma, or a validated VHDL/manifest hint; legal sets reference
-// only already inferred states. Ambiguous, incomplete, and conflicting
-// descriptions retain stable detailed diagnostics without displacing
-// independently valid fallback inference.
-[[nodiscard]] CoverageFsmInferenceResult make_coverage_fsm_inference(
-    const frontend::DesignUnit& unit,
-    std::span<const frontend::SignalDeclaration> ports,
-    const CoverageInventoryOwner& owner,
-    std::span<const VerilogCoverageSource> sources,
-    std::span<const CoverageFsmHint> hints,
-    CoverageFsmInferenceLimits limits = { }) noexcept;
-
-[[nodiscard]] inline CoverageFsmInferenceResult make_coverage_fsm_inference(
-    const frontend::DesignUnit& unit,
-    const std::span<const frontend::SignalDeclaration> ports,
-    const CoverageInventoryOwner& owner,
-    const std::span<const VerilogCoverageSource> sources,
-    const CoverageFsmInferenceLimits limits = { }) noexcept
-{
-    return make_coverage_fsm_inference(
-        unit, ports, owner, sources, { }, limits);
-}
 
 } // namespace fsim::elaboration

@@ -279,9 +279,7 @@ void verify_capture(const Capture& capture)
         capture.result.status
         == fsim::runtime::RunStatus::completed);
     assert(capture.result.time == 2);
-    assert((
-        capture.values
-        == std::vector<std::string> {
+    const std::vector<std::string> expected_values {
             "ULH-WZ01",
             "U10XXX10",
             "U01XXX01",
@@ -311,7 +309,8 @@ void verify_capture(const Capture& capture)
             "0",
             "10111101",
             "1",
-            "0" }));
+            "0" };
+    assert(capture.values == expected_values);
     assert((capture.reports
         == std::vector<std::string> {
             "ULH-WZ01", "065", "AC", std::string(65, '1'),
@@ -844,16 +843,23 @@ end architecture;
         assert(
             checked->standard_sources[1].path.filename()
             == "std_logic_1164-body.vhdl");
+        const auto& hir = checked->vhdl_hir;
         const auto package = std::ranges::find_if(
-            checked->parsed.units,
-            [](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+            hir.units(),
+            [](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
                     && unit.library == "ieee"
                     && unit.name == "std_logic_1164"
                     && unit.primary_name.empty();
             });
-        assert(package != checked->parsed.units.end());
-        assert(package->type_aliases.empty());
+        assert(package != hir.units().end());
+        assert(std::ranges::none_of(
+            package->declarations, [&](const auto id) {
+                const auto form = hir.declarations()[id.value()].form;
+                return form == fsim::semantic::vhdl::DeclarationForm::type
+                    || form
+                        == fsim::semantic::vhdl::DeclarationForm::subtype;
+            }));
         assert(
             package->standard_package_revision
             == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");
@@ -870,9 +876,9 @@ end architecture;
                    package->standard_package_declarations, "rising_edge")
             != package->standard_package_declarations.end());
         assert(std::ranges::any_of(
-            checked->parsed.units,
-            [](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+            hir.units(),
+            [](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
                     && unit.library == "ieee"
                     && unit.name == "std_logic_1164"
                     && !unit.primary_name.empty();
@@ -934,9 +940,9 @@ end entity;
                     == "526a2e1e0a05f35ae97fb046ec90ebe8250324390aab2f3adccde73e605e3937";
             }));
         assert(std::ranges::any_of(
-            checked->parsed.units,
-            [](const fsim::frontend::DesignUnit& unit) {
-                return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+            checked->vhdl_hir.units(),
+            [](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
                     && unit.library == "ieee"
                     && unit.name == "std_logic_textio";
             }));

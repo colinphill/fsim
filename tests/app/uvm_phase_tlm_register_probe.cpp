@@ -20,7 +20,7 @@ namespace {
 
 using namespace fsim::runtime;
 
-const frontend::SystemVerilogClassSpecialization &
+const semantic::sv::ClassSpecialization &
 find_class(const fsim::app::Simulation &simulation,
            const std::string_view suffix) {
   const auto found = std::ranges::find_if(
@@ -33,7 +33,7 @@ find_class(const fsim::app::Simulation &simulation,
 
 SystemVerilogClassHandle
 allocate_object(fsim::app::Simulation &simulation,
-                const frontend::SystemVerilogClassSpecialization &type,
+                const semantic::sv::ClassSpecialization &type,
                 std::string name) {
   return simulation.allocate_uvm_object(
       type.specialization_identity, std::move(name), type.declaration_identity);
@@ -41,7 +41,7 @@ allocate_object(fsim::app::Simulation &simulation,
 
 SystemVerilogClassHandle
 allocate_component(fsim::app::Simulation &simulation,
-                   const frontend::SystemVerilogClassSpecialization &type,
+                   const semantic::sv::ClassSpecialization &type,
                    std::string name, const SystemVerilogClassHandle parent,
                    const SystemVerilogUvmRootHandle root = {}) {
   return simulation.allocate_uvm_component(type.specialization_identity,

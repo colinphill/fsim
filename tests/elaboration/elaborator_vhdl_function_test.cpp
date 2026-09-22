@@ -107,7 +107,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.function_top(rtl)");
     if (!elaborated.ok()) {
@@ -116,6 +116,8 @@ end architecture;
                       << diagnostic.message << '\n';
         }
     }
+    assert(!has_diagnostic(elaborated, "FSIM-ELAB-GENERIC-005"));
+    assert(!has_diagnostic(elaborated, "FSIM-ELAB-HIR-001"));
     assert(elaborated.ok());
     assert(elaborated.design->specializations().size() == 7);
 
@@ -167,7 +169,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(missing.ok());
-    const auto missing_result = fsim::elaboration::elaborate(
+    const auto missing_result = compile_and_elaborate(
         missing.design, "vhdl:work.missing(rtl)");
     assert(!missing_result.ok());
     assert(has_diagnostic(
@@ -234,7 +236,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto invalid_result = fsim::elaboration::elaborate(
+    const auto invalid_result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid_top(rtl)");
     assert(!invalid_result.ok());
     assert(has_diagnostic(
@@ -282,7 +284,7 @@ end architecture;
         cross_language_binding { { "cross_language_function.child",
             "vhdl:work.foreign_target(rtl)",
             std::nullopt } };
-    const auto cross_language_result = fsim::elaboration::elaborate(
+    const auto cross_language_result = compile_and_elaborate(
         cross_language_parent.design,
         "sv:work.cross_language_function",
         cross_language_binding);
@@ -324,7 +326,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(recursive.ok());
-    const auto recursive_result = fsim::elaboration::elaborate(
+    const auto recursive_result = compile_and_elaborate(
         recursive.design, "vhdl:work.recursive_top(rtl)");
     assert(recursive_result.ok());
 
@@ -350,7 +352,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(loop_shadow.ok());
-    const auto loop_shadow_result = fsim::elaboration::elaborate(
+    const auto loop_shadow_result = compile_and_elaborate(
         loop_shadow.design, "vhdl:work.pure_loop_shadow(rtl)");
     for (const auto& diagnostic : loop_shadow_result.diagnostics) {
         std::cerr << diagnostic.code << ": "
@@ -398,7 +400,7 @@ end architecture;
         contextual_result.design.units.back().functions.front();
     assert(contextual_function.vhdl_return_identifier == "result_t");
     assert(contextual_function.type_aliases.front().name == "result_t");
-    const auto contextual_elaboration = fsim::elaboration::elaborate(
+    const auto contextual_elaboration = compile_and_elaborate(
         contextual_result.design,
         "vhdl:work.contextual_result(rtl)");
     if (!contextual_elaboration.ok()) {
@@ -462,7 +464,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl2019);
     assert(unconstrained_context.ok());
-    const auto rejected_unconstrained = fsim::elaboration::elaborate(
+    const auto rejected_unconstrained = compile_and_elaborate(
         unconstrained_context.design,
         "vhdl:work.unconstrained_result(rtl)");
     assert(!rejected_unconstrained.ok());
@@ -542,7 +544,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(negative_mod.ok());
-    const auto negative_mod_result = fsim::elaboration::elaborate(
+    const auto negative_mod_result = compile_and_elaborate(
         negative_mod.design,
         "vhdl:work.negative_mod_constant_function(rtl)");
     for (const auto& diagnostic : negative_mod_result.diagnostics) {

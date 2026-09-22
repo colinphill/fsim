@@ -12912,7 +12912,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     handoff.
 19. **Complete.** The eighteen-row ABI/schema ledger is zero-active at
     normalized SHA-256
-    `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`.
+    `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`.
     The reference, architecture, README, diagnostics, installed-package,
     relocation, evidence, regression-deduplication and restart documents name
     the same current-only contracts. Source/license and dependent static audit
@@ -12946,7 +12946,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     owner despite `-LE release`; it passed, but no Release configuration, build,
     regression or intentional release-gate qualification ran. No sanitizer or
     hosted-CI execution/monitoring ran. The zero-active ledger remains at SHA-
-    256 `96d4ee761b927df5a02559f6abf3c0e2014f52bf44635ec245f98aaed2c7b613`.
+    256 `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`.
     Batch 174 is neither a sanitizer nor a Release boundary and is not a
     hosted-CI monitoring boundary. Commit and push the accumulated batch once;
     defer all Release, sanitizer, release-gate and hosted-CI work to final Batch

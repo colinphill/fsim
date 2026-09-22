@@ -41,7 +41,7 @@ endmodule
         fsim::frontend::Language::Verilog2005);
     assert(parsed.ok());
 
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "verilog:work.defparam_top");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -92,7 +92,7 @@ endmodule
     auto unresolved_design = parsed.design;
     auto& unresolved_top = unresolved_design.units.back();
     unresolved_top.verilog_defparams.front().path.front().name = "missing";
-    const auto unresolved = fsim::elaboration::elaborate(
+    const auto unresolved = compile_and_elaborate(
         unresolved_design, "verilog:work.defparam_top");
     assert(!unresolved.ok());
     assert(has_diagnostic(unresolved, "FSIM-ELAB-DEFPARAM-002"));
@@ -101,7 +101,7 @@ endmodule
     auto& duplicate_top = duplicate_design.units.back();
     duplicate_top.verilog_defparams.push_back(
         duplicate_top.verilog_defparams[1]);
-    const auto duplicate = fsim::elaboration::elaborate(
+    const auto duplicate = compile_and_elaborate(
         duplicate_design, "verilog:work.defparam_top");
     assert(!duplicate.ok());
     assert(has_diagnostic(duplicate, "FSIM-ELAB-DEFPARAM-003"));
@@ -111,7 +111,7 @@ endmodule
     auto local_target = local_top.verilog_defparams[1];
     local_target.path.back().name = "LOCKED";
     local_top.verilog_defparams = { std::move(local_target) };
-    const auto local = fsim::elaboration::elaborate(
+    const auto local = compile_and_elaborate(
         local_design, "verilog:work.defparam_top");
     assert(!local.ok());
     assert(has_diagnostic(local, "FSIM-ELAB-PARAM-001"));

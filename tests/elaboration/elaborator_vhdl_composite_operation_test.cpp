@@ -71,7 +71,7 @@ end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "vhdl:work.composite_operations(rtl)");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -117,7 +117,7 @@ end architecture;
     const auto invalid = fsim::frontend::parse_text(
         filename, source, fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
-    const auto result = fsim::elaboration::elaborate(
+    const auto result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid(rtl)");
     if (result.ok() || !has_diagnostic(result, code)) {
       std::cerr << filename << " expected " << code << '\n';

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -22,7 +23,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(case_process.ok());
-    const auto elaborated_case = fsim::elaboration::elaborate(
+    const auto elaborated_case = compile_and_elaborate(
         case_process.design, "sv:work.case_process");
     assert(elaborated_case.ok());
     const auto case_selector = elaborated_case.design->find_signal("selector");
@@ -68,7 +69,7 @@ endmodule
                   "endmodule\n",
             fsim::frontend::Language::SystemVerilog2017);
         assert(wildcard_case.ok());
-        const auto elaborated_wildcard_case = fsim::elaboration::elaborate(
+        const auto elaborated_wildcard_case = compile_and_elaborate(
             wildcard_case.design, "sv:work.wildcard_case");
         assert(elaborated_wildcard_case.ok());
         assert(std::any_of(
@@ -84,7 +85,7 @@ endmodule
 
     auto malformed_case_design = case_process.design;
     malformed_case_design.units.front().processes.front().statements.front().case_match_kind = static_cast<fsim::frontend::CaseMatchKind>(255);
-    const auto rejected_matching_mode = fsim::elaboration::elaborate(
+    const auto rejected_matching_mode = compile_and_elaborate(
         malformed_case_design, "sv:work.case_process");
     assert(!rejected_matching_mode.ok());
     assert(has_diagnostic(
@@ -126,7 +127,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mismatched_case.ok());
-    const auto rejected_case = fsim::elaboration::elaborate(
+    const auto rejected_case = compile_and_elaborate(
         mismatched_case.design, "sv:work.mismatched_case");
     assert(!rejected_case.ok());
     assert(has_diagnostic(rejected_case, "FSIM-ELAB-063"));
@@ -152,7 +153,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(conditional_process.ok());
-    const auto elaborated_conditional = fsim::elaboration::elaborate(
+    const auto elaborated_conditional = compile_and_elaborate(
         conditional_process.design,
         "sv:work.conditional_process");
     assert(elaborated_conditional.ok());
@@ -262,11 +263,11 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(sized_conditional.ok());
-    const auto elaborated_vector_condition = fsim::elaboration::elaborate(
+    const auto elaborated_vector_condition = compile_and_elaborate(
         sized_conditional.design,
         "sv:work.vector_condition");
     assert(elaborated_vector_condition.ok());
-    const auto elaborated_alternatives = fsim::elaboration::elaborate(
+    const auto elaborated_alternatives = compile_and_elaborate(
         sized_conditional.design,
         "sv:work.mismatched_alternatives");
     assert(elaborated_alternatives.ok());
@@ -303,7 +304,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(comparison_process.ok());
-    const auto elaborated_comparisons = fsim::elaboration::elaborate(
+    const auto elaborated_comparisons = compile_and_elaborate(
         comparison_process.design,
         "sv:work.comparison_process");
     assert(elaborated_comparisons.ok());
@@ -405,7 +406,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_comparison.ok());
-    const auto elaborated_signed_comparison = fsim::elaboration::elaborate(
+    const auto elaborated_signed_comparison = compile_and_elaborate(
         signed_comparison.design,
         "sv:work.signed_comparison");
     assert(elaborated_signed_comparison.ok());
@@ -460,7 +461,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(systemverilog_power.ok());
-    const auto elaborated_systemverilog_power = fsim::elaboration::elaborate(
+    const auto elaborated_systemverilog_power = compile_and_elaborate(
         systemverilog_power.design,
         "sv:work.systemverilog_power");
     if (!elaborated_systemverilog_power.ok()) {
@@ -508,7 +509,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(power_context.ok());
-    const auto elaborated_power_context = fsim::elaboration::elaborate(
+    const auto elaborated_power_context = compile_and_elaborate(
         power_context.design, "sv:work.power_context");
     assert(elaborated_power_context.ok());
     const auto& power_profiles = elaborated_power_context.design->processes().front().expression_profiles;
@@ -553,7 +554,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_power.ok());
-    const auto elaborated_vhdl_power = fsim::elaboration::elaborate(
+    const auto elaborated_vhdl_power = compile_and_elaborate(
         vhdl_power.design,
         "vhdl:work.vhdl_power(rtl)");
     if (!elaborated_vhdl_power.ok()) {
@@ -598,7 +599,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_power.ok());
-    const auto rejected_vhdl_power = fsim::elaboration::elaborate(
+    const auto rejected_vhdl_power = compile_and_elaborate(
         invalid_vhdl_power.design,
         "vhdl:work.invalid_vhdl_power(rtl)");
     assert(!rejected_vhdl_power.ok());
@@ -620,7 +621,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_vhdl_conditional.ok());
-    const auto rejected_vhdl_conditional = fsim::elaboration::elaborate(
+    const auto rejected_vhdl_conditional = compile_and_elaborate(
         invalid_vhdl_conditional.design,
         "vhdl:work.invalid_vhdl_conditional(rtl)");
     assert(!rejected_vhdl_conditional.ok());
@@ -668,7 +669,7 @@ end architecture;
     }
     assert(vhdl_2019_conditional.ok());
     const auto elaborated_vhdl_2019_conditional =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             vhdl_2019_conditional.design,
             "vhdl:work.vhdl_2019_conditional(rtl)");
     if (!elaborated_vhdl_2019_conditional.ok()) {
@@ -723,7 +724,7 @@ end architecture;
             fsim::frontend::VhdlStandard::Vhdl2019);
     assert(mismatched_vhdl_2019_conditional.ok());
     const auto rejected_mismatched_vhdl_2019_conditional =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             mismatched_vhdl_2019_conditional.design,
             "vhdl:work.mismatched_vhdl_2019_conditional(rtl)");
     assert(!rejected_mismatched_vhdl_2019_conditional.ok());
@@ -747,7 +748,7 @@ end architecture;
             fsim::frontend::VhdlStandard::Vhdl2019);
     assert(invalid_vhdl_2019_condition.ok());
     const auto rejected_invalid_vhdl_2019_condition =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_vhdl_2019_condition.design,
             "vhdl:work.invalid_vhdl_2019_condition(rtl)");
     assert(!rejected_invalid_vhdl_2019_condition.ok());
@@ -813,7 +814,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signedness_casts.ok());
-    const auto elaborated_signedness_casts = fsim::elaboration::elaborate(
+    const auto elaborated_signedness_casts = compile_and_elaborate(
         signedness_casts.design,
         "sv:work.signedness_casts");
     assert(elaborated_signedness_casts.ok());
@@ -1048,7 +1049,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(packed_array_queries.ok());
-    const auto elaborated_packed_array_queries = fsim::elaboration::elaborate(
+    const auto elaborated_packed_array_queries = compile_and_elaborate(
         packed_array_queries.design,
         "sv:work.packed_array_queries");
     assert(elaborated_packed_array_queries.ok());
@@ -1120,7 +1121,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_packed_query.ok());
-    const auto rejected_packed_query = fsim::elaboration::elaborate(
+    const auto rejected_packed_query = compile_and_elaborate(
         invalid_packed_query.design,
         "sv:work.invalid_packed_query");
     assert(!rejected_packed_query.ok());
@@ -1178,7 +1179,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_countbits.ok());
-    const auto rejected_countbits = fsim::elaboration::elaborate(
+    const auto rejected_countbits = compile_and_elaborate(
         invalid_countbits.design,
         "sv:work.invalid_countbits");
     assert(!rejected_countbits.ok());
@@ -1201,7 +1202,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(logical_process.ok());
-    const auto elaborated_logical = fsim::elaboration::elaborate(
+    const auto elaborated_logical = compile_and_elaborate(
         logical_process.design, "sv:work.logical_process");
     assert(elaborated_logical.ok());
     const auto logical_lhs = elaborated_logical.design->find_signal("lhs");
@@ -1273,7 +1274,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(reduction_shift_process.ok());
-    const auto elaborated_reduction_shift = fsim::elaboration::elaborate(
+    const auto elaborated_reduction_shift = compile_and_elaborate(
         reduction_shift_process.design,
         "sv:work.reduction_shift_process");
     assert(elaborated_reduction_shift.ok());
@@ -1417,7 +1418,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(arithmetic_process.ok());
-    const auto elaborated_arithmetic = fsim::elaboration::elaborate(
+    const auto elaborated_arithmetic = compile_and_elaborate(
         arithmetic_process.design,
         "sv:work.arithmetic_process");
     assert(elaborated_arithmetic.ok());
@@ -1501,7 +1502,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_arithmetic.ok());
-    const auto elaborated_signed_arithmetic = fsim::elaboration::elaborate(
+    const auto elaborated_signed_arithmetic = compile_and_elaborate(
         signed_arithmetic.design,
         "sv:work.signed_arithmetic");
     assert(elaborated_signed_arithmetic.ok());
@@ -1644,7 +1645,7 @@ endmodule
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.membership_expression");
     assert(elaborated.ok());
     const auto& process = elaborated.design->processes().front();
@@ -1708,7 +1709,7 @@ endmodule
             path, source,
             fsim::frontend::Language::SystemVerilog2017);
         assert(candidate.ok());
-        const auto rejected = fsim::elaboration::elaborate(
+        const auto rejected = compile_and_elaborate(
             candidate.design, "sv:work.membership_negative");
         assert(!rejected.ok());
         assert(has_diagnostic(rejected, code));
@@ -1834,7 +1835,7 @@ endmodule
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.case_inside");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -1888,7 +1889,7 @@ endmodule
             path, source,
             fsim::frontend::Language::SystemVerilog2017);
         assert(candidate.ok());
-        const auto rejected = fsim::elaboration::elaborate(
+        const auto rejected = compile_and_elaborate(
             candidate.design, "sv:work.case_inside_negative");
         assert(!rejected.ok());
         assert(has_diagnostic(rejected, code));
@@ -1909,22 +1910,55 @@ endmodule
         "initial case (s) inside 8'h1: r = 1; endcase endmodule",
         fsim::frontend::Language::SystemVerilog2017);
     assert(malformed_parsed.ok());
-    auto empty = malformed_parsed.design;
-    empty.units.front().processes.front().statements.front().case_alternatives.front().choices.clear();
+    auto malformed_compiled = compile_test_design(
+        malformed_parsed.design);
+    assert(fsim::semantic::normalize_compiled_design(
+        malformed_compiled));
+    auto empty = malformed_compiled;
+    auto empty_case = std::ranges::find_if(
+        empty.mutable_systemverilog().mutable_statements(),
+        [](const fsim::semantic::sv::Statement& statement) {
+            return statement.case_match
+                    == fsim::semantic::sv::CaseMatchKind::inside
+                && !statement.case_alternatives.empty();
+        });
+    assert(
+        empty_case
+        != empty.mutable_systemverilog().mutable_statements().end());
+    empty_case->case_alternatives.front().choices.clear();
+    empty.refresh_lookup_indexes();
     const auto empty_result = fsim::elaboration::elaborate(
         empty, "sv:work.case_inside_malformed_hir");
     assert(!empty_result.ok());
     assert(has_diagnostic(
         empty_result, "FSIM-ELAB-SVCASEINSIDE-005"));
 
-    auto malformed = malformed_parsed.design;
-    auto& malformed_case = malformed.units.front().processes.front().statements.front();
-    malformed_case.case_alternatives.front().choices.front() = fsim::frontend::Expression {
-        fsim::frontend::ExpressionKind::Call,
-        "@inside-range",
-        { },
-        malformed_case.span
-    };
+    auto malformed = malformed_compiled;
+    auto malformed_case = std::ranges::find_if(
+        malformed.mutable_systemverilog().mutable_statements(),
+        [](const fsim::semantic::sv::Statement& statement) {
+            return statement.case_match
+                    == fsim::semantic::sv::CaseMatchKind::inside
+                && !statement.case_alternatives.empty()
+                && !statement.case_alternatives.front().choices.empty();
+        });
+    assert(
+        malformed_case
+        != malformed.mutable_systemverilog().mutable_statements().end());
+    const auto malformed_choice
+        = malformed_case->case_alternatives.front().choices.front();
+    auto malformed_expression = std::ranges::find(
+        malformed.mutable_systemverilog().mutable_expressions(),
+        malformed_choice,
+        &fsim::semantic::sv::Expression::id);
+    assert(
+        malformed_expression
+        != malformed.mutable_systemverilog().mutable_expressions().end());
+    malformed_expression->kind
+        = fsim::semantic::sv::ExpressionKind::call;
+    malformed_expression->text = "@inside-range";
+    malformed_expression->operands.clear();
+    malformed.refresh_lookup_indexes();
     const auto malformed_result = fsim::elaboration::elaborate(
         malformed, "sv:work.case_inside_malformed_hir");
     assert(!malformed_result.ok());
@@ -1937,8 +1971,22 @@ endmodule
         "initial case (s) 1'b0: r = 1; endcase endmodule",
         fsim::frontend::Language::Verilog2005);
     assert(verilog_parsed.ok());
-    auto wrong_language = verilog_parsed.design;
-    wrong_language.units.front().processes.front().statements.front().case_match_kind = fsim::frontend::CaseMatchKind::Inside;
+    auto wrong_language = compile_test_design(
+        std::move(verilog_parsed.design));
+    assert(fsim::semantic::normalize_compiled_design(wrong_language));
+    auto wrong_language_case = std::ranges::find_if(
+        wrong_language.mutable_systemverilog().mutable_statements(),
+        [](const fsim::semantic::sv::Statement& statement) {
+            return !statement.case_alternatives.empty();
+        });
+    assert(
+        wrong_language_case
+        != wrong_language.mutable_systemverilog()
+               .mutable_statements()
+               .end());
+    wrong_language_case->case_match
+        = fsim::semantic::sv::CaseMatchKind::inside;
+    wrong_language.refresh_lookup_indexes();
     const auto wrong_language_result = fsim::elaboration::elaborate(
         wrong_language, "sv:work.case_inside_wrong_language");
     assert(!wrong_language_result.ok());
@@ -1970,7 +2018,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(vhdl_attribute_negative.ok());
-    const auto rejected_vhdl_attributes = fsim::elaboration::elaborate(
+    const auto rejected_vhdl_attributes = compile_and_elaborate(
         vhdl_attribute_negative.design,
         "vhdl:work.vhdl_attribute_negative(rtl)");
     assert(!rejected_vhdl_attributes.ok());

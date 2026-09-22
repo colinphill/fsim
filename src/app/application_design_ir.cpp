@@ -141,6 +141,12 @@ class DesignIrBuilder final {
 
   [[nodiscard]] std::optional<semantic::UnitId> find_unit(
       const elaboration::SpecializationInfo& input) const noexcept {
+    if (input.source_unit
+        && input.source_unit->value() < model_.units().size()
+        && model_.units()[input.source_unit->value()].id
+            == *input.source_unit) {
+      return input.source_unit;
+    }
     const auto input_language = language(input.language);
     std::string_view primary = input.unit;
     std::string_view secondary;
@@ -182,6 +188,12 @@ class DesignIrBuilder final {
 
   [[nodiscard]] std::optional<semantic::InstanceId> find_source_instance(
       const elaboration::SpecializationInfo& input) const noexcept {
+    if (input.source_instance
+        && input.source_instance->value() < model_.instances().size()
+        && model_.instances()[input.source_instance->value()].id
+            == *input.source_instance) {
+      return input.source_instance;
+    }
     auto name = std::string{leaf_name(input.instance)};
     if (const auto generated = name.find('[');
         generated != std::string::npos) {
@@ -241,6 +253,14 @@ class DesignIrBuilder final {
     if (systemverilog != checked_.systemverilog_hir.declarations().end()) {
       switch (systemverilog->direction) {
         case semantic::sv::Direction::unknown:
+          if (systemverilog->form
+                  == semantic::sv::DeclarationForm::port
+              && (!systemverilog->interface_type.empty()
+                  || (systemverilog->type
+                      && systemverilog->type->target.spelling
+                          == "interface"))) {
+            return di::Direction::inout;
+          }
           return di::Direction::unknown;
         case semantic::sv::Direction::input:
           return di::Direction::input;
@@ -312,7 +332,9 @@ class DesignIrBuilder final {
       specialization.language = language(input.language);
       specialization.library = input.library;
       specialization.name = input.unit;
-      if (unit) {
+      if (input.source_span) {
+        specialization.source = *input.source_span;
+      } else if (unit) {
         specialization.source = model_.units()[unit->value()].source;
       }
       specialization.source_dependencies = input.source_dependencies;
@@ -326,7 +348,9 @@ class DesignIrBuilder final {
       instance.path = input.instance;
       instance.target = input.unit;
       instance.source = specialization.source;
-      if (unit) {
+      if (input.origin) {
+        instance.origin = *input.origin;
+      } else if (unit) {
         instance.origin = model_.units()[unit->value()].origin;
       }
       specializations.push_back(std::move(specialization));
@@ -761,7 +785,7 @@ class DesignIrBuilder final {
             member.storage,
             0,
             member.width,
-            member.type.is_signed,
+            member.is_signed,
             member_source,
             std::nullopt,
             object);
@@ -1003,6 +1027,17 @@ class DesignIrBuilder final {
       return std::nullopt;
     }
     const auto& legacy = elaborated_.specializations()[specialization.value()];
+    const auto direct = std::ranges::find_if(
+        legacy.semantic_processes,
+        [&](const auto& candidate) {
+          return candidate.first == runtime_process;
+        });
+    if (direct != legacy.semantic_processes.end()) {
+      return direct->second;
+    }
+    if (legacy.source_unit) {
+      return std::nullopt;
+    }
     const auto found = std::ranges::find(legacy.processes, runtime_process);
     if (found == legacy.processes.end()) {
       return std::nullopt;
@@ -1055,15 +1090,11 @@ class DesignIrBuilder final {
     }
     std::vector<std::optional<di::SpecializationId>>
         specialization_by_process(elaborated_.processes().size());
-    std::vector<std::optional<semantic::ProcessId>>
-        source_by_process(elaborated_.processes().size());
     for (std::size_t specialization_index = 0;
          specialization_index < hdl_specialization_count_;
          ++specialization_index) {
       const auto specialization = di::SpecializationId::from_index(
           static_cast<std::uint32_t>(specialization_index));
-      const auto source_processes = unit_processes(
-          result_.specializations()[specialization_index].unit);
       const auto& runtime_processes =
           elaborated_.specializations()[specialization_index].processes;
       for (std::size_t process_index = 0;
@@ -1074,10 +1105,6 @@ class DesignIrBuilder final {
           continue;
         }
         specialization_by_process[runtime_process] = specialization;
-        if (process_index < source_processes.size()) {
-          source_by_process[runtime_process] =
-              source_processes[process_index];
-        }
       }
     }
     for (std::size_t index = 0; index < elaborated_.processes().size(); ++index) {
@@ -1088,10 +1115,7 @@ class DesignIrBuilder final {
               && specialization_by_process[runtime_index]
           ? *specialization_by_process[runtime_index]
           : process_specialization(input.id, input.name);
-      const auto source_id =
-          runtime_index < source_by_process.size()
-          ? source_by_process[runtime_index]
-          : std::nullopt;
+      const auto source_id = source_process(specialization, input.id);
       const auto id = di::ProcessOccurrenceId::from_index(
           static_cast<std::uint32_t>(result_.processes().size()));
       di::ProcessOccurrence output;

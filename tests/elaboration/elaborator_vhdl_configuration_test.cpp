@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
 
@@ -169,7 +170,7 @@ end configuration;
         leaf.design, std::move(direct_configuration.design));
 
     const auto architecture_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             leaf.design,
             "vhdl:work.configured_top(rtl)");
     if (!architecture_result.ok()) {
@@ -253,7 +254,7 @@ end configuration;
         missing_direct_configuration).unit_name =
         "work.absent_direct_configuration";
     const auto missing_direct_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             missing_direct_configuration,
             "vhdl:work.configured_top(rtl)");
     assert(!missing_direct_result.ok());
@@ -278,7 +279,7 @@ end configuration;
     ambiguous_direct_configuration.units.push_back(
         duplicate_direct_configuration);
     const auto ambiguous_direct_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             ambiguous_direct_configuration,
             "vhdl:work.configured_top(rtl)");
     assert(!ambiguous_direct_result.ok());
@@ -287,7 +288,7 @@ end configuration;
         "FSIM-ELAB-VHCONFIG-014"));
 
     const auto configured_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             leaf.design,
             "vhdl:work.selected_configuration");
     if (!configured_result.ok()) {
@@ -498,7 +499,7 @@ end configuration;
         nested.design,
         std::move(referenced_configuration.design));
     const auto nested_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             nested.design,
             "vhdl:work.nested_configuration");
     if (!nested_result.ok()) {
@@ -590,33 +591,50 @@ end configuration;
           return *found;
         };
 
-    auto invalid_scopes = nested.design;
-    auto& invalid_scope_root =
-        find_configuration(
-            invalid_scopes,
-            "nested_configuration")
-            .vhdl_configuration->block;
-    auto duplicate_outer =
-        invalid_scope_root.block_configurations.front();
-    invalid_scope_root.block_configurations.push_back(
-        duplicate_outer);
-    fsim::frontend::VhdlBlockConfiguration missing_scope;
-    missing_scope.block_name = "absent_block";
-    missing_scope.span = invalid_scope_root.span;
-    invalid_scope_root.block_configurations.push_back(
-        missing_scope);
-    invalid_scope_root.block_configurations.front()
-        .block_configurations.front()
-        .generate_index =
-        fsim::frontend::Expression{
-            fsim::frontend::ExpressionKind::Identifier,
-            "dynamic_index",
-            {},
-            invalid_scope_root.span};
-    const auto invalid_scope_result =
-        fsim::elaboration::elaborate(
-            invalid_scopes,
-            "vhdl:work.nested_configuration");
+    auto invalid_scopes = compile_test_design(nested.design);
+    assert(fsim::semantic::normalize_compiled_design(invalid_scopes));
+    auto& invalid_scope_vhdl = invalid_scopes.mutable_vhdl();
+    auto invalid_scope_configuration = std::ranges::find_if(
+        invalid_scope_vhdl.mutable_units(),
+        [](const auto& unit) {
+            return unit.kind
+                    == fsim::semantic::vhdl::UnitKind::configuration
+                && unit.name == "nested_configuration";
+        });
+    assert(invalid_scope_configuration
+        != invalid_scope_vhdl.mutable_units().end());
+    assert(invalid_scope_configuration->configuration);
+    auto& invalid_scope_root
+        = *invalid_scope_configuration->configuration;
+    assert(!invalid_scope_root.blocks.empty());
+    auto duplicate_outer = invalid_scope_root.blocks.front();
+    invalid_scope_root.blocks.push_back(duplicate_outer);
+    fsim::semantic::vhdl::BlockConfiguration missing_scope;
+    missing_scope.block.spelling = "absent_block";
+    missing_scope.block.canonical = "absent_block";
+    missing_scope.block.source = invalid_scope_root.source;
+    missing_scope.source = invalid_scope_root.source;
+    invalid_scope_root.blocks.push_back(std::move(missing_scope));
+    auto& indexed_scope = invalid_scope_root.blocks.front().blocks.front();
+    assert(indexed_scope.generate_index);
+    const auto existing_index = invalid_scopes.find_expression(
+        *indexed_scope.generate_index);
+    assert(existing_index && existing_index->vhdl != nullptr);
+    auto dynamic_index = *existing_index->vhdl;
+    dynamic_index.id = invalid_scopes.semantics.add_expression_identity(
+        dynamic_index.scope, dynamic_index.source, dynamic_index.origin);
+    dynamic_index.kind = fsim::semantic::vhdl::ExpressionKind::name;
+    dynamic_index.text = "dynamic_index";
+    dynamic_index.referenced_name.reset();
+    dynamic_index.operands.clear();
+    dynamic_index.folded = false;
+    invalid_scope_vhdl.mutable_expressions().push_back(dynamic_index);
+    indexed_scope.generate_index = dynamic_index.id;
+    invalid_scopes.refresh_lookup_indexes();
+    assert(invalid_scopes.valid());
+    const auto invalid_scope_result = fsim::elaboration::elaborate(
+        invalid_scopes,
+        "vhdl:work.nested_configuration");
     assert(!invalid_scope_result.ok());
     assert(has_diagnostic(
         invalid_scope_result,
@@ -646,7 +664,7 @@ end configuration;
     missing_reference_rule->binding.configuration_name =
         "work.absent_configuration";
     const auto missing_reference_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             missing_reference,
             "vhdl:work.nested_configuration");
     assert(!missing_reference_result.ok());
@@ -667,7 +685,7 @@ end configuration;
     ambiguous_reference.units.push_back(
         duplicate_reference);
     const auto ambiguous_reference_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             ambiguous_reference,
             "vhdl:work.nested_configuration");
     assert(!ambiguous_reference_result.ok());
@@ -705,7 +723,7 @@ end configuration;
     const auto duplicate_open_entity = *nested_leaf_entity;
     invalid_open.units.push_back(duplicate_open_entity);
     const auto invalid_open_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_open,
             "vhdl:work.nested_configuration");
     assert(!invalid_open_result.ok());
@@ -762,7 +780,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(invalid.ok());
     const auto invalid_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid.design,
             "vhdl:work.invalid_configuration_top(rtl)");
     assert(!invalid_result.ok());
@@ -815,7 +833,7 @@ end architecture;
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_map.ok());
     const auto invalid_map_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_map.design,
             "vhdl:work.invalid_configuration_map_top(rtl)");
     assert(!invalid_map_result.ok());
@@ -837,7 +855,7 @@ end configuration;
         fsim::frontend::Language::Vhdl2008);
     assert(missing_entity.ok());
     const auto missing_entity_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             missing_entity.design,
             "vhdl:work.missing_entity_configuration");
     assert(!missing_entity_result.ok());
@@ -863,7 +881,7 @@ end configuration;
             fsim::frontend::Language::Vhdl2008);
     assert(missing_architecture.ok());
     const auto missing_architecture_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             missing_architecture.design,
             "vhdl:work.missing_architecture_configuration");
     assert(!missing_architecture_result.ok());
@@ -883,7 +901,7 @@ end configuration;
     assert(configuration_unit != missing_hir.units.end());
     configuration_unit->vhdl_configuration.reset();
     const auto missing_hir_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             missing_hir,
             "vhdl:work.selected_configuration");
     assert(!missing_hir_result.ok());
@@ -906,7 +924,7 @@ end configuration;
     assert(fast_architecture != ambiguous_binding.units.end());
     ambiguous_binding.units.push_back(*fast_architecture);
     const auto ambiguous_binding_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             ambiguous_binding,
             "vhdl:work.selected_configuration");
     assert(!ambiguous_binding_result.ok());
@@ -928,7 +946,7 @@ end configuration;
     assert(top_architecture != ambiguous_root.units.end());
     ambiguous_root.units.push_back(*top_architecture);
     const auto ambiguous_root_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             ambiguous_root,
             "vhdl:work.selected_configuration");
     assert(!ambiguous_root_result.ok());
@@ -953,7 +971,7 @@ endmodule
             "vhdl:work.selected_configuration",
             std::nullopt}};
     const auto cross_language_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             cross_language.design,
             "sv:work.cross_language_configuration",
             cross_language_binding);
@@ -986,7 +1004,7 @@ end configuration;
         fsim::frontend::Language::Vhdl2008);
     assert(recursive.ok());
     const auto recursive_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             recursive.design,
             "vhdl:work.recursive_configuration");
     assert(!recursive_result.ok());
@@ -1035,20 +1053,34 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(transactional.ok());
+    auto transactional_compiled = compile_test_design(
+        std::move(transactional.design));
+    assert(fsim::semantic::normalize_compiled_design(
+        transactional_compiled));
+    auto& transactional_vhdl = transactional_compiled.mutable_vhdl();
     auto rollback_top = std::ranges::find_if(
-        transactional.design.units,
+        transactional_vhdl.mutable_units(),
         [](const auto& unit) {
           return unit.kind
-                     == fsim::frontend::UnitKind::VhdlArchitecture
+                     == fsim::semantic::vhdl::UnitKind::architecture
               && unit.primary_name == "rollback_top"
               && unit.name == "rtl";
         });
-    assert(rollback_top != transactional.design.units.end());
+    assert(rollback_top != transactional_vhdl.mutable_units().end());
     assert(rollback_top->instances.size() == 3);
-    rollback_top->instances[1].name = "failed";
+    auto recovered_instance = std::ranges::find_if(
+        transactional_vhdl.mutable_instances(),
+        [&](const auto& instance) {
+            return instance.scope == rollback_top->scope
+                && instance.name == "recovered";
+        });
+    assert(recovered_instance
+           != transactional_vhdl.mutable_instances().end());
+    recovered_instance->name = "failed";
+    transactional_compiled.refresh_lookup_indexes();
     const auto transactional_result =
         fsim::elaboration::elaborate(
-            transactional.design,
+            transactional_compiled,
             "vhdl:work.rollback_top(rtl)");
     assert(!transactional_result.ok());
     assert(has_diagnostic(

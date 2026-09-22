@@ -144,12 +144,12 @@ whole bind succeeds. Shutdown precedes unload.
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
 | `fsim.toml` | project schema 3 | user-authored project, source, library, build, run, trace, SDF, SystemC, and code-coverage settings |
-| `.fsimobj` | `FSIMOBJ\0`, format 7, portable schema 14 | canonical metadata, v3 code-coverage identity, optional source payloads, portable owning units |
-| `.fsimdesign` | `FSIMDES\0`, format 12, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
-| `.fsimlib` | canonical TOML format 5, portable schema 14 | logical-library metadata, optional sources, portable units, optional exact native accelerators |
+| `.fsimobj` | `FSIMOBJ\0`, format 8, portable schema 15, compiled-HIR bundle 1 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
+| `.fsimdesign` | `FSIMDES\0`, format 13, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
+| `.fsimlib` | canonical TOML format 6, portable schema 15, compiled-HIR bundle 1 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
-| LLVM object cache | `FSIM-OBJECT-CACHE-V1`, key schema `fsim-llvm-native-object-v168` | checksum-framed native object keyed by target, lowering controls, and v3 code-coverage identity; canonical lowercase SHA-256 key; 256 MiB read ceiling |
+| Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v168`; ordinary payload compiled-HIR bundle 1 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
 
 All numeric binary fields are canonical little-endian. Artifact payload paths
 are relative, normalized, contained, and unique within their artifact. Trees
@@ -162,10 +162,10 @@ model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
 rejected directly; there is no compatibility reader or migration.
 
-The portable owning-unit and class codecs are schema 32; UDP declarations are
-schema 1. The standalone design's current state schemas are runtime 62,
-semantic 4, DesignIR 4, class 12, SystemVerilog constraint HIR 7, coverage 7,
-UVM 3, and VHDL HIR 4. Checkpoint envelopes are schema 1 or 2 according to the
+The compiled-HIR bundle is schema 1 and embeds semantic schema 4,
+SystemVerilog HIR schema 8, and VHDL HIR schema 5. The standalone design's
+other current state schemas are runtime 62, DesignIR 4, coverage 7, and UVM 3.
+Checkpoint envelopes are schema 1 or 2 according to the
 typed checkpoint family. SDF application records use explicit schema 1, 2, or
 4 owners; trace archives use schema 1, and the clean-room FST container carries
 its own fixed v2 container identity. SCV artifact/cache, protocol, transport,
@@ -184,9 +184,9 @@ and [incremental native contract](../tests/feature_matrix/incremental_native_con
 source + selected language profile
   -> .fsimobj
        -> optional source payloads
-       -> schema-31 owning units / schema-1 UDP declarations
+       -> one compiled semantic/SV/VHDL HIR bundle
   -> .fsimlib
-       -> optional sources + portable units
+       -> optional sources + the identical compiled-HIR bundle
        -> optional exact LLVM/SystemC native accelerators
 
 ordered .fsimobj + selected .fsimscplugin + roots/bindings

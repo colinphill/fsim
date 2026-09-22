@@ -450,6 +450,7 @@ endfunction()
 add_library(
   fsim_diagnostic STATIC
   src/diagnostic/artifact_identity.cpp
+  src/diagnostic/compiled_hir_compatibility_codes.cpp
   src/diagnostic/diagnostic.cpp
 )
 add_library(fsim::diagnostic ALIAS fsim_diagnostic)
@@ -465,8 +466,16 @@ fsim_configure_library(fsim_project)
 target_link_libraries(fsim_project PUBLIC fsim_diagnostic)
 
 add_library(fsim_semantic STATIC
+  src/semantic/compiled_design.cpp
+  src/semantic/compiled_design_linker.cpp
+  src/semantic/compiled_design_linker_classes.cpp
+  src/semantic/compiled_design_normalization.cpp
+  src/semantic/compiled_design_resolver.cpp
+  src/semantic/compiled_design_specialization.cpp
+  src/semantic/compiled_design_specialization_vhdl_generate.cpp
   src/semantic/design_ir.cpp
   src/semantic/model.cpp
+  src/semantic/systemverilog_class_specialization.cpp
   src/semantic/systemverilog_hir.cpp
   src/semantic/vhdl_hir.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)
@@ -738,147 +747,63 @@ target_link_libraries(fsim_runtime PRIVATE fsim_tf)
   add_library(
     fsim_elaboration
     STATIC
-      src/elaboration/coverage_conditions.cpp
-      src/elaboration/coverage_branches.cpp
+      src/frontend/coverage_conditions.cpp
+      src/frontend/coverage_branches.cpp
       src/elaboration/coverage_exclusion_persistence.cpp
       src/elaboration/coverage_external_exclusions.cpp
-      src/elaboration/coverage_fsm_inference.cpp
-      src/elaboration/coverage_fsm_hints.cpp
+      src/frontend/coverage_fsm_inference.cpp
+      src/frontend/coverage_fsm_hints.cpp
       src/elaboration/coverage_fsm_validation.cpp
       src/elaboration/coverage_memory_toggle.cpp
-      src/elaboration/coverage_toggle_selection.cpp
+      src/frontend/coverage_toggle_selection.cpp
       src/elaboration/coverage_instance_identity.cpp
       src/elaboration/coverage_inventory.cpp
       src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
       src/elaboration/elaborate.cpp
-      src/elaboration/verilog_coverage_points.cpp
-      src/elaboration/verilog_coverage_conditions.cpp
-      src/elaboration/verilog_toggle_inventory.cpp
-      src/elaboration/vhdl_coverage_conditions.cpp
-      src/elaboration/vhdl_coverage_points.cpp
-      src/elaboration/vhdl_toggle_inventory.cpp
-      src/elaboration/elaboration_analysis.cpp
-      src/elaboration/elaboration_generated_constants.cpp
-      src/elaboration/elaboration_generated_declarations.cpp
-      src/elaboration/elaboration_generate_substitution.cpp
+      src/frontend/verilog_coverage_points.cpp
+      src/frontend/verilog_coverage_conditions.cpp
+      src/frontend/verilog_toggle_inventory.cpp
+      src/frontend/vhdl_coverage_conditions.cpp
+      src/frontend/vhdl_coverage_points.cpp
+      src/frontend/vhdl_toggle_inventory.cpp
       src/elaboration/elaboration_constants.cpp
-      src/elaboration/elaboration_constant_types.cpp
-      src/elaboration/elaboration_defaults.cpp
-      src/elaboration/elaboration_vhdl_array_layout.cpp
-      src/elaboration/elaboration_literals.cpp
-  src/elaboration/elaboration_specialization.cpp
-  src/elaboration/elaboration_specialization_support.cpp
-  src/elaboration/elaboration_systemc_specialization.cpp
-      src/elaboration/elaboration_vhdl_static.cpp
-      src/elaboration/elaboration_vhdl_values.cpp
-      src/elaboration/elaboration_vhdl_blocks.cpp
-      src/elaboration/elaboration_vhdl_generate_choice.cpp
-      src/elaboration/elaboration_vhdl_local.cpp
-      src/elaboration/elaboration_sv_constants.cpp
-      src/elaboration/elaboration_sv_constant_evaluator.cpp
-      src/elaboration/elaboration_sv_constant_support.cpp
-  src/elaboration/elaboration_sv_constant_services.cpp
-  src/elaboration/elaboration_sv_lets.cpp
-  src/elaboration/elaboration_sv_scalars.cpp
-      src/elaboration/elaboration_sv_functions.cpp
-      src/elaboration/elaboration_sv_function_evaluator_execution.cpp
-      src/elaboration/elaboration_sv_function_evaluator_expression.cpp
-      src/elaboration/elaboration_sv_generate.cpp
-      src/elaboration/elaboration_sv_strings.cpp
-      src/elaboration/elaboration_sv_container_type.cpp
-      src/elaboration/elaboration_sv_type_parameters.cpp
-      src/elaboration/elaboration_type_generics.cpp
-      src/elaboration/elaboration_vhdl_components.cpp
-      src/elaboration/vhdl_component_profiles.cpp
-      src/elaboration/vhdl_array_boundary.cpp
-      src/elaboration/elaboration_vhdl_configurations.cpp
-      src/elaboration/elaboration_vhdl_packages.cpp
-      src/elaboration/elaboration_vhdl_subprograms.cpp
+      src/elaboration/elaboration_vhdl_configuration_hir.cpp
       src/elaboration/elaboration_targets.cpp
-      src/elaboration/hierarchy_generic_interfaces.cpp
       src/elaboration/hierarchy_packages.cpp
-      src/elaboration/hierarchy_package_imports.cpp
-      src/elaboration/hierarchy_root_globals.cpp
       src/elaboration/hierarchy_builder.cpp
-      src/elaboration/hierarchy_vhdl_protected.cpp
-      src/elaboration/hierarchy_ports.cpp
-      src/elaboration/hierarchy_sv_package_qualified.cpp
-      src/elaboration/hierarchy_sv_interface_callables.cpp
+      src/elaboration/hierarchy_compiled_occurrence.cpp
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
-  src/elaboration/hierarchy_sv_container_bridge.cpp
+      src/elaboration/hierarchy_sv_constant_evaluator.cpp
   src/elaboration/hierarchy_sv_aliases.cpp
   src/elaboration/hierarchy_sv_configuration.cpp
-      src/elaboration/hierarchy_sv_ports.cpp
       src/elaboration/hierarchy_instantiate.cpp
-      src/elaboration/hierarchy_instantiate_processes_and_children.cpp
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_udp.cpp
-      src/elaboration/hierarchy_type_resolution.cpp
-      src/elaboration/hierarchy_types.cpp
-      src/elaboration/hierarchy_connect_ports.cpp
-      src/elaboration/lowerer_assignment.cpp
-      src/elaboration/lowerer_assignment_support.cpp
+      src/elaboration/vhdl_hir_type_validation.cpp
       src/elaboration/lowerer_driver_regions.cpp
-      src/elaboration/lowerer_assert.cpp
-      src/elaboration/lowerer_condition.cpp
-      src/elaboration/lowerer_procedural_updates.cpp
-      src/elaboration/lowerer_case_qualified.cpp
-      src/elaboration/lowerer_vhdl_case.cpp
-      src/elaboration/lowerer_vhdl_conversion.cpp
-      src/elaboration/lowerer_vhdl_composite_operations.cpp
-      src/elaboration/lowerer_vhdl_attributes.cpp
-      src/elaboration/lowerer_vhdl_matching.cpp
-      src/elaboration/lowerer_vhdl_logic.cpp
-  src/elaboration/lowerer_vhdl_vital.cpp
-  src/elaboration/lowerer_vhdl_vital_delay.cpp
-  src/elaboration/lowerer_vhdl_vital_memory.cpp
-  src/elaboration/lowerer_vhdl_vital_state.cpp
-  src/elaboration/lowerer_vhdl_vital_timing.cpp
-      src/elaboration/lowerer_vhdl_numeric.cpp
-      src/elaboration/lowerer_vhdl_fixed.cpp
-      src/elaboration/lowerer_vhdl_float.cpp
-      src/elaboration/lowerer_vhdl_physical.cpp
-      src/elaboration/lowerer_vhdl_signal_attributes.cpp
-      src/elaboration/lowerer_vhdl_protected.cpp
-      src/elaboration/lowerer_control.cpp
-      src/elaboration/lowerer_expression.cpp
-      src/elaboration/lowerer_expression_support.cpp
-      src/elaboration/lowerer_sv_classes.cpp
-      src/elaboration/lowerer_expression_binary.cpp
-      src/elaboration/lowerer_expression_membership.cpp
-      src/elaboration/lowerer_expression_system.cpp
-      src/elaboration/lowerer_expression_unary.cpp
-      src/elaboration/lowerer_functions.cpp
-      src/elaboration/lowerer_functions_part2.cpp
-      src/elaboration/lowerer_callables.cpp
-      src/elaboration/lowerer_overloads.cpp
-      src/elaboration/lowerer_procedures.cpp
-      src/elaboration/lowerer_vhdl_textio.cpp
-      src/elaboration/lowerer_concurrent.cpp
-      src/elaboration/lowerer_process.cpp
-      src/elaboration/lowerer_process_part2.cpp
-      src/elaboration/lowerer_fork.cpp
-      src/elaboration/lowerer_pla.cpp
-      src/elaboration/lowerer_sv_synchronization.cpp
-      src/elaboration/lowerer_events.cpp
-      src/elaboration/lowerer_tasks.cpp
-      src/elaboration/lowerer_types.cpp
-      src/elaboration/lowerer_types_part2.cpp
-      src/elaboration/lowerer_sv_string_format.cpp
-      src/elaboration/lowerer_sv_strings.cpp
-      src/elaboration/lowerer_sv_container_slices.cpp
-      src/elaboration/lowerer_sv_container_types.cpp
-      src/elaboration/lowerer_sv_containers.cpp
-      src/elaboration/lowerer_sv_containers_part2.cpp
-      src/elaboration/lowerer_sv_file_binary.cpp
-      src/elaboration/lowerer_sv_file_scan.cpp
-      src/elaboration/lowerer_sv_multidimensional.cpp
-      src/elaboration/lowerer_sv_unpacked_aggregates.cpp
-      src/elaboration/lowerer_vhdl_array_selection.cpp
-      src/elaboration/lowerer_vhdl_access.cpp
+      src/elaboration/lowerer_hir_capability.cpp
+      src/elaboration/lowerer_hir_callable.cpp
+      src/elaboration/lowerer_hir_container.cpp
+      src/elaboration/lowerer_hir_expression.cpp
+      src/elaboration/lowerer_hir_file.cpp
+      src/elaboration/lowerer_hir_let.cpp
+      src/elaboration/lowerer_hir_math.cpp
+      src/elaboration/lowerer_hir_process.cpp
+      src/elaboration/lowerer_hir_statement.cpp
+      src/elaboration/lowerer_hir_synchronization.cpp
+      src/elaboration/lowerer_hir_vhdl_access.cpp
+      src/elaboration/lowerer_hir_vhdl_fixed.cpp
+      src/elaboration/lowerer_hir_vhdl_float.cpp
+      src/elaboration/lowerer_hir_vhdl_special.cpp
+      src/elaboration/lowerer_hir_vhdl_vital.cpp
+      src/elaboration/lowerer_hir_vhdl_vital_delay.cpp
+      src/elaboration/lowerer_hir_vhdl_vital_memory.cpp
+      src/elaboration/lowerer_hir_vhdl_vital_state.cpp
+      src/elaboration/lowerer_hir_vhdl_vital_timing.cpp
+      src/elaboration/vhdl_callable_legality.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)
@@ -916,7 +841,6 @@ add_library(
   src/artifact/design.cpp
   src/artifact/object.cpp
   src/library/artifact.cpp
-  src/library/portable_unit.cpp
 )
 add_library(fsim::library ALIAS fsim_library)
 fsim_configure_library(fsim_library)
@@ -1233,6 +1157,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_coverage_database_psl.cpp
       src/app/application_coverage_control.cpp
       src/app/application_check.cpp
+      src/app/application_compiled_design.cpp
       src/app/application_standard_library.cpp
       src/app/application_standard_library_vital.cpp
       src/app/application_vhdl_analysis.cpp
@@ -1242,6 +1167,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_inspection.cpp
       src/app/application_design_ir.cpp
       src/app/application_design_artifact_codec.cpp
+      src/app/application_design_artifact_hir_codec.cpp
       src/app/application_design_artifact_codec_validation.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
@@ -1271,10 +1197,15 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_constraint_lowering.cpp
       src/app/application_class_randomization.cpp
       src/app/application_class_execution.cpp
+      src/app/application_class_hir_execution.cpp
+      src/app/application_systemverilog_class_hir.cpp
       src/app/application_systemverilog_hir.cpp
+      src/app/application_systemverilog_hir_projection.cpp
+      src/app/application_systemverilog_coverage_hir.cpp
       src/app/application_systemverilog_executable_hir.cpp
       src/app/application_vhdl_hir.cpp
       src/app/application_vhdl_hir_builder.cpp
+      src/app/application_vhdl_hir_projection.cpp
       src/app/application_vhdl_hir_callables.cpp
       src/app/application_vhdl_hir_statements.cpp
       src/app/application_vhdl_hir_types.cpp

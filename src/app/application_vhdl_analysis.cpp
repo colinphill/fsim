@@ -50,10 +50,22 @@ std::string architecture_key(
 
 class AnalysisOrderValidator {
  public:
-  explicit AnalysisOrderValidator(diagnostic::Engine& diagnostics)
-      : diagnostics_(diagnostics) {}
+  explicit AnalysisOrderValidator(
+      diagnostic::Engine& diagnostics,
+      const bool allow_external_architecture_primary)
+      : diagnostics_(diagnostics),
+        allow_external_architecture_primary_(
+            allow_external_architecture_primary) {}
 
   void run(const std::span<const DesignUnit> units) {
+    if (allow_external_architecture_primary_) {
+      for (const auto& unit : units) {
+        if (unit.language == frontend::Language::Vhdl2008
+            && unit.kind == frontend::UnitKind::VhdlEntity) {
+          local_entities_.insert(primary_key(library_of(unit), unit.name));
+        }
+      }
+    }
     for (const auto& unit : units) {
       if (unit.language != frontend::Language::Vhdl2008) {
         continue;
@@ -269,9 +281,11 @@ class AnalysisOrderValidator {
     const auto library = library_of(unit);
     switch (unit.kind) {
       case frontend::UnitKind::VhdlArchitecture:
-          if (!validate_dependency(
-                  entities_, primary_key(library, unit.primary_name),
-                  "entity", unit, unit.span)) {
+        {
+          const auto key = primary_key(library, unit.primary_name);
+          if (!validate_dependency(entities_, key, "entity", unit, unit.span)
+              && (!allow_external_architecture_primary_
+                  || local_entities_.contains(key))) {
               report(
                   "FSIM-FE-VHORDER-001",
                   "VHDL entity '" + library + "." + unit.primary_name
@@ -279,6 +293,7 @@ class AnalysisOrderValidator {
                       + unit.name + "'",
                   unit.span);
           }
+        }
         break;
       case frontend::UnitKind::VhdlPackage:
           if (!unit.primary_name.empty()
@@ -392,6 +407,8 @@ class AnalysisOrderValidator {
   RevisionIndex configurations_;
   std::set<std::string> primary_units_;
   std::set<std::string> secondary_units_;
+  std::set<std::string> local_entities_;
+  bool allow_external_architecture_primary_ { };
 };
 
 }  // namespace
@@ -442,8 +459,10 @@ void report_vhdl_duplicate_design_unit(
 
 void validate_vhdl_analysis_order(
     const std::span<const frontend::DesignUnit> units,
-    diagnostic::Engine& diagnostics) {
-  AnalysisOrderValidator{diagnostics}.run(units);
+    diagnostic::Engine& diagnostics,
+    const bool allow_external_architecture_primary) {
+  AnalysisOrderValidator{
+      diagnostics, allow_external_architecture_primary}.run(units);
 }
 
 void validate_vhdl_simulator_api(

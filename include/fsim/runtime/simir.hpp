@@ -815,6 +815,11 @@ struct Binary {
     RegisterId rhs { };
 };
 
+[[nodiscard]] PackedLogic4 binary_value(
+    BinaryOperator operation,
+    const PackedLogic4& lhs,
+    const PackedLogic4& rhs);
+
 enum class IntegerUnaryOperator : std::uint8_t {
     negate,
     absolute,
@@ -845,8 +850,9 @@ struct IntegerBinary {
     RegisterId rhs { };
 };
 
-/// Require a known signed 32- or 64-bit value to belong to an elaborated VHDL
-/// scalar subtype before it is stored.
+/// Require a known value no wider than 64 bits to belong to an elaborated VHDL
+/// scalar subtype before it is stored. Narrow nonnegative ranges represent
+/// enumeration ordinals and are interpreted as unsigned.
 struct IntegerCheck {
     RegisterId source { };
     std::int64_t lower { };
@@ -1760,6 +1766,16 @@ public:
         std::vector<std::string>&,
         std::span<const std::string>,
         std::span<const std::uint8_t>)>;
+    /// Execute one imported SystemVerilog DPI function. The identity is the
+    /// declaration's C linkage name; mutable actual vectors carry output,
+    /// inout, and ref copy-out values using the same representation as class
+    /// call boundaries.
+    using DpiFunctionCallHook = std::function<PackedLogic4(
+        std::string_view,
+        std::vector<PackedLogic4>&,
+        std::vector<std::string>&,
+        std::span<const std::string>,
+        std::span<const std::uint8_t>)>;
 
     explicit Interpreter(
         SchedulerOptions options = { },
@@ -1987,6 +2003,7 @@ public:
     void set_class_static_property_write_hook(
         ClassStaticPropertyWriteHook hook);
     void set_class_static_method_call_hook(ClassStaticMethodCallHook hook);
+    void set_dpi_function_call_hook(DpiFunctionCallHook hook);
 
 private:
     [[nodiscard]] ProcessId

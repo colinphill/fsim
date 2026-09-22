@@ -74,9 +74,6 @@ semantic::vhdl::Hir build_vhdl_hir(
     semantic::Model& semantics)
 {
     semantic::vhdl::Hir result;
-    if (!parsed.vhdl_profile_compatible) {
-        return result;
-    }
     VhdlHirBuilder builder { semantics, result };
     builder.add_design(parsed);
     complete_vhdl_executable_hir(parsed, semantics, result);

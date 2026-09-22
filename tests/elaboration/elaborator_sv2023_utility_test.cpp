@@ -51,7 +51,7 @@ endmodule
                 "constant-severity.sv", std::string { accepted_source } },
             revision);
         assert(parsed.ok());
-        const auto elaborated = fsim::elaboration::elaborate(
+        const auto elaborated = compile_and_elaborate(
             parsed.design, "constant_severity");
         if (elaborated.messages.size() != 3U) {
             for (const auto& message : elaborated.messages) {
@@ -92,7 +92,7 @@ endmodule
  )" },
         fsim::frontend::StandardRevision::SystemVerilog2023);
     assert(rejected.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         rejected.design, "constant_severity_error");
     assert(!elaborated.ok());
     assert(std::ranges::any_of(

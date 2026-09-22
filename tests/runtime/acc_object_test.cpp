@@ -312,7 +312,7 @@ int main() {
           "object fixture enters its exact v3 context");
   require(acc_initialize() == 1, "object fixture initializes ACC lifecycle");
 
-  for (const auto [object, type] : fixture.types) {
+  for (const auto& [object, type] : fixture.types) {
     auto mapped = acc(fixture, object);
     require(acc_object_of_type(mapped, type) == 1 && acc_error_flag == 0,
             "every complete object-model subtype preserves exact identity");

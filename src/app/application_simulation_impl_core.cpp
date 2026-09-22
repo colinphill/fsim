@@ -52,7 +52,8 @@ void Simulation::Impl::load_coverage_database(const std::filesystem::path& path)
     }
     diagnostic::Engine diagnostics;
     auto loaded = deserialize_systemverilog_coverage_state(
-        contents, support::path_to_utf8(path), diagnostics);
+        contents, support::path_to_utf8(path), built.systemverilog_hir,
+        built.semantics, diagnostics);
     if (!loaded) {
         const auto& entries = diagnostics.diagnostics();
         throw std::runtime_error {
@@ -62,8 +63,9 @@ void Simulation::Impl::load_coverage_database(const std::filesystem::path& path)
         };
     }
     std::string merge_error;
-    if (!frontend::merge_systemverilog_coverage_state(
-            built.systemverilog_coverage, *loaded, merge_error)) {
+    if (!application_detail::merge_systemverilog_coverage_state(
+            built.systemverilog_coverage, *loaded,
+            built.systemverilog_hir, built.semantics, merge_error)) {
         throw std::runtime_error { std::move(merge_error) };
     }
 }
@@ -75,7 +77,8 @@ void Simulation::Impl::save_coverage_database()
     }
     diagnostic::Engine diagnostics;
     auto contents = serialize_systemverilog_coverage_state(
-        built.systemverilog_coverage, diagnostics);
+        built.systemverilog_coverage, built.systemverilog_hir,
+        built.semantics, diagnostics);
     if (!contents) {
         const auto& entries = diagnostics.diagnostics();
         throw std::runtime_error {
@@ -238,10 +241,29 @@ void Simulation::Impl::validate_external_value(
     }
 }
 
-[[nodiscard]] const frontend::SystemVerilogClassSpecialization&
+[[nodiscard]] const semantic::sv::ClassSpecialization&
 Simulation::Impl::class_specialization(const std::string_view identity) const
 {
-    return class_execution.class_specialization(identity);
+    auto found = std::ranges::find(
+        built.compiled_systemverilog_class_specializations, identity,
+        &semantic::sv::ClassSpecialization::specialization_identity);
+    if (found == built.compiled_systemverilog_class_specializations.end()) {
+        const auto matches = std::ranges::count(
+            built.compiled_systemverilog_class_specializations, identity,
+            &semantic::sv::ClassSpecialization::declaration_identity);
+        if (matches == 1) {
+            found = std::ranges::find(
+                built.compiled_systemverilog_class_specializations, identity,
+                &semantic::sv::ClassSpecialization::declaration_identity);
+        }
+    }
+    if (found == built.compiled_systemverilog_class_specializations.end()) {
+        throw std::out_of_range {
+            "SystemVerilog class specialization '" + std::string { identity }
+            + "' is not available in this simulation"
+        };
+    }
+    return *found;
 }
 
 [[nodiscard]] runtime::SystemVerilogUvmRootHandle Simulation::Impl::component_root(
@@ -256,8 +278,71 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
     const std::span<const runtime::SystemVerilogConstraintTemplate>
         inline_constraints)
 {
-    return class_execution.invoke_source_randomize(
-        handle, selected_names, inline_constraints);
+    auto& object = class_heap.object(handle);
+    const auto prior_properties = object.properties;
+    const auto callback = [&](const std::string_view name) {
+        const auto* method = class_hir_execution.method_named(handle, name);
+        if (method == nullptr)
+            return;
+        const auto returns_void = !method->return_type
+            || method->return_type->target.spelling == "void";
+        if (method->kind != semantic::sv::ClassMethodKind::function
+            || method->static_method || !method->formals.empty()
+            || !returns_void) {
+            throw std::invalid_argument {
+                "randomize callback requires a nonstatic zero-argument void "
+                "function"
+            };
+        }
+        std::vector<runtime::PackedLogic4> actuals;
+        std::vector<std::string> string_actuals;
+        (void)class_hir_execution.invoke_function(
+            *method, handle, actuals, string_actuals, { }, { });
+    };
+    try {
+        callback("pre_randomize");
+    } catch (...) {
+        object.properties = prior_properties;
+        return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+    }
+    runtime::SystemVerilogClassRandomizeRequest request;
+    application_detail::configure_systemverilog_randomize_selection(
+        request, selected_names);
+    request.call_identity = object.specialization_identity
+        + "::randomize@source";
+    request.class_constraints
+        = [this, handle,
+              specialization = object.specialization_identity](
+              auto& solver, const auto& variables) {
+              application_detail::configure_systemverilog_class_constraints(
+                  solver, variables, built.systemverilog_hir,
+                  class_specialization(specialization),
+                  [this, handle](const auto identity) {
+                      return class_heap.constraint_mode(handle, identity);
+                  });
+          };
+    if (!inline_constraints.empty()) {
+        request.inline_constraints
+            = [inline_constraints,
+                  identity = object.specialization_identity](
+                  auto& solver, const auto& variables) {
+                  runtime::configure_systemverilog_inline_constraints(
+                      solver, variables, inline_constraints,
+                      identity + "::randomize@inline");
+              };
+    }
+    const auto result = runtime::randomize_systemverilog_class_object(
+        class_heap, handle, request);
+    if (result.language_result() != 0) {
+        try {
+            callback("post_randomize");
+        } catch (...) {
+            object.properties = prior_properties;
+            return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+        }
+    }
+    return runtime::PackedLogic4::from_aval_bval(
+        32, result.language_result(), 0);
 }
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_randomization_mode(
@@ -289,8 +374,35 @@ void Simulation::Impl::assign_property_value(
     const std::string_view canonical_identity,
     const runtime::PackedLogic4& value)
 {
-    class_execution.assign_property_value(
-        destination, canonical_identity, value);
+    if (destination.kind
+        == runtime::SystemVerilogClassPropertyKind::ClassHandle) {
+        const auto word = value.low_word();
+        if (word.bval != 0) {
+            throw std::invalid_argument {
+                "class-handle property assignment contains X or Z"
+            };
+        }
+        const auto [owner, name] = static_property_parts(canonical_identity);
+        const auto& specialization = class_specialization(owner);
+        const auto property = std::ranges::find_if(
+            specialization.properties, [&](const auto& candidate) {
+                return candidate.owner_identity == owner
+                    && candidate.name == name;
+            });
+        if (property == specialization.properties.end()) {
+            throw std::out_of_range {
+                "SystemVerilog class property profile '"
+                + std::string { canonical_identity } + "' is not available"
+            };
+        }
+        if (word.aval != 0) {
+            (void)class_heap.checked_cast(
+                word.aval, property->type.class_identity);
+        }
+        destination.handle = word.aval;
+        return;
+    }
+    destination.packed = resize_packed(value, destination.packed.width());
 }
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_class_container(
@@ -316,37 +428,6 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         identity);
 }
 
-[[nodiscard]] std::optional<runtime::PackedLogic4>
-Simulation::Impl::evaluate_constructor_expression(
-    const frontend::Expression& expression,
-    const runtime::SystemVerilogClassHandle handle,
-    ConstructorEnvironment& environment)
-{
-    return class_execution.evaluate_constructor_expression(
-        expression, handle, environment);
-}
-
-[[nodiscard]] Simulation::Impl::ConstructorEnvironment
-Simulation::Impl::bind_constructor_actuals(
-    const frontend::SystemVerilogClassMethodProfile& constructor,
-    const runtime::SystemVerilogClassHandle handle,
-    const std::span<const runtime::PackedLogic4> actuals,
-    const std::span<const std::string> actual_names)
-{
-    return class_execution.bind_constructor_actuals(
-        constructor, handle, actuals, actual_names);
-}
-
-void Simulation::Impl::execute_constructor_statements(
-    const std::span<const frontend::Statement> statements,
-    const runtime::SystemVerilogClassHandle handle,
-    ConstructorEnvironment& environment,
-    const bool native_uvm_library)
-{
-    class_execution.execute_constructor_statements(
-        statements, handle, environment, native_uvm_library);
-}
-
 [[nodiscard]] runtime::SystemVerilogClassHandle Simulation::Impl::allocate_class(
     const std::string_view specialization_identity,
     const std::string_view declared_type,
@@ -368,15 +449,16 @@ void Simulation::Impl::execute_constructor_statements(
     while (current != nullptr) {
         descriptor.assignable_declared_types.push_back(
             current->declaration_identity);
-        if (current->base_specialization_identity.empty())
+        if (!current->base)
             break;
         current = &class_specialization(
-            current->base_specialization_identity);
+            current->base->specialization_identity);
     }
     for (const auto& property : specialization.properties) {
-        if (!property.is_static) {
+        if (!property.static_storage) {
             descriptor.properties.push_back(
-                class_property_descriptor(property, true));
+                class_property_descriptor(
+                    property, built.systemverilog_hir, true));
         }
     }
     const auto declaration = std::ranges::find(
@@ -392,7 +474,10 @@ void Simulation::Impl::execute_constructor_statements(
             }
         }
     } else {
-        descriptor.constraint_modes = specialization.constraint_modes;
+        for (const auto& constraint : specialization.constraints) {
+            descriptor.constraint_modes.emplace_back(
+                constraint.selected_identity, constraint.mode_enabled);
+        }
     }
     return class_heap.allocate(descriptor);
 }
@@ -414,7 +499,7 @@ void Simulation::Impl::execute_constructor_statements(
         allocation_scope);
     const auto before = packed_class_snapshot();
     const auto component_specialization = is_systemverilog_uvm_type(
-        built.systemverilog_class_specializations,
+        built.compiled_systemverilog_class_specializations,
         specialization,
         "uvm_component");
     bool object_initialized { };
@@ -425,7 +510,7 @@ void Simulation::Impl::execute_constructor_statements(
         invoke_source_constructor(
             specialization, handle, actuals, actual_names);
         if (is_systemverilog_uvm_type(
-                built.systemverilog_class_specializations,
+                built.compiled_systemverilog_class_specializations,
                 specialization,
                 "uvm_object")) {
             uvm_objects.initialize(handle);

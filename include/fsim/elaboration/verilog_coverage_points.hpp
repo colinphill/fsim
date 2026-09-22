@@ -6,7 +6,6 @@
 #include "fsim/frontend/design.hpp"
 
 #include <cstddef>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -95,21 +94,5 @@ struct VerilogCoveragePointResult {
         return error == VerilogCoveragePointError::None;
     }
 };
-
-// A retained source-language statement is executable unless it is only a
-// lexical block container or an explicit null statement. Declarations are not
-// Statement nodes and therefore cannot enter discovery.
-[[nodiscard]] bool is_executable_verilog_statement_kind(
-    frontend::StatementKind kind) noexcept;
-
-// Discover one statement point for each executable node in the supplied
-// retained statement forest. The walk includes true/false bodies and every
-// case alternative, but not normalized for-loop update fragments (which are
-// expressions in the source grammar, not standalone statements).
-[[nodiscard]] VerilogCoveragePointResult discover_verilog_statement_points(
-    std::span<const frontend::Statement> statements,
-    frontend::Language language,
-    std::span<const VerilogCoverageSource> sources,
-    VerilogCoveragePointLimits limits = { }) noexcept;
 
 } // namespace fsim::elaboration

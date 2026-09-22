@@ -154,6 +154,18 @@ ModelRecords Model::records() const {
         statement_identities_, process_identities_};
 }
 
+ModelRecords Model::take_records() && noexcept {
+    ModelRecords records {
+        std::move(source_files_), std::move(expansions_),
+        std::move(source_spans_), std::move(origins_), std::move(scopes_),
+        std::move(units_), std::move(types_), std::move(values_),
+        std::move(instances_), std::move(declarations_),
+        std::move(expression_identities_), std::move(statement_identities_),
+        std::move(process_identities_)};
+    *this = Model {};
+    return records;
+}
+
 std::optional<Model> Model::from_records(ModelRecords records) {
     Model model;
     model.source_files_ = std::move(records.source_files);

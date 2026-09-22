@@ -10,7 +10,7 @@ void test_generate_slice_and_case_closure(
     const fsim::frontend::ParsedDesign& generated_design)
 {
     const auto generated_sv_full_slice_bank =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_full_slice_bank");
     assert(generated_sv_full_slice_bank.ok());
@@ -51,7 +51,7 @@ void test_generate_slice_and_case_closure(
         == "00001111");
 
     const auto generated_sv_partial_slice_bank =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_partial_slice_bank");
     assert(generated_sv_partial_slice_bank.ok());
@@ -74,7 +74,7 @@ void test_generate_slice_and_case_closure(
         == 8);
 
     const auto generated_sv_wide_slice_bank =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_wide_slice_bank");
     assert(generated_sv_wide_slice_bank.ok());
@@ -108,7 +108,7 @@ void test_generate_slice_and_case_closure(
         == fsim::runtime::RunStatus::completed);
 
     const auto generated_vhdl_bad_constant =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_bad_constant(rtl)");
     assert(!generated_vhdl_bad_constant.ok());
@@ -120,7 +120,7 @@ void test_generate_slice_and_case_closure(
         }));
 
     const auto forward_generated_type =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_forward_generated_type(rtl)");
     assert(!forward_generated_type.ok());
@@ -128,7 +128,7 @@ void test_generate_slice_and_case_closure(
         forward_generated_type, "FSIM-ELAB-VHTYPE-001"));
 
     const auto duplicate_generated_callable =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_duplicate_callable(rtl)");
     assert(!duplicate_generated_callable.ok());
@@ -138,7 +138,7 @@ void test_generate_slice_and_case_closure(
         duplicate_generated_callable, "FSIM-ELAB-VHOVER-006"));
 
     const auto forward_generated_callable =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_forward_callable(rtl)");
     assert(!forward_generated_callable.ok());
@@ -146,7 +146,7 @@ void test_generate_slice_and_case_closure(
         forward_generated_callable, "FSIM-ELAB-VHNAME-001"));
 
     const auto forward_generated_generic_callable =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_forward_generic_callable(rtl)");
     assert(!forward_generated_generic_callable.ok());
@@ -166,7 +166,7 @@ void test_generate_slice_and_case_closure(
     unevaluable_unit->generate_regions.front().condition.text =
         "MISSING_GENERATE_CONSTANT";
     const auto unevaluable_generate =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             unevaluable_generate_design,
             "sv:work.generated_sv_true");
     assert(!unevaluable_generate.ok());
@@ -196,7 +196,7 @@ void test_generate_slice_and_case_closure(
     invalid_loop_initial.text = "MISSING_LOOP_INITIAL";
     invalid_loop_initial.operands.clear();
     const auto invalid_loop_initial_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_loop_initial_design,
             "sv:work.generated_sv_loop");
     assert(!invalid_loop_initial_result.ok());
@@ -213,7 +213,7 @@ void test_generate_slice_and_case_closure(
     invalid_loop_condition.text = "MISSING_LOOP_CONDITION";
     invalid_loop_condition.operands.clear();
     const auto invalid_loop_condition_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_loop_condition_design,
             "sv:work.generated_sv_loop");
     assert(!invalid_loop_condition_result.ok());
@@ -236,7 +236,7 @@ void test_generate_slice_and_case_closure(
     stalled_iteration.text = "i";
     stalled_iteration.operands.clear();
     const auto stalled_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             stalled_loop_design,
             "sv:work.generated_sv_loop",
             first_generated_loop_binding);
@@ -254,7 +254,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(cycling_loop_design.ok());
-    const auto cycling_loop = fsim::elaboration::elaborate(
+    const auto cycling_loop = compile_and_elaborate(
         cycling_loop_design.design, "cycling_generate");
     assert(!cycling_loop.ok());
     assert(has_diagnostic(cycling_loop, "FSIM-ELAB-GEN-014"));
@@ -269,7 +269,7 @@ endmodule
     invalid_loop_iteration.text = "MISSING_LOOP_ITERATION";
     invalid_loop_iteration.operands.clear();
     const auto invalid_loop_iteration_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_loop_iteration_design,
             "sv:work.generated_sv_loop",
             first_generated_loop_binding);
@@ -278,7 +278,7 @@ endmodule
         invalid_loop_iteration_result, "FSIM-ELAB-GEN-005"));
 
     const auto shadowed_loop =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             generated_design,
             "sv:work.generated_shadow_loop");
     assert(!shadowed_loop.ok());
@@ -309,7 +309,7 @@ endmodule
     invalid_case_selector.text = "MISSING_CASE_SELECTOR";
     invalid_case_selector.operands.clear();
     const auto invalid_case_selector_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_case_selector_design,
             "sv:work.generated_sv_case_selected");
     assert(!invalid_case_selector_result.ok());
@@ -327,7 +327,7 @@ endmodule
     invalid_case_choice.left.text = "MISSING_CASE_CHOICE";
     invalid_case_choice.left.operands.clear();
     const auto invalid_case_choice_result =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_case_choice_design,
             "sv:work.generated_sv_case_selected");
     assert(!invalid_case_choice_result.ok());
@@ -342,7 +342,7 @@ endmodule
             .choices.front();
     overlapping_choice.left.text = "2";
     const auto overlapping_case =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             overlapping_case_design,
             "sv:work.generated_sv_case_selected");
     assert(!overlapping_case.ok());
@@ -368,7 +368,7 @@ endmodule
             }),
         unmatched_alternatives.end());
     const auto unmatched_case =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             unmatched_case_design,
             "sv:work.generated_sv_case_default");
     assert(unmatched_case.ok());
@@ -405,7 +405,7 @@ endmodule
     std::vector<fsim::frontend::Diagnostic> class_diagnostics;
     assert(fsim::frontend::resolve_systemverilog_classes(
         generated_class_design.design, class_diagnostics));
-    const auto generated_class = fsim::elaboration::elaborate(
+    const auto generated_class = compile_and_elaborate(
         generated_class_design.design, "generated_class_revision");
     if (!generated_class.ok()) {
         for (const auto& diagnostic : generated_class.diagnostics) {

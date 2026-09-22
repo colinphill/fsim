@@ -11,7 +11,6 @@ set(FSIM_CONTRACT
 set(FSIM_OBJECT_CODEC "${FSIM_SOURCE_DIR}/src/artifact/object.cpp")
 set(FSIM_DESIGN_CODEC "${FSIM_SOURCE_DIR}/src/artifact/design.cpp")
 set(FSIM_LIBRARY_CODEC "${FSIM_SOURCE_DIR}/src/library/artifact.cpp")
-set(FSIM_PORTABLE_CODEC "${FSIM_SOURCE_DIR}/src/library/portable_unit.cpp")
 set(FSIM_OBJECT_TEST
   "${FSIM_SOURCE_DIR}/tests/artifact/object_artifact_test.cpp")
 set(FSIM_DESIGN_TEST
@@ -28,7 +27,6 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_OBJECT_CODEC}"
     "${FSIM_DESIGN_CODEC}"
     "${FSIM_LIBRARY_CODEC}"
-    "${FSIM_PORTABLE_CODEC}"
     "${FSIM_OBJECT_TEST}"
     "${FSIM_DESIGN_TEST}"
     "${FSIM_LIBRARY_TEST}"
@@ -45,16 +43,16 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "8d50da489568ec8764dc2fff02f58224f82a7855bf655c85b8a2eaa55b2ab14b")
+  "b3685d16aca700e0fe4981875866f1b20a0ce78d661b7f8503431f2382ef4a25")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable stale-schema contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 33)
+if(NOT FSIM_ROW_COUNT EQUAL 34)
   message(FATAL_ERROR
-    "portable stale-schema contract requires SPDX, header and 31 rows")
+    "portable stale-schema contract requires SPDX, header and 32 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -63,7 +61,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
      "family\tboundary\tcurrent_identity\trejection_and_containment")
   message(FATAL_ERROR "portable stale-schema header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 32)
+foreach(FSIM_INDEX RANGE 2 33)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -97,8 +95,11 @@ endfunction()
 fsim_require_portable_policy_tokens("${FSIM_OBJECT_CODEC}"
   "writer.u32(kObjectFormatVersion)"
   "writer.u32(library::kPortableSchemaVersion)"
+  "writer.u32(library::kCompiledHirSchemaVersion)"
   "metadata.format != kObjectFormatVersion"
   "metadata.portable_schema != library::kPortableSchemaVersion"
+  "metadata.compiled_hir_schema"
+  "!= library::kCompiledHirSchemaVersion"
   "validate_metadata("
   "invalid object metadata supplied for publication")
 fsim_forbid_portable_policy_tokens("${FSIM_OBJECT_CODEC}"
@@ -164,33 +165,33 @@ endif()
 fsim_require_portable_policy_tokens("${FSIM_LIBRARY_CODEC}"
   "output << \"format = \" << kFormatVersion"
   "<< \"portable_schema = \" << kPortableSchemaVersion"
+  "<< \"compiled_hir_schema = \" << kCompiledHirSchemaVersion"
   "metadata.format != kFormatVersion"
   "metadata.portable_schema != kPortableSchemaVersion"
+  "metadata.compiled_hir_schema != kCompiledHirSchemaVersion"
   "unsupported_artifact_identity("
   "\".fsimlib publication\""
   "and portable-unit schema")
 fsim_forbid_portable_policy_tokens("${FSIM_LIBRARY_CODEC}"
   "output << \"format = \" << metadata.format"
-  "<< \"portable_schema = \" << metadata.portable_schema")
+  "<< \"portable_schema = \" << metadata.portable_schema"
+  "<< \"compiled_hir_schema = \" << metadata.compiled_hir_schema")
 
-fsim_require_portable_policy_tokens("${FSIM_PORTABLE_CODEC}"
-  "schema != kOwningUnitSchemaVersion || !reader.read(unit)"
-  "schema != kUdpDeclarationSchemaVersion"
-  "unsupported_artifact_identity("
-  "\"portable owning unit\""
-  "\"portable class unit\""
-  "\"portable UDP declaration\"")
 fsim_require_portable_policy_tokens("${FSIM_OBJECT_TEST}"
   "format < fsim::artifact::kObjectFormatVersion"
   "schema < fsim::library::kPortableSchemaVersion"
+  "stale-compiled-hir-schema"
+  "future-compiled-hir-schema"
   "stale-publication")
 fsim_require_portable_policy_tokens("${FSIM_DESIGN_TEST}"
-  "{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U }"
+  "{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U }"
   "future_header"
   "stale-publication")
 fsim_require_portable_policy_tokens("${FSIM_LIBRARY_TEST}"
   "format < fsim::library::kFormatVersion"
   "schema < fsim::library::kPortableSchemaVersion"
+  "stale-compiled-hir.toml"
+  "future-compiled-hir.toml"
   "stale-publication.fsimlib")
 fsim_require_portable_policy_tokens("${FSIM_PHASE_TEST}"
   "future_design_metadata[8]"
@@ -204,4 +205,4 @@ fsim_require_portable_policy_tokens("${FSIM_TEST_BUILD}"
   "CheckPortableStaleSchemaPolicy.cmake")
 
 message(STATUS
-  "portable stale-schema policy passed: rows=31 digest=${FSIM_CONTRACT_DIGEST}")
+  "portable stale-schema policy passed: rows=32 digest=${FSIM_CONTRACT_DIGEST}")

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/elaboration/verilog_coverage_conditions.hpp"
+#include "fsim/frontend/verilog_coverage_conditions.hpp"
 
 #include "fsim/frontend/parser.hpp"
 
@@ -113,7 +113,7 @@ endmodule
     const auto left_text = statements[0].condition.operands.front().text;
 
     const auto discovered
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             statements, frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
     require(discovered.ok() && discovered.points.size() == 6U,
@@ -231,11 +231,11 @@ endmodule
             profiles[index].revision);
         require(parsed_a.ok() && parsed_b.ok(),
             "every retained Verilog/SystemVerilog profile must parse the condition corpus");
-        const auto first = elaboration::discover_verilog_coverage_conditions(
+        const auto first = frontend::discover_verilog_coverage_conditions(
             parsed_a.design.units.front().processes.front().statements,
             profiles[index].language, std::span { &source_a, 1U });
         const auto relocated
-            = elaboration::discover_verilog_coverage_conditions(
+            = frontend::discover_verilog_coverage_conditions(
                 parsed_b.design.units.front().processes.front().statements,
                 profiles[index].language, std::span { &source_b, 1U });
         require(first.ok() && first.points.size() == 5U && relocated.ok()
@@ -274,7 +274,7 @@ void test_immediate_assertion_and_rejections()
         span(source.source_name, 2U, 6U)
     };
     const auto assertion_result
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -288,7 +288,7 @@ void test_immediate_assertion_and_rejections()
         assertion.condition.span
     };
     const auto negated_result
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &negated_composite, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -301,7 +301,7 @@ void test_immediate_assertion_and_rejections()
         "logical negation around a composite must expose inner atoms without flattening its path");
 
     const auto invalid_language
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U }, frontend::Language::Vhdl2008,
             std::span { &source, 1U });
     require(!invalid_language.ok()
@@ -311,7 +311,7 @@ void test_immediate_assertion_and_rejections()
     auto invalid_source = source;
     ++invalid_source.identity.content_bytes;
     const auto unauthenticated
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &invalid_source, 1U });
@@ -321,7 +321,7 @@ void test_immediate_assertion_and_rejections()
         "unauthenticated condition sources must fail transactionally");
     auto unnamed_source = source;
     unnamed_source.source_name.clear();
-    const auto unnamed = elaboration::discover_verilog_coverage_conditions(
+    const auto unnamed = frontend::discover_verilog_coverage_conditions(
         std::span { &assertion, 1U },
         frontend::Language::SystemVerilog2017,
         std::span { &unnamed_source, 1U });
@@ -331,7 +331,7 @@ void test_immediate_assertion_and_rejections()
         "empty source mapping names must be rejected");
     const std::vector duplicate_sources { source, source };
     const auto duplicate_source
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U },
             frontend::Language::SystemVerilog2017, duplicate_sources);
     require(!duplicate_source.ok()
@@ -342,7 +342,7 @@ void test_immediate_assertion_and_rejections()
     auto missing = assertion;
     missing.condition = { };
     const auto missing_condition
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &missing, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -353,7 +353,7 @@ void test_immediate_assertion_and_rejections()
     auto malformed = assertion;
     malformed.condition.operands.pop_back();
     const auto malformed_expression
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &malformed, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -364,7 +364,7 @@ void test_immediate_assertion_and_rejections()
     auto malformed_negation = negated_composite;
     malformed_negation.condition.operands.clear();
     const auto malformed_unary
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &malformed_negation, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -375,7 +375,7 @@ void test_immediate_assertion_and_rejections()
     auto unknown = assertion;
     unknown.condition.operands.front().span.source_name = "unknown.sv";
     const auto unknown_source
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &unknown, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -386,7 +386,7 @@ void test_immediate_assertion_and_rejections()
     auto outside = assertion;
     outside.condition.operands.front().span.end.offset = contents.size() + 1U;
     const auto outside_source
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &outside, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U });
@@ -395,7 +395,7 @@ void test_immediate_assertion_and_rejections()
                 == elaboration::VerilogCoverageConditionError::InvalidConditionSpan,
         "atomic spans outside authenticated source bytes must be rejected");
     const std::vector duplicate_statements { assertion, assertion };
-    const auto duplicate = elaboration::discover_verilog_coverage_conditions(
+    const auto duplicate = frontend::discover_verilog_coverage_conditions(
         duplicate_statements, frontend::Language::SystemVerilog2017,
         std::span { &source, 1U });
     require(!duplicate.ok() && duplicate.points.empty()
@@ -406,7 +406,7 @@ void test_immediate_assertion_and_rejections()
     auto limits = elaboration::VerilogCoverageConditionLimits { };
     limits.maximum_conditions = 1U;
     const auto condition_limit
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U }, limits);
@@ -417,7 +417,7 @@ void test_immediate_assertion_and_rejections()
     limits = { };
     limits.maximum_expression_nodes = 1U;
     const auto expression_limit
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U }, limits);
@@ -427,7 +427,7 @@ void test_immediate_assertion_and_rejections()
         "expression traversal must be bounded before publication");
     limits = { };
     limits.maximum_path_steps = 1U;
-    const auto path_limit = elaboration::discover_verilog_coverage_conditions(
+    const auto path_limit = frontend::discover_verilog_coverage_conditions(
         std::span { &assertion, 1U },
         frontend::Language::SystemVerilog2017,
         std::span { &source, 1U }, limits);
@@ -438,7 +438,7 @@ void test_immediate_assertion_and_rejections()
     limits = { };
     limits.maximum_expression_nesting = 1U;
     const auto nesting_limit
-        = elaboration::discover_verilog_coverage_conditions(
+        = frontend::discover_verilog_coverage_conditions(
             std::span { &assertion, 1U },
             frontend::Language::SystemVerilog2017,
             std::span { &source, 1U }, limits);

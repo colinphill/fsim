@@ -8,12 +8,14 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 5;
-inline constexpr std::uint32_t kPortableSchemaVersion = 14;
+inline constexpr std::uint32_t kFormatVersion = 6;
+inline constexpr std::uint32_t kPortableSchemaVersion = 15;
+inline constexpr std::uint32_t kCompiledHirSchemaVersion = 1;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
 struct LanguageStandard {
@@ -44,6 +46,9 @@ struct UnitIndexEntry {
   std::string name;
   std::string primary_name;
   std::string architecture;
+  // Every entry is a metadata-only index into the bundle named by its owning
+  // object or library. No unit kind owns a standalone syntax or portable-unit
+  // payload.
   std::filesystem::path artifact;
   std::string checksum;
   std::string standard;
@@ -88,26 +93,57 @@ struct NativeArtifact {
   friend bool operator==(const NativeArtifact&, const NativeArtifact&) = default;
 };
 
+// Checksummed portable payloads that are associated with a compiled library
+// but are not language units. Language-unit ownership remains exclusively in
+// the compiled-HIR bundle.
+struct AuxiliaryArtifact {
+  std::string kind;
+  std::string name;
+  std::filesystem::path artifact;
+  std::string checksum;
+  std::string revision;
+  std::string compatibility_profile;
+
+  friend bool operator==(
+      const AuxiliaryArtifact&, const AuxiliaryArtifact&) = default;
+};
+
 struct Metadata {
   std::uint32_t format{kFormatVersion};
   std::string library;
   std::string producer;
   std::uint32_t runtime_schema{};
   std::uint32_t portable_schema{kPortableSchemaVersion};
+  std::uint32_t compiled_hir_schema{kCompiledHirSchemaVersion};
+  std::filesystem::path compiled_hir_artifact;
+  std::string compiled_hir_checksum;
   std::string trace_archive;
   std::vector<LanguageStandard> standards;
   std::vector<VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<std::string> dependencies;
   std::vector<SourceIndexEntry> sources;
   std::vector<UnitIndexEntry> units;
+  std::vector<AuxiliaryArtifact> auxiliary_artifacts;
   std::vector<NativeArtifact> native_artifacts;
 
   friend bool operator==(const Metadata&, const Metadata&) = default;
 };
 
 struct PortablePayload {
+  PortablePayload(
+      std::filesystem::path payload_path,
+      std::string payload_bytes,
+      std::optional<std::string> payload_checksum = std::nullopt)
+      : path(std::move(payload_path)),
+        bytes(std::move(payload_bytes)),
+        trusted_checksum(std::move(payload_checksum)) {}
+
   std::filesystem::path path;
   std::string bytes;
+  // Internal publishers may carry the checksum they computed from immutable
+  // bytes while constructing metadata. Artifact publication still verifies
+  // the checksum against metadata, but need not hash the same buffer twice.
+  std::optional<std::string> trusted_checksum;
 };
 
 // Emits the canonical deterministic metadata spelling used for artifact

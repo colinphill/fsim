@@ -736,6 +736,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ClassStaticPropertyReadHook class_static_property_read_hook;
     ClassStaticPropertyWriteHook class_static_property_write_hook;
     ClassStaticMethodCallHook class_static_method_call_hook;
+    DpiFunctionCallHook dpi_function_call_hook;
     std::optional<MonitorInstall> monitor;
     ProcessId monitor_process { };
     std::optional<FileHandle> monitor_file_handle;

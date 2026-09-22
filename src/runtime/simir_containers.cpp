@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 
-
 #include <algorithm>
 #include <charconv>
 
@@ -483,6 +482,45 @@ void Interpreter::Impl::write_container_object_element_value(
 {
     auto& object = get_container_object(id);
     auto& target = object.initial_value;
+    if ((target.type.element_kind != ContainerElementKind::Packed
+            && target.type.element_kind != ContainerElementKind::Scalar)
+        || value.width() != target.type.element_width
+        || value.is_logic9()
+        || (target.type.two_state && has_unknown(value))) {
+        container_error(
+            process, instruction,
+            "container element write type mismatch");
+    }
+    if (target.type.associative) {
+        if (target.type.string_indices) {
+            container_error(
+                process, instruction,
+                "direct associative object element writes require an "
+                "integral key");
+        }
+        auto replacement = target;
+        const auto key = associative_key(
+            process, instruction, replacement.type, index);
+        const auto at = lower_key(replacement, key);
+        if (at < replacement.keys.size()
+            && key_equal(replacement.keys[at], key)) {
+            replacement.elements[at] = value;
+        } else {
+            if (replacement.elements.size()
+                >= maximum_container_elements(replacement.type)) {
+                container_error(
+                    process, instruction,
+                    "associative array exceeds the per-container "
+                    "owning-storage budget");
+            }
+            replacement.keys.insert(
+                iterator_at(replacement.keys, at), key);
+            replacement.elements.insert(
+                iterator_at(replacement.elements, at), value);
+        }
+        write_container_object_value(id, replacement);
+        return;
+    }
     if (object.slice_alias) {
         // Slice aliases need a coherent aggregate replacement. Ordinary
         // signal-backed element writes use the direct packed slice below and
@@ -507,15 +545,6 @@ void Interpreter::Impl::write_container_object_element_value(
         replacement.elements[selected] = value;
         write_container_object_value(id, replacement);
         return;
-    }
-    if ((target.type.element_kind != ContainerElementKind::Packed
-            && target.type.element_kind != ContainerElementKind::Scalar)
-        || value.width() != target.type.element_width
-        || value.is_logic9()
-        || (target.type.two_state && has_unknown(value))) {
-        container_error(
-            process, instruction,
-            "container element write type mismatch");
     }
     const auto selected = target.type.fixed
         ? linear_index
@@ -546,7 +575,8 @@ void Interpreter::Impl::write_container_object_element_value(
         ? extract_value(
               get_signal(alias->signal).initial_value,
               packed_offset,
-              target.type.element_width) != value
+              target.type.element_width)
+            != value
         : target.elements[selected] != value;
     target.elements[selected] = value;
     if (alias && alias->writable) {
@@ -979,16 +1009,15 @@ void Interpreter::Impl::execute_container(
             if (!index || *index < 0
                 || static_cast<std::uint64_t>(*index)
                     >= source.elements.size()) {
-                get_register(process, operation.destination) =
-                    PackedLogic4(
-                        source.type.element_width,
-                        source.type.two_state
-                            ? Logic4::zero : Logic4::x);
+                get_register(process, operation.destination) = PackedLogic4(
+                    source.type.element_width,
+                    source.type.two_state
+                        ? Logic4::zero
+                        : Logic4::x);
                 ++process.pc;
                 return;
             }
-            get_register(process, operation.destination) =
-                source.elements[static_cast<std::size_t>(*index)];
+            get_register(process, operation.destination) = source.elements[static_cast<std::size_t>(*index)];
             ++process.pc;
             return;
         }
@@ -998,16 +1027,15 @@ void Interpreter::Impl::execute_container(
         const auto high = std::max(
             source.type.index_left, source.type.index_right);
         if (!index || *index < low || *index > high) {
-            get_register(process, operation.destination) =
-                PackedLogic4(
-                    source.type.element_width,
-                    source.type.two_state
-                        ? Logic4::zero : Logic4::x);
+            get_register(process, operation.destination) = PackedLogic4(
+                source.type.element_width,
+                source.type.two_state
+                    ? Logic4::zero
+                    : Logic4::x);
             ++process.pc;
             return;
         }
-        get_register(process, operation.destination) = source.elements[
-            fixed_offset(source.type, static_cast<std::int32_t>(*index))];
+        get_register(process, operation.destination) = source.elements[fixed_offset(source.type, static_cast<std::int32_t>(*index))];
         ++process.pc;
         return;
     }

@@ -63,7 +63,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed.ok());
-  const auto elaborated = fsim::elaboration::elaborate(
+  const auto elaborated = compile_and_elaborate(
       parsed.design, "aggregate_containers");
   if (!elaborated.ok()) {
     for (const auto& diagnostic : elaborated.diagnostics) {
@@ -118,7 +118,7 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(mismatch.ok());
-  const auto rejected = fsim::elaboration::elaborate(
+  const auto rejected = compile_and_elaborate(
       mismatch.design, "aggregate_container_nominal_invalid");
   assert(
       !rejected.ok()

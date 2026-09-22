@@ -80,7 +80,7 @@ endmodule
         }
     }
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.memoized_function_top");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -405,7 +405,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(parsed.ok());
-    const auto elaborated = fsim::elaboration::elaborate(
+    const auto elaborated = compile_and_elaborate(
         parsed.design, "sv:work.typed_constant_top");
     if (!elaborated.ok()) {
         for (const auto& diagnostic : elaborated.diagnostics) {
@@ -752,7 +752,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(arbitrary_width_literals.ok());
-    const auto arbitrary_width_elaborated = fsim::elaboration::elaborate(
+    const auto arbitrary_width_elaborated = compile_and_elaborate(
         arbitrary_width_literals.design,
         "sv:work.arbitrary_width_literals");
     assert(arbitrary_width_elaborated.ok());
@@ -793,7 +793,6 @@ endmodule
         arbitrary_width_interpreter->signal_value(*arbitrary_width_q)
             .to_msb_string()
         == exact_4097_bits);
-
     const auto malformed_decimal_unknown = fsim::frontend::parse_text(
         "malformed-decimal-unknown.sv",
         R"(
@@ -804,7 +803,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(malformed_decimal_unknown.ok());
-    const auto rejected_decimal_unknown = fsim::elaboration::elaborate(
+    const auto rejected_decimal_unknown = compile_and_elaborate(
         malformed_decimal_unknown.design,
         "sv:work.malformed_decimal_unknown");
     assert(!rejected_decimal_unknown.ok());
@@ -826,7 +825,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(converted.ok());
-    const auto converted_result = fsim::elaboration::elaborate(
+    const auto converted_result = compile_and_elaborate(
         converted.design, "sv:work.two_state_constant_conversion");
     assert(converted_result.ok());
 
@@ -840,7 +839,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(converted_cast.ok());
-    const auto converted_cast_result = fsim::elaboration::elaborate(
+    const auto converted_cast_result = compile_and_elaborate(
         converted_cast.design, "sv:work.two_state_cast_conversion");
     assert(converted_cast_result.ok());
 
@@ -855,7 +854,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(negative_clog2.ok());
-    const auto rejected_clog2 = fsim::elaboration::elaborate(
+    const auto rejected_clog2 = compile_and_elaborate(
         negative_clog2.design, "sv:work.negative_wide_clog2");
     assert(!rejected_clog2.ok());
     assert(has_diagnostic(rejected_clog2, "FSIM-ELAB-PARAM-005"));
@@ -871,7 +870,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(unknown_clog2.ok());
-    const auto rejected_unknown_clog2 = fsim::elaboration::elaborate(
+    const auto rejected_unknown_clog2 = compile_and_elaborate(
         unknown_clog2.design, "sv:work.unknown_wide_clog2");
     assert(!rejected_unknown_clog2.ok());
     assert(has_diagnostic(
@@ -888,7 +887,7 @@ endmodule
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_constant_dimension.ok());
     const auto rejected_constant_dimension =
-        fsim::elaboration::elaborate(
+        compile_and_elaborate(
             invalid_constant_dimension.design,
             "sv:work.invalid_constant_dimension");
     assert(!rejected_constant_dimension.ok());
@@ -905,7 +904,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(excessive_work.ok());
-    const auto rejected_work = fsim::elaboration::elaborate(
+    const auto rejected_work = compile_and_elaborate(
         excessive_work.design, "sv:work.excessive_wide_constant_work");
     assert(!rejected_work.ok());
     assert(has_diagnostic(rejected_work, "FSIM-ELAB-PARAM-005"));
@@ -926,7 +925,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(excessive_multiply_work.ok());
-    const auto rejected_multiply_work = fsim::elaboration::elaborate(
+    const auto rejected_multiply_work = compile_and_elaborate(
         excessive_multiply_work.design,
         "sv:work.excessive_wide_multiply_work");
     assert(!rejected_multiply_work.ok());
@@ -953,7 +952,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_division_overflow.ok());
-    const auto rejected_division_overflow = fsim::elaboration::elaborate(
+    const auto rejected_division_overflow = compile_and_elaborate(
         signed_division_overflow.design,
         "sv:work.wide_signed_division_overflow");
     assert(!rejected_division_overflow.ok());
@@ -997,7 +996,7 @@ end architecture;
          "vhdl:work.foreign_integer(rtl)",
          std::nullopt},
     };
-    const auto rejected_boundary = fsim::elaboration::elaborate(
+    const auto rejected_boundary = compile_and_elaborate(
         boundary_design,
         "sv:work.unsigned_boundary",
         bindings);
@@ -1026,7 +1025,7 @@ endmodule
          "vhdl:work.foreign_integer(rtl)",
          std::nullopt},
     };
-    const auto wide_small_elaborated = fsim::elaboration::elaborate(
+    const auto wide_small_elaborated = compile_and_elaborate(
         wide_small_design,
         "sv:work.wide_small_boundary",
         wide_small_bindings);
@@ -1069,7 +1068,7 @@ endmodule
         }
     }
     assert(scalar_parameters.ok());
-    const auto scalar_elaborated = fsim::elaboration::elaborate(
+    const auto scalar_elaborated = compile_and_elaborate(
         scalar_parameters.design, "sv:work.scalar_parameter_top");
     if (!scalar_elaborated.ok()) {
         for (const auto& diagnostic : scalar_elaborated.diagnostics) {
@@ -1112,7 +1111,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(chandle_parameters.ok());
-    const auto chandle_elaborated = fsim::elaboration::elaborate(
+    const auto chandle_elaborated = compile_and_elaborate(
         chandle_parameters.design, "sv:work.chandle_parameter_top");
     if (!chandle_elaborated.ok()) {
         for (const auto& diagnostic : chandle_elaborated.diagnostics) {
@@ -1143,7 +1142,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_chandle_actual.ok());
-    const auto rejected_chandle_actual = fsim::elaboration::elaborate(
+    const auto rejected_chandle_actual = compile_and_elaborate(
         invalid_chandle_actual.design,
         "sv:work.invalid_chandle_actual_top");
     assert(!rejected_chandle_actual.ok());
@@ -1161,7 +1160,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_dependency.ok());
-    const auto rejected_dependency = fsim::elaboration::elaborate(
+    const auto rejected_dependency = compile_and_elaborate(
         invalid_dependency.design, "sv:work.scalar_parameter_forward");
     assert(!rejected_dependency.ok());
     assert(has_diagnostic(rejected_dependency, "FSIM-ELAB-PARAM-005"));
@@ -1196,7 +1195,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(scalar_profiles.ok());
-    const auto profile_elaborated = fsim::elaboration::elaborate(
+    const auto profile_elaborated = compile_and_elaborate(
         scalar_profiles.design, "sv:work.scalar_profile_top");
     if (!profile_elaborated.ok()) {
         for (const auto& diagnostic : profile_elaborated.diagnostics) {
@@ -1238,7 +1237,7 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mismatched_profile.ok());
-    const auto rejected_profile = fsim::elaboration::elaborate(
+    const auto rejected_profile = compile_and_elaborate(
         mismatched_profile.design, "sv:work.scalar_profile_mismatch_top");
     assert(!rejected_profile.ok());
     assert(has_diagnostic(rejected_profile, "FSIM-ELAB-BIND-019"));
@@ -1260,13 +1259,13 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(scalar_negative_matrix.ok());
-    const auto rejected_scalar_conversion = fsim::elaboration::elaborate(
+    const auto rejected_scalar_conversion = compile_and_elaborate(
         scalar_negative_matrix.design,
         "sv:work.scalar_conversion_overflow");
     assert(!rejected_scalar_conversion.ok());
     assert(has_diagnostic(
         rejected_scalar_conversion, "FSIM-ELAB-SVSCALAR-001"));
-    const auto rejected_scalar_operator = fsim::elaboration::elaborate(
+    const auto rejected_scalar_operator = compile_and_elaborate(
         scalar_negative_matrix.design,
         "sv:work.scalar_unsupported_operator");
     assert(!rejected_scalar_operator.ok());

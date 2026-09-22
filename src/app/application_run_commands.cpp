@@ -96,7 +96,7 @@ int handle_check(
         return 1;
     }
     output << "checked " << checked->source_count << " source file(s), "
-           << checked->parsed.units.size() << " design unit(s)\n";
+           << checked->semantics.units().size() << " design unit(s)\n";
     return 0;
 }
 
