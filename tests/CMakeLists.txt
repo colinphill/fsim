@@ -83,7 +83,7 @@ add_executable(
 fsim_configure_test(fsim_compiled_hir_cache_application_tests)
 target_link_libraries(
   fsim_compiled_hir_cache_application_tests
-  PRIVATE fsim_application fsim_boost_pfr_headers
+  PRIVATE fsim_boost_pfr_headers fsim_application
 )
 add_test(
   NAME fsim.application.compiled_hir_cache

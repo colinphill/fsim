@@ -2523,6 +2523,15 @@ end architecture;
 
 int main()
 {
+#if defined(_WIN32)
+    assert(fsim::app::application_detail::source_path_key(
+               std::filesystem::path { "D:\\Build\\Sources\\Top.sv" })
+        == fsim::app::application_detail::source_path_key(
+            std::filesystem::path { "d:/build/sources/top.sv" }));
+    assert(fsim::app::application_detail::same_source_path(
+        std::filesystem::path { "D:\\Build\\Sources\\Top.sv" },
+        std::filesystem::path { "d:/build/sources/top.sv" }));
+#endif
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     TemporaryDirectory temporary {

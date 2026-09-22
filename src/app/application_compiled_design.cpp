@@ -25,8 +25,7 @@ struct SourceMappingIndex {
 
 std::string normalized_source_name(const std::string_view name)
 {
-    return support::path_to_utf8(
-        std::filesystem::path { name }.lexically_normal());
+    return source_path_key(support::path_from_utf8(name));
 }
 
 std::optional<SourceMappingIndex> prepare_source_mappings(
@@ -49,7 +48,14 @@ std::optional<SourceMappingIndex> prepare_source_mappings(
                 "compiled-HIR source relocation mapping is not bijective");
             return std::nullopt;
         }
-        result.ordered.push_back({ producer, logical });
+        result.ordered.push_back({
+            support::path_to_utf8(
+                support::path_from_utf8(mapping.producer_name)
+                    .lexically_normal()),
+            support::path_to_utf8(
+                support::path_from_utf8(mapping.logical_name)
+                    .lexically_normal())
+        });
     }
     return result;
 }
@@ -318,13 +324,38 @@ bool relocate_embedded_source_names(
     std::string& name,
     const SourceMappingIndex& mappings)
 {
+    const auto find_source = [&](const std::string_view producer,
+                                 const std::size_t begin) {
+#if defined(_WIN32)
+        for (auto offset = begin;
+             offset + producer.size() <= name.size(); ++offset) {
+            const auto matches = std::ranges::equal(
+                producer,
+                std::string_view { name }.substr(offset, producer.size()),
+                [](const char left, const char right) {
+                    const auto fold = [](const char character) {
+                        return character >= 'A' && character <= 'Z'
+                            ? static_cast<char>(character - 'A' + 'a')
+                            : character;
+                    };
+                    return fold(left) == fold(right);
+                });
+            if (matches) {
+                return offset;
+            }
+        }
+        return std::string::npos;
+#else
+        return name.find(producer, begin);
+#endif
+    };
     bool relocated = false;
     for (const auto& mapping : mappings.ordered) {
         const auto& producer = mapping.producer_name;
         const auto& logical = mapping.logical_name;
         std::size_t offset = 0;
         while (!producer.empty()
-            && (offset = name.find(producer, offset)) != std::string::npos) {
+            && (offset = find_source(producer, offset)) != std::string::npos) {
             const auto end = offset + producer.size();
             const auto bounded_before = offset == 0
                 || is_embedded_source_boundary(name[offset - 1]);
@@ -360,7 +391,7 @@ bool relocate_name(
     const auto relocated_path = std::filesystem::path { name };
     const auto mapped_destination = [&](const auto& candidate) {
         return mappings.logical_names.contains(
-            support::path_to_utf8(candidate.lexically_normal()));
+            source_path_key(candidate));
     };
     const auto embedded_absolute = std::ranges::any_of(
         expansion_source_paths(name), [&](const auto& embedded) {
@@ -569,14 +600,15 @@ compiled_cache_source_mappings(
         if (path.empty()) {
             return;
         }
-        const auto producer = support::path_to_utf8(
-            path.lexically_normal());
-        if (!producers.insert(producer).second) {
+        const auto producer = support::path_to_utf8(path.lexically_normal());
+        if (!producers.insert(source_path_key(path)).second) {
             return;
         }
         auto logical = support::path_to_utf8(
             std::filesystem::path { make_logical() }.lexically_normal());
-        if (logical.empty() || !logical_names.insert(logical).second) {
+        if (logical.empty()
+            || !logical_names.insert(source_path_key(
+                    support::path_from_utf8(logical))).second) {
             diagnostics.error(
                 "FSIM-CACHE-0001",
                 "compiled-HIR cache source relocation is not bijective for '"

@@ -310,7 +310,12 @@ bool same_source_path(
     const std::filesystem::path& left,
     const std::filesystem::path& right)
 {
-    if (left.lexically_normal() == right.lexically_normal()) {
+    if (source_path_key(left) == source_path_key(right)) {
+        return true;
+    }
+    std::error_code equivalent_error;
+    if (std::filesystem::equivalent(left, right, equivalent_error)
+        && !equivalent_error) {
         return true;
     }
     std::error_code left_error;
@@ -318,7 +323,20 @@ bool same_source_path(
     const auto canonical_left = std::filesystem::weakly_canonical(left, left_error);
     const auto canonical_right = std::filesystem::weakly_canonical(right, right_error);
     return !left_error && !right_error
-        && canonical_left == canonical_right;
+        && source_path_key(canonical_left) == source_path_key(canonical_right);
+}
+
+std::string source_path_key(const std::filesystem::path& path)
+{
+    auto result = support::path_to_utf8(path.lexically_normal());
+#if defined(_WIN32)
+    std::ranges::transform(result, result.begin(), [](const char character) {
+        return character >= 'A' && character <= 'Z'
+            ? static_cast<char>(character - 'A' + 'a')
+            : character;
+    });
+#endif
+    return result;
 }
 
 std::string compilation_unit_digest(

@@ -1338,6 +1338,9 @@ bool same_source_path(
     const std::filesystem::path& left,
     const std::filesystem::path& right);
 
+[[nodiscard]] std::string source_path_key(
+    const std::filesystem::path& path);
+
 std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedRoot>& roots,
     const std::vector<frontend::PreprocessedDependency>& inputs,
