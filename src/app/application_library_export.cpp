@@ -564,9 +564,10 @@ bool export_library(
     }
     auto compiled_design = std::move(*projected_design.design);
     auto compiled_mappings = source_mappings;
-    std::set<std::filesystem::path> mapped_compiled_sources;
+    std::vector<std::filesystem::path> mapped_compiled_sources;
+    mapped_compiled_sources.reserve(compiled_mappings.size());
     for (const auto& mapping : compiled_mappings) {
-        mapped_compiled_sources.insert(
+        mapped_compiled_sources.push_back(
             support::path_from_utf8(mapping.producer_name)
                 .lexically_normal());
     }
@@ -577,9 +578,14 @@ bool export_library(
         }
         const auto path = support::path_from_utf8(name).lexically_normal();
         if (!path.is_absolute()
-            || !mapped_compiled_sources.insert(path).second) {
+            || std::ranges::any_of(
+                mapped_compiled_sources, [&](const auto& mapped) {
+                    return application_detail::same_source_path(
+                        mapped, path);
+                })) {
             return;
         }
+        mapped_compiled_sources.push_back(path);
         const auto filename = path.filename().empty()
             ? std::string { "source" }
             : support::path_to_utf8(path.filename());

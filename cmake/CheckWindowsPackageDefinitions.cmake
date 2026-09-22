@@ -134,7 +134,7 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "Upload deterministic Windows binary archive"
     "actions/upload-artifact@v7"
     "if-no-files-found: error"
-    "--parallel 2")
+    "--parallel 4")
   string(FIND "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_WORKFLOW_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR

@@ -124,7 +124,7 @@ fsim_require_warning_tokens(.github/workflows/ci.yml
   "Final closure checks"
   "if: matrix.configuration == 'Debug'"
   "-L '^recursive-closure$'"
-  "--parallel 2")
+  "--parallel 4")
 
 file(READ "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml"
   FSIM_WARNING_WORKFLOW)
@@ -219,7 +219,7 @@ fsim_require_warning_occurrences("-DFSIM_LLVM_MODE=ON" 1)
 fsim_require_warning_occurrences(
   "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}" 1)
 fsim_require_warning_occurrences("-DFSIM_WARNINGS_AS_ERRORS=ON" 2)
-fsim_require_warning_occurrences("--parallel 2" 5)
+fsim_require_warning_occurrences("--parallel 4" 5)
 fsim_require_warning_occurrences("timeout-minutes: 120" 2)
 fsim_require_warning_tokens(tests/CMakeLists.txt
   "NAME fsim.v3-warning-audit"

@@ -131,7 +131,7 @@ fsim_require_hosted_tokens(.github/workflows/ci.yml
   "Final closure checks"
   "if: matrix.configuration == 'Debug'"
   "-L '^recursive-closure$'"
-  "--parallel 2"
+  "--parallel 4"
   "actions/upload-artifact@v7"
   "if-no-files-found: error")
 
@@ -234,7 +234,7 @@ endif()
 fsim_require_hosted_occurrences("-DFSIM_LLVM_MODE=ON" 1)
 fsim_require_hosted_occurrences(
   "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}" 1)
-fsim_require_hosted_occurrences("--parallel 2" 5)
+fsim_require_hosted_occurrences("--parallel 4" 5)
 fsim_require_hosted_occurrences("timeout-minutes: 120" 2)
 foreach(FSIM_INDEX RANGE 0 3)
   list(GET FSIM_ARTIFACTS ${FSIM_INDEX} FSIM_ARTIFACT)

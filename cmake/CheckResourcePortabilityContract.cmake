@@ -3137,16 +3137,16 @@ file(READ "${FSIM_FST_CONTROL}" FSIM_FST_CONTROL_CONTENTS)
 file(READ "${FSIM_FST_CONTROL_TEST}" FSIM_FST_CONTROL_TEST_CONTENTS)
 file(READ "${FSIM_FST_APPLICATION}" FSIM_FST_APPLICATION_CONTENTS)
 
-string(REGEX MATCHALL "--parallel 2" FSIM_PARALLEL_STEPS "${FSIM_WORKFLOW_CONTENTS}")
+string(REGEX MATCHALL "--parallel 4" FSIM_PARALLEL_STEPS "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_PARALLEL_STEPS FSIM_PARALLEL_COUNT)
 if(NOT FSIM_PARALLEL_COUNT EQUAL 5)
   message(FATAL_ERROR
-    "expected five two-worker hosted build/test steps, found ${FSIM_PARALLEL_COUNT}")
+    "expected five four-worker hosted build/test steps, found ${FSIM_PARALLEL_COUNT}")
 endif()
-string(REGEX MATCH "--parallel ([^2]|2[^[:space:]\r\n])" FSIM_OTHER_PARALLEL
+string(REGEX MATCH "--parallel ([^4]|4[^[:space:]\r\n])" FSIM_OTHER_PARALLEL
   "${FSIM_WORKFLOW_CONTENTS}")
 if(FSIM_OTHER_PARALLEL)
-  message(FATAL_ERROR "workflow contains a non-two-worker build/test step")
+  message(FATAL_ERROR "workflow contains a non-four-worker build/test step")
 endif()
 
 string(REGEX MATCHALL

@@ -79,18 +79,18 @@ foreach(FSIM_JOB IN LISTS FSIM_WORKFLOW_JOBS)
   endif()
 endforeach()
 
-string(REGEX MATCHALL "--parallel 2" FSIM_CI_PARALLEL_MATCHES
+string(REGEX MATCHALL "--parallel 4" FSIM_CI_PARALLEL_MATCHES
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_CI_PARALLEL_MATCHES FSIM_CI_PARALLEL_COUNT)
 if(NOT FSIM_CI_PARALLEL_COUNT EQUAL 5)
   message(FATAL_ERROR
-    "expected five two-worker CI build/test steps, found ${FSIM_CI_PARALLEL_COUNT}")
+    "expected five four-worker CI build/test steps, found ${FSIM_CI_PARALLEL_COUNT}")
 endif()
-string(REGEX MATCH "--parallel ([0-13-9]|[1-9][0-9]+)" FSIM_OTHER_PARALLEL
+string(REGEX MATCH "--parallel ([0-35-9]|[1-9][0-9]+)" FSIM_OTHER_PARALLEL
   "${FSIM_WORKFLOW_CONTENTS}")
 if(FSIM_OTHER_PARALLEL)
   message(FATAL_ERROR
-    "CI build/test parallelism drifted from two workers: ${FSIM_OTHER_PARALLEL}")
+    "CI build/test parallelism drifted from four workers: ${FSIM_OTHER_PARALLEL}")
 endif()
 
 set(FSIM_REQUIRED_PRESETS

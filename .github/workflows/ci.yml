@@ -84,7 +84,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build "${{ matrix.build_dir }}" --parallel 2 2>&1 \
+          cmake --build "${{ matrix.build_dir }}" --parallel 4 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
 
       - name: Test
@@ -92,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir "${{ matrix.build_dir }}" \
-            --parallel 2 \
+            --parallel 4 \
             --output-on-failure \
             -LE '^recursive-closure$' 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
@@ -103,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir "${{ matrix.build_dir }}" \
-            --parallel 2 \
+            --parallel 4 \
             --output-on-failure \
             -L '^recursive-closure$' 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
@@ -234,7 +234,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          & cmake --build "${{ matrix.build_dir }}" --parallel 2 2>&1 `
+          & cmake --build "${{ matrix.build_dir }}" --parallel 4 2>&1 `
             | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -244,7 +244,7 @@ jobs:
           CTEST_OUTPUT_ON_FAILURE: '1'
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 2 --progress --output-on-failure -LE '^recursive-closure$' 2>&1 `
+          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$' 2>&1 `
             | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
