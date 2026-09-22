@@ -11913,3 +11913,42 @@ remain available for local development but are not hosted jobs.
    LLVM-only lanes: Linux Debug/Release and Windows Debug/Release. Do not create
    a Batch 188A release tag. Preserve `phase.fst`, and do not clean or reset the
    intentional accumulated worktree.
+
+## Batch 188A 2026-09-22 closure checkpoint
+
+1. Batch 188A Changes 1-20 are complete. The accepted implementation is the
+   AST-free compiled-HIR pipeline recorded above plus the bounded hosted-CI
+   repairs through this checkpoint. Batch 189 is the next implementation
+   batch. No sanitizer was run, and Batch 188A creates no release tag.
+2. Local final-code qualification is green. Both LLVM-enabled warnings-as-
+   errors configurations previously passed all 423 registered Release and
+   Debug tests. After the final Windows repair, the expanded
+   `fsim.application.compiled_hir_cache` boundary rebuilt and passed in both
+   Release and Debug; it exercises cache, object, mapped-library, and design
+   bytes across worker counts and checkout relocation.
+3. Hosted run `35720970860` built all four exact-head LLVM-only lanes. Ubuntu
+   Release passed 414/414. Windows Debug and Release each passed 413/414 and
+   exposed the same remaining failure: compiled-HIR cache bytes differed in a
+   test that changed both worker count and checkout root. Ubuntu Debug had
+   built successfully and was still testing when this closure repair was
+   published.
+4. The Windows failure was a pre-relocation identity leak, not a scheduler-
+   order defect. The Verilog preprocessor canonicalizes source paths before
+   `stable_cache_source_name()` hashes them into compilation-unit identities;
+   its old case-sensitive lexical base check could retain an absolute Windows
+   checkout path. The common helper now canonicalizes both operands, compares
+   path components with the established Windows-insensitive source key, and
+   emits the generic project-relative spelling before hashing.
+5. Determinism evidence now separates its two variables. One checkout is
+   compiled at 1/2/4/8 workers, while distinct checkout roots are compiled at
+   a fixed four workers. Both axes retain exact compiled-HIR cache and complete
+   object, library, and design artifact byte comparisons. A direct Windows
+   mixed-case-root assertion freezes the repaired pre-hash behavior.
+6. The previously recorded Callgrind, `perf`, seven-sample performance, RSS,
+   and simulation-equivalence evidence remains the accepted Batch 188A
+   performance boundary by explicit direction. The final path repair does not
+   reopen that gate.
+7. The authoritative plan now records the actual publication model: one
+   cohesive implementation boundary followed by bounded in-scope CI repair
+   commits and pushes. This supersedes the earlier literal one-push wording.
+   Preserve the intentional untracked `phase.fst` and do not clean or reset it.

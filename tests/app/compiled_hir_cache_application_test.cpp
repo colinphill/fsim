@@ -1115,84 +1115,99 @@ end architecture rtl;
 void run_artifact_worker_determinism_test(
     const std::filesystem::path& directory)
 {
-    std::optional<std::vector<std::byte>> cache_reference;
-    std::optional<ArtifactSnapshot> object_reference;
-    std::optional<ArtifactSnapshot> library_reference;
-    std::optional<ArtifactSnapshot> design_reference;
-    for (const std::uint32_t jobs : { 1U, 2U, 4U, 8U }) {
-        const auto checkout = directory
-            / ("relocated-checkout-" + std::to_string(jobs));
+    struct DeterminismSnapshot {
+        std::vector<std::byte> cache;
+        ArtifactSnapshot object;
+        ArtifactSnapshot library;
+        ArtifactSnapshot design;
+
+        bool operator==(const DeterminismSnapshot&) const = default;
+    };
+    const auto capture = [&](const std::filesystem::path& checkout,
+                             const std::string_view label,
+                             const std::uint32_t jobs) {
         write_sources(checkout);
 
         auto cache_config = mixed_config(
             checkout,
-            directory / ("ordinary-cache-" + std::to_string(jobs)),
+            directory / (std::string { label } + "-ordinary-cache"),
             jobs);
         fsim::diagnostic::Engine cache_diagnostics;
         const auto cached = fsim::app::build_project(
             cache_config, cache_diagnostics);
         assert(cached && !cache_diagnostics.has_error()
             && !cached->cache_hit);
-        const auto cache_snapshot = cache_payload(
+        auto cache_snapshot = cache_payload(
             cache_config, cached->cache_key);
-        if (!cache_reference) {
-            cache_reference = cache_snapshot;
-        } else {
-            assert(cache_snapshot == *cache_reference);
-        }
 
         auto object_config = systemverilog_config(
-            checkout, directory / ("object-cache-" + std::to_string(jobs)));
+            checkout,
+            directory / (std::string { label } + "-object-cache"));
         object_config.build.jobs = jobs;
         const auto object = directory
-            / ("object-" + std::to_string(jobs) + ".fsimobj");
+            / (std::string { label } + ".fsimobj");
         fsim::diagnostic::Engine object_diagnostics;
         assert(fsim::app::compile_artifact(
             object_config, object, object_diagnostics));
         assert(!object_diagnostics.has_error());
         assert_parser_independent_object(object, true);
-        const auto object_snapshot = capture_artifact(object);
-        if (!object_reference) {
-            object_reference = object_snapshot;
-        } else {
-            assert(object_snapshot == *object_reference);
-        }
+        auto object_snapshot = capture_artifact(object);
 
         auto design_config = object_config;
         design_config.source_sets.clear();
         design_config.build.cache_path = directory
-            / ("design-cache-" + std::to_string(jobs));
+            / (std::string { label } + "-design-cache");
         const auto design = directory
-            / ("design-" + std::to_string(jobs) + ".fsimdesign");
+            / (std::string { label } + ".fsimdesign");
         const std::array objects { object };
         fsim::diagnostic::Engine design_diagnostics;
         assert(fsim::app::elaborate_artifact(
             design_config, objects, design, design_diagnostics));
         assert(!design_diagnostics.has_error());
-        const auto design_snapshot = capture_artifact(design);
-        if (!design_reference) {
-            design_reference = design_snapshot;
-        } else {
-            assert(design_snapshot == *design_reference);
-        }
+        auto design_snapshot = capture_artifact(design);
 
         auto library_config = mixed_config(
             checkout,
-            directory / ("library-cache-" + std::to_string(jobs)),
+            directory / (std::string { label } + "-library-cache"),
             jobs);
         const auto library = directory
-            / ("library-" + std::to_string(jobs) + ".fsimlib");
+            / (std::string { label } + ".fsimlib");
         fsim::diagnostic::Engine library_diagnostics;
         assert(fsim::app::export_library(
             library_config, "work", library, library_diagnostics));
         assert(!library_diagnostics.has_error());
         assert_parser_independent_library(library, "work", true);
-        const auto library_snapshot = capture_artifact(library);
-        if (!library_reference) {
-            library_reference = library_snapshot;
+        auto library_snapshot = capture_artifact(library);
+        return DeterminismSnapshot {
+            std::move(cache_snapshot),
+            std::move(object_snapshot),
+            std::move(library_snapshot),
+            std::move(design_snapshot),
+        };
+    };
+
+    const auto worker_checkout = directory / "worker-count-checkout";
+    std::optional<DeterminismSnapshot> worker_reference;
+    std::optional<DeterminismSnapshot> relocation_reference;
+    for (const std::uint32_t jobs : { 1U, 2U, 4U, 8U }) {
+        auto snapshot = capture(
+            worker_checkout, "worker-" + std::to_string(jobs), jobs);
+        if (!worker_reference) {
+            worker_reference = snapshot;
         } else {
-            assert(library_snapshot == *library_reference);
+            assert(snapshot == *worker_reference);
         }
+        if (jobs == 4U) {
+            relocation_reference = std::move(snapshot);
+        }
+    }
+    assert(relocation_reference);
+    for (const std::uint32_t relocation : { 1U, 2U }) {
+        const auto checkout = directory
+            / ("relocated-checkout-" + std::to_string(relocation));
+        const auto label = "relocation-" + std::to_string(relocation);
+        const auto snapshot = capture(checkout, label, 4U);
+        assert(snapshot == *relocation_reference);
     }
 }
 
@@ -2530,6 +2545,11 @@ int main()
     assert(!fsim::support::path_is_portably_absolute(
         fsim::support::path_from_utf8("producer/source.sv")));
 #if defined(_WIN32)
+    assert(fsim::app::application_detail::stable_cache_source_name(
+               fsim::support::path_from_utf8(
+                   "D:\\Build\\Sources\\Top.sv"),
+               fsim::support::path_from_utf8("d:/build/sources"))
+        == "project/Top.sv");
     assert(fsim::app::application_detail::source_path_key(
                std::filesystem::path { "D:\\Build\\Sources\\Top.sv" })
         == fsim::app::application_detail::source_path_key(

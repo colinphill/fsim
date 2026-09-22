@@ -579,13 +579,42 @@ bool relocate_pending_assertion_marker(
     return true;
 }
 
-bool is_within_base(const std::filesystem::path& relative)
+std::optional<std::filesystem::path> relative_within_base(
+    const std::filesystem::path& path,
+    const std::filesystem::path& base_directory)
 {
-    if (relative.empty() || relative.is_absolute()) {
-        return false;
+    if (path.empty() || base_directory.empty()) {
+        return std::nullopt;
     }
-    const auto first = relative.begin();
-    return first == relative.end() || *first != "..";
+    const auto canonical = [](const std::filesystem::path& value) {
+        std::error_code error;
+        auto absolute = std::filesystem::absolute(value, error);
+        if (error) {
+            return value.lexically_normal();
+        }
+        auto result = std::filesystem::weakly_canonical(absolute, error);
+        return error ? absolute.lexically_normal() : result;
+    };
+    const auto normalized = canonical(path);
+    const auto normalized_base = canonical(base_directory);
+    auto path_component = normalized.begin();
+    auto base_component = normalized_base.begin();
+    while (path_component != normalized.end()
+        && base_component != normalized_base.end()
+        && source_path_key(*path_component)
+            == source_path_key(*base_component)) {
+        ++path_component;
+        ++base_component;
+    }
+    if (base_component != normalized_base.end()) {
+        return std::nullopt;
+    }
+    std::filesystem::path relative;
+    for (; path_component != normalized.end(); ++path_component) {
+        relative /= *path_component;
+    }
+    return relative.empty() ? std::filesystem::path { "." }
+                            : std::move(relative);
 }
 
 std::string fallback_logical_name(
@@ -611,13 +640,10 @@ std::string stable_cache_source_name(
     const std::filesystem::path& base_directory)
 {
     const auto normalized = path.lexically_normal();
-    if (!base_directory.empty()) {
-        const auto relative = normalized.lexically_relative(
-            base_directory.lexically_normal());
-        if (is_within_base(relative)) {
-            return support::path_to_utf8(
-                std::filesystem::path { "project" } / relative);
-        }
+    if (const auto relative = relative_within_base(
+            normalized, base_directory)) {
+        return support::path_to_utf8(
+            std::filesystem::path { "project" } / *relative);
     }
     return support::path_to_utf8(normalized);
 }

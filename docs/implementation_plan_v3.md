@@ -6366,13 +6366,15 @@ SDF matching, foreign construction, and final lowering after specialization.
     sampling state.
     Retain semantic, DesignIR, and runtime-state schemas unless their
     serialized layouts change, and reject earlier object/library formats.
-20. Run clean warnings-as-errors Release then Debug builds and complete suites
-    with eight workers, representative pure-SystemVerilog and mixed-language
-    compile/elaborate measurements, and one four-lane, LLVM-enabled-only hosted
-    matrix: Linux Debug/Release and Windows Debug/Release. Do not repeat
-    sanitizers before Batch 190. Commit and push once, monitor the replacement
-    matrix, and correct in-scope CI failures. Do not create a release tag for
-    Batch 188A.
+20. **Complete.** Run clean warnings-as-errors Release then Debug builds and
+    complete suites with eight workers, representative pure-SystemVerilog and
+    mixed-language compile/elaborate measurements, and one four-lane, LLVM-
+    enabled-only hosted matrix: Linux Debug/Release and Windows Debug/Release.
+    Do not repeat sanitizers before Batch 190. Publish the cohesive
+    implementation at the Change 20 boundary, monitor the replacement matrix,
+    and make only bounded
+    in-scope repair commits and pushes required to correct its failures. Do not
+    create a release tag for Batch 188A.
 
 Acceptance requires elaboration from a decoded bundle after parser storage has
 been destroyed; no elaboration interface, owner, cache entry, or specialized
