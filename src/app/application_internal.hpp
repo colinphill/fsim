@@ -1304,6 +1304,11 @@ struct CompilationWorkspace final : CheckedProject {
     std::span<const library::SourceNameMapping> mappings,
     diagnostic::Engine& diagnostics);
 
+[[nodiscard]] bool normalize_compiled_design_source_paths(
+    CheckedProject& checked,
+    const std::filesystem::path& base_directory,
+    diagnostic::Engine& diagnostics);
+
 [[nodiscard]] std::string stable_cache_source_name(
     const std::filesystem::path& path,
     const std::filesystem::path& base_directory);

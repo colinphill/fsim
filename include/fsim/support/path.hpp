@@ -28,4 +28,24 @@ namespace fsim::support {
       encoded.size()};
 }
 
+/// Recognize absolute source names produced on either supported host family.
+[[nodiscard]] inline bool path_is_portably_absolute(
+    const std::filesystem::path& value) {
+  if (value.is_absolute()) {
+    return true;
+  }
+  const auto encoded = path_to_utf8(value);
+  if (!encoded.empty()
+      && (encoded.front() == '/' || encoded.front() == '\\')) {
+    return true;
+  }
+  const auto ascii_letter = [](const char character) {
+    return (character >= 'A' && character <= 'Z')
+        || (character >= 'a' && character <= 'z');
+  };
+  return encoded.size() >= 3U && ascii_letter(encoded[0])
+      && encoded[1] == ':'
+      && (encoded[2] == '/' || encoded[2] == '\\');
+}
+
 }  // namespace fsim::support

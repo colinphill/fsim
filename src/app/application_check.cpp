@@ -770,6 +770,10 @@ static std::optional<CompilationWorkspace> check_project_impl(
   checked.systemverilog_uvm_provenance.release = *uvm_release;
   checked.systemverilog_uvm_provenance.source_identity =
       uvm_source_identity(*uvm_release, checked.hdl_sources);
+  if (!application_detail::normalize_compiled_design_source_paths(
+          checked, config.base_directory, diagnostics)) {
+    return std::nullopt;
+  }
   return checked;
 }
 

@@ -288,6 +288,40 @@ function(fsim_systemc_apply_runtime_fixes target source_root)
   if(patched_contents STREQUAL original_contents)
     message(FATAL_ERROR "cannot apply the governed SystemC process teardown fix")
   endif()
+
+  set(stop_report [=[    SC_REPORT_INFO("/OSCI/SystemC","Simulation stopped by user.");]=])
+  string(FIND "${patched_contents}" "${stop_report}" stop_report_offset)
+  if(stop_report_offset EQUAL -1)
+    message(FATAL_ERROR "cannot suppress the governed SystemC stop report")
+  endif()
+  string(REPLACE "${stop_report}"
+    "    // fsim intentionally suppresses the routine user-stop report."
+    patched_contents "${patched_contents}")
+
+  set(no_activity_warning [=[    // If there was no activity and the simulation clock did not move warn
+    // the user, except if we're in a first sc_start(SC_ZERO_TIME) for
+    // initialisation (only) or there have been pending updates:
+
+    if ( !init_delta_or_pending_updates &&
+         starting_delta == sc_delta_count() &&
+         context_p->m_curr_time == entry_time &&
+         sim_status == SC_SIM_OK )
+    {
+        SC_REPORT_WARNING(SC_ID_NO_SC_START_ACTIVITY_, "");
+    }
+]=])
+  string(FIND "${patched_contents}" "${no_activity_warning}"
+    no_activity_warning_offset)
+  if(no_activity_warning_offset EQUAL -1)
+    message(FATAL_ERROR
+      "cannot suppress the governed SystemC no-activity warning")
+  endif()
+  string(REPLACE "${no_activity_warning}"
+    [=[    // fsim intentionally suppresses the routine no-activity warning.
+    (void)init_delta_or_pending_updates;
+]=]
+    patched_contents "${patched_contents}")
+
   set(patched_root "${CMAKE_BINARY_DIR}/generated/systemc-runtime-fixes")
   file(MAKE_DIRECTORY "${patched_root}")
   set(patched_source "${patched_root}/sc_simcontext.cpp")

@@ -577,7 +577,7 @@ bool export_library(
             return;
         }
         const auto path = support::path_from_utf8(name).lexically_normal();
-        if (!path.is_absolute()
+        if (!support::path_is_portably_absolute(path)
             || std::ranges::any_of(
                 mapped_compiled_sources, [&](const auto& mapped) {
                     return application_detail::same_source_path(

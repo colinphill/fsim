@@ -2523,6 +2523,12 @@ end architecture;
 
 int main()
 {
+    assert(fsim::support::path_is_portably_absolute(
+        fsim::support::path_from_utf8("/producer/source.sv")));
+    assert(fsim::support::path_is_portably_absolute(
+        fsim::support::path_from_utf8("C:/producer/source.sv")));
+    assert(!fsim::support::path_is_portably_absolute(
+        fsim::support::path_from_utf8("producer/source.sv")));
 #if defined(_WIN32)
     assert(fsim::app::application_detail::source_path_key(
                std::filesystem::path { "D:\\Build\\Sources\\Top.sv" })

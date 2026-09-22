@@ -432,10 +432,10 @@ bool relocate_name(
     };
     const auto embedded_absolute = std::ranges::any_of(
         expansion_source_paths(name), [&](const auto& embedded) {
-            return embedded.is_absolute()
+            return support::path_is_portably_absolute(embedded)
                 && !mapped_destination(embedded);
         });
-    if ((!relocated_path.is_absolute()
+    if ((!support::path_is_portably_absolute(relocated_path)
             || mapped_destination(relocated_path))
         && !embedded_absolute) {
         return true;
@@ -665,7 +665,8 @@ compiled_cache_source_mappings(
         const auto category = std::string { role } + "/"
             + std::to_string(ordinal);
         const auto stable = stable_cache_source_name(path, base_directory);
-        if (std::filesystem::path { stable }.is_absolute()) {
+        if (support::path_is_portably_absolute(
+                support::path_from_utf8(stable))) {
             return fallback_logical_name(category, digest, path);
         }
         return support::path_to_utf8(
@@ -706,7 +707,7 @@ compiled_cache_source_mappings(
          index < checked.semantics.source_files().size(); ++index) {
         const auto& file = checked.semantics.source_files()[index];
         const auto path = support::path_from_utf8(file.physical_name);
-        if (path.is_absolute()) {
+        if (support::path_is_portably_absolute(path)) {
             add(path, [&] {
                 return logical_name(
                     "semantic", index, path, file.content_digest);
@@ -715,7 +716,7 @@ compiled_cache_source_mappings(
     }
     for (const auto& span : checked.semantics.source_spans()) {
         const auto path = support::path_from_utf8(span.logical_name);
-        if (path.is_absolute()) {
+        if (support::path_is_portably_absolute(path)) {
             const auto& file = checked.semantics.source_files().at(
                 span.file.value());
             add(path, [&] {
@@ -730,7 +731,7 @@ compiled_cache_source_mappings(
         std::size_t source_index = 0;
         for (const auto& path : expansion_source_paths(
                  expansion.description)) {
-            if (path.is_absolute()) {
+            if (support::path_is_portably_absolute(path)) {
                 const auto role = std::string { "expansion/" }
                     + std::to_string(index);
                 const auto ordinal = source_index++;
@@ -746,7 +747,7 @@ compiled_cache_source_mappings(
         const auto& dependency = checked.dependencies()[index];
         const auto path = support::path_from_utf8(
             dependency.logical_name);
-        if (path.is_absolute()) {
+        if (support::path_is_portably_absolute(path)) {
             add(path, [&] {
                 return logical_name(
                     "dependency", index, path,
@@ -765,7 +766,7 @@ compiled_cache_source_mappings(
                 const auto path = support::path_from_utf8(
                     units[unit_index]
                         .source_dependencies[dependency_index]);
-                if (!path.is_absolute()) {
+                if (!support::path_is_portably_absolute(path)) {
                     continue;
                 }
                 const auto role = std::string { language } + "/"
@@ -782,6 +783,26 @@ compiled_cache_source_mappings(
     return valid
         ? std::optional { std::move(result) }
         : std::nullopt;
+}
+
+bool normalize_compiled_design_source_paths(
+    CheckedProject& checked,
+    const std::filesystem::path& base_directory,
+    diagnostic::Engine& diagnostics)
+{
+    const auto mappings = compiled_cache_source_mappings(
+        checked, base_directory, diagnostics);
+    if (!mappings) {
+        return false;
+    }
+    std::vector<library::SourceNameMapping> normalized;
+    normalized.reserve(mappings->size());
+    for (const auto& mapping : *mappings) {
+        normalized.push_back(
+            { mapping.producer_name, mapping.producer_name });
+    }
+    return relocate_compiled_design_sources(
+        checked, normalized, diagnostics);
 }
 
 semantic::CompiledLinkResult install_linked_compiled_design(

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_design_artifact_codec_validation.hpp"
+#include "fsim/support/path.hpp"
 
 #include <filesystem>
 
@@ -12,7 +13,8 @@ bool portable_semantics(
     diagnostic::Engine& diagnostics)
 {
     for (const auto& file : records.source_files) {
-        if (std::filesystem::path(file.physical_name).is_absolute()) {
+        if (support::path_is_portably_absolute(
+                support::path_from_utf8(file.physical_name))) {
             diagnostics.error(
                 std::string { kCode },
                 "semantic state contains a producer-absolute source path: "
