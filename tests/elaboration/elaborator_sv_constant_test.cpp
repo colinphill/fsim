@@ -96,6 +96,88 @@ endmodule
     assert(first != nullptr && second != nullptr);
     assert(parameter_value(*first, "VALUE") == "4");
     assert(parameter_value(*second, "VALUE") == "10");
+
+    const auto packed_parsed = fsim::frontend::parse_text(
+        "packed-constant-function-parameter-actual.sv",
+        R"(
+module packed_init_child #(
+  parameter integer WIDTH = 8,
+  parameter integer DEPTH = 256,
+  parameter integer PARENT_BITS_MATCH = 0,
+  parameter [DEPTH*WIDTH-1:0] INIT = {(DEPTH*WIDTH){1'b0}}
+) ();
+endmodule
+
+module packed_init_parent;
+  localparam integer WIDTH = 4;
+  localparam integer DEPTH = 1 << WIDTH;
+
+  function automatic [DEPTH*WIDTH-1:0] build_lane_lookup;
+    input integer offset;
+    integer target_slot [0:DEPTH-1];
+    integer slot_owner [0:DEPTH-1];
+    integer index;
+    reg [DEPTH*WIDTH-1:0] packed_lookup;
+    begin
+      for (index = 0; index < DEPTH; index = index+1)
+        target_slot[index] = (index + offset) & (DEPTH-1);
+      for (index = 0; index < DEPTH; index = index+1)
+        slot_owner[target_slot[index]] = index;
+      packed_lookup = {DEPTH*WIDTH{1'b0}};
+      for (index = 0; index < DEPTH; index = index+1)
+        packed_lookup[index*WIDTH +: WIDTH]
+          = slot_owner[index][WIDTH-1:0];
+      build_lane_lookup = packed_lookup;
+    end
+  endfunction
+
+  localparam [DEPTH*WIDTH-1:0] INIT_VALUE = build_lane_lookup(3);
+
+  packed_init_child #(
+    .WIDTH(WIDTH), .DEPTH(DEPTH),
+    .PARENT_BITS_MATCH(INIT_VALUE == 64'hcba9876543210fed),
+    .INIT(INIT_VALUE)
+  ) function_actual();
+  packed_init_child #(
+    .WIDTH(WIDTH), .DEPTH(DEPTH),
+    .PARENT_BITS_MATCH(1'b1),
+    .INIT(64'hcba9876543210fed)
+  ) literal_actual();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    if (!packed_parsed.ok()) {
+        for (const auto& diagnostic : packed_parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(packed_parsed.ok());
+    const auto packed_elaborated = compile_and_elaborate(
+        packed_parsed.design, "sv:work.packed_init_parent");
+    if (!packed_elaborated.ok()) {
+        for (const auto& diagnostic : packed_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(packed_elaborated.ok());
+    const auto* function_actual = specialization_at(
+        *packed_elaborated.design,
+        "packed_init_parent.function_actual");
+    const auto* literal_actual = specialization_at(
+        *packed_elaborated.design,
+        "packed_init_parent.literal_actual");
+    assert(function_actual != nullptr && literal_actual != nullptr);
+    assert(
+        parameter_value(*function_actual, "PARENT_BITS_MATCH") == "1");
+    assert(parameter_value(*literal_actual, "PARENT_BITS_MATCH") == "1");
+    const auto expected_init_identity
+        = parameter_identity(*literal_actual, "INIT");
+    assert(expected_init_identity.starts_with("svconst-v3:"));
+    assert(
+        parameter_identity(*function_actual, "INIT")
+        == expected_init_identity);
 }
 
 void test_systemverilog_typed_constants() {

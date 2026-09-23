@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+
+cmake_minimum_required(VERSION 3.28)
+
+foreach(FSIM_VARIABLE IN ITEMS FSIM_SOURCE_DIR FSIM_BINARY_DIR
+    FSIM_CTEST_COMMAND FSIM_RESOURCE_DOMAIN)
+  if(NOT DEFINED ${FSIM_VARIABLE} OR "${${FSIM_VARIABLE}}" STREQUAL "")
+    message(FATAL_ERROR "${FSIM_VARIABLE} is required")
+  endif()
+endforeach()
+if(NOT FSIM_RESOURCE_DOMAIN MATCHES
+    "^(coverage|foreign-abi|trace|language|systemc|artifact)$")
+  message(FATAL_ERROR "unknown resource domain: ${FSIM_RESOURCE_DOMAIN}")
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/CurrentEvidenceOwners.cmake")
+fsim_current_registered_ctests(FSIM_REGISTERED_TESTS)
+
+if(DEFINED FSIM_RESOURCE_LEDGER)
+  set(FSIM_LEDGER "${FSIM_RESOURCE_LEDGER}")
+else()
+  set(FSIM_LEDGER
+    "${FSIM_SOURCE_DIR}/tests/feature_matrix/current_resource_domains.tsv")
+endif()
+file(STRINGS "${FSIM_LEDGER}" FSIM_ROWS)
+set(FSIM_ALL_IDS)
+set(FSIM_DOMAIN_IDS)
+foreach(FSIM_ROW IN LISTS FSIM_ROWS)
+  if(FSIM_ROW MATCHES "^#" OR FSIM_ROW MATCHES "^id\t"
+     OR FSIM_ROW STREQUAL "")
+    continue()
+  endif()
+  if(FSIM_ROW MATCHES ";")
+    message(FATAL_ERROR "invalid resource-domain row")
+  endif()
+  string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
+  list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
+  if(NOT FSIM_FIELD_COUNT EQUAL 4)
+    message(FATAL_ERROR "resource-domain row has ${FSIM_FIELD_COUNT} fields")
+  endif()
+  list(GET FSIM_FIELDS 0 FSIM_ID)
+  list(GET FSIM_FIELDS 1 FSIM_DOMAIN)
+  list(GET FSIM_FIELDS 2 FSIM_PATH)
+  list(GET FSIM_FIELDS 3 FSIM_OWNER)
+  if(NOT FSIM_ID MATCHES "^RES(COV|ABI|TRACE|LANG|SC|ART)-[0-9]+$"
+     OR NOT FSIM_DOMAIN MATCHES
+       "^(coverage|foreign-abi|trace|language|systemc|artifact)$"
+     OR FSIM_ID IN_LIST FSIM_ALL_IDS)
+    message(FATAL_ERROR "invalid resource-domain identity: ${FSIM_ID}")
+  endif()
+  if((FSIM_ID MATCHES "^RESCOV-" AND NOT FSIM_DOMAIN STREQUAL "coverage")
+     OR (FSIM_ID MATCHES "^RESABI-" AND NOT FSIM_DOMAIN STREQUAL "foreign-abi")
+     OR (FSIM_ID MATCHES "^RESTRACE-" AND NOT FSIM_DOMAIN STREQUAL "trace")
+     OR (FSIM_ID MATCHES "^RESLANG-" AND NOT FSIM_DOMAIN STREQUAL "language")
+     OR (FSIM_ID MATCHES "^RESSC-" AND NOT FSIM_DOMAIN STREQUAL "systemc")
+     OR (FSIM_ID MATCHES "^RESART-" AND NOT FSIM_DOMAIN STREQUAL "artifact"))
+    message(FATAL_ERROR "resource ID belongs to another domain: ${FSIM_ID}")
+  endif()
+  list(APPEND FSIM_ALL_IDS "${FSIM_ID}")
+  if(NOT FSIM_DOMAIN STREQUAL FSIM_RESOURCE_DOMAIN)
+    continue()
+  endif()
+  fsim_current_evidence_file("${FSIM_PATH}")
+  if(NOT FSIM_OWNER IN_LIST FSIM_REGISTERED_TESTS)
+    message(FATAL_ERROR "resource owner is not a registered CTest: ${FSIM_ID}")
+  endif()
+  list(APPEND FSIM_DOMAIN_IDS "${FSIM_ID}")
+endforeach()
+
+if(FSIM_RESOURCE_DOMAIN STREQUAL "coverage")
+  set(FSIM_PREFIX "RESCOV-")
+elseif(FSIM_RESOURCE_DOMAIN STREQUAL "foreign-abi")
+  set(FSIM_PREFIX "RESABI-")
+elseif(FSIM_RESOURCE_DOMAIN STREQUAL "trace")
+  set(FSIM_PREFIX "RESTRACE-")
+elseif(FSIM_RESOURCE_DOMAIN STREQUAL "language")
+  set(FSIM_PREFIX "RESLANG-")
+elseif(FSIM_RESOURCE_DOMAIN STREQUAL "systemc")
+  set(FSIM_PREFIX "RESSC-")
+else()
+  set(FSIM_PREFIX "RESART-")
+endif()
+file(STRINGS
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_current_required_ids.txt"
+  FSIM_REQUIRED_IDS)
+foreach(FSIM_ID IN LISTS FSIM_REQUIRED_IDS)
+  if(FSIM_ID MATCHES "^${FSIM_PREFIX}[0-9]+$"
+     AND NOT FSIM_ID IN_LIST FSIM_DOMAIN_IDS)
+    message(FATAL_ERROR "required resource ID is missing: ${FSIM_ID}")
+  endif()
+endforeach()
+
+list(LENGTH FSIM_DOMAIN_IDS FSIM_ID_COUNT)
+if(FSIM_ID_COUNT LESS 1)
+  message(FATAL_ERROR "resource domain has no behavioral owners")
+endif()
+message(STATUS
+  "${FSIM_RESOURCE_DOMAIN} resources: ${FSIM_ID_COUNT} required/additive behavioral owners")

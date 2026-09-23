@@ -117,20 +117,74 @@ endmodule
         "mismatched_case.sv",
         R"(
 module mismatched_case;
-  logic [1:0] selector;
-  logic result;
-  always_comb case (selector)
-    1'b0: result = 1'b0;
-    default: result = 1'b1;
-  endcase
+  logic [5:0] selector;
+  logic matches_ten;
+  logic does_not_truncate;
+  always_comb begin
+    case (selector)
+      32'd10: matches_ten = 1'b1;
+      default: matches_ten = 1'b0;
+    endcase
+    case (selector)
+      32'd266: does_not_truncate = 1'b1;
+      default: does_not_truncate = 1'b0;
+    endcase
+  end
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(mismatched_case.ok());
-    const auto rejected_case = compile_and_elaborate(
+    const auto elaborated_mismatched_case = compile_and_elaborate(
         mismatched_case.design, "sv:work.mismatched_case");
-    assert(!rejected_case.ok());
-    assert(has_diagnostic(rejected_case, "FSIM-ELAB-063"));
+    assert(elaborated_mismatched_case.ok());
+    const auto mismatch_selector
+        = elaborated_mismatched_case.design->find_signal("selector");
+    const auto matches_ten
+        = elaborated_mismatched_case.design->find_signal("matches_ten");
+    const auto does_not_truncate
+        = elaborated_mismatched_case.design->find_signal(
+            "does_not_truncate");
+    assert(mismatch_selector && matches_ten && does_not_truncate);
+    auto mismatch_interpreter
+        = elaborated_mismatched_case.design->create_interpreter();
+    (void)mismatch_interpreter->run();
+    mismatch_interpreter->deposit_signal(
+        *mismatch_selector,
+        fsim::runtime::PackedLogic4::from_msb_string("001010"));
+    (void)mismatch_interpreter->run();
+    assert(mismatch_interpreter->signal_value(*matches_ten).to_msb_string()
+           == "1");
+    assert(
+        mismatch_interpreter
+            ->signal_value(*does_not_truncate)
+            .to_msb_string()
+        == "0");
+
+    const auto vhdl_mismatched_case = fsim::frontend::parse_text(
+        "vhdl_mismatched_case.vhd",
+        R"(
+entity vhdl_mismatched_case is end entity;
+architecture rtl of vhdl_mismatched_case is
+begin
+  process
+    variable selector : boolean := false;
+  begin
+    case selector is
+      when 0 => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_mismatched_case.ok());
+    const auto rejected_vhdl_case = compile_and_elaborate(
+        vhdl_mismatched_case.design,
+        "vhdl:work.vhdl_mismatched_case(rtl)");
+    assert(!rejected_vhdl_case.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_case, "FSIM-ELAB-VHDLCASE-001"));
 
     const auto conditional_process = fsim::frontend::parse_text(
         "conditional_process.sv",

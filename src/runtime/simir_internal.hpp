@@ -901,6 +901,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const PackedLogic4& value,
         ProcessId process,
         InstructionIndex instruction);
+    void write_container_object_dynamic_part_element_value(
+        ContainerObjectId id,
+        const PackedLogic4& index,
+        bool signed_index,
+        bool linear_index,
+        const PackedLogic4& value,
+        const PackedLogic4& base,
+        const DynamicPartIndex& selection,
+        ProcessId process,
+        InstructionIndex instruction);
 
     void set_file_root(std::filesystem::path root);
     [[nodiscard]] FileHandle open_file(

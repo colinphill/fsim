@@ -2654,12 +2654,13 @@ bool Lowerer::lower_hir_class_task_call(
     } else {
         const auto callable_key = systemverilog_task_callable_key(
             profile->declaration);
-        const auto found = hir_callable_indices_.find(callable_key);
+        const auto key = std::to_string(callable_key);
+        const auto found = hir_callable_indices_.find(key);
         if (found != hir_callable_indices_.end()) {
             frame_index = found->second;
             new_frame = false;
         } else {
-            hir_callable_indices_.emplace(callable_key, frame_index);
+            hir_callable_indices_.emplace(key, frame_index);
         }
     }
     if (new_frame) {
@@ -3293,6 +3294,8 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
             || !source.subtype) {
             return std::nullopt;
         }
+        // VHDL subprogram locals have per-call activation lifetime.
+        result.automatic = true;
         auto subtype = hir_effective_vhdl_subtype(*source.subtype);
         if (!subtype) {
             return std::nullopt;
@@ -4818,13 +4821,231 @@ Lowerer::lower_hir_function_call_value(
         return std::nullopt;
     }
 
-    const auto callable_key
+    std::vector<std::pair<std::size_t, std::int64_t>>
+        static_integer_actuals;
+    std::vector<std::pair<std::size_t, semantic::ExpressionId>>
+        static_integer_actual_expressions;
+    std::vector<std::pair<std::size_t, std::optional<HirPackedRange>>>
+        vhdl_actual_ranges;
+    if (declaration->vhdl != nullptr) {
+        const auto array_root = [&](semantic::TypeId type_id)
+            -> std::optional<std::pair<semantic::TypeId, std::size_t>> {
+            std::unordered_set<std::uint32_t> visited;
+            while (type_id.valid()
+                && visited.insert(type_id.value()).second) {
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                if (type->vhdl->form
+                    == semantic::vhdl::TypeForm::array) {
+                    return std::pair {
+                        type_id, type->vhdl->array_dimensions.size()
+                    };
+                }
+                if (type->vhdl->form
+                        != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form
+                        != semantic::vhdl::TypeForm::alias) {
+                    return std::nullopt;
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+            return std::nullopt;
+        };
+        const auto predefined_packed_vector = [&](
+            const semantic::vhdl::SubtypeIndication& subtype)
+            -> std::optional<std::pair<std::string_view,
+                frontend::ValueDomain>> {
+            using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
+            if (subtype.domain
+                == semantic::vhdl::ValueDomain::logic9) {
+                if (subtype.builtin_type
+                    == BuiltinType::
+                        ieee_std_logic_1164_std_logic_vector) {
+                    return std::pair {
+                        std::string_view { "std_logic_vector" },
+                        frontend::ValueDomain::Logic9,
+                    };
+                }
+                if (subtype.builtin_type
+                    == BuiltinType::
+                        ieee_std_logic_1164_std_ulogic_vector) {
+                    return std::pair {
+                        std::string_view { "std_ulogic_vector" },
+                        frontend::ValueDomain::Logic9,
+                    };
+                }
+            }
+            if (subtype.type_mark.target.valid()) {
+                return std::nullopt;
+            }
+            constexpr auto builtin_prefix
+                = std::string_view { "@builtin:" };
+            auto spelling
+                = std::string_view { subtype.type_mark.spelling };
+            if (spelling.starts_with(builtin_prefix)) {
+                spelling.remove_prefix(builtin_prefix.size());
+            }
+            if (same_callable_name(spelling, "bit_vector", true)
+                || same_callable_name(
+                    spelling, "standard.bit_vector", true)) {
+                return std::pair {
+                    std::string_view { "bit_vector" },
+                    frontend::ValueDomain::Bit2,
+                };
+            }
+            return std::nullopt;
+        };
+        for (std::size_t index { }; index < formals.size(); ++index) {
+            const auto formal = specialized_hir_unit_->find_declaration(
+                formals[index]);
+            if (!formal || formal->vhdl == nullptr
+                || callable_direction(*formal)
+                    != frontend::PortDirection::Input) {
+                continue;
+            }
+            auto actual_expression = (*actuals)[index];
+            auto actual_value = hir_constant_integer(actual_expression);
+            if (!actual_value && active_hir_callable_
+                && *active_hir_callable_ < hir_callable_frames_.size()) {
+                const auto actual_declaration
+                    = hir_referenced_declaration(actual_expression);
+                const auto& caller = hir_callable_frames_[
+                    *active_hir_callable_];
+                const auto static_binding = actual_declaration
+                    ? std::ranges::find_if(
+                          caller.static_integer_bindings,
+                          [&](const auto& binding) {
+                              return binding.first == *actual_declaration;
+                          })
+                    : caller.static_integer_bindings.end();
+                if (static_binding
+                    != caller.static_integer_bindings.end()) {
+                    auto body_formal = *actual_declaration;
+                    const auto profile = std::ranges::find(
+                        caller.profile_formals, *actual_declaration);
+                    const bool profile_formal
+                        = profile != caller.profile_formals.end();
+                    const auto profile_index = profile_formal
+                        ? static_cast<std::size_t>(
+                              profile - caller.profile_formals.begin())
+                        : 0U;
+                    if (!profile_formal
+                        || profile_index < caller.formals.size()) {
+                        if (profile_formal) {
+                            body_formal = caller.formals[profile_index];
+                        }
+                        const auto binding = std::ranges::find_if(
+                            caller.generic_bindings.rbegin(),
+                            caller.generic_bindings.rend(),
+                            [&](const HirGenericBinding& candidate) {
+                                return candidate.formal == body_formal
+                                    && candidate.expression.has_value();
+                            });
+                        if (binding != caller.generic_bindings.rend()) {
+                            actual_value = static_binding->second;
+                            actual_expression = *binding->expression;
+                        }
+                    }
+                }
+            }
+            if (actual_value) {
+                static_integer_actuals.emplace_back(index, *actual_value);
+                static_integer_actual_expressions.emplace_back(
+                    index, actual_expression);
+            }
+
+            const auto formal_subtype = formal->vhdl->subtype
+                ? hir_effective_vhdl_subtype(*formal->vhdl->subtype)
+                : std::nullopt;
+            const auto formal_predefined_vector = formal_subtype
+                    && formal_subtype->unconstrained
+                ? predefined_packed_vector(*formal_subtype)
+                : std::nullopt;
+            const auto formal_array = formal_subtype
+                    && formal_subtype->unconstrained
+                    && formal_subtype->type_mark.target.valid()
+                ? array_root(formal_subtype->type_mark.target)
+                : std::nullopt;
+            if ((!formal_array || formal_array->second != 1U)
+                && !formal_predefined_vector) {
+                continue;
+            }
+
+            std::optional<HirPackedRange> actual_range;
+            const auto actual_root = hir_vhdl_composite_root_type(
+                (*actuals)[index]);
+            const auto actual_width = hir_expression_width(
+                (*actuals)[index], hir_process_scope_);
+            const auto actual_subtype = hir_vhdl_expression_subtype(
+                (*actuals)[index]);
+            const auto actual_predefined_vector = actual_subtype
+                ? predefined_packed_vector(*actual_subtype)
+                : std::nullopt;
+            const auto actual_array = actual_root
+                    && actual_root->first
+                        == semantic::vhdl::TypeForm::array
+                ? array_root(actual_root->second)
+                : std::nullopt;
+            const auto actual_domain = hir_expression_domain(
+                (*actuals)[index], hir_process_scope_);
+            const auto range = hir_expression_range(
+                (*actuals)[index], hir_process_scope_);
+            const auto distance = range
+                ? index_distance(range->left, range->right)
+                : std::numeric_limits<std::uint64_t>::max();
+            const auto nominal_array_match = formal_array && actual_array
+                && formal_array->second == 1U
+                && actual_array->first == formal_array->first
+                && actual_array->second == 1U;
+            const auto predefined_vector_match
+                = formal_predefined_vector && actual_predefined_vector
+                && same_callable_name(
+                    formal_predefined_vector->first,
+                    actual_predefined_vector->first, true)
+                && actual_domain
+                && *actual_domain == formal_predefined_vector->second
+                && (!actual_root
+                    || (actual_array && actual_array->second == 1U));
+            const auto proven_vector_match = predefined_vector_match;
+            if ((nominal_array_match || proven_vector_match)
+                && actual_width && range
+                && distance
+                    != std::numeric_limits<std::uint64_t>::max()
+                && distance + 1U == *actual_width
+                && (range->left == range->right
+                    || range->descending
+                        == (range->left > range->right))) {
+                actual_range = *range;
+            }
+            vhdl_actual_ranges.emplace_back(index, actual_range);
+        }
+    }
+
+    const auto callable_identity
         = (static_cast<std::uint64_t>(resolution->key.value()) << 32U)
         | static_cast<std::uint64_t>(type->width);
+    auto callable_key = std::to_string(callable_identity);
+    for (const auto& [index, value] : static_integer_actuals) {
+        callable_key += "|" + std::to_string(index) + "="
+            + std::to_string(value);
+    }
+    for (const auto& [index, range] : vhdl_actual_ranges) {
+        callable_key += "|vhdl-range:" + std::to_string(index) + "=";
+        if (range) {
+            callable_key += std::to_string(range->left) + ":"
+                + std::to_string(range->right) + ":"
+                + (range->descending ? "down" : "up");
+        } else {
+            callable_key += "unknown";
+        }
+    }
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
     if (interface_callable) {
-        const auto key = std::to_string(callable_key) + ":"
+        const auto key = callable_key + "|receiver:"
+            + std::to_string(interface_callable->receiver.size()) + ":"
             + interface_callable->receiver;
         const auto found = hir_interface_callable_indices_.find(key);
         if (found != hir_interface_callable_indices_.end()) {
@@ -4864,6 +5085,19 @@ Lowerer::lower_hir_function_call_value(
                 debug_declaration->vhdl->callable->formals.begin(),
                 debug_declaration->vhdl->callable->formals.end());
         }
+        for (const auto& [index, range] : vhdl_actual_ranges) {
+            if (index >= frame.formals.size()) {
+                return std::nullopt;
+            }
+            frame.vhdl_formal_ranges.emplace(
+                frame.formals[index].value(), range);
+            if (frame.profile_formals.size() == frame.formals.size()
+                && frame.profile_formals[index]
+                    != frame.formals[index]) {
+                frame.vhdl_formal_ranges.emplace(
+                    frame.profile_formals[index].value(), range);
+            }
+        }
         // A VHDL function cannot suspend, so its invocation registers are no
         // longer live at any debugger stop. Keep those transient formals out
         // of the enclosing process's debug-local table. Procedures retain a
@@ -4898,14 +5132,34 @@ Lowerer::lower_hir_function_call_value(
             if (direction == frontend::PortDirection::Unknown) {
                 return std::nullopt;
             }
-            if (record->vhdl != nullptr
-                && direction == frontend::PortDirection::Input
-                && hir_constant_integer((*actuals)[index])) {
+            const auto static_actual = std::ranges::find_if(
+                static_integer_actuals,
+                [index](const auto& binding) {
+                    return binding.first == index;
+                });
+            if (static_actual != static_integer_actuals.end()) {
                 HirGenericBinding constant_actual;
                 constant_actual.formal = formal;
-                constant_actual.expression = (*actuals)[index];
+                const auto static_expression = std::ranges::find_if(
+                    static_integer_actual_expressions,
+                    [index](const auto& binding) {
+                        return binding.first == index;
+                    });
+                if (static_expression
+                    == static_integer_actual_expressions.end()) {
+                    return std::nullopt;
+                }
+                constant_actual.expression = static_expression->second;
                 frame.generic_bindings.push_back(
                     std::move(constant_actual));
+                frame.static_integer_bindings.emplace_back(
+                    formal, static_actual->second);
+                if (frame.profile_formals.size() == formals.size()
+                    && frame.profile_formals[index] != formal) {
+                    frame.static_integer_bindings.emplace_back(
+                        frame.profile_formals[index],
+                        static_actual->second);
+                }
             }
             const auto string = record
                     && record->systemverilog != nullptr
@@ -5440,12 +5694,13 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
 
     const auto callable_key = std::uint64_t { 1 } << 63U
         | (static_cast<std::uint64_t>(resolution->key.value()) << 32U);
-    const auto found = hir_callable_indices_.find(callable_key);
+    const auto callable_key_text = std::to_string(callable_key);
+    const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
         : hir_callable_frames_.size();
     if (found == hir_callable_indices_.end()) {
-        hir_callable_indices_.emplace(callable_key, frame_index);
+        hir_callable_indices_.emplace(callable_key_text, frame_index);
         HirCallableFrame frame;
         frame.declaration = resolution->body;
         frame.scope = *scope;
@@ -5999,12 +6254,13 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
 
     const auto callable_key = vhdl_procedure_callable_key(
         resolution->key);
-    const auto found = hir_callable_indices_.find(callable_key);
+    const auto callable_key_text = std::to_string(callable_key);
+    const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
         : hir_callable_frames_.size();
     if (found == hir_callable_indices_.end()) {
-        hir_callable_indices_.emplace(callable_key, frame_index);
+        hir_callable_indices_.emplace(callable_key_text, frame_index);
         HirCallableFrame frame;
         frame.declaration = resolution->body;
         frame.scope = scope;

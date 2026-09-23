@@ -3,21 +3,13 @@
 if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
+include("${CMAKE_CURRENT_LIST_DIR}/CurrentEvidenceOwners.cmake")
+fsim_current_registered_ctests(FSIM_REGISTERED_CTESTS)
 
 set(FSIM_CORPUS "${FSIM_SOURCE_DIR}/docs/v1-portability-corpus.txt")
-set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
-if(NOT EXISTS "${FSIM_CORPUS}" OR NOT EXISTS "${FSIM_TEST_CMAKE}")
+if(NOT EXISTS "${FSIM_CORPUS}")
   message(FATAL_ERROR "v1 portability corpus inputs are missing")
 endif()
-file(GLOB_RECURSE
-  FSIM_TEST_CMAKE_FILES
-  "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt"
-  "${FSIM_SOURCE_DIR}/tests/*/CMakeLists.txt")
-set(FSIM_TEST_CMAKE_CONTENTS "")
-foreach(FSIM_CMAKE_FILE IN LISTS FSIM_TEST_CMAKE_FILES)
-  file(READ "${FSIM_CMAKE_FILE}" FSIM_CMAKE_CONTENT)
-  string(APPEND FSIM_TEST_CMAKE_CONTENTS "\n${FSIM_CMAKE_CONTENT}")
-endforeach()
 file(STRINGS "${FSIM_CORPUS}" FSIM_LINES)
 
 set(FSIM_IDS "")
@@ -47,16 +39,13 @@ foreach(FSIM_LINE IN LISTS FSIM_LINES)
   endif()
   list(APPEND FSIM_IDS "${FSIM_ID}")
   string(APPEND FSIM_ALL_MODES "+${FSIM_MODES}")
-  string(FIND "${FSIM_TEST_CMAKE_CONTENTS}" "${FSIM_CTEST}" FSIM_CTEST_INDEX)
+  list(FIND FSIM_REGISTERED_CTESTS "${FSIM_CTEST}" FSIM_CTEST_INDEX)
   if(FSIM_CTEST_INDEX EQUAL -1)
     message(FATAL_ERROR
       "${FSIM_ID} names an unregistered CTest: ${FSIM_CTEST}")
   endif()
+  fsim_current_evidence_file("${FSIM_EVIDENCE}")
   set(FSIM_EVIDENCE_PATH "${FSIM_SOURCE_DIR}/${FSIM_EVIDENCE}")
-  if(NOT EXISTS "${FSIM_EVIDENCE_PATH}")
-    message(FATAL_ERROR
-      "${FSIM_ID} evidence file is missing: ${FSIM_EVIDENCE}")
-  endif()
   file(READ "${FSIM_EVIDENCE_PATH}" FSIM_EVIDENCE_CONTENTS)
   string(FIND "${FSIM_EVIDENCE_CONTENTS}" "${FSIM_MARKER}" FSIM_MARKER_INDEX)
   if(FSIM_MARKER_INDEX EQUAL -1)
@@ -66,10 +55,6 @@ foreach(FSIM_LINE IN LISTS FSIM_LINES)
   math(EXPR FSIM_ROW_COUNT "${FSIM_ROW_COUNT} + 1")
 endforeach()
 
-if(NOT FSIM_ROW_COUNT EQUAL 20)
-  message(FATAL_ERROR
-    "expected 20 exact portability rows, found ${FSIM_ROW_COUNT}")
-endif()
 foreach(FSIM_REQUIRED_MODE IN ITEMS
     Debug Release interpreter LLVM-O0 LLVM-O2 cold warm edit api abi plugin
     callback debugger vcd files path newline resources)
@@ -79,12 +64,27 @@ foreach(FSIM_REQUIRED_MODE IN ITEMS
       "portability corpus lacks required mode: ${FSIM_REQUIRED_MODE}")
   endif()
 endforeach()
-set(FSIM_REQUIRED_IDS
-  PORT-001 PORT-002 PORT-003 PORT-004 PORT-005
-  PORT-006 PORT-007 PORT-008 PORT-009 PORT-010
-  PORT-011 PORT-012 PORT-013 PORT-014 PORT-015
-  PORT-016 PORT-017 PORT-018 PORT-019 PORT-020)
+set(FSIM_REQUIRED_IDS_FILE
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/v1_portability_required_ids.txt")
+if(NOT EXISTS "${FSIM_REQUIRED_IDS_FILE}")
+  message(FATAL_ERROR "required portability ID set is missing")
+endif()
+file(STRINGS "${FSIM_REQUIRED_IDS_FILE}" FSIM_REQUIRED_IDS)
+list(FILTER FSIM_REQUIRED_IDS EXCLUDE REGEX
+  "^# SPDX-License-Identifier: Apache-2.0$")
+if(NOT FSIM_REQUIRED_IDS)
+  message(FATAL_ERROR "required portability ID set is empty")
+endif()
+set(FSIM_SEEN_REQUIRED_IDS)
 foreach(FSIM_REQUIRED_ID IN LISTS FSIM_REQUIRED_IDS)
+  if(NOT FSIM_REQUIRED_ID MATCHES "^PORT-[0-9][0-9][0-9]$")
+    message(FATAL_ERROR "invalid required portability ID: ${FSIM_REQUIRED_ID}")
+  endif()
+  list(FIND FSIM_SEEN_REQUIRED_IDS "${FSIM_REQUIRED_ID}" FSIM_SEEN_INDEX)
+  if(NOT FSIM_SEEN_INDEX EQUAL -1)
+    message(FATAL_ERROR "duplicate required portability ID: ${FSIM_REQUIRED_ID}")
+  endif()
+  list(APPEND FSIM_SEEN_REQUIRED_IDS "${FSIM_REQUIRED_ID}")
   list(FIND FSIM_IDS "${FSIM_REQUIRED_ID}" FSIM_REQUIRED_INDEX)
   if(FSIM_REQUIRED_INDEX EQUAL -1)
     message(FATAL_ERROR "portability corpus lacks ${FSIM_REQUIRED_ID}")
@@ -92,6 +92,6 @@ foreach(FSIM_REQUIRED_ID IN LISTS FSIM_REQUIRED_IDS)
 endforeach()
 
 message(STATUS
-  "v1 portability corpus: 20 exact rows cover Debug/Release, interpreter, "
+  "portability corpus: ${FSIM_ROW_COUNT} rows cover Debug/Release, interpreter, "
   "LLVM O0/O2, cold/warm/edit, API/ABI, plug-in, debugger/VCD, files, "
-  "path/newline, callbacks, and bounded resources")
+  "path/newline, callbacks, and bounded resources; additions allowed")

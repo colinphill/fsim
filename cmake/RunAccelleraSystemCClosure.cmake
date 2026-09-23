@@ -13,6 +13,8 @@ if(FSIM_DEDUPLICATED_CTEST)
   return()
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RunClosureWitnesses.cmake")
+
 file(REMOVE_RECURSE "${FSIM_OUTPUT_DIR}")
 file(MAKE_DIRECTORY "${FSIM_OUTPUT_DIR}/logs")
 set(FSIM_CONSOLE "${FSIM_OUTPUT_DIR}/console.log")
@@ -24,25 +26,21 @@ set(FSIM_STAGES
   "corpus@@^fsim\\.systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo))$"
   "backend@@^fsim\\.systemc\\.(shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend)$"
   "integration@@^fsim\\.(systemc\\.(shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$"
-  "contracts@@^fsim\\.(systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|resource-portability-contract)$")
+  "contracts@@^fsim\\.(systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|contract\\.systemc-resources)$")
 
 foreach(FSIM_STAGE_SPEC IN LISTS FSIM_STAGES)
   string(REPLACE "@@" ";" FSIM_STAGE_FIELDS "${FSIM_STAGE_SPEC}")
   list(GET FSIM_STAGE_FIELDS 0 FSIM_STAGE)
   list(GET FSIM_STAGE_FIELDS 1 FSIM_REGEX)
   set(FSIM_LOG "${FSIM_OUTPUT_DIR}/logs/${FSIM_STAGE}.log")
-  execute_process(
-    COMMAND "${FSIM_CTEST_COMMAND}"
-      --test-dir "${FSIM_BINARY_DIR}"
-      --output-on-failure
-      --verbose
-      --timeout 7200
-      -j 8
-      -R "${FSIM_REGEX}"
-    RESULT_VARIABLE FSIM_STATUS
-    OUTPUT_VARIABLE FSIM_STDOUT
-    ERROR_VARIABLE FSIM_STDERR
-    TIMEOUT 7200)
+  fsim_run_closure_witnesses(
+    FSIM_STATUS FSIM_STDOUT FSIM_STDERR 7200
+    --test-dir "${FSIM_BINARY_DIR}"
+    --output-on-failure
+    --verbose
+    --timeout 7200
+    -j 8
+    -R "${FSIM_REGEX}")
   file(WRITE "${FSIM_LOG}" "${FSIM_STDOUT}${FSIM_STDERR}")
   file(APPEND "${FSIM_CONSOLE}" "${FSIM_STDOUT}${FSIM_STDERR}")
   string(FIND "${FSIM_STDOUT}${FSIM_STDERR}" "100% tests passed"

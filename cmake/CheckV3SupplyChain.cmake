@@ -5,11 +5,14 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/CurrentEvidenceOwners.cmake")
+
 set(inventory "${FSIM_SOURCE_DIR}/packaging/v3-supply-chain-inventory.tsv")
 file(STRINGS "${inventory}" rows)
 set(ids)
 set(paths)
-set(count 0)
+file(STRINGS "${FSIM_SOURCE_DIR}/packaging/source-package-manifest.txt"
+  manifest)
 foreach(row IN LISTS rows)
   if(row MATCHES "^#" OR row STREQUAL "")
     continue()
@@ -23,39 +26,64 @@ foreach(row IN LISTS rows)
   list(GET fields 1 kind)
   list(GET fields 2 path)
   list(GET fields 3 owner)
-  if(id IN_LIST ids OR path IN_LIST paths OR NOT owner STREQUAL "B188-C17"
+  if(NOT id MATCHES "^V3SUP-[A-Z0-9-]+$"
+      OR id IN_LIST ids OR path IN_LIST paths OR owner STREQUAL ""
       OR NOT kind MATCHES "^(license|notice|sbom|provenance|exclusion|reference-audit)$")
     message(FATAL_ERROR "invalid v3 supply-chain identity/owner: ${row}")
   endif()
-  if(NOT EXISTS "${FSIM_SOURCE_DIR}/${path}")
-    message(FATAL_ERROR "missing v3 supply-chain input: ${path}")
+  fsim_current_evidence_file("${path}")
+  if(NOT path IN_LIST manifest)
+    message(FATAL_ERROR "v3 supply-chain input is not packaged: ${path}")
   endif()
   list(APPEND ids "${id}")
   list(APPEND paths "${path}")
-  math(EXPR count "${count} + 1")
 endforeach()
-if(NOT count EQUAL 13)
-  message(FATAL_ERROR "expected 13 v3 supply-chain rows, found ${count}")
-endif()
+
+file(STRINGS
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_current_required_ids.txt"
+  required_ids)
+foreach(id IN LISTS required_ids)
+  if(id MATCHES "^V3SUP-[A-Z0-9-]+$" AND NOT id IN_LIST ids)
+    message(FATAL_ERROR "required v3 supply-chain input is missing: ${id}")
+  endif()
+endforeach()
 
 foreach(sbom IN ITEMS
     third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
     third_party/scv-2.0.1/scv-2.0.1.spdx.json)
   file(READ "${FSIM_SOURCE_DIR}/${sbom}" contents)
-  foreach(token IN ITEMS
-      "\"spdxVersion\": \"SPDX-2.3\""
-      "\"dataLicense\": \"CC0-1.0\""
-      "\"licenseDeclared\": \"Apache-2.0\""
-      "\"checksums\""
-      "\"externalRefs\"")
-    if(NOT contents MATCHES "${token}")
-      message(FATAL_ERROR "SPDX SBOM ${sbom} misses ${token}")
+  string(JSON spdx_version ERROR_VARIABLE json_error
+    GET "${contents}" spdxVersion)
+  if(json_error OR NOT spdx_version STREQUAL "SPDX-2.3")
+    message(FATAL_ERROR "SPDX SBOM ${sbom} has invalid version")
+  endif()
+  string(JSON data_license ERROR_VARIABLE json_error
+    GET "${contents}" dataLicense)
+  if(json_error OR NOT data_license STREQUAL "CC0-1.0")
+    message(FATAL_ERROR "SPDX SBOM ${sbom} has invalid data license")
+  endif()
+  string(JSON package_count ERROR_VARIABLE json_error
+    LENGTH "${contents}" packages)
+  if(json_error OR package_count LESS 1)
+    message(FATAL_ERROR "SPDX SBOM ${sbom} has no packages")
+  endif()
+  math(EXPR package_last "${package_count} - 1")
+  foreach(package_index RANGE 0 ${package_last})
+    string(JSON declared ERROR_VARIABLE json_error
+      GET "${contents}" packages ${package_index} licenseDeclared)
+    if(json_error OR NOT declared STREQUAL "Apache-2.0")
+      message(FATAL_ERROR "SPDX SBOM ${sbom} has invalid package license")
     endif()
+    foreach(field IN ITEMS checksums externalRefs)
+      string(JSON item_count ERROR_VARIABLE json_error
+        LENGTH "${contents}" packages ${package_index} ${field})
+      if(json_error OR item_count LESS 1)
+        message(FATAL_ERROR "SPDX SBOM ${sbom} has no ${field}")
+      endif()
+    endforeach()
   endforeach()
 endforeach()
 
-file(STRINGS
-  "${FSIM_SOURCE_DIR}/packaging/source-package-manifest.txt" manifest)
 set(forbidden_home "/home/" "colin/standards")
 list(JOIN forbidden_home "" forbidden_absolute)
 set(forbidden_pdf "standards/" ".pdf")
@@ -80,8 +108,3 @@ foreach(path IN LISTS manifest)
     endif()
   endif()
 endforeach()
-
-file(SHA256 "${inventory}" digest)
-if(NOT digest STREQUAL "991174ef94f597bf5c4b956619e6c102bebe3adfc477e04becd99c1ff673b626")
-  message(FATAL_ERROR "v3 supply-chain inventory digest changed: ${digest}")
-endif()

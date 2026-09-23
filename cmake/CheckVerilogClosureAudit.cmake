@@ -2,9 +2,11 @@
 
 cmake_policy(SET CMP0007 NEW)
 
-if(NOT DEFINED FSIM_SOURCE_DIR)
-  message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
-endif()
+foreach(FSIM_REQUIRED IN ITEMS FSIM_SOURCE_DIR FSIM_BINARY_DIR FSIM_CTEST_COMMAND)
+  if(NOT DEFINED ${FSIM_REQUIRED} OR "${${FSIM_REQUIRED}}" STREQUAL "")
+    message(FATAL_ERROR "${FSIM_REQUIRED} is required")
+  endif()
+endforeach()
 
 set(FSIM_MATRIX
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/verilog_release_closure.tsv")
@@ -218,11 +220,14 @@ set(FSIM_COMPOSED_OUTPUT)
 foreach(FSIM_GATE IN ITEMS
     CheckVerilogGapInventory.cmake
     CheckDiagnosticCatalog.cmake
-    CheckSourceLineBudget.cmake
-    CheckV1ConformanceAudit.cmake
-    CheckResourcePortabilityContract.cmake)
+    CheckTranslationUnitStructure.cmake
+    CheckAuthoredLicenseInventory.cmake
+    CheckCurrentResourceDomain.cmake)
   execute_process(
     COMMAND "${CMAKE_COMMAND}" "-DFSIM_SOURCE_DIR=${FSIM_SOURCE_DIR}"
+      "-DFSIM_BINARY_DIR=${FSIM_BINARY_DIR}"
+      "-DFSIM_CTEST_COMMAND=${FSIM_CTEST_COMMAND}"
+      "-DFSIM_RESOURCE_DOMAIN=language"
       -P "${FSIM_SOURCE_DIR}/cmake/${FSIM_GATE}"
     RESULT_VARIABLE FSIM_GATE_RESULT
     OUTPUT_VARIABLE FSIM_GATE_OUTPUT
@@ -239,9 +244,9 @@ foreach(FSIM_TOKEN IN ITEMS
     "34 supported, 0 active, and 3 deferred"
     "12 preserved, 0 active, and 3 physical"
     "diagnostic catalog covers 2765 production codes"
-    "The physical source-line ceiling is disabled; checking translation-unit structure only"
-    "v1 conformance audit:"
-    "resource portability contract:")
+    "Translation-unit structure checked: 0 forbidden .tpp files"
+    "authored license inventory:"
+    "language resources:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR

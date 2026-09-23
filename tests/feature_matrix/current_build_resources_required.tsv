@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+id	path	owner
+RESBUILD-HOSTED	.github/workflows/ci.yml	fsim.v3-hosted-toolchains
+RESBUILD-LINK	cmake/FsimDebugFootprint.cmake	fsim.contract.build-resources
+RESBUILD-STACK	CMakeLists.txt	fsim.msvc-debug-contract
+RESBUILD-RELEASE	CMakeLists.txt	fsim.msvc-release-contract
+RESBUILD-WINDOWS	cmake/CheckWindowsLlvmContract.cmake	fsim.windows-llvm-contract
+RESBUILD-CTEST	tests/CMakeLists.txt	fsim.ctest-command-uniqueness
+RESBUILD-BOOST	cmake/FsimDependencies.cmake	fsim.contract.build-resources

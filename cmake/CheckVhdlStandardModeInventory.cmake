@@ -43,7 +43,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "fsim.llvm"
     "fsim.msvc-debug-contract"
     "fsim.windows-llvm-contract"
-    "fsim.resource-portability-contract"
+    "fsim.contract.language-resources"
     "FSIM-VHDL-OLDER-ENVIRONMENT-PASS revisions=1987/1993/2000/2002"
     "FSIM-VHDL-SYNOPSYS-PACKAGES-PASS"
     "FSIM-VHDL-OLDER-MODES-PASS revisions=1987/1993/2000/2002"

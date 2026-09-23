@@ -4,13 +4,26 @@
 #include "fsim/semantic/compiled_design.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace fsim::semantic {
+
+/// A fully known VHDL packed vector produced by bounded constant evaluation.
+/// `bits` are ordered from the left bound through the right bound.
+struct SpecializedHirVhdlPackedValue {
+    std::string bits;
+    std::int64_t left_bound { };
+    std::int64_t right_bound { };
+
+    friend bool operator==(const SpecializedHirVhdlPackedValue&,
+        const SpecializedHirVhdlPackedValue&) = default;
+};
 
 struct SpecializedHirActualIdentity {
     DeclarationId declaration;
@@ -35,6 +48,11 @@ struct SpecializedHirActualIdentity {
     // constraints written on this actual from constraints inherited through
     // its named subtype. This is non-owning compiled-HIR provenance.
     SourceSpanId source { };
+    // A transient, subtype-checked packed VHDL value for this formal. It is
+    // not part of `identity` or the specialization cache key; it lets the
+    // target unit evaluate lexical references to packed generic actuals
+    // without re-evaluating a parent expression in the child's context.
+    std::optional<SpecializedHirVhdlPackedValue> vhdl_packed_value { };
 
     friend bool operator==(const SpecializedHirActualIdentity&,
         const SpecializedHirActualIdentity&) = default;
@@ -202,6 +220,26 @@ struct SpecializedHirIntegralEvaluation {
     std::vector<SpecializedHirConstantEffect> effects;
 };
 
+using SpecializedHirIntegralBinding =
+    std::function<std::optional<ExpressionId>(DeclarationId)>;
+
+/// A bounded one-dimensional VHDL array whose elements are packed values.
+/// `elements` are ordered from the outer left bound through the right bound;
+/// each element retains its own packed bounds and the array's element domain.
+struct SpecializedHirVhdlPackedArrayValue {
+    std::int64_t left_bound { };
+    std::int64_t right_bound { };
+    vhdl::ValueDomain element_domain { vhdl::ValueDomain::unknown };
+    std::vector<SpecializedHirVhdlPackedValue> elements;
+
+    friend bool operator==(const SpecializedHirVhdlPackedArrayValue&,
+        const SpecializedHirVhdlPackedArrayValue&) = default;
+};
+
+/// Integral or packed VHDL value returned by typed constant evaluation.
+using SpecializedHirVhdlConstantValue =
+    std::variant<std::int64_t, SpecializedHirVhdlPackedValue>;
+
 /// Mutable, unit-scoped HIR replacements for one specialization. Records not
 /// replaced here remain owned by, and are resolved through, the immutable
 /// CompiledDesign supplied at construction. Replacements never allocate new
@@ -220,6 +258,41 @@ public:
     /// parent specialization without consulting syntax storage.
     [[nodiscard]] std::optional<std::int64_t>
     evaluate_integral_expression(ExpressionId expression) const;
+
+    /// Evaluate one integral expression with an explicit, caller-owned
+    /// formal-to-actual context. The context is consulted only for selected
+    /// VHDL names that are not already active evaluated locals.
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_integral_expression(
+        ExpressionId expression,
+        const SpecializedHirIntegralBinding& binding) const;
+
+    /// Evaluate the bounded pure VHDL constant subset while preserving
+    /// packed-vector width and index bounds. Unsupported or runtime-dependent
+    /// expressions return no value.
+    [[nodiscard]] std::optional<SpecializedHirVhdlConstantValue>
+    evaluate_vhdl_constant_expression(ExpressionId expression) const;
+
+    /// Evaluate one bounded one-dimensional array of packed VHDL constants.
+    /// Unsupported shapes, mismatched bounds, and partially initialized
+    /// arrays return no value. Elements are ordered from the declared left
+    /// index through the right index.
+    [[nodiscard]] std::optional<SpecializedHirVhdlPackedArrayValue>
+    evaluate_vhdl_packed_array_expression(ExpressionId expression) const;
+
+    /// Evaluate and coerce a bounded packed-vector VHDL constant declaration
+    /// to its effective subtype. Unsupported or mismatched values return no
+    /// value.
+    [[nodiscard]] std::optional<SpecializedHirVhdlPackedValue>
+    evaluate_vhdl_packed_value_declaration(
+        DeclarationId declaration) const;
+
+    /// Evaluate and coerce a VHDL constant declaration to its effective
+    /// declared subtype before projecting a bounded packed array. Runtime,
+    /// malformed, or partially initialized declarations return no value.
+    [[nodiscard]] std::optional<SpecializedHirVhdlPackedArrayValue>
+    evaluate_vhdl_packed_array_declaration(
+        DeclarationId declaration) const;
 
     /// Evaluate SystemVerilog constant truth using integral, four-state, and
     /// string-comparison rules. A missing result means the expression still

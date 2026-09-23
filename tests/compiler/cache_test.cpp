@@ -2,6 +2,7 @@
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
 #include "fsim/support/sha256.hpp"
+#include "native_cache_schema.hpp"
 
 #include <array>
 #include <cassert>
@@ -440,6 +441,28 @@ int main() {
     fsim::compiler::ObjectCachePruneOptions no_limits;
     assert(absent.prune(no_limits, prune, error));
     assert(prune == fsim::compiler::ObjectCachePruneResult{});
+
+    // A v2 namespace entry cannot satisfy the current native-object key.
+    CacheKeyBuilder legacy_native;
+    const auto legacy_native_key = legacy_native
+        .add("llvm-object-schema", "fsim-llvm-native-object-v116")
+        .add("process-identity", "legacy-namespace-fixture")
+        .finish();
+    CacheKeyBuilder current_native;
+    const auto current_native_key = current_native
+        .add("llvm-object-schema",
+            fsim::compiler::llvm_detail::kNativeObjectCacheSchema)
+        .add("process-identity", "legacy-namespace-fixture")
+        .finish();
+    assert(legacy_native_key != current_native_key);
+    ObjectCache native_namespace{root / "native-namespace"};
+    assert(native_namespace.store(legacy_native_key, payload, error));
+    assert(!error);
+    assert(!native_namespace.load(current_native_key, error));
+    const auto legacy_payload = native_namespace.load(legacy_native_key, error);
+    assert(legacy_payload);
+    assert(std::equal(legacy_payload->begin(), legacy_payload->end(),
+        payload.begin(), payload.end()));
 
     std::filesystem::remove_all(root, error);
     std::cout << "cache tests passed\n";

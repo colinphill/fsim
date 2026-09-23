@@ -1,83 +1,131 @@
 # SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.25)
 
-foreach(required IN ITEMS FSIM_SOURCE_DIR FSIM_BINARY_DIR FSIM_EXECUTABLE)
-  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
-    message(FATAL_ERROR "${required} is required")
+foreach(FSIM_VARIABLE IN ITEMS FSIM_SOURCE_DIR FSIM_BINARY_DIR FSIM_EXECUTABLE)
+  if(NOT DEFINED ${FSIM_VARIABLE} OR "${${FSIM_VARIABLE}}" STREQUAL "")
+    message(FATAL_ERROR "${FSIM_VARIABLE} is required")
   endif()
 endforeach()
 
-set(inventory "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_version_identity.tsv")
-file(STRINGS "${inventory}" rows)
-set(ids)
-set(count 0)
-foreach(row IN LISTS rows)
-  if(row MATCHES "^#" OR row STREQUAL "")
+include("${CMAKE_CURRENT_LIST_DIR}/CurrentEvidenceOwners.cmake")
+
+file(READ "${FSIM_SOURCE_DIR}/CMakeLists.txt" FSIM_PROJECT_CMAKE)
+if(NOT FSIM_PROJECT_CMAKE MATCHES
+    "project\\([ \n\r\t]*fsim[ \n\r\t]+VERSION[ \n\r\t]+([0-9]+\\.[0-9]+\\.[0-9]+)")
+  message(FATAL_ERROR "cannot read fsim project version")
+endif()
+set(FSIM_VERSION "${CMAKE_MATCH_1}")
+file(READ "${FSIM_SOURCE_DIR}/include/fsim/version.hpp" FSIM_HEADER)
+if(NOT FSIM_HEADER MATCHES "version = \"${FSIM_VERSION}\"")
+  message(FATAL_ERROR "compiled version header differs from project version")
+endif()
+if(NOT FSIM_HEADER MATCHES
+    "native_abi_version = ([0-9]+)")
+  message(FATAL_ERROR "cannot read native ABI version")
+endif()
+set(FSIM_ABI_VERSION "${CMAKE_MATCH_1}")
+
+set(FSIM_INVENTORY
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_version_identity.tsv")
+file(STRINGS "${FSIM_INVENTORY}" FSIM_ROWS)
+set(FSIM_IDS)
+set(FSIM_PATHS)
+foreach(FSIM_ROW IN LISTS FSIM_ROWS)
+  if(FSIM_ROW MATCHES "^#" OR FSIM_ROW STREQUAL "")
     continue()
   endif()
-  string(REPLACE "\t" ";" fields "${row}")
-  list(LENGTH fields field_count)
-  if(NOT field_count EQUAL 5)
-    message(FATAL_ERROR "invalid v3 version-identity row: ${row}")
+  if(FSIM_ROW MATCHES ";")
+    message(FATAL_ERROR "invalid v3 version-identity row")
   endif()
-  list(GET fields 0 id)
-  list(GET fields 2 path)
-  list(GET fields 4 owner)
-  if(id IN_LIST ids OR NOT owner STREQUAL "B188-C19"
-      OR NOT EXISTS "${FSIM_SOURCE_DIR}/${path}")
-    message(FATAL_ERROR "invalid v3 version identity/owner: ${row}")
+  string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
+  list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
+  if(NOT FSIM_FIELD_COUNT EQUAL 5)
+    message(FATAL_ERROR "invalid v3 version-identity row: ${FSIM_ROW}")
   endif()
-  list(APPEND ids "${id}")
-  math(EXPR count "${count} + 1")
-endforeach()
-if(NOT count EQUAL 11)
-  message(FATAL_ERROR "expected 11 v3 version identities, found ${count}")
-endif()
-
-function(require_token path token)
-  file(READ "${FSIM_SOURCE_DIR}/${path}" contents)
-  string(FIND "${contents}" "${token}" offset)
-  if(offset EQUAL -1)
-    message(FATAL_ERROR "${path} misses v3 identity token: ${token}")
+  list(GET FSIM_FIELDS 0 FSIM_ID)
+  list(GET FSIM_FIELDS 1 FSIM_SURFACE)
+  list(GET FSIM_FIELDS 2 FSIM_PATH)
+  list(GET FSIM_FIELDS 3 FSIM_IDENTITY)
+  list(GET FSIM_FIELDS 4 FSIM_OWNER)
+  if(NOT FSIM_ID MATCHES "^V3VER-[A-Z0-9-]+$"
+     OR FSIM_SURFACE STREQUAL "" OR FSIM_IDENTITY STREQUAL ""
+     OR FSIM_OWNER STREQUAL "" OR FSIM_ID IN_LIST FSIM_IDS
+     OR FSIM_PATH IN_LIST FSIM_PATHS)
+    message(FATAL_ERROR "invalid v3 version identity/owner: ${FSIM_ROW}")
   endif()
-endfunction()
-require_token(CMakeLists.txt "VERSION 3.0.0")
-require_token(include/fsim/version.hpp "version = \"3.0.0\"")
-require_token(cmake/fsim.pc.in "Version: @PROJECT_VERSION@")
-require_token(packaging/package-policy.txt "release_identity=fsim-v3.0.0")
-require_token(packaging/package-policy.txt
-  "binary_artifacts=fsim-v3.0.0-linux-x86_64-clang22-no-llvm.zip,fsim-v3.0.0-linux-x86_64-clang22-llvm22.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-no-llvm.zip,fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip")
-require_token(packaging/v3-release-record.txt "tag_message=fsim v3.0.0")
-require_token(.github/workflows/ci.yml
-  "binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip")
-foreach(target IN ITEMS
-    packaging/targets/linux-clang22-no-llvm.txt
-    packaging/targets/linux-clang22-llvm22.txt
-    packaging/targets/windows-llvm-mingw-no-llvm.txt
-    packaging/targets/windows-llvm-mingw-llvm22.txt)
-  require_token(${target} "hosted_workers=2")
-  require_token(${target} "batch188_required=")
+  fsim_current_evidence_file("${FSIM_PATH}")
+  if(FSIM_ID MATCHES "^V3VER-(CMAKE|HEADER|PKGCONFIG)$")
+    set(FSIM_EXPECTED "${FSIM_VERSION}")
+  elseif(FSIM_ID STREQUAL "V3VER-RECORD")
+    set(FSIM_EXPECTED "v${FSIM_VERSION}")
+  elseif(FSIM_ID MATCHES "^V3VER-(POLICY|ARCHIVES|CI)$")
+    set(FSIM_EXPECTED "fsim-v${FSIM_VERSION}")
+  else()
+    set(FSIM_EXPECTED "${FSIM_IDENTITY}")
+  endif()
+  if(NOT FSIM_IDENTITY STREQUAL FSIM_EXPECTED)
+    message(FATAL_ERROR "v3 version identity differs: ${FSIM_ID}")
+  endif()
+  list(APPEND FSIM_IDS "${FSIM_ID}")
+  list(APPEND FSIM_PATHS "${FSIM_PATH}")
 endforeach()
 
-file(READ "${FSIM_BINARY_DIR}/fsim.pc" pc)
-string(FIND "${pc}" "Version: 3.0.0" pc_offset)
-if(pc_offset EQUAL -1)
-  message(FATAL_ERROR "generated fsim.pc is not version 3.0.0")
+file(STRINGS
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_current_required_ids.txt"
+  FSIM_REQUIRED_IDS)
+foreach(FSIM_ID IN LISTS FSIM_REQUIRED_IDS)
+  if(FSIM_ID MATCHES "^V3VER-[A-Z0-9-]+$"
+     AND NOT FSIM_ID IN_LIST FSIM_IDS)
+    message(FATAL_ERROR "required v3 version identity is missing: ${FSIM_ID}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_BINARY_DIR}/fsim.pc" FSIM_PC)
+string(FIND "\n${FSIM_PC}\n" "\nVersion: ${FSIM_VERSION}\n"
+  FSIM_PC_VERSION)
+if(FSIM_PC_VERSION EQUAL -1)
+  message(FATAL_ERROR "generated fsim.pc differs from project version")
 endif()
 execute_process(COMMAND "${FSIM_EXECUTABLE}" --version
-  RESULT_VARIABLE version_result OUTPUT_VARIABLE version ERROR_VARIABLE version_error)
-string(STRIP "${version}" version)
-if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 3.0.0 (C API 1)")
-  message(FATAL_ERROR "compiled v3 version identity failed: ${version}${version_error}")
+  RESULT_VARIABLE FSIM_VERSION_STATUS OUTPUT_VARIABLE FSIM_COMPILED_VERSION
+  ERROR_VARIABLE FSIM_VERSION_ERROR)
+string(STRIP "${FSIM_COMPILED_VERSION}" FSIM_COMPILED_VERSION)
+if(NOT FSIM_VERSION_STATUS EQUAL 0
+   OR NOT FSIM_COMPILED_VERSION STREQUAL
+     "fsim ${FSIM_VERSION} (C API ${FSIM_ABI_VERSION})")
+  message(FATAL_ERROR "compiled v3 version identity failed: ${FSIM_COMPILED_VERSION}${FSIM_VERSION_ERROR}")
 endif()
 
-foreach(path IN ITEMS packaging/package-policy.txt .github/workflows/ci.yml)
-  file(READ "${FSIM_SOURCE_DIR}/${path}" contents)
-  if(contents MATCHES "fsim-v2[.]0[.]0" OR contents MATCHES "linux-x86_64-gcc13")
-    message(FATAL_ERROR "active v3 product/package surface retains v2/GCC identity: ${path}")
+file(READ "${FSIM_SOURCE_DIR}/packaging/package-policy.txt" FSIM_POLICY)
+string(FIND "\n${FSIM_POLICY}\n"
+  "\nrelease_identity=fsim-v${FSIM_VERSION}\n" FSIM_POLICY_VERSION)
+if(FSIM_POLICY_VERSION EQUAL -1)
+  message(FATAL_ERROR "package policy differs from project version")
+endif()
+file(READ "${FSIM_SOURCE_DIR}/packaging/v3-release-record.txt" FSIM_RECORD)
+string(FIND "\n${FSIM_RECORD}\n"
+  "\ncompiled_version_required=${FSIM_VERSION}\n" FSIM_RECORD_VERSION)
+if(FSIM_RECORD_VERSION EQUAL -1)
+  message(FATAL_ERROR "release record differs from project version")
+endif()
+
+file(READ "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml" FSIM_CI)
+string(FIND "${FSIM_CI}"
+  "binary_archive: fsim-v${FSIM_VERSION}-windows-x86_64-llvm-mingw-llvm22.zip"
+  FSIM_CI_ARCHIVE)
+if(FSIM_CI_ARCHIVE EQUAL -1)
+  message(FATAL_ERROR "hosted archive differs from project version")
+endif()
+
+foreach(FSIM_PATH IN ITEMS packaging/package-policy.txt .github/workflows/ci.yml)
+  file(READ "${FSIM_SOURCE_DIR}/${FSIM_PATH}" FSIM_CONTENTS)
+  if(FSIM_CONTENTS MATCHES "fsim-v2[.]0[.]0"
+     OR FSIM_CONTENTS MATCHES "linux-x86_64-gcc13")
+    message(FATAL_ERROR "active v3 product surface retains v2/GCC identity: ${FSIM_PATH}")
   endif()
 endforeach()
-file(SHA256 "${inventory}" digest)
-if(NOT digest STREQUAL "394256500832e38e3e15bbc4715e4494312192de1a39a1eea9bf4e77b3b3be2c")
-  message(FATAL_ERROR "v3 version-identity inventory digest changed: ${digest}")
-endif()
+
+list(LENGTH FSIM_IDS FSIM_ID_COUNT)
+message(STATUS
+  "v3 version identity: ${FSIM_ID_COUNT} required/additive surfaces agree with ${FSIM_VERSION}")

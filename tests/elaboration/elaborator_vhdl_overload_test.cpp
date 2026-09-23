@@ -31,6 +31,429 @@ end architecture;
         "vhdl:work.unconstrained_function_result(rtl)");
     assert(unconstrained_elaboration.ok());
 
+    const auto local_callable_storage = frontend::parse_text(
+        "vhdl_local_callable_storage.vhd",
+        R"(
+entity local_callable_storage is
+end entity;
+architecture rtl of local_callable_storage is
+  function increment(value : integer) return integer is
+    variable local_value : integer := value;
+  begin
+    local_value := local_value + 1;
+    return local_value;
+  end function;
+  signal first_input : integer := 1;
+  signal second_input : integer := 2;
+  signal first_result : integer;
+  signal second_result : integer;
+begin
+  process
+  begin
+    first_result <= increment(first_input);
+    second_result <= increment(second_input);
+    wait;
+  end process;
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(local_callable_storage.ok());
+    const auto local_callable_storage_result = compile_and_elaborate(
+        local_callable_storage.design,
+        "vhdl:work.local_callable_storage(rtl)");
+    if (!local_callable_storage_result.ok()) {
+        for (const auto& diagnostic :
+             local_callable_storage_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(local_callable_storage_result.ok());
+    auto local_callable_storage_interpreter =
+        local_callable_storage_result.design->create_interpreter();
+    assert(local_callable_storage_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto first_result = local_callable_storage_result.design->find_signal(
+        "first_result");
+    const auto second_result = local_callable_storage_result.design->find_signal(
+        "second_result");
+    assert(first_result && second_result);
+    const auto first_value = local_callable_storage_interpreter
+                                 ->signal_value(*first_result)
+                                 .known_signed_value();
+    const auto second_value = local_callable_storage_interpreter
+                                  ->signal_value(*second_result)
+                                  .known_signed_value();
+    assert(first_value && *first_value == 2);
+    assert(second_value && *second_value == 3);
+
+    const auto constrained_local_storage = frontend::parse_text(
+        "vhdl_constrained_local_storage.vhd",
+        R"(
+entity constrained_local_storage is
+  generic (width : integer := 4);
+end entity;
+architecture rtl of constrained_local_storage is
+  function touch_locals(value : integer; width_arg : integer) return integer is
+    variable packed : bit_vector(width_arg - 1 downto 0);
+    type words_t is array (natural range <>) of bit_vector(width_arg - 1 downto 0);
+    variable words : words_t(0 to 1);
+  begin
+    packed := (others => '0');
+    packed(0) := '1';
+    packed(width_arg - 1) := '1';
+    words(0) := packed;
+    words(1) := packed;
+    if words(0)(0) = '1'
+        and words(1)(width_arg - 1) = '1' then
+      return value + 1;
+    end if;
+    return -1;
+  end function;
+  signal first_input : integer := 1;
+  signal second_input : integer := 2;
+  signal first_result : integer;
+  signal second_result : integer;
+begin
+  process
+  begin
+    first_result <= touch_locals(first_input, width);
+    second_result <= touch_locals(second_input, width);
+    wait;
+  end process;
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(constrained_local_storage.ok());
+    const auto constrained_local_storage_result = compile_and_elaborate(
+        constrained_local_storage.design,
+        "vhdl:work.constrained_local_storage(rtl)");
+    if (!constrained_local_storage_result.ok()) {
+        for (const auto& diagnostic :
+             constrained_local_storage_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(constrained_local_storage_result.ok());
+    auto constrained_local_storage_interpreter =
+        constrained_local_storage_result.design->create_interpreter();
+    assert(constrained_local_storage_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto constrained_first_result
+        = constrained_local_storage_result.design->find_signal(
+            "first_result");
+    const auto constrained_second_result
+        = constrained_local_storage_result.design->find_signal(
+            "second_result");
+    assert(constrained_first_result && constrained_second_result);
+    const auto constrained_first_value
+        = constrained_local_storage_interpreter
+              ->signal_value(*constrained_first_result)
+              .known_signed_value();
+    const auto constrained_second_value
+        = constrained_local_storage_interpreter
+              ->signal_value(*constrained_second_result)
+              .known_signed_value();
+    assert(constrained_first_value && *constrained_first_value == 2);
+    assert(constrained_second_value && *constrained_second_value == 3);
+
+    const auto formal_bound_local = frontend::parse_text(
+        "vhdl_formal_bound_local.vhd",
+        R"(
+entity formal_bound_local is
+  generic (width : integer := 4);
+end entity;
+architecture rtl of formal_bound_local is
+  function touch(value : integer; width_arg : integer) return integer is
+    variable packed : bit_vector(width_arg - 1 downto 0);
+  begin
+    packed := (others => '0');
+    packed(0) := '1';
+    packed(width_arg - 1) := '1';
+    if packed(0) = '1'
+        and packed(width_arg - 1) = '1' then
+      return value + 1;
+    end if;
+    return -1;
+  end function;
+  signal first_input : integer := 1;
+  signal second_input : integer := 2;
+  signal first_result : integer;
+  signal second_result : integer;
+begin
+  process
+  begin
+    first_result <= touch(first_input, width);
+    second_result <= touch(second_input, width);
+    wait;
+  end process;
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(formal_bound_local.ok());
+    const auto formal_bound_local_result = compile_and_elaborate(
+        formal_bound_local.design,
+        "vhdl:work.formal_bound_local(rtl)");
+    assert(formal_bound_local_result.ok());
+    auto formal_bound_local_interpreter =
+        formal_bound_local_result.design->create_interpreter();
+    assert(formal_bound_local_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto formal_first_result = formal_bound_local_result.design
+                                         ->find_signal("first_result");
+    const auto formal_second_result = formal_bound_local_result.design
+                                          ->find_signal("second_result");
+    assert(formal_first_result && formal_second_result);
+    const auto formal_first_value = formal_bound_local_interpreter
+                                        ->signal_value(*formal_first_result)
+                                        .known_signed_value();
+    const auto formal_second_value = formal_bound_local_interpreter
+                                         ->signal_value(*formal_second_result)
+                                         .known_signed_value();
+    assert(formal_first_value && *formal_first_value == 2);
+    assert(formal_second_value && *formal_second_value == 3);
+
+    const auto formal_initializer_local = frontend::parse_text(
+        "vhdl_formal_initializer_local.vhd",
+        R"(
+entity formal_initializer_local is
+  generic (width : integer := 4);
+end entity;
+architecture rtl of formal_initializer_local is
+  function touch(value : integer; width_arg : integer) return integer is
+    constant total : integer := width_arg * 2;
+    variable packed : bit_vector(total - 1 downto 0) := (others => '0');
+  begin
+    packed(total - 1) := '1';
+    if packed(total - 1) = '1' then
+      return value + 1;
+    end if;
+    return -1;
+  end function;
+  signal first_input : integer := 1;
+  signal second_input : integer := 2;
+  signal first_result : integer;
+  signal second_result : integer;
+begin
+  process
+  begin
+    first_result <= touch(first_input, width);
+    second_result <= touch(second_input, width);
+    wait;
+  end process;
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(formal_initializer_local.ok());
+    const auto formal_initializer_local_result = compile_and_elaborate(
+        formal_initializer_local.design,
+        "vhdl:work.formal_initializer_local(rtl)");
+    assert(formal_initializer_local_result.ok());
+    auto formal_initializer_local_interpreter
+        = formal_initializer_local_result.design->create_interpreter();
+    assert(formal_initializer_local_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto initializer_first_result
+        = formal_initializer_local_result.design->find_signal(
+            "first_result");
+    const auto initializer_second_result
+        = formal_initializer_local_result.design->find_signal(
+            "second_result");
+    assert(initializer_first_result && initializer_second_result);
+    const auto initializer_first_value
+        = formal_initializer_local_interpreter
+              ->signal_value(*initializer_first_result)
+              .known_signed_value();
+    const auto initializer_second_value
+        = formal_initializer_local_interpreter
+              ->signal_value(*initializer_second_result)
+              .known_signed_value();
+    assert(initializer_first_value && *initializer_first_value == 2);
+    assert(initializer_second_value && *initializer_second_value == 3);
+
+    const auto formal_bound_loop = frontend::parse_text(
+        "vhdl_formal_bound_loop.vhd",
+        R"(
+entity formal_bound_loop is
+  generic (width : integer := 4);
+end entity;
+architecture rtl of formal_bound_loop is
+  function count_width(value : integer; width_arg : integer) return integer is
+    variable count : integer := 0;
+  begin
+    for i in 0 to width_arg - 1 loop
+      count := count + 1;
+    end loop;
+    for i in width_arg - 1 downto width_arg - 1 loop
+      count := count + 1;
+    end loop;
+    return value + count;
+  end function;
+  signal first_input : integer := 1;
+  signal second_input : integer := 2;
+  signal first_result : integer;
+  signal second_result : integer;
+begin
+  process
+  begin
+    first_result <= count_width(first_input, width);
+    second_result <= count_width(second_input, width);
+    wait;
+  end process;
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(formal_bound_loop.ok());
+    const auto formal_bound_loop_result = compile_and_elaborate(
+        formal_bound_loop.design,
+        "vhdl:work.formal_bound_loop(rtl)");
+    assert(formal_bound_loop_result.ok());
+    auto formal_bound_loop_interpreter
+        = formal_bound_loop_result.design->create_interpreter();
+    assert(formal_bound_loop_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto loop_first_result = formal_bound_loop_result.design->find_signal(
+        "first_result");
+    const auto loop_second_result = formal_bound_loop_result.design->find_signal(
+        "second_result");
+    assert(loop_first_result && loop_second_result);
+    const auto loop_first_value = formal_bound_loop_interpreter
+                                      ->signal_value(*loop_first_result)
+                                      .known_signed_value();
+    const auto loop_second_value = formal_bound_loop_interpreter
+                                       ->signal_value(*loop_second_result)
+                                       .known_signed_value();
+    assert(loop_first_value && *loop_first_value == 6);
+    assert(loop_second_value && *loop_second_value == 7);
+
+    const auto runtime_bound_loop = frontend::parse_text(
+        "vhdl_runtime_bound_loop.vhd",
+        R"(
+entity runtime_bound_loop is
+end entity;
+architecture rtl of runtime_bound_loop is
+  function count_width(value : integer; width_arg : integer) return integer is
+    variable count : integer := 0;
+  begin
+    for i in 0 to width_arg - 1 loop
+      count := count + 1;
+    end loop;
+    return value + count;
+  end function;
+  signal runtime_width : integer := 4;
+  signal result : integer;
+begin
+  result <= count_width(1, runtime_width);
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(runtime_bound_loop.ok());
+    const auto runtime_bound_loop_result = compile_and_elaborate(
+        runtime_bound_loop.design,
+        "vhdl:work.runtime_bound_loop(rtl)");
+    assert(runtime_bound_loop_result.ok());
+    auto runtime_bound_loop_interpreter
+        = runtime_bound_loop_result.design->create_interpreter();
+    assert(runtime_bound_loop_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto runtime_bound_loop_value
+        = runtime_bound_loop_result.design->find_signal("result");
+    assert(runtime_bound_loop_value);
+    const auto runtime_bound_loop_integer
+        = runtime_bound_loop_interpreter
+              ->signal_value(*runtime_bound_loop_value)
+              .known_signed_value();
+    assert(runtime_bound_loop_integer && *runtime_bound_loop_integer == 5);
+
+    const auto unresolved_bound = frontend::parse_text(
+        "vhdl_unresolved_formal_bound.vhd",
+        R"(
+entity unresolved_formal_bound is
+end entity;
+architecture rtl of unresolved_formal_bound is
+  function touch(value : integer; width_arg : integer) return integer is
+    variable packed : bit_vector(width_arg - 1 downto 0);
+  begin
+    packed := (others => '0');
+    return value;
+  end function;
+  signal input_value : integer := 1;
+  signal runtime_width : integer := 4;
+  signal result : integer;
+begin
+  result <= touch(input_value, runtime_width);
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(unresolved_bound.ok());
+    const auto unresolved_bound_result = compile_and_elaborate(
+        unresolved_bound.design,
+        "vhdl:work.unresolved_formal_bound(rtl)");
+    assert(!unresolved_bound_result.ok());
+
+    const auto mixed_parent = frontend::parse_text(
+        "mixed_vhdl_callable_profile.sv",
+        R"(
+module mixed_vhdl_callable_profile;
+  parameter integer M = 8;
+  parameter integer OFFSET = 7;
+  mixed_vhdl_callable_child #(
+    .M(M),
+    .OFFSET(OFFSET)
+  ) child();
+endmodule
+)",
+        frontend::Language::SystemVerilog2017);
+    const auto mixed_child = frontend::parse_text(
+        "mixed_vhdl_callable_child.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity mixed_vhdl_callable_child is
+  generic (
+    M : integer := 8;
+    OFFSET : integer := 7);
+end entity;
+architecture rtl of mixed_vhdl_callable_child is
+  function combine(
+      left : std_logic_vector;
+      right : std_logic_vector;
+      width : integer;
+      offset_value : integer) return std_logic_vector is
+  begin
+    return left xor right;
+  end function;
+  signal left : std_logic_vector(M - 1 downto 0);
+  signal right : std_logic_vector(M - 1 downto 0);
+  signal result : std_logic_vector(M - 1 downto 0);
+begin
+  result <= combine(left, right, M, OFFSET + 0);
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(mixed_parent.ok() && mixed_child.ok());
+    auto mixed_design = mixed_parent.design;
+    mixed_design.units.insert(
+        mixed_design.units.end(), mixed_child.design.units.begin(),
+        mixed_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> mixed_bindings {{
+        "mixed_vhdl_callable_profile.child",
+        "vhdl:work.mixed_vhdl_callable_child(rtl)",
+        std::nullopt,
+    }};
+    const auto mixed_result = compile_and_elaborate(
+        mixed_design, "sv:work.mixed_vhdl_callable_profile",
+        mixed_bindings);
+    if (!mixed_result.ok()) {
+        for (const auto& diagnostic : mixed_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(mixed_result.ok());
+
   const auto parsed = fsim::frontend::parse_text(
       "vhdl-callable-overloads.vhd",
       R"(
@@ -774,6 +1197,94 @@ end architecture;
       no_match_result, "FSIM-ELAB-VHOVER-002"));
   assert(has_diagnostic(
       no_match_result, "FSIM-ELAB-VHOVER-005"));
+
+  const auto wrong_arity = fsim::frontend::parse_text(
+      "vhdl-callable-wrong-arity.vhd",
+      R"(
+entity callable_wrong_arity is
+end entity;
+architecture rtl of callable_wrong_arity is
+  function convert(value : integer) return integer is
+  begin
+    return value;
+  end function;
+  signal result : integer;
+begin
+  result <= convert(1, 2);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(wrong_arity.ok());
+  const auto wrong_arity_result = compile_and_elaborate(
+      wrong_arity.design, "vhdl:work.callable_wrong_arity(rtl)");
+  assert(!wrong_arity_result.ok());
+  assert(has_diagnostic(
+      wrong_arity_result, "FSIM-ELAB-VHOVER-002"));
+
+  const auto predefined_operator = fsim::frontend::parse_text(
+      "vhdl-predefined-operator-fallback.vhd",
+      R"(
+entity predefined_operator_fallback is
+end entity;
+architecture rtl of predefined_operator_fallback is
+  function "+"(left : boolean; right : boolean) return boolean is
+  begin
+    return left or right;
+  end function;
+  signal left : integer;
+  signal right : integer;
+  signal result : integer;
+begin
+  result <= left + right;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(predefined_operator.ok());
+  const auto predefined_operator_result = compile_and_elaborate(
+      predefined_operator.design,
+      "vhdl:work.predefined_operator_fallback(rtl)");
+  if (!predefined_operator_result.ok()) {
+    for (const auto& diagnostic : predefined_operator_result.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(predefined_operator_result.ok());
+
+  const auto user_operator_result_type = fsim::frontend::parse_text(
+      "vhdl-user-operator-result-type.vhd",
+      R"(
+entity user_operator_result_type is
+end entity;
+architecture rtl of user_operator_result_type is
+  function "+"(left : integer; right : integer) return boolean is
+  begin
+    return left = right;
+  end function;
+  function accept(value : boolean) return boolean is
+  begin
+    return value;
+  end function;
+  signal left : integer;
+  signal right : integer;
+  signal result : boolean;
+begin
+  result <= accept(left + right);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(user_operator_result_type.ok());
+  const auto user_operator_result_type_result = compile_and_elaborate(
+      user_operator_result_type.design,
+      "vhdl:work.user_operator_result_type(rtl)");
+  if (!user_operator_result_type_result.ok()) {
+    for (const auto& diagnostic :
+         user_operator_result_type_result.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(user_operator_result_type_result.ok());
 
   const auto ambiguous = fsim::frontend::parse_text(
       "vhdl-callable-overload-ambiguous.vhd",

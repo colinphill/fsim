@@ -3,6 +3,7 @@
 # kind<TAB>value<TAB>reason
 root	.agents	workspace agent state
 root	.cache	local tool cache
+root	.local-artifacts	local non-source artifacts
 root	.codex	workspace Codex state
 root	.fsim-cache	generated simulator cache
 root	.git	version-control metadata

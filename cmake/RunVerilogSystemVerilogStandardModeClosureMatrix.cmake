@@ -13,6 +13,8 @@ if(FSIM_DEDUPLICATED_CTEST)
   return()
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RunClosureWitnesses.cmake")
+
 set(FSIM_STAGE_TIMEOUT_SECONDS 1200)
 set(FSIM_WITNESSES
   fsim.verilog-systemverilog-standard-mode-inventory
@@ -30,38 +32,14 @@ set(FSIM_WITNESSES
   fsim.msvc-release-contract
   fsim.windows-llvm-contract
   fsim.tool-portability-contract
-  fsim.resource-portability-contract)
+  fsim.contract.language-resources)
 
 file(REMOVE_RECURSE "${FSIM_OUTPUT_DIR}")
 file(MAKE_DIRECTORY "${FSIM_OUTPUT_DIR}")
 file(WRITE "${FSIM_OUTPUT_DIR}/stage-results.tsv" "test\tresult\tlog\n")
-set(FSIM_COMBINED_OUTPUT)
-set(FSIM_COMPLETED 0)
-foreach(FSIM_WITNESS IN LISTS FSIM_WITNESSES)
-  string(REPLACE "." "-" FSIM_LOG_NAME "${FSIM_WITNESS}")
-  set(FSIM_LOG "${FSIM_OUTPUT_DIR}/${FSIM_LOG_NAME}.log")
-  execute_process(
-    COMMAND "${FSIM_CTEST_COMMAND}"
-      --test-dir "${FSIM_BINARY_DIR}"
-      -R "^${FSIM_WITNESS}$"
-      -V
-      --output-on-failure
-    RESULT_VARIABLE FSIM_RESULT
-    OUTPUT_VARIABLE FSIM_OUTPUT
-    ERROR_VARIABLE FSIM_ERROR
-    TIMEOUT "${FSIM_STAGE_TIMEOUT_SECONDS}")
-  file(WRITE "${FSIM_LOG}" "${FSIM_OUTPUT}${FSIM_ERROR}")
-  file(APPEND "${FSIM_OUTPUT_DIR}/stage-results.tsv"
-    "${FSIM_WITNESS}\t${FSIM_RESULT}\t${FSIM_LOG_NAME}.log\n")
-  if(NOT FSIM_RESULT EQUAL 0)
-    message(FATAL_ERROR
-      "Verilog/SystemVerilog standard-mode closure witness failed: "
-      "${FSIM_WITNESS}\nretained log: ${FSIM_LOG}\n"
-      "${FSIM_OUTPUT}${FSIM_ERROR}")
-  endif()
-  math(EXPR FSIM_COMPLETED "${FSIM_COMPLETED} + 1")
-  string(APPEND FSIM_COMBINED_OUTPUT "${FSIM_OUTPUT}${FSIM_ERROR}\n")
-endforeach()
+fsim_run_closure_matrix(
+  "Verilog/SystemVerilog standard-mode closure" "${FSIM_STAGE_TIMEOUT_SECONDS}"
+  ${FSIM_WITNESSES})
 
 foreach(FSIM_TRANSCRIPT IN ITEMS
     "FSIM-OLDER-MODE-MIXED-PASS"

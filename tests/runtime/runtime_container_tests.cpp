@@ -1453,7 +1453,8 @@ void test_simir_containers()
         LoadConstant { 0, value(32, 1) },
         LoadConstant { 1, value(8, 0xaa) },
         WriteContainerObjectElement {
-            bridged_object, 0, 1, true, false, false, std::nullopt },
+            bridged_object, 0, 1, true, false, false, std::nullopt,
+            std::nullopt },
         Halt { }
     };
     (void)bridged.add_process(std::move(bridged_process));
@@ -1500,7 +1501,8 @@ void test_simir_containers()
         LoadConstant { 0, value(32, 0) },
         LoadConstant { 1, value(8, 0xaa) },
         WriteContainerObjectElement {
-            dynamic_object, 0, 1, true, false, true, std::nullopt },
+            dynamic_object, 0, 1, true, false, true, std::nullopt,
+            std::nullopt },
         ReadContainerObject { 0, dynamic_object },
         ContainerRead { 2, 0, 0, true, false, false },
         Halt { }
@@ -1513,6 +1515,130 @@ void test_simir_containers()
                 == value(8, 0xaa),
         "nonblocking container-element writes capture their operands and "
         "publish only after active execution completes");
+
+    Interpreter dynamic_part;
+    ContainerType word_array_type;
+    word_array_type.element_width = 16;
+    word_array_type.fixed = true;
+    word_array_type.index_left = 0;
+    word_array_type.index_right = 1;
+    const auto word_array_object = dynamic_part.add_container_object(
+        { "word_array",
+            ContainerValue {
+                word_array_type,
+                { value(16, 0), value(16, 0) },
+                { } },
+            std::nullopt });
+    const DynamicPartIndex byte_lane {
+        1, 15, 0, 0, 8, true, true };
+    Process dynamic_part_process;
+    dynamic_part_process.id = 0;
+    dynamic_part_process.name = "nonblocking_dynamic_part_element_write";
+    dynamic_part_process.register_count = 3;
+    dynamic_part_process.operations = {
+        LoadConstant { 0, value(32, 0) },
+        LoadConstant { 1, value(32, 0) },
+        LoadConstant { 2, value(8, 0x12) },
+        WriteContainerObjectElement {
+            word_array_object, 0, 2, false, false, true,
+            std::nullopt, byte_lane },
+        LoadConstant { 0, value(32, 0) },
+        LoadConstant { 1, value(32, 8) },
+        LoadConstant { 2, value(8, 0x34) },
+        WriteContainerObjectElement {
+            word_array_object, 0, 2, false, false, true,
+            std::nullopt, byte_lane },
+        LoadConstant { 0, value(32, 0) },
+        LoadConstant { 1, value(32, 0) },
+        LoadConstant { 2, value(8, 0x56) },
+        WriteContainerObjectElement {
+            word_array_object, 0, 2, false, false, true,
+            std::nullopt, byte_lane },
+        LoadConstant { 0, value(32, 1) },
+        LoadConstant { 1, value(32, 0) },
+        LoadConstant {
+            2, PackedLogic4::from_msb_string("X1010101") },
+        WriteContainerObjectElement {
+            word_array_object, 0, 2, false, false, true,
+            std::nullopt, byte_lane },
+        // Change every captured operand before the update phase begins.
+        LoadConstant { 0, value(32, 0) },
+        LoadConstant { 1, value(32, 8) },
+        LoadConstant { 2, value(8, 0xee) },
+        Halt { }
+    };
+    (void)dynamic_part.add_process(std::move(dynamic_part_process));
+    const auto dynamic_part_result = dynamic_part.run();
+    const auto& dynamic_part_words
+        = dynamic_part.container_object_value(word_array_object).elements;
+    require(
+        dynamic_part_result.status == RunStatus::completed
+            && dynamic_part_words.size() == 2U
+            && dynamic_part_words[0] == value(16, 0x3456)
+            && dynamic_part_words[1]
+                == PackedLogic4::from_msb_string("00000000X1010101"),
+        "nonblocking packed-slice writes capture address, base, and data; "
+        "disjoint lanes compose, later overlapping writes win, and four-state "
+        "bits are preserved");
+
+    const auto expect_dynamic_part_failure =
+        [&](const DynamicPartIndex selection,
+            const std::string_view expected_message) {
+            Interpreter failing;
+            const auto object = failing.add_container_object(
+                { "word_array",
+                    ContainerValue {
+                        word_array_type,
+                        { value(16, 0x1234), value(16, 0x5678) },
+                        { } },
+                    std::nullopt });
+            Process candidate;
+            candidate.id = 0;
+            candidate.name = "malformed_dynamic_part_element_write";
+            candidate.register_count = 3;
+            candidate.operations = {
+                LoadConstant { 0, value(32, 0) },
+                LoadConstant { 1, value(32, 0) },
+                LoadConstant { 2, value(8, 0xaa) },
+                WriteContainerObjectElement {
+                    object, 0, 2, false, false, true,
+                    std::nullopt, selection },
+                Halt { }
+            };
+            (void)failing.add_process(std::move(candidate));
+            try {
+                (void)failing.run();
+                require(false, "malformed dynamic part write must fail");
+            } catch (const InterpreterError& error) {
+                require(
+                    std::string_view { error.what() }.find(expected_message)
+                        != std::string_view::npos,
+                    "malformed dynamic part write retains its diagnostic");
+            }
+            require(
+                failing.container_object_value(object).elements
+                    == std::vector<PackedLogic4> {
+                        value(16, 0x1234), value(16, 0x5678) },
+                "malformed dynamic part writes never fall back to replacing "
+                "the whole element");
+        };
+    expect_dynamic_part_failure(
+        DynamicPartIndex {
+            1,
+            static_cast<std::int64_t>(
+                std::numeric_limits<std::int32_t>::max()) + 1,
+            0,
+            0,
+            8,
+            true,
+            true },
+        "bounds must fit signed 32-bit integers");
+    expect_dynamic_part_failure(
+        DynamicPartIndex { 1, 15, 0, 1, 8, true, true },
+        "range is outside its packed target");
+    expect_dynamic_part_failure(
+        DynamicPartIndex { 3, 15, 0, 0, 8, true, true },
+        "invalid register ID");
 
     ContainerType slice_parent_type = static_type;
     slice_parent_type.index_left = 5;

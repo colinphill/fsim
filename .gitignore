@@ -3,6 +3,7 @@
 /build/
 /build-*/
 /.cache/
+/.local-artifacts/
 .fsim-cache/
 /.idea/
 /.vscode/

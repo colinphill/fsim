@@ -116,9 +116,9 @@ endforeach()
 set(FSIM_COMPOSED_OUTPUT)
 foreach(FSIM_GATE IN ITEMS
     CheckDiagnosticCatalog.cmake
-    CheckSourceLineBudget.cmake
-    CheckV1ConformanceAudit.cmake
-    CheckV1InventoryRelease.cmake)
+    CheckTranslationUnitStructure.cmake
+    CheckAuthoredLicenseInventory.cmake
+    CheckSourcePackageManifest.cmake)
   execute_process(
     COMMAND "${CMAKE_COMMAND}" "-DFSIM_SOURCE_DIR=${FSIM_SOURCE_DIR}"
       -P "${FSIM_SOURCE_DIR}/cmake/${FSIM_GATE}"
@@ -135,9 +135,9 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "diagnostic catalog covers 2765 production codes"
-    "The physical source-line ceiling is disabled; checking translation-unit structure only"
-    "final inventory audit: 2746 diagnostics, 1510 bounded sources, 1813 SPDX-owned files"
-    "v1 conformance audit: 572 authored test/control files")
+    "Translation-unit structure checked: 0 forbidden .tpp files"
+    "authored license inventory:"
+    "source-package manifest:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR "UVM closure lost composed evidence: ${FSIM_TOKEN}")

@@ -603,6 +603,82 @@ void Interpreter::Impl::write_container_object_element_value(
     }
 }
 
+void Interpreter::Impl::write_container_object_dynamic_part_element_value(
+    const ContainerObjectId id,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const PackedLogic4& value,
+    const PackedLogic4& base,
+    const DynamicPartIndex& selection,
+    const ProcessId process,
+    const InstructionIndex instruction)
+{
+    auto& object = get_container_object(id);
+    const auto& type = object.initial_value.type;
+    if (!type.fixed || type.associative || object.slice_alias
+        || (type.element_kind != ContainerElementKind::Packed
+            && type.element_kind != ContainerElementKind::Scalar)
+        || selection.width == 0U || value.width() != selection.width
+        || base.width() != 32U || type.element_width == 0U
+        || (type.two_state && has_unknown(value))) {
+        container_error(
+            process, instruction,
+            "dynamic part-select container element write type mismatch");
+    }
+    if (selection.left < std::numeric_limits<std::int32_t>::min()
+        || selection.left > std::numeric_limits<std::int32_t>::max()
+        || selection.right < std::numeric_limits<std::int32_t>::min()
+        || selection.right > std::numeric_limits<std::int32_t>::max()) {
+        container_error(
+            process, instruction,
+            "dynamic part-select write bounds must fit signed 32-bit integers");
+    }
+    const auto lower = std::min(selection.left, selection.right);
+    const auto upper = std::max(selection.left, selection.right);
+    const auto range_width = static_cast<std::uint64_t>(upper - lower) + 1U;
+    if (selection.base_offset > type.element_width
+        || range_width > type.element_width - selection.base_offset) {
+        container_error(
+            process, instruction,
+            "dynamic part-select write range is outside its packed target");
+    }
+
+    // Refresh signal-backed fixed arrays before reading the old word. The
+    // update-phase read is what lets separately queued lane writes compose.
+    (void)read_container_object_value(id);
+    auto& current_object = get_container_object(id);
+    const auto selected = linear_index
+        ? known_index(
+              process, instruction, index, true,
+              "multidimensional linear index")
+        : fixed_offset(process, instruction, type, index);
+    if (selected >= current_object.initial_value.elements.size()) {
+        container_error(
+            process, instruction,
+            "container index is out of range");
+    }
+
+    PackedLogic4 current;
+    if (!read_container_object_element(id, selected, current)) {
+        container_error(
+            process, instruction,
+            "dynamic part-select container element cannot be read");
+    }
+    PackedLogic4 replacement;
+    try {
+        replacement = dynamic_part_insert_value(
+            std::move(current), value, base, selection);
+    } catch (const std::invalid_argument&) {
+        container_error(
+            process, instruction,
+            "invalid dynamic part-select container element write");
+    }
+    write_container_object_element_value(
+        id, index, signed_index, linear_index, replacement,
+        process, instruction);
+}
+
 PackedLogic4 default_container_element(
     const ContainerType& type)
 {
@@ -1152,6 +1228,10 @@ void Interpreter::Impl::execute_container(
 {
     const auto index = get_register(process, operation.index);
     const auto value = get_register(process, operation.source);
+    const auto base = operation.dynamic_part
+        ? std::optional { get_register(
+              process, operation.dynamic_part->base) }
+        : std::nullopt;
     if (operation.nonblocking) {
         scheduler.schedule(
             SchedulerPhase::update,
@@ -1159,12 +1239,34 @@ void Interpreter::Impl::execute_container(
             [this, object = operation.object, index,
                 signed_index = operation.signed_index,
                 linear_index = operation.linear_index, value,
+                base, dynamic_part = operation.dynamic_part,
                 driver = process.program.id,
                 instruction = process.pc](Scheduler&) {
-                write_container_object_element_value(
-                    object, index, signed_index, linear_index, value,
-                    driver, instruction);
+                if (dynamic_part) {
+                    if (!base) {
+                        container_error(
+                            driver, instruction,
+                            "dynamic container element write is missing its captured base");
+                    }
+                    write_container_object_dynamic_part_element_value(
+                        object, index, signed_index, linear_index, value,
+                        *base, *dynamic_part, driver, instruction);
+                } else {
+                    write_container_object_element_value(
+                        object, index, signed_index, linear_index, value,
+                        driver, instruction);
+                }
             });
+    } else if (operation.dynamic_part) {
+        if (!base) {
+            container_error(
+                process.program.id, process.pc,
+                "dynamic container element write is missing its captured base");
+        }
+        write_container_object_dynamic_part_element_value(
+            operation.object, index, operation.signed_index,
+            operation.linear_index, value, *base, *operation.dynamic_part,
+            process.program.id, process.pc);
     } else {
         write_container_object_element_value(
             operation.object, index, operation.signed_index,

@@ -953,6 +953,8 @@ bool Lowerer::initialize_hir_declarations(
         std::optional<semantic::ExpressionId> file_open_kind;
         std::vector<std::string> enumeration_literals;
         std::optional<std::int64_t> vhdl_enumeration_default;
+        std::optional<semantic::vhdl::SubtypeIndication>
+            vhdl_initializer_subtype;
         bool vhdl_file { };
         if (declaration->systemverilog != nullptr) {
             const auto& input = *declaration->systemverilog;
@@ -973,6 +975,9 @@ bool Lowerer::initialize_hir_declarations(
                 type_name = input.subtype->type_mark.spelling;
                 const auto effective = hir_effective_vhdl_subtype(
                     *input.subtype);
+                if (input.initializer) {
+                    vhdl_initializer_subtype = effective;
+                }
                 auto type_id = effective
                         && effective->type_mark.target.valid()
                     ? effective->type_mark.target
@@ -1117,7 +1122,9 @@ bool Lowerer::initialize_hir_declarations(
                 ? lower_hir_vhdl_aggregate(
                       *initializer,
                       binding->width,
-                      &*declaration->vhdl->subtype)
+                      vhdl_initializer_subtype
+                          ? &*vhdl_initializer_subtype
+                          : &*declaration->vhdl->subtype)
                 : lower_hir_expression(*initializer, binding->width);
             if (!initial) {
                 if (declaration->vhdl != nullptr) {

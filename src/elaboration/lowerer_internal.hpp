@@ -205,6 +205,9 @@ private:
     [[nodiscard]] std::optional<HirPackedRange> hir_expression_range(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<std::optional<HirPackedRange>>
+    hir_vhdl_callable_formal_range(
+        semantic::DeclarationId declaration) const;
     struct HirConstantSelection {
         std::size_t offset { };
         std::size_t width { };
@@ -409,6 +412,13 @@ private:
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_expression_subtype(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_original_integer_generic_subtype(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<std::int64_t>
+    hir_vhdl_generate_iterator_value(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::pair<semantic::vhdl::TypeForm,
         semantic::TypeId>>
     hir_vhdl_composite_root_type(
@@ -1348,6 +1358,12 @@ private:
         std::vector<bool> argument_is_container;
         std::vector<frontend::PortDirection> directions;
         std::vector<HirGenericBinding> generic_bindings;
+        std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
+            static_integer_bindings;
+        // Shape facts only: a present empty value means the caller's packed
+        // range was not proven and must not fall back to type-level bounds.
+        std::unordered_map<std::uint32_t,
+            std::optional<HirPackedRange>> vhdl_formal_ranges;
         std::string debug_name;
         std::unordered_map<std::uint32_t, RegisterId> static_variables;
         std::unordered_map<std::uint32_t, StringRegisterId>
@@ -1373,7 +1389,7 @@ private:
     [[nodiscard]] bool allocate_hir_static_callable_declarations(
         std::size_t frame_index);
     std::vector<HirCallableFrame> hir_callable_frames_;
-    std::unordered_map<std::uint64_t, std::size_t> hir_callable_indices_;
+    std::unordered_map<std::string, std::size_t> hir_callable_indices_;
     std::unordered_map<std::string, std::size_t>
         hir_interface_callable_indices_;
     std::deque<std::size_t> pending_hir_callables_;
@@ -1389,6 +1405,8 @@ private:
         hir_vhdl_access_heaps_;
     std::optional<RegisterId> hir_class_receiver_register_;
     mutable std::vector<HirLetFrame> hir_let_frames_;
+    mutable std::unordered_set<std::uint32_t>
+        hir_vhdl_generate_iterator_profile_frames_;
     mutable std::vector<std::vector<HirCasePatternBinding>>
         hir_case_pattern_binding_frames_;
     mutable std::vector<semantic::CompiledBindingFrame>

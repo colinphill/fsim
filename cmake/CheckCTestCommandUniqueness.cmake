@@ -6,17 +6,21 @@ foreach(FSIM_REQUIRED IN ITEMS FSIM_BINARY_DIR FSIM_CTEST_COMMAND)
   endif()
 endforeach()
 
-execute_process(
-  COMMAND "${FSIM_CTEST_COMMAND}"
-    --test-dir "${FSIM_BINARY_DIR}"
-    --show-only=json-v1
-  RESULT_VARIABLE FSIM_CTEST_STATUS
-  OUTPUT_VARIABLE FSIM_CTEST_JSON
-  ERROR_VARIABLE FSIM_CTEST_ERROR
-  TIMEOUT 120)
-if(NOT FSIM_CTEST_STATUS EQUAL 0)
-  message(FATAL_ERROR
-    "could not inspect generated CTest commands: ${FSIM_CTEST_ERROR}")
+if(DEFINED FSIM_CTEST_TEST_JSON)
+  file(READ "${FSIM_CTEST_TEST_JSON}" FSIM_CTEST_JSON)
+else()
+  execute_process(
+    COMMAND "${FSIM_CTEST_COMMAND}"
+      --test-dir "${FSIM_BINARY_DIR}"
+      --show-only=json-v1
+    RESULT_VARIABLE FSIM_CTEST_STATUS
+    OUTPUT_VARIABLE FSIM_CTEST_JSON
+    ERROR_VARIABLE FSIM_CTEST_ERROR
+    TIMEOUT 120)
+  if(NOT FSIM_CTEST_STATUS EQUAL 0)
+    message(FATAL_ERROR
+      "could not inspect generated CTest commands: ${FSIM_CTEST_ERROR}")
+  endif()
 endif()
 
 string(JSON FSIM_TEST_COUNT LENGTH "${FSIM_CTEST_JSON}" tests)

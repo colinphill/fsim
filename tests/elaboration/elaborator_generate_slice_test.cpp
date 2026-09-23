@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <cstdlib>
+#include <iostream>
 #include <string>
 #include <unordered_set>
 
@@ -84,6 +86,49 @@ void test_generate_slice_and_case_closure(
             return process.name.find(".continuous_fused_")
                 != std::string::npos;
         });
+    if (std::getenv("FSIM_TRACE_WIDE_FUSION") != nullptr) {
+        const auto& all_processes
+            = generated_sv_wide_slice_bank.design->processes();
+        std::cerr << "[fsim-test] wide-fusion process-count="
+                  << all_processes.size() << '\n';
+        const auto operation_name = [](const auto& operation) {
+            using fsim::runtime::simir::operation_holds;
+            if (operation_holds<fsim::runtime::simir::LoadConstant>(
+                    operation)) {
+                return "LoadConstant";
+            }
+            if (operation_holds<fsim::runtime::simir::CopyRegister>(
+                    operation)) {
+                return "CopyRegister";
+            }
+            if (operation_holds<fsim::runtime::simir::WriteUpdateSlice>(
+                    operation)) {
+                return "WriteUpdateSlice";
+            }
+            if (operation_holds<fsim::runtime::simir::Insert>(operation)) {
+                return "Insert";
+            }
+            if (operation_holds<fsim::runtime::simir::ReadSignal>(operation)) {
+                return "ReadSignal";
+            }
+            if (operation_holds<fsim::runtime::simir::Halt>(operation)) {
+                return "Halt";
+            }
+            return "other";
+        };
+        for (const auto& process : all_processes) {
+            std::cerr << "[fsim-test] wide-fusion candidate name="
+                      << process.name << " operations="
+                      << process.operations.size() << '\n';
+            for (std::size_t index { }; index < process.operations.size();
+                ++index) {
+                std::cerr << "[fsim-test] wide-fusion op=" << index
+                          << " kind=" << operation_name(
+                                 process.operations[index]) << '\n';
+            }
+            break;
+        }
+    }
     assert(
         wide_slice_process
         != generated_sv_wide_slice_bank.design->processes().end());

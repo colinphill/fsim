@@ -25,11 +25,11 @@ jobs:
           - configuration: Debug
             build_dir: build/ci-linux-llvm22-debug
             artifact: github-linux-clang22-llvm22-debug
-            retained_log: build/qualification/batch188a-change20-hosted-linux-clang22-llvm22-debug.log
+            retained_log: build/qualification/ci-linux-clang22-llvm22-debug.log
           - configuration: Release
             build_dir: build/ci-linux-llvm22-release
             artifact: github-linux-clang22-llvm22-release
-            retained_log: build/qualification/batch188a-change20-hosted-linux-clang22-llvm22-release.log
+            retained_log: build/qualification/ci-linux-clang22-llvm22-release.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -93,19 +93,7 @@ jobs:
           set -euo pipefail
           ctest --test-dir "${{ matrix.build_dir }}" \
             --parallel 4 \
-            --output-on-failure \
-            -LE '^recursive-closure$' 2>&1 \
-            | tee -a "${{ matrix.retained_log }}"
-
-      - name: Final closure checks
-        if: matrix.configuration == 'Debug'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --test-dir "${{ matrix.build_dir }}" \
-            --parallel 4 \
-            --output-on-failure \
-            -L '^recursive-closure$' 2>&1 \
+            --output-on-failure 2>&1 \
             | tee -a "${{ matrix.retained_log }}"
 
       - name: Upload retained lane log
@@ -128,18 +116,16 @@ jobs:
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Debug-llvm-ON
             artifact: github-windows-debug-llvm-on
-            retained_log: build/qualification/batch188a-change20-hosted-windows-debug-llvm-on.log
+            retained_log: build/qualification/ci-windows-debug-llvm-on.log
           - configuration: Release
             llvm_mode: 'ON'
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
             artifact: github-windows-release-llvm-on
-            retained_log: build/qualification/batch188a-change20-hosted-windows-release-llvm-on.log
+            retained_log: build/qualification/ci-windows-release-llvm-on.log
             binary_package: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22
             binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip
-            binary_log: build/qualification/batch188-change20-windows-llvm22-archive.log
-            install_log: build/qualification/batch188-change20-windows-llvm22-install.log
-            expected_tests: '423'
-            expected_archive_entries: '1269'
+            binary_log: build/qualification/ci-windows-llvm22-archive.log
+            install_log: build/qualification/ci-windows-llvm22-install.log
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
@@ -244,7 +230,7 @@ jobs:
           CTEST_OUTPUT_ON_FAILURE: '1'
         run: |
           $env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
-          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 4 --progress --output-on-failure -LE '^recursive-closure$' 2>&1 `
+          & ctest --test-dir "${{ matrix.build_dir }}" --parallel 4 --progress --output-on-failure 2>&1 `
             | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -290,8 +276,8 @@ jobs:
             "-DFSIM_ARCHIVE_AUDIT_ROOT=${{ matrix.binary_package }}",
             "-DFSIM_ARCHIVE_AUDIT_REGRESSION_LOG=$env:GITHUB_WORKSPACE/${{ matrix.retained_log }}",
             "-DFSIM_ARCHIVE_AUDIT_WORK_DIR=${{ matrix.build_dir }}/v3-install-audit",
-            "-DFSIM_ARCHIVE_AUDIT_EXPECTED_TESTS=${{ matrix.expected_tests }}",
-            "-DFSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES=${{ matrix.expected_archive_entries }}",
+            "-DFSIM_ARCHIVE_AUDIT_REQUIRED_CTESTS=$env:GITHUB_WORKSPACE/tests/feature_matrix/v3_current_required_ctests.txt",
+            "-DFSIM_ARCHIVE_AUDIT_REQUIRED_ENTRIES=$env:GITHUB_WORKSPACE/tests/feature_matrix/v3_installed_archive_required.txt",
             "-DFSIM_ARCHIVE_AUDIT_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
             "-DFSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX=.exe",
             "-P", "cmake/CheckV3InstalledArchive.cmake"

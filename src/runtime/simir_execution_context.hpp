@@ -85,6 +85,17 @@ struct Interpreter::Impl::ExecutionContext final
         const ProcessId generated_process,
         const InstructionIndex instruction,
         const bool nonblocking) override;
+    void write_container_object_dynamic_part_element(
+        const ContainerObjectId object,
+        const PackedLogic4& index,
+        const bool signed_index,
+        const bool linear_index,
+        const PackedLogic4& value,
+        const PackedLogic4& base,
+        const DynamicPartIndex& selection,
+        const ProcessId generated_process,
+        const InstructionIndex instruction,
+        const bool nonblocking) override;
     [[nodiscard]] FileHandle open_file(
         const std::string_view path,
         const std::string_view mode) override;

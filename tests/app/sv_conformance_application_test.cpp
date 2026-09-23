@@ -931,6 +931,13 @@ struct ArtifactRoundTripCapture {
     fsim::app::NativeCacheStatistics cache;
 };
 
+struct DynamicNbaArtifactCapture {
+    fsim::runtime::RunResult result;
+    std::string word0;
+    std::string word1;
+    std::size_t compiled_processes{};
+};
+
 void test_2023_artifact_and_cache_round_trip(
     const std::filesystem::path& directory)
 {
@@ -1267,6 +1274,143 @@ endmodule
 #if defined(FSIM_HAS_LLVM)
     assert(relocated_capture.cache.hits == cold.cache.misses);
 #endif
+}
+
+void test_dynamic_memory_nba_artifact_round_trip(
+    const std::filesystem::path& directory)
+{
+    const auto root = directory / "systemverilog-dynamic-memory-nba-artifact";
+    std::filesystem::create_directories(root);
+    const auto source = root / "dynamic-nba.sv";
+    const auto object = root / "dynamic-nba.fsimobj";
+    write_text(
+        source,
+        R"(module dynamic_nba_artifact(
+  output logic [15:0] word0,
+  output logic [15:0] word1
+);
+  logic [15:0] words[0:1];
+  integer address;
+  integer lane;
+  logic [7:0] data;
+
+  initial begin
+    words[0] = 16'h0000;
+    words[1] = 16'h0000;
+    address = 0;
+    lane = 0;
+    data = 8'h12;
+    words[address][lane * 8 +: 8] <= data;
+    lane = 1;
+    data = 8'h34;
+    words[address][lane * 8 +: 8] <= data;
+    lane = 0;
+    data = 8'h56;
+    words[address][lane * 8 +: 8] <= data;
+    address = 1;
+    lane = 0;
+    data = 8'bx1010101;
+    words[address][lane * 8 +: 8] <= data;
+
+    // Mutate every source operand before the NBA update phase.
+    address = 0;
+    lane = 1;
+    data = 8'hee;
+    #1;
+    word0 = words[0];
+    word1 = words[1];
+    $finish;
+  end
+endmodule
+)");
+
+    fsim::project::Config compile_config;
+    compile_config.manifest_path = "<systemverilog-dynamic-memory-nba>";
+    compile_config.base_directory = root;
+    compile_config.project.name = "systemverilog-dynamic-memory-nba-compile";
+    compile_config.source_sets = { identity_source_set(
+        fsim::project::Language::system_verilog, "2017", source) };
+    fsim::diagnostic::Engine compile_diagnostics;
+    const auto compiled = fsim::app::compile_artifact(
+        compile_config, object, compile_diagnostics);
+    if (!compiled) {
+        fsim::diagnostic::print_text(std::cerr, compile_diagnostics);
+    }
+    assert(compiled && !compile_diagnostics.has_error());
+
+    const std::array objects { object };
+    const std::array optimizations {
+        fsim::project::Optimization::o0,
+        fsim::project::Optimization::o2 };
+    const std::array designs {
+        root / "dynamic-nba-o0.fsimdesign",
+        root / "dynamic-nba-o2.fsimdesign" };
+    for (std::size_t index = 0; index < optimizations.size(); ++index) {
+        const auto optimization = optimizations[index];
+        fsim::project::Config elaborate_config;
+        elaborate_config.manifest_path =
+            "<systemverilog-dynamic-memory-nba>";
+        elaborate_config.base_directory = root;
+        elaborate_config.project.name =
+            index == 0 ? "systemverilog-dynamic-memory-nba-o0"
+                       : "systemverilog-dynamic-memory-nba-o2";
+        elaborate_config.project.tops.push_back(
+            { "sv:work.dynamic_nba_artifact", "dut" });
+        elaborate_config.project.time_resolution = "1ns";
+        elaborate_config.build.optimization = optimization;
+        elaborate_config.build.cache_path =
+            root / (index == 0 ? "native-cache-o0" : "native-cache-o2");
+        elaborate_config.run.max_deltas = 1000;
+        fsim::diagnostic::Engine elaborate_diagnostics;
+        const auto elaborated = fsim::app::elaborate_artifact(
+            elaborate_config, objects, designs[index], elaborate_diagnostics);
+        if (!elaborated) {
+            fsim::diagnostic::print_text(std::cerr, elaborate_diagnostics);
+        }
+        assert(elaborated && !elaborate_diagnostics.has_error());
+    }
+
+    std::filesystem::rename(source, root / "dynamic-nba.sv.hidden");
+    std::filesystem::rename(object, root / "dynamic-nba.fsimobj.hidden");
+    const auto run_artifact = [&](
+        const std::filesystem::path& design,
+        const fsim::project::Optimization optimization) {
+        fsim::diagnostic::Engine diagnostics;
+        auto loaded = fsim::app::load_design_artifact(design, diagnostics);
+        if (!loaded) {
+            fsim::diagnostic::print_text(std::cerr, diagnostics);
+        }
+        assert(loaded && !diagnostics.has_error());
+        const auto word0_signal = loaded->design.find_signal("dut.word0");
+        const auto word1_signal = loaded->design.find_signal("dut.word1");
+        assert(word0_signal && word1_signal);
+        loaded->cache_path =
+            root
+            / (optimization == fsim::project::Optimization::o0
+                   ? "native-cache-o0"
+                   : "native-cache-o2");
+        fsim::app::Simulation simulation {
+            std::move(*loaded), 1000,
+            fsim::app::SimulationEngine::compiled };
+        DynamicNbaArtifactCapture capture;
+        capture.compiled_processes = simulation.compiled_process_count();
+        capture.result = simulation.run();
+        capture.word0 = simulation.read_signal(*word0_signal).to_msb_string();
+        capture.word1 = simulation.read_signal(*word1_signal).to_msb_string();
+        return capture;
+    };
+
+    for (std::size_t index = 0; index < optimizations.size(); ++index) {
+        const auto capture = run_artifact(designs[index], optimizations[index]);
+        assert(
+            capture.result.status == fsim::runtime::RunStatus::stopped
+            && capture.result.time == 1
+            && capture.word0 == "0011010001010110"
+            && capture.word1 == "00000000X1010101");
+#if defined(FSIM_HAS_LLVM)
+        assert(capture.compiled_processes > 0);
+#endif
+    }
 }
 
 void test_constant_function_severity_messages(
@@ -1712,6 +1856,7 @@ int main()
     test_package_lookup_revision_rules(directory.path);
     test_standard_package_revision_rules(directory.path);
     test_2023_artifact_and_cache_round_trip(directory.path);
+    test_dynamic_memory_nba_artifact_round_trip(directory.path);
     const auto source = directory.path / "conformance.sv";
 
     write_text(directory.path / "conformance-input.txt", "13 fsim\n");

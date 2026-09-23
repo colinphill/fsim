@@ -1,0 +1,441 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "ed5ca693704edd277ec3f055ed7d9ed0e3048f2d",
+  "baseline_revision_semantics": "Declared comparison revision only; supplied executable provenance is established by captured binary, build, and dependency identities rather than inferred from this value.",
+  "defaults": {
+    "jobs": 8,
+    "seed": 1,
+    "samples": 7,
+    "regression_limit": 1.1,
+    "max_deltas": 100000000
+  },
+  "qualification_requirements": {
+    "phase_profiling": {
+      "status": "complete",
+      "reason": "Each selected case, configuration, and binary receives one separate untimed phase and native-execution evidence pass with an isolated artifact and native-cache directory."
+    },
+    "native_coverage_acceptance": {
+      "status": "complete",
+      "reason": "Profile evidence reports observed native resumes, operation counts, modules without native resumes, and unsupported-module reasons; acceptance is transparent reporting and does not require universal native coverage."
+    },
+    "source_identity_hashes": {
+      "status": "complete",
+      "reason": "The runner records ordered literal sources, generated wrappers, recursively resolved include inputs, flags, and SHA-256 identities before execution and verifies them afterward."
+    },
+    "dependency_identity_hashes": {
+      "status": "complete",
+      "reason": "The Linux runner records executable, ELF build/compiler metadata, GNU time, and resolved linked-runtime dependency identities before execution and verifies them afterward."
+    }
+  },
+  "roots": {
+    "original": {
+      "default": "/home/colin/vprojects/reed_solomon",
+      "read_only": true
+    },
+    "mixed": {
+      "default": "/home/colin/vprojects/rs-vhdl",
+      "read_only": true
+    },
+    "codex": {
+      "default": "/home/colin/vprojects/rs_codex",
+      "read_only": true
+    },
+    "repository": {
+      "default": ".",
+      "read_only": true
+    }
+  },
+  "source_sets": {
+    "original_rtl": [
+      "rtl/mem_ram_1w1r.v",
+      "rtl/mem_ram_tdp.v",
+      "rtl/mem_rom_sync.v",
+      "rtl/mem_rom_async.v",
+      "rtl/gf_mult.v",
+      "rtl/gf_inv.v",
+      "rtl/syndrome_calc.v",
+      "rtl/erasure_locator.v",
+      "rtl/bm_algorithm.v",
+      "rtl/euclid_solver.v",
+      "rtl/conv_full.v",
+      "rtl/conv_half.v",
+      "rtl/chien_forney.v",
+      "rtl/kes_block.v",
+      "rtl/codeword_buffer.v",
+      "rtl/rs_decoder_top.v",
+      "rtl/rs_encoder_top.v"
+    ],
+    "original_throughput_rtl": [
+      "rtl/mem_ram_1w1r.v",
+      "rtl/mem_ram_tdp.v",
+      "rtl/mem_rom_sync.v",
+      "rtl/gf_mult.v",
+      "rtl/gf_inv.v",
+      "rtl/syndrome_calc.v",
+      "rtl/erasure_locator.v",
+      "rtl/bm_algorithm.v",
+      "rtl/euclid_solver.v",
+      "rtl/conv_full.v",
+      "rtl/conv_half.v",
+      "rtl/chien_forney.v",
+      "rtl/kes_block.v",
+      "rtl/codeword_buffer.v",
+      "rtl/rs_decoder_top.v"
+    ],
+    "mixed_vhdl_rtl": [
+      "rtl_vhdl/rs_pkg.vhd",
+      "rtl_vhdl/gf_mult.vhd",
+      "rtl_vhdl/mem_rom_async.vhd",
+      "rtl_vhdl/mem_rom_sync.vhd",
+      "rtl_vhdl/mem_ram_1w1r.vhd",
+      "rtl_vhdl/mem_ram_tdp.vhd",
+      "rtl_vhdl/gf_inv.vhd",
+      "rtl_vhdl/codeword_buffer.vhd",
+      "rtl_vhdl/syndrome_calc.vhd",
+      "rtl_vhdl/erasure_locator.vhd",
+      "rtl_vhdl/conv_full.vhd",
+      "rtl_vhdl/conv_half.vhd",
+      "rtl_vhdl/bm_algorithm.vhd",
+      "rtl_vhdl/euclid_solver.vhd",
+      "rtl_vhdl/chien_forney.vhd",
+      "rtl_vhdl/kes_block.vhd",
+      "rtl_vhdl/rs_encoder_top.vhd",
+      "rtl_vhdl/rs_decoder_top.vhd"
+    ],
+    "codex_rtl": [
+      "rtl/rs_kes_euclid_pkg.sv",
+      "rtl/rs_chien_forney.sv",
+      "rtl/rs_chien_forney_datapath.sv",
+      "rtl/rs_chien_forney_fixed.sv",
+      "rtl/rs_decoder_axi.sv",
+      "rtl/rs_decoder_fixed_ingress.sv",
+      "rtl/rs_decoder_fixed_output.sv",
+      "rtl/rs_decoder_frame_store.sv",
+      "rtl/rs_decoder_ingress.sv",
+      "rtl/rs_decoder_kes_dispatch.sv",
+      "rtl/rs_decoder_multi_pipeline.sv",
+      "rtl/rs_decoder_multi_scheduler.sv",
+      "rtl/rs_decoder_output.sv",
+      "rtl/rs_decoder_single_mode0_direct.sv",
+      "rtl/rs_decoder_single_pipeline.sv",
+      "rtl/rs_decoder_single_scheduler.sv",
+      "rtl/rs_encoder_axi.sv",
+      "rtl/rs_gf_inverse_rom.sv",
+      "rtl/rs_kes_bm.sv",
+      "rtl/rs_kes_bm_datapath.sv",
+      "rtl/rs_kes_engine.sv",
+      "rtl/rs_kes_erasure_arbiter.sv",
+      "rtl/rs_kes_euclid.sv",
+      "rtl/rs_kes_euclid_datapath.sv",
+      "rtl/rs_kes_inverse_arbiter.sv",
+      "rtl/rs_kes_pibma.sv",
+      "rtl/rs_sync_sdp_ram.sv",
+      "rtl/rs_sync_tdp_ram.sv"
+    ]
+  },
+  "configurations": [
+    {
+      "id": "interpreter",
+      "engine": "interpreter",
+      "optimization": "O2"
+    },
+    {
+      "id": "llvm_o0",
+      "engine": "compiled",
+      "optimization": "O0"
+    },
+    {
+      "id": "llvm_o2",
+      "engine": "compiled",
+      "optimization": "O2"
+    }
+  ],
+  "cases": [
+    {
+      "id": "original_codec",
+      "status": "active",
+      "root": "original",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "original_rtl", "sources": ["tb/rs_codec_tb.v"], "defines": ["SIMULATION"], "rationale": "The Vivado Verilog flow accepts SystemVerilog $fatal as an extension; fsim strict Verilog 2005 correctly rejects it, so this fixture is compiled as one explicit SystemVerilog source set."}
+      ],
+      "top": "sv:work.rs_codec_tb",
+      "correctness": {
+        "required": [
+          {"pattern": "(?m)^ALL_CODEC_DONE\\s*$", "count": 1},
+          {"pattern": "(?m)^CODEC_OK \\[", "count": 11}
+        ],
+        "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]
+      }
+    },
+    {
+      "id": "original_throughput",
+      "status": "active",
+      "root": "original",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "original_throughput_rtl", "sources": ["tb/rs_thru_tb.v"], "defines": ["SIMULATION"], "rationale": "The Vivado Verilog flow accepts SystemVerilog $fatal as an extension; fsim strict Verilog 2005 correctly rejects it, so this fixture is compiled as one explicit SystemVerilog source set."}
+      ],
+      "top": "sv:work.rs_thru_tb",
+      "correctness": {
+        "required": [
+          {"pattern": "(?m)^THRU TESTS COMPLETE\\s*$", "count": 1},
+          {"pattern": "(?m)^THRU \\[.* PASS\\s*$", "count": 6}
+        ],
+        "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]
+      }
+    },
+    {
+      "id": "mixed_codec",
+      "status": "active",
+      "root": "mixed",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "source_set": "mixed_vhdl_rtl"},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/rs_codec_tb.v"]}
+      ],
+      "top": "sv:work.rs_codec_tb",
+      "correctness": {
+        "required": [
+          {"pattern": "(?m)^ALL_CODEC_DONE\\s*$", "count": 1},
+          {"pattern": "(?m)^CODEC_OK \\[", "count": 11}
+        ],
+        "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]
+      }
+    },
+    {
+      "id": "mixed_throughput",
+      "status": "active",
+      "root": "mixed",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "source_set": "mixed_vhdl_rtl"},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/rs_thru_tb.v"]}
+      ],
+      "top": "sv:work.rs_thru_tb",
+      "correctness": {
+        "required": [
+          {"pattern": "(?m)^THRU TESTS COMPLETE\\s*$", "count": 1},
+          {"pattern": "(?m)^THRU \\[.* PASS\\s*$", "count": 6}
+        ],
+        "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]
+      }
+    },
+    {
+      "id": "codex_reference_mode0_frames1",
+      "status": "active",
+      "root": "codex",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "codex_rtl", "include_dirs": ["rtl"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/tb_rs_decoder_reference.sv", "$generated/wrapper.sv"], "include_dirs": ["rtl"]}
+      ],
+      "wrapper": "module simplification_benchmark_top;\n  tb_rs_decoder_reference #(\n    .MODE(0),\n    .INPUT_FRAMES(1)\n  ) testbench();\nendmodule\n",
+      "top": "sv:work.simplification_benchmark_top",
+      "correctness": {"required": [{"pattern": "(?m)^PASS: reference decoder mode 0 processed 1 input frame\\(s\\)\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "codex_reference_mode0_frames2",
+      "status": "active",
+      "root": "codex",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "codex_rtl", "include_dirs": ["rtl"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/tb_rs_decoder_reference.sv", "$generated/wrapper.sv"], "include_dirs": ["rtl"]}
+      ],
+      "wrapper": "module simplification_benchmark_top;\n  tb_rs_decoder_reference #(\n    .MODE(0),\n    .INPUT_FRAMES(2)\n  ) testbench();\nendmodule\n",
+      "top": "sv:work.simplification_benchmark_top",
+      "correctness": {"required": [{"pattern": "(?m)^PASS: reference decoder mode 0 processed 2 input frame\\(s\\)\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "codex_reference_mode1_frames1",
+      "status": "active",
+      "root": "codex",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "codex_rtl", "include_dirs": ["rtl"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/tb_rs_decoder_reference.sv", "$generated/wrapper.sv"], "include_dirs": ["rtl"]}
+      ],
+      "wrapper": "module simplification_benchmark_top;\n  tb_rs_decoder_reference #(\n    .MODE(1),\n    .INPUT_FRAMES(1)\n  ) testbench();\nendmodule\n",
+      "top": "sv:work.simplification_benchmark_top",
+      "correctness": {"required": [{"pattern": "(?m)^PASS: reference decoder mode 1 processed 1 input frame\\(s\\)\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "codex_reference_mode1_frames2",
+      "status": "active",
+      "root": "codex",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "codex_rtl", "include_dirs": ["rtl"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/tb_rs_decoder_reference.sv", "$generated/wrapper.sv"], "include_dirs": ["rtl"]}
+      ],
+      "wrapper": "module simplification_benchmark_top;\n  tb_rs_decoder_reference #(\n    .MODE(1),\n    .INPUT_FRAMES(2)\n  ) testbench();\nendmodule\n",
+      "top": "sv:work.simplification_benchmark_top",
+      "correctness": {"required": [{"pattern": "(?m)^PASS: reference decoder mode 1 processed 2 input frame\\(s\\)\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "codex_throughput_default",
+      "status": "active",
+      "root": "codex",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "codex_rtl", "include_dirs": ["rtl"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/tb_rs_decoder_throughput.sv", "$generated/wrapper.sv"], "include_dirs": ["rtl"]}
+      ],
+      "wrapper": "module simplification_benchmark_top;\n  tb_rs_decoder_throughput testbench();\nendmodule\n",
+      "top": "sv:work.simplification_benchmark_top",
+      "correctness": {"required": [{"pattern": "(?m)^PASS: mode 1 continuous full-length input/output throughput\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "codex_throughput_direct_syndrome",
+      "status": "active",
+      "root": "codex",
+      "configurations": ["llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "source_set": "codex_rtl", "include_dirs": ["rtl"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["tb/tb_rs_decoder_throughput.sv", "$generated/wrapper.sv"], "include_dirs": ["rtl"]}
+      ],
+      "wrapper": "module simplification_benchmark_top;\n  tb_rs_decoder_throughput #(\n    .VERIFY(0),\n    .ERASURES(0)\n  ) testbench();\nendmodule\n",
+      "top": "sv:work.simplification_benchmark_top",
+      "correctness": {"required": [{"pattern": "(?m)^PASS: mode 1 continuous full-length input/output throughput\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "repository_pure_sv_coverage",
+      "status": "active",
+      "verification_status": "implementation_verified",
+      "root": "repository",
+      "configurations": ["interpreter", "llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "systemverilog", "standard": "2017", "sources": ["examples/v3_coverage/counter.sv", "$generated/wrapper.sv"]}
+      ],
+      "wrapper_generator": {"kind": "coverage"},
+      "top": "sv:work.simplification_coverage_tb",
+      "runner": "helper",
+      "helper_mode": "coverage",
+      "helper_source_inputs": ["tests/app/simplification_benchmark_driver.cpp", "tests/CMakeLists.txt"],
+      "observation": {"kind": "functional_coverage", "path": "observations/functional.fsimcov"},
+      "correctness": {"required": [{"pattern": "(?m)^PASS: simplification pure SV coverage value=2 coverage=100\\.0+\\s*$", "count": 1}, {"pattern": "(?m)^PASS: simplification functional coverage roundtrip reports=[1-9][0-9]* instances=[1-9][0-9]*\\s*$", "count": 1}, {"pattern": "(?m)^PASS: simplification functional coverage semantic_sha256=[0-9a-f]{64}\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "repository_mixed_long_bare",
+      "status": "active",
+      "verification_status": "implementation_verified",
+      "root": "repository",
+      "configurations": ["interpreter", "llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "sources": ["examples/vertical_slice/counter.vhd"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["examples/vertical_slice/sv_child.sv", "$generated/wrapper.sv"]}
+      ],
+      "wrapper_generator": {"kind": "mixed_long", "instances": 16, "cycles": 100000},
+      "top": "sv:work.simplification_mixed_long_tb",
+      "observation": {"kind": "none"},
+      "correctness": {"required": [{"pattern": "(?m)^PASS: simplification mixed long cycles=100000 instances=16 expected_logical_changes=3200000\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "repository_mixed_long_vcd",
+      "status": "active",
+      "verification_status": "implementation_verified",
+      "root": "repository",
+      "configurations": ["interpreter", "llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "sources": ["examples/vertical_slice/counter.vhd"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["examples/vertical_slice/sv_child.sv", "$generated/wrapper.sv"]}
+      ],
+      "wrapper_generator": {"kind": "mixed_long", "instances": 16, "cycles": 100000},
+      "top": "sv:work.simplification_mixed_long_tb",
+      "observation": {
+        "kind": "vcd",
+        "filters": [
+          "{root}.counter_q_0",
+          "{root}.counter_q_1",
+          "{root}.counter_q_2",
+          "{root}.counter_q_3",
+          "{root}.child_y_0",
+          "{root}.child_y_1",
+          "{root}.child_y_2",
+          "{root}.child_y_3"
+        ],
+        "minimum_value_changes": 800000,
+        "selection_reason": "Eight exact top-level vectors retain the identical 16-instance workload while remaining below the current 1048576-record observation cap; greater-than-one-million trace stress remains a later Batch 188F obligation."
+      },
+      "correctness": {"required": [{"pattern": "(?m)^PASS: simplification mixed long cycles=100000 instances=16 expected_logical_changes=3200000\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "repository_mixed_long_fst",
+      "status": "active",
+      "verification_status": "implementation_verified",
+      "root": "repository",
+      "configurations": ["interpreter", "llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "sources": ["examples/vertical_slice/counter.vhd"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["examples/vertical_slice/sv_child.sv", "$generated/wrapper.sv"]}
+      ],
+      "wrapper_generator": {"kind": "mixed_long", "instances": 16, "cycles": 100000},
+      "top": "sv:work.simplification_mixed_long_tb",
+      "observation": {
+        "kind": "fst",
+        "filters": [
+          "{root}.counter_q_0",
+          "{root}.counter_q_1",
+          "{root}.counter_q_2",
+          "{root}.counter_q_3",
+          "{root}.child_y_0",
+          "{root}.child_y_1",
+          "{root}.child_y_2",
+          "{root}.child_y_3"
+        ],
+        "minimum_value_changes": 800000,
+        "selection_reason": "Eight exact top-level vectors retain the identical 16-instance workload while remaining below the current 1048576-record observation cap; greater-than-one-million trace stress remains a later Batch 188F obligation."
+      },
+      "correctness": {"required": [{"pattern": "(?m)^PASS: simplification mixed long cycles=100000 instances=16 expected_logical_changes=3200000\\s*$", "count": 1}], "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]}
+    },
+    {
+      "id": "repository_mixed_long_observer",
+      "status": "active",
+      "verification_status": "implementation_verified",
+      "root": "repository",
+      "configurations": ["interpreter", "llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "sources": ["examples/vertical_slice/counter.vhd"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["examples/vertical_slice/sv_child.sv", "$generated/wrapper.sv"]}
+      ],
+      "wrapper_generator": {"kind": "mixed_long", "instances": 16, "cycles": 100000},
+      "top": "sv:work.simplification_mixed_long_tb",
+      "runner": "helper",
+      "helper_mode": "observer",
+      "helper_source_inputs": ["tests/app/simplification_benchmark_driver.cpp", "tests/CMakeLists.txt"],
+      "observation": {"kind": "none"},
+      "correctness": {
+        "required": [
+          {"pattern": "(?m)^PASS: simplification mixed long cycles=100000 instances=16 expected_logical_changes=3200000\\s*$", "count": 1},
+          {"pattern": "(?m)^PASS: simplification observer events=[0-9]+ checksum=[0-9a-f]+\\s*$", "count": 1}
+        ],
+        "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]
+      }
+    },
+    {
+      "id": "repository_mixed_long_history",
+      "status": "active",
+      "verification_status": "implementation_verified",
+      "root": "repository",
+      "configurations": ["interpreter", "llvm_o0", "llvm_o2"],
+      "source_groups": [
+        {"language": "vhdl", "standard": "2008", "sources": ["examples/vertical_slice/counter.vhd"]},
+        {"language": "systemverilog", "standard": "2017", "sources": ["examples/vertical_slice/sv_child.sv", "$generated/wrapper.sv"]}
+      ],
+      "wrapper_generator": {"kind": "mixed_long", "instances": 16, "cycles": 100000},
+      "top": "sv:work.simplification_mixed_long_tb",
+      "runner": "helper",
+      "helper_mode": "history",
+      "helper_source_inputs": ["tests/app/simplification_benchmark_driver.cpp", "tests/CMakeLists.txt"],
+      "observation": {"kind": "none"},
+      "correctness": {
+        "required": [
+          {"pattern": "(?m)^PASS: simplification mixed long cycles=100000 instances=16 expected_logical_changes=3200000\\s*$", "count": 1},
+          {"pattern": "(?m)^PASS: simplification history checks=9 checksum=[0-9a-f]+\\s*$", "count": 1}
+        ],
+        "forbidden": ["(?i)FAIL", "(?i)TIMEOUT", "(?i)fatal"]
+      }
+    }
+  ]
+}

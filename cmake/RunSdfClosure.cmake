@@ -13,6 +13,8 @@ if(FSIM_DEDUPLICATED_CTEST)
   return()
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RunClosureWitnesses.cmake")
+
 file(MAKE_DIRECTORY "${FSIM_OUTPUT_DIR}")
 set(FSIM_TRANSCRIPT "${FSIM_OUTPUT_DIR}/console.log")
 set(FSIM_RESULT "${FSIM_OUTPUT_DIR}/result.txt")
@@ -20,19 +22,14 @@ file(WRITE "${FSIM_TRANSCRIPT}"
   "FSIM-SDF-CLOSURE-START revisions=2.1,3.0,4.0\n")
 
 set(FSIM_TEST_REGEX
-  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|source-line-budget$|sdf-inventory$|resource-portability-contract$)")
-execute_process(
-  COMMAND "${FSIM_CTEST_COMMAND}"
-    --test-dir "${FSIM_BINARY_DIR}"
-    --output-on-failure
-    --verbose
-    --timeout 1200
-    -R "${FSIM_TEST_REGEX}"
-  RESULT_VARIABLE FSIM_STATUS
-  OUTPUT_VARIABLE FSIM_STDOUT
-  ERROR_VARIABLE FSIM_STDERR
-  TIMEOUT 1200
-)
+  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|translation-unit-structure$|sdf-inventory$|contract\\.artifact-resources$)")
+fsim_run_closure_witnesses(
+  FSIM_STATUS FSIM_STDOUT FSIM_STDERR 1200
+  --test-dir "${FSIM_BINARY_DIR}"
+  --output-on-failure
+  --verbose
+  --timeout 1200
+  -R "${FSIM_TEST_REGEX}")
 file(APPEND "${FSIM_TRANSCRIPT}" "${FSIM_STDOUT}${FSIM_STDERR}")
 
 set(FSIM_EXPECTED_OUTPUT

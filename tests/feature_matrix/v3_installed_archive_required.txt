@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+bin/fsim@EXE@
+bin/fsim-sv@EXE@
+bin/fsim-vhdl@EXE@
+include/fsim/api.h
+include/fsim/version.hpp
+lib/pkgconfig/fsim.pc
+share/doc/fsim/LICENSE

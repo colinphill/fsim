@@ -1612,9 +1612,44 @@ void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
     auto& expressions = design.vhdl_hir.mutable_expressions();
     design.refresh_lookup_indexes();
     for (auto& expression : expressions) {
-        if (!expression.referenced_name
-            || !expression.scope.valid()
+        expression.builtin_operator
+            = vhdl::BuiltinOperatorIdentity::none;
+        if (!expression.scope.valid()
             || expression.scope.value() >= design.semantics.scopes().size()) {
+            continue;
+        }
+
+        auto builtin_operator = vhdl::BuiltinOperatorIdentity::none;
+        const auto& operation = expression.text;
+        if (expression.kind == vhdl::ExpressionKind::unary
+            && expression.operands.size() == 1U
+            && same_vhdl_identifier(operation, "not")) {
+            builtin_operator
+                = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not;
+        } else if (expression.kind == vhdl::ExpressionKind::binary
+            && expression.operands.size() == 2U) {
+            if (same_vhdl_identifier(operation, "and")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_and;
+            } else if (same_vhdl_identifier(operation, "or")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_or;
+            } else if (same_vhdl_identifier(operation, "nand")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_nand;
+            } else if (same_vhdl_identifier(operation, "nor")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_nor;
+            } else if (same_vhdl_identifier(operation, "xor")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_xor;
+            } else if (same_vhdl_identifier(operation, "xnor")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_xnor;
+            }
+        }
+        if (builtin_operator == vhdl::BuiltinOperatorIdentity::none
+            && !expression.referenced_name) {
             continue;
         }
         const auto unit_id
@@ -1624,10 +1659,31 @@ void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
             || unit->vhdl->kind != vhdl::UnitKind::architecture) {
             continue;
         }
-        const auto resolved = CompiledDesignResolver { design, unit_id }
-            .resolve_vhdl(*expression.referenced_name, expression.scope);
-        expression.referenced_name->overloads = resolved.candidates;
-        expression.referenced_name->selected = resolved.unique();
+        const auto retained_candidate = expression.referenced_name
+            && (expression.referenced_name->selected.has_value()
+                || !expression.referenced_name->overloads.empty());
+        const CompiledDesignResolver resolver { design, unit_id };
+        auto synthetic_name = vhdl::Name { };
+        synthetic_name.spelling = operation;
+        synthetic_name.canonical = operation;
+        synthetic_name.source = expression.source;
+        const auto& resolution_name = expression.referenced_name
+            ? *expression.referenced_name
+            : synthetic_name;
+        const auto resolved = resolver.resolve_vhdl(
+            resolution_name, expression.scope);
+        if (expression.referenced_name) {
+            expression.referenced_name->overloads = resolved.candidates;
+            expression.referenced_name->selected = resolved.unique();
+        }
+        if (builtin_operator != vhdl::BuiltinOperatorIdentity::none
+            && !retained_candidate
+            && resolved.status == CompiledResolutionStatus::not_found
+            && resolved.candidates.empty()
+            && resolver.vhdl_builtin_package_member_imported("ieee",
+                "std_logic_1164", operation, expression.scope)) {
+            expression.builtin_operator = builtin_operator;
+        }
     }
 }
 

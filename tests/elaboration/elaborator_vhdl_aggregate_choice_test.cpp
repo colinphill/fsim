@@ -43,6 +43,10 @@ architecture rtl of aggregate_choice_closure is
   signal Mode_Array : Mode_Array_T;
   signal Range_Bits : Nibble_T;
   signal Packed_Bits : bit_vector(3 downto 0);
+  signal Descending_Source : bit_vector(7 downto 4);
+  signal Ascending_Source : bit_vector(0 to 3);
+  signal Attribute_Range_Bits : bit_vector(7 downto 4);
+  signal Attribute_Reverse_Bits : bit_vector(3 downto 0);
 begin
   drive : process
   begin
@@ -63,6 +67,8 @@ begin
     Mode_Array <= (0 => Ready, others => Busy);
     Range_Bits <= (3 downto 2 => '1', 1 | 0 => '0');
     Packed_Bits <= (3 | 1 => '1', others => '0');
+    Attribute_Range_Bits <= (Descending_Source'range => '1');
+    Attribute_Reverse_Bits <= (Ascending_Source'reverse_range => '0');
     wait;
   end process;
 end architecture;
@@ -93,9 +99,14 @@ end architecture;
   const auto mode_array = elaborated.design->find_signal("mode_array");
   const auto range_bits = elaborated.design->find_signal("range_bits");
   const auto packed_bits = elaborated.design->find_signal("packed_bits");
+  const auto attribute_range_bits = elaborated.design->find_signal(
+      "attribute_range_bits");
+  const auto attribute_reverse_bits = elaborated.design->find_signal(
+      "attribute_reverse_bits");
   assert(
       choice_record && others_record && nested_record && record_array
-      && nested_array && mode_array && range_bits && packed_bits);
+      && nested_array && mode_array && range_bits && packed_bits
+      && attribute_range_bits && attribute_reverse_bits);
 
   auto interpreter = elaborated.design->create_interpreter();
   const auto run = interpreter->run();
@@ -111,7 +122,127 @@ end architecture;
           == "10100011"
       && interpreter->signal_value(*mode_array).to_msb_string() == "0110"
       && interpreter->signal_value(*range_bits).to_msb_string() == "1100"
-      && interpreter->signal_value(*packed_bits).to_msb_string() == "1010");
+      && interpreter->signal_value(*packed_bits).to_msb_string() == "1010"
+      && interpreter->signal_value(*attribute_range_bits).to_msb_string()
+          == "1111"
+      && interpreter->signal_value(*attribute_reverse_bits).to_msb_string()
+          == "0000");
+
+  const auto slice_aggregate = fsim::frontend::parse_text(
+      "vhdl_predefined_slice_others_aggregate.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity Predefined_Slice_Others_Aggregate is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of predefined_slice_others_aggregate is
+  signal Descending : std_logic_vector(15 downto 0);
+  signal Ascending : std_logic_vector(0 to 15);
+begin
+  Descending(7 downto 0) <=
+    (others => '1') when true else (others => '0');
+  Ascending(0 to 7) <=
+    (others => '1') when true else (others => '0');
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(slice_aggregate.ok());
+  const auto slice_elaborated = compile_and_elaborate(
+      slice_aggregate.design,
+      "vhdl:work.predefined_slice_others_aggregate(rtl)");
+  if (!slice_elaborated.ok()) {
+    for (const auto& diagnostic : slice_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(slice_elaborated.ok());
+  const auto descending = slice_elaborated.design->find_signal(
+      "descending");
+  const auto ascending = slice_elaborated.design->find_signal("ascending");
+  assert(descending && ascending);
+  auto slice_interpreter = slice_elaborated.design->create_interpreter();
+  const auto slice_run = slice_interpreter->run();
+  assert(slice_run.status == fsim::runtime::RunStatus::completed);
+  // The selected halves are driven; their untouched halves remain Z.
+  assert(
+      slice_interpreter->signal_value(*descending).to_msb_string()
+          == "ZZZZZZZZ11111111"
+      && slice_interpreter->signal_value(*ascending).to_msb_string()
+          == "11111111ZZZZZZZZ");
+
+  const auto inactive_generate = fsim::frontend::parse_text(
+      "vhdl_inactive_generate_slice_validation.vhd",
+      R"(
+entity Inactive_Generate_Slice_Validation is end entity;
+architecture rtl of inactive_generate_slice_validation is
+  signal Source : bit_vector(3 downto 0);
+  signal Destination : bit_vector(3 downto 0);
+begin
+  inactive: if false generate
+    Destination <= Source(3 downto 4);
+    nested: if true generate
+      Destination <= Source(3 downto 4);
+    end generate nested;
+  end generate inactive;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(inactive_generate.ok());
+  const auto inactive_generate_design = compile_and_elaborate(
+      inactive_generate.design,
+      "vhdl:work.inactive_generate_slice_validation(rtl)");
+  if (!inactive_generate_design.ok()) {
+    for (const auto& diagnostic : inactive_generate_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(inactive_generate_design.ok());
+
+  const auto expect_active_generate_slice_rejection = [](
+      const std::string_view filename,
+      const std::string_view source) {
+    const auto parsed = fsim::frontend::parse_text(
+        filename, source, fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto result = compile_and_elaborate(
+        parsed.design, "vhdl:work.active_generate_slice_validation(rtl)");
+    assert(
+        !result.ok()
+        && has_diagnostic(result, "FSIM-ELAB-VHARRAYSEL-004"));
+  };
+  expect_active_generate_slice_rejection(
+      "vhdl_active_generate_slice_validation.vhd",
+      R"(
+entity Active_Generate_Slice_Validation is end entity;
+architecture rtl of active_generate_slice_validation is
+  signal Source : bit_vector(3 downto 0);
+  signal Destination : bit_vector(3 downto 0);
+begin
+  active: if true generate
+    Destination <= Source(3 downto 4);
+  end generate active;
+end architecture;
+)");
+  expect_active_generate_slice_rejection(
+      "vhdl_false_generate_else_slice_validation.vhd",
+      R"(
+entity Active_Generate_Slice_Validation is end entity;
+architecture rtl of active_generate_slice_validation is
+  signal Source : bit_vector(3 downto 0);
+  signal Destination : bit_vector(3 downto 0);
+begin
+  select_branch: if false generate
+    Destination <= Source(3 downto 4);
+  else generate
+    Destination <= Source(3 downto 4);
+  end generate select_branch;
+end architecture;
+)");
 
   const auto reject = [](
       const std::string_view filename,
@@ -227,6 +358,46 @@ begin
 end architecture;
 )",
       "FSIM-ELAB-VHARRAYAGG-003");
+  reject(
+      "vhdl_user_array_choice_outside_non_slice.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity Invalid is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of invalid is
+  type User_Vector_T is array (15 downto 0) of std_logic;
+  signal Value : User_Vector_T;
+begin
+  Value <= (16 => '1', others => '0');
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-003");
+  reject(
+      "vhdl_array_attribute_choice_outside.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  signal Source : bit_vector(3 downto 0);
+  signal Value : bit_vector(2 downto 0);
+begin
+  Value <= (Source'range => '0');
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-003");
+  reject(
+      "vhdl_array_attribute_choice_unconstrained.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Open_T is array (natural range <>) of bit;
+  signal Value : bit_vector(3 downto 0);
+begin
+  Value <= (Open_T'range => '0');
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYATTR-001");
   reject(
       "vhdl_array_choice_missing.vhd",
       R"(

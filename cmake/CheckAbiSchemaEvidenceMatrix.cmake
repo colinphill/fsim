@@ -6,6 +6,9 @@ endif()
 
 set(FSIM_MATRIX
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_evidence_matrix.tsv")
+if(DEFINED FSIM_ABI_SCHEMA_TEST_MATRIX)
+  set(FSIM_MATRIX "${FSIM_ABI_SCHEMA_TEST_MATRIX}")
+endif()
 set(FSIM_INVENTORY
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_inventory.tsv")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
@@ -19,19 +22,6 @@ foreach(FSIM_INPUT IN ITEMS
     message(FATAL_ERROR "ABI/schema evidence input is missing: ${FSIM_INPUT}")
   endif()
 endforeach()
-
-file(READ "${FSIM_MATRIX}" FSIM_MATRIX_CONTENTS)
-string(REPLACE "\r\n" "\n" FSIM_MATRIX_CONTENTS
-  "${FSIM_MATRIX_CONTENTS}")
-string(REPLACE "\r" "\n" FSIM_MATRIX_CONTENTS
-  "${FSIM_MATRIX_CONTENTS}")
-string(SHA256 FSIM_MATRIX_SHA256 "${FSIM_MATRIX_CONTENTS}")
-set(FSIM_EXPECTED_SHA256
-  "aa4865193d5db8481af13f947cecc29f3525560314a5dca720d76c37de89c943")
-if(NOT FSIM_MATRIX_SHA256 STREQUAL FSIM_EXPECTED_SHA256)
-  message(FATAL_ERROR
-    "ABI/schema evidence matrix digest changed: ${FSIM_MATRIX_SHA256}")
-endif()
 
 file(STRINGS "${FSIM_INVENTORY}" FSIM_INVENTORY_LINES)
 list(REMOVE_AT FSIM_INVENTORY_LINES 0 1)

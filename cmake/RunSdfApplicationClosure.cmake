@@ -14,6 +14,8 @@ if(FSIM_DEDUPLICATED_CTEST)
   return()
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RunClosureWitnesses.cmake")
+
 file(MAKE_DIRECTORY "${FSIM_OUTPUT_DIR}/logs")
 set(FSIM_CONSOLE "${FSIM_OUTPUT_DIR}/console.log")
 set(FSIM_RESULT "${FSIM_OUTPUT_DIR}/result.tsv")
@@ -28,25 +30,20 @@ set(FSIM_STAGES
   "artifact@@^fsim\\.(library\\.artifact|artifact\\.(object|design)|cache)$"
   "public@@^fsim\\.(application\\.(specify|resolution|vpi|vcd_control)|api|api\\.c_header)$"
   "project@@^fsim\\.application$"
-  "contracts@@^fsim\\.(diagnostics-catalog|source-line-budget|sdf-application-inventory|resource-portability-contract)$")
+  "contracts@@^fsim\\.(diagnostics-catalog|translation-unit-structure|sdf-application-inventory|contract\\.artifact-resources)$")
 
 foreach(FSIM_STAGE_SPEC IN LISTS FSIM_STAGES)
   string(REPLACE "@@" ";" FSIM_STAGE_FIELDS "${FSIM_STAGE_SPEC}")
   list(GET FSIM_STAGE_FIELDS 0 FSIM_STAGE)
   list(GET FSIM_STAGE_FIELDS 1 FSIM_REGEX)
   set(FSIM_LOG "${FSIM_OUTPUT_DIR}/logs/${FSIM_STAGE}.log")
-  execute_process(
-    COMMAND "${FSIM_CTEST_COMMAND}"
-      --test-dir "${FSIM_BINARY_DIR}"
-      --output-on-failure
-      --verbose
-      --timeout 1200
-      -R "${FSIM_REGEX}"
-    RESULT_VARIABLE FSIM_STATUS
-    OUTPUT_VARIABLE FSIM_STDOUT
-    ERROR_VARIABLE FSIM_STDERR
-    TIMEOUT 1200
-  )
+  fsim_run_closure_witnesses(
+    FSIM_STATUS FSIM_STDOUT FSIM_STDERR 1200
+    --test-dir "${FSIM_BINARY_DIR}"
+    --output-on-failure
+    --verbose
+    --timeout 1200
+    -R "${FSIM_REGEX}")
   file(WRITE "${FSIM_LOG}" "${FSIM_STDOUT}${FSIM_STDERR}")
   file(APPEND "${FSIM_CONSOLE}" "${FSIM_STDOUT}${FSIM_STDERR}")
   string(FIND "${FSIM_STDOUT}${FSIM_STDERR}" "100% tests passed"

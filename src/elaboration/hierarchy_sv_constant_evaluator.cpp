@@ -79,6 +79,9 @@ constexpr std::uint32_t maximum_constant_width
     = hir_systemverilog_maximum_constant_width;
 constexpr std::uint64_t maximum_constant_work_units = 64U * 1024U * 1024U;
 constexpr std::size_t maximum_constant_call_depth = 1024U;
+constexpr std::size_t maximum_constant_local_array_elements = 65536U;
+constexpr std::uint64_t maximum_constant_local_array_bits
+    = 8U * 1024U * 1024U;
 
 [[nodiscard]] char ascii_lower(const char value) noexcept
 {
@@ -809,9 +812,20 @@ public:
     }
 
 private:
+    struct LocalUnpackedArray {
+        std::int64_t left { };
+        std::int64_t right { };
+        semantic::sv::TypeReference element_type;
+        Value default_value;
+        std::vector<Value> elements;
+    };
+
     struct Frame {
         semantic::DeclarationId callable;
         std::map<semantic::DeclarationId, Value> values;
+        std::map<semantic::DeclarationId, LocalUnpackedArray> arrays;
+        std::size_t array_elements { };
+        std::uint64_t array_bits { };
         std::map<std::string, Value> pattern_values;
         std::optional<Value> result;
     };
@@ -821,6 +835,191 @@ private:
         continued,
         returned,
         failed };
+
+    [[nodiscard]] bool consume_work(const std::uint64_t amount)
+    {
+        if (amount > maximum_constant_work_units - work_units_used_) {
+            error_ = "constant function evaluation exceeds the work limit";
+            return false;
+        }
+        work_units_used_ += amount;
+        return true;
+    }
+
+    [[nodiscard]] static bool integral_array_element_type(
+        const semantic::sv::TypeReference& type) noexcept
+    {
+        if (type.value_form
+            && (*type.value_form
+                    == semantic::sv::TypeForm::packed_integral
+                || *type.value_form
+                    == semantic::sv::TypeForm::enumeration)) {
+            return true;
+        }
+        const auto& spelling = type.target.spelling;
+        return spelling == "bit" || spelling == "logic"
+            || spelling == "reg" || spelling == "byte"
+            || spelling == "shortint" || spelling == "int"
+            || spelling == "integer" || spelling == "longint";
+    }
+
+    [[nodiscard]] static bool fixed_one_dimensional_array_type(
+        const semantic::sv::TypeReference& type) noexcept
+    {
+        return type.unpacked_dimensions.size() == 1U
+            && (!type.container_form
+                || *type.container_form
+                    == semantic::sv::TypeForm::static_array)
+            && !type.associative_index && !type.queue_maximum
+            && integral_array_element_type(type);
+    }
+
+    [[nodiscard]] LocalUnpackedArray* find_local_array(
+        const semantic::DeclarationId declaration)
+    {
+        for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
+            if (const auto found = frame->arrays.find(declaration);
+                found != frame->arrays.end()) {
+                return &found->second;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] static std::optional<std::size_t> local_array_offset(
+        const LocalUnpackedArray& array,
+        const std::int64_t index) noexcept
+    {
+        if (index < std::min(array.left, array.right)
+            || index > std::max(array.left, array.right)) {
+            return std::nullopt;
+        }
+        const auto distance = array.left <= array.right
+            ? static_cast<std::uint64_t>(index - array.left)
+            : static_cast<std::uint64_t>(array.left - index);
+        if (distance >= array.elements.size()) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(distance);
+    }
+
+    [[nodiscard]] bool initialize_local_array(
+        const semantic::DeclarationId declaration_id,
+        const semantic::sv::Declaration& declaration)
+    {
+        if (frames_.empty()
+            || declaration.form
+                != semantic::sv::DeclarationForm::variable
+            || !declaration.type
+            || !fixed_one_dimensional_array_type(*declaration.type)) {
+            return true;
+        }
+        if (frames_.back().arrays.contains(declaration_id)) {
+            return true;
+        }
+
+        const auto& declared_type = *declaration.type;
+        const auto& dimension = declared_type.unpacked_dimensions.front();
+        const auto resolve_bound = [&](
+            const std::optional<std::int64_t> value,
+            const std::optional<semantic::ExpressionId> expression)
+            -> std::optional<std::int64_t> {
+            if (value) {
+                return value;
+            }
+            if (!expression) {
+                return std::nullopt;
+            }
+            const auto evaluated = evaluate(*expression);
+            return evaluated ? evaluated->integer_value() : std::nullopt;
+        };
+        const auto left = resolve_bound(
+            dimension.left, dimension.left_expression);
+        const auto right = resolve_bound(
+            dimension.right, dimension.right_expression);
+        if (!left || !right) {
+            error_ = "constant function array bounds must be known integers";
+            return false;
+        }
+        const auto distance = *left >= *right
+            ? static_cast<std::uint64_t>(*left)
+                - static_cast<std::uint64_t>(*right)
+            : static_cast<std::uint64_t>(*right)
+                - static_cast<std::uint64_t>(*left);
+        if (distance >= maximum_constant_local_array_elements) {
+            error_ = "constant function local array exceeds the element limit";
+            return false;
+        }
+        const auto element_count = static_cast<std::size_t>(distance + 1U);
+        std::size_t active_array_elements { };
+        for (const auto& frame : frames_) {
+            if (frame.array_elements
+                > maximum_constant_local_array_elements
+                    - active_array_elements) {
+                error_ = "constant function local arrays exceed the element limit";
+                return false;
+            }
+            active_array_elements += frame.array_elements;
+        }
+        if (element_count
+            > maximum_constant_local_array_elements
+                - active_array_elements) {
+            error_ = "constant function local arrays exceed the element limit";
+            return false;
+        }
+        auto element_type = declared_type;
+        element_type.container_form.reset();
+        element_type.unpacked_dimensions.clear();
+        element_type.container_element_types.clear();
+        element_type.associative_index.reset();
+        element_type.queue_maximum.reset();
+        std::unordered_set<std::uint32_t> visiting;
+        const auto width = resolved_type_width(
+            element_type, &specialization_, visiting);
+        if (!width || *width == 0U || *width > maximum_constant_width) {
+            error_ = "constant function array element width is unresolved";
+            return false;
+        }
+        const auto storage_value_count
+            = static_cast<std::uint64_t>(element_count) + 1U;
+        const auto array_bits = storage_value_count * *width;
+        std::uint64_t active_array_bits { };
+        for (const auto& frame : frames_) {
+            if (frame.array_bits
+                > maximum_constant_local_array_bits - active_array_bits) {
+                error_ = "constant function local arrays exceed the storage limit";
+                return false;
+            }
+            active_array_bits += frame.array_bits;
+        }
+        if (array_bits
+            > maximum_constant_local_array_bits - active_array_bits) {
+            error_ = "constant function local arrays exceed the storage limit";
+            return false;
+        }
+        if (!consume_work(element_count)) {
+            return false;
+        }
+        const auto element_domain = type_domain(element_type);
+        auto default_value = make_value(
+            PackedLogic4 { static_cast<std::uint32_t>(*width),
+                element_domain == frontend::ValueDomain::Bit2
+                    ? Logic4::zero : Logic4::x },
+            element_type.signed_value, false, element_domain);
+        default_value.packed_range = element_type.packed_range;
+
+        LocalUnpackedArray array;
+        array.left = *left;
+        array.right = *right;
+        array.element_type = std::move(element_type);
+        array.default_value = default_value;
+        array.elements.resize(element_count, array.default_value);
+        auto& frame = frames_.back();
+        frame.array_elements += element_count;
+        frame.array_bits += array_bits;
+        frame.arrays.emplace(declaration_id, std::move(array));
+        return true;
+    }
 
     [[nodiscard]] std::optional<std::uint32_t> expression_width(
         const semantic::ExpressionId expression,
@@ -1414,6 +1613,32 @@ private:
     {
         if (record.kind == ExpressionKind::index
             && record.operands.size() == 2U) {
+            const auto base_view = specialization_.find_expression(
+                record.operands.front());
+            if (base_view && base_view->systemverilog != nullptr
+                && base_view->systemverilog->kind == ExpressionKind::name
+                && base_view->systemverilog->referenced_name
+                && base_view->systemverilog->referenced_name->selected) {
+                const auto declaration
+                    = *base_view->systemverilog->referenced_name->selected;
+                if (find_local_array(declaration) != nullptr) {
+                    const auto index = evaluate(record.operands.back());
+                    if (!index || !consume_work(1U)) {
+                        return std::nullopt;
+                    }
+                    const auto* array = find_local_array(declaration);
+                    if (array == nullptr) {
+                        return std::nullopt;
+                    }
+                    const auto integer = index->integer_value();
+                    if (!integer) {
+                        return array->default_value;
+                    }
+                    const auto offset = local_array_offset(*array, *integer);
+                    return offset ? std::optional { array->elements[*offset] }
+                                  : std::optional { array->default_value };
+                }
+            }
             const auto base = evaluate(record.operands.front());
             const auto index = base
                 ? evaluate(record.operands.back()) : std::nullopt;
@@ -2025,6 +2250,22 @@ private:
         }
         frame.values.emplace(callable.id, result);
         frames_.push_back(std::move(frame));
+        if (callable.nested_scope) {
+            for (const auto child_id : callable.children) {
+                const auto child
+                    = specialization_.find_declaration(child_id);
+                if (!child || child->systemverilog == nullptr
+                    || child->systemverilog->scope != *callable.nested_scope
+                    || child->systemverilog->initializer) {
+                    continue;
+                }
+                if (!initialize_local_array(
+                        child_id, *child->systemverilog)) {
+                    frames_.pop_back();
+                    return std::nullopt;
+                }
+            }
+        }
         for (const auto statement : callable.statements) {
             const auto flow = execute_statement(statement);
             if (flow == Flow::failed) {
@@ -2052,6 +2293,46 @@ private:
             return false;
         }
         const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::index
+            && record.operands.size() == 2U) {
+            const auto base_view = specialization_.find_expression(
+                record.operands.front());
+            if (base_view && base_view->systemverilog != nullptr
+                && base_view->systemverilog->kind == ExpressionKind::name
+                && base_view->systemverilog->referenced_name
+                && base_view->systemverilog->referenced_name->selected) {
+                const auto declaration
+                    = *base_view->systemverilog->referenced_name->selected;
+                if (find_local_array(declaration) != nullptr) {
+                    const auto index = evaluate(record.operands.back());
+                    if (!index || !consume_work(1U)) {
+                        return false;
+                    }
+                    auto* array = find_local_array(declaration);
+                    if (array == nullptr) {
+                        return false;
+                    }
+                    const auto integer = index->integer_value();
+                    if (!integer) {
+                        return true;
+                    }
+                    const auto offset = local_array_offset(*array, *integer);
+                    if (!offset) {
+                        return true;
+                    }
+                    auto converted = convert_hir_systemverilog_constant(
+                        std::move(value), array->element_type, error_,
+                        &specialization_);
+                    if (!converted) {
+                        return false;
+                    }
+                    converted->packed_range
+                        = array->element_type.packed_range;
+                    array->elements[*offset] = std::move(*converted);
+                    return true;
+                }
+            }
+        }
         if (record.kind == ExpressionKind::name
             && record.referenced_name
             && record.referenced_name->selected) {
@@ -2252,11 +2533,16 @@ private:
         for (const auto declaration_id : statement.declarations) {
             const auto declaration
                 = specialization_.find_declaration(declaration_id);
-            if (!declaration || declaration->systemverilog == nullptr
-                || !declaration->systemverilog->initializer) {
+            if (!declaration || declaration->systemverilog == nullptr) {
                 continue;
             }
             const auto& source = *declaration->systemverilog;
+            if (!source.initializer) {
+                if (!initialize_local_array(declaration_id, source)) {
+                    return false;
+                }
+                continue;
+            }
             auto value = evaluate(*source.initializer);
             if (!value) {
                 return false;
@@ -2541,6 +2827,7 @@ private:
     std::unordered_set<std::uint32_t> active_expressions_;
     std::unordered_set<std::uint32_t> active_declarations_;
     std::vector<Frame> frames_;
+    std::uint64_t work_units_used_ { };
 };
 
 [[nodiscard]] bool real_scalar_kind(const ScalarKind kind) noexcept

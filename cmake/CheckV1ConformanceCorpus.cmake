@@ -5,6 +5,8 @@ cmake_policy(SET CMP0007 NEW)
 if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
+include("${CMAKE_CURRENT_LIST_DIR}/CurrentEvidenceOwners.cmake")
+fsim_current_registered_ctests(FSIM_REGISTERED_CTESTS)
 
 set(FSIM_MANIFEST
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/v1_conformance_corpus.txt")
@@ -12,21 +14,42 @@ if(NOT EXISTS "${FSIM_MANIFEST}")
   message(FATAL_ERROR "v1 conformance corpus manifest is missing")
 endif()
 
-file(READ "${FSIM_MANIFEST}" FSIM_MANIFEST_CONTENTS)
-string(REGEX MATCH
-  "# marker-count: ([0-9]+)" FSIM_COUNT_MATCH
-  "${FSIM_MANIFEST_CONTENTS}")
-if(NOT FSIM_COUNT_MATCH)
-  message(FATAL_ERROR "conformance manifest lacks marker-count metadata")
+set(FSIM_REQUIRED_MARKERS_FILE
+  "${FSIM_SOURCE_DIR}/tests/feature_matrix/v1_conformance_required.tsv")
+if(NOT EXISTS "${FSIM_REQUIRED_MARKERS_FILE}")
+  message(FATAL_ERROR "required conformance marker ledger is missing")
 endif()
-set(FSIM_EXPECTED_MARKER_COUNT "${CMAKE_MATCH_1}")
-string(REGEX MATCH
-  "# marker-sha256: ([0-9a-f]+)" FSIM_DIGEST_MATCH
-  "${FSIM_MANIFEST_CONTENTS}")
-if(NOT FSIM_DIGEST_MATCH)
-  message(FATAL_ERROR "conformance manifest lacks marker-sha256 metadata")
+file(STRINGS "${FSIM_REQUIRED_MARKERS_FILE}" FSIM_REQUIRED_MARKER_ROWS)
+list(FILTER FSIM_REQUIRED_MARKER_ROWS EXCLUDE REGEX
+  "^# SPDX-License-Identifier: Apache-2.0$")
+list(POP_FRONT FSIM_REQUIRED_MARKER_ROWS FSIM_REQUIRED_MARKER_HEADER)
+if(NOT FSIM_REQUIRED_MARKER_HEADER STREQUAL
+    "id\tpath\towner\tsource\texpectation")
+  message(FATAL_ERROR "required conformance marker ledger has an invalid header")
 endif()
-set(FSIM_EXPECTED_MARKER_DIGEST "${CMAKE_MATCH_1}")
+set(FSIM_REQUIRED_MARKER_IDS)
+foreach(FSIM_REQUIRED_ROW IN LISTS FSIM_REQUIRED_MARKER_ROWS)
+  string(REPLACE "\t" ";" FSIM_REQUIRED_FIELDS "${FSIM_REQUIRED_ROW}")
+  list(LENGTH FSIM_REQUIRED_FIELDS FSIM_REQUIRED_FIELD_COUNT)
+  if(NOT FSIM_REQUIRED_FIELD_COUNT EQUAL 5)
+    message(FATAL_ERROR "malformed required conformance marker row")
+  endif()
+  list(GET FSIM_REQUIRED_FIELDS 0 FSIM_REQUIRED_ID)
+  list(FIND FSIM_REQUIRED_MARKER_IDS "${FSIM_REQUIRED_ID}" FSIM_DUPLICATE_ID)
+  if(NOT FSIM_DUPLICATE_ID EQUAL -1)
+    message(FATAL_ERROR "duplicate required conformance marker: ${FSIM_REQUIRED_ID}")
+  endif()
+  if(NOT FSIM_REQUIRED_ID MATCHES "^[A-Z0-9-]+$")
+    message(FATAL_ERROR "invalid required conformance marker: ${FSIM_REQUIRED_ID}")
+  endif()
+  list(APPEND FSIM_REQUIRED_MARKER_IDS "${FSIM_REQUIRED_ID}")
+  string(SHA256 FSIM_REQUIRED_ID_HASH "${FSIM_REQUIRED_ID}")
+  set(FSIM_REQUIRED_MARKER_${FSIM_REQUIRED_ID_HASH}
+    "${FSIM_REQUIRED_FIELDS}")
+endforeach()
+if(NOT FSIM_REQUIRED_MARKER_IDS)
+  message(FATAL_ERROR "required conformance marker ledger is empty")
+endif()
 
 set(FSIM_ALLOWED_MODES
   frontend
@@ -85,10 +108,7 @@ foreach(FSIM_LINE IN LISTS FSIM_MANIFEST_LINES)
   list(GET FSIM_FIELDS 0 FSIM_FIXTURE)
   list(GET FSIM_FIELDS 1 FSIM_CTEST)
   list(GET FSIM_FIELDS 2 FSIM_MODE_TEXT)
-  if(NOT EXISTS "${FSIM_SOURCE_DIR}/${FSIM_FIXTURE}")
-    message(FATAL_ERROR
-      "conformance fixture does not exist: ${FSIM_FIXTURE}")
-  endif()
+  fsim_current_evidence_file("${FSIM_FIXTURE}")
   list(FIND FSIM_MAPPED_FILES "${FSIM_FIXTURE}" FSIM_DUPLICATE_FILE)
   if(NOT FSIM_DUPLICATE_FILE EQUAL -1)
     message(FATAL_ERROR
@@ -121,15 +141,8 @@ foreach(FSIM_LINE IN LISTS FSIM_MANIFEST_LINES)
   list(APPEND FSIM_MAPPED_MODES "${FSIM_MODE_TEXT}")
 endforeach()
 
-file(GLOB_RECURSE FSIM_TEST_CMAKE_FILES LIST_DIRECTORIES FALSE
-  "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
-set(FSIM_TEST_CMAKE_CONTENTS)
-foreach(FSIM_CMAKE_FILE IN LISTS FSIM_TEST_CMAKE_FILES)
-  file(READ "${FSIM_CMAKE_FILE}" FSIM_CMAKE_CONTENT)
-  string(APPEND FSIM_TEST_CMAKE_CONTENTS "\n${FSIM_CMAKE_CONTENT}")
-endforeach()
 foreach(FSIM_CTEST IN LISTS FSIM_MAPPED_TESTS)
-  string(FIND "${FSIM_TEST_CMAKE_CONTENTS}" "${FSIM_CTEST}" FSIM_CTEST_INDEX)
+  list(FIND FSIM_REGISTERED_CTESTS "${FSIM_CTEST}" FSIM_CTEST_INDEX)
   if(FSIM_CTEST_INDEX EQUAL -1)
     message(FATAL_ERROR
       "conformance mapping names an unregistered CTest: ${FSIM_CTEST}")
@@ -142,7 +155,6 @@ file(GLOB_RECURSE FSIM_TEST_SOURCES LIST_DIRECTORIES FALSE
   "${FSIM_SOURCE_DIR}/tests/*.hpp")
 set(FSIM_MARKER_IDS)
 set(FSIM_MARKER_FILES)
-set(FSIM_CANONICAL_MARKERS)
 foreach(FSIM_TEST_SOURCE IN LISTS FSIM_TEST_SOURCES)
   file(STRINGS
     "${FSIM_TEST_SOURCE}" FSIM_MARKER_LINES REGEX "FSIM-CONFORMANCE")
@@ -175,6 +187,17 @@ foreach(FSIM_TEST_SOURCE IN LISTS FSIM_TEST_SOURCES)
     if(NOT FSIM_DUPLICATE_ID EQUAL -1)
       message(FATAL_ERROR
         "duplicate conformance expectation ID: ${FSIM_MARKER_ID}")
+    endif()
+    string(SHA256 FSIM_MARKER_ID_HASH "${FSIM_MARKER_ID}")
+    if(DEFINED FSIM_REQUIRED_MARKER_${FSIM_MARKER_ID_HASH})
+      list(GET FSIM_MAPPED_TESTS ${FSIM_MAPPING_INDEX} FSIM_MARKER_CTEST)
+      set(FSIM_ACTUAL_REQUIRED_MARKER
+        "${FSIM_MARKER_ID};${FSIM_RELATIVE_SOURCE};${FSIM_MARKER_CTEST};${FSIM_MARKER_SOURCE};${FSIM_MARKER_EXPECTATION}")
+      if(NOT FSIM_ACTUAL_REQUIRED_MARKER STREQUAL
+          FSIM_REQUIRED_MARKER_${FSIM_MARKER_ID_HASH})
+        message(FATAL_ERROR
+          "required conformance marker mapping changed: ${FSIM_MARKER_ID}")
+      endif()
     endif()
     list(FIND
       FSIM_ALLOWED_SOURCES "${FSIM_MARKER_SOURCE}" FSIM_SOURCE_INDEX)
@@ -234,8 +257,6 @@ foreach(FSIM_TEST_SOURCE IN LISTS FSIM_TEST_SOURCES)
     endif()
 
     list(APPEND FSIM_MARKER_IDS "${FSIM_MARKER_ID}")
-    list(APPEND FSIM_CANONICAL_MARKERS
-      "${FSIM_MARKER_ID}|${FSIM_MARKER_SOURCE}|${FSIM_MARKER_EXPECTATION}|${FSIM_RELATIVE_SOURCE}")
   endforeach()
 endforeach()
 
@@ -247,21 +268,14 @@ foreach(FSIM_MAPPED_FILE IN LISTS FSIM_MAPPED_FILES)
   endif()
 endforeach()
 
+foreach(FSIM_REQUIRED_ID IN LISTS FSIM_REQUIRED_MARKER_IDS)
+  list(FIND FSIM_MARKER_IDS "${FSIM_REQUIRED_ID}" FSIM_REQUIRED_INDEX)
+  if(FSIM_REQUIRED_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "required conformance marker is missing: ${FSIM_REQUIRED_ID}")
+  endif()
+endforeach()
 list(LENGTH FSIM_MARKER_IDS FSIM_MARKER_COUNT)
-if(NOT FSIM_MARKER_COUNT EQUAL FSIM_EXPECTED_MARKER_COUNT)
-  message(FATAL_ERROR
-    "conformance marker count changed: expected ${FSIM_EXPECTED_MARKER_COUNT}, "
-    "found ${FSIM_MARKER_COUNT}; update the exact corpus manifest")
-endif()
-list(SORT FSIM_CANONICAL_MARKERS)
-list(JOIN FSIM_CANONICAL_MARKERS "\n" FSIM_CANONICAL_TEXT)
-string(SHA256 FSIM_MARKER_DIGEST "${FSIM_CANONICAL_TEXT}\n")
-if(NOT FSIM_MARKER_DIGEST STREQUAL FSIM_EXPECTED_MARKER_DIGEST)
-  message(FATAL_ERROR
-    "conformance marker identity changed: expected "
-    "${FSIM_EXPECTED_MARKER_DIGEST}, found ${FSIM_MARKER_DIGEST}; "
-    "update the exact corpus manifest")
-endif()
 
 list(REMOVE_DUPLICATES FSIM_ALL_MODES)
 foreach(FSIM_REQUIRED_MODE IN LISTS FSIM_ALLOWED_MODES)
@@ -278,4 +292,4 @@ list(LENGTH FSIM_MAPPED_TESTS FSIM_CTEST_COUNT)
 message(STATUS
   "v1 conformance corpus: ${FSIM_MARKER_COUNT} expectations, "
   "${FSIM_FIXTURE_COUNT} fixtures, ${FSIM_CTEST_COUNT} CTests, "
-  "${FSIM_EXPECTED_MARKER_DIGEST}")
+  "required identities preserved; additions allowed")

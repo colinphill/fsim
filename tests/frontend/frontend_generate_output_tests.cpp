@@ -191,7 +191,7 @@ module direct_generated;
   endgenerate
 endmodule
 
-module reed_solomon_generate_shapes #(
+module conditional_generate_shapes #(
   parameter COUNT = 2,
   parameter MODE = 0
 ) (
@@ -396,32 +396,32 @@ endmodule
                  .then_body.constants.size()
               == 1,
       "direct and named SystemVerilog generate blocks");
-  const auto* sv_reed_solomon_shapes =
+  const auto* sv_conditional_shapes =
       systemverilog.design.find(
           UnitKind::VerilogModule,
-          "reed_solomon_generate_shapes");
+          "conditional_generate_shapes");
   require(
-      sv_reed_solomon_shapes != nullptr
-          && sv_reed_solomon_shapes->generate_regions.size() == 1
-          && sv_reed_solomon_shapes->generate_regions.front()
+      sv_conditional_shapes != nullptr
+          && sv_conditional_shapes->generate_regions.size() == 1
+          && sv_conditional_shapes->generate_regions.front()
                  .then_body.concurrent_statements.size()
               == 1
-          && sv_reed_solomon_shapes->generate_regions.front()
+          && sv_conditional_shapes->generate_regions.front()
                  .else_body.generate_regions.size()
               == 1
-          && sv_reed_solomon_shapes->generate_regions.front()
+          && sv_conditional_shapes->generate_regions.front()
                  .else_body.generate_regions.front()
                  .else_body.variables.size()
               == 1
-          && sv_reed_solomon_shapes->generate_regions.front()
+          && sv_conditional_shapes->generate_regions.front()
                  .else_body.generate_regions.front()
                  .else_body.variables.front().name
               == "lane_values"
-          && sv_reed_solomon_shapes->generate_regions.front()
+          && sv_conditional_shapes->generate_regions.front()
                  .else_body.generate_regions.front()
                  .else_body.generate_regions.size()
               == 1
-          && sv_reed_solomon_shapes->generate_regions.front()
+          && sv_conditional_shapes->generate_regions.front()
                  .else_body.generate_regions.front()
                  .else_body.generate_regions.front().variable
               == "lane_index",

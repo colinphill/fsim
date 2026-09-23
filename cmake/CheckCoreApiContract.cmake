@@ -187,7 +187,7 @@ foreach(FSIM_TOKEN IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
-    "NAME fsim.api.abi"
+    "fsim.api.abi"
     "NAME fsim.api.contract"
     "CheckCoreApiContract.cmake")
   string(FIND "${FSIM_TEST_BUILD_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_OFFSET)

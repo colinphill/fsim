@@ -524,6 +524,16 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, semantic::vhdl::DelayMechanism>) {
             return value >= semantic::vhdl::DelayMechanism::implicit_inertial
                 && value <= semantic::vhdl::DelayMechanism::transport;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::BuiltinTypeIdentity>) {
+            return value >= semantic::vhdl::BuiltinTypeIdentity::none
+                && value <= semantic::vhdl::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_ulogic_vector;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::BuiltinOperatorIdentity>) {
+            return value >= semantic::vhdl::BuiltinOperatorIdentity::none
+                && value <= semantic::vhdl::BuiltinOperatorIdentity::
+                    ieee_std_logic_1164_xnor;
         } else {
             return true;
         }

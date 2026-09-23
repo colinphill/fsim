@@ -1028,6 +1028,133 @@ endmodule
   assert(!rejected_lossy_logic9.ok());
   assert(has_diagnostic(
       rejected_lossy_logic9, "FSIM-ELAB-BIND-022"));
+
+  const auto nested_domain_sv_parent = fsim::frontend::parse_text(
+      "nested_domain_sv_parent.sv",
+      R"(
+module nested_domain_sv_parent;
+  logic clk;
+  logic observed;
+  assign clk = 1'bz;
+  nested_domain_vhdl_parent dut(
+    .clk(clk),
+    .observed(observed)
+  );
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  const auto nested_domain_vhdl_parent = fsim::frontend::parse_text(
+      "nested_domain_vhdl_parent.vhd",
+      R"(
+entity nested_domain_vhdl_parent is
+  port (
+    clk : in std_logic;
+    observed : out std_logic
+  );
+end entity;
+architecture rtl of nested_domain_vhdl_parent is
+begin
+  leaf : entity work.nested_domain_vhdl_leaf(rtl)
+    port map (clk => clk, observed => observed);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  const auto nested_domain_vhdl_leaf = fsim::frontend::parse_text(
+      "nested_domain_vhdl_leaf.vhd",
+      R"(
+entity nested_domain_vhdl_leaf is
+  port (
+    clk : in std_logic;
+    observed : out std_logic
+  );
+end entity;
+architecture rtl of nested_domain_vhdl_leaf is
+begin
+  observed <= clk;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(
+      nested_domain_sv_parent.ok() && nested_domain_vhdl_parent.ok()
+      && nested_domain_vhdl_leaf.ok());
+  auto nested_domain_design = nested_domain_sv_parent.design;
+  append_units(nested_domain_design, nested_domain_vhdl_parent.design);
+  append_units(nested_domain_design, nested_domain_vhdl_leaf.design);
+  const std::vector<fsim::elaboration::Binding>
+      nested_domain_bindings{
+          { "nested_domain_sv_parent.dut",
+              "vhdl:work.nested_domain_vhdl_parent(rtl)",
+              std::nullopt },
+      };
+  const auto elaborated_nested_domain = compile_and_elaborate(
+      nested_domain_design,
+      "sv:work.nested_domain_sv_parent",
+      nested_domain_bindings);
+  if (!elaborated_nested_domain.ok()) {
+    for (const auto& diagnostic : elaborated_nested_domain.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(elaborated_nested_domain.ok());
+  const auto& nested_domain_conversions =
+      elaborated_nested_domain.design->boundary_conversions();
+  assert(nested_domain_conversions.size() == 2);
+  assert(std::ranges::all_of(
+      nested_domain_conversions,
+      [](const auto& conversion) {
+        return conversion.kind
+                == fsim::elaboration::BoundaryConversionKind::state_domain_alias
+            && conversion.state_domain_changed
+            && conversion.formal_signal == conversion.actual_signal
+            && !conversion.process;
+      }));
+  auto nested_domain_interpreter =
+      elaborated_nested_domain.design->create_interpreter();
+  assert(
+      nested_domain_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto nested_domain_observed =
+      elaborated_nested_domain.design->find_signal("observed");
+  assert(nested_domain_observed);
+  assert(
+      nested_domain_interpreter
+          ->signal_value(*nested_domain_observed)
+          .to_msb_string()
+      == "Z");
+
+  const auto strict_domain_vhdl_parent = fsim::frontend::parse_text(
+      "strict_domain_vhdl_parent.vhd",
+      R"(
+entity strict_domain_vhdl_parent is
+end entity;
+architecture rtl of strict_domain_vhdl_parent is
+  signal clk : std_logic;
+begin
+  child : entity work.strict_domain_bit_leaf(rtl)
+    port map (clk => clk);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  const auto strict_domain_bit_leaf = fsim::frontend::parse_text(
+      "strict_domain_bit_leaf.vhd",
+      R"(
+entity strict_domain_bit_leaf is
+  port (clk : in bit);
+end entity;
+architecture rtl of strict_domain_bit_leaf is
+begin
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(strict_domain_vhdl_parent.ok() && strict_domain_bit_leaf.ok());
+  auto strict_domain_design = strict_domain_vhdl_parent.design;
+  append_units(strict_domain_design, strict_domain_bit_leaf.design);
+  const auto rejected_strict_domain = compile_and_elaborate(
+      strict_domain_design,
+      "vhdl:work.strict_domain_vhdl_parent(rtl)");
+  assert(!rejected_strict_domain.ok());
+  assert(has_diagnostic(
+      rejected_strict_domain, "FSIM-ELAB-BIND-019"));
 }
 
 }  // namespace fsim::tests::elaboration

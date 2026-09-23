@@ -9,6 +9,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <ranges>
 #include <string>
@@ -1621,6 +1622,12 @@ void assert_same_expressions(
         assert(left[index].operands == right[index].operands);
         assert(left[index].dependencies == right[index].dependencies);
         assert(left[index].folded == right[index].folded);
+        if constexpr (requires(const Expression& expression) {
+                          expression.builtin_operator;
+                      }) {
+            assert(left[index].builtin_operator
+                == right[index].builtin_operator);
+        }
     }
 }
 
@@ -2814,6 +2821,103 @@ void test_compiled_systemverilog_resolver_exports_and_lets()
     assert(qualified_let.unique() == resolved_let.unique());
 }
 
+void test_compiled_systemverilog_resolver_enum_literal_duplicates()
+{
+    LinkBundleBuilder builder { "resolver-systemverilog-enum-literals.sv" };
+    const auto enum_package = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "enum_values");
+    const auto parameter_package = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "parameter_values");
+    const auto consumer = builder.add_systemverilog_unit(
+        UnitKind::verilog_module, sv::UnitKind::module, "consumer");
+
+    const auto add_declaration = [&](const UnitId unit,
+                                     const DeclarationKind kind,
+                                     const sv::DeclarationForm form,
+                                     const std::string& name,
+                                     const std::optional<OriginId> origin
+                                         = std::nullopt) {
+        const auto scope = builder.model.units()[unit.value()].scope;
+        const auto declaration_origin = origin.value_or(builder.origin);
+        const auto id = builder.model.add_declaration(
+            scope, kind, name, builder.source, declaration_origin);
+        sv::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = form;
+        declaration.name = name;
+        declaration.source = builder.source;
+        declaration.origin = declaration_origin;
+        builder.systemverilog.mutable_declarations().push_back(
+            std::move(declaration));
+        builder.systemverilog_unit(unit).declarations.push_back(id);
+        return id;
+    };
+
+    const auto enum_literal = add_declaration(
+        consumer, DeclarationKind::enumeration_literal,
+        sv::DeclarationForm::enumeration_literal, "READY");
+    const auto synthetic_origin = builder.model.add_origin(
+        OriginKind::parsed, builder.source, builder.origin,
+        "synthetic enum local parameter");
+    const auto synthetic_parameter = add_declaration(
+        consumer, DeclarationKind::generic,
+        sv::DeclarationForm::local_parameter, "READY", synthetic_origin);
+    const auto imported_enum = add_declaration(
+        enum_package, DeclarationKind::enumeration_literal,
+        sv::DeclarationForm::enumeration_literal, "CONFLICT");
+    const auto imported_parameter = add_declaration(
+        parameter_package, DeclarationKind::generic,
+        sv::DeclarationForm::parameter, "CONFLICT");
+
+    for (const auto package : { "enum_values", "parameter_values" }) {
+        sv::Import import;
+        import.package.spelling = package;
+        import.package.source = builder.source;
+        import.wildcard = true;
+        import.source = builder.source;
+        builder.systemverilog_unit(consumer).imports.push_back(
+            std::move(import));
+    }
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const auto scope = design.units()[consumer.value()].scope;
+    const CompiledDesignResolver resolver { design, consumer };
+
+    sv::Name retained;
+    retained.spelling = "READY";
+    retained.source = builder.source;
+    retained.overloads = { enum_literal, synthetic_parameter };
+    const auto retained_result = resolver.resolve_systemverilog_name(
+        retained, scope);
+    assert(retained_result.status == CompiledResolutionStatus::unique);
+    assert(retained_result.unique() == enum_literal);
+
+    sv::Name lexical;
+    lexical.spelling = "READY";
+    lexical.source = builder.source;
+    const auto lexical_result = resolver.resolve_systemverilog_name(
+        lexical, scope);
+    assert(lexical_result.status == CompiledResolutionStatus::unique);
+    assert(lexical_result.unique() == enum_literal);
+
+    sv::Name imported;
+    imported.spelling = "CONFLICT";
+    imported.source = builder.source;
+    const auto imported_result = resolver.resolve_systemverilog_name(
+        imported, scope);
+    assert(imported_result.status == CompiledResolutionStatus::ambiguous);
+    assert(std::ranges::find(
+               imported_result.candidates, imported_enum)
+        != imported_result.candidates.end());
+    assert(std::ranges::find(
+               imported_result.candidates, imported_parameter)
+        != imported_result.candidates.end());
+}
+
 void test_compiled_systemverilog_resolver_expression_targets()
 {
     LinkBundleBuilder builder { "resolver-systemverilog-targets.sv" };
@@ -3949,6 +4053,31 @@ void test_specialized_hir_unit()
         design.vhdl_hir.expressions(),
         design.semantics.expression_identities(), fixture.vhdl_entity,
         [](const auto& expression) { return expression.text == "17"; });
+    vhdl::SubtypeIndication bound_vector;
+    bound_vector.type_mark.spelling = "bit_vector";
+    vhdl::RangeConstraint bound_range;
+    bound_range.left_expression = fixture.entity_expression;
+    bound_range.right = 0;
+    bound_range.descending = true;
+    bound_vector.constraints.push_back(bound_range);
+    CompiledActualBinding bound_actual;
+    bound_actual.formal = fixture.entity_generic;
+    bound_actual.expression = vhdl_entity_expression.id;
+    const std::vector<CompiledBindingFrame> bound_frames {
+        { bound_actual }
+    };
+    const CompiledDesignResolver bound_resolver {
+        *specialized_vhdl, bound_frames
+    };
+    const auto bound_effective = bound_resolver.effective_vhdl_subtype(
+        bound_vector, specialized_vhdl->scope());
+    assert(bound_effective
+        && bound_effective->executable_width == 18U
+        && bound_effective->constraints.size() == 1U
+        && bound_effective->constraints.front().left == 17
+        && bound_effective->constraints.front().right == 0
+        && bound_effective->constraints.front().left_expression
+            == fixture.entity_expression);
     const auto& vhdl_entity_statement = record_in_unit(design,
         design.vhdl_hir.statements(),
         design.semantics.statement_identities(), fixture.vhdl_entity,
@@ -4100,6 +4229,3272 @@ void test_specialized_hir_unit()
         design, fixture.systemverilog_unit,
         std::vector<SpecializedHirActualIdentity> {
             { fixture.foreign_parameter, "1" } }));
+}
+
+void test_specialized_hir_parameter_bit_selection()
+{
+    LinkBundleBuilder builder { "parameter-bit-selection.sv" };
+    const auto unit = builder.add_systemverilog_unit(
+        UnitKind::verilog_module, sv::UnitKind::module,
+        "parameter_bit_selection");
+    const auto scope = builder.model.units()[unit.value()].scope;
+
+    const auto add_expression
+        = [&](const sv::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  scope, builder.source, builder.origin);
+              sv::Expression expression;
+              expression.id = id;
+              expression.scope = scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.systemverilog.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto add_parameter
+        = [&](std::string name, const std::int64_t left,
+              const std::int64_t right, std::string literal,
+              const bool signed_value = false) {
+              const auto initializer = add_expression(
+                  sv::ExpressionKind::integer_literal,
+                  std::move(literal));
+              const auto declaration = builder.model.add_declaration(
+                  scope, DeclarationKind::constant, name,
+                  builder.source, builder.origin);
+              sv::Declaration parameter;
+              parameter.id = declaration;
+              parameter.scope = scope;
+              parameter.form = sv::DeclarationForm::parameter;
+              parameter.name = name;
+              parameter.initializer = initializer;
+              parameter.source = builder.source;
+              parameter.origin = builder.origin;
+              parameter.type.emplace();
+              parameter.type->target.spelling = "logic";
+              parameter.type->target.source = builder.source;
+              parameter.type->packed_range.emplace();
+              parameter.type->packed_range->left = left;
+              parameter.type->packed_range->right = right;
+              parameter.type->packed_range->descending = left >= right;
+              parameter.type->packed_range->source = builder.source;
+              parameter.type->executable_width = static_cast<std::uint64_t>(
+                  left >= right ? left - right + 1 : right - left + 1);
+              parameter.type->signed_value = signed_value;
+              parameter.type->four_state = true;
+              builder.systemverilog.mutable_declarations().push_back(
+                  std::move(parameter));
+              builder.systemverilog_unit(unit).declarations.push_back(
+                  declaration);
+              return std::pair { declaration,
+                  add_expression(sv::ExpressionKind::name,
+                      std::move(name), { }, declaration) };
+          };
+    const auto add_index = [&](const ExpressionId base,
+                               const std::int64_t value) {
+        const auto index = add_expression(
+            sv::ExpressionKind::integer_literal,
+            std::to_string(value));
+        return add_expression(sv::ExpressionKind::index, "[]",
+            { base, index });
+    };
+    const auto add_slice = [&](const ExpressionId base, std::string text,
+                               const std::int64_t first,
+                               const std::int64_t second) {
+        const auto first_expression = add_expression(
+            sv::ExpressionKind::integer_literal, std::to_string(first));
+        const auto second_expression = add_expression(
+            sv::ExpressionKind::integer_literal, std::to_string(second));
+        return add_expression(sv::ExpressionKind::slice,
+            std::move(text), { base, first_expression, second_expression });
+    };
+
+    const auto [descending_parameter, descending]
+        = add_parameter("DESCENDING", 7, 0, "8'b10000000");
+    const auto [ascending_parameter, ascending]
+        = add_parameter("ASCENDING", 0, 7, "8'b10000000");
+    const auto [unknown_parameter, unknown]
+        = add_parameter("UNKNOWN", 3, 0, "4'b1x0z");
+    const auto [signed_parameter, signed_bits]
+        = add_parameter("SIGNED_BITS", 7, 0, "8'sh8", true);
+    const auto [extended_x_parameter, extended_x]
+        = add_parameter("EXTENDED_X", 7, 0, "8'hx");
+    const auto [extended_z_parameter, extended_z]
+        = add_parameter("EXTENDED_Z", 7, 0, "8'hz");
+    const auto [converted_signed_parameter, converted_signed]
+        = add_parameter("CONVERTED_SIGNED", 7, 0, "4'shf");
+    const auto [decimal_parameter, decimal]
+        = add_parameter("DECIMAL", 7, 0, "5");
+    const auto [negative_parameter, negative]
+        = add_parameter("NEGATIVE", -1, -4, "4'b1000");
+    const auto [field_poly_parameter, field_poly]
+        = add_parameter("FIELD_POLY", 8, 0, "9'b100011101");
+    const auto [asymmetric_descending_parameter, asymmetric_descending]
+        = add_parameter("ASYMMETRIC_DESCENDING", 7, 0,
+            "8'b10010110");
+    const auto [asymmetric_ascending_parameter, asymmetric_ascending]
+        = add_parameter("ASYMMETRIC_ASCENDING", 0, 7,
+            "8'b10010110");
+    const auto [extreme_parameter, extreme]
+        = add_parameter("EXTREME", 3, 0, "4'b1010");
+    auto extreme_record = std::ranges::find(
+        builder.systemverilog.mutable_declarations(), extreme_parameter,
+        &sv::Declaration::id);
+    assert(extreme_record
+        != builder.systemverilog.mutable_declarations().end());
+    extreme_record->type->packed_range->left
+        = std::numeric_limits<std::int64_t>::min();
+    extreme_record->type->packed_range->right
+        = std::numeric_limits<std::int64_t>::max();
+    extreme_record->type->packed_range->descending = false;
+    (void)descending_parameter;
+    (void)ascending_parameter;
+    (void)unknown_parameter;
+    (void)signed_parameter;
+    (void)extended_x_parameter;
+    (void)extended_z_parameter;
+    (void)converted_signed_parameter;
+    (void)decimal_parameter;
+    (void)negative_parameter;
+    (void)field_poly_parameter;
+    (void)asymmetric_descending_parameter;
+    (void)asymmetric_ascending_parameter;
+    const auto descending_left = add_index(descending, 7);
+    const auto descending_right = add_index(descending, 0);
+    const auto ascending_left = add_index(ascending, 0);
+    const auto ascending_right = add_index(ascending, 7);
+    const auto unknown_x = add_index(unknown, 2);
+    const auto unknown_z = add_index(unknown, 0);
+    const auto out_of_range = add_index(unknown, 4);
+    const auto signed_sign_bit = add_index(signed_bits, 7);
+    const auto signed_value_bit = add_index(signed_bits, 3);
+    const auto extended_x_bit = add_index(extended_x, 7);
+    const auto extended_z_bit = add_index(extended_z, 7);
+    const auto converted_signed_bit = add_index(converted_signed, 7);
+    const auto decimal_bit = add_index(decimal, 2);
+    const auto negative_left = add_index(negative, -1);
+    const auto extreme_left = add_index(
+        extreme, std::numeric_limits<std::int64_t>::min());
+    const auto descending_slice = add_slice(descending, ":", 7, 4);
+    const auto ascending_slice = add_slice(ascending, ":", 0, 3);
+    const auto unknown_slice = add_slice(unknown, "-:", 2, 3);
+    const auto out_of_range_slice = add_slice(unknown, "+:", 2, 3);
+    const auto field_poly_slice = add_slice(field_poly, ":", 7, 0);
+    const auto descending_indexed_up = add_slice(
+        asymmetric_descending, "+:", 4, 4);
+    const auto descending_indexed_down = add_slice(
+        asymmetric_descending, "-:", 7, 4);
+    const auto ascending_indexed_up = add_slice(
+        asymmetric_ascending, "+:", 0, 4);
+    const auto ascending_indexed_down = add_slice(
+        asymmetric_ascending, "-:", 3, 4);
+    const auto invalid_descending_slice = add_slice(
+        asymmetric_descending, ":", 0, 3);
+    const auto invalid_ascending_slice = add_slice(
+        asymmetric_ascending, ":", 3, 0);
+
+    const auto add_variable = [&](const DeclarationKind kind,
+                                  const sv::DeclarationForm form,
+                                  std::string name,
+                                  const std::optional<std::uint64_t> width
+                                      = std::nullopt) {
+        const auto declaration = builder.model.add_declaration(
+            scope, kind, name, builder.source, builder.origin);
+        sv::Declaration record;
+        record.id = declaration;
+        record.scope = scope;
+        record.form = form;
+        record.name = std::move(name);
+        record.source = builder.source;
+        record.origin = builder.origin;
+        if (width) {
+            record.type.emplace();
+            record.type->target.spelling = "logic";
+            record.type->target.source = builder.source;
+            record.type->packed_range.emplace();
+            record.type->packed_range->left
+                = static_cast<std::int64_t>(*width - 1U);
+            record.type->packed_range->right = 0;
+            record.type->packed_range->descending = true;
+            record.type->packed_range->source = builder.source;
+            record.type->executable_width = width;
+            record.type->four_state = true;
+        }
+        builder.systemverilog.mutable_declarations().push_back(
+            std::move(record));
+        return declaration;
+    };
+    const auto lhs = add_variable(DeclarationKind::constant,
+        sv::DeclarationForm::variable, "lhs");
+    const auto rhs = add_variable(DeclarationKind::constant,
+        sv::DeclarationForm::variable, "rhs");
+    const auto a = add_variable(DeclarationKind::variable,
+        sv::DeclarationForm::variable, "a");
+    const auto b = add_variable(DeclarationKind::variable,
+        sv::DeclarationForm::variable, "b");
+    const auto remainder = add_variable(DeclarationKind::variable,
+        sv::DeclarationForm::variable, "remainder");
+    const auto gcd = add_variable(DeclarationKind::function,
+        sv::DeclarationForm::function, "rs_gcd");
+    const auto name = [&](const std::string& spelling,
+                          const DeclarationId declaration) {
+        return add_expression(sv::ExpressionKind::name,
+            spelling, { }, declaration);
+    };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(sv::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto binary = [&](const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return add_expression(sv::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto add_assignment = [&](const ExpressionId target,
+                                    const ExpressionId value) {
+        const auto id = builder.model.add_statement_identity(
+            scope, builder.source, builder.origin);
+        sv::Statement statement;
+        statement.id = id;
+        statement.scope = scope;
+        statement.kind = sv::StatementKind::assignment;
+        statement.target = target;
+        statement.value = value;
+        statement.source = builder.source;
+        statement.origin = builder.origin;
+        builder.systemverilog.mutable_statements().push_back(
+            std::move(statement));
+        return id;
+    };
+    const auto assign_a = add_assignment(name("a", a), name("lhs", lhs));
+    const auto assign_b = add_assignment(name("b", b), name("rhs", rhs));
+    const auto assign_remainder = add_assignment(name("remainder", remainder),
+        binary("%", name("a", a), name("b", b)));
+    const auto advance_a = add_assignment(name("a", a), name("b", b));
+    const auto advance_b = add_assignment(
+        name("b", b), name("remainder", remainder));
+    const auto loop_id = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    sv::Statement loop;
+    loop.id = loop_id;
+    loop.scope = scope;
+    loop.kind = sv::StatementKind::loop;
+    loop.loop_runtime = true;
+    loop.condition = binary("!=", name("b", b), literal(0));
+    loop.statements = { assign_remainder, advance_a, advance_b };
+    loop.source = builder.source;
+    loop.origin = builder.origin;
+    builder.systemverilog.mutable_statements().push_back(std::move(loop));
+    const auto assign_result = add_assignment(
+        name("rs_gcd", gcd), name("a", a));
+    auto gcd_record = std::ranges::find(
+        builder.systemverilog.mutable_declarations(), gcd,
+        &sv::Declaration::id);
+    assert(gcd_record != builder.systemverilog.declarations().end());
+    gcd_record->callable.emplace();
+    gcd_record->callable->function = true;
+    gcd_record->callable->formals = { lhs, rhs };
+    gcd_record->children = { lhs, rhs, a, b, remainder };
+    gcd_record->statements = {
+        assign_a, assign_b, loop_id, assign_result };
+    builder.systemverilog_unit(unit).declarations.push_back(gcd);
+    const auto gcd_call = add_expression(sv::ExpressionKind::call,
+        "rs_gcd", { literal(1), literal(255) }, gcd);
+    const auto narrow = add_variable(DeclarationKind::function,
+        sv::DeclarationForm::function, "narrow", 8U);
+    const auto working = add_variable(DeclarationKind::variable,
+        sv::DeclarationForm::variable, "working", 8U);
+    const auto initialize_working = add_assignment(
+        name("working", working), literal(128));
+    const auto shift_working = add_assignment(name("working", working),
+        binary("<<", name("working", working), literal(1)));
+    const auto reduce_working = add_assignment(name("working", working),
+        binary("^", name("working", working), literal(0x1d)));
+    const auto assign_narrow = add_assignment(
+        name("narrow", narrow), name("working", working));
+    auto narrow_record = std::ranges::find(
+        builder.systemverilog.mutable_declarations(), narrow,
+        &sv::Declaration::id);
+    assert(narrow_record != builder.systemverilog.declarations().end());
+    narrow_record->callable.emplace();
+    narrow_record->callable->function = true;
+    narrow_record->children = { working };
+    narrow_record->statements = { initialize_working, shift_working,
+        reduce_working, assign_narrow };
+    builder.systemverilog_unit(unit).declarations.push_back(narrow);
+    const auto narrow_call = add_expression(sv::ExpressionKind::call,
+        "narrow", { }, narrow);
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const auto assert_selected
+        = [&](const ExpressionId expression, const std::string& bits,
+              const std::optional<std::int64_t> integral,
+              const std::optional<bool> truth) {
+              const auto actual_bits
+                  = specialized->evaluate_systemverilog_bits_expression(
+                      expression);
+              const auto actual_integral
+                  = specialized->evaluate_integral_expression(expression);
+              const auto actual_truth
+                  = specialized->evaluate_systemverilog_truth_expression(
+                      expression);
+              if (actual_bits != std::optional<std::string> { bits }
+                  || actual_integral != integral
+                  || actual_truth != truth) {
+                  std::cerr << "selected-bit expression "
+                            << expression.value() << ": expected bits="
+                            << bits << " integral="
+                            << (integral ? std::to_string(*integral)
+                                         : "unknown")
+                            << " truth="
+                            << (truth ? (*truth ? "true" : "false")
+                                      : "unknown")
+                            << ", actual bits="
+                            << (actual_bits ? *actual_bits : "unknown")
+                            << " integral="
+                            << (actual_integral
+                                    ? std::to_string(*actual_integral)
+                                    : "unknown")
+                            << " truth="
+                            << (actual_truth
+                                    ? (*actual_truth ? "true" : "false")
+                                    : "unknown") << '\n';
+              }
+              assert(actual_bits == std::optional<std::string> { bits });
+              assert(actual_integral == integral);
+              assert(actual_truth == truth);
+          };
+    assert_selected(descending_left, "1", 1, true);
+    assert_selected(descending_right, "0", 0, false);
+    assert_selected(ascending_left, "1", 1, true);
+    assert_selected(ascending_right, "0", 0, false);
+    assert_selected(unknown_x, "x", std::nullopt, std::nullopt);
+    assert_selected(unknown_z, "z", std::nullopt, std::nullopt);
+    assert_selected(out_of_range, "x", std::nullopt, std::nullopt);
+    assert_selected(signed_sign_bit, "0", 0, false);
+    assert_selected(signed_value_bit, "1", 1, true);
+    assert_selected(extended_x_bit, "x", std::nullopt, std::nullopt);
+    assert_selected(extended_z_bit, "z", std::nullopt, std::nullopt);
+    assert_selected(converted_signed_bit, "1", 1, true);
+    assert_selected(decimal_bit, "1", 1, true);
+    assert_selected(negative_left, "1", 1, true);
+    assert_selected(extreme_left, "x", std::nullopt, std::nullopt);
+    assert_selected(descending_slice, "1000", 8, true);
+    assert_selected(ascending_slice, "1000", 8, true);
+    assert_selected(
+        unknown_slice, "x0z", std::nullopt, std::nullopt);
+    assert_selected(out_of_range_slice, "x1x", std::nullopt, true);
+    assert_selected(field_poly_slice, "00011101", 29, true);
+    assert_selected(descending_indexed_up, "1001", 9, true);
+    assert_selected(descending_indexed_down, "1001", 9, true);
+    assert_selected(ascending_indexed_up, "1001", 9, true);
+    assert_selected(ascending_indexed_down, "1001", 9, true);
+    assert(!specialized->evaluate_systemverilog_bits_expression(
+        invalid_descending_slice));
+    assert(!specialized->evaluate_systemverilog_bits_expression(
+        invalid_ascending_slice));
+    assert(specialized->evaluate_integral_expression(gcd_call)
+        == std::optional<std::int64_t> { 1 });
+    assert(specialized->evaluate_integral_expression(narrow_call)
+        == std::optional<std::int64_t> { 0x1d });
+}
+
+void test_specialized_hir_vhdl_while_function()
+{
+    LinkBundleBuilder builder { "while-function.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "while_function");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression_in_scope
+        = [&](const ScopeId expression_scope,
+              const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  expression_scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = expression_scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling = expression.text;
+                  expression.referenced_name->canonical = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto add_expression
+        = [&](const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              return add_expression_in_scope(scope, kind,
+                  std::move(text), std::move(operands), selected);
+          };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto add_declaration
+        = [&](const DeclarationKind kind,
+              const vhdl::DeclarationForm form, std::string name,
+              const std::optional<ExpressionId> initializer = std::nullopt) {
+              const auto id = builder.model.add_declaration(
+                  scope, kind, name, builder.source, builder.origin);
+              vhdl::Declaration declaration;
+              declaration.id = id;
+              declaration.scope = scope;
+              declaration.form = form;
+              declaration.name = std::move(name);
+              declaration.initializer = initializer;
+              declaration.source = builder.source;
+              declaration.origin = builder.origin;
+              builder.vhdl_hir.mutable_declarations().push_back(
+                  std::move(declaration));
+              return id;
+          };
+    const auto n = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "n");
+    const auto r = add_declaration(DeclarationKind::variable,
+        vhdl::DeclarationForm::variable, "r", literal(0));
+    const auto v = add_declaration(DeclarationKind::variable,
+        vhdl::DeclarationForm::variable, "v", literal(1));
+    const auto clog2 = add_declaration(DeclarationKind::function,
+        vhdl::DeclarationForm::function, "clog2");
+    const auto name = [&](const std::string& spelling,
+                          const DeclarationId declaration) {
+        return add_expression(vhdl::ExpressionKind::name,
+            spelling, { }, declaration);
+    };
+    const auto binary = [&](const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return add_expression(vhdl::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto add_statement = [&](const vhdl::StatementKind kind) {
+        const auto id = builder.model.add_statement_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Statement statement;
+        statement.id = id;
+        statement.scope = scope;
+        statement.kind = kind;
+        statement.source = builder.source;
+        statement.origin = builder.origin;
+        builder.vhdl_hir.mutable_statements().push_back(
+            std::move(statement));
+        return id;
+    };
+    const auto double_v = add_statement(
+        vhdl::StatementKind::variable_assignment);
+    auto double_v_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), double_v,
+        &vhdl::Statement::id);
+    double_v_record->target = name("v", v);
+    double_v_record->value = binary("*", name("v", v), literal(2));
+    const auto increment_r = add_statement(
+        vhdl::StatementKind::variable_assignment);
+    auto increment_r_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), increment_r,
+        &vhdl::Statement::id);
+    increment_r_record->target = name("r", r);
+    increment_r_record->value = binary("+", name("r", r), literal(1));
+    const auto loop = add_statement(vhdl::StatementKind::loop);
+    auto loop_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), loop,
+        &vhdl::Statement::id);
+    loop_record->condition = binary("<", name("v", v), name("n", n));
+    loop_record->statements = { double_v, increment_r };
+    const auto return_r = add_statement(
+        vhdl::StatementKind::return_statement);
+    auto return_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), return_r,
+        &vhdl::Statement::id);
+    return_record->value = name("r", r);
+    auto function_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), clog2,
+        &vhdl::Declaration::id);
+    function_record->callable.emplace();
+    function_record->callable->function = true;
+    function_record->callable->pure = true;
+    function_record->callable->defined = true;
+    function_record->callable->formals = { n };
+    function_record->children = { n, r, v };
+    function_record->statements = { loop, return_r };
+    builder.vhdl_unit(unit).declarations.push_back(clog2);
+    const auto call = add_expression(vhdl::ExpressionKind::call,
+        "clog2", { literal(5) }, clog2);
+    const auto width = binary("-", call, literal(1));
+
+    const auto default_poly = add_declaration(DeclarationKind::function,
+        vhdl::DeclarationForm::function, "default_poly");
+    const auto m = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "m");
+    const auto runtime = add_declaration(DeclarationKind::variable,
+        vhdl::DeclarationForm::variable, "runtime");
+    const auto n_binding_name = name("n", n);
+    const auto m_binding_name = name("m", m);
+    const auto runtime_name = name("runtime", runtime);
+    const auto bound_arithmetic = binary(
+        "+", n_binding_name, literal(3));
+    const auto return_11d = add_statement(
+        vhdl::StatementKind::return_statement);
+    auto return_11d_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), return_11d,
+        &vhdl::Statement::id);
+    return_11d_record->value = literal(0x11d);
+    const auto return_default = add_statement(
+        vhdl::StatementKind::return_statement);
+    auto return_default_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), return_default,
+        &vhdl::Statement::id);
+    return_default_record->value = literal(7);
+    const auto selection = add_statement(vhdl::StatementKind::selection);
+    auto selection_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), selection,
+        &vhdl::Statement::id);
+    selection_record->condition = name("m", m);
+    vhdl::CaseAlternative matching;
+    matching.choices = { literal(8) };
+    matching.statements = { return_11d };
+    matching.source = builder.source;
+    vhdl::CaseAlternative others;
+    others.statements = { return_default };
+    others.is_default = true;
+    others.source = builder.source;
+    selection_record->alternatives = {
+        std::move(matching), std::move(others) };
+    auto default_poly_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), default_poly,
+        &vhdl::Declaration::id);
+    default_poly_record->callable.emplace();
+    default_poly_record->callable->function = true;
+    default_poly_record->callable->pure = true;
+    default_poly_record->callable->defined = true;
+    default_poly_record->callable->formals = { m };
+    default_poly_record->children = { m };
+    default_poly_record->statements = { selection };
+    builder.vhdl_unit(unit).declarations.push_back(default_poly);
+    const auto matching_call = add_expression(vhdl::ExpressionKind::call,
+        "default_poly", { literal(8) }, default_poly);
+    const auto default_call = add_expression(vhdl::ExpressionKind::call,
+        "default_poly", { literal(3) }, default_poly);
+    const auto add_failing_case_function
+        = [&](std::string function_name,
+              const std::vector<std::int64_t>& choices,
+              const std::int64_t actual) {
+              const auto function = add_declaration(
+                  DeclarationKind::function,
+                  vhdl::DeclarationForm::function, function_name);
+              const auto formal = add_declaration(
+                  DeclarationKind::constant,
+                  vhdl::DeclarationForm::constant,
+                  function_name + "_formal");
+              const auto return_value = add_statement(
+                  vhdl::StatementKind::return_statement);
+              auto return_value_record = std::ranges::find(
+                  builder.vhdl_hir.mutable_statements(), return_value,
+                  &vhdl::Statement::id);
+              return_value_record->value = literal(1);
+              const auto case_statement = add_statement(
+                  vhdl::StatementKind::selection);
+              auto case_record = std::ranges::find(
+                  builder.vhdl_hir.mutable_statements(), case_statement,
+                  &vhdl::Statement::id);
+              case_record->condition = name(
+                  function_name + "_formal", formal);
+              vhdl::CaseAlternative alternative;
+              for (const auto choice : choices) {
+                  alternative.choices.push_back(literal(choice));
+              }
+              alternative.statements = { return_value };
+              alternative.source = builder.source;
+              case_record->alternatives.push_back(
+                  std::move(alternative));
+              auto function_record = std::ranges::find(
+                  builder.vhdl_hir.mutable_declarations(), function,
+                  &vhdl::Declaration::id);
+              function_record->callable.emplace();
+              function_record->callable->function = true;
+              function_record->callable->pure = true;
+              function_record->callable->defined = true;
+              function_record->callable->formals = { formal };
+              function_record->children = { formal };
+              function_record->statements = { case_statement };
+              builder.vhdl_unit(unit).declarations.push_back(function);
+              return add_expression(vhdl::ExpressionKind::call,
+                  std::move(function_name), { literal(actual) }, function);
+          };
+    const auto unmatched_call = add_failing_case_function(
+        "unmatched_case", { 8 }, 3);
+    const auto duplicate_call = add_failing_case_function(
+        "duplicate_case", { 8, 8 }, 8);
+
+    const auto sum_function = add_declaration(
+        DeclarationKind::function,
+        vhdl::DeclarationForm::function, "sum_sized_range");
+    const auto degree = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "degree");
+    const auto degree_width = add_declaration(
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "degree_width", binary("+", name("degree", degree), literal(1)));
+    const auto total = add_declaration(DeclarationKind::variable,
+        vhdl::DeclarationForm::variable, "total", literal(0));
+    const auto sum_loop = add_statement(vhdl::StatementKind::loop);
+    const auto sum_loop_scope = builder.model.add_scope(
+        unit, scope, "<loop>", builder.source, builder.origin);
+    const auto loop_index = builder.model.add_declaration(
+        sum_loop_scope, DeclarationKind::constant, "i",
+        builder.source, builder.origin);
+    vhdl::Declaration loop_index_record;
+    loop_index_record.id = loop_index;
+    loop_index_record.scope = sum_loop_scope;
+    loop_index_record.form = vhdl::DeclarationForm::constant;
+    loop_index_record.name = "i";
+    loop_index_record.object_class = vhdl::ObjectClass::constant;
+    loop_index_record.source = builder.source;
+    loop_index_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(loop_index_record));
+    auto sum_loop_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), sum_loop,
+        &vhdl::Statement::id);
+    sum_loop_record->loop_variable = "i";
+    sum_loop_record->loop_initial = literal(0);
+    sum_loop_record->loop_limit = binary(
+        "-", name("degree", degree), literal(1));
+    sum_loop_record->nested_scope = sum_loop_scope;
+    sum_loop_record->declarations = { loop_index };
+    const auto loop_name = [&](const std::string& spelling,
+                               const DeclarationId declaration) {
+        return add_expression_in_scope(sum_loop_scope,
+            vhdl::ExpressionKind::name, spelling, { }, declaration);
+    };
+    const auto loop_binary = [&](const std::string& operation,
+                                 const ExpressionId left,
+                                 const ExpressionId right) {
+        return add_expression_in_scope(sum_loop_scope,
+            vhdl::ExpressionKind::binary, operation, { left, right });
+    };
+    const auto add_loop_statement = [&](const vhdl::StatementKind kind) {
+        const auto id = builder.model.add_statement_identity(
+            sum_loop_scope, builder.source, builder.origin);
+        vhdl::Statement statement;
+        statement.id = id;
+        statement.scope = sum_loop_scope;
+        statement.kind = kind;
+        statement.source = builder.source;
+        statement.origin = builder.origin;
+        builder.vhdl_hir.mutable_statements().push_back(
+            std::move(statement));
+        return id;
+    };
+    const auto accumulate = add_loop_statement(
+        vhdl::StatementKind::variable_assignment);
+    auto accumulate_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), accumulate,
+        &vhdl::Statement::id);
+    accumulate_record->target = loop_name("total", total);
+    accumulate_record->value = loop_binary("+",
+        loop_name("total", total),
+        loop_binary("+", loop_name("degree_width", degree_width),
+            loop_name("i", loop_index)));
+    sum_loop_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), sum_loop,
+        &vhdl::Statement::id);
+    sum_loop_record->statements = { accumulate };
+    const auto return_total = add_statement(
+        vhdl::StatementKind::return_statement);
+    auto return_total_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), return_total,
+        &vhdl::Statement::id);
+    return_total_record->value = name("total", total);
+    auto sum_function_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), sum_function,
+        &vhdl::Declaration::id);
+    sum_function_record->callable.emplace();
+    sum_function_record->callable->function = true;
+    sum_function_record->callable->pure = true;
+    sum_function_record->callable->defined = true;
+    sum_function_record->callable->formals = { degree };
+    sum_function_record->children = { degree, degree_width, total };
+    sum_function_record->statements = { sum_loop, return_total };
+    builder.vhdl_unit(unit).declarations.push_back(sum_function);
+    const auto sized_sum_call = add_expression(
+        vhdl::ExpressionKind::call, "sum_sized_range",
+        { literal(4) }, sum_function);
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const SpecializedHirIntegralBinding arithmetic_binding =
+        [&](const DeclarationId formal) -> std::optional<ExpressionId> {
+            return formal == n
+                ? std::optional<ExpressionId> { call }
+                : std::nullopt;
+        };
+    assert(specialized->evaluate_integral_expression(
+               bound_arithmetic, arithmetic_binding)
+        == std::optional<std::int64_t> { 6 });
+
+    const SpecializedHirIntegralBinding cycle_binding =
+        [&](const DeclarationId formal) -> std::optional<ExpressionId> {
+            if (formal == n) {
+                return m_binding_name;
+            }
+            if (formal == m) {
+                return n_binding_name;
+            }
+            return std::nullopt;
+        };
+    assert(!specialized->evaluate_integral_expression(
+        n_binding_name, cycle_binding));
+
+    const SpecializedHirIntegralBinding runtime_binding =
+        [&](const DeclarationId formal) -> std::optional<ExpressionId> {
+            return formal == n
+                ? std::optional<ExpressionId> { runtime_name }
+                : std::nullopt;
+        };
+    assert(!specialized->evaluate_integral_expression(
+        n_binding_name, runtime_binding));
+    assert(specialized->evaluate_integral_expression(call)
+        == std::optional<std::int64_t> { 3 });
+    assert(specialized->evaluate_integral_expression(width)
+        == std::optional<std::int64_t> { 2 });
+    assert(specialized->evaluate_integral_expression(matching_call)
+        == std::optional<std::int64_t> { 0x11d });
+    assert(specialized->evaluate_integral_expression(default_call)
+        == std::optional<std::int64_t> { 7 });
+    assert(!specialized->evaluate_integral_expression(unmatched_call));
+    assert(!specialized->evaluate_integral_expression(duplicate_call));
+    assert(specialized->evaluate_integral_expression(sized_sum_call)
+        == std::optional<std::int64_t> { 26 });
+}
+
+void test_specialized_hir_vhdl_integer_exponentiation()
+{
+    LinkBundleBuilder builder { "integer-exponentiation.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "integer_exponentiation");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression
+        = [&](const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling = expression.text;
+                  expression.referenced_name->canonical = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto binary = [&](const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return add_expression(vhdl::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto add_generic = [&](const std::string& name) {
+        const auto id = builder.model.add_declaration(scope,
+            DeclarationKind::generic, name, builder.source,
+            builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = vhdl::DeclarationForm::generic_constant;
+        declaration.object_class = vhdl::ObjectClass::constant;
+        declaration.name = name;
+        declaration.subtype.emplace();
+        declaration.subtype->type_mark.spelling = "integer";
+        declaration.subtype->domain = vhdl::ValueDomain::integer;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        builder.vhdl_unit(unit).declarations.push_back(id);
+        return id;
+    };
+    const auto m = add_generic("M");
+    const auto n = add_generic("N");
+    const auto depth = add_generic("DEPTH");
+    const auto m_name = add_expression(
+        vhdl::ExpressionKind::name, "M", { }, m);
+    const auto n_name = add_expression(
+        vhdl::ExpressionKind::name, "N", { }, n);
+    const auto depth_name = add_expression(
+        vhdl::ExpressionKind::name, "DEPTH", { }, depth);
+    const auto one = literal(1);
+    const auto two = literal(2);
+    const auto depth_actual = binary(
+        "**", two, m_name);
+    const auto dependent_condition = binary("+",
+        binary("-", binary("-", depth_actual, one), n_name), one);
+    const auto negative_one = add_expression(
+        vhdl::ExpressionKind::unary, "-", { one });
+    const auto overflow_power = binary("**", two, literal(63));
+    const auto negative_exponent_power = binary(
+        "**", two, negative_one);
+    const auto depth_dependent_condition = binary("+",
+        binary("-", binary("-", depth_name, one), n_name), one);
+
+    const auto generated = builder.model.add_declaration(scope,
+        DeclarationKind::generate, "depth_positive",
+        builder.source, builder.origin);
+    vhdl::Declaration generated_declaration;
+    generated_declaration.id = generated;
+    generated_declaration.scope = scope;
+    generated_declaration.form = vhdl::DeclarationForm::generated;
+    generated_declaration.name = "depth_positive";
+    generated_declaration.source = builder.source;
+    generated_declaration.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(generated_declaration));
+    builder.vhdl_unit(unit).declarations.push_back(generated);
+    vhdl::GenerateRegion generate;
+    generate.declaration = generated;
+    generate.scope = builder.model.add_scope(unit, scope,
+        "depth_positive", builder.source, builder.origin);
+    generate.kind = vhdl::GenerateKind::conditional;
+    generate.label = "depth_positive";
+    generate.condition = dependent_condition;
+    generate.source = builder.source;
+    generate.origin = builder.origin;
+    builder.vhdl_unit(unit).generates.push_back(std::move(generate));
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::vector<SpecializedHirActualIdentity> actuals {
+        { m, "8" }, { n, "255" },
+    };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const SpecializedHirIntegralBinding generic_actual_binding =
+        [&](const DeclarationId formal)
+            -> std::optional<ExpressionId> {
+            return formal == depth
+                ? std::optional<ExpressionId> { depth_actual }
+                : std::nullopt;
+        };
+    assert(specialized->evaluate_integral_expression(
+               depth_name, generic_actual_binding)
+        == std::optional<std::int64_t> { 256 });
+    assert(specialized->evaluate_integral_expression(
+               dependent_condition)
+        == std::optional<std::int64_t> { 1 });
+    assert(specialized->evaluate_integral_expression(
+               depth_dependent_condition, generic_actual_binding)
+        == std::optional<std::int64_t> { 1 });
+    assert(std::ranges::find(specialized->selected_generates(), generated)
+        != specialized->selected_generates().end());
+    assert(!specialized->evaluate_integral_expression(overflow_power));
+    assert(!specialized->evaluate_integral_expression(
+        negative_exponent_power));
+}
+
+void test_specialized_hir_vhdl_packed_constant_function()
+{
+    LinkBundleBuilder builder { "packed-constant-function.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "packed_constant_function");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto numeric_std = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "numeric_std", {}, "ieee");
+    const auto numeric_std_scope
+        = builder.model.units()[numeric_std.value()].scope;
+    const auto add_numeric_vector = [&](const std::string& type_name) {
+        const auto declaration = builder.model.add_declaration(
+            numeric_std_scope, DeclarationKind::type, type_name,
+            builder.source, builder.origin);
+        TypeReference base;
+        base.source = builder.source;
+        const auto type = builder.model.add_type(numeric_std_scope,
+            TypeKind::declaration, type_name, base,
+            builder.source, builder.origin);
+        vhdl::Declaration type_record;
+        type_record.id = declaration;
+        type_record.scope = numeric_std_scope;
+        type_record.form = vhdl::DeclarationForm::type;
+        type_record.name = type_name;
+        type_record.declared_type = type;
+        type_record.source = builder.source;
+        type_record.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(type_record));
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = vhdl::TypeForm::array;
+        definition.name = type_name;
+        definition.element_subtype.emplace();
+        definition.element_subtype->type_mark.spelling = "std_ulogic";
+        definition.element_subtype->domain = vhdl::ValueDomain::logic9;
+        vhdl::ArrayDimension dimension;
+        dimension.index_subtype = vhdl_name("natural", builder.source);
+        dimension.unconstrained = true;
+        dimension.source = builder.source;
+        definition.array_dimensions.push_back(std::move(dimension));
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        builder.vhdl_unit(numeric_std).declarations.push_back(declaration);
+        return std::pair { declaration, type };
+    };
+    const auto [unsigned_array_decl, unsigned_array]
+        = add_numeric_vector("UNRESOLVED_UNSIGNED");
+    const auto [signed_array_decl, signed_array]
+        = add_numeric_vector("UNRESOLVED_SIGNED");
+    (void)unsigned_array_decl;
+    (void)signed_array_decl;
+    const auto add_numeric_subtype = [&](const std::string& name,
+                                         const TypeId type,
+                                         const bool signed_value) {
+        const auto declaration = builder.model.add_declaration(
+            numeric_std_scope, DeclarationKind::type, name,
+            builder.source, builder.origin);
+        vhdl::Declaration record;
+        record.id = declaration;
+        record.scope = numeric_std_scope;
+        record.form = vhdl::DeclarationForm::subtype;
+        record.name = name;
+        record.source = builder.source;
+        record.origin = builder.origin;
+        record.subtype.emplace();
+        record.subtype->type_mark.target = type;
+        record.subtype->type_mark.spelling = name;
+        record.subtype->domain = vhdl::ValueDomain::logic9;
+        record.subtype->signed_value = signed_value;
+        record.subtype->unconstrained = true;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(record));
+        builder.vhdl_unit(numeric_std).declarations.push_back(declaration);
+        return declaration;
+    };
+    const auto unsigned_type = add_numeric_subtype(
+        "UNSIGNED", unsigned_array, false);
+    const auto signed_type = add_numeric_subtype(
+        "SIGNED", signed_array, true);
+    const auto add_to_integer_overload = [&](const TypeId argument_type,
+                                             const bool signed_value) {
+        const auto function_scope = builder.model.add_scope(
+            numeric_std, numeric_std_scope,
+            signed_value ? "to_integer_signed" : "to_integer_unsigned",
+            builder.source, builder.origin);
+        const auto formal = builder.model.add_declaration(
+            function_scope, DeclarationKind::constant, "arg",
+            builder.source, builder.origin);
+        vhdl::Declaration formal_record;
+        formal_record.id = formal;
+        formal_record.scope = function_scope;
+        formal_record.form = vhdl::DeclarationForm::constant;
+        formal_record.name = "arg";
+        formal_record.source = builder.source;
+        formal_record.origin = builder.origin;
+        formal_record.subtype.emplace();
+        formal_record.subtype->type_mark.target = argument_type;
+        formal_record.subtype->type_mark.spelling = signed_value
+            ? "UNRESOLVED_SIGNED"
+            : "UNRESOLVED_UNSIGNED";
+        formal_record.subtype->domain = vhdl::ValueDomain::logic9;
+        formal_record.subtype->signed_value = signed_value;
+        formal_record.subtype->unconstrained = true;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(formal_record));
+        const auto function = builder.model.add_declaration(
+            numeric_std_scope, DeclarationKind::function, "to_integer",
+            builder.source, builder.origin);
+        vhdl::Declaration function_record;
+        function_record.id = function;
+        function_record.scope = numeric_std_scope;
+        function_record.form = vhdl::DeclarationForm::function;
+        function_record.name = "to_integer";
+        function_record.source = builder.source;
+        function_record.origin = builder.origin;
+        function_record.callable.emplace();
+        function_record.callable->function = true;
+        function_record.callable->pure = true;
+        function_record.callable->defined = true;
+        function_record.callable->formals = { formal };
+        function_record.children = { formal };
+        function_record.callable->return_type.emplace();
+        function_record.callable->return_type->type_mark.spelling
+            = signed_value ? "integer" : "natural";
+        function_record.callable->return_type->domain
+            = vhdl::ValueDomain::integer;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(function_record));
+        builder.vhdl_unit(numeric_std).declarations.push_back(function);
+        return function;
+    };
+    const auto unsigned_to_integer = add_to_integer_overload(
+        unsigned_array, false);
+    const auto signed_to_integer = add_to_integer_overload(
+        signed_array, true);
+    vhdl::ContextItem numeric_std_import;
+    numeric_std_import.kind = vhdl::ContextKind::use_clause;
+    numeric_std_import.selected_names.push_back(
+        vhdl_name("ieee.numeric_std.all", builder.source));
+    builder.vhdl_unit(unit).context.push_back(std::move(numeric_std_import));
+    const auto add_expression_in_scope
+        = [&](const ScopeId expression_scope,
+              const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  expression_scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = expression_scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling = expression.text;
+                  expression.referenced_name->canonical = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto add_expression
+        = [&](const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              return add_expression_in_scope(scope, kind,
+                  std::move(text), std::move(operands), selected);
+          };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto add_declaration
+        = [&](const DeclarationKind kind,
+              const vhdl::DeclarationForm form, std::string name,
+              const std::optional<ExpressionId> initializer = std::nullopt) {
+              const auto id = builder.model.add_declaration(
+                  scope, kind, name, builder.source, builder.origin);
+              vhdl::Declaration declaration;
+              declaration.id = id;
+              declaration.scope = scope;
+              declaration.form = form;
+              declaration.name = std::move(name);
+              declaration.initializer = initializer;
+              declaration.source = builder.source;
+              declaration.origin = builder.origin;
+              builder.vhdl_hir.mutable_declarations().push_back(
+                  std::move(declaration));
+              return id;
+          };
+    const auto name = [&](const std::string& spelling,
+                          const DeclarationId declaration) {
+        return add_expression(vhdl::ExpressionKind::name,
+            spelling, { }, declaration);
+    };
+    const auto binary = [&](const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return add_expression(vhdl::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto function = add_declaration(DeclarationKind::function,
+        vhdl::DeclarationForm::function, "gf_pow_u");
+    const auto exponent = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "exp");
+    const auto m = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "m");
+    const auto poly = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "poly");
+    const auto runtime = add_declaration(DeclarationKind::variable,
+        vhdl::DeclarationForm::variable, "runtime");
+    auto integer_subtype = [] {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "integer";
+        subtype.domain = vhdl::ValueDomain::integer;
+        return subtype;
+    };
+    for (const auto formal : { exponent, m, poly }) {
+        auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), formal,
+            &vhdl::Declaration::id);
+        record->subtype = integer_subtype();
+    }
+    const auto m_name = name("m", m);
+    const auto zero = literal(0);
+    const auto one = literal(1);
+    const auto m_plus_one = binary("+", m_name, one);
+    const auto to_unsigned_one = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned", { one, m_plus_one });
+    const auto val = add_declaration(DeclarationKind::variable,
+        vhdl::DeclarationForm::variable, "val", to_unsigned_one);
+    vhdl::SubtypeIndication val_subtype;
+    val_subtype.type_mark.spelling = "unsigned";
+    val_subtype.domain = vhdl::ValueDomain::logic9;
+    vhdl::RangeConstraint val_range;
+    val_range.kind = vhdl::RangeKind::array_index;
+    val_range.left_expression = m_name;
+    val_range.right_expression = zero;
+    val_range.descending = true;
+    val_range.source = builder.source;
+    val_subtype.constraints.push_back(val_range);
+    auto val_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), val,
+        &vhdl::Declaration::id);
+    val_record->subtype = val_subtype;
+
+    const auto two = literal(2);
+    const auto exponent_power = binary("**", two, m_name);
+    const auto order = binary("-", exponent_power, one);
+    const auto exponent_name = name("exp", exponent);
+    const auto reduced_exponent = binary("mod", exponent_name, order);
+    const auto loop_index_scope = builder.model.add_scope(
+        unit, scope, "gf_pow_u:loop", builder.source, builder.origin);
+    const auto loop_index = builder.model.add_declaration(
+        loop_index_scope, DeclarationKind::constant, "j",
+        builder.source, builder.origin);
+    vhdl::Declaration loop_index_record;
+    loop_index_record.id = loop_index;
+    loop_index_record.scope = loop_index_scope;
+    loop_index_record.form = vhdl::DeclarationForm::constant;
+    loop_index_record.name = "j";
+    loop_index_record.source = builder.source;
+    loop_index_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(loop_index_record));
+    const auto loop = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement loop_record;
+    loop_record.id = loop;
+    loop_record.scope = scope;
+    loop_record.kind = vhdl::StatementKind::loop;
+    loop_record.loop_variable = "j";
+    loop_record.loop_initial = zero;
+    loop_record.loop_limit = binary("-", reduced_exponent, one);
+    loop_record.nested_scope = loop_index_scope;
+    loop_record.declarations = { loop_index };
+    loop_record.source = builder.source;
+    loop_record.origin = builder.origin;
+    const auto assign_val = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement assign_val_record;
+    assign_val_record.id = assign_val;
+    assign_val_record.scope = scope;
+    assign_val_record.kind = vhdl::StatementKind::variable_assignment;
+    assign_val_record.target = name("val", val);
+    const auto shifted = binary("sll", name("val", val), one);
+    const auto poly_name = name("poly", poly);
+    const auto poly_width = binary("+", name("m", m), one);
+    const auto to_unsigned_poly = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned",
+        { poly_name, poly_width });
+    assign_val_record.value = binary(
+        "xor", shifted, to_unsigned_poly);
+    assign_val_record.source = builder.source;
+    assign_val_record.origin = builder.origin;
+    loop_record.statements = { assign_val };
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(assign_val_record));
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(loop_record));
+    const auto returned_slice = add_expression(
+        vhdl::ExpressionKind::slice, "downto",
+        { name("val", val), binary("-", name("m", m), one), zero });
+    const auto return_statement = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement return_record;
+    return_record.id = return_statement;
+    return_record.scope = scope;
+    return_record.kind = vhdl::StatementKind::return_statement;
+    return_record.value = returned_slice;
+    return_record.source = builder.source;
+    return_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(return_record));
+
+    auto function_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), function,
+        &vhdl::Declaration::id);
+    function_record->callable.emplace();
+    function_record->callable->function = true;
+    function_record->callable->pure = true;
+    function_record->callable->defined = true;
+    function_record->callable->formals = { exponent, m, poly };
+    function_record->children = { exponent, m, poly, val };
+    function_record->statements = { loop, return_statement };
+    vhdl::SubtypeIndication return_subtype = val_subtype;
+    return_subtype.constraints.front().left_expression
+        = binary("-", name("m", m), one);
+    function_record->callable->return_type = return_subtype;
+    builder.vhdl_unit(unit).declarations.push_back(function);
+
+    const auto static_call = add_expression(
+        vhdl::ExpressionKind::call, "gf_pow_u",
+        { literal(2), literal(8), literal(1) }, function);
+    const auto set_to_integer_overloads = [&](const ExpressionId call) {
+        auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_expressions(), call,
+            &vhdl::Expression::id);
+        assert(record != builder.vhdl_hir.mutable_expressions().end());
+        record->referenced_name.emplace();
+        record->referenced_name->spelling = "to_integer";
+        record->referenced_name->canonical = "to_integer";
+        record->referenced_name->overloads = {
+            unsigned_to_integer, signed_to_integer
+        };
+    };
+    const auto slice_constant_initializer = add_expression(
+        vhdl::ExpressionKind::string_literal, "\"00000111\"");
+    const auto slice_constant = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "slice_constant", slice_constant_initializer);
+    auto slice_constant_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), slice_constant,
+        &vhdl::Declaration::id);
+    assert(slice_constant_record
+        != builder.vhdl_hir.mutable_declarations().end());
+    slice_constant_record->subtype.emplace();
+    slice_constant_record->subtype->type_mark.target = unsigned_array;
+    slice_constant_record->subtype->type_mark.spelling
+        = "UNRESOLVED_UNSIGNED";
+    slice_constant_record->subtype->domain = vhdl::ValueDomain::logic9;
+    slice_constant_record->subtype->unconstrained = true;
+    const auto unsigned_cast = add_expression(
+        vhdl::ExpressionKind::call, "unsigned", { static_call },
+        unsigned_type);
+    const auto packed_function_to_integer = add_expression(
+        vhdl::ExpressionKind::call, "to_integer", { unsigned_cast });
+    set_to_integer_overloads(packed_function_to_integer);
+    const auto sliced_unsigned = add_expression(
+        vhdl::ExpressionKind::slice, "downto",
+        { name("slice_constant", slice_constant), literal(2), zero });
+    const auto sliced_to_integer_call = add_expression(
+        vhdl::ExpressionKind::call, "to_integer", { sliced_unsigned });
+    set_to_integer_overloads(sliced_to_integer_call);
+    const auto out_of_range_unsigned = add_expression(
+        vhdl::ExpressionKind::slice, "downto",
+        { name("slice_constant", slice_constant), literal(8), zero });
+    const auto out_of_range_to_integer_call = add_expression(
+        vhdl::ExpressionKind::call, "to_integer",
+        { out_of_range_unsigned });
+    set_to_integer_overloads(out_of_range_to_integer_call);
+    const auto signed_bits = add_expression(
+        vhdl::ExpressionKind::string_literal, "\"1110\"");
+    const auto signed_cast = add_expression(
+        vhdl::ExpressionKind::call, "signed", { signed_bits }, signed_type);
+    const auto signed_to_integer_call = add_expression(
+        vhdl::ExpressionKind::call, "to_integer",
+        { signed_cast });
+    set_to_integer_overloads(signed_to_integer_call);
+    const auto unknown_bits = add_expression(
+        vhdl::ExpressionKind::string_literal, "\"10X1\"");
+    const auto unknown_unsigned = add_expression(
+        vhdl::ExpressionKind::call, "unsigned", { unknown_bits },
+        unsigned_type);
+    const auto unknown_to_integer = add_expression(
+        vhdl::ExpressionKind::call, "to_integer", { unknown_unsigned });
+    set_to_integer_overloads(unknown_to_integer);
+    const auto untyped_bits = add_expression(
+        vhdl::ExpressionKind::string_literal, "\"1010\"");
+    const auto ambiguous_to_integer = add_expression(
+        vhdl::ExpressionKind::call, "to_integer", { untyped_bits });
+    set_to_integer_overloads(ambiguous_to_integer);
+    const auto untyped_slice = add_expression(
+        vhdl::ExpressionKind::slice, "downto",
+        { untyped_bits, literal(3), zero });
+    const auto untyped_slice_to_integer = add_expression(
+        vhdl::ExpressionKind::call, "to_integer", { untyped_slice });
+    set_to_integer_overloads(untyped_slice_to_integer);
+    const auto oversized_bits = add_expression(
+        vhdl::ExpressionKind::string_literal,
+        "\"1" + std::string(32U, '0') + "\"");
+    const auto oversized_unsigned = add_expression(
+        vhdl::ExpressionKind::call, "unsigned", { oversized_bits },
+        unsigned_type);
+    const auto oversized_to_integer = add_expression(
+        vhdl::ExpressionKind::call, "to_integer", { oversized_unsigned });
+    set_to_integer_overloads(oversized_to_integer);
+    const auto runtime_call = add_expression(
+        vhdl::ExpressionKind::call, "gf_pow_u",
+        { name("runtime", runtime), literal(8), literal(1) }, function);
+
+    const auto nibble_type_declaration = add_declaration(
+        DeclarationKind::type, vhdl::DeclarationForm::subtype,
+        "nibble_t");
+    TypeReference nibble_base;
+    nibble_base.source = builder.source;
+    nibble_base.spelling = "nibble_t";
+    const auto nibble_type = builder.model.add_type(scope,
+        TypeKind::declaration, "nibble_t", nibble_base,
+        builder.source, builder.origin);
+    auto nibble_declaration = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), nibble_type_declaration,
+        &vhdl::Declaration::id);
+    nibble_declaration->declared_type = nibble_type;
+    vhdl::TypeDefinition nibble_definition;
+    nibble_definition.id = nibble_type;
+    nibble_definition.declaration = nibble_type_declaration;
+    nibble_definition.form = vhdl::TypeForm::subtype;
+    nibble_definition.name = "nibble_t";
+    nibble_definition.base.type_mark.spelling = "std_logic_vector";
+    nibble_definition.base.domain = vhdl::ValueDomain::logic9;
+    vhdl::RangeConstraint nibble_range;
+    nibble_range.kind = vhdl::RangeKind::array_index;
+    nibble_range.left = 3;
+    nibble_range.right = 0;
+    nibble_range.descending = true;
+    nibble_definition.base.constraints.push_back(nibble_range);
+    nibble_definition.source = builder.source;
+    nibble_definition.origin = builder.origin;
+    builder.vhdl_hir.mutable_types().push_back(
+        std::move(nibble_definition));
+    builder.vhdl_unit(unit).declarations.push_back(
+        nibble_type_declaration);
+
+    const auto constant_packed = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned",
+        { literal(7), literal(8) });
+    const auto constant_nibble = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned",
+        { literal(7), literal(4) });
+    const auto add_constant_return_function
+        = [&](std::string function_name,
+              vhdl::SubtypeIndication return_subtype,
+              const ExpressionId return_value) {
+              const auto function_id = add_declaration(
+                  DeclarationKind::function,
+                  vhdl::DeclarationForm::function,
+                  std::move(function_name));
+              const auto statement_id = builder.model
+                  .add_statement_identity(
+                      scope, builder.source, builder.origin);
+              vhdl::Statement statement;
+              statement.id = statement_id;
+              statement.scope = scope;
+              statement.kind = vhdl::StatementKind::return_statement;
+              statement.value = return_value;
+              statement.source = builder.source;
+              statement.origin = builder.origin;
+              builder.vhdl_hir.mutable_statements().push_back(
+                  std::move(statement));
+              auto record = std::ranges::find(
+                  builder.vhdl_hir.mutable_declarations(), function_id,
+                  &vhdl::Declaration::id);
+              record->callable.emplace();
+              record->callable->function = true;
+              record->callable->pure = true;
+              record->callable->defined = true;
+              record->callable->return_type = std::move(return_subtype);
+              record->statements = { statement_id };
+              builder.vhdl_unit(unit).declarations.push_back(function_id);
+              return add_expression(vhdl::ExpressionKind::call,
+                  record->name, { }, function_id);
+          };
+    const auto add_packed_formal_return_function
+        = [&](std::string function_name,
+              vhdl::SubtypeIndication return_subtype,
+              const DeclarationId formal,
+              const ExpressionId return_value,
+              const ExpressionId actual) {
+              const auto function_id = add_declaration(
+                  DeclarationKind::function,
+                  vhdl::DeclarationForm::function, function_name);
+              const auto statement_id = builder.model
+                  .add_statement_identity(
+                      scope, builder.source, builder.origin);
+              vhdl::Statement statement;
+              statement.id = statement_id;
+              statement.scope = scope;
+              statement.kind = vhdl::StatementKind::return_statement;
+              statement.value = return_value;
+              statement.source = builder.source;
+              statement.origin = builder.origin;
+              builder.vhdl_hir.mutable_statements().push_back(
+                  std::move(statement));
+              auto record = std::ranges::find(
+                  builder.vhdl_hir.mutable_declarations(), function_id,
+                  &vhdl::Declaration::id);
+              record->callable.emplace();
+              record->callable->function = true;
+              record->callable->pure = true;
+              record->callable->defined = true;
+              record->callable->formals = { formal };
+              record->callable->return_type = std::move(return_subtype);
+              record->children = { formal };
+              record->statements = { statement_id };
+              builder.vhdl_unit(unit).declarations.push_back(function_id);
+              return add_expression(vhdl::ExpressionKind::call,
+                  std::move(function_name), { actual }, function_id);
+          };
+    vhdl::SubtypeIndication nibble_return;
+    nibble_return.type_mark.target = nibble_type;
+    nibble_return.type_mark.spelling = "nibble_t";
+    const auto alias_return_call = add_constant_return_function(
+        "nibble_alias_result", nibble_return, constant_nibble);
+    const auto alias_wrong_width_return_call = add_constant_return_function(
+        "nibble_alias_wrong_width_result", nibble_return,
+        constant_packed);
+
+    vhdl::SubtypeIndication unconstrained_unsigned;
+    unconstrained_unsigned.type_mark.spelling = "unsigned";
+    unconstrained_unsigned.domain = vhdl::ValueDomain::logic9;
+    unconstrained_unsigned.unconstrained = true;
+    const auto unconstrained_return_call = add_constant_return_function(
+        "unconstrained_unsigned_result", unconstrained_unsigned,
+        constant_packed);
+    auto unconstrained_unsigned_placeholder_width = unconstrained_unsigned;
+    unconstrained_unsigned_placeholder_width.executable_width = 1U;
+    const auto unconstrained_placeholder_width_return_call
+        = add_constant_return_function(
+            "unconstrained_unsigned_placeholder_width_result",
+            unconstrained_unsigned_placeholder_width, constant_packed);
+    auto constrained_one_bit_unsigned = unconstrained_unsigned;
+    constrained_one_bit_unsigned.unconstrained = false;
+    constrained_one_bit_unsigned.executable_width = 1U;
+    const auto constrained_one_bit_return_call = add_constant_return_function(
+        "constrained_one_bit_unsigned_result",
+        constrained_one_bit_unsigned, constant_packed);
+
+    const auto unconstrained_formal = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "unconstrained_formal");
+    auto unconstrained_formal_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), unconstrained_formal,
+        &vhdl::Declaration::id);
+    unconstrained_formal_record->subtype
+        = unconstrained_unsigned_placeholder_width;
+    const auto unconstrained_formal_identity
+        = add_packed_formal_return_function(
+            "unconstrained_formal_identity",
+            unconstrained_unsigned_placeholder_width,
+            unconstrained_formal, name("unconstrained_formal",
+                unconstrained_formal), constant_packed);
+
+    const auto constrained_formal = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "constrained_formal");
+    auto constrained_formal_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), constrained_formal,
+        &vhdl::Declaration::id);
+    constrained_formal_record->subtype = constrained_one_bit_unsigned;
+    const auto constrained_formal_identity
+        = add_packed_formal_return_function(
+            "constrained_formal_identity", unconstrained_unsigned,
+            constrained_formal, name("constrained_formal",
+                constrained_formal), constant_packed);
+
+    vhdl::SubtypeIndication integer_return;
+    integer_return.type_mark.spelling = "integer";
+    integer_return.domain = vhdl::ValueDomain::integer;
+    const auto wrong_domain_return_call = add_constant_return_function(
+        "packed_value_as_integer", integer_return, constant_packed);
+
+    auto seven_bit_return = unconstrained_unsigned;
+    seven_bit_return.unconstrained = false;
+    vhdl::RangeConstraint seven_bit_range;
+    seven_bit_range.kind = vhdl::RangeKind::array_index;
+    seven_bit_range.left = 6;
+    seven_bit_range.right = 0;
+    seven_bit_range.descending = true;
+    seven_bit_return.constraints.push_back(seven_bit_range);
+    const auto wrong_width_return_call = add_constant_return_function(
+        "wrong_width_unsigned_result", seven_bit_return,
+        constant_packed);
+
+    std::vector<CompiledDesign> inputs;
+    inputs.push_back(builder.finish());
+    auto linked = link_compiled_designs(std::move(inputs));
+    assert(linked.ok());
+    auto design = std::move(*linked.design);
+    assert(design.valid());
+    const auto numeric_std_imports = design.vhdl_linked_imports(unit);
+    assert(numeric_std_imports);
+    assert(std::ranges::any_of(*numeric_std_imports,
+        [](const CompiledVhdlImport& imported) {
+            return imported.library == "ieee"
+                && imported.package == "numeric_std"
+                && imported.member == "all";
+        }));
+    const auto conversion_call = design.find_expression(
+        packed_function_to_integer);
+    assert(conversion_call && conversion_call->vhdl != nullptr
+        && conversion_call->vhdl->referenced_name
+        && !conversion_call->vhdl->referenced_name->selected
+        && conversion_call->vhdl->referenced_name->overloads.size() == 2U);
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const auto evaluated
+        = specialized->evaluate_vhdl_constant_expression(static_call);
+    assert(evaluated);
+    const auto packed
+        = std::get_if<SpecializedHirVhdlPackedValue>(&*evaluated);
+    assert(packed);
+    assert(packed->bits == "00000111");
+    assert(packed->left_bound == 7);
+    assert(packed->right_bound == 0);
+    const auto packed_integer
+        = specialized->evaluate_vhdl_constant_expression(
+            packed_function_to_integer);
+    assert(packed_integer);
+    const auto packed_integer_value = std::get_if<std::int64_t>(
+        &*packed_integer);
+    assert(packed_integer_value && *packed_integer_value == 7);
+    const auto sliced_integer
+        = specialized->evaluate_vhdl_constant_expression(
+            sliced_to_integer_call);
+    assert(sliced_integer);
+    const auto sliced_integer_value = std::get_if<std::int64_t>(
+        &*sliced_integer);
+    assert(sliced_integer_value && *sliced_integer_value == 7);
+    const auto signed_integer
+        = specialized->evaluate_vhdl_constant_expression(
+            signed_to_integer_call);
+    assert(signed_integer);
+    const auto signed_integer_value = std::get_if<std::int64_t>(
+        &*signed_integer);
+    assert(signed_integer_value && *signed_integer_value == -2);
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        unknown_to_integer));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        ambiguous_to_integer));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        untyped_slice_to_integer));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        out_of_range_to_integer_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        oversized_to_integer));
+    const auto alias_result
+        = specialized->evaluate_vhdl_constant_expression(alias_return_call);
+    assert(alias_result);
+    const auto alias_packed
+        = std::get_if<SpecializedHirVhdlPackedValue>(&*alias_result);
+    assert(alias_packed);
+    assert(alias_packed->bits == "0111");
+    assert(alias_packed->left_bound == 3);
+    assert(alias_packed->right_bound == 0);
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        alias_wrong_width_return_call));
+    const auto unconstrained_result
+        = specialized->evaluate_vhdl_constant_expression(
+            unconstrained_return_call);
+    assert(unconstrained_result);
+    const auto unconstrained_packed
+        = std::get_if<SpecializedHirVhdlPackedValue>(
+            &*unconstrained_result);
+    assert(unconstrained_packed);
+    assert(unconstrained_packed->bits == "00000111");
+    assert(unconstrained_packed->left_bound == 7);
+    assert(unconstrained_packed->right_bound == 0);
+    const auto placeholder_width_result
+        = specialized->evaluate_vhdl_constant_expression(
+            unconstrained_placeholder_width_return_call);
+    assert(placeholder_width_result);
+    const auto placeholder_width_packed
+        = std::get_if<SpecializedHirVhdlPackedValue>(
+            &*placeholder_width_result);
+    assert(placeholder_width_packed);
+    assert(placeholder_width_packed->bits == "00000111");
+    assert(placeholder_width_packed->left_bound == 7);
+    assert(placeholder_width_packed->right_bound == 0);
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        constrained_one_bit_return_call));
+    const auto unconstrained_formal_result
+        = specialized->evaluate_vhdl_constant_expression(
+            unconstrained_formal_identity);
+    assert(unconstrained_formal_result);
+    const auto unconstrained_formal_packed
+        = std::get_if<SpecializedHirVhdlPackedValue>(
+            &*unconstrained_formal_result);
+    assert(unconstrained_formal_packed);
+    assert(unconstrained_formal_packed->bits == "00000111");
+    assert(unconstrained_formal_packed->left_bound == 7);
+    assert(unconstrained_formal_packed->right_bound == 0);
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        constrained_formal_identity));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        wrong_domain_return_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        wrong_width_return_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(runtime_call));
+}
+
+void test_specialized_hir_vhdl_generated_packed_constant_iterator()
+{
+    LinkBundleBuilder builder {
+        "generated-packed-constant-iterator.vhd"
+    };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "generated_packed_constant_iterator");
+    const auto unit_scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression
+        = [&](const ScopeId scope, const vhdl::ExpressionKind kind,
+              std::string text, std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling = expression.text;
+                  expression.referenced_name->canonical = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto literal = [&](const ScopeId scope, const std::int64_t value) {
+        return add_expression(scope,
+            vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto binary = [&](const ScopeId scope,
+                            const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return add_expression(scope, vhdl::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto branch_scope = builder.model.add_scope(
+        unit, unit_scope, "gen_syn", builder.source, builder.origin);
+    const auto region_declaration = builder.model.add_declaration(
+        unit_scope, DeclarationKind::generate, "gen_syn",
+        builder.source, builder.origin);
+    vhdl::Declaration region_record;
+    region_record.id = region_declaration;
+    region_record.scope = unit_scope;
+    region_record.form = vhdl::DeclarationForm::generated;
+    region_record.name = "gen_syn";
+    region_record.source = builder.source;
+    region_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(region_record));
+    builder.vhdl_unit(unit).declarations.push_back(region_declaration);
+
+    const auto iterator_name = add_expression(
+        branch_scope, vhdl::ExpressionKind::name, "gi");
+    const auto packed_initializer = add_expression(
+        branch_scope, vhdl::ExpressionKind::call, "to_unsigned",
+        { iterator_name, literal(branch_scope, 4) });
+    const auto uninitialized_local = builder.model.add_declaration(
+        branch_scope, DeclarationKind::variable, "uninitialized_local",
+        builder.source, builder.origin);
+    vhdl::Declaration local_record;
+    local_record.id = uninitialized_local;
+    local_record.scope = branch_scope;
+    local_record.form = vhdl::DeclarationForm::variable;
+    local_record.name = "uninitialized_local";
+    local_record.source = builder.source;
+    local_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(local_record));
+    const auto local_name = add_expression(branch_scope,
+        vhdl::ExpressionKind::name, "uninitialized_local", { },
+        uninitialized_local);
+    const auto shadowed_initializer = add_expression(
+        branch_scope, vhdl::ExpressionKind::call, "to_unsigned",
+        { local_name, literal(branch_scope, 4) });
+    const auto add_packed_constant = [&](const std::string& name,
+                                         const ExpressionId initializer,
+                                         const std::int64_t left_bound) {
+        const auto id = builder.model.add_declaration(
+            branch_scope, DeclarationKind::constant, name,
+            builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = branch_scope;
+        declaration.form = vhdl::DeclarationForm::constant;
+        declaration.name = name;
+        declaration.initializer = initializer;
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "std_logic_vector";
+        subtype.domain = vhdl::ValueDomain::logic9;
+        vhdl::RangeConstraint range;
+        range.kind = vhdl::RangeKind::array_index;
+        range.left = left_bound;
+        range.right = 0;
+        range.descending = true;
+        range.source = builder.source;
+        subtype.constraints.push_back(range);
+        declaration.subtype = std::move(subtype);
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        return id;
+    };
+    const auto alpha_i = add_packed_constant(
+        "ALPHA_I", packed_initializer, 3);
+    const auto mismatched_width = add_packed_constant(
+        "MISMATCHED_WIDTH", packed_initializer, 2);
+    const auto shadowed = add_packed_constant(
+        "SHADOWED", shadowed_initializer, 3);
+
+    vhdl::GenerateRegion generate;
+    generate.declaration = region_declaration;
+    generate.scope = branch_scope;
+    generate.kind = vhdl::GenerateKind::iterative;
+    generate.label = "gen_syn";
+    generate.iterator = "gi";
+    generate.initial = literal(unit_scope, 0);
+    generate.condition = binary(branch_scope, "<=", iterator_name,
+        literal(branch_scope, 0));
+    generate.iteration = binary(branch_scope, "+", iterator_name,
+        literal(branch_scope, 1));
+    generate.declarations = { alpha_i, mismatched_width, shadowed };
+    generate.source = builder.source;
+    generate.origin = builder.origin;
+    builder.vhdl_unit(unit).generates.push_back(std::move(generate));
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const auto specialized = make_specialized_hir_unit(
+        design, unit,
+        std::span<const SpecializedHirActualIdentity> { });
+    assert(specialized);
+    assert(!specialized->evaluate_vhdl_packed_value_declaration(alpha_i));
+
+    const std::array<SpecializedHirNamedIdentity, 1> iterator_identity {
+        SpecializedHirNamedIdentity { "GI", "5" }
+    };
+    const auto occurrence
+        = specialized->with_hierarchy_identities(iterator_identity);
+    const auto alpha_value
+        = occurrence.evaluate_vhdl_packed_value_declaration(alpha_i);
+    assert(alpha_value);
+    assert(alpha_value->bits == "0101");
+    assert(alpha_value->left_bound == 3);
+    assert(alpha_value->right_bound == 0);
+    assert(!occurrence.evaluate_vhdl_packed_value_declaration(
+        mismatched_width));
+    assert(!occurrence.evaluate_vhdl_packed_value_declaration(shadowed));
+
+    const std::array<SpecializedHirNamedIdentity, 1> invalid_identity {
+        SpecializedHirNamedIdentity { "gi", "not-static" }
+    };
+    assert(!specialized->with_hierarchy_identities(invalid_identity)
+                .evaluate_vhdl_packed_value_declaration(alpha_i));
+    const std::array<SpecializedHirNamedIdentity, 1> oversized_identity {
+        SpecializedHirNamedIdentity { "gi", "16" }
+    };
+    assert(!specialized->with_hierarchy_identities(oversized_identity)
+                .evaluate_vhdl_packed_value_declaration(alpha_i));
+    const std::array<SpecializedHirNamedIdentity, 2> ambiguous_identity {
+        SpecializedHirNamedIdentity { "gi", "5" },
+        SpecializedHirNamedIdentity { "GI", "5" },
+    };
+    assert(!specialized->with_hierarchy_identities(ambiguous_identity)
+                .evaluate_vhdl_packed_value_declaration(alpha_i));
+}
+
+void test_specialized_hir_vhdl_selection_constant_function()
+{
+    LinkBundleBuilder builder { "selection-constant-function.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "selection_constant_function");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression
+        = [&](const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling = expression.text;
+                  expression.referenced_name->canonical = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto add_declaration
+        = [&](const DeclarationKind kind,
+              const vhdl::DeclarationForm form, std::string name) {
+              const auto id = builder.model.add_declaration(
+                  scope, kind, name, builder.source, builder.origin);
+              vhdl::Declaration declaration;
+              declaration.id = id;
+              declaration.scope = scope;
+              declaration.form = form;
+              declaration.name = std::move(name);
+              declaration.source = builder.source;
+              declaration.origin = builder.origin;
+              builder.vhdl_hir.mutable_declarations().push_back(
+                  std::move(declaration));
+              return id;
+          };
+    const auto name = [&](const std::string& spelling,
+                          const DeclarationId declaration) {
+        return add_expression(vhdl::ExpressionKind::name,
+            spelling, { }, declaration);
+    };
+    const auto add_statement = [&](const vhdl::StatementKind kind) {
+        const auto id = builder.model.add_statement_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Statement statement;
+        statement.id = id;
+        statement.scope = scope;
+        statement.kind = kind;
+        statement.source = builder.source;
+        statement.origin = builder.origin;
+        builder.vhdl_hir.mutable_statements().push_back(
+            std::move(statement));
+        return id;
+    };
+    const auto return_statement = [&](const std::int64_t value) {
+        const auto id = add_statement(vhdl::StatementKind::return_statement);
+        auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_statements(), id,
+            &vhdl::Statement::id);
+        record->value = literal(value);
+        return id;
+    };
+    const auto add_function =
+        [&](std::string function_name,
+            std::vector<vhdl::CaseAlternative> alternatives,
+            const std::int64_t actual) {
+            const auto function = add_declaration(
+                DeclarationKind::function, vhdl::DeclarationForm::function,
+                function_name);
+            const auto formal = add_declaration(
+                DeclarationKind::constant, vhdl::DeclarationForm::constant,
+                function_name + "_selector");
+            const auto selection = add_statement(
+                vhdl::StatementKind::selection);
+            auto selection_record = std::ranges::find(
+                builder.vhdl_hir.mutable_statements(), selection,
+                &vhdl::Statement::id);
+            selection_record->condition = name(
+                function_name + "_selector", formal);
+            selection_record->alternatives = std::move(alternatives);
+            auto function_record = std::ranges::find(
+                builder.vhdl_hir.mutable_declarations(), function,
+                &vhdl::Declaration::id);
+            function_record->callable.emplace();
+            function_record->callable->function = true;
+            function_record->callable->pure = true;
+            function_record->callable->defined = true;
+            function_record->callable->formals = { formal };
+            function_record->children = { formal };
+            function_record->statements = { selection };
+            builder.vhdl_unit(unit).declarations.push_back(function);
+            return add_expression(vhdl::ExpressionKind::call,
+                std::move(function_name), { literal(actual) }, function);
+        };
+    const auto matching_alternative =
+        [&](const std::int64_t choice, const std::int64_t result) {
+            vhdl::CaseAlternative alternative;
+            alternative.choices = { literal(choice) };
+            alternative.statements = { return_statement(result) };
+            alternative.source = builder.source;
+            return alternative;
+        };
+    const auto default_alternative = [&](const std::int64_t result) {
+        vhdl::CaseAlternative alternative;
+        alternative.is_default = true;
+        alternative.statements = { return_statement(result) };
+        alternative.source = builder.source;
+        return alternative;
+    };
+
+    const auto runtime = add_declaration(
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "runtime_choice");
+    const auto branch_call = add_function("select_branch", {
+        matching_alternative(1, 11),
+        matching_alternative(3, 33),
+        default_alternative(99) }, 1);
+    const auto second_branch_call = add_function("select_second_branch", {
+        matching_alternative(1, 11),
+        matching_alternative(3, 33),
+        default_alternative(99) }, 3);
+    const auto default_call = add_function("select_default", {
+        matching_alternative(1, 11),
+        default_alternative(99) }, 2);
+    const auto duplicate_match_call = add_function("duplicate_match", {
+        matching_alternative(1, 11),
+        matching_alternative(1, 33) }, 1);
+    const auto duplicate_default_call = add_function("duplicate_default", {
+        default_alternative(11), default_alternative(33) }, 1);
+    const auto unmatched_call = add_function("unmatched_selection", {
+        matching_alternative(1, 11) }, 2);
+    vhdl::CaseAlternative unresolved_choice;
+    unresolved_choice.choices = { name("runtime_choice", runtime) };
+    unresolved_choice.statements = { return_statement(11) };
+    unresolved_choice.source = builder.source;
+    const auto unresolved_call = add_function(
+        "unresolved_choice", { std::move(unresolved_choice) }, 1);
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const auto evaluate_integer = [&](const ExpressionId expression,
+                                      const std::int64_t expected) {
+        const auto value
+            = specialized->evaluate_vhdl_constant_expression(expression);
+        assert(value);
+        const auto integer = std::get_if<std::int64_t>(&*value);
+        assert(integer && *integer == expected);
+    };
+    evaluate_integer(branch_call, 11);
+    evaluate_integer(second_branch_call, 33);
+    evaluate_integer(default_call, 99);
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        duplicate_match_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        duplicate_default_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(unmatched_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(unresolved_call));
+}
+
+void test_specialized_hir_vhdl_local_array_constant_function()
+{
+    LinkBundleBuilder builder { "packed-array-constant-function.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "packed_array_constant_function");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression_in_scope
+        = [&](const ScopeId expression_scope,
+              const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  expression_scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = expression_scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling
+                      = expression.text;
+                  expression.referenced_name->canonical
+                      = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto add_expression
+        = [&](const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              return add_expression_in_scope(scope, kind,
+                  std::move(text), std::move(operands), selected);
+          };
+    const auto add_declaration
+        = [&](const ScopeId declaration_scope,
+              const DeclarationKind kind,
+              const vhdl::DeclarationForm form, std::string name) {
+              const auto id = builder.model.add_declaration(
+                  declaration_scope, kind, name,
+                  builder.source, builder.origin);
+              vhdl::Declaration declaration;
+              declaration.id = id;
+              declaration.scope = declaration_scope;
+              declaration.form = form;
+              declaration.name = std::move(name);
+              declaration.source = builder.source;
+              declaration.origin = builder.origin;
+              builder.vhdl_hir.mutable_declarations().push_back(
+                  std::move(declaration));
+              return id;
+          };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto name = [&](const std::string& spelling,
+                          const DeclarationId declaration) {
+        return add_expression(vhdl::ExpressionKind::name,
+            spelling, { }, declaration);
+    };
+    const auto binary = [&](const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return add_expression(vhdl::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto integer_subtype = [] {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "integer";
+        subtype.domain = vhdl::ValueDomain::integer;
+        return subtype;
+    };
+    const auto vector_subtype = [&](const ExpressionId left,
+                                    const ExpressionId right) {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "std_logic_vector";
+        subtype.domain = vhdl::ValueDomain::logic9;
+        vhdl::RangeConstraint range;
+        range.kind = vhdl::RangeKind::array_index;
+        range.left_expression = left;
+        range.right_expression = right;
+        range.descending = true;
+        range.source = builder.source;
+        subtype.constraints.push_back(std::move(range));
+        return subtype;
+    };
+    const auto make_assignment = [&](const ExpressionId target,
+                                     const ExpressionId value) {
+        const auto id = builder.model.add_statement_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Statement statement;
+        statement.id = id;
+        statement.scope = scope;
+        statement.kind = vhdl::StatementKind::variable_assignment;
+        statement.target = target;
+        statement.value = value;
+        statement.source = builder.source;
+        statement.origin = builder.origin;
+        builder.vhdl_hir.mutable_statements().push_back(
+            std::move(statement));
+        return id;
+    };
+
+    const auto helper = add_declaration(scope,
+        DeclarationKind::function, vhdl::DeclarationForm::function,
+        "make_cell");
+    const auto helper_value = add_declaration(scope,
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "value");
+    const auto helper_m = add_declaration(scope,
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "width_value");
+    for (const auto formal : { helper_value, helper_m }) {
+        const auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), formal,
+            &vhdl::Declaration::id);
+        record->subtype = integer_subtype();
+    }
+    const auto helper_width = name("width_value", helper_m);
+    const auto helper_result = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned",
+        { literal(255), helper_width });
+    const auto helper_return = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement helper_return_record;
+    helper_return_record.id = helper_return;
+    helper_return_record.scope = scope;
+    helper_return_record.kind = vhdl::StatementKind::return_statement;
+    helper_return_record.value = helper_result;
+    helper_return_record.source = builder.source;
+    helper_return_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(helper_return_record));
+    auto helper_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), helper,
+        &vhdl::Declaration::id);
+    helper_record->callable.emplace();
+    helper_record->callable->function = true;
+    helper_record->callable->pure = true;
+    helper_record->callable->defined = true;
+    helper_record->callable->formals = { helper_value, helper_m };
+    helper_record->callable->return_type = vector_subtype(
+        binary("-", helper_width, literal(1)), literal(0));
+    helper_record->children = { helper_value, helper_m };
+    helper_record->statements = { helper_return };
+    builder.vhdl_unit(unit).declarations.push_back(helper);
+
+    const auto function = add_declaration(scope,
+        DeclarationKind::function, vhdl::DeclarationForm::function,
+        "pack_cells");
+    const auto m = add_declaration(scope, DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "M");
+    auto m_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), m,
+        &vhdl::Declaration::id);
+    m_record->subtype = integer_subtype();
+    const auto m_name = name("M", m);
+    const auto zero = literal(0);
+    const auto one = literal(1);
+    const auto m_minus_one = binary("-", m_name, one);
+    const auto cells_type_declaration = add_declaration(scope,
+        DeclarationKind::type, vhdl::DeclarationForm::type,
+        "cell_array_t");
+    TypeReference type_base;
+    type_base.source = builder.source;
+    type_base.spelling = "cell_array_t";
+    const auto cells_type = builder.model.add_type(scope,
+        TypeKind::declaration, "cell_array_t", type_base,
+        builder.source, builder.origin);
+    auto type_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(),
+        cells_type_declaration, &vhdl::Declaration::id);
+    type_record->declared_type = cells_type;
+    vhdl::TypeDefinition cells_definition;
+    cells_definition.id = cells_type;
+    cells_definition.declaration = cells_type_declaration;
+    cells_definition.form = vhdl::TypeForm::array;
+    cells_definition.name = "cell_array_t";
+    cells_definition.element_subtype = vector_subtype(m_minus_one, zero);
+    vhdl::ArrayDimension cells_dimension;
+    cells_dimension.index_subtype.spelling = "integer";
+    cells_dimension.constraint.emplace();
+    cells_dimension.constraint->kind = vhdl::RangeKind::array_index;
+    cells_dimension.constraint->left = 0;
+    cells_dimension.constraint->right_expression = m_name;
+    cells_dimension.constraint->source = builder.source;
+    cells_dimension.source = builder.source;
+    cells_definition.array_dimensions.push_back(
+        std::move(cells_dimension));
+    cells_definition.source = builder.source;
+    cells_definition.origin = builder.origin;
+    builder.vhdl_hir.mutable_types().push_back(
+        std::move(cells_definition));
+
+    const auto cells = add_declaration(scope,
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "cells");
+    auto cells_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), cells,
+        &vhdl::Declaration::id);
+    cells_record->declared_type = cells_type;
+    const auto total_bits = binary("*", binary("+", m_name, one), m_name);
+    const auto result_left = binary("-", total_bits, one);
+    const auto result_subtype = vector_subtype(result_left, zero);
+    const auto result_initializer = add_expression(
+        vhdl::ExpressionKind::aggregate, "(...)");
+    const auto others = add_expression(
+        vhdl::ExpressionKind::default_choice, "others");
+    vhdl::AggregateAssociation result_fill;
+    result_fill.choices.push_back(others);
+    result_fill.value = add_expression(
+        vhdl::ExpressionKind::logic_literal, "'0'");
+    result_fill.source = builder.source;
+    auto result_initializer_record = std::ranges::find(
+        builder.vhdl_hir.mutable_expressions(), result_initializer,
+        &vhdl::Expression::id);
+    result_initializer_record->associations.push_back(
+        std::move(result_fill));
+    const auto result = add_declaration(scope,
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "result");
+    auto result_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), result,
+        &vhdl::Declaration::id);
+    result_record->subtype = result_subtype;
+    result_record->initializer = result_initializer;
+
+    const auto loop_scope = builder.model.add_scope(
+        unit, scope, "pack_cells:loop", builder.source, builder.origin);
+    const auto loop_index = builder.model.add_declaration(
+        loop_scope, DeclarationKind::constant, "j",
+        builder.source, builder.origin);
+    vhdl::Declaration loop_index_record;
+    loop_index_record.id = loop_index;
+    loop_index_record.scope = loop_scope;
+    loop_index_record.form = vhdl::DeclarationForm::constant;
+    loop_index_record.name = "j";
+    loop_index_record.source = builder.source;
+    loop_index_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(loop_index_record));
+    const auto loop_index_name = add_expression_in_scope(loop_scope,
+        vhdl::ExpressionKind::name, "j", { }, loop_index);
+    const auto cells_name = name("cells", cells);
+    const auto loop_target = add_expression(
+        vhdl::ExpressionKind::index, "index",
+        { cells_name, loop_index_name });
+    const auto zero_cell = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned", { zero, m_name });
+    const auto loop_assignment = make_assignment(loop_target, zero_cell);
+    const auto loop = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement loop_record;
+    loop_record.id = loop;
+    loop_record.scope = scope;
+    loop_record.kind = vhdl::StatementKind::loop;
+    loop_record.loop_variable = "j";
+    loop_record.loop_initial = zero;
+    loop_record.loop_limit = m_name;
+    loop_record.nested_scope = loop_scope;
+    loop_record.declarations = { loop_index };
+    loop_record.statements = { loop_assignment };
+    loop_record.source = builder.source;
+    loop_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(loop_record));
+
+    const auto cells_zero = add_expression(
+        vhdl::ExpressionKind::index, "index", { cells_name, zero });
+    const auto cell_sixty = add_expression(
+        vhdl::ExpressionKind::call, "to_unsigned",
+        { literal(60), m_name });
+    const auto assign_zero = make_assignment(cells_zero, cell_sixty);
+    const auto cells_m = add_expression(
+        vhdl::ExpressionKind::index, "index", { cells_name, m_name });
+    const auto make_cell = add_expression(
+        vhdl::ExpressionKind::call, "make_cell",
+        { zero, m_name }, helper);
+    const auto assign_m = make_assignment(cells_m, make_cell);
+
+    const auto cells_m_read = add_expression(
+        vhdl::ExpressionKind::index, "index", { cells_name, m_name });
+    const auto cast_cells_m = add_expression(
+        vhdl::ExpressionKind::call, "std_logic_vector", { cells_m_read });
+    const auto high_left = binary("-", total_bits, one);
+    const auto high_right = binary("*", m_name, m_name);
+    const auto high_target = add_expression(
+        vhdl::ExpressionKind::slice, "downto",
+        { name("result", result), high_left, high_right });
+    const auto assign_high = make_assignment(high_target, cast_cells_m);
+
+    const auto cells_zero_read = add_expression(
+        vhdl::ExpressionKind::index, "index", { cells_name, zero });
+    const auto cast_cells_zero = add_expression(
+        vhdl::ExpressionKind::call, "std_logic_vector",
+        { cells_zero_read });
+    const auto low_target = add_expression(
+        vhdl::ExpressionKind::slice, "downto",
+        { name("result", result), m_minus_one, zero });
+    const auto assign_low = make_assignment(low_target, cast_cells_zero);
+
+    const auto return_statement = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement return_record;
+    return_record.id = return_statement;
+    return_record.scope = scope;
+    return_record.kind = vhdl::StatementKind::return_statement;
+    return_record.value = name("result", result);
+    return_record.source = builder.source;
+    return_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(return_record));
+
+    const auto function_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), function,
+        &vhdl::Declaration::id);
+    function_record->callable.emplace();
+    function_record->callable->function = true;
+    function_record->callable->pure = true;
+    function_record->callable->defined = true;
+    function_record->callable->formals = { m };
+    function_record->callable->return_type = result_subtype;
+    function_record->children = {
+        m, cells_type_declaration, cells, result
+    };
+    function_record->statements = {
+        loop, assign_zero, assign_m, assign_high, assign_low,
+        return_statement
+    };
+    builder.vhdl_unit(unit).declarations.push_back(function);
+
+    const auto runtime = add_declaration(scope,
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "runtime");
+    const auto static_call = add_expression(
+        vhdl::ExpressionKind::call, "pack_cells", { literal(8) }, function);
+    const auto runtime_call = add_expression(
+        vhdl::ExpressionKind::call, "pack_cells",
+        { name("runtime", runtime) }, function);
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const auto evaluated
+        = specialized->evaluate_vhdl_constant_expression(static_call);
+    assert(evaluated);
+    const auto packed
+        = std::get_if<SpecializedHirVhdlPackedValue>(&*evaluated);
+    assert(packed);
+    assert(packed->bits
+        == "11111111" + std::string(56U, '0') + "00111100");
+    assert(packed->bits.size() == 72U);
+    assert(packed->left_bound == 71);
+    assert(packed->right_bound == 0);
+    assert(!specialized->evaluate_vhdl_constant_expression(runtime_call));
+}
+
+void test_specialized_hir_vhdl_integer_array_constant_function()
+{
+    LinkBundleBuilder builder { "integer-array-constant-function.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "integer_array_constant_function");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression = [&](const ScopeId expression_scope,
+                                    const vhdl::ExpressionKind kind,
+                                    std::string text,
+                                    std::vector<ExpressionId> operands = { },
+                                    const std::optional<DeclarationId>
+                                        selected = std::nullopt) {
+        const auto id = builder.model.add_expression_identity(
+            expression_scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = expression_scope;
+        expression.kind = kind;
+        expression.text = std::move(text);
+        expression.operands = std::move(operands);
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        if (selected) {
+            expression.referenced_name.emplace();
+            expression.referenced_name->spelling = expression.text;
+            expression.referenced_name->canonical = expression.text;
+            expression.referenced_name->selected = selected;
+        }
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto add_declaration = [&](const ScopeId declaration_scope,
+                                         const DeclarationKind kind,
+                                         const vhdl::DeclarationForm form,
+                                         std::string name) {
+        const auto id = builder.model.add_declaration(
+            declaration_scope, kind, name,
+            builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = declaration_scope;
+        declaration.form = form;
+        declaration.name = std::move(name);
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        return id;
+    };
+    const auto integer_subtype = [] {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "integer";
+        subtype.domain = vhdl::ValueDomain::integer;
+        return subtype;
+    };
+    const auto vector_subtype = [&](const std::int64_t left,
+                                    const std::int64_t right) {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "std_logic_vector";
+        subtype.domain = vhdl::ValueDomain::logic9;
+        vhdl::RangeConstraint range;
+        range.kind = vhdl::RangeKind::array_index;
+        range.left = left;
+        range.right = right;
+        range.descending = left >= right;
+        range.source = builder.source;
+        subtype.constraints.push_back(std::move(range));
+        return subtype;
+    };
+    const auto expression = [&](const vhdl::ExpressionKind kind,
+                                std::string text,
+                                std::vector<ExpressionId> operands = { },
+                                const std::optional<DeclarationId> selected
+                                    = std::nullopt) {
+        return add_expression(scope, kind, std::move(text),
+            std::move(operands), selected);
+    };
+    const auto literal = [&](const std::int64_t value) {
+        return expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto name = [&](const ScopeId expression_scope,
+                          const std::string& spelling,
+                          const DeclarationId selected) {
+        return add_expression(expression_scope,
+            vhdl::ExpressionKind::name, spelling, { }, selected);
+    };
+    const auto binary = [&](const std::string& operation,
+                            const ExpressionId left,
+                            const ExpressionId right) {
+        return expression(vhdl::ExpressionKind::binary,
+            operation, { left, right });
+    };
+    const auto add_statement = [&](const ScopeId statement_scope,
+                                   const vhdl::StatementKind kind) {
+        const auto id = builder.model.add_statement_identity(
+            statement_scope, builder.source, builder.origin);
+        vhdl::Statement statement;
+        statement.id = id;
+        statement.scope = statement_scope;
+        statement.kind = kind;
+        statement.source = builder.source;
+        statement.origin = builder.origin;
+        builder.vhdl_hir.mutable_statements().push_back(
+            std::move(statement));
+        return id;
+    };
+    const auto add_assignment = [&](const ExpressionId target,
+                                    const ExpressionId value) {
+        const auto id = add_statement(
+            scope, vhdl::StatementKind::variable_assignment);
+        auto statement = std::ranges::find(
+            builder.vhdl_hir.mutable_statements(), id,
+            &vhdl::Statement::id);
+        statement->target = target;
+        statement->value = value;
+        return id;
+    };
+    const auto add_integer_array_type = [&](const std::string& type_name,
+                                                const bool two_dimensions,
+                                                const vhdl::ValueDomain
+                                                    element_domain) {
+        const auto declaration = add_declaration(scope,
+            DeclarationKind::type, vhdl::DeclarationForm::type,
+            type_name);
+        TypeReference base;
+        base.source = builder.source;
+        base.spelling = type_name;
+        const auto type = builder.model.add_type(scope,
+            TypeKind::declaration, type_name, base,
+            builder.source, builder.origin);
+        auto type_declaration = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        type_declaration->declared_type = type;
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = vhdl::TypeForm::array;
+        definition.name = type_name;
+        definition.element_subtype.emplace();
+        definition.element_subtype->type_mark.spelling
+            = element_domain == vhdl::ValueDomain::integer
+            ? "integer"
+            : "boolean";
+        definition.element_subtype->domain = element_domain;
+        if (element_domain == vhdl::ValueDomain::integer) {
+            definition.element_subtype->executable_width = 32U;
+            definition.element_subtype->signed_value = true;
+            definition.element_subtype->integer_storage_width = 32U;
+        }
+        const auto dimension_count = two_dimensions ? 2U : 1U;
+        for (std::size_t dimension_index { };
+             dimension_index < dimension_count; ++dimension_index) {
+            vhdl::ArrayDimension dimension;
+            dimension.index_subtype.spelling = "natural";
+            dimension.constraint.emplace();
+            dimension.constraint->kind = vhdl::RangeKind::array_index;
+            dimension.constraint->left = 0;
+            dimension.constraint->right = 1;
+            dimension.constraint->source = builder.source;
+            dimension.source = builder.source;
+            definition.array_dimensions.push_back(std::move(dimension));
+        }
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        return std::pair { declaration, type };
+    };
+    const auto add_others_initializer = [&](const ScopeId initializer_scope,
+                                            const ExpressionId fill) {
+        const auto aggregate = add_expression(initializer_scope,
+            vhdl::ExpressionKind::aggregate, "(...)");
+        const auto others = add_expression(initializer_scope,
+            vhdl::ExpressionKind::default_choice, "others");
+        vhdl::AggregateAssociation association;
+        association.choices.push_back(others);
+        association.value = fill;
+        association.source = builder.source;
+        const auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_expressions(), aggregate,
+            &vhdl::Expression::id);
+        record->associations.push_back(std::move(association));
+        return aggregate;
+    };
+
+    const auto [array_type_declaration, array_type]
+        = add_integer_array_type(
+            "integer_array_t", false, vhdl::ValueDomain::integer);
+    const auto array_type_record = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), array_type,
+        &vhdl::TypeDefinition::id);
+    array_type_record->array_dimensions.front().constraint->right = 512;
+
+    const auto function = add_declaration(scope,
+        DeclarationKind::function, vhdl::DeclarationForm::function,
+        "fill_integer_array");
+    const auto count = add_declaration(scope,
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "integer_array_count");
+    auto count_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), count,
+        &vhdl::Declaration::id);
+    count_record->subtype = integer_subtype();
+    const auto mode = add_declaration(scope,
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "integer_array_mode");
+    auto mode_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), mode,
+        &vhdl::Declaration::id);
+    mode_record->subtype = integer_subtype();
+    const auto values = add_declaration(scope,
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "integer_array_values");
+    auto values_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), values,
+        &vhdl::Declaration::id);
+    values_record->declared_type = array_type;
+    values_record->initializer = add_others_initializer(scope, literal(0));
+
+    const auto runtime_value = add_declaration(scope,
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "integer_array_runtime_value");
+    auto runtime_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), runtime_value,
+        &vhdl::Declaration::id);
+    runtime_record->subtype = integer_subtype();
+
+    const auto count_name = name(scope, "integer_array_count", count);
+    const auto mode_name = name(scope, "integer_array_mode", mode);
+    const auto values_name = name(scope, "integer_array_values", values);
+    const auto loop_scope = builder.model.add_scope(unit, scope,
+        "fill_integer_array:loop", builder.source, builder.origin);
+    const auto loop_index = builder.model.add_declaration(
+        loop_scope, DeclarationKind::constant, "integer_array_i",
+        builder.source, builder.origin);
+    vhdl::Declaration loop_index_record;
+    loop_index_record.id = loop_index;
+    loop_index_record.scope = loop_scope;
+    loop_index_record.form = vhdl::DeclarationForm::constant;
+    loop_index_record.name = "integer_array_i";
+    loop_index_record.source = builder.source;
+    loop_index_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(loop_index_record));
+    const auto loop_index_name = name(
+        loop_scope, "integer_array_i", loop_index);
+    const auto loop_target = expression(
+        vhdl::ExpressionKind::index, "index",
+        { values_name, loop_index_name });
+    const auto loop_assignment = add_assignment(
+        loop_target, loop_index_name);
+    const auto loop = add_statement(scope, vhdl::StatementKind::loop);
+    auto loop_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), loop,
+        &vhdl::Statement::id);
+    loop_record->loop_variable = "integer_array_i";
+    loop_record->loop_initial = literal(0);
+    loop_record->loop_limit = count_name;
+    loop_record->nested_scope = loop_scope;
+    loop_record->declarations = { loop_index };
+    loop_record->statements = { loop_assignment };
+
+    const auto one = literal(1);
+    const auto out_of_range_target = expression(
+        vhdl::ExpressionKind::index, "index",
+        { values_name, binary("+", count_name, one) });
+    const auto out_of_range_assignment = add_assignment(
+        out_of_range_target, one);
+    const auto unknown_target = expression(
+        vhdl::ExpressionKind::index, "index",
+        { values_name, literal(0) });
+    const auto unknown_assignment = add_assignment(
+        unknown_target,
+        name(scope, "integer_array_runtime_value", runtime_value));
+
+    const auto mode_is_unknown = add_statement(
+        scope, vhdl::StatementKind::conditional);
+    auto unknown_branch = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), mode_is_unknown,
+        &vhdl::Statement::id);
+    unknown_branch->condition = binary("=", mode_name, literal(2));
+    unknown_branch->statements = { unknown_assignment };
+    unknown_branch->else_statements = { loop };
+    const auto mode_is_out_of_range = add_statement(
+        scope, vhdl::StatementKind::conditional);
+    auto out_of_range_branch = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), mode_is_out_of_range,
+        &vhdl::Statement::id);
+    out_of_range_branch->condition = binary("=", mode_name, one);
+    out_of_range_branch->statements = { out_of_range_assignment };
+    out_of_range_branch->else_statements = { mode_is_unknown };
+
+    const auto nested_read = expression(vhdl::ExpressionKind::index,
+        "index", { values_name,
+            expression(vhdl::ExpressionKind::index, "index",
+                { values_name, count_name }) });
+    const auto unsigned_result = expression(
+        vhdl::ExpressionKind::call, "to_unsigned",
+        { nested_read, literal(10) });
+    const auto cast_result = expression(
+        vhdl::ExpressionKind::call, "std_logic_vector", { unsigned_result });
+    const auto return_statement = add_statement(
+        scope, vhdl::StatementKind::return_statement);
+    auto return_record = std::ranges::find(
+        builder.vhdl_hir.mutable_statements(), return_statement,
+        &vhdl::Statement::id);
+    return_record->value = cast_result;
+
+    auto function_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), function,
+        &vhdl::Declaration::id);
+    function_record->callable.emplace();
+    function_record->callable->function = true;
+    function_record->callable->pure = true;
+    function_record->callable->defined = true;
+    function_record->callable->formals = { count, mode };
+    function_record->callable->return_type = vector_subtype(9, 0);
+    function_record->children = {
+        count, mode, array_type_declaration, values
+    };
+    function_record->statements = {
+        mode_is_out_of_range, return_statement
+    };
+
+    const auto add_invalid_array_function = [&](const std::string& name,
+                                                    const bool two_dimensions,
+                                                    const vhdl::ValueDomain
+                                                        element_domain) {
+        const auto [type_declaration, type] = add_integer_array_type(
+            name + "_array_t", two_dimensions, element_domain);
+        const auto function_id = add_declaration(scope,
+            DeclarationKind::function, vhdl::DeclarationForm::function,
+            name);
+        const auto values_id = add_declaration(scope,
+            DeclarationKind::variable, vhdl::DeclarationForm::variable,
+            name + "_values");
+        auto values_declaration = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), values_id,
+            &vhdl::Declaration::id);
+        values_declaration->declared_type = type;
+        values_declaration->initializer
+            = add_others_initializer(scope, literal(0));
+        const auto invalid_return = add_statement(
+            scope, vhdl::StatementKind::return_statement);
+        auto invalid_return_record = std::ranges::find(
+            builder.vhdl_hir.mutable_statements(), invalid_return,
+            &vhdl::Statement::id);
+        invalid_return_record->value = literal(0);
+        auto invalid_function = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), function_id,
+            &vhdl::Declaration::id);
+        invalid_function->callable.emplace();
+        invalid_function->callable->function = true;
+        invalid_function->callable->pure = true;
+        invalid_function->callable->defined = true;
+        invalid_function->callable->return_type = integer_subtype();
+        invalid_function->children = { type_declaration, values_id };
+        invalid_function->statements = { invalid_return };
+        builder.vhdl_unit(unit).declarations.push_back(function_id);
+        return expression(vhdl::ExpressionKind::call, name, { }, function_id);
+    };
+    const auto unsupported_shape_call = add_invalid_array_function(
+        "unsupported_integer_matrix", true,
+        vhdl::ValueDomain::integer);
+    const auto unsupported_domain_call = add_invalid_array_function(
+        "unsupported_boolean_array", false,
+        vhdl::ValueDomain::boolean);
+    const auto out_of_range_call = expression(
+        vhdl::ExpressionKind::call, "fill_integer_array",
+        { literal(512), one }, function);
+    const auto unknown_call = expression(
+        vhdl::ExpressionKind::call, "fill_integer_array",
+        { literal(512), literal(2) }, function);
+    const auto positive_call = expression(
+        vhdl::ExpressionKind::call, "fill_integer_array",
+        { literal(512), literal(0) }, function);
+    builder.vhdl_unit(unit).declarations.push_back(function);
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const auto positive
+        = specialized->evaluate_vhdl_constant_expression(positive_call);
+    assert(positive);
+    const auto packed = std::get_if<SpecializedHirVhdlPackedValue>(&*positive);
+    assert(packed);
+    assert(packed->bits == "1000000000");
+    assert(packed->left_bound == 9 && packed->right_bound == 0);
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        out_of_range_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(unknown_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        unsupported_shape_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        unsupported_domain_call));
+}
+
+void test_specialized_hir_vhdl_integer_array_rejects_shadowed_integer()
+{
+    LinkBundleBuilder builder { "shadowed-integer-array-constant.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "shadowed_integer_array_constant");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_declaration = [&](const DeclarationKind kind,
+                                         const vhdl::DeclarationForm form,
+                                         const std::string& name) {
+        const auto id = builder.model.add_declaration(
+            scope, kind, name, builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = form;
+        declaration.name = name;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        builder.vhdl_unit(unit).declarations.push_back(id);
+        return id;
+    };
+    const auto add_type = [&](const DeclarationId declaration,
+                              const std::string& name,
+                              const vhdl::TypeForm form) {
+        TypeReference base;
+        base.source = builder.source;
+        const auto type = builder.model.add_type(scope,
+            TypeKind::declaration, name, base,
+            builder.source, builder.origin);
+        const auto declaration_record = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        declaration_record->declared_type = type;
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = form;
+        definition.name = name;
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        return type;
+    };
+    const auto shadow_declaration = add_declaration(
+        DeclarationKind::type, vhdl::DeclarationForm::type, "integer");
+    const auto shadow_type = add_type(
+        shadow_declaration, "integer", vhdl::TypeForm::scalar);
+    const auto array_declaration = add_declaration(
+        DeclarationKind::type, vhdl::DeclarationForm::type,
+        "shadow_integer_array_t");
+    const auto array_type = add_type(array_declaration,
+        "shadow_integer_array_t", vhdl::TypeForm::array);
+    auto array_definition = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), array_type,
+        &vhdl::TypeDefinition::id);
+    array_definition->element_subtype.emplace();
+    array_definition->element_subtype->type_mark.spelling = "integer";
+    array_definition->element_subtype->domain = vhdl::ValueDomain::integer;
+    array_definition->element_subtype->executable_width = 32U;
+    array_definition->element_subtype->signed_value = true;
+    array_definition->element_subtype->integer_storage_width = 32U;
+    vhdl::ArrayDimension dimension;
+    dimension.index_subtype.spelling = "natural";
+    dimension.constraint.emplace();
+    dimension.constraint->kind = vhdl::RangeKind::array_index;
+    dimension.constraint->left = 0;
+    dimension.constraint->right = 1;
+    dimension.constraint->source = builder.source;
+    dimension.source = builder.source;
+    array_definition->array_dimensions.push_back(std::move(dimension));
+
+    const auto values = add_declaration(
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        "shadowed_values");
+    auto values_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), values,
+        &vhdl::Declaration::id);
+    values_record->declared_type = array_type;
+    const auto fill = builder.model.add_expression_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Expression fill_expression;
+    fill_expression.id = fill;
+    fill_expression.scope = scope;
+    fill_expression.kind = vhdl::ExpressionKind::integer_literal;
+    fill_expression.text = "0";
+    fill_expression.source = builder.source;
+    fill_expression.origin = builder.origin;
+    builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(fill_expression));
+    const auto aggregate = builder.model.add_expression_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Expression aggregate_expression;
+    aggregate_expression.id = aggregate;
+    aggregate_expression.scope = scope;
+    aggregate_expression.kind = vhdl::ExpressionKind::aggregate;
+    aggregate_expression.text = "(...)";
+    aggregate_expression.source = builder.source;
+    aggregate_expression.origin = builder.origin;
+    vhdl::AggregateAssociation others;
+    others.choice_spelling = "others";
+    others.value = fill;
+    others.source = builder.source;
+    aggregate_expression.associations.push_back(std::move(others));
+    builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(aggregate_expression));
+    values_record->initializer = aggregate;
+
+    const auto function = add_declaration(
+        DeclarationKind::function, vhdl::DeclarationForm::function,
+        "read_shadowed_integer_array");
+    const auto result_name = builder.model.add_expression_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Expression name_expression;
+    name_expression.id = result_name;
+    name_expression.scope = scope;
+    name_expression.kind = vhdl::ExpressionKind::name;
+    name_expression.text = "shadowed_values";
+    name_expression.source = builder.source;
+    name_expression.origin = builder.origin;
+    name_expression.referenced_name.emplace();
+    name_expression.referenced_name->spelling = "shadowed_values";
+    name_expression.referenced_name->canonical = "shadowed_values";
+    name_expression.referenced_name->selected = values;
+    builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(name_expression));
+    const auto zero = builder.model.add_expression_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Expression zero_expression;
+    zero_expression.id = zero;
+    zero_expression.scope = scope;
+    zero_expression.kind = vhdl::ExpressionKind::integer_literal;
+    zero_expression.text = "0";
+    zero_expression.source = builder.source;
+    zero_expression.origin = builder.origin;
+    builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(zero_expression));
+    const auto index = builder.model.add_expression_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Expression index_expression;
+    index_expression.id = index;
+    index_expression.scope = scope;
+    index_expression.kind = vhdl::ExpressionKind::index;
+    index_expression.text = "index";
+    index_expression.operands = { result_name, zero };
+    index_expression.source = builder.source;
+    index_expression.origin = builder.origin;
+    builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(index_expression));
+    const auto return_statement = builder.model.add_statement_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Statement statement;
+    statement.id = return_statement;
+    statement.scope = scope;
+    statement.kind = vhdl::StatementKind::return_statement;
+    statement.value = index;
+    statement.source = builder.source;
+    statement.origin = builder.origin;
+    builder.vhdl_hir.mutable_statements().push_back(
+        std::move(statement));
+    auto function_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), function,
+        &vhdl::Declaration::id);
+    function_record->callable.emplace();
+    function_record->callable->function = true;
+    function_record->callable->pure = true;
+    function_record->callable->defined = true;
+    function_record->callable->return_type.emplace();
+    function_record->callable->return_type->type_mark.spelling = "integer";
+    function_record->callable->return_type->domain
+        = vhdl::ValueDomain::integer;
+    function_record->children = { values };
+    function_record->statements = { return_statement };
+
+    const auto call = builder.model.add_expression_identity(
+        scope, builder.source, builder.origin);
+    vhdl::Expression call_expression;
+    call_expression.id = call;
+    call_expression.scope = scope;
+    call_expression.kind = vhdl::ExpressionKind::call;
+    call_expression.text = "read_shadowed_integer_array";
+    call_expression.source = builder.source;
+    call_expression.origin = builder.origin;
+    call_expression.referenced_name.emplace();
+    call_expression.referenced_name->spelling
+        = "read_shadowed_integer_array";
+    call_expression.referenced_name->canonical
+        = "read_shadowed_integer_array";
+    call_expression.referenced_name->selected = function;
+    builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(call_expression));
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const auto shadow_types = design.vhdl_type_declarations_named("integer");
+    assert(shadow_types && shadow_types->size() == 1U);
+    const auto resolved_shadow_declaration = design.find_declaration(
+        *shadow_types->begin());
+    assert(resolved_shadow_declaration
+        && resolved_shadow_declaration->vhdl != nullptr
+        && resolved_shadow_declaration->vhdl->declared_type == shadow_type);
+
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    assert(!specialized->evaluate_vhdl_constant_expression(call));
+}
+
+void test_specialized_hir_vhdl_packed_array_projection()
+{
+    LinkBundleBuilder builder { "packed-array-constant-projection.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "packed_array_constant_projection");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_expression
+        = [&](const vhdl::ExpressionKind kind, std::string text,
+              std::vector<ExpressionId> operands = { },
+              const std::optional<DeclarationId> selected = std::nullopt) {
+              const auto id = builder.model.add_expression_identity(
+                  scope, builder.source, builder.origin);
+              vhdl::Expression expression;
+              expression.id = id;
+              expression.scope = scope;
+              expression.kind = kind;
+              expression.text = std::move(text);
+              expression.operands = std::move(operands);
+              expression.source = builder.source;
+              expression.origin = builder.origin;
+              if (selected) {
+                  expression.referenced_name.emplace();
+                  expression.referenced_name->spelling
+                      = expression.text;
+                  expression.referenced_name->canonical
+                      = expression.text;
+                  expression.referenced_name->selected = selected;
+              }
+              builder.vhdl_hir.mutable_expressions().push_back(
+                  std::move(expression));
+              return id;
+          };
+    const auto literal = [&](const std::int64_t value) {
+        return add_expression(vhdl::ExpressionKind::integer_literal,
+            std::to_string(value));
+    };
+    const auto add_declaration
+        = [&](const DeclarationKind kind,
+              const vhdl::DeclarationForm form, std::string name,
+              const std::optional<ExpressionId> initializer = std::nullopt) {
+              const auto id = builder.model.add_declaration(
+                  scope, kind, name, builder.source, builder.origin);
+              vhdl::Declaration declaration;
+              declaration.id = id;
+              declaration.scope = scope;
+              declaration.form = form;
+              declaration.name = std::move(name);
+              declaration.initializer = initializer;
+              declaration.source = builder.source;
+              declaration.origin = builder.origin;
+              builder.vhdl_hir.mutable_declarations().push_back(
+                  std::move(declaration));
+              return id;
+          };
+    const auto array_type = [&](const std::string& name,
+                                const std::int64_t outer_left,
+                                const std::int64_t outer_right,
+                                const std::int64_t element_left) {
+        const auto declaration = add_declaration(
+            DeclarationKind::type, vhdl::DeclarationForm::type, name);
+        TypeReference base;
+        base.source = builder.source;
+        base.spelling = name;
+        const auto type = builder.model.add_type(scope,
+            TypeKind::declaration, name, base,
+            builder.source, builder.origin);
+        auto declaration_record = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        declaration_record->declared_type = type;
+
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = vhdl::TypeForm::array;
+        definition.name = name;
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        definition.element_subtype.emplace();
+        definition.element_subtype->type_mark.spelling
+            = "std_logic_vector";
+        definition.element_subtype->domain = vhdl::ValueDomain::logic9;
+        vhdl::RangeConstraint element_range;
+        element_range.kind = vhdl::RangeKind::array_index;
+        element_range.left = element_left;
+        element_range.right = 0;
+        element_range.descending = true;
+        element_range.source = builder.source;
+        definition.element_subtype->constraints.push_back(
+            std::move(element_range));
+        vhdl::ArrayDimension dimension;
+        dimension.index_subtype.spelling = "integer";
+        dimension.constraint.emplace();
+        dimension.constraint->kind = vhdl::RangeKind::array_index;
+        dimension.constraint->left = outer_left;
+        dimension.constraint->right = outer_right;
+        dimension.constraint->descending = outer_left >= outer_right;
+        dimension.constraint->source = builder.source;
+        dimension.source = builder.source;
+        definition.array_dimensions.push_back(std::move(dimension));
+        builder.vhdl_hir.mutable_types().push_back(std::move(definition));
+        builder.vhdl_unit(unit).declarations.push_back(declaration);
+        return type;
+    };
+    const auto packed_array_type = array_type("rom_t", 1, 0, 3);
+    const auto wrong_outer_type = array_type(
+        "wrong_outer_t", 2, 0, 3);
+    const auto wrong_element_type = array_type(
+        "wrong_element_t", 1, 0, 2);
+    const auto subtype = [&](const TypeId type, const std::string& name) {
+        vhdl::SubtypeIndication result;
+        result.type_mark.target = type;
+        result.type_mark.spelling = name;
+        return result;
+    };
+    const auto add_array_function
+        = [&](const std::string& function_name,
+              const TypeId return_type,
+              const std::string& return_type_name,
+              const TypeId local_type,
+              const std::int64_t local_element_width,
+              const bool initialize, const bool replace_second_element) {
+              const auto function = add_declaration(
+                  DeclarationKind::function,
+                  vhdl::DeclarationForm::function, function_name);
+              const auto local = add_declaration(
+                  DeclarationKind::variable,
+                  vhdl::DeclarationForm::variable,
+                  function_name + "_value");
+              auto local_record = std::ranges::find(
+                  builder.vhdl_hir.mutable_declarations(), local,
+                  &vhdl::Declaration::id);
+              local_record->declared_type = local_type;
+              if (initialize) {
+                  const auto aggregate = add_expression(
+                      vhdl::ExpressionKind::aggregate, "(...)");
+                  const auto others = add_expression(
+                      vhdl::ExpressionKind::default_choice, "others");
+                  const auto fill = add_expression(
+                      vhdl::ExpressionKind::call, "to_unsigned",
+                      { literal(5), literal(local_element_width) });
+                  vhdl::AggregateAssociation association;
+                  association.choices.push_back(others);
+                  association.value = fill;
+                  association.source = builder.source;
+                  auto aggregate_record = std::ranges::find(
+                      builder.vhdl_hir.mutable_expressions(), aggregate,
+                      &vhdl::Expression::id);
+                  aggregate_record->associations.push_back(
+                      std::move(association));
+                  local_record->initializer = aggregate;
+              }
+
+              std::vector<StatementId> statements;
+              if (replace_second_element) {
+                  const auto target = add_expression(
+                      vhdl::ExpressionKind::index, "index",
+                      { add_expression(vhdl::ExpressionKind::name,
+                            function_name + "_value", { }, local),
+                          literal(0) });
+                  const auto replacement = add_expression(
+                      vhdl::ExpressionKind::call, "to_unsigned",
+                      { literal(10), literal(4) });
+                  const auto assignment = builder.model
+                      .add_statement_identity(
+                          scope, builder.source, builder.origin);
+                  vhdl::Statement assignment_record;
+                  assignment_record.id = assignment;
+                  assignment_record.scope = scope;
+                  assignment_record.kind
+                      = vhdl::StatementKind::variable_assignment;
+                  assignment_record.target = target;
+                  assignment_record.value = replacement;
+                  assignment_record.source = builder.source;
+                  assignment_record.origin = builder.origin;
+                  builder.vhdl_hir.mutable_statements().push_back(
+                      std::move(assignment_record));
+                  statements.push_back(assignment);
+              }
+              const auto returned = add_expression(
+                  vhdl::ExpressionKind::name,
+                  function_name + "_value", { }, local);
+              const auto return_statement = builder.model
+                  .add_statement_identity(
+                      scope, builder.source, builder.origin);
+              vhdl::Statement return_record;
+              return_record.id = return_statement;
+              return_record.scope = scope;
+              return_record.kind
+                  = vhdl::StatementKind::return_statement;
+              return_record.value = returned;
+              return_record.source = builder.source;
+              return_record.origin = builder.origin;
+              builder.vhdl_hir.mutable_statements().push_back(
+                  std::move(return_record));
+              statements.push_back(return_statement);
+
+              auto function_record = std::ranges::find(
+                  builder.vhdl_hir.mutable_declarations(), function,
+                  &vhdl::Declaration::id);
+              function_record->callable.emplace();
+              function_record->callable->function = true;
+              function_record->callable->pure = true;
+              function_record->callable->defined = true;
+              function_record->callable->return_type
+                  = subtype(return_type, return_type_name);
+              function_record->children = { local };
+              function_record->statements = std::move(statements);
+              builder.vhdl_unit(unit).declarations.push_back(function);
+              return add_expression(vhdl::ExpressionKind::call,
+                  function_name, { }, function);
+          };
+
+    const auto packed_array_call = add_array_function(
+        "make_rom", packed_array_type, "rom_t", packed_array_type,
+        4, true, true);
+    const auto wrong_outer_call = add_array_function(
+        "make_wrong_outer", packed_array_type, "rom_t",
+        wrong_outer_type, 4, true, false);
+    const auto wrong_element_call = add_array_function(
+        "make_wrong_element", packed_array_type, "rom_t",
+        wrong_element_type, 3, true, false);
+    const auto incomplete_call = add_array_function(
+        "make_incomplete", packed_array_type, "rom_t",
+        packed_array_type, 4, false, false);
+
+    const auto rom = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "ROM", packed_array_call);
+    auto rom_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), rom,
+        &vhdl::Declaration::id);
+    rom_record->declared_type = packed_array_type;
+    builder.vhdl_unit(unit).declarations.push_back(rom);
+    const auto wrong_rom = add_declaration(DeclarationKind::constant,
+        vhdl::DeclarationForm::constant, "WRONG_ROM", wrong_outer_call);
+    auto wrong_rom_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), wrong_rom,
+        &vhdl::Declaration::id);
+    wrong_rom_record->declared_type = packed_array_type;
+    builder.vhdl_unit(unit).declarations.push_back(wrong_rom);
+    const auto incomplete_rom = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "INCOMPLETE_ROM", incomplete_call);
+    auto incomplete_rom_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), incomplete_rom,
+        &vhdl::Declaration::id);
+    incomplete_rom_record->declared_type = packed_array_type;
+    builder.vhdl_unit(unit).declarations.push_back(incomplete_rom);
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+
+    const auto expression_value
+        = specialized->evaluate_vhdl_packed_array_expression(
+            packed_array_call);
+    assert(expression_value);
+    assert(expression_value->left_bound == 1);
+    assert(expression_value->right_bound == 0);
+    assert(expression_value->element_domain == vhdl::ValueDomain::logic9);
+    assert(expression_value->elements.size() == 2U);
+    assert(expression_value->elements[0].bits == "0101");
+    assert(expression_value->elements[0].left_bound == 3);
+    assert(expression_value->elements[0].right_bound == 0);
+    assert(expression_value->elements[1].bits == "1010");
+    assert(expression_value->elements[1].left_bound == 3);
+    assert(expression_value->elements[1].right_bound == 0);
+
+    const auto declaration_value
+        = specialized->evaluate_vhdl_packed_array_declaration(rom);
+    assert(declaration_value);
+    assert(*declaration_value == *expression_value);
+    assert(!specialized->evaluate_vhdl_packed_array_declaration(wrong_rom));
+    assert(!specialized->evaluate_vhdl_packed_array_declaration(
+        incomplete_rom));
+    assert(!specialized->evaluate_vhdl_packed_array_expression(
+        wrong_outer_call));
+    assert(!specialized->evaluate_vhdl_packed_array_expression(
+        wrong_element_call));
+    assert(!specialized->evaluate_vhdl_packed_array_expression(
+        incomplete_call));
+    assert(!specialized->evaluate_vhdl_constant_expression(
+        packed_array_call));
 }
 
 void test_compiled_design_normalization()
@@ -5075,6 +8470,299 @@ void test_compiled_vhdl_predefined_subtype_fast_path()
     assert_equivalent(unknown);
 }
 
+void test_vhdl_builtin_std_logic_1164_provenance()
+{
+    struct LinkedFixture {
+        CompiledDesign design;
+        UnitId architecture;
+        std::optional<TypeId> user_vector_type;
+    };
+    const auto make_fixture = [](const std::string& source_name,
+                                  const bool import_user_operator,
+                                  const bool import_std_logic_1164,
+                                  const bool define_user_vector_type) {
+        LinkBundleBuilder builder { source_name };
+        builder.add_vhdl_unit(UnitKind::vhdl_entity,
+            vhdl::UnitKind::entity, "provenance_entity");
+        const auto architecture = builder.add_vhdl_unit(
+            UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+            "rtl", "provenance_entity");
+        const auto scope
+            = builder.model.units()[architecture.value()].scope;
+
+        const auto add_use = [&](const std::string_view package) {
+            vhdl::ContextItem clause;
+            clause.kind = vhdl::ContextKind::use_clause;
+            clause.source = builder.source;
+            clause.selected_names.push_back(vhdl_name(
+                std::string { package } + ".all", builder.source));
+            builder.vhdl_unit(architecture).context.push_back(
+                std::move(clause));
+        };
+        if (import_std_logic_1164) {
+            add_use("ieee.std_logic_1164");
+        }
+        if (import_user_operator) {
+            const auto package = builder.add_vhdl_unit(
+                UnitKind::vhdl_package, vhdl::UnitKind::package,
+                "user_ops");
+            const auto package_scope
+                = builder.model.units()[package.value()].scope;
+            const auto declaration = builder.model.add_declaration(
+                package_scope, DeclarationKind::function, "and",
+                builder.source, builder.origin);
+            vhdl::Declaration function;
+            function.id = declaration;
+            function.scope = package_scope;
+            function.form = vhdl::DeclarationForm::function;
+            function.name = "and";
+            function.source = builder.source;
+            function.origin = builder.origin;
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(function));
+            builder.vhdl_unit(package).declarations.push_back(declaration);
+            add_use("work.user_ops");
+        }
+
+        std::optional<TypeId> user_vector_type;
+        if (define_user_vector_type) {
+            const auto declaration = builder.model.add_declaration(
+                scope, DeclarationKind::type, "std_logic_vector",
+                builder.source, builder.origin);
+            TypeReference base;
+            base.source = builder.source;
+            base.spelling = "std_logic_vector";
+            const auto type = builder.model.add_type(scope,
+                TypeKind::declaration, "std_logic_vector", base,
+                builder.source, builder.origin);
+            vhdl::Declaration type_declaration;
+            type_declaration.id = declaration;
+            type_declaration.scope = scope;
+            type_declaration.form = vhdl::DeclarationForm::type;
+            type_declaration.name = "std_logic_vector";
+            type_declaration.declared_type = type;
+            type_declaration.source = builder.source;
+            type_declaration.origin = builder.origin;
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(type_declaration));
+            vhdl::TypeDefinition definition;
+            definition.id = type;
+            definition.declaration = declaration;
+            definition.form = vhdl::TypeForm::array;
+            definition.name = "std_logic_vector";
+            definition.element_subtype.emplace();
+            definition.element_subtype->type_mark.spelling = "std_logic";
+            definition.element_subtype->type_mark.source = builder.source;
+            definition.element_subtype->domain = vhdl::ValueDomain::logic9;
+            definition.element_subtype->executable_width = 1U;
+            vhdl::ArrayDimension dimension;
+            dimension.index_subtype = vhdl_name("natural", builder.source);
+            dimension.unconstrained = true;
+            dimension.source = builder.source;
+            definition.array_dimensions.push_back(std::move(dimension));
+            definition.source = builder.source;
+            definition.origin = builder.origin;
+            builder.vhdl_hir.mutable_types().push_back(
+                std::move(definition));
+            builder.vhdl_unit(architecture).declarations.push_back(
+                declaration);
+            user_vector_type = type;
+        }
+
+        vhdl::SubtypeIndication vector_subtype;
+        vector_subtype.type_mark.spelling = "std_logic_vector";
+        vector_subtype.type_mark.source = builder.source;
+        vector_subtype.domain = vhdl::ValueDomain::logic9;
+        vector_subtype.executable_width = 8U;
+        const auto add_signal = [&](const std::string& name) {
+            const auto declaration = builder.model.add_declaration(scope,
+                DeclarationKind::signal, name,
+                builder.source, builder.origin);
+            vhdl::Declaration signal;
+            signal.id = declaration;
+            signal.scope = scope;
+            signal.form = vhdl::DeclarationForm::signal;
+            signal.name = name;
+            signal.source = builder.source;
+            signal.origin = builder.origin;
+            signal.subtype = vector_subtype;
+            signal.object_class = vhdl::ObjectClass::signal;
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(signal));
+            builder.vhdl_unit(architecture).declarations.push_back(
+                declaration);
+        };
+        add_signal("source_a");
+        add_signal("source_b");
+
+        const auto add_expression = [&](const vhdl::ExpressionKind kind,
+                                        const std::string& text,
+                                        std::vector<ExpressionId> operands) {
+            const auto expression_id = builder.model.add_expression_identity(
+                scope, builder.source, builder.origin);
+            vhdl::Expression expression;
+            expression.id = expression_id;
+            expression.scope = scope;
+            expression.kind = kind;
+            expression.text = text;
+            expression.source = builder.source;
+            expression.origin = builder.origin;
+            expression.operands = std::move(operands);
+            expression.referenced_name = vhdl_name(text, builder.source);
+            builder.vhdl_hir.mutable_expressions().push_back(
+                std::move(expression));
+            return expression_id;
+        };
+        const auto left = add_expression(
+            vhdl::ExpressionKind::name, "source_a", { });
+        const auto right = add_expression(
+            vhdl::ExpressionKind::name, "source_b", { });
+        const auto inverse = add_expression(
+            vhdl::ExpressionKind::unary, "not", { right });
+        add_expression(vhdl::ExpressionKind::binary,
+            "and", { left, inverse });
+
+        std::vector<CompiledDesign> inputs;
+        inputs.push_back(builder.finish());
+        auto linked = link_compiled_designs(std::move(inputs));
+        assert(linked.ok());
+        return LinkedFixture {
+            std::move(*linked.design), architecture, user_vector_type
+        };
+    };
+
+    const auto find_operator = [](const CompiledDesign& design,
+                                  const vhdl::ExpressionKind kind,
+                                  const std::string_view spelling)
+        -> const vhdl::Expression& {
+        const auto expression = std::ranges::find_if(
+            design.vhdl_hir.expressions(), [&](const auto& candidate) {
+                return candidate.kind == kind
+                    && candidate.text == spelling;
+            });
+        assert(expression != design.vhdl_hir.expressions().end());
+        return *expression;
+    };
+    const auto imported = make_fixture(
+        "builtin-vector-import.vhd", false, true, false);
+    assert(find_operator(imported.design,
+               vhdl::ExpressionKind::unary, "not").builtin_operator
+        == vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not);
+    assert(find_operator(imported.design,
+               vhdl::ExpressionKind::binary, "and").builtin_operator
+        == vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_and);
+    vhdl::SubtypeIndication imported_vector;
+    imported_vector.type_mark.spelling = "std_logic_vector";
+    imported_vector.domain = vhdl::ValueDomain::logic9;
+    imported_vector.executable_width = 8U;
+    const CompiledDesignResolver imported_resolver {
+        imported.design, imported.architecture
+    };
+    const auto imported_subtype = imported_resolver.effective_vhdl_subtype(
+        imported_vector,
+        imported.design.units()[imported.architecture.value()].scope);
+    assert(imported_subtype
+        && imported_subtype->builtin_type
+            == vhdl::BuiltinTypeIdentity::
+                ieee_std_logic_1164_std_logic_vector);
+
+    const auto missing_import = make_fixture(
+        "builtin-vector-missing-import.vhd", false, false, false);
+    const auto missing_imports =
+        missing_import.design.vhdl_linked_imports(
+            missing_import.architecture);
+    assert(missing_imports);
+    assert(std::ranges::none_of(*missing_imports,
+        [](const CompiledVhdlImport& item) {
+            return item.library == "ieee"
+                && item.package == "std_logic_1164";
+        }));
+    const CompiledDesignResolver missing_import_resolver {
+        missing_import.design, missing_import.architecture
+    };
+    const auto missing_import_subtype
+        = missing_import_resolver.effective_vhdl_subtype(
+            imported_vector,
+            missing_import.design.units()[
+                missing_import.architecture.value()].scope);
+    assert(missing_import_subtype
+        && !missing_import_subtype->type_mark.target.valid()
+        && missing_import_subtype->builtin_type
+            == vhdl::BuiltinTypeIdentity::none);
+    assert(find_operator(missing_import.design,
+               vhdl::ExpressionKind::unary, "not").builtin_operator
+        == vhdl::BuiltinOperatorIdentity::none);
+    assert(find_operator(missing_import.design,
+               vhdl::ExpressionKind::binary, "and").builtin_operator
+        == vhdl::BuiltinOperatorIdentity::none);
+
+    const auto user_vector_shadow = make_fixture(
+        "builtin-vector-user-shadow.vhd", false, true, true);
+    assert(user_vector_shadow.user_vector_type);
+    const auto shadow_imports
+        = user_vector_shadow.design.vhdl_linked_imports(
+            user_vector_shadow.architecture);
+    assert(shadow_imports);
+    assert(std::ranges::any_of(*shadow_imports,
+        [](const CompiledVhdlImport& item) {
+            return item.library == "ieee"
+                && item.package == "std_logic_1164"
+                && item.member == "all";
+        }));
+    const auto shadow_type_declarations
+        = user_vector_shadow.design.vhdl_type_declarations_named(
+            "std_logic_vector");
+    assert(shadow_type_declarations
+        && shadow_type_declarations->size() == 1U);
+    const auto shadow_type = user_vector_shadow.design.find_type(
+        *user_vector_shadow.user_vector_type);
+    assert(shadow_type && shadow_type->vhdl != nullptr
+        && shadow_type->vhdl->name == "std_logic_vector");
+    const CompiledDesignResolver shadow_resolver {
+        user_vector_shadow.design, user_vector_shadow.architecture
+    };
+    const auto shadow_subtype = shadow_resolver.effective_vhdl_subtype(
+        imported_vector,
+        user_vector_shadow.design.units()[
+            user_vector_shadow.architecture.value()].scope);
+    assert(shadow_subtype
+        && shadow_subtype->type_mark.target
+            == *user_vector_shadow.user_vector_type
+        && shadow_subtype->builtin_type
+            == vhdl::BuiltinTypeIdentity::none);
+
+    const auto overloaded = make_fixture(
+        "builtin-vector-user-overload.vhd", true, true, false);
+    const auto imports
+        = overloaded.design.vhdl_linked_imports(overloaded.architecture);
+    assert(imports);
+    assert(std::ranges::any_of(*imports, [](const CompiledVhdlImport& item) {
+        return item.library == "work" && item.package == "user_ops"
+            && item.member == "all";
+    }));
+    const auto package_members
+        = overloaded.design.vhdl_package_members("and");
+    assert(package_members);
+    const auto user_and = std::ranges::find_if(*package_members,
+        [](const CompiledVhdlPackageMemberIndexEntry& member) {
+            return member.library == "work"
+                && member.package == "user_ops";
+        });
+    assert(user_and != package_members->end());
+    const auto& overloaded_and = find_operator(overloaded.design,
+        vhdl::ExpressionKind::binary, "and");
+    assert(overloaded_and.referenced_name);
+    assert(overloaded_and.referenced_name->selected == user_and->member
+        || std::ranges::find(overloaded_and.referenced_name->overloads,
+               user_and->member)
+            != overloaded_and.referenced_name->overloads.end());
+    assert(overloaded_and.builtin_operator
+        == vhdl::BuiltinOperatorIdentity::none);
+    assert(find_operator(overloaded.design,
+               vhdl::ExpressionKind::unary, "not").builtin_operator
+        == vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not);
+}
+
 void test_vhdl_package_member_index_contract()
 {
     auto fixture = make_vhdl_package_member_index_fixture();
@@ -5260,6 +8948,7 @@ void run_compiled_design_tests()
     test_systemverilog_auxiliary_record_relocation();
     test_systemverilog_auxiliary_record_projection();
     test_compiled_systemverilog_resolver_exports_and_lets();
+    test_compiled_systemverilog_resolver_enum_literal_duplicates();
     test_compiled_systemverilog_resolver_expression_targets();
     test_compiled_systemverilog_resolver_synthetic_type_designator();
     test_compiled_design_specialization();
@@ -5267,8 +8956,19 @@ void run_compiled_design_tests()
     test_compiled_vhdl_resolver_retained_time_layout();
     test_compiled_vhdl_resolver_array_shapes();
     test_compiled_vhdl_predefined_subtype_fast_path();
+    test_vhdl_builtin_std_logic_1164_provenance();
     test_compiled_association_resolution();
     test_specialized_hir_unit();
+    test_specialized_hir_parameter_bit_selection();
+    test_specialized_hir_vhdl_while_function();
+    test_specialized_hir_vhdl_integer_exponentiation();
+    test_specialized_hir_vhdl_packed_constant_function();
+    test_specialized_hir_vhdl_generated_packed_constant_iterator();
+    test_specialized_hir_vhdl_selection_constant_function();
+    test_specialized_hir_vhdl_local_array_constant_function();
+    test_specialized_hir_vhdl_integer_array_constant_function();
+    test_specialized_hir_vhdl_integer_array_rejects_shadowed_integer();
+    test_specialized_hir_vhdl_packed_array_projection();
     test_compiled_design_normalization();
     test_compiled_design_indexed_lookup_contract();
     test_vhdl_package_member_index_contract();

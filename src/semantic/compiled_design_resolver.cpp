@@ -233,6 +233,62 @@ CompiledDeclarationResolution declaration_result(
     return { status_for(candidates.size()), std::move(candidates) };
 }
 
+std::optional<std::vector<DeclarationId>> rank_systemverilog_constants(
+    const CompiledDesign& design, const SpecializedHirUnit* const effective,
+    const std::vector<DeclarationId>& candidates)
+{
+    using Form = sv::DeclarationForm;
+    auto winning_rank = 0U;
+    std::vector<DeclarationId> ranked;
+    for (const auto id : candidates) {
+        const auto declaration = find_declaration(design, effective, id);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto form = declaration->systemverilog->form;
+        if (form != Form::parameter
+            && form != Form::local_parameter
+            && form != Form::enumeration_literal) {
+            return std::nullopt;
+        }
+        const auto rank = form == Form::enumeration_literal ? 2U : 1U;
+        if (rank > winning_rank) {
+            ranked.clear();
+            winning_rank = rank;
+        }
+        if (rank == winning_rank) {
+            ranked.push_back(id);
+        }
+    }
+    return ranked;
+}
+
+bool synthetic_enum_constant_duplicate(
+    const CompiledDesign& design, const SpecializedHirUnit* const effective,
+    const std::vector<DeclarationId>& candidates)
+{
+    if (candidates.size() != 2U) {
+        return false;
+    }
+    const auto first = find_declaration(design, effective, candidates[0]);
+    const auto second = find_declaration(design, effective, candidates[1]);
+    if (!first || !second
+        || first->systemverilog == nullptr
+        || second->systemverilog == nullptr) {
+        return false;
+    }
+    const auto is_pair = [](const sv::Declaration& enumeration,
+                            const sv::Declaration& parameter) {
+        return enumeration.form == sv::DeclarationForm::enumeration_literal
+            && parameter.form == sv::DeclarationForm::local_parameter
+            && enumeration.scope == parameter.scope
+            && enumeration.source == parameter.source
+            && enumeration.name == parameter.name;
+    };
+    return is_pair(*first->systemverilog, *second->systemverilog)
+        || is_pair(*second->systemverilog, *first->systemverilog);
+}
+
 sv::TypeReference retain_systemverilog_declarator(
     sv::TypeReference replacement, const sv::TypeReference& use)
 {
@@ -743,6 +799,18 @@ bool builtin_standard_package_exports(const std::string_view library,
     const std::string_view package, const std::string_view member)
 {
     if (same_vhdl_identifier(library, "ieee")
+        && same_vhdl_identifier(package, "std_logic_1164")) {
+        constexpr auto members = std::to_array<std::string_view>({
+            "std_logic", "std_ulogic", "std_logic_vector",
+            "std_ulogic_vector", "not", "and", "or", "nand",
+            "nor", "xor", "xnor",
+        });
+        return std::ranges::any_of(members,
+            [&](const std::string_view candidate) {
+                return same_vhdl_identifier(candidate, member);
+            });
+    }
+    if (same_vhdl_identifier(library, "ieee")
         && (same_vhdl_identifier(package, "numeric_std")
             || same_vhdl_identifier(package, "numeric_bit"))) {
         // Standard-library package projections are optional compiled inputs.
@@ -751,6 +819,7 @@ bool builtin_standard_package_exports(const std::string_view library,
         constexpr auto members = std::to_array<std::string_view>({
             "signed", "unsigned", "abs", "+", "-", "*", "/",
             "mod", "rem", "**", "=", "/=", "<", "<=", ">", ">=",
+            "and", "or", "nand", "nor", "xor", "xnor",
             "sll", "srl", "rol", "ror", "shift_left", "shift_right",
             "rotate_left", "rotate_right", "resize", "to_integer",
             "to_unsigned", "to_signed", "to_01", "find_leftmost",
@@ -1291,6 +1360,19 @@ CompiledDesignResolver::resolve_systemverilog_name(
     if (name.selected && retained_is_valid(*name.selected)) {
         return { CompiledResolutionStatus::unique, { *name.selected } };
     }
+    const auto normalize_synthetic_duplicate
+        = [&](CompiledDeclarationResolution result) {
+              if (result.status != CompiledResolutionStatus::ambiguous
+                  || !synthetic_enum_constant_duplicate(
+                      *design_, effective_, result.candidates)) {
+                  return result;
+              }
+              const auto ranked = rank_systemverilog_constants(
+                  *design_, effective_, result.candidates);
+              return ranked && ranked->size() == 1U
+                  ? declaration_result(*ranked)
+                  : result;
+          };
     std::vector<DeclarationId> retained;
     for (const auto candidate : name.overloads) {
         if (retained_is_valid(candidate)) {
@@ -1298,10 +1380,11 @@ CompiledDesignResolver::resolve_systemverilog_name(
         }
     }
     if (!retained.empty()) {
-        return declaration_result(std::move(retained));
+        return normalize_synthetic_duplicate(
+            declaration_result(std::move(retained)));
     }
-    return resolve_systemverilog(name.spelling, use_scope, predicate,
-        same_library_fallback);
+    return normalize_synthetic_duplicate(resolve_systemverilog(
+        name.spelling, use_scope, predicate, same_library_fallback));
 }
 
 CompiledDeclarationResolution
@@ -1654,26 +1737,11 @@ CompiledDesignResolver::resolve_systemverilog_constant(
     if (result.candidates.empty()) {
         return result;
     }
-    auto winning_rank = 0U;
-    std::vector<DeclarationId> ranked;
-    for (const auto id : result.candidates) {
-        const auto declaration = find_declaration(*design_, effective_, id);
-        if (!declaration || declaration->systemverilog == nullptr) {
-            continue;
-        }
-        const auto rank = declaration->systemverilog->form
-                == Form::enumeration_literal
-            ? 2U
-            : 1U;
-        if (rank > winning_rank) {
-            ranked.clear();
-            winning_rank = rank;
-        }
-        if (rank == winning_rank) {
-            ranked.push_back(id);
-        }
+    if (const auto ranked = rank_systemverilog_constants(
+            *design_, effective_, result.candidates)) {
+        return declaration_result(*ranked);
     }
-    return declaration_result(std::move(ranked));
+    return result;
 }
 
 CompiledDeclarationResolution
@@ -2243,14 +2311,51 @@ CompiledDesignResolver::effective_vhdl_subtype(
         return std::nullopt;
     }
 
-    const auto evaluate_boundary = [&](const std::optional<std::int64_t> folded,
-                                       const std::optional<ExpressionId> residual) {
+    const auto make_boundary_binding = [](
+        const std::span<const CompiledBindingFrame> active)
+        -> SpecializedHirIntegralBinding {
+        return [active](const DeclarationId formal)
+            -> std::optional<ExpressionId> {
+            for (auto frame = active.rbegin();
+                 frame != active.rend(); ++frame) {
+                const auto binding = std::ranges::find(
+                    *frame, formal, &CompiledActualBinding::formal);
+                if (binding == frame->end()) {
+                    continue;
+                }
+                // The nearest frame owns the name even when it carries a
+                // declaration/type binding rather than an expression.  Do
+                // not expose an older frame through that shadowing boundary.
+                return binding->expression;
+            }
+            return std::nullopt;
+        };
+    };
+    const auto evaluate_boundary = [&](
+        const std::optional<std::int64_t> folded,
+        const std::optional<ExpressionId> residual,
+        const std::span<const CompiledBindingFrame> active) {
         if (folded) {
             return folded;
         }
         return residual && effective_ != nullptr
-            ? effective_->evaluate_integral_expression(*residual)
+            ? effective_->evaluate_integral_expression(
+                  *residual, make_boundary_binding(active))
             : std::nullopt;
+    };
+    const auto materialize_boundaries = [&](
+        vhdl::SubtypeIndication& subtype,
+        const std::span<const CompiledBindingFrame> active) {
+        for (auto& constraint : subtype.constraints) {
+            if (!constraint.left && constraint.left_expression) {
+                constraint.left = evaluate_boundary(
+                    constraint.left, constraint.left_expression, active);
+            }
+            if (!constraint.right && constraint.right_expression) {
+                constraint.right = evaluate_boundary(
+                    constraint.right, constraint.right_expression, active);
+            }
+        }
     };
     const auto standard_width = [&]() -> std::uint8_t {
         const auto selected = design_->find_unit(selected_unit_);
@@ -2259,8 +2364,46 @@ CompiledDesignResolver::effective_vhdl_subtype(
             ? 64U
             : 32U;
     };
-    const auto complete_predefined = [&](vhdl::SubtypeIndication& result) {
+    const auto complete_predefined = [&](
+        vhdl::SubtypeIndication& result,
+        const std::span<const CompiledBindingFrame> active,
+        const ScopeId subtype_scope) {
+        materialize_boundaries(result, active);
         const auto name = simple_vhdl_name(result.type_mark.spelling);
+        const auto stamp_builtin_vector_identity = [&]() {
+            if (result.builtin_type != vhdl::BuiltinTypeIdentity::none
+                || result.type_mark.target.valid()
+                || result.domain != vhdl::ValueDomain::logic9) {
+                return;
+            }
+            auto type_name = std::string_view {
+                result.type_mark.spelling
+            };
+            constexpr auto builtin_prefix
+                = std::string_view { "@builtin:" };
+            if (type_name.starts_with(builtin_prefix)) {
+                type_name.remove_prefix(builtin_prefix.size());
+            }
+            if (type_name.empty()
+                || type_name.find_first_of(".:") != std::string_view::npos) {
+                return;
+            }
+            const auto declarations
+                = design_->vhdl_type_declarations_named(type_name);
+            if (!declarations || !declarations->empty()
+                || !vhdl_builtin_package_member_imported("ieee",
+                    "std_logic_1164", type_name, subtype_scope)) {
+                return;
+            }
+            if (same_vhdl_identifier(type_name, "std_logic_vector")) {
+                result.builtin_type
+                    = vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector;
+            } else if (same_vhdl_identifier(
+                           type_name, "std_ulogic_vector")) {
+                result.builtin_type
+                    = vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector;
+            }
+        };
         if (same_vhdl_identifier(name, "integer")
             || same_vhdl_identifier(name, "natural")
             || same_vhdl_identifier(name, "positive")
@@ -2357,6 +2500,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             if (result.domain == vhdl::ValueDomain::unknown) {
                 result.domain = element_domain;
             }
+            stamp_builtin_vector_identity();
             if (result.constraints.empty()) {
                 if (!result.executable_width
                     || *result.executable_width == 0U) {
@@ -2368,9 +2512,11 @@ CompiledDesignResolver::effective_vhdl_subtype(
             std::uint64_t count { 1U };
             for (const auto& constraint : result.constraints) {
                 const auto left = evaluate_boundary(
-                    constraint.left, constraint.left_expression);
+                    constraint.left, constraint.left_expression,
+                    active);
                 const auto right = evaluate_boundary(
-                    constraint.right, constraint.right_expression);
+                    constraint.right, constraint.right_expression,
+                    active);
                 if (!left || !right) {
                     result.executable_width.reset();
                     return true;
@@ -2442,7 +2588,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             return std::optional<vhdl::SubtypeIndication> { };
         }
         auto result = input;
-        return complete_predefined(result)
+        return complete_predefined(result, binding_frames_, use_scope)
             ? std::optional<vhdl::SubtypeIndication> { std::move(result) }
             : std::optional<vhdl::SubtypeIndication> { };
     }();
@@ -2475,6 +2621,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
         if (result.resolution_function.spelling.empty()
             && result.resolution_function.canonical.empty()) {
             result.resolution_function = inherited.resolution_function;
+        }
+        if (result.builtin_type == vhdl::BuiltinTypeIdentity::none) {
+            result.builtin_type = inherited.builtin_type;
         }
         result.signed_value = result.signed_value || inherited.signed_value;
         // `unconstrained` is part of the effective array shape, not a
@@ -2563,6 +2712,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
     resolve = [&](vhdl::SubtypeIndication result, ScopeId scope,
                   std::vector<CompiledBindingFrame>& active_frames)
         -> std::optional<vhdl::SubtypeIndication> {
+        materialize_boundaries(result, active_frames);
         const auto resolver = CompiledDesignResolver {
             *design_, selected_unit_, effective_, active_frames
         };
@@ -2693,7 +2843,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
         }
 
         if (!result.type_mark.target.valid()) {
-            complete_predefined(result);
+            complete_predefined(result, active_frames, scope);
             return result;
         }
         if (!active_types.insert(result.type_mark.target).second) {
@@ -2704,7 +2854,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             : design_->find_type(result.type_mark.target);
         if (!type || type->vhdl == nullptr) {
             active_types.erase(result.type_mark.target);
-            complete_predefined(result);
+            complete_predefined(result, active_frames, scope);
             return result;
         }
         const auto& definition = *type->vhdl;
@@ -2739,9 +2889,11 @@ CompiledDesignResolver::effective_vhdl_subtype(
             if (result.constraints.size() == 1U) {
                 const auto& constraint = result.constraints.front();
                 const auto left = evaluate_boundary(
-                    constraint.left, constraint.left_expression);
+                    constraint.left, constraint.left_expression,
+                    active_frames);
                 const auto right = evaluate_boundary(
-                    constraint.right, constraint.right_expression);
+                    constraint.right, constraint.right_expression,
+                    active_frames);
                 if (left && right && *left >= 0 && *right >= 0) {
                     maximum = static_cast<std::size_t>(
                         std::max(*left, *right));
@@ -2807,6 +2959,37 @@ CompiledDesignResolver::effective_vhdl_subtype(
             const auto element = resolve(
                 *definition.element_subtype, definition_scope,
                 active_frames);
+            if (definition.array_dimensions.size() == 1U
+                && definition_declaration
+                && definition_declaration->vhdl != nullptr
+                && definition.element_subtype->domain
+                    == vhdl::ValueDomain::logic9) {
+                const auto& scopes = design_->semantics.scopes();
+                const auto owner_scope = std::ranges::find(
+                    scopes, definition_declaration->vhdl->scope,
+                    &Scope::id);
+                const auto owner = owner_scope != scopes.end()
+                    ? design_->find_unit(owner_scope->unit)
+                    : std::nullopt;
+                if (owner && owner->vhdl != nullptr
+                    && owner->vhdl->kind == vhdl::UnitKind::package
+                    && owner->vhdl->primary_name.empty()
+                    && same_vhdl_identifier(
+                        owner->vhdl->library, "ieee")
+                    && same_vhdl_identifier(
+                        owner->vhdl->name, "std_logic_1164")) {
+                    if (same_vhdl_identifier(
+                            definition.name, "std_logic_vector")) {
+                        result.builtin_type = vhdl::BuiltinTypeIdentity::
+                            ieee_std_logic_1164_std_logic_vector;
+                    } else if (same_vhdl_identifier(
+                                   definition.name,
+                                   "std_ulogic_vector")) {
+                        result.builtin_type = vhdl::BuiltinTypeIdentity::
+                            ieee_std_logic_1164_std_ulogic_vector;
+                    }
+                }
+            }
             std::uint64_t count { 1U };
             bool concrete = element && element->executable_width
                 && *element->executable_width != 0U;
@@ -2824,9 +3007,11 @@ CompiledDesignResolver::effective_vhdl_subtype(
             if (!result.constraints.empty()) {
                 for (const auto& constraint : result.constraints) {
                     const auto left = evaluate_boundary(
-                        constraint.left, constraint.left_expression);
+                        constraint.left, constraint.left_expression,
+                        active_frames);
                     const auto right = evaluate_boundary(
-                        constraint.right, constraint.right_expression);
+                        constraint.right, constraint.right_expression,
+                        active_frames);
                     if (!left || !right) {
                         concrete = false;
                         break;
@@ -2858,10 +3043,12 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     }
                     const auto left = evaluate_boundary(
                         dimension.constraint->left,
-                        dimension.constraint->left_expression);
+                        dimension.constraint->left_expression,
+                        active_frames);
                     const auto right = evaluate_boundary(
                         dimension.constraint->right,
-                        dimension.constraint->right_expression);
+                        dimension.constraint->right_expression,
+                        active_frames);
                     if (!left || !right) {
                         concrete = false;
                         break;
@@ -2906,7 +3093,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             }
         }
         active_types.erase(result.type_mark.target);
-        complete_predefined(result);
+        complete_predefined(result, active_frames, scope);
         return result;
     };
     return resolve(input, use_scope, frames);
@@ -3780,6 +3967,25 @@ bool CompiledDesignResolver::vhdl_builtin_type_visible(
     name.spelling = spelling;
     name.canonical = spelling;
     return vhdl_standard_package_member_visible(name, use_scope);
+}
+
+bool CompiledDesignResolver::vhdl_builtin_package_member_imported(
+    const std::string_view library, const std::string_view package,
+    const std::string_view member, const ScopeId use_scope) const
+{
+    if (design_ == nullptr
+        || !builtin_standard_package_exports(library, package, member)) {
+        return false;
+    }
+    const auto lookup_units = vhdl_lookup_units(
+        *design_, selected_unit_, use_scope);
+    return visit_vhdl_linked_imports(*design_, lookup_units,
+        [&](const CompiledVhdlImport& imported) {
+            return same_vhdl_identifier(imported.library, library)
+                && same_vhdl_identifier(imported.package, package)
+                && (same_vhdl_identifier(imported.member, "all")
+                    || same_vhdl_identifier(imported.member, member));
+        });
 }
 
 CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(

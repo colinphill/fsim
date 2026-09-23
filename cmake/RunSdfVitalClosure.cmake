@@ -14,22 +14,19 @@ if(FSIM_DEDUPLICATED_CTEST)
   return()
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RunClosureWitnesses.cmake")
+
 file(MAKE_DIRECTORY "${FSIM_OUTPUT_DIR}/logs")
 set(FSIM_LOG "${FSIM_OUTPUT_DIR}/logs/corpus.log")
 set(FSIM_CONSOLE "${FSIM_OUTPUT_DIR}/console.log")
 set(FSIM_RESULT "${FSIM_OUTPUT_DIR}/result.tsv")
-execute_process(
-  COMMAND "${FSIM_CTEST_COMMAND}"
-    --test-dir "${FSIM_BINARY_DIR}"
-    --output-on-failure
-    --verbose
-    --timeout 1200
-    -R "^fsim\\.application\\.sdf_vital_corpus$"
-  RESULT_VARIABLE FSIM_STATUS
-  OUTPUT_VARIABLE FSIM_STDOUT
-  ERROR_VARIABLE FSIM_STDERR
-  TIMEOUT 1200
-)
+fsim_run_closure_witnesses(
+  FSIM_STATUS FSIM_STDOUT FSIM_STDERR 1200
+  --test-dir "${FSIM_BINARY_DIR}"
+  --output-on-failure
+  --verbose
+  --timeout 1200
+  -R "^fsim\\.application\\.sdf_vital_corpus$")
 file(WRITE "${FSIM_LOG}" "${FSIM_STDOUT}${FSIM_STDERR}")
 file(WRITE "${FSIM_CONSOLE}"
   "FSIM-SDF-VITAL-CLOSURE-START\n${FSIM_STDOUT}${FSIM_STDERR}")
@@ -44,18 +41,13 @@ endif()
 file(APPEND "${FSIM_RESULT}" "corpus\tPASS\t${FSIM_LOG}\n")
 
 set(FSIM_NEGATIVE_LOG "${FSIM_OUTPUT_DIR}/logs/negatives.log")
-execute_process(
-  COMMAND "${FSIM_CTEST_COMMAND}"
-    --test-dir "${FSIM_BINARY_DIR}"
-    --output-on-failure
-    --verbose
-    --timeout 1200
-    -R "^fsim\\.application\\.sdf_(vital_models|mixed_resolution|vital_archive|vital_phases)$"
-  RESULT_VARIABLE FSIM_NEGATIVE_STATUS
-  OUTPUT_VARIABLE FSIM_NEGATIVE_STDOUT
-  ERROR_VARIABLE FSIM_NEGATIVE_STDERR
-  TIMEOUT 1200
-)
+fsim_run_closure_witnesses(
+  FSIM_NEGATIVE_STATUS FSIM_NEGATIVE_STDOUT FSIM_NEGATIVE_STDERR 1200
+  --test-dir "${FSIM_BINARY_DIR}"
+  --output-on-failure
+  --verbose
+  --timeout 1200
+  -R "^fsim\\.application\\.sdf_(vital_models|mixed_resolution|vital_archive|vital_phases)$")
 file(WRITE "${FSIM_NEGATIVE_LOG}"
   "${FSIM_NEGATIVE_STDOUT}${FSIM_NEGATIVE_STDERR}")
 file(APPEND "${FSIM_CONSOLE}"
@@ -72,18 +64,14 @@ file(APPEND "${FSIM_RESULT}"
   "negatives\tPASS\t${FSIM_NEGATIVE_LOG}\n")
 
 set(FSIM_PORTABILITY_LOG "${FSIM_OUTPUT_DIR}/logs/portability.log")
-execute_process(
-  COMMAND "${FSIM_CTEST_COMMAND}"
-    --test-dir "${FSIM_BINARY_DIR}"
-    --output-on-failure
-    --verbose
-    --timeout 1200
-    -R "^fsim\\.resource-portability-contract$"
-  RESULT_VARIABLE FSIM_PORTABILITY_STATUS
-  OUTPUT_VARIABLE FSIM_PORTABILITY_STDOUT
-  ERROR_VARIABLE FSIM_PORTABILITY_STDERR
-  TIMEOUT 1200
-)
+fsim_run_closure_witnesses(
+  FSIM_PORTABILITY_STATUS FSIM_PORTABILITY_STDOUT FSIM_PORTABILITY_STDERR
+  1200
+  --test-dir "${FSIM_BINARY_DIR}"
+  --output-on-failure
+  --verbose
+  --timeout 1200
+  -R "^fsim\\.contract\\.artifact-resources$")
 file(WRITE "${FSIM_PORTABILITY_LOG}"
   "${FSIM_PORTABILITY_STDOUT}${FSIM_PORTABILITY_STDERR}")
 file(APPEND "${FSIM_CONSOLE}"

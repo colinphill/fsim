@@ -4,6 +4,8 @@
 
 #include <iterator>
 #include <map>
+#include <type_traits>
+#include <unordered_set>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -385,6 +387,71 @@ void HierarchyBuilder::validate_process_drivers()
         bool continuous { };
         bool event_controlled { };
     };
+    std::unordered_map<ContainerObjectId, SignalId> writable_container_signals;
+    std::unordered_map<SignalId, bool> variable_container_signals;
+    for (const auto& alias : design_.container_signal_aliases_) {
+        if (alias.writable) {
+            writable_container_signals.insert_or_assign(
+                alias.object, alias.signal);
+            if (alias.signal < design_.signal_info_.size()
+                && design_.signal_info_[alias.signal]
+                       .systemverilog_net_type.empty()) {
+                variable_container_signals.insert_or_assign(
+                    alias.signal, true);
+            }
+        }
+    }
+    const auto regions_overlap = [](
+                                     const DriverRegion& left,
+                                     const DriverRegion& right) {
+        if (left.whole || right.whole) {
+            return true;
+        }
+        const auto left_end = static_cast<std::uint64_t>(left.offset)
+            + left.width;
+        const auto right_end = static_cast<std::uint64_t>(right.offset)
+            + right.width;
+        return left.offset < right_end && right.offset < left_end;
+    };
+    const auto process_leaf = [](const Process& process) {
+        return std::string_view { process.name }.substr(
+            process.name.find_last_of('.') + 1U);
+    };
+    const auto is_continuous_process = [&](const Process& process) {
+        const auto leaf = process_leaf(process);
+        return leaf.starts_with("concurrent_")
+            || leaf.starts_with("continuous_fused_");
+    };
+    std::unordered_set<SignalId> continuous_signals;
+    for (const auto& process : design_.processes_) {
+        if (process.name.find("$declaration_initializer_")
+                != std::string::npos
+            || !is_continuous_process(process)) {
+            continue;
+        }
+        for (const auto& region : process.driver_regions) {
+            continuous_signals.insert(region.signal);
+        }
+        for (const auto& operation : process.operations) {
+            visit_operation(
+                [&](const auto& value) {
+                    using OperationType
+                        = std::decay_t<decltype(value)>;
+                    if constexpr (
+                        std::is_same_v<
+                            OperationType, WriteContainerObject>
+                        || std::is_same_v<
+                            OperationType, WriteContainerObjectElement>) {
+                        const auto alias
+                            = writable_container_signals.find(value.object);
+                        if (alias != writable_container_signals.end()) {
+                            continuous_signals.insert(alias->second);
+                        }
+                    }
+                },
+                operation);
+        }
+    }
     std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
     for (const auto& process : design_.processes_) {
         if (process.name.find("$declaration_initializer_")
@@ -395,12 +462,62 @@ void HierarchyBuilder::validate_process_drivers()
         for (const auto& region : process.driver_regions) {
             process_outputs[region.signal].push_back(region);
         }
+        const auto record_container_object_write =
+            [&](const ContainerObjectId object) {
+                const auto alias = writable_container_signals.find(object);
+                if (alias == writable_container_signals.end()) {
+                    return;
+                }
+                if (variable_container_signals.contains(alias->second)
+                    && !continuous_signals.contains(alias->second)) {
+                    // Procedural-only variable arrays retain their legacy
+                    // multiple-writer semantics. Audit the conservative
+                    // whole-array claim only when a continuous process also
+                    // drives the alias-backed signal.
+                    return;
+                }
+                auto& regions = process_outputs[alias->second];
+                if (std::ranges::none_of(
+                        regions,
+                        [](const DriverRegion& region) {
+                            return region.whole;
+                        })) {
+                    regions.push_back(DriverRegion {
+                        alias->second, 0U, 0U, true });
+                }
+            };
+        for (const auto& operation : process.operations) {
+            visit_operation(
+                [&](const auto& value) {
+                    using OperationType
+                        = std::decay_t<decltype(value)>;
+                    if constexpr (
+                        std::is_same_v<
+                            OperationType, WriteContainerObject>
+                        || std::is_same_v<
+                            OperationType, WriteContainerObjectElement>) {
+                        record_container_object_write(value.object);
+                    }
+                },
+                operation);
+        }
         for (auto& [signal, regions] : process_outputs) {
-            const auto leaf = std::string_view { process.name }.substr(
-                process.name.find_last_of('.') + 1U);
-            drivers[signal].push_back(ProcessDriver {
-                std::move(regions), leaf.starts_with("concurrent_"),
-                !process.static_sensitivity.empty() });
+            const bool continuous = is_continuous_process(process);
+            const bool event_controlled
+                = !process.static_sensitivity.empty();
+            if (process_leaf(process).starts_with("continuous_fused_")) {
+                // Fusion combines independently elaborated continuous
+                // assignments into one process. Keep their regions separate
+                // here so an overlapping pair remains a multiple-driver
+                // error after fusion.
+                for (const auto& region : regions) {
+                    drivers[signal].push_back(ProcessDriver {
+                        { region }, continuous, event_controlled });
+                }
+            } else {
+                drivers[signal].push_back(ProcessDriver {
+                    std::move(regions), continuous, event_controlled });
+            }
         }
     }
     for (SignalId signal = 0;
@@ -413,16 +530,6 @@ void HierarchyBuilder::validate_process_drivers()
                 native_resolution(
                     design_.signal_info_.at(signal))));
     }
-    const auto regions_overlap = [](
-                                     const DriverRegion& left,
-                                     const DriverRegion& right) {
-        if (left.whole || right.whole) {
-            return true;
-        }
-        const auto left_end = static_cast<std::uint64_t>(left.offset) + left.width;
-        const auto right_end = static_cast<std::uint64_t>(right.offset) + right.width;
-        return left.offset < right_end && right.offset < left_end;
-    };
     for (const auto& [signal, process_drivers] : drivers) {
         const auto& info = design_.signal_info_.at(signal);
         const auto boundary_drivers = boundary_driver_paths_.find(signal);
@@ -431,8 +538,10 @@ void HierarchyBuilder::validate_process_drivers()
                 && boundary_drivers->second.size() > 1U)
             || vhdl_1993_shared_signals_.contains(signal)
             || info.resolution != ResolutionKind::none
-            || info.type_name == "reg"
-            || info.type_name == "integer"
+            || (info.type_name == "reg"
+                && !variable_container_signals.contains(signal))
+            || (info.type_name == "integer"
+                && !variable_container_signals.contains(signal))
             || info.name.ends_with(".$container_storage")) {
             continue;
         }

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 id	runner	compiler	compiler_version	llvm_mode	llvm_version	configuration	artifact	retained_log	timeout_minutes	workers	owner
-V3HOST-LINUX-LLVM-DEBUG	ubuntu-24.04	clang	22	ON	22.1.8	Debug	github-linux-clang22-llvm22-debug	build/qualification/batch188a-change20-hosted-linux-clang22-llvm22-debug.log	120	2	B188A-C20
-V3HOST-LINUX-LLVM-RELEASE	ubuntu-24.04	clang	22	ON	22.1.8	Release	github-linux-clang22-llvm22-release	build/qualification/batch188a-change20-hosted-linux-clang22-llvm22-release.log	120	2	B188A-C20
-V3HOST-WINDOWS-DEBUG-ON	windows-2022	llvm-mingw	20260616	ON	22.1.8	Debug	github-windows-debug-llvm-on	build/qualification/batch188a-change20-hosted-windows-debug-llvm-on.log	120	2	B188A-C20
-V3HOST-WINDOWS-RELEASE-ON	windows-2022	llvm-mingw	20260616	ON	22.1.8	Release	github-windows-release-llvm-on	build/qualification/batch188a-change20-hosted-windows-release-llvm-on.log	120	2	B188A-C20
+V3HOST-LINUX-LLVM-DEBUG	ubuntu-24.04	clang	22	ON	22.1.8	Debug	github-linux-clang22-llvm22-debug	build/qualification/ci-linux-clang22-llvm22-debug.log	120	2	V3-HOSTED-CI
+V3HOST-LINUX-LLVM-RELEASE	ubuntu-24.04	clang	22	ON	22.1.8	Release	github-linux-clang22-llvm22-release	build/qualification/ci-linux-clang22-llvm22-release.log	120	2	V3-HOSTED-CI
+V3HOST-WINDOWS-DEBUG-ON	windows-2022	llvm-mingw	20260616	ON	22.1.8	Debug	github-windows-debug-llvm-on	build/qualification/ci-windows-debug-llvm-on.log	120	2	V3-HOSTED-CI
+V3HOST-WINDOWS-RELEASE-ON	windows-2022	llvm-mingw	20260616	ON	22.1.8	Release	github-windows-release-llvm-on	build/qualification/ci-windows-release-llvm-on.log	120	2	V3-HOSTED-CI

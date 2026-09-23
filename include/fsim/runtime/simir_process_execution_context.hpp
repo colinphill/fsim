@@ -109,6 +109,17 @@ public:
         ProcessId,
         InstructionIndex,
         bool);
+    virtual void write_container_object_dynamic_part_element(
+        ContainerObjectId,
+        const PackedLogic4&,
+        bool,
+        bool,
+        const PackedLogic4&,
+        const PackedLogic4&,
+        const DynamicPartIndex&,
+        ProcessId,
+        InstructionIndex,
+        bool);
 
     [[nodiscard]] virtual FileHandle open_file(
         std::string_view, std::string_view);

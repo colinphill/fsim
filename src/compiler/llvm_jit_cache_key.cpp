@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_cache_key_internal.hpp"
+#include "native_cache_schema.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
 
@@ -198,8 +199,6 @@ using runtime::simir::WriteUpdateDynamicPartSlice;
 using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
-
-constexpr std::string_view kNativeObjectCacheSchema = "fsim-llvm-native-object-v168";
 
 void add_key_u64(CacheKeyBuilder& builder, const std::string_view label,
     const std::uint64_t value)

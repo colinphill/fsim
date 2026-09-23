@@ -13,6 +13,8 @@ if(FSIM_DEDUPLICATED_CTEST)
   return()
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RunClosureWitnesses.cmake")
+
 get_filename_component(FSIM_BINARY_ROOT "${FSIM_BINARY_DIR}" ABSOLUTE)
 get_filename_component(FSIM_EVIDENCE_ROOT "${FSIM_OUTPUT_DIR}" ABSOLUTE)
 string(FIND "${FSIM_EVIDENCE_ROOT}/" "${FSIM_BINARY_ROOT}/"
@@ -32,19 +34,14 @@ file(WRITE "${FSIM_RESULT}" "stage\tstatus\tlog\n")
 
 function(fsim_run_scv_stage FSIM_STAGE FSIM_REGEX)
   set(FSIM_LOG "${FSIM_OUTPUT_DIR}/logs/${FSIM_STAGE}.log")
-  execute_process(
-    COMMAND "${FSIM_CTEST_COMMAND}"
-      --test-dir "${FSIM_BINARY_DIR}"
-      --output-on-failure
-      --verbose
-      --timeout 7200
-      -j 8
-      -R "${FSIM_REGEX}"
-    RESULT_VARIABLE FSIM_STATUS
-    OUTPUT_VARIABLE FSIM_STDOUT
-    ERROR_VARIABLE FSIM_STDERR
-    TIMEOUT 7200
-  )
+  fsim_run_closure_witnesses(
+    FSIM_STATUS FSIM_STDOUT FSIM_STDERR 7200
+    --test-dir "${FSIM_BINARY_DIR}"
+    --output-on-failure
+    --verbose
+    --timeout 7200
+    -j 8
+    -R "${FSIM_REGEX}")
   file(WRITE "${FSIM_LOG}" "${FSIM_STDOUT}${FSIM_STDERR}")
   file(APPEND "${FSIM_CONSOLE}" "${FSIM_STDOUT}${FSIM_STDERR}")
   string(FIND "${FSIM_STDOUT}${FSIM_STDERR}" "100% tests passed"

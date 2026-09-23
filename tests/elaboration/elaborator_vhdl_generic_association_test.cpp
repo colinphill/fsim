@@ -45,11 +45,11 @@ void test_vhdl_generic_associations() {
         "generic_based_default.vhd",
         R"(
 entity based_default is
-  generic (primitive_polynomial : integer := 16#11D#);
+  generic (item_count : integer := 16#2A#);
 end entity;
 architecture rtl of based_default is
   type row_array is array (natural range <>) of
-    bit_vector(primitive_polynomial - 280 downto 0);
+    bit_vector(item_count - 40 downto 0);
   signal rows : row_array(0 to 1);
 begin
 end architecture;
@@ -61,7 +61,7 @@ end architecture;
     assert(based_result.ok());
     assert(has_parameter(
         based_result.design->specializations().front(),
-        "primitive_polynomial", "285"));
+        "item_count", "42"));
 
     auto fixture = frontend::parse_text(
         "generic_association_matrix.vhd",
@@ -146,6 +146,73 @@ end architecture;
     assert(!dynamic_result.ok());
     assert(has_diagnostic(
         dynamic_result, "FSIM-ELAB-GENERIC-004"));
+
+    const auto packed_fixture = frontend::parse_text(
+        "packed_generic_function_actual.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity packed_generic_leaf is
+  generic (init : std_logic_vector(7 downto 0));
+end entity;
+architecture rtl of packed_generic_leaf is
+begin
+end architecture;
+entity packed_generic_top is
+end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of packed_generic_top is
+  function make_init return std_logic_vector is
+  begin
+    return "10100101";
+  end function;
+  function make_narrow_init return std_logic_vector is
+  begin
+    return "0100101";
+  end function;
+  constant packed_init : std_logic_vector(7 downto 0) := make_init;
+  constant narrow_init : std_logic_vector(6 downto 0) := make_narrow_init;
+begin
+  child: entity work.packed_generic_leaf(rtl)
+    generic map (init => packed_init);
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(packed_fixture.ok());
+    const auto packed_actual = compile_and_elaborate(
+        packed_fixture.design,
+        "vhdl:work.packed_generic_top(rtl)");
+    if (!packed_actual.ok()) {
+        std::size_t printed_diagnostics { };
+        for (const auto& diagnostic : packed_actual.diagnostics) {
+            if (printed_diagnostics++ == 8U) {
+                std::cerr << "... additional diagnostics omitted\n";
+                break;
+            }
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message.substr(0U, 240U) << '\n';
+        }
+    }
+    assert(packed_actual.ok());
+
+    auto mismatched_packed_fixture = packed_fixture.design;
+    const auto packed_architecture = std::ranges::find_if(
+        mismatched_packed_fixture.units,
+        [](const auto& unit) {
+            return unit.kind == frontend::UnitKind::VhdlArchitecture
+                && unit.primary_name == "packed_generic_top";
+        });
+    assert(packed_architecture != mismatched_packed_fixture.units.end());
+    assert(packed_architecture->instances.size() == 1U);
+    packed_architecture->instances.front().parameter_overrides.front()
+        .value.text = "narrow_init";
+    const auto mismatched_packed_actual = compile_and_elaborate(
+        mismatched_packed_fixture,
+        "vhdl:work.packed_generic_top(rtl)");
+    assert(!mismatched_packed_actual.ok());
+    assert(has_diagnostic(
+        mismatched_packed_actual, "FSIM-ELAB-GENERIC-004"));
 
     const auto invalid_boundaries = frontend::parse_text(
         "invalid_dependent_boundaries.vhd",

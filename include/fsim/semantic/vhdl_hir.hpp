@@ -285,6 +285,27 @@ struct Name {
     bool operator==(const Name&) const = default;
 };
 
+/// Compiler-owned IEEE std_logic_1164 vector types whose package declarations
+/// may be absent from a compiled-HIR bundle.
+enum class BuiltinTypeIdentity : std::uint8_t {
+    none,
+    ieee_std_logic_1164_std_logic_vector,
+    ieee_std_logic_1164_std_ulogic_vector,
+};
+
+/// Operator overload families with compiler-owned IEEE std_logic_1164
+/// provenance. User declarations continue to use Name::selected/overloads.
+enum class BuiltinOperatorIdentity : std::uint8_t {
+    none,
+    ieee_std_logic_1164_not,
+    ieee_std_logic_1164_and,
+    ieee_std_logic_1164_or,
+    ieee_std_logic_1164_nand,
+    ieee_std_logic_1164_nor,
+    ieee_std_logic_1164_xor,
+    ieee_std_logic_1164_xnor,
+};
+
 struct RangeConstraint {
     RangeKind kind { RangeKind::discrete };
     std::optional<std::int64_t> left;
@@ -325,6 +346,9 @@ struct Expression {
     bool unspecified_type_inference_unique { };
     ResidualDependencies dependencies;
     bool folded { };
+    BuiltinOperatorIdentity builtin_operator {
+        BuiltinOperatorIdentity::none
+    };
 };
 
 struct DelayValue {
@@ -450,6 +474,7 @@ struct SubtypeIndication {
     std::vector<std::string> unspecified_component_type_marks;
     std::size_t unspecified_array_index_count { };
     std::string unspecified_inference_identity;
+    BuiltinTypeIdentity builtin_type { BuiltinTypeIdentity::none };
 
     bool operator==(const SubtypeIndication&) const = default;
 };

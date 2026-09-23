@@ -9,6 +9,30 @@ fsim_configure_library(fsim_common_test_support)
 
 add_subdirectory(runtime)
 
+function(fsim_register_simple_test FSIM_NAME FSIM_TARGET FSIM_LABELS)
+  if(NOT TARGET "${FSIM_TARGET}")
+    message(FATAL_ERROR "test target is missing: ${FSIM_TARGET}")
+  endif()
+  add_test(NAME "${FSIM_NAME}" COMMAND "${FSIM_TARGET}")
+  set_tests_properties("${FSIM_NAME}" PROPERTIES LABELS "${FSIM_LABELS}")
+endfunction()
+
+function(fsim_add_single_source_test_target FSIM_TARGET FSIM_SOURCE)
+  add_executable("${FSIM_TARGET}" "${FSIM_SOURCE}")
+  fsim_configure_test("${FSIM_TARGET}")
+  target_link_libraries("${FSIM_TARGET}" PRIVATE ${ARGN})
+endfunction()
+
+add_executable(
+  fsim_simplification_benchmark_driver
+  app/simplification_benchmark_driver.cpp
+)
+fsim_configure_test(fsim_simplification_benchmark_driver)
+target_link_libraries(
+  fsim_simplification_benchmark_driver
+  PRIVATE fsim_application
+)
+
 add_executable(
   fsim_semantic_tests
   semantic/compiled_design_test.cpp
@@ -16,10 +40,10 @@ add_executable(
 )
 fsim_configure_test(fsim_semantic_tests)
 target_link_libraries(fsim_semantic_tests PRIVATE fsim_semantic)
-add_test(NAME fsim.semantic COMMAND fsim_semantic_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.semantic
-  PROPERTIES LABELS "fast;semantic;hir;designir;source"
+  fsim_semantic_tests
+  "fast;semantic;hir;designir;source"
 )
 
 add_executable(
@@ -31,13 +55,10 @@ target_link_libraries(
   fsim_semantic_class_specialization_tests
   PRIVATE fsim_semantic
 )
-add_test(
-  NAME fsim.semantic.systemverilog_class_specialization
-  COMMAND fsim_semantic_class_specialization_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.semantic.systemverilog_class_specialization
-  PROPERTIES LABELS "fast;semantic;hir;systemverilog"
+  fsim_semantic_class_specialization_tests
+  "fast;semantic;hir;systemverilog"
 )
 
 add_executable(
@@ -49,13 +70,10 @@ target_link_libraries(
   fsim_systemverilog_hir_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.systemverilog_hir
-  COMMAND fsim_systemverilog_hir_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.systemverilog_hir
-  PROPERTIES LABELS "fast;semantic;hir;systemverilog"
+  fsim_systemverilog_hir_application_tests
+  "fast;semantic;hir;systemverilog"
 )
 
 add_executable(
@@ -67,13 +85,10 @@ target_link_libraries(
   fsim_hir_lowering_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.hir_lowering
-  COMMAND fsim_hir_lowering_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.hir_lowering
-  PROPERTIES LABELS "fast;application;hir;elaboration;artifact"
+  fsim_hir_lowering_application_tests
+  "fast;application;hir;elaboration;artifact"
 )
 
 add_executable(
@@ -85,13 +100,10 @@ target_link_libraries(
   fsim_compiled_hir_cache_application_tests
   PRIVATE fsim_boost_pfr_headers fsim_application
 )
-add_test(
-  NAME fsim.application.compiled_hir_cache
-  COMMAND fsim_compiled_hir_cache_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.compiled_hir_cache
-  PROPERTIES LABELS "fast;application;cache;hir;portability"
+  fsim_compiled_hir_cache_application_tests
+  "fast;application;cache;hir;portability"
 )
 
 add_executable(
@@ -146,288 +158,202 @@ endif()
 
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_point_identity_tests
   frontend/coverage_point_identity_test.cpp
+  fsim_frontend
 )
-fsim_configure_test(fsim_coverage_point_identity_tests)
-target_link_libraries(fsim_coverage_point_identity_tests PRIVATE fsim_frontend)
-add_test(
-  NAME fsim.frontend.coverage_point_identity
-  COMMAND fsim_coverage_point_identity_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.coverage_point_identity
-  PROPERTIES LABELS "fast;frontend;coverage;identity;determinism;relocation;positive;negative"
+  fsim_coverage_point_identity_tests
+  "fast;frontend;coverage;identity;determinism;relocation;positive;negative"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_source_identity_tests
   frontend/coverage_source_identity_test.cpp
+  fsim_frontend
 )
-fsim_configure_test(fsim_coverage_source_identity_tests)
-target_link_libraries(fsim_coverage_source_identity_tests PRIVATE fsim_frontend)
-add_test(
-  NAME fsim.frontend.coverage_source_identity
-  COMMAND fsim_coverage_source_identity_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.coverage_source_identity
-  PROPERTIES LABELS "fast;frontend;coverage;identity;relocation;positive;negative;resource"
+  fsim_coverage_source_identity_tests
+  "fast;frontend;coverage;identity;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_source_control_tests
   elaboration/coverage_source_control_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_source_control_tests)
-target_link_libraries(
-  fsim_coverage_source_control_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_source_control
-  COMMAND fsim_coverage_source_control_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_source_control
-  PROPERTIES LABELS "fast;frontend;elaboration;coverage;exclusion;verilog;systemverilog;vhdl;positive;negative;resource;determinism"
+  fsim_coverage_source_control_tests
+  "fast;frontend;elaboration;coverage;exclusion;verilog;systemverilog;vhdl;positive;negative;resource;determinism"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_external_exclusions_tests
   elaboration/coverage_external_exclusions_test.cpp
+  fsim_elaboration fsim_project
 )
-fsim_configure_test(fsim_coverage_external_exclusions_tests)
-target_link_libraries(
-  fsim_coverage_external_exclusions_tests PRIVATE fsim_elaboration fsim_project)
-add_test(
-  NAME fsim.elaboration.coverage_external_exclusions
-  COMMAND fsim_coverage_external_exclusions_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_external_exclusions
-  PROPERTIES LABELS "fast;project;elaboration;coverage;exclusion;source;hierarchy;object;metrics;positive;negative;resource;determinism"
+  fsim_coverage_external_exclusions_tests
+  "fast;project;elaboration;coverage;exclusion;source;hierarchy;object;metrics;positive;negative;resource;determinism"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_exclusion_persistence_tests
   elaboration/coverage_exclusion_persistence_test.cpp
+  fsim_elaboration fsim_project
 )
-fsim_configure_test(fsim_coverage_exclusion_persistence_tests)
-target_link_libraries(
-  fsim_coverage_exclusion_persistence_tests PRIVATE fsim_elaboration fsim_project)
-add_test(
-  NAME fsim.elaboration.coverage_exclusion_persistence
-  COMMAND fsim_coverage_exclusion_persistence_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_exclusion_persistence
-  PROPERTIES LABELS "fast;elaboration;artifact;coverage;exclusion;source;hierarchy;instance;metrics;positive;negative;resource;determinism"
+  fsim_coverage_exclusion_persistence_tests
+  "fast;elaboration;artifact;coverage;exclusion;source;hierarchy;instance;metrics;positive;negative;resource;determinism"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_verilog_coverage_points_tests
   elaboration/verilog_coverage_points_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_verilog_coverage_points_tests)
-target_link_libraries(
-  fsim_verilog_coverage_points_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.verilog_coverage_points
-  COMMAND fsim_verilog_coverage_points_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.verilog_coverage_points
-  PROPERTIES LABELS "fast;elaboration;coverage;verilog;systemverilog;identity;relocation;positive;negative;resource"
+  fsim_verilog_coverage_points_tests
+  "fast;elaboration;coverage;verilog;systemverilog;identity;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_verilog_coverage_conditions_tests
   elaboration/verilog_coverage_conditions_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_verilog_coverage_conditions_tests)
-target_link_libraries(
-  fsim_verilog_coverage_conditions_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.verilog_coverage_conditions
-  COMMAND fsim_verilog_coverage_conditions_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.verilog_coverage_conditions
-  PROPERTIES LABELS "fast;elaboration;coverage;condition;verilog;systemverilog;identity;profiles;relocation;positive;negative;resource"
+  fsim_verilog_coverage_conditions_tests
+  "fast;elaboration;coverage;condition;verilog;systemverilog;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_verilog_toggle_inventory_tests
   elaboration/verilog_toggle_inventory_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_verilog_toggle_inventory_tests)
-target_link_libraries(
-  fsim_verilog_toggle_inventory_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.verilog_toggle_inventory
-  COMMAND fsim_verilog_toggle_inventory_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.verilog_toggle_inventory
-  PROPERTIES LABELS "fast;elaboration;coverage;toggle;verilog;systemverilog;hierarchy;identity;profiles;relocation;positive;negative;resource"
+  fsim_verilog_toggle_inventory_tests
+  "fast;elaboration;coverage;toggle;verilog;systemverilog;hierarchy;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_toggle_selection_tests
   elaboration/coverage_toggle_selection_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_toggle_selection_tests)
-target_link_libraries(
-  fsim_coverage_toggle_selection_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_toggle_selection
-  COMMAND fsim_coverage_toggle_selection_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_toggle_selection
-  PROPERTIES LABELS "fast;elaboration;coverage;toggle;exclusion;memory;array;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+  fsim_coverage_toggle_selection_tests
+  "fast;elaboration;coverage;toggle;exclusion;memory;array;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_memory_toggle_tests
   elaboration/coverage_memory_toggle_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_memory_toggle_tests)
-target_link_libraries(
-  fsim_coverage_memory_toggle_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_memory_toggle
-  COMMAND fsim_coverage_memory_toggle_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_memory_toggle
-  PROPERTIES LABELS "fast;elaboration;coverage;toggle;memory;array;selection;verilog;systemverilog;vhdl;hierarchy;identity;positive;negative;resource"
+  fsim_coverage_memory_toggle_tests
+  "fast;elaboration;coverage;toggle;memory;array;selection;verilog;systemverilog;vhdl;hierarchy;identity;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_fsm_inference_tests
   elaboration/coverage_fsm_inference_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_fsm_inference_tests)
-target_link_libraries(
-  fsim_coverage_fsm_inference_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_fsm_inference
-  COMMAND fsim_coverage_fsm_inference_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_fsm_inference
-  PROPERTIES LABELS "fast;elaboration;coverage;fsm;state;enum;case;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+  fsim_coverage_fsm_inference_tests
+  "fast;elaboration;coverage;fsm;state;enum;case;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_fsm_hints_tests
   elaboration/coverage_fsm_hints_test.cpp
+  fsim_elaboration fsim_project
 )
-fsim_configure_test(fsim_coverage_fsm_hints_tests)
-target_link_libraries(
-  fsim_coverage_fsm_hints_tests PRIVATE fsim_elaboration fsim_project)
-add_test(
-  NAME fsim.elaboration.coverage_fsm_hints
-  COMMAND fsim_coverage_fsm_hints_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_fsm_hints
-  PROPERTIES LABELS "fast;elaboration;project;manifest;coverage;fsm;state;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+  fsim_coverage_fsm_hints_tests
+  "fast;elaboration;project;manifest;coverage;fsm;state;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_fsm_validation_tests
   elaboration/coverage_fsm_validation_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_fsm_validation_tests)
-target_link_libraries(
-  fsim_coverage_fsm_validation_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_fsm_validation
-  COMMAND fsim_coverage_fsm_validation_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_fsm_validation
-  PROPERTIES LABELS "fast;elaboration;coverage;fsm;diagnostic;ambiguity;incomplete;conflict;identity;positive;negative;resource"
+  fsim_coverage_fsm_validation_tests
+  "fast;elaboration;coverage;fsm;diagnostic;ambiguity;incomplete;conflict;identity;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_vhdl_toggle_inventory_tests
   elaboration/vhdl_toggle_inventory_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_vhdl_toggle_inventory_tests)
-target_link_libraries(
-  fsim_vhdl_toggle_inventory_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.vhdl_toggle_inventory
-  COMMAND fsim_vhdl_toggle_inventory_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.vhdl_toggle_inventory
-  PROPERTIES LABELS "fast;elaboration;coverage;toggle;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
+  fsim_vhdl_toggle_inventory_tests
+  "fast;elaboration;coverage;toggle;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_vhdl_coverage_conditions_tests
   elaboration/vhdl_coverage_conditions_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_vhdl_coverage_conditions_tests)
-target_link_libraries(
-  fsim_vhdl_coverage_conditions_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.vhdl_coverage_conditions
-  COMMAND fsim_vhdl_coverage_conditions_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.vhdl_coverage_conditions
-  PROPERTIES LABELS "fast;elaboration;coverage;condition;vhdl;identity;profiles;relocation;positive;negative;resource"
+  fsim_vhdl_coverage_conditions_tests
+  "fast;elaboration;coverage;condition;vhdl;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_vhdl_coverage_points_tests
   elaboration/vhdl_coverage_points_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_vhdl_coverage_points_tests)
-target_link_libraries(
-  fsim_vhdl_coverage_points_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.vhdl_coverage_points
-  COMMAND fsim_vhdl_coverage_points_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.vhdl_coverage_points
-  PROPERTIES LABELS "fast;elaboration;coverage;vhdl;identity;profiles;relocation;positive;negative;resource"
+  fsim_vhdl_coverage_points_tests
+  "fast;elaboration;coverage;vhdl;identity;profiles;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_branches_tests
   elaboration/coverage_branches_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_branches_tests)
-target_link_libraries(fsim_coverage_branches_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_branches
-  COMMAND fsim_coverage_branches_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_branches
-  PROPERTIES LABELS "fast;elaboration;coverage;branch;verilog;systemverilog;vhdl;identity;relocation;positive;negative;resource"
+  fsim_coverage_branches_tests
+  "fast;elaboration;coverage;branch;verilog;systemverilog;vhdl;identity;relocation;positive;negative;resource"
 )
 
-add_executable(
+fsim_add_single_source_test_target(
   fsim_coverage_points_tests
   elaboration/coverage_points_test.cpp
+  fsim_elaboration
 )
-fsim_configure_test(fsim_coverage_points_tests)
-target_link_libraries(fsim_coverage_points_tests PRIVATE fsim_elaboration)
-add_test(
-  NAME fsim.elaboration.coverage_points
-  COMMAND fsim_coverage_points_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_points
-  PROPERTIES LABELS "fast;elaboration;coverage;exclusion;verilog;systemverilog;vhdl;identity;profiles;positive;negative;resource"
+  fsim_coverage_points_tests
+  "fast;elaboration;coverage;exclusion;verilog;systemverilog;vhdl;identity;profiles;positive;negative;resource"
 )
 
 add_executable(
@@ -438,13 +364,10 @@ add_executable(
 fsim_configure_test(fsim_coverage_instance_identity_tests)
 target_link_libraries(
   fsim_coverage_instance_identity_tests PRIVATE fsim_application)
-add_test(
-  NAME fsim.elaboration.coverage_instance_identity
-  COMMAND fsim_coverage_instance_identity_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_instance_identity
-  PROPERTIES LABELS "fast;elaboration;coverage;instance;identity;hierarchy;generate;parameters;determinism;positive;negative;resource"
+  fsim_coverage_instance_identity_tests
+  "fast;elaboration;coverage;instance;identity;hierarchy;generate;parameters;determinism;positive;negative;resource"
 )
 
 add_executable(
@@ -454,13 +377,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_inventory_tests)
 target_link_libraries(fsim_coverage_inventory_tests PRIVATE fsim_application)
-add_test(
-  NAME fsim.elaboration.coverage_inventory
-  COMMAND fsim_coverage_inventory_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.elaboration.coverage_inventory
-  PROPERTIES LABELS "fast;elaboration;coverage;inventory;instance;verilog;systemverilog;vhdl;identity;positive;negative;resource;state"
+  fsim_coverage_inventory_tests
+  "fast;elaboration;coverage;inventory;instance;verilog;systemverilog;vhdl;identity;positive;negative;resource;state"
 )
 
 add_executable(
@@ -469,10 +389,10 @@ add_executable(
 )
 fsim_configure_test(fsim_sdf_frontend_tests)
 target_link_libraries(fsim_sdf_frontend_tests PRIVATE fsim_frontend)
-add_test(NAME fsim.frontend.sdf COMMAND fsim_sdf_frontend_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.sdf
-  PROPERTIES LABELS "fast;frontend;sdf;lexical;positive;negative;coordinates;resources"
+  fsim_sdf_frontend_tests
+  "fast;frontend;sdf;lexical;positive;negative;coordinates;resources"
 )
 add_executable(
   fsim_sdf_parser_tests
@@ -480,10 +400,10 @@ add_executable(
 )
 fsim_configure_test(fsim_sdf_parser_tests)
 target_link_libraries(fsim_sdf_parser_tests PRIVATE fsim_frontend)
-add_test(NAME fsim.frontend.sdf_parser COMMAND fsim_sdf_parser_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.sdf_parser
-  PROPERTIES LABELS "fast;frontend;sdf;parser;headers;positive;negative;coordinates;revision"
+  fsim_sdf_parser_tests
+  "fast;frontend;sdf;parser;headers;positive;negative;coordinates;revision"
 )
 add_executable(
   fsim_sdf_construct_parser_tests
@@ -491,13 +411,10 @@ add_executable(
 )
 fsim_configure_test(fsim_sdf_construct_parser_tests)
 target_link_libraries(fsim_sdf_construct_parser_tests PRIVATE fsim_frontend)
-add_test(
-  NAME fsim.frontend.sdf_constructs
-  COMMAND fsim_sdf_construct_parser_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.sdf_constructs
-  PROPERTIES LABELS "fast;frontend;sdf;parser;constructs;positive;negative;coordinates;revision"
+  fsim_sdf_construct_parser_tests
+  "fast;frontend;sdf;parser;constructs;positive;negative;coordinates;revision"
 )
 add_executable(
   fsim_sdf21_adapter_tests
@@ -505,10 +422,10 @@ add_executable(
 )
 fsim_configure_test(fsim_sdf21_adapter_tests)
 target_link_libraries(fsim_sdf21_adapter_tests PRIVATE fsim_frontend)
-add_test(NAME fsim.frontend.sdf21 COMMAND fsim_sdf21_adapter_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.sdf21
-  PROPERTIES LABELS "fast;frontend;sdf;parser;adapter;sdf21;positive;negative;coordinates;revision"
+  fsim_sdf21_adapter_tests
+  "fast;frontend;sdf;parser;adapter;sdf21;positive;negative;coordinates;revision"
 )
 add_executable(
   fsim_sdf30_adapter_tests
@@ -557,13 +474,10 @@ target_link_libraries(
   fsim_sdf_annotation_scope_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_scope
-  COMMAND fsim_sdf_annotation_scope_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_scope
-  PROPERTIES LABELS "fast;application;sdf;scope;positive;negative;multi-root;revision"
+  fsim_sdf_annotation_scope_tests
+  "fast;application;sdf;scope;positive;negative;multi-root;revision"
 )
 
 add_executable(
@@ -575,13 +489,10 @@ target_link_libraries(
   fsim_sdf_cell_resolution_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_cell_resolution
-  COMMAND fsim_sdf_cell_resolution_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_cell_resolution
-  PROPERTIES LABELS "fast;application;sdf;resolution;positive;negative;multi-root;revision;resources"
+  fsim_sdf_cell_resolution_tests
+  "fast;application;sdf;resolution;positive;negative;multi-root;revision;resources"
 )
 
 add_executable(
@@ -593,13 +504,10 @@ target_link_libraries(
   fsim_sdf_endpoint_resolution_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_endpoint_resolution
-  COMMAND fsim_sdf_endpoint_resolution_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_endpoint_resolution
-  PROPERTIES LABELS "fast;application;sdf;resolution;endpoints;positive;negative;mixed-language;revision;resources"
+  fsim_sdf_endpoint_resolution_tests
+  "fast;application;sdf;resolution;endpoints;positive;negative;mixed-language;revision;resources"
 )
 
 add_executable(
@@ -611,13 +519,10 @@ target_link_libraries(
   fsim_sdf_mapping_validation_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_mapping_validation
-  COMMAND fsim_sdf_mapping_validation_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_mapping_validation
-  PROPERTIES LABELS "fast;application;sdf;validation;mapping;positive;negative;mixed-language;revision;resources"
+  fsim_sdf_mapping_validation_tests
+  "fast;application;sdf;validation;mapping;positive;negative;mixed-language;revision;resources"
 )
 
 add_executable(
@@ -629,13 +534,10 @@ target_link_libraries(
   fsim_sdf_value_policy_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_value_policy
-  COMMAND fsim_sdf_value_policy_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_value_policy
-  PROPERTIES LABELS "fast;application;sdf;timing;value-policy;positive;negative;coordinates;resources"
+  fsim_sdf_value_policy_tests
+  "fast;application;sdf;timing;value-policy;positive;negative;coordinates;resources"
 )
 
 add_executable(
@@ -647,13 +549,10 @@ target_link_libraries(
   fsim_sdf_target_plan_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_target_plan
-  COMMAND fsim_sdf_target_plan_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_target_plan
-  PROPERTIES LABELS "fast;application;sdf;timing;target-plan;positive;negative;coordinates;atomic;resources"
+  fsim_sdf_target_plan_tests
+  "fast;application;sdf;timing;target-plan;positive;negative;coordinates;atomic;resources"
 )
 
 add_executable(
@@ -665,13 +564,10 @@ target_link_libraries(
   fsim_sdf_vital_target_plan_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_target_plan
-  COMMAND fsim_sdf_vital_target_plan_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_target_plan
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;target-plan;positive;negative;coordinates;atomic;resources"
+  fsim_sdf_vital_target_plan_tests
+  "fast;application;sdf;vhdl;vital;timing;target-plan;positive;negative;coordinates;atomic;resources"
 )
 
 add_executable(
@@ -683,13 +579,10 @@ target_link_libraries(
   fsim_sdf_vital_models_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_models
-  COMMAND fsim_sdf_vital_models_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_models
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;models;wrappers;positive;negative;atomic;resources"
+  fsim_sdf_vital_models_tests
+  "fast;application;sdf;vhdl;vital;timing;models;wrappers;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -701,13 +594,10 @@ target_link_libraries(
   fsim_sdf_vital_precedence_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_precedence
-  COMMAND fsim_sdf_vital_precedence_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_precedence
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;precedence;selection;repeated;positive;negative;atomic;resources"
+  fsim_sdf_vital_precedence_tests
+  "fast;application;sdf;vhdl;vital;timing;precedence;selection;repeated;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -719,13 +609,10 @@ target_link_libraries(
   fsim_sdf_vital_scheduling_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_scheduling
-  COMMAND fsim_sdf_vital_scheduling_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_scheduling
-  PROPERTIES LABELS "application;sdf;vhdl;vital;timing;scheduler;transport;inertial;pulse;logic9;interpreter;llvm;delta;positive;negative;atomic;resources"
+  fsim_sdf_vital_scheduling_tests
+  "application;sdf;vhdl;vital;timing;scheduler;transport;inertial;pulse;logic9;interpreter;llvm;delta;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -737,13 +624,10 @@ target_link_libraries(
   fsim_sdf_vital_timing_checks_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_timing_checks
-  COMMAND fsim_sdf_vital_timing_checks_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_timing_checks
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;timing;checks;setup-hold;recovery-removal;period-pulse;skew;violations;positive;negative;atomic;resources"
+  fsim_sdf_vital_timing_checks_tests
+  "fast;application;sdf;vhdl;vital;timing;checks;setup-hold;recovery-removal;period-pulse;skew;violations;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -755,13 +639,10 @@ target_link_libraries(
   fsim_sdf_path_timing_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_path_timing
-  COMMAND fsim_sdf_path_timing_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_path_timing
-  PROPERTIES LABELS "fast;application;sdf;timing;iopath;specify;absolute;incremental;conditional;edge;positive;negative;atomic;resources"
+  fsim_sdf_path_timing_tests
+  "fast;application;sdf;timing;iopath;specify;absolute;incremental;conditional;edge;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -773,13 +654,10 @@ target_link_libraries(
   fsim_sdf_interconnect_timing_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_interconnect_timing
-  COMMAND fsim_sdf_interconnect_timing_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_interconnect_timing
-  PROPERTIES LABELS "fast;application;sdf;timing;interconnect;port;mipd;device;drivers;positive;negative;atomic;resources"
+  fsim_sdf_interconnect_timing_tests
+  "fast;application;sdf;timing;interconnect;port;mipd;device;drivers;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -791,13 +669,10 @@ target_link_libraries(
   fsim_sdf_mixed_verilog_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_mixed_verilog
-  COMMAND fsim_sdf_mixed_verilog_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_mixed_verilog
-  PROPERTIES LABELS "fast;application;sdf;vhdl;verilog;mixed;timing;conversion;drivers;loads;positive;negative;atomic;resources"
+  fsim_sdf_mixed_verilog_tests
+  "fast;application;sdf;vhdl;verilog;mixed;timing;conversion;drivers;loads;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -809,13 +684,10 @@ target_link_libraries(
   fsim_sdf_mixed_systemverilog_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_mixed_systemverilog
-  COMMAND fsim_sdf_mixed_systemverilog_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_mixed_systemverilog
-  PROPERTIES LABELS "fast;application;sdf;vhdl;systemverilog;mixed;interface;program;class;assertion;package;region;positive;negative;atomic;resources"
+  fsim_sdf_mixed_systemverilog_tests
+  "fast;application;sdf;vhdl;systemverilog;mixed;interface;program;class;assertion;package;region;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -827,13 +699,10 @@ target_link_libraries(
   fsim_sdf_mixed_systemc_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_mixed_systemc
-  COMMAND fsim_sdf_mixed_systemc_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_mixed_systemc
-  PROPERTIES LABELS "fast;application;sdf;vhdl;systemc;mixed;proxy;logic9;arbitrary-width;time;delta;channel;positive;negative;atomic;resources"
+  fsim_sdf_mixed_systemc_tests
+  "fast;application;sdf;vhdl;systemc;mixed;proxy;logic9;arbitrary-width;time;delta;channel;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -845,13 +714,10 @@ target_link_libraries(
   fsim_sdf_mixed_resolution_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_mixed_resolution
-  COMMAND fsim_sdf_mixed_resolution_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_mixed_resolution
-  PROPERTIES LABELS "fast;application;sdf;vhdl;verilog;systemverilog;systemc;mixed;multi-root;library;nested;direction;identity;positive;negative;atomic;resources"
+  fsim_sdf_mixed_resolution_tests
+  "fast;application;sdf;vhdl;verilog;systemverilog;systemc;mixed;multi-root;library;nested;direction;identity;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -863,13 +729,10 @@ target_link_libraries(
   fsim_sdf_foreign_interfaces_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_foreign_interfaces
-  COMMAND fsim_sdf_foreign_interfaces_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_foreign_interfaces
-  PROPERTIES LABELS "fast;application;sdf;vhdl;verilog;systemverilog;mixed;vhpi;vpi;identity;enumeration;callback;control;disabled;positive;negative;atomic;resources"
+  fsim_sdf_foreign_interfaces_tests
+  "fast;application;sdf;vhdl;verilog;systemverilog;mixed;vhpi;vpi;identity;enumeration;callback;control;disabled;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -881,13 +744,10 @@ target_link_libraries(
   fsim_sdf_vital_observability_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_observability
-  COMMAND fsim_sdf_vital_observability_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_observability
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed;debugger;callback;trace;vcd;pending-event;violation;time;delta;region;disabled;positive;negative;atomic;resources"
+  fsim_sdf_vital_observability_tests
+  "fast;application;sdf;vhdl;vital;mixed;debugger;callback;trace;vcd;pending-event;violation;time;delta;region;disabled;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -899,13 +759,10 @@ target_link_libraries(
   fsim_sdf_vital_archive_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_archive
-  COMMAND fsim_sdf_vital_archive_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_archive
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed;artifact;object;design;library;relocation;cache;checkpoint;replay;roundtrip;positive;negative;atomic;resources"
+  fsim_sdf_vital_archive_tests
+  "fast;application;sdf;vhdl;vital;mixed;artifact;object;design;library;relocation;cache;checkpoint;replay;roundtrip;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -917,13 +774,10 @@ target_link_libraries(
   fsim_sdf_vital_phases_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_phases
-  COMMAND fsim_sdf_vital_phases_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_phases
-  PROPERTIES LABELS "fast;application;sdf;vhdl;vital;mixed;project;cli;tcl;c-api;cpp-api;non-project;cold;warm;relocated;interpreter;llvm;summary;positive;negative;atomic;resources"
+  fsim_sdf_vital_phases_tests
+  "fast;application;sdf;vhdl;vital;mixed;project;cli;tcl;c-api;cpp-api;non-project;cold;warm;relocated;interpreter;llvm;summary;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -954,13 +808,10 @@ target_link_libraries(
   fsim_sdf_delay_modes_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_delay_modes
-  COMMAND fsim_sdf_delay_modes_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_delay_modes
-  PROPERTIES LABELS "fast;application;sdf;timing;delay-list;absolute;incremental;transition;ordering;positive;negative;atomic;resources"
+  fsim_sdf_delay_modes_tests
+  "fast;application;sdf;timing;delay-list;absolute;incremental;transition;ordering;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -972,13 +823,10 @@ target_link_libraries(
   fsim_sdf_primary_timing_checks_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_primary_timing_checks
-  COMMAND fsim_sdf_primary_timing_checks_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_primary_timing_checks
-  PROPERTIES LABELS "fast;application;sdf;timing;setup;hold;setuphold;recovery;removal;recrem;events;positive;negative;atomic;resources"
+  fsim_sdf_primary_timing_checks_tests
+  "fast;application;sdf;timing;setup;hold;setuphold;recovery;removal;recrem;events;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -990,13 +838,10 @@ target_link_libraries(
   fsim_sdf_secondary_timing_checks_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_secondary_timing_checks
-  COMMAND fsim_sdf_secondary_timing_checks_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_secondary_timing_checks
-  PROPERTIES LABELS "fast;application;sdf;timing;skew;timeskew;fullskew;width;period;nochange;state;positive;negative;atomic;resources"
+  fsim_sdf_secondary_timing_checks_tests
+  "fast;application;sdf;timing;skew;timeskew;fullskew;width;period;nochange;state;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -1008,13 +853,10 @@ target_link_libraries(
   fsim_sdf_condition_timing_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_condition_timing
-  COMMAND fsim_sdf_condition_timing_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_condition_timing
-  PROPERTIES LABELS "fast;application;sdf;timing;conditions;edges;notifier;four-state;same-tick;negative;positive;atomic;resources"
+  fsim_sdf_condition_timing_tests
+  "fast;application;sdf;timing;conditions;edges;notifier;four-state;same-tick;negative;positive;atomic;resources"
 )
 
 add_executable(
@@ -1026,13 +868,10 @@ target_link_libraries(
   fsim_sdf_pulse_timing_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_pulse_timing
-  COMMAND fsim_sdf_pulse_timing_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_pulse_timing
-  PROPERTIES LABELS "fast;application;sdf;timing;pathpulse;percentage;global;retain;four-state;cancellation;threshold;positive;negative;atomic;resources"
+  fsim_sdf_pulse_timing_tests
+  "fast;application;sdf;timing;pathpulse;percentage;global;retain;four-state;cancellation;threshold;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -1044,13 +883,10 @@ target_link_libraries(
   fsim_sdf_precedence_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_precedence
-  COMMAND fsim_sdf_precedence_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_precedence
-  PROPERTIES LABELS "fast;application;sdf;timing;precedence;delay-mode;disable;pathpulse;retain;positive;negative;atomic;resources"
+  fsim_sdf_precedence_tests
+  "fast;application;sdf;timing;precedence;delay-mode;disable;pathpulse;retain;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -1062,13 +898,10 @@ target_link_libraries(
   fsim_sdf_scheduling_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_scheduling
-  COMMAND fsim_sdf_scheduling_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_scheduling
-  PROPERTIES LABELS "fast;application;sdf;timing;scheduler;interpreter;llvm;inertial;cancellation;delta;same-time;ordering;positive;negative;atomic;resources"
+  fsim_sdf_scheduling_tests
+  "fast;application;sdf;timing;scheduler;interpreter;llvm;inertial;cancellation;delta;same-time;ordering;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -1080,13 +913,10 @@ target_link_libraries(
   fsim_sdf_drive_timing_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_drive_timing
-  COMMAND fsim_sdf_drive_timing_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_drive_timing
-  PROPERTIES LABELS "fast;application;sdf;timing;driver;strength;resolved-net;switch;mos;cmos;tran;force;release;scalar;vector;interpreter;llvm;positive;negative;atomic;resources"
+  fsim_sdf_drive_timing_tests
+  "fast;application;sdf;timing;driver;strength;resolved-net;switch;mos;cmos;tran;force;release;scalar;vector;interpreter;llvm;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -1098,13 +928,10 @@ target_link_libraries(
   fsim_sdf_reannotation_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_reannotation
-  COMMAND fsim_sdf_reannotation_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_reannotation
-  PROPERTIES LABELS "fast;application;sdf;timing;reannotation;multi-file;wildcard;multi-root;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
+  fsim_sdf_reannotation_tests
+  "fast;application;sdf;timing;reannotation;multi-file;wildcard;multi-root;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
 )
 
 add_executable(
@@ -1116,13 +943,10 @@ target_link_libraries(
   fsim_sdf_vital_reannotation_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_vital_reannotation
-  COMMAND fsim_sdf_vital_reannotation_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_vital_reannotation
-  PROPERTIES LABELS "fast;application;sdf;vital;reannotation;multi-file;wildcard;multi-root;generic;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
+  fsim_sdf_vital_reannotation_tests
+  "fast;application;sdf;vital;reannotation;multi-file;wildcard;multi-root;generic;precedence;safe-point;pending-event;timing-check;ordering;positive;negative;atomic;rollback;resources"
 )
 
 add_executable(
@@ -1134,13 +958,10 @@ target_link_libraries(
   fsim_sdf_control_tests
   PRIVATE fsim_application fsim_cli fsim_api
 )
-add_test(
-  NAME fsim.application.sdf_control
-  COMMAND fsim_sdf_control_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_control
-  PROPERTIES LABELS "fast;application;sdf;control;cli;c-api;cpp-api;phase;report;identity;positive;negative;atomic;rollback;resources"
+  fsim_sdf_control_tests
+  "fast;application;sdf;control;cli;c-api;cpp-api;phase;report;identity;positive;negative;atomic;rollback;resources"
 )
 
 add_executable(
@@ -1152,13 +973,10 @@ target_link_libraries(
   fsim_sdf_effective_archive_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_effective_archive
-  COMMAND fsim_sdf_effective_archive_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_effective_archive
-  PROPERTIES LABELS "fast;application;sdf;effective;archive;object;design;library;cache;checkpoint;replay;relocation;schema;checksum;policy;provenance;identity;positive;negative;atomic;rollback;resources"
+  fsim_sdf_effective_archive_tests
+  "fast;application;sdf;effective;archive;object;design;library;cache;checkpoint;replay;relocation;schema;checksum;policy;provenance;identity;positive;negative;atomic;rollback;resources"
 )
 
 add_executable(
@@ -1170,13 +988,10 @@ target_link_libraries(
   fsim_sdf_observability_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_observability
-  COMMAND fsim_sdf_observability_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_observability
-  PROPERTIES LABELS "fast;application;sdf;observability;debugger;callback;trace;vpi;vcd;region;ordering;source;identity;disabled;allocation;positive;negative;atomic;resources"
+  fsim_sdf_observability_tests
+  "fast;application;sdf;observability;debugger;callback;trace;vpi;vcd;region;ordering;source;identity;disabled;allocation;positive;negative;atomic;resources"
 )
 
 add_executable(
@@ -1188,13 +1003,10 @@ target_link_libraries(
   fsim_sdf_application_corpus_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_application_corpus
-  COMMAND fsim_sdf_application_corpus_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_application_corpus
-  PROPERTIES LABELS "fast;application;sdf;corpus;standard-cell;primitive;interconnect;pulse;timing-check;interpreter;llvm;project;non-project;artifact;cache;checkpoint;relocation;linux;windows;positive;negative;resources"
+  fsim_sdf_application_corpus_tests
+  "fast;application;sdf;corpus;standard-cell;primitive;interconnect;pulse;timing-check;interpreter;llvm;project;non-project;artifact;cache;checkpoint;relocation;linux;windows;positive;negative;resources"
 )
 
 add_executable(
@@ -1206,13 +1018,10 @@ target_link_libraries(
   fsim_sdf_schema_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_schema
-  COMMAND fsim_sdf_schema_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_schema
-  PROPERTIES LABELS "fast;application;sdf;schema;positive;negative;revision;roundtrip;resources"
+  fsim_sdf_schema_tests
+  "fast;application;sdf;schema;positive;negative;revision;roundtrip;resources"
 )
 
 add_executable(
@@ -1224,13 +1033,10 @@ target_link_libraries(
   fsim_sdf_artifact_identity_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sdf_artifact_identity
-  COMMAND fsim_sdf_artifact_identity_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_artifact_identity
-  PROPERTIES LABELS "fast;application;sdf;artifact;cache;positive;negative;revision;roundtrip;resources"
+  fsim_sdf_artifact_identity_tests
+  "fast;application;sdf;artifact;cache;positive;negative;revision;roundtrip;resources"
 )
 
 add_executable(
@@ -1243,10 +1049,10 @@ target_compile_definitions(
   PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )
 target_link_libraries(fsim_sdf_corpus_tests PRIVATE fsim_application)
-add_test(NAME fsim.application.sdf_corpus COMMAND fsim_sdf_corpus_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sdf_corpus
-  PROPERTIES LABELS "fast;application;sdf;corpus;positive;revision;normalization;resolution;mixed-language;roundtrip"
+  fsim_sdf_corpus_tests
+  "fast;application;sdf;corpus;positive;revision;normalization;resolution;mixed-language;roundtrip"
 )
 
 add_executable(fsim_project_tests project/project_config_test.cpp)
@@ -1257,10 +1063,10 @@ add_test(NAME fsim.project COMMAND fsim_project_tests)
 add_executable(fsim_library_tests library/library_artifact_test.cpp)
 fsim_configure_test(fsim_library_tests)
 target_link_libraries(fsim_library_tests PRIVATE fsim_library)
-add_test(NAME fsim.library.artifact COMMAND fsim_library_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.library.artifact
-  PROPERTIES LABELS "fast;library;artifact;source"
+  fsim_library_tests
+  "fast;library;artifact;source"
 )
 
 add_executable(
@@ -1269,13 +1075,10 @@ add_executable(
 )
 fsim_configure_test(fsim_code_coverage_identity_tests)
 target_link_libraries(fsim_code_coverage_identity_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.code-coverage-identity
-  COMMAND fsim_code_coverage_identity_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.code-coverage-identity
-  PROPERTIES LABELS "fast;artifact;coverage;identity;schema;positive;negative"
+  fsim_code_coverage_identity_tests
+  "fast;artifact;coverage;identity;schema;positive;negative"
 )
 
 add_executable(
@@ -1285,13 +1088,10 @@ add_executable(
 fsim_configure_test(fsim_code_coverage_metrics_identity_tests)
 target_link_libraries(
   fsim_code_coverage_metrics_identity_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.code-coverage-metrics-identity
-  COMMAND fsim_code_coverage_metrics_identity_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.code-coverage-metrics-identity
-  PROPERTIES LABELS "fast;artifact;coverage;metrics;identity;schema;positive;negative"
+  fsim_code_coverage_metrics_identity_tests
+  "fast;artifact;coverage;metrics;identity;schema;positive;negative"
 )
 
 add_executable(
@@ -1300,13 +1100,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_database_schema_tests)
 target_link_libraries(fsim_coverage_database_schema_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-database-schema
-  COMMAND fsim_coverage_database_schema_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-database-schema
-  PROPERTIES LABELS "fast;artifact;coverage;database;schema;namespace;resources;positive;negative"
+  fsim_coverage_database_schema_tests
+  "fast;artifact;coverage;database;schema;namespace;resources;positive;negative"
 )
 
 add_executable(
@@ -1315,13 +1112,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_database_model_tests)
 target_link_libraries(fsim_coverage_database_model_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-database-model
-  COMMAND fsim_coverage_database_model_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-database-model
-  PROPERTIES LABELS "fast;artifact;coverage;database;model;source;run;metrics;exclusion;resources;positive;negative"
+  fsim_coverage_database_model_tests
+  "fast;artifact;coverage;database;model;source;run;metrics;exclusion;resources;positive;negative"
 )
 
 add_executable(
@@ -1330,13 +1124,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_exclusion_report_tests)
 target_link_libraries(fsim_coverage_exclusion_report_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-exclusion-report
-  COMMAND fsim_coverage_exclusion_report_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-exclusion-report
-  PROPERTIES LABELS "fast;artifact;coverage;database;report;exclusion;reason;positive;negative;resource;determinism"
+  fsim_coverage_exclusion_report_tests
+  "fast;artifact;coverage;database;report;exclusion;reason;positive;negative;resource;determinism"
 )
 
 add_executable(
@@ -1345,13 +1136,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_report_model_tests)
 target_link_libraries(fsim_coverage_report_model_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-report-model
-  COMMAND fsim_coverage_report_model_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-report-model
-  PROPERTIES LABELS "fast;artifact;coverage;database;report;source;instance;combined;metrics;exclusion;reason;positive;negative;resource;determinism"
+  fsim_coverage_report_model_tests
+  "fast;artifact;coverage;database;report;source;instance;combined;metrics;exclusion;reason;positive;negative;resource;determinism"
 )
 
 add_executable(
@@ -1360,13 +1148,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_report_render_tests)
 target_link_libraries(fsim_coverage_report_render_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-report-render
-  COMMAND fsim_coverage_report_render_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-report-render
-  PROPERTIES LABELS "fast;artifact;coverage;database;report;text;html;json;escaping;source;instance;combined;metrics;exclusion;reason;positive;negative;resource;determinism"
+  fsim_coverage_report_render_tests
+  "fast;artifact;coverage;database;report;text;html;json;escaping;source;instance;combined;metrics;exclusion;reason;positive;negative;resource;determinism"
 )
 
 add_executable(
@@ -1375,13 +1160,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_report_projection_tests)
 target_link_libraries(fsim_coverage_report_projection_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-report-projection
-  COMMAND fsim_coverage_report_projection_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-report-projection
-  PROPERTIES LABELS "fast;artifact;coverage;database;report;lcov;cobertura;xml;line;branch;source;exclusion;positive;negative;resource;determinism"
+  fsim_coverage_report_projection_tests
+  "fast;artifact;coverage;database;report;lcov;cobertura;xml;line;branch;source;exclusion;positive;negative;resource;determinism"
 )
 
 add_executable(
@@ -1390,13 +1172,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_database_codec_tests)
 target_link_libraries(fsim_coverage_database_codec_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-database-codec
-  COMMAND fsim_coverage_database_codec_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-database-codec
-  PROPERTIES LABELS "fast;artifact;coverage;database;codec;serialization;atomic;source;run;metrics;exclusion;resources;positive;negative"
+  fsim_coverage_database_codec_tests
+  "fast;artifact;coverage;database;codec;serialization;atomic;source;run;metrics;exclusion;resources;positive;negative"
 )
 
 add_executable(
@@ -1405,13 +1184,10 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_database_merge_tests)
 target_link_libraries(fsim_coverage_database_merge_tests PRIVATE fsim_library)
-add_test(
-  NAME fsim.artifact.coverage-database-merge
-  COMMAND fsim_coverage_database_merge_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-database-merge
-  PROPERTIES LABELS "fast;artifact;coverage;database;merge;strict;run;metrics;exclusion;resources;positive;negative"
+  fsim_coverage_database_merge_tests
+  "fast;artifact;coverage;database;merge;strict;run;metrics;exclusion;resources;positive;negative"
 )
 
 add_executable(
@@ -1422,13 +1198,10 @@ fsim_configure_test(fsim_coverage_database_partial_merge_tests)
 target_link_libraries(
   fsim_coverage_database_partial_merge_tests PRIVATE fsim_library
 )
-add_test(
-  NAME fsim.artifact.coverage-database-partial-merge
-  COMMAND fsim_coverage_database_partial_merge_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-database-partial-merge
-  PROPERTIES LABELS "fast;artifact;coverage;database;merge;partial;run;metrics;exclusion;resources;positive;negative"
+  fsim_coverage_database_partial_merge_tests
+  "fast;artifact;coverage;database;merge;partial;run;metrics;exclusion;resources;positive;negative"
 )
 
 add_executable(
@@ -1439,13 +1212,10 @@ fsim_configure_test(fsim_coverage_database_robustness_tests)
 target_link_libraries(
   fsim_coverage_database_robustness_tests PRIVATE fsim_library
 )
-add_test(
-  NAME fsim.artifact.coverage-database-robustness
-  COMMAND fsim_coverage_database_robustness_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.coverage-database-robustness
-  PROPERTIES LABELS "fast;artifact;coverage;database;corruption;resource;path;merge;strict;partial;conflict;mixed-language;systemverilog;vhdl;psl;report;json;lcov;cobertura;atomic;positive;negative;determinism"
+  fsim_coverage_database_robustness_tests
+  "fast;artifact;coverage;database;corruption;resource;path;merge;strict;partial;conflict;mixed-language;systemverilog;vhdl;psl;report;json;lcov;cobertura;atomic;positive;negative;determinism"
 )
 
 add_executable(
@@ -1456,13 +1226,10 @@ fsim_configure_test(fsim_coverage_database_systemverilog_tests)
 target_link_libraries(
   fsim_coverage_database_systemverilog_tests PRIVATE fsim_frontend fsim_library
 )
-add_test(
-  NAME fsim.frontend.coverage-database-systemverilog
-  COMMAND fsim_coverage_database_systemverilog_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.frontend.coverage-database-systemverilog
-  PROPERTIES LABELS "fast;frontend;systemverilog;coverage;database;namespace;source;run;metrics;exclusion;resources;positive;negative"
+  fsim_coverage_database_systemverilog_tests
+  "fast;frontend;systemverilog;coverage;database;namespace;source;run;metrics;exclusion;resources;positive;negative"
 )
 
 add_executable(
@@ -1473,13 +1240,10 @@ fsim_configure_test(fsim_coverage_database_psl_tests)
 target_link_libraries(
   fsim_coverage_database_psl_tests PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.coverage-database-psl
-  COMMAND fsim_coverage_database_psl_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.coverage-database-psl
-  PROPERTIES LABELS "fast;application;vhdl;psl;coverage;database;namespace;source;run;metrics;resources;positive;negative"
+  fsim_coverage_database_psl_tests
+  "fast;application;vhdl;psl;coverage;database;namespace;source;run;metrics;resources;positive;negative"
 )
 
 add_executable(
@@ -1490,22 +1254,19 @@ fsim_configure_test(fsim_coverage_command_tests)
 target_link_libraries(
   fsim_coverage_command_tests PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.coverage-command
-  COMMAND fsim_coverage_command_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.coverage-command
-  PROPERTIES LABELS "fast;application;cli;coverage;database;merge;partial;report;text;lcov;threshold;ci;atomic;positive;negative"
+  fsim_coverage_command_tests
+  "fast;application;cli;coverage;database;merge;partial;report;text;lcov;threshold;ci;atomic;positive;negative"
 )
 
 add_executable(fsim_object_artifact_tests artifact/object_artifact_test.cpp)
 fsim_configure_test(fsim_object_artifact_tests)
 target_link_libraries(fsim_object_artifact_tests PRIVATE fsim_library)
-add_test(NAME fsim.artifact.object COMMAND fsim_object_artifact_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.object
-  PROPERTIES LABELS "fast;artifact;compile;source"
+  fsim_object_artifact_tests
+  "fast;artifact;compile;source"
 )
 
 add_executable(fsim_design_artifact_tests artifact/design_artifact_test.cpp)
@@ -1514,14 +1275,17 @@ target_link_libraries(
   fsim_design_artifact_tests
   PRIVATE fsim_library fsim_runtime fsim_systemc
 )
-add_test(NAME fsim.artifact.design COMMAND fsim_design_artifact_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.artifact.design
-  PROPERTIES LABELS "fast;artifact;elaborate"
+  fsim_design_artifact_tests
+  "fast;artifact;elaborate"
 )
 
 add_executable(fsim_cache_tests compiler/cache_test.cpp)
 fsim_configure_test(fsim_cache_tests)
+target_include_directories(
+  fsim_cache_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/compiler"
+)
 target_link_libraries(fsim_cache_tests PRIVATE fsim_object_cache)
 add_test(NAME fsim.cache COMMAND fsim_cache_tests)
 
@@ -1566,11 +1330,24 @@ set_tests_properties(
 )
 
 add_test(
-  NAME fsim.source-line-budget
+  NAME fsim.translation-unit-structure
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSourceLineBudget.cmake"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckTranslationUnitStructure.cmake"
+)
+add_test(
+  NAME fsim.translation-unit-structure-selftest
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/CheckTranslationUnitStructureSelfTest.cmake"
+)
+set_tests_properties(
+  fsim.translation-unit-structure
+  fsim.translation-unit-structure-selftest
+  PROPERTIES LABELS "fast;structure;cmake;positive;negative"
 )
 
 add_test(
@@ -1740,46 +1517,11 @@ set_tests_properties(
 )
 
 add_test(
-  NAME fsim.release-candidate-log-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    "-DFSIM_EVIDENCE_DIR=${PROJECT_SOURCE_DIR}/build/qualification"
-    "-DFSIM_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/release-candidate-log-audit"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckReleaseCandidateLogAudit.cmake"
-)
-set_tests_properties(
-  fsim.release-candidate-log-audit
-  PROPERTIES
-    LABELS "fast;candidate;audit;debug;logs;warnings;failures;resources;positive;negative;cmake"
-)
-
-add_test(
-  NAME fsim.v2-release-records
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV2ReleaseRecords.cmake"
-)
-set_tests_properties(
-  fsim.v2-release-records
-  PROPERTIES
-    LABELS "fast;candidate;records;package;support;platform;examples;license;notice;sbom;archive;signature;debug;cmake"
-)
-
-add_test(
   NAME fsim.ieee-package-inventory
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckIeeePackageInventory.cmake"
-)
-add_test(
-  NAME fsim.v1-vhdl-matrix
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1VhdlMatrix.cmake"
 )
 add_test(
   NAME fsim.vhdl-psl-gap-inventory
@@ -1879,7 +1621,9 @@ add_test(
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3ReleaseIntegrationInventory.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentReleaseIntegrationInventory.cmake"
 )
 set_tests_properties(
   fsim.v3-release-integration-inventory
@@ -1892,7 +1636,9 @@ add_test(
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3SchemaFreeze.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentSchemaFreeze.cmake"
 )
 set_tests_properties(
   fsim.v3-schema-freeze
@@ -1905,7 +1651,9 @@ add_test(
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3V2InputRejection.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentV2InputRejection.cmake"
 )
 set_tests_properties(
   fsim.v3-v2-input-rejection
@@ -1918,7 +1666,9 @@ add_test(
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3RetainedProfiles.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentRetainedProfiles.cmake"
 )
 set_tests_properties(
   fsim.v3-retained-profile-qualification
@@ -1927,28 +1677,106 @@ set_tests_properties(
       "v3;release;vhdl;verilog;systemverilog;profile;inventory;artifact;interpreter;llvm;positive;negative;fast"
 )
 add_test(
-  NAME fsim.v3-warning-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3WarningAudit.cmake"
-)
-set_tests_properties(
-  fsim.v3-warning-audit
-  PROPERTIES
-    LABELS "v3;warning;warnings-as-errors;clang;linux;windows;debug;release;llvm;inventory;positive;negative;fast"
-)
-add_test(
   NAME fsim.v3-hosted-toolchains
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3HostedToolchains.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentHostedLanes.cmake"
 )
 set_tests_properties(
   fsim.v3-hosted-toolchains
   PROPERTIES
-    LABELS "v3;hosted;ci;platform;toolchain;clang;llvm;llvm-mingw;linux;windows;debug;release;inventory;positive;negative;fast"
+    LABELS "v3;hosted;ci;warning;warnings-as-errors;platform;toolchain;clang;llvm;llvm-mingw;linux;windows;debug;release;inventory;positive;negative;fast"
+)
+if(UNIX)
+  add_test(
+    NAME fsim.v3-installed-archive-required-set
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+      "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_BINARY_DIR}/tests/v3-install-audit-fixture"
+      -P "${PROJECT_SOURCE_DIR}/tests/cmake/CheckV3InstalledArchiveRequiredSet.cmake"
+  )
+  set_tests_properties(
+    fsim.v3-installed-archive-required-set
+    PROPERTIES
+      LABELS "v3;install;archive;required-set;positive;negative;fast"
+  )
+endif()
+add_test(
+  NAME fsim.gate-migration-negative-probes
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_TEST_WORK_DIR=${PROJECT_BINARY_DIR}/tests/gate-migration-negative-probes"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/CheckGateMigrationNegativeProbes.cmake"
+)
+set_tests_properties(
+  fsim.gate-migration-negative-probes
+  PROPERTIES
+    LABELS "gate-migration;abi;schema;ast-lifetime;fixture;negative;fast"
+)
+add_test(
+  NAME fsim.contract.build-resources
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentBuildResources.cmake"
+)
+set_tests_properties(
+  fsim.contract.build-resources
+  PROPERTIES LABELS "contract;resources;build;hosted;ci;fast"
+)
+set(FSIM_RESOURCE_DOMAINS
+  coverage foreign-abi trace language systemc artifact
+)
+set(FSIM_RESOURCE_TESTS
+  fsim.contract.coverage-resources
+  fsim.contract.foreign-abi-lifetime
+  fsim.contract.trace-resources
+  fsim.contract.language-resources
+  fsim.contract.systemc-resources
+  fsim.contract.artifact-resources
+)
+list(LENGTH FSIM_RESOURCE_DOMAINS FSIM_RESOURCE_DOMAIN_COUNT)
+math(EXPR FSIM_RESOURCE_LAST "${FSIM_RESOURCE_DOMAIN_COUNT} - 1")
+foreach(FSIM_RESOURCE_INDEX RANGE 0 ${FSIM_RESOURCE_LAST})
+  list(GET FSIM_RESOURCE_DOMAINS ${FSIM_RESOURCE_INDEX} FSIM_RESOURCE_DOMAIN)
+  list(GET FSIM_RESOURCE_TESTS ${FSIM_RESOURCE_INDEX} FSIM_RESOURCE_TEST)
+  add_test(
+    NAME ${FSIM_RESOURCE_TEST}
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+      "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+      "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+      "-DFSIM_RESOURCE_DOMAIN=${FSIM_RESOURCE_DOMAIN}"
+      -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentResourceDomain.cmake"
+  )
+  set_tests_properties(
+    ${FSIM_RESOURCE_TEST}
+    PROPERTIES LABELS "contract;resources;${FSIM_RESOURCE_DOMAIN};positive;negative;fast"
+  )
+endforeach()
+add_test(
+  NAME fsim.contract.resource-domain-validator-selftest
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/cmake/CheckCurrentResourceDomainSelfTest.cmake"
+)
+set_tests_properties(
+  fsim.contract.resource-domain-validator-selftest
+  PROPERTIES LABELS "contract;resources;cmake;positive;negative;fast"
 )
 add_test(
   NAME fsim.v3-release-documentation
@@ -1985,6 +1813,53 @@ set_tests_properties(
   fsim.v3-supply-chain
   PROPERTIES
     LABELS "v3;release;package;source;license;notice;sbom;provenance;reference-audit;positive;negative;fast"
+)
+add_test(
+  NAME fsim.required-set-helper-self-test
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_TEST_WORK_DIR=${PROJECT_BINARY_DIR}/required-set-helper-self-test"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/CheckRequiredSetHelpersSelfTest.cmake"
+)
+set_tests_properties(
+  fsim.required-set-helper-self-test
+  PROPERTIES LABELS "v3;contract;required-set;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v3-current-obligations
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3CurrentObligations.cmake"
+)
+set_tests_properties(
+  fsim.v3-current-obligations
+  PROPERTIES
+    LABELS "v3;contract;required-set;license;package;abi;language;positive;negative;fast"
+)
+add_test(
+  NAME fsim.release-case-ids
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentReleaseCaseIds.cmake"
+)
+set_tests_properties(
+  fsim.release-case-ids
+  PROPERTIES LABELS "v3;language;required-set;release;positive;negative;fast"
+)
+add_test(
+  NAME fsim.authored-license-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckAuthoredLicenseInventory.cmake"
+)
+set_tests_properties(
+  fsim.authored-license-inventory
+  PROPERTIES LABELS "v3;license;source;package;positive;negative;fast"
 )
 add_test(
   NAME fsim.v3-release-record
@@ -2024,21 +1899,30 @@ add_test(
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationInventory.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_INVENTORY_KIND=sdf-application"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentTraceTimingInventory.cmake"
 )
 add_test(
   NAME fsim.sdf-vital-inventory
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfVitalInventory.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_INVENTORY_KIND=sdf-vital"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentTraceTimingInventory.cmake"
 )
 add_test(
   NAME fsim.fst-inventory
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstInventory.cmake"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    "-DFSIM_INVENTORY_KIND=fst"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckCurrentTraceTimingInventory.cmake"
 )
 add_test(
   NAME fsim.systemc-accellera-inventory
@@ -2065,30 +1949,6 @@ set_tests_properties(
   fsim.abi-schema-inventory
   PROPERTIES
     LABELS "abi;schema;artifact;cache;inventory;documentation;positive;negative;fast"
-)
-add_test(
-  NAME fsim.v2-qualification-inventory
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV2QualificationInventory.cmake"
-)
-set_tests_properties(
-  fsim.v2-qualification-inventory
-  PROPERTIES
-    LABELS "qualification;platform;performance;resource;inventory;documentation;positive;negative;fast"
-)
-add_test(
-  NAME fsim.v2-performance-baselines
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV2PerformanceBaselines.cmake"
-)
-set_tests_properties(
-  fsim.v2-performance-baselines
-  PROPERTIES
-    LABELS "qualification;performance;resource;baseline;linux;clang;gcc;inventory;positive;negative;fast"
 )
 add_test(
   NAME fsim.execution-mode-qualification
@@ -2452,27 +2312,6 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckApplicationTestDeduplication.cmake"
 )
 add_test(
-  NAME fsim.fst-release-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstReleaseAudit.cmake"
-)
-add_test(
-  NAME fsim.sdf-application-release-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationReleaseAudit.cmake"
-)
-add_test(
-  NAME fsim.sdf-vital-release-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfVitalReleaseAudit.cmake"
-)
-add_test(
   NAME fsim.sdf-closure
   COMMAND
     "${CMAKE_COMMAND}"
@@ -2579,6 +2418,8 @@ add_test(
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVerilogClosureAudit.cmake"
 )
 add_test(
@@ -2611,27 +2452,6 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlPslDocumentation.cmake"
-)
-add_test(
-  NAME fsim.v1-mixed-conversion-matrix
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1MixedConversionMatrix.cmake"
-)
-add_test(
-  NAME fsim.v1-legality-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1LegalityAudit.cmake"
-)
-add_test(
-  NAME fsim.v1-conformance-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ConformanceAudit.cmake"
 )
 add_test(
   NAME fsim.uvm-source-harness
@@ -2670,88 +2490,22 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmDocumentation.cmake"
 )
 add_test(
-  NAME fsim.v1-conformance-corpus
+  NAME fsim.conformance-corpus
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ConformanceCorpus.cmake"
 )
 add_test(
-  NAME fsim.v1-portability-audit
+  NAME fsim.portability-corpus
   COMMAND
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PortabilityAudit.cmake"
-)
-add_test(
-  NAME fsim.v1-portability-corpus
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PortabilityCorpus.cmake"
-)
-add_test(
-  NAME fsim.v1-release-audit
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ReleaseAudit.cmake"
-)
-add_test(
-  NAME fsim.v1-systemverilog-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1SystemVerilogRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-vhdl-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1VhdlRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-mixed-systemc-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1MixedSystemCRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-differential-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1DifferentialRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-public-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PublicRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-inventory-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1InventoryRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-resource-release
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ResourceRelease.cmake"
-)
-add_test(
-  NAME fsim.v1-release-candidate
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ReleaseCandidate.cmake"
 )
 if(WIN32)
   set(FSIM_INSTALLED_API_LIBRARY_DIR "${CMAKE_INSTALL_BINDIR}")
@@ -2840,17 +2594,6 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstPortabilityContract.cmake"
 )
-add_test(
-  NAME fsim.resource-portability-contract
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckResourcePortabilityContract.cmake"
-)
-set_tests_properties(
-  fsim.v1-vhdl-matrix
-  PROPERTIES LABELS "fast;vhdl;matrix;cmake"
-)
 set_tests_properties(
   fsim.vhdl-psl-gap-inventory
   PROPERTIES LABELS "fast;vhdl;psl;conformance;inventory;positive;negative;resources;cmake"
@@ -2930,18 +2673,6 @@ set_tests_properties(
   PROPERTIES LABELS "fast;regression;deduplication;ctest;cmake"
 )
 set_tests_properties(
-  fsim.fst-release-audit
-  PROPERTIES LABELS "fast;fst;vcd;trace;release;audit;documentation;inventory;diagnostics;resources;license;portability"
-)
-set_tests_properties(
-  fsim.sdf-application-release-audit
-  PROPERTIES LABELS "fast;sdf;application;release;audit;documentation;inventory;diagnostics;resources;license;portability"
-)
-set_tests_properties(
-  fsim.sdf-vital-release-audit
-  PROPERTIES LABELS "fast;sdf;vhdl;vital;mixed-language;release;audit;documentation;inventory;diagnostics;resources;license;portability"
-)
-set_tests_properties(
   fsim.vhdl-standard-mode-closure-matrix
   PROPERTIES
     LABELS "slow;vhdl;closure;recursive-closure;release;positive;negative;llvm;artifact;cache;debug;trace;mixed;packages;provenance;portability;resources"
@@ -2998,18 +2729,6 @@ set_tests_properties(
   PROPERTIES LABELS "fast;vhdl;psl;documentation;installed;release;cmake"
 )
 set_tests_properties(
-  fsim.v1-mixed-conversion-matrix
-  PROPERTIES LABELS "fast;mixed-language;conversions;matrix;cmake"
-)
-set_tests_properties(
-  fsim.v1-legality-audit
-  PROPERTIES LABELS "fast;legality;matrix;cmake"
-)
-set_tests_properties(
-  fsim.v1-conformance-audit
-  PROPERTIES LABELS "fast;conformance;license;provenance;cmake"
-)
-set_tests_properties(
   fsim.uvm-source-harness
   PROPERTIES LABELS "fast;systemverilog;uvm;license;provenance;cmake"
 )
@@ -3030,52 +2749,12 @@ set_tests_properties(
   PROPERTIES LABELS "fast;systemverilog;uvm;documentation;release;installed;portability;cmake"
 )
 set_tests_properties(
-  fsim.v1-conformance-corpus
+  fsim.conformance-corpus
   PROPERTIES LABELS "fast;conformance;coverage;provenance;cmake"
 )
 set_tests_properties(
-  fsim.v1-portability-audit
-  PROPERTIES LABELS "fast;portability;windows;linux;cmake"
-)
-set_tests_properties(
-  fsim.v1-portability-corpus
+  fsim.portability-corpus
   PROPERTIES LABELS "fast;portability;windows;linux;matrix;differential;cmake"
-)
-set_tests_properties(
-  fsim.v1-release-audit
-  PROPERTIES LABELS "fast;release;legality;conformance;portability;matrix;cmake"
-)
-set_tests_properties(
-  fsim.v1-systemverilog-release
-  PROPERTIES LABELS "fast;release;systemverilog;legality;matrix;cmake"
-)
-set_tests_properties(
-  fsim.v1-vhdl-release
-  PROPERTIES LABELS "fast;release;vhdl;legality;matrix;cmake"
-)
-set_tests_properties(
-  fsim.v1-mixed-systemc-release
-  PROPERTIES LABELS "fast;release;mixed-language;systemc;abi;matrix;cmake"
-)
-set_tests_properties(
-  fsim.v1-differential-release
-  PROPERTIES LABELS "fast;release;differential;llvm;cache;debugger;vcd;cmake"
-)
-set_tests_properties(
-  fsim.v1-public-release
-  PROPERTIES LABELS "fast;release;api;abi;cli;tcl;files;portability;cmake"
-)
-set_tests_properties(
-  fsim.v1-inventory-release
-  PROPERTIES LABELS "fast;release;diagnostics;source;license;conformance;provenance;cmake"
-)
-set_tests_properties(
-  fsim.v1-resource-release
-  PROPERTIES LABELS "fast;release;portability;windows;linux;resources;cmake"
-)
-set_tests_properties(
-  fsim.v1-release-candidate
-  PROPERTIES LABELS "fast;release;matrix;coverage;evidence;cmake"
 )
 set_tests_properties(
   fsim.installed-public-contract
@@ -3114,10 +2793,6 @@ set_tests_properties(
 set_tests_properties(
   fsim.fst-portability-contract
   PROPERTIES LABELS "fast;fst;reader;negative;determinism;portability;windows;linux;files;cmake"
-)
-set_tests_properties(
-  fsim.resource-portability-contract
-  PROPERTIES LABELS "fast;portability;windows;linux;resources;memory;timeouts;cmake"
 )
 set_tests_properties(
   fsim.ieee-package-inventory
@@ -3267,13 +2942,10 @@ target_link_libraries(
   PRIVATE fsim_systemc_accellera_runtime
 )
 fsim_link_systemc_launcher(fsim_systemc_shared_runtime_tests)
-add_test(
-  NAME fsim.systemc.shared_runtime
-  COMMAND fsim_systemc_shared_runtime_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.shared_runtime
-  PROPERTIES LABELS "fast;systemc;accellera;runtime;shared;identity;positive;negative"
+  fsim_systemc_shared_runtime_tests
+  "fast;systemc;accellera;runtime;shared;identity;positive;negative"
 )
 
 add_executable(
@@ -3286,13 +2958,10 @@ target_link_libraries(
   PRIVATE SCV::scv
 )
 fsim_link_systemc_launcher(fsim_scv_shared_runtime_tests)
-add_test(
-  NAME fsim.scv.shared_runtime
-  COMMAND fsim_scv_shared_runtime_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.scv.shared_runtime
-  PROPERTIES LABELS "fast;systemc;scv;accellera;runtime;shared;patch;positive"
+  fsim_scv_shared_runtime_tests
+  "fast;systemc;scv;accellera;runtime;shared;patch;positive"
 )
 
 add_executable(
@@ -3305,13 +2974,10 @@ target_link_libraries(
   PRIVATE SCV::scv
 )
 fsim_link_systemc_launcher(fsim_scv_compatibility_tests)
-add_test(
-  NAME fsim.scv.compatibility
-  COMMAND fsim_scv_compatibility_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.scv.compatibility
-  PROPERTIES LABELS "fast;systemc;scv;compatibility;abi;cache;artifact;positive;negative"
+  fsim_scv_compatibility_tests
+  "fast;systemc;scv;compatibility;abi;cache;artifact;positive;negative"
 )
 
 add_executable(
@@ -3654,14 +3320,10 @@ fsim_configure_test(fsim_systemc_compatibility_tests)
 target_link_libraries(
   fsim_systemc_compatibility_tests PRIVATE fsim_systemc_headers
 )
-add_test(
-  NAME fsim.systemc.compatibility
-  COMMAND fsim_systemc_compatibility_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.compatibility
-  PROPERTIES
-    LABELS "fast;systemc;accellera;compatibility;abi;cache;positive;negative"
+  fsim_systemc_compatibility_tests
+  "fast;systemc;accellera;compatibility;abi;cache;positive;negative"
 )
 add_executable(
   fsim_systemc_kernel_backend_protocol_tests
@@ -3671,14 +3333,10 @@ fsim_configure_test(fsim_systemc_kernel_backend_protocol_tests)
 target_link_libraries(
   fsim_systemc_kernel_backend_protocol_tests PRIVATE fsim_systemc
 )
-add_test(
-  NAME fsim.systemc.kernel_backend_protocol
-  COMMAND fsim_systemc_kernel_backend_protocol_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.kernel_backend_protocol
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;protocol;identity;positive;negative;resources"
+  fsim_systemc_kernel_backend_protocol_tests
+  "fast;systemc;accellera;backend;protocol;identity;positive;negative;resources"
 )
 add_library(
   fsim_test_accellera_session_plugin
@@ -3842,14 +3500,10 @@ fsim_configure_test(fsim_systemc_kernel_backend_value_codec_tests)
 target_link_libraries(
   fsim_systemc_kernel_backend_value_codec_tests PRIVATE fsim_systemc
 )
-add_test(
-  NAME fsim.systemc.kernel_backend_value_codec
-  COMMAND fsim_systemc_kernel_backend_value_codec_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.kernel_backend_value_codec
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;value;codec;wide;four-state;nine-state;enum;time;positive;negative;resources"
+  fsim_systemc_kernel_backend_value_codec_tests
+  "fast;systemc;accellera;backend;value;codec;wide;four-state;nine-state;enum;time;positive;negative;resources"
 )
 add_executable(
   fsim_systemc_tlm1_backend_tests
@@ -3860,14 +3514,10 @@ target_link_libraries(
   fsim_systemc_tlm1_backend_tests PRIVATE fsim_systemc
 )
 fsim_link_systemc_launcher(fsim_systemc_tlm1_backend_tests)
-add_test(
-  NAME fsim.systemc.tlm1_backend
-  COMMAND fsim_systemc_tlm1_backend_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.tlm1_backend
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;tlm;tlm1;fifo;blocking;nonblocking;transport;analysis;identity;protocol;positive;negative;resources"
+  fsim_systemc_tlm1_backend_tests
+  "fast;systemc;accellera;backend;tlm;tlm1;fifo;blocking;nonblocking;transport;analysis;identity;protocol;positive;negative;resources"
 )
 add_executable(
   fsim_systemc_tlm2_backend_tests
@@ -3878,14 +3528,10 @@ target_link_libraries(
   fsim_systemc_tlm2_backend_tests PRIVATE fsim_systemc
 )
 fsim_link_systemc_launcher(fsim_systemc_tlm2_backend_tests)
-add_test(
-  NAME fsim.systemc.tlm2_backend
-  COMMAND fsim_systemc_tlm2_backend_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.tlm2_backend
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;tlm;tlm2;socket;blocking;nonblocking;dmi;debug;extensions;quantum;identity;protocol;positive;negative;resources"
+  fsim_systemc_tlm2_backend_tests
+  "fast;systemc;accellera;backend;tlm;tlm2;socket;blocking;nonblocking;dmi;debug;extensions;quantum;identity;protocol;positive;negative;resources"
 )
 add_executable(
   fsim_systemc_kernel_backend_inventory_tests
@@ -3896,14 +3542,10 @@ target_link_libraries(
   fsim_systemc_kernel_backend_inventory_tests PRIVATE fsim_systemc
 )
 fsim_link_systemc_launcher(fsim_systemc_kernel_backend_inventory_tests)
-add_test(
-  NAME fsim.systemc.kernel_backend_inventory
-  COMMAND fsim_systemc_kernel_backend_inventory_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.kernel_backend_inventory
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;inventory;signal;buffer;clock;resolved;primitive;identity;protocol;positive;negative;resources"
+  fsim_systemc_kernel_backend_inventory_tests
+  "fast;systemc;accellera;backend;inventory;signal;buffer;clock;resolved;primitive;identity;protocol;positive;negative;resources"
 )
 add_executable(
   fsim_systemc_kernel_backend_binding_inventory_tests
@@ -3915,14 +3557,10 @@ target_link_libraries(
 )
 fsim_link_systemc_launcher(
   fsim_systemc_kernel_backend_binding_inventory_tests)
-add_test(
-  NAME fsim.systemc.kernel_backend_binding_inventory
-  COMMAND fsim_systemc_kernel_backend_binding_inventory_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.kernel_backend_binding_inventory
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;inventory;port;export;hierarchy;multi-bind;mixed-language;alias;identity;protocol;positive;negative;resources"
+  fsim_systemc_kernel_backend_binding_inventory_tests
+  "fast;systemc;accellera;backend;inventory;port;export;hierarchy;multi-bind;mixed-language;alias;identity;protocol;positive;negative;resources"
 )
 add_executable(
   fsim_systemc_kernel_backend_observation_tests
@@ -3933,14 +3571,10 @@ target_link_libraries(
   fsim_systemc_kernel_backend_observation_tests PRIVATE fsim_systemc
 )
 fsim_link_systemc_launcher(fsim_systemc_kernel_backend_observation_tests)
-add_test(
-  NAME fsim.systemc.kernel_backend_observation
-  COMMAND fsim_systemc_kernel_backend_observation_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.kernel_backend_observation
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;debugger;safe-point;inventory;report;tlm;transaction;custom-channel;protocol;positive;negative;resources"
+  fsim_systemc_kernel_backend_observation_tests
+  "fast;systemc;accellera;backend;debugger;safe-point;inventory;report;tlm;transaction;custom-channel;protocol;positive;negative;resources"
 )
 
 add_executable(
@@ -4256,10 +3890,10 @@ target_compile_definitions(
     FSIM_TEST_CXX_COMPILER="${FSIM_TEST_CXX_COMPILER_PATH}"
 )
 target_link_libraries(fsim_systemc_matrix_tests PRIVATE fsim_systemc)
-add_test(NAME fsim.systemc.matrix COMMAND fsim_systemc_matrix_tests)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.systemc.matrix
-  PROPERTIES LABELS "systemc;compiler;cache;lifecycle;accellera;portability"
+  fsim_systemc_matrix_tests
+  "systemc;compiler;cache;lifecycle;accellera;portability"
 )
 
 if(FSIM_WITH_LLVM)
@@ -4299,13 +3933,10 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_code_coverage_control_tests)
   target_link_libraries(
     fsim_code_coverage_control_tests PRIVATE fsim_application fsim_cli)
-  add_test(
-    NAME fsim.application.code-coverage-control
-    COMMAND fsim_code_coverage_control_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.code-coverage-control
-    PROPERTIES LABELS "fast;application;coverage;project;cli;schema;resource"
+    fsim_code_coverage_control_tests
+    "fast;application;coverage;project;cli;schema;resource"
   )
 
   if(TARGET fsim_llvm)
@@ -4316,13 +3947,10 @@ if(TARGET fsim_application)
     fsim_configure_test(fsim_code_coverage_application_tests)
     target_link_libraries(
       fsim_code_coverage_application_tests PRIVATE fsim_application)
-    add_test(
-      NAME fsim.application.code-coverage
-      COMMAND fsim_code_coverage_application_tests
-    )
-    set_tests_properties(
+    fsim_register_simple_test(
       fsim.application.code-coverage
-      PROPERTIES LABELS "fast;application;coverage;debug;interpreter;llvm;o0;o1;o2;o3;saturation;instance"
+      fsim_code_coverage_application_tests
+      "fast;application;coverage;debug;interpreter;llvm;o0;o1;o2;o3;saturation;instance"
     )
 
     add_executable(
@@ -4332,13 +3960,10 @@ if(TARGET fsim_application)
     fsim_configure_test(fsim_code_coverage_equivalence_tests)
     target_link_libraries(
       fsim_code_coverage_equivalence_tests PRIVATE fsim_application)
-    add_test(
-      NAME fsim.application.code-coverage-equivalence
-      COMMAND fsim_code_coverage_equivalence_tests
-    )
-    set_tests_properties(
+    fsim_register_simple_test(
       fsim.application.code-coverage-equivalence
-      PROPERTIES LABELS "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
+      fsim_code_coverage_equivalence_tests
+      "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
     )
 
     add_executable(
@@ -4348,13 +3973,10 @@ if(TARGET fsim_application)
     fsim_configure_test(fsim_code_coverage_metrics_equivalence_tests)
     target_link_libraries(
       fsim_code_coverage_metrics_equivalence_tests PRIVATE fsim_application)
-    add_test(
-      NAME fsim.application.code-coverage-metrics-equivalence
-      COMMAND fsim_code_coverage_metrics_equivalence_tests
-    )
-    set_tests_properties(
+    fsim_register_simple_test(
       fsim.application.code-coverage-metrics-equivalence
-      PROPERTIES LABELS "fast;application;coverage;condition;expression;toggle;fsm;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;generate;instance;aggregation"
+      fsim_code_coverage_metrics_equivalence_tests
+      "fast;application;coverage;condition;expression;toggle;fsm;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;generate;instance;aggregation"
     )
   endif()
 
@@ -4365,13 +3987,10 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_code_coverage_metrics_application_tests)
   target_link_libraries(
     fsim_code_coverage_metrics_application_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.code-coverage-metrics
-    COMMAND fsim_code_coverage_metrics_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.code-coverage-metrics
-    PROPERTIES LABELS "fast;application;coverage;condition;expression;toggle;fsm;verilog;systemverilog;vhdl;generate;instance;aggregation"
+    fsim_code_coverage_metrics_application_tests
+    "fast;application;coverage;condition;expression;toggle;fsm;verilog;systemverilog;vhdl;generate;instance;aggregation"
   )
 
   add_executable(
@@ -4381,14 +4000,10 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_vpi_application_tests)
   target_link_libraries(
     fsim_vpi_application_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.vpi
-    COMMAND fsim_vpi_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vpi
-    PROPERTIES
-      LABELS "fast;application;verilog;vpi;hierarchy;value;callback;control;llvm"
+    fsim_vpi_application_tests
+    "fast;application;verilog;vpi;hierarchy;value;callback;control;llvm"
   )
 
   add_executable(
@@ -4405,14 +4020,10 @@ if(TARGET fsim_application)
     fsim_tf_plugin_application_tests PRIVATE fsim_application)
   add_dependencies(
     fsim_tf_plugin_application_tests fsim_tf_link_probe_plugin)
-  add_test(
-    NAME fsim.application.tf-plugin
-    COMMAND fsim_tf_plugin_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.tf-plugin
-    PROPERTIES LABELS
-      "fast;application;tf;pli;plugin;registration;task;function;verilog;systemverilog;profile;positive;negative;resource;portability"
+    fsim_tf_plugin_application_tests
+    "fast;application;tf;pli;plugin;registration;task;function;verilog;systemverilog;profile;positive;negative;resource;portability"
   )
 
   add_executable(
@@ -4431,14 +4042,10 @@ if(TARGET fsim_application)
   add_dependencies(
     fsim_tf_scheduler_application_tests fsim_tf_link_probe_plugin
   )
-  add_test(
-    NAME fsim.application.tf-scheduler
-    COMMAND fsim_tf_scheduler_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.tf-scheduler
-    PROPERTIES LABELS
-      "fast;application;runtime;tf;scheduler;coordination;ordering;transactional;synchronization;delay;output;control;positive;negative"
+    fsim_tf_scheduler_application_tests
+    "fast;application;runtime;tf;scheduler;coordination;ordering;transactional;synchronization;delay;output;control;positive;negative"
   )
 
   add_executable(
@@ -4449,14 +4056,10 @@ if(TARGET fsim_application)
   target_link_libraries(
     fsim_acc_scheduler_application_tests PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.acc-scheduler
-    COMMAND fsim_acc_scheduler_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.acc-scheduler
-    PROPERTIES LABELS
-      "fast;application;runtime;acc;pli;scheduler;parallel;coordination;ordering;observation;mutation;traversal;callback;transactional;positive;negative;resource;portability"
+    fsim_acc_scheduler_application_tests
+    "fast;application;runtime;acc;pli;scheduler;parallel;coordination;ordering;observation;mutation;traversal;callback;transactional;positive;negative;resource;portability"
   )
 
   add_executable(
@@ -4514,13 +4117,10 @@ if(TARGET fsim_application)
     fsim_trace_api_application_tests
     PRIVATE fsim_application fsim_cli fsim_api
   )
-  add_test(
-    NAME fsim.application.trace_api
-    COMMAND fsim_trace_api_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.trace_api
-    PROPERTIES LABELS "fast;trace;vcd;fst;api"
+    fsim_trace_api_application_tests
+    "fast;trace;vcd;fst;api"
   )
 
   add_executable(
@@ -4532,13 +4132,10 @@ if(TARGET fsim_application)
     fsim_trace_archive_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.trace_archive
-    COMMAND fsim_trace_archive_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.trace_archive
-    PROPERTIES LABELS "fast;trace;vcd;fst;artifact"
+    fsim_trace_archive_application_tests
+    "fast;trace;vcd;fst;artifact"
   )
 
   add_executable(
@@ -4550,13 +4147,10 @@ if(TARGET fsim_application)
     fsim_trace_format_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.trace_format
-    COMMAND fsim_trace_format_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.trace_format
-    PROPERTIES LABELS "fast;trace;vcd;fst;systemverilog"
+    fsim_trace_format_application_tests
+    "fast;trace;vcd;fst;systemverilog"
   )
 
   add_executable(
@@ -4572,13 +4166,10 @@ if(TARGET fsim_application)
     fsim_trace_hierarchy_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.trace_hierarchy
-    COMMAND fsim_trace_hierarchy_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.trace_hierarchy
-    PROPERTIES LABELS "fast;trace;vcd;fst;verilog;systemverilog;vhdl;systemc;mixed-language;hierarchy;provenance;alias"
+    fsim_trace_hierarchy_application_tests
+    "fast;trace;vcd;fst;verilog;systemverilog;vhdl;systemc;mixed-language;hierarchy;provenance;alias"
   )
 
   add_executable(
@@ -4594,13 +4185,10 @@ if(TARGET fsim_application)
     fsim_trace_observation_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.trace_observation
-    COMMAND fsim_trace_observation_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.trace_observation
-    PROPERTIES LABELS "fast;trace;vcd;fst;callbacks;uvm;class;container;coverage;assertion;sdf;atomic;negative"
+    fsim_trace_observation_application_tests
+    "fast;trace;vcd;fst;callbacks;uvm;class;container;coverage;assertion;sdf;atomic;negative"
   )
 
   add_executable(
@@ -4641,13 +4229,10 @@ if(TARGET fsim_application)
     PRIVATE fsim_application
   )
   fsim_link_systemc_launcher(fsim_systemc_trace_application_tests)
-  add_test(
-    NAME fsim.application.systemc_trace
-    COMMAND fsim_systemc_trace_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.systemc_trace
-    PROPERTIES LABELS "fast;systemc;accellera;trace;vcd;fst;dirty;post-update;selection;snapshot;alias;wide;backpressure;lifecycle"
+    fsim_systemc_trace_application_tests
+    "fast;systemc;accellera;trace;vcd;fst;dirty;post-update;selection;snapshot;alias;wide;backpressure;lifecycle"
   )
 
   add_executable(
@@ -4663,13 +4248,10 @@ if(TARGET fsim_application)
     fsim_trace_control_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.trace_control
-    COMMAND fsim_trace_control_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.trace_control
-    PROPERTIES LABELS "fast;trace;vcd;fst;selection;debugger;tcl;snapshot;lifecycle;deterministic;negative"
+    fsim_trace_control_application_tests
+    "fast;trace;vcd;fst;selection;debugger;tcl;snapshot;lifecycle;deterministic;negative"
   )
 
   add_executable(
@@ -5204,13 +4786,10 @@ if(TARGET fsim_application)
     fsim_expression_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.expressions
-    COMMAND fsim_expression_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.expressions
-    PROPERTIES LABELS "fast;expressions"
+    fsim_expression_application_tests
+    "fast;expressions"
   )
 
   add_executable(
@@ -5222,13 +4801,10 @@ if(TARGET fsim_application)
     fsim_sv_hierarchy_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_hierarchy
-    COMMAND fsim_sv_hierarchy_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_hierarchy
-    PROPERTIES LABELS "fast;systemverilog;hierarchy"
+    fsim_sv_hierarchy_application_tests
+    "fast;systemverilog;hierarchy"
   )
 
   add_executable(
@@ -5242,13 +4818,10 @@ if(TARGET fsim_application)
     fsim_sv_parameter_sizing_application_tests
     PRIVATE fsim_application
   )
-add_test(
-  NAME fsim.application.sv_parameter_sizing
-  COMMAND fsim_sv_parameter_sizing_application_tests
-)
-  set_tests_properties(
-    fsim.application.sv_parameter_sizing
-  PROPERTIES LABELS "fast;parameters;systemverilog"
+fsim_register_simple_test(
+  fsim.application.sv_parameter_sizing
+  fsim_sv_parameter_sizing_application_tests
+  "fast;parameters;systemverilog"
 )
 
 add_executable(
@@ -5260,13 +4833,10 @@ target_link_libraries(
   fsim_sv_type_parameter_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sv_type_parameters
-  COMMAND fsim_sv_type_parameter_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sv_type_parameters
-  PROPERTIES LABELS "fast;parameters;systemverilog"
+  fsim_sv_type_parameter_application_tests
+  "fast;parameters;systemverilog"
 )
 
 add_executable(
@@ -5278,13 +4848,10 @@ target_link_libraries(
   fsim_sv_string_parameter_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.sv_string_parameters
-  COMMAND fsim_sv_string_parameter_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.sv_string_parameters
-  PROPERTIES LABELS "fast;parameters;strings;systemverilog"
+  fsim_sv_string_parameter_application_tests
+  "fast;parameters;strings;systemverilog"
 )
 
 add_executable(
@@ -5296,13 +4863,10 @@ target_link_libraries(
   fsim_vhdl_type_generic_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_type_generics
-  COMMAND fsim_vhdl_type_generic_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_type_generics
-  PROPERTIES LABELS "fast;generics;vhdl;cache;hierarchy"
+  fsim_vhdl_type_generic_application_tests
+  "fast;generics;vhdl;cache;hierarchy"
 )
 
 add_executable(
@@ -5314,13 +4878,10 @@ target_link_libraries(
   fsim_vhdl_function_generic_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_function_generics
-  COMMAND fsim_vhdl_function_generic_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_function_generics
-  PROPERTIES LABELS "fast;functions;generics;vhdl;cache;hierarchy"
+  fsim_vhdl_function_generic_application_tests
+  "fast;functions;generics;vhdl;cache;hierarchy"
 )
 
 add_executable(
@@ -5332,13 +4893,10 @@ target_link_libraries(
   fsim_vhdl_overload_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_overloads
-  COMMAND fsim_vhdl_overload_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_overloads
-  PROPERTIES LABELS "fast;functions;procedures;packages;vhdl;cache"
+  fsim_vhdl_overload_application_tests
+  "fast;functions;procedures;packages;vhdl;cache"
 )
 
 add_executable(
@@ -5350,13 +4908,10 @@ target_link_libraries(
   fsim_vhdl_procedure_generic_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_procedure_generics
-  COMMAND fsim_vhdl_procedure_generic_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_procedure_generics
-  PROPERTIES LABELS "fast;procedures;generics;vhdl;cache;hierarchy"
+  fsim_vhdl_procedure_generic_application_tests
+  "fast;procedures;generics;vhdl;cache;hierarchy"
 )
 
 add_executable(
@@ -5368,13 +4923,10 @@ target_link_libraries(
   fsim_vhdl_procedure_wait_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_procedure_waits
-  COMMAND fsim_vhdl_procedure_wait_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_procedure_waits
-  PROPERTIES LABELS "fast;procedures;timing;vhdl;llvm"
+  fsim_vhdl_procedure_wait_application_tests
+  "fast;procedures;timing;vhdl;llvm"
 )
 
 add_executable(
@@ -5386,14 +4938,10 @@ target_link_libraries(
   fsim_vhdl_package_generic_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_package_generics
-  COMMAND fsim_vhdl_package_generic_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_package_generics
-  PROPERTIES
-    LABELS "fast;packages;functions;procedures;generics;vhdl;cache;hierarchy"
+  fsim_vhdl_package_generic_application_tests
+  "fast;packages;functions;procedures;generics;vhdl;cache;hierarchy"
 )
 
 add_executable(
@@ -5406,14 +4954,10 @@ target_link_libraries(
   fsim_vhdl_generic_subprogram_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_generic_subprograms
-  COMMAND fsim_vhdl_generic_subprogram_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_generic_subprograms
-  PROPERTIES
-    LABELS "fast;functions;procedures;generics;vhdl;cache;hierarchy"
+  fsim_vhdl_generic_subprogram_application_tests
+  "fast;functions;procedures;generics;vhdl;cache;hierarchy"
 )
 
 add_executable(
@@ -5426,14 +4970,10 @@ target_link_libraries(
   fsim_vhdl_configuration_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_configurations
-  COMMAND fsim_vhdl_configuration_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_configurations
-  PROPERTIES
-    LABELS "fast;configurations;vhdl;cache;hierarchy;debugger"
+  fsim_vhdl_configuration_application_tests
+  "fast;configurations;vhdl;cache;hierarchy;debugger"
 )
 
 add_executable(
@@ -5446,14 +4986,10 @@ target_link_libraries(
   fsim_vhdl_component_application_tests
   PRIVATE fsim_application
 )
-add_test(
-  NAME fsim.application.vhdl_components
-  COMMAND fsim_vhdl_component_application_tests
-)
-set_tests_properties(
+fsim_register_simple_test(
   fsim.application.vhdl_components
-  PROPERTIES
-    LABELS "fast;components;vhdl;cache;hierarchy;debugger"
+  fsim_vhdl_component_application_tests
+  "fast;components;vhdl;cache;hierarchy;debugger"
 )
 
   add_executable(
@@ -5485,14 +5021,10 @@ set_tests_properties(
     fsim_specify_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.specify
-    COMMAND fsim_specify_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.specify
-    PROPERTIES
-      LABELS "fast;specify;timing;systemverilog;vhdl;hierarchy;llvm;debugger;vcd"
+    fsim_specify_application_tests
+    "fast;specify;timing;systemverilog;vhdl;hierarchy;llvm;debugger;vcd"
   )
 
   add_executable(
@@ -5504,13 +5036,10 @@ set_tests_properties(
     fsim_call_safe_point_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.call_safe_points
-    COMMAND fsim_call_safe_point_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.call_safe_points
-    PROPERTIES LABELS "fast;call-safe-points"
+    fsim_call_safe_point_application_tests
+    "fast;call-safe-points"
   )
 
   add_executable(
@@ -5522,14 +5051,10 @@ set_tests_properties(
     fsim_sv_interface_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_interfaces
-    COMMAND fsim_sv_interface_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_interfaces
-    PROPERTIES
-      LABELS "fast;interfaces;packages;systemverilog;cache;debugger;vcd"
+    fsim_sv_interface_application_tests
+    "fast;interfaces;packages;systemverilog;cache;debugger;vcd"
   )
 
   add_executable(
@@ -5541,14 +5066,10 @@ set_tests_properties(
     fsim_sv_function_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_functions
-    COMMAND fsim_sv_function_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_functions
-    PROPERTIES
-      LABELS "fast;functions;systemverilog;cache"
+    fsim_sv_function_application_tests
+    "fast;functions;systemverilog;cache"
   )
 
   add_executable(
@@ -5560,14 +5081,10 @@ set_tests_properties(
     fsim_sv_task_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_tasks
-    COMMAND fsim_sv_task_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_tasks
-    PROPERTIES
-      LABELS "fast;tasks;systemverilog;cache"
+    fsim_sv_task_application_tests
+    "fast;tasks;systemverilog;cache"
   )
 
   add_executable(
@@ -5579,14 +5096,10 @@ set_tests_properties(
     fsim_sv_callable_closure_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_callable_closure
-    COMMAND fsim_sv_callable_closure_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_callable_closure
-    PROPERTIES
-      LABELS "fast;functions;tasks;systemverilog;cache;debugger;vcd"
+    fsim_sv_callable_closure_application_tests
+    "fast;functions;tasks;systemverilog;cache;debugger;vcd"
   )
 
   add_executable(
@@ -5600,14 +5113,10 @@ set_tests_properties(
     fsim_sv_suspending_task_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_suspending_tasks
-    COMMAND fsim_sv_suspending_task_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_suspending_tasks
-    PROPERTIES
-      LABELS "fast;tasks;timing;systemverilog;cache"
+    fsim_sv_suspending_task_application_tests
+    "fast;tasks;timing;systemverilog;cache"
   )
 
   add_executable(
@@ -5621,14 +5130,10 @@ set_tests_properties(
     fsim_sv_mutable_string_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_mutable_strings
-    COMMAND fsim_sv_mutable_string_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_mutable_strings
-    PROPERTIES
-      LABELS "fast;strings;tasks;timing;systemverilog;cache;debugger"
+    fsim_sv_mutable_string_application_tests
+    "fast;strings;tasks;timing;systemverilog;cache;debugger"
   )
 
   add_executable(
@@ -5673,14 +5178,10 @@ set_tests_properties(
     fsim_sv_file_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_files
-    COMMAND fsim_sv_file_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_files
-    PROPERTIES
-      LABELS "fast;files;strings;tasks;timing;systemverilog;cache;debugger"
+    fsim_sv_file_application_tests
+    "fast;files;strings;tasks;timing;systemverilog;cache;debugger"
   )
 
   add_executable(
@@ -5692,13 +5193,10 @@ set_tests_properties(
     fsim_named_event_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.named_events
-    COMMAND fsim_named_event_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.named_events
-    PROPERTIES LABELS "fast;named-events"
+    fsim_named_event_application_tests
+    "fast;named-events"
   )
 
   add_executable(
@@ -5710,13 +5208,10 @@ set_tests_properties(
     fsim_fork_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.fork
-    COMMAND fsim_fork_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.fork
-    PROPERTIES LABELS "fast;fork;systemverilog;cache;debugger"
+    fsim_fork_application_tests
+    "fast;fork;systemverilog;cache;debugger"
   )
 
   add_executable(
@@ -5728,14 +5223,10 @@ set_tests_properties(
     fsim_synchronization_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.synchronization
-    COMMAND fsim_synchronization_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.synchronization
-    PROPERTIES
-      LABELS "fast;synchronization;mailbox;semaphore;systemverilog;cache"
+    fsim_synchronization_application_tests
+    "fast;synchronization;mailbox;semaphore;systemverilog;cache"
   )
 
   add_executable(
@@ -5747,14 +5238,10 @@ set_tests_properties(
     fsim_ordering_interaction_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.ordering_interactions
-    COMMAND fsim_ordering_interaction_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.ordering_interactions
-    PROPERTIES
-      LABELS "fast;named-events;containers;ordering;shuffle;systemverilog;cache"
+    fsim_ordering_interaction_application_tests
+    "fast;named-events;containers;ordering;shuffle;systemverilog;cache"
   )
 
   add_executable(
@@ -5766,13 +5253,10 @@ set_tests_properties(
     fsim_display_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.display
-    COMMAND fsim_display_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.display
-    PROPERTIES LABELS "fast;display"
+    fsim_display_application_tests
+    "fast;display"
   )
 
   add_executable(
@@ -5784,13 +5268,10 @@ set_tests_properties(
     fsim_random_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.random
-    COMMAND fsim_random_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.random
-    PROPERTIES LABELS "fast;random"
+    fsim_random_application_tests
+    "fast;random"
   )
 
   add_executable(
@@ -5802,13 +5283,10 @@ set_tests_properties(
     fsim_plusarg_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.plusargs
-    COMMAND fsim_plusarg_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.plusargs
-    PROPERTIES LABELS "fast;plusargs"
+    fsim_plusarg_application_tests
+    "fast;plusargs"
   )
 
   add_executable(
@@ -5820,13 +5298,10 @@ set_tests_properties(
     fsim_system_command_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.system_command
-    COMMAND fsim_system_command_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.system_command
-    PROPERTIES LABELS "fast;system-command"
+    fsim_system_command_application_tests
+    "fast;system-command"
   )
 
   add_executable(
@@ -5838,13 +5313,10 @@ set_tests_properties(
     fsim_stochastic_queue_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.stochastic_queues
-    COMMAND fsim_stochastic_queue_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.stochastic_queues
-    PROPERTIES LABELS "fast;stochastic-queues"
+    fsim_stochastic_queue_application_tests
+    "fast;stochastic-queues"
   )
 
   add_executable(
@@ -5856,13 +5328,10 @@ set_tests_properties(
     fsim_pla_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.pla
-    COMMAND fsim_pla_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.pla
-    PROPERTIES LABELS "fast;pla"
+    fsim_pla_application_tests
+    "fast;pla"
   )
 
   add_executable(
@@ -5874,13 +5343,10 @@ set_tests_properties(
     fsim_vcd_control_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vcd_control
-    COMMAND fsim_vcd_control_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vcd_control
-    PROPERTIES LABELS "fast;vcd;systemverilog"
+    fsim_vcd_control_application_tests
+    "fast;vcd;systemverilog"
   )
 
   add_executable(
@@ -5892,13 +5358,10 @@ set_tests_properties(
     fsim_coverage_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.coverage
-    COMMAND fsim_coverage_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.coverage
-    PROPERTIES LABELS "fast;coverage"
+    fsim_coverage_application_tests
+    "fast;coverage"
   )
 
   add_executable(
@@ -5913,13 +5376,10 @@ set_tests_properties(
     fsim_assertion_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.assertions
-    COMMAND fsim_assertion_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.assertions
-    PROPERTIES LABELS "fast;assertions"
+    fsim_assertion_application_tests
+    "fast;assertions"
   )
 
   add_executable(
@@ -5931,13 +5391,10 @@ set_tests_properties(
     fsim_line_directive_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.line_directives
-    COMMAND fsim_line_directive_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.line_directives
-    PROPERTIES LABELS "fast;line-directives"
+    fsim_line_directive_application_tests
+    "fast;line-directives"
   )
 
   add_executable(
@@ -5951,13 +5408,10 @@ set_tests_properties(
     fsim_sv_preprocessor_generate_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_preprocessor_generate
-    COMMAND fsim_sv_preprocessor_generate_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_preprocessor_generate
-    PROPERTIES LABELS "fast;preprocessor;generate;systemverilog"
+    fsim_sv_preprocessor_generate_application_tests
+    "fast;preprocessor;generate;systemverilog"
   )
 
   add_executable(
@@ -5971,13 +5425,10 @@ set_tests_properties(
     fsim_sv_aggregate_multidimensional_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_aggregate_multidimensional
-    COMMAND fsim_sv_aggregate_multidimensional_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.sv_aggregate_multidimensional
-    PROPERTIES LABELS "fast;aggregates;containers;systemverilog;cache;debugger"
+    fsim_sv_aggregate_multidimensional_application_tests
+    "fast;aggregates;containers;systemverilog;cache;debugger"
   )
 
   add_executable(
@@ -5989,13 +5440,10 @@ set_tests_properties(
     fsim_time_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.time
-    COMMAND fsim_time_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.time
-    PROPERTIES LABELS "fast;time"
+    fsim_time_application_tests
+    "fast;time"
   )
 
   add_executable(
@@ -6009,13 +5457,10 @@ set_tests_properties(
       fsim_application
       fsim_cli
   )
-  add_test(
-    NAME fsim.application.delay_modes
-    COMMAND fsim_delay_mode_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.delay_modes
-    PROPERTIES LABELS "fast;delay-modes"
+    fsim_delay_mode_application_tests
+    "fast;delay-modes"
   )
 
   add_executable(
@@ -6027,13 +5472,10 @@ set_tests_properties(
     fsim_transition_delay_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.transition_delays
-    COMMAND fsim_transition_delay_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.transition_delays
-    PROPERTIES LABELS "fast;transition-delays"
+    fsim_transition_delay_application_tests
+    "fast;transition-delays"
   )
 
   add_executable(
@@ -6045,13 +5487,10 @@ set_tests_properties(
     fsim_procedural_assignment_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.procedural_assignments
-    COMMAND fsim_procedural_assignment_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.procedural_assignments
-    PROPERTIES LABELS "fast;procedural-assignments"
+    fsim_procedural_assignment_application_tests
+    "fast;procedural-assignments"
   )
 
   add_executable(
@@ -6063,13 +5502,10 @@ set_tests_properties(
     fsim_resolution_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.resolution
-    COMMAND fsim_resolution_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.resolution
-    PROPERTIES LABELS "fast;resolution;mixed-language"
+    fsim_resolution_application_tests
+    "fast;resolution;mixed-language"
   )
 
   add_executable(
@@ -6134,13 +5570,10 @@ set_tests_properties(
     fsim_systemc_datatype_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.systemc_datatypes
-    COMMAND fsim_systemc_datatype_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.systemc_datatypes
-    PROPERTIES LABELS "fast;systemc;datatypes"
+    fsim_systemc_datatype_application_tests
+    "fast;systemc;datatypes"
   )
 
   add_executable(
@@ -6156,14 +5589,10 @@ set_tests_properties(
     fsim_systemc_tlm1_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.systemc_tlm1
-    COMMAND fsim_systemc_tlm1_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.systemc_tlm1
-    PROPERTIES
-      LABELS "fast;systemc;accellera;tlm;tlm1;tlm2;fifo;socket;blocking;nonblocking;dmi;debug;extensions;quantum;transport;analysis;cache"
+    fsim_systemc_tlm1_application_tests
+    "fast;systemc;accellera;tlm;tlm1;tlm2;fifo;socket;blocking;nonblocking;dmi;debug;extensions;quantum;transport;analysis;cache"
   )
 
   add_executable(
@@ -6177,13 +5606,10 @@ set_tests_properties(
     fsim_vhdl_integer_shift_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_integer_shifts
-    COMMAND fsim_vhdl_integer_shift_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_integer_shifts
-    PROPERTIES LABELS "fast;vhdl;integer;expressions"
+    fsim_vhdl_integer_shift_application_tests
+    "fast;vhdl;integer;expressions"
   )
 
   add_executable(
@@ -6197,13 +5623,10 @@ set_tests_properties(
     fsim_vhdl_logic9_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_logic9
-    COMMAND fsim_vhdl_logic9_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_logic9
-    PROPERTIES LABELS "fast;vhdl;logic9;resolution"
+    fsim_vhdl_logic9_application_tests
+    "fast;vhdl;logic9;resolution"
   )
 
   add_executable(
@@ -6217,13 +5640,10 @@ set_tests_properties(
     fsim_vhdl_record_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_records
-    COMMAND fsim_vhdl_record_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_records
-    PROPERTIES LABELS "fast;vhdl;records;logic9"
+    fsim_vhdl_record_application_tests
+    "fast;vhdl;records;logic9"
   )
 
   add_executable(
@@ -6237,13 +5657,10 @@ set_tests_properties(
     fsim_vhdl_package_record_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_package_records
-    COMMAND fsim_vhdl_package_record_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_package_records
-    PROPERTIES LABELS "fast;vhdl;records;packages;logic9"
+    fsim_vhdl_package_record_application_tests
+    "fast;vhdl;records;packages;logic9"
   )
 
   add_executable(
@@ -6257,13 +5674,10 @@ set_tests_properties(
     fsim_vhdl_record_aggregate_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_record_aggregates
-    COMMAND fsim_vhdl_record_aggregate_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_record_aggregates
-    PROPERTIES LABELS "fast;vhdl;records;aggregates;packages;logic9"
+    fsim_vhdl_record_aggregate_application_tests
+    "fast;vhdl;records;aggregates;packages;logic9"
   )
 
   add_executable(
@@ -6277,13 +5691,10 @@ set_tests_properties(
     fsim_vhdl_subtype_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_subtypes
-    COMMAND fsim_vhdl_subtype_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_subtypes
-    PROPERTIES LABELS "fast;vhdl;subtypes;packages;hierarchy;integer;logic9"
+    fsim_vhdl_subtype_application_tests
+    "fast;vhdl;subtypes;packages;hierarchy;integer;logic9"
   )
 
   add_executable(
@@ -6297,13 +5708,10 @@ set_tests_properties(
     fsim_vhdl_enumeration_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_enumerations
-    COMMAND fsim_vhdl_enumeration_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_enumerations
-    PROPERTIES LABELS "fast;vhdl;enumerations;packages;hierarchy;cache;vcd"
+    fsim_vhdl_enumeration_application_tests
+    "fast;vhdl;enumerations;packages;hierarchy;cache;vcd"
   )
 
   add_executable(
@@ -6317,13 +5725,10 @@ set_tests_properties(
     fsim_vhdl_array_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_arrays
-    COMMAND fsim_vhdl_array_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_arrays
-    PROPERTIES LABELS "fast;vhdl;arrays;packages;hierarchy;cache;vcd"
+    fsim_vhdl_array_application_tests
+    "fast;vhdl;arrays;packages;hierarchy;cache;vcd"
   )
 
   add_executable(
@@ -6335,13 +5740,10 @@ set_tests_properties(
     fsim_vhdl_attribute_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_attributes
-    COMMAND fsim_vhdl_attribute_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_attributes
-    PROPERTIES LABELS "fast;vhdl;attributes;arrays;enumerations;integer;cache"
+    fsim_vhdl_attribute_application_tests
+    "fast;vhdl;attributes;arrays;enumerations;integer;cache"
   )
 
   add_executable(
@@ -6353,13 +5755,10 @@ set_tests_properties(
     fsim_vhdl_composite_operation_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_composite_operations
-    COMMAND fsim_vhdl_composite_operation_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_composite_operations
-    PROPERTIES LABELS "fast;vhdl;records;arrays;expressions;cache"
+    fsim_vhdl_composite_operation_application_tests
+    "fast;vhdl;records;arrays;expressions;cache"
   )
 
   add_executable(
@@ -6371,13 +5770,10 @@ set_tests_properties(
     fsim_vhdl_projected_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_projected
-    COMMAND fsim_vhdl_projected_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_projected
-    PROPERTIES LABELS "fast;vhdl;projected-waveforms"
+    fsim_vhdl_projected_application_tests
+    "fast;vhdl;projected-waveforms"
   )
 
   add_executable(
@@ -6389,14 +5785,10 @@ set_tests_properties(
     fsim_vhdl_advanced_type_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.vhdl_advanced_types
-    COMMAND fsim_vhdl_advanced_type_application_tests
-  )
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.application.vhdl_advanced_types
-    PROPERTIES
-      LABELS "fast;vhdl;access;protected;physical;cache;debugger;vcd"
+    fsim_vhdl_advanced_type_application_tests
+    "fast;vhdl;access;protected;physical;cache;debugger;vcd"
   )
 
   add_executable(
@@ -6453,13 +5845,10 @@ set_tests_properties(
       fsim_tcl_application_tests
       PRIVATE fsim_application
     )
-    add_test(
-      NAME fsim.application.tcl
-      COMMAND fsim_tcl_application_tests
-    )
-    set_tests_properties(
+    fsim_register_simple_test(
       fsim.application.tcl
-      PROPERTIES LABELS "fast;tcl"
+      fsim_tcl_application_tests
+      "fast;tcl"
     )
     if(FSIM_WITH_BUNDLED_TCL)
       set_tests_properties(
@@ -6518,6 +5907,28 @@ set_tests_properties(
     )
   endif()
 
+  add_executable(fsim_schema_identity_test api/schema_identity_test.cpp)
+  fsim_configure_test(fsim_schema_identity_test)
+  target_include_directories(
+    fsim_schema_identity_test PRIVATE "${PROJECT_SOURCE_DIR}/src/compiler"
+  )
+  fsim_register_simple_test(
+    fsim.schema-identity
+    fsim_schema_identity_test
+    "abi;schema;artifact;checkpoint;positive;fast"
+  )
+
+  add_executable(
+    fsim_release_assertion_witness
+    cmake/release_assertion_witness.cpp
+  )
+  fsim_configure_test(fsim_release_assertion_witness)
+  fsim_register_simple_test(
+    fsim.contract.release-test-assertions
+    fsim_release_assertion_witness
+    "contract;release;assertion;cmake;positive;fast"
+  )
+
   add_executable(fsim_api_header_c_test api/api_header_c_test.c)
   target_compile_features(fsim_api_header_c_test PRIVATE c_std_11)
   target_link_libraries(fsim_api_header_c_test PRIVATE fsim_api)
@@ -6550,10 +5961,10 @@ set_tests_properties(
   )
   target_link_libraries(fsim_api_abi_tests PRIVATE fsim_api)
   fsim_configure_test(fsim_api_abi_tests)
-  add_test(NAME fsim.api.abi COMMAND fsim_api_abi_tests)
-  set_tests_properties(
+  fsim_register_simple_test(
     fsim.api.abi
-    PROPERTIES LABELS "api;abi;c;cxx;runtime;positive;negative;fast"
+    fsim_api_abi_tests
+    "api;abi;c;cxx;runtime;positive;negative;fast"
   )
   if(WIN32)
     add_custom_command(
@@ -6598,7 +6009,7 @@ set_tests_properties(
     fsim.nested-portable-schema-freeze
     fsim.abi-schema-reference
     fsim.abi-schema-evidence-matrix
-    fsim.resource-portability-contract
+    fsim.contract.artifact-resources
     fsim.source-hidden-relocation-contract
   )
   list(LENGTH FSIM_BATCH188A_CHANGE19_TESTS
@@ -6670,24 +6081,22 @@ function(fsim_require_fixture_witnesses FSIM_DRIVER FSIM_FIXTURE)
 endfunction()
 
 function(fsim_require_fixture_regex FSIM_DRIVER FSIM_FIXTURE FSIM_REGEX)
-  if(NOT TEST "${FSIM_DRIVER}")
-    return()
-  endif()
-  set_tests_properties(
-    "${FSIM_DRIVER}" PROPERTIES FIXTURES_REQUIRED "${FSIM_FIXTURE}")
   get_property(FSIM_REGISTERED_TESTS DIRECTORY PROPERTY TESTS)
+  set(FSIM_WITNESSES)
   foreach(FSIM_WITNESS IN LISTS FSIM_REGISTERED_TESTS)
     list(FIND FSIM_RECURSIVE_CLOSURE_TESTS "${FSIM_WITNESS}"
       FSIM_CLOSURE_INDEX)
     if(FSIM_CLOSURE_INDEX EQUAL -1 AND FSIM_WITNESS MATCHES "${FSIM_REGEX}")
-      fsim_append_fixture_setup("${FSIM_WITNESS}" "${FSIM_FIXTURE}")
+      list(APPEND FSIM_WITNESSES "${FSIM_WITNESS}")
     endif()
   endforeach()
+  fsim_require_fixture_witnesses(
+    "${FSIM_DRIVER}" "${FSIM_FIXTURE}" ${FSIM_WITNESSES})
 endfunction()
 
 fsim_require_fixture_regex(
   fsim.systemc.accellera_closure fsim_systemc_accellera_closure_witnesses
-  "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|resource-portability-contract|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
+  "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|contract\\.systemc-resources|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
 fsim_require_fixture_regex(
   fsim.offline-producer-consumer-closure
   fsim_offline_producer_consumer_closure_witnesses
@@ -6705,10 +6114,10 @@ fsim_require_fixture_regex(
   "^fsim\\.(scv(-.*)?|scv\\..*|application\\.scv_.*|runtime\\.transaction_record|diagnostics-catalog)$")
 fsim_require_fixture_regex(
   fsim.sdf-closure fsim_sdf_closure_witnesses
-  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|source-line-budget$|sdf-inventory$|resource-portability-contract$)")
+  "^fsim\\.(frontend\\.sdf.*|application\\.sdf_.*|application$|application\\.artifact_phases$|project$|library\\.artifact$|artifact\\.design$|diagnostics-catalog$|translation-unit-structure$|sdf-inventory$|contract\\.artifact-resources$)")
 fsim_require_fixture_regex(
   fsim.sdf-application-closure fsim_sdf_application_closure_witnesses
-  "^fsim\\.(application\\.(sdf_(application_corpus|path_timing|interconnect_timing|mixed_verilog|mixed_systemverilog|mixed_systemc|mixed_resolution|foreign_interfaces|vital_observability|vital_archive|vital_phases|delay_modes|primary_timing_checks|secondary_timing_checks|condition_timing|pulse_timing|precedence|scheduling|drive_timing|reannotation|control|effective_archive|observability)|specify|resolution|vpi|vcd_control)|library\\.artifact|artifact\\.(object|design)|cache|api|api\\.c_header|diagnostics-catalog|source-line-budget|sdf-application-inventory|resource-portability-contract)$")
+  "^fsim\\.(application\\.(sdf_(application_corpus|path_timing|interconnect_timing|mixed_verilog|mixed_systemverilog|mixed_systemc|mixed_resolution|foreign_interfaces|vital_observability|vital_archive|vital_phases|delay_modes|primary_timing_checks|secondary_timing_checks|condition_timing|pulse_timing|precedence|scheduling|drive_timing|reannotation|control|effective_archive|observability)|specify|resolution|vpi|vcd_control)|library\\.artifact|artifact\\.(object|design)|cache|api|api\\.c_header|diagnostics-catalog|translation-unit-structure|sdf-application-inventory|contract\\.artifact-resources)$")
 fsim_require_fixture_witnesses(
   fsim.sdf-vital-closure fsim_sdf_vital_closure_witnesses
   fsim.application.sdf_vital_corpus
@@ -6716,7 +6125,7 @@ fsim_require_fixture_witnesses(
   fsim.application.sdf_mixed_resolution
   fsim.application.sdf_vital_archive
   fsim.application.sdf_vital_phases
-  fsim.resource-portability-contract)
+  fsim.contract.artifact-resources)
 fsim_require_fixture_witnesses(
   fsim.vhdl-standard-mode-closure-matrix
   fsim_vhdl_standard_mode_closure_witnesses
@@ -6734,7 +6143,7 @@ fsim_require_fixture_witnesses(
   fsim.msvc-release-contract
   fsim.windows-llvm-contract
   fsim.tool-portability-contract
-  fsim.resource-portability-contract)
+  fsim.contract.language-resources)
 fsim_require_fixture_witnesses(
   fsim.verilog-systemverilog-standard-mode-closure-matrix
   fsim_verilog_systemverilog_standard_mode_closure_witnesses
@@ -6753,7 +6162,7 @@ fsim_require_fixture_witnesses(
   fsim.msvc-release-contract
   fsim.windows-llvm-contract
   fsim.tool-portability-contract
-  fsim.resource-portability-contract)
+  fsim.contract.language-resources)
 fsim_require_fixture_witnesses(
   fsim.systemverilog-closure-matrix
   fsim_systemverilog_closure_witnesses

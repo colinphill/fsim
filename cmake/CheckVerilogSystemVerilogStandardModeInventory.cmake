@@ -66,7 +66,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "fsim.msvc-release-contract"
     "fsim.windows-llvm-contract"
     "fsim.tool-portability-contract"
-    "fsim.resource-portability-contract"
+    "fsim.contract.language-resources"
     "FSIM-OLDER-MODE-MIXED-PASS"
     "FSIM-OLDER-STANDARD-ARTIFACT-MATRIX-PASS modes=6"
     "FSIM_WITNESS_COUNT EQUAL 16")

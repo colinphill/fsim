@@ -17,6 +17,7 @@ cmake/CheckAbiSchemaInventory.cmake
 cmake/CheckAbiSchemaReference.cmake
 cmake/CheckApplicationTestDeduplication.cmake
 cmake/CheckAstLifetimeGovernance.cmake
+cmake/CheckAuthoredLicenseInventory.cmake
 cmake/CheckBinaryInstallOwnership.cmake
 cmake/CheckCTestCommandUniqueness.cmake
 cmake/CheckCacheCorruptionIsolation.cmake
@@ -24,6 +25,15 @@ cmake/CheckCodeCoverageInventory.cmake
 cmake/CheckCodeCoverageMetricsInventory.cmake
 cmake/CheckCompositionQualification.cmake
 cmake/CheckCoreApiContract.cmake
+cmake/CheckCurrentBuildResources.cmake
+cmake/CheckCurrentHostedLanes.cmake
+cmake/CheckCurrentReleaseCaseIds.cmake
+cmake/CheckCurrentReleaseIntegrationInventory.cmake
+cmake/CheckCurrentResourceDomain.cmake
+cmake/CheckCurrentRetainedProfiles.cmake
+cmake/CheckCurrentSchemaFreeze.cmake
+cmake/CheckCurrentTraceTimingInventory.cmake
+cmake/CheckCurrentV2InputRejection.cmake
 cmake/CheckDesignLibraryFreeze.cmake
 cmake/CheckDeterministicPackaging.cmake
 cmake/CheckDiagnosticCatalog.cmake
@@ -51,6 +61,8 @@ cmake/CheckPortableObjectFreeze.cmake
 cmake/CheckPortableStaleSchemaPolicy.cmake
 cmake/CheckProjectManifestFreeze.cmake
 cmake/CheckReleaseCandidateLogAudit.cmake
+cmake/CheckRequiredCTestSet.cmake
+cmake/CheckRequiredIdSet.cmake
 cmake/CheckResourcePortabilityContract.cmake
 cmake/CheckSchemaProducerDiagnostics.cmake
 cmake/CheckScvInventory.cmake
@@ -100,6 +112,7 @@ cmake/CheckV2PerformanceBaselines.cmake
 cmake/CheckV2QualificationInventory.cmake
 cmake/CheckV2ReleaseRecords.cmake
 cmake/CheckV2SupplyChain.cmake
+cmake/CheckV3CurrentObligations.cmake
 cmake/CheckV3DeterministicArtifacts.cmake
 cmake/CheckV3HostedToolchains.cmake
 cmake/CheckV3InstalledArchive.cmake
@@ -124,6 +137,7 @@ cmake/CheckVhdlStandardModeInventory.cmake
 cmake/CheckWindowsLlvmContract.cmake
 cmake/CheckWindowsPackageDefinitions.cmake
 cmake/CreateDeterministicArchive.cmake
+cmake/CurrentEvidenceOwners.cmake
 cmake/FsimDebugFootprint.cmake
 cmake/FsimDependencies.cmake
 cmake/FsimNativePlugin.cmake
@@ -138,6 +152,7 @@ cmake/MaterializeUvmSources.cmake
 cmake/MergeSystemCArchives.cmake
 cmake/RunAccelleraSystemCClosure.cmake
 cmake/RunCleanMachineInstallClosure.cmake
+cmake/RunClosureWitnesses.cmake
 cmake/RunCompatibilitySmokeClosure.cmake
 cmake/RunFstClosure.cmake
 cmake/RunOfflineProducerConsumerClosure.cmake
@@ -173,6 +188,7 @@ docs/language-support.md
 docs/legacy-pli.md
 docs/release-and-post-v2.md
 docs/sdf.md
+docs/simplification-gate-migration.md
 docs/systemc-subset.md
 docs/systemverilog-2023.md
 docs/systemverilog-dpi.md
@@ -572,6 +588,10 @@ scripts/audit_msvc_test_strings.py
 scripts/create_deterministic_zip.py
 scripts/measure-debug-footprint.sh
 scripts/qualify-batch188a-performance.py
+scripts/qualify-simplification-performance.py
+scripts/simplification_benchmarks.json
+scripts/simplification_benchmarks.json.license
+scripts/test_qualify_simplification_performance.py
 src/api/api.cpp
 src/api/api_internal.hpp
 src/api/api_session.cpp
@@ -765,6 +785,7 @@ src/compiler/llvm_jit_validation_selection.cpp
 src/compiler/llvm_jit_validation_signal.hpp
 src/compiler/llvm_jit_validation_support.cpp
 src/compiler/llvm_jit_value_lowering.cpp
+src/compiler/native_cache_schema.hpp
 src/compiler/object_cache.cpp
 src/diagnostic/artifact_identity.cpp
 src/diagnostic/artifact_identity.hpp
@@ -1186,6 +1207,7 @@ tests/api/api_multiple_root_test.cpp
 tests/api/api_systemc_test.cpp
 tests/api/api_test.cpp
 tests/api/installed_consumer/CMakeLists.txt
+tests/api/schema_identity_test.cpp
 tests/app/acc_scheduler_application_test.cpp
 tests/app/application_artifact_case.cpp
 tests/app/application_case_dispatch.cpp
@@ -1294,6 +1316,7 @@ tests/app/sdf_vital_reannotation_test.cpp
 tests/app/sdf_vital_scheduling_test.cpp
 tests/app/sdf_vital_target_plan_test.cpp
 tests/app/sdf_vital_timing_checks_test.cpp
+tests/app/simplification_benchmark_driver.cpp
 tests/app/specify_application_test.cpp
 tests/app/stochastic_queue_application_test.cpp
 tests/app/structural_signal_remap_application_test.cpp
@@ -1386,6 +1409,12 @@ tests/artifact/coverage_report_projection_test.cpp
 tests/artifact/coverage_report_render_test.cpp
 tests/artifact/design_artifact_test.cpp
 tests/artifact/object_artifact_test.cpp
+tests/cmake/CheckCurrentResourceDomainSelfTest.cmake
+tests/cmake/CheckGateMigrationNegativeProbes.cmake
+tests/cmake/CheckRequiredSetHelpersSelfTest.cmake
+tests/cmake/CheckTranslationUnitStructureSelfTest.cmake
+tests/cmake/CheckV3InstalledArchiveRequiredSet.cmake
+tests/cmake/release_assertion_witness.cpp
 tests/compiler/cache_test.cpp
 tests/compiler/jit_runtime_c_test.c
 tests/compiler/llvm_jit_cache_advanced_test.cpp
@@ -1498,6 +1527,9 @@ tests/feature_matrix/cache_corruption_isolation_contract.tsv
 tests/feature_matrix/code_coverage_inventory.tsv
 tests/feature_matrix/code_coverage_metrics_inventory.tsv
 tests/feature_matrix/core_api_contract.tsv
+tests/feature_matrix/current_build_resources_required.tsv
+tests/feature_matrix/current_resource_domains.tsv
+tests/feature_matrix/current_trace_timing_required.tsv
 tests/feature_matrix/design_library_contract.tsv
 tests/feature_matrix/foreign_abi_contract.tsv
 tests/feature_matrix/fst_inventory.tsv
@@ -1526,9 +1558,16 @@ tests/feature_matrix/systemverilog_release_closure.tsv
 tests/feature_matrix/uvm_conformance_inventory.tsv
 tests/feature_matrix/uvm_release_closure.tsv
 tests/feature_matrix/v1_conformance_corpus.txt
+tests/feature_matrix/v1_conformance_required.tsv
+tests/feature_matrix/v1_portability_required_ids.txt
+tests/feature_matrix/v1_release_required_ids.txt
 tests/feature_matrix/v2_performance_baselines.tsv
 tests/feature_matrix/v2_qualification_inventory.tsv
+tests/feature_matrix/v3_current_obligations.tsv
+tests/feature_matrix/v3_current_required_ctests.txt
+tests/feature_matrix/v3_current_required_ids.txt
 tests/feature_matrix/v3_hosted_toolchain_inventory.tsv
+tests/feature_matrix/v3_installed_archive_required.txt
 tests/feature_matrix/v3_release_documentation.tsv
 tests/feature_matrix/v3_release_integration_inventory.tsv
 tests/feature_matrix/v3_retained_profile_qualification.tsv

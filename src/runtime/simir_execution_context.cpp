@@ -264,6 +264,36 @@ void Interpreter::Impl::ExecutionContext::write_container_object_element(
     }
 }
 
+void Interpreter::Impl::ExecutionContext::write_container_object_dynamic_part_element(
+    const ContainerObjectId object,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const PackedLogic4& value,
+    const PackedLogic4& base,
+    const DynamicPartIndex& selection,
+    const ProcessId generated_process,
+    const InstructionIndex instruction,
+    const bool nonblocking)
+{
+    if (nonblocking) {
+        owner.scheduler.schedule(
+            SchedulerPhase::update,
+            generated_process,
+            [&owner = owner, object, index, signed_index, linear_index,
+                value, base, selection, generated_process,
+                instruction](Scheduler&) {
+                owner.write_container_object_dynamic_part_element_value(
+                    object, index, signed_index, linear_index, value, base,
+                    selection, generated_process, instruction);
+            });
+    } else {
+        owner.write_container_object_dynamic_part_element_value(
+            object, index, signed_index, linear_index, value, base,
+            selection, generated_process, instruction);
+    }
+}
+
 [[nodiscard]] FileHandle Interpreter::Impl::ExecutionContext::open_file(
     const std::string_view path,
     const std::string_view mode){

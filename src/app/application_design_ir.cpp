@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include <cstdlib>
+
 namespace fsim::app::application_detail {
 namespace {
 
@@ -631,7 +633,10 @@ class DesignIrBuilder final {
   void add_container_aliases() {
     for (const auto& [path, runtime_object] :
          elaborated_.container_paths()) {
-      if (object_by_path_.contains(path)) {
+      const auto existing = object_by_path_.find(path);
+      if (existing != object_by_path_.end()
+          && result_.objects()[existing->second.value()].kind
+              == di::ObjectKind::container) {
         continue;
       }
       const auto base = container_object_by_runtime_.find(runtime_object);
@@ -1343,9 +1348,23 @@ bool valid_runtime_projection(
     const elaboration::ElaboratedDesign& runtime) {
   using ObjectKind = semantic::design::ObjectKind;
   using BoundaryKind = semantic::design::BoundaryKind;
+  const bool trace_projection
+      = std::getenv("FSIM_TRACE_DESIGN_IR_PROJECTION") != nullptr;
+  const auto reject = [&](const std::string_view reason) {
+    if (trace_projection) {
+      std::cerr << "[fsim-design-ir] reject reason=" << reason << '\n';
+    }
+    return false;
+  };
   if (!design.valid() || design.top() != runtime.top()
       || design.roots() != runtime.roots()) {
-    return false;
+    if (trace_projection) {
+      std::cerr << "[fsim-design-ir] top_equal="
+                << (design.top() == runtime.top())
+                << " roots_equal="
+                << (design.roots() == runtime.roots()) << '\n';
+    }
+    return reject("design-header");
   }
   const auto hdl_specialization_count = static_cast<std::size_t>(
       std::ranges::count_if(
@@ -1356,17 +1375,44 @@ bool valid_runtime_projection(
       || design.processes().size() != runtime.processes().size()
       || design.conversions().size()
           != runtime.boundary_conversions().size()) {
-    return false;
+    if (trace_projection) {
+      std::cerr << "[fsim-design-ir] hdl_specializations="
+                << hdl_specialization_count
+                << " runtime_specializations="
+                << runtime.specializations().size()
+                << " design_processes=" << design.processes().size()
+                << " runtime_processes=" << runtime.processes().size()
+                << " design_conversions=" << design.conversions().size()
+                << " runtime_conversions="
+                << runtime.boundary_conversions().size() << '\n';
+    }
+    return reject("top-level-counts");
   }
   for (const auto& specialization : runtime.specializations()) {
     if (specialization.id >= design.specializations().size()) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] specialization_id="
+                  << specialization.id
+                  << " design_count=" << design.specializations().size()
+                  << '\n';
+      }
+      return reject("specialization-id");
     }
     const auto& projected = design.specializations()[specialization.id];
     if (projected.language == semantic::Language::systemc
         || design.instances()[projected.instance.value()].path
             != specialization.instance) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] specialization_id="
+                  << specialization.id
+                  << " projected_language_systemc="
+                  << (projected.language == semantic::Language::systemc)
+                  << " projected_instance_path="
+                  << design.instances()[projected.instance.value()].path
+                  << " runtime_instance_path=" << specialization.instance
+                  << '\n';
+      }
+      return reject("specialization-path");
     }
   }
   std::vector<std::size_t> signal_matches(runtime.signals().size());
@@ -1394,7 +1440,17 @@ bool valid_runtime_projection(
   if (std::ranges::any_of(
           signal_matches,
           [](const auto matches) { return matches != 1; })) {
-    return false;
+    if (trace_projection) {
+      for (std::size_t index = 0; index < signal_matches.size(); ++index) {
+        if (signal_matches[index] != 1) {
+          std::cerr << "[fsim-design-ir] signal_index=" << index
+                    << " top_level_matches=" << signal_matches[index]
+                    << " runtime_width=" << runtime.signals()[index].width
+                    << '\n';
+        }
+      }
+    }
+    return reject("signal-ownership");
   }
   std::ranges::sort(projected_signal_paths);
   std::ranges::sort(projected_container_paths);
@@ -1402,14 +1458,22 @@ bool valid_runtime_projection(
     if (!std::ranges::binary_search(
             projected_signal_paths,
             RuntimePath { path, signal })) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] signal_path_missing path=" << path
+                  << " runtime_index=" << signal << '\n';
+      }
+      return reject("signal-path");
     }
   }
   for (const auto& [path, object] : runtime.container_paths()) {
     if (!std::ranges::binary_search(
             projected_container_paths,
             RuntimePath { path, object })) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] container_path_missing path=" << path
+                  << " runtime_index=" << object << '\n';
+      }
+      return reject("container-path");
     }
   }
   std::vector<const semantic::design::ProcessOccurrence*>
@@ -1442,16 +1506,32 @@ bool valid_runtime_projection(
         || projected->observed != runtime.processes()[index].observed
         || projected->reactive != runtime.processes()[index].reactive
         || projected->final != runtime.processes()[index].final) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] process_index=" << index
+                  << " projected=" << (projected != nullptr)
+                  << " matches=" << process_matches[index];
+        if (projected != nullptr) {
+          std::cerr << " projected_name=" << projected->name;
+        }
+        std::cerr << " runtime_name=" << runtime.processes()[index].name
+                  << '\n';
+      }
+      return reject("process-identity");
     }
     if (runtime.processes()[index].switch_bidirectional
         && (!projected->drivers.empty()
             || !projected->transactions.empty()
             || (projected->id.value() < process_has_driver.size()
                 && process_has_driver[projected->id.value()])
-            || (projected->id.value() < process_has_transaction.size()
-                && process_has_transaction[projected->id.value()]))) {
-      return false;
+                || (projected->id.value() < process_has_transaction.size()
+                    && process_has_transaction[projected->id.value()]))) {
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] switch_bidirectional_process="
+                  << index << " drivers=" << projected->drivers.size()
+                  << " transactions=" << projected->transactions.size()
+                  << '\n';
+      }
+      return reject("bidirectional-driver");
     }
   }
   const auto systemc_specialization_count = static_cast<std::size_t>(
@@ -1460,7 +1540,13 @@ bool valid_runtime_projection(
             return specialization.language == semantic::Language::systemc;
           }));
   if (systemc_specialization_count != runtime.systemc_instances().size()) {
-    return false;
+    if (trace_projection) {
+      std::cerr << "[fsim-design-ir] systemc_specializations="
+                << systemc_specialization_count
+                << " runtime_systemc_instances="
+                << runtime.systemc_instances().size() << '\n';
+    }
+    return reject("systemc-specialization-count");
   }
   for (const auto& instance : runtime.systemc_instances()) {
     if (std::ranges::none_of(
@@ -1468,7 +1554,11 @@ bool valid_runtime_projection(
               return boundary.kind == BoundaryKind::systemc_instance
                   && boundary.path == instance.instance;
             })) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] systemc_instance_boundary_missing path="
+                  << instance.instance << '\n';
+      }
+      return reject("systemc-instance-boundary");
     }
   }
   for (const auto& input : runtime.systemc_objects()) {
@@ -1481,7 +1571,12 @@ bool valid_runtime_projection(
                     && design.processes()[boundary.process->value()]
                            .runtime_index == *input.process;
               })) {
-        return false;
+        if (trace_projection) {
+          std::cerr << "[fsim-design-ir] systemc_process_boundary_missing name="
+                    << input.name << " runtime_process=" << *input.process
+                    << '\n';
+        }
+        return reject("systemc-process-boundary");
       }
       continue;
     }
@@ -1509,7 +1604,12 @@ bool valid_runtime_projection(
             design.objects(), [&](const auto& object) {
               return object.kind == expected && object.path == input.name;
             })) {
-      return false;
+      if (trace_projection) {
+        std::cerr << "[fsim-design-ir] systemc_object_missing name="
+                  << input.name << " expected_kind="
+                  << static_cast<int>(expected) << '\n';
+      }
+      return reject("systemc-object");
     }
   }
   return true;

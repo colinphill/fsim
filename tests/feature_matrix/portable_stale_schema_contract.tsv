@@ -30,5 +30,5 @@ library	future-compiled-hir-schema	schema=2	returns-no-metadata
 library	lazy-admission	metadata-only	invalid-schema-precedes-portable-or-native-payload-access
 library	publication	validate-original-before-canonical-write	no-destination-or-staging-tree-on-downgrade
 nested	portable-composition	current-inventory=65	exact-schema-comparisons-and-no-partial-state
-nested	design-state	runtime=62,semantic=4,design-ir=4,compiled-hir=1,constraint=8,coverage=7,uvm=3,vhdl=5	stale-future-corrupt-truncated-trailing-reject
+nested	design-state	runtime=63,semantic=4,design-ir=4,compiled-hir=1,constraint=8,coverage=7,uvm=3,vhdl=6	stale-future-corrupt-truncated-trailing-reject
 nested	sdf-trace-transaction-checkpoint-scv	current-identities-per-owner	bounded-decode-and-transactional-rejection

@@ -11952,3 +11952,2781 @@ remain available for local development but are not hosted jobs.
    cohesive implementation boundary followed by bounded in-scope CI repair
    commits and pushes. This supersedes the earlier literal one-push wording.
    Preserve the intentional untracked `phase.fst` and do not clean or reset it.
+
+## Batch 188B 2026-09-22 program-registration checkpoint
+
+1. This is the latest active checkpoint and supersedes the preceding statement
+   that Batch 189 is next. Completed Batch 188A remains historical fact.
+   Batches 188B-188I now execute before Batch 189 without renumbering or
+   replacing Batches 189-197 and without creating a release tag.
+2. Batch 188B Change 1 is complete. Its exact focused governance selector
+   passed 8/8 in 1.51 seconds with eight CTest workers and a 7,200-second test
+   timeout: code-coverage inventory, code-coverage-metrics inventory, legacy
+   TF inventory, legacy ACC inventory, v3 release record, v3 release-
+   integration inventory, v3 version identity, and AST-lifetime governance.
+   This validates plan registration only, not the baseline or implementation
+   program.
+
+   ```text
+   ctest --test-dir build/ci-linux-release --output-on-failure --parallel 8 --timeout 7200 -R '^fsim\.(code-coverage-inventory|code-coverage-metrics-inventory|legacy-tf-inventory|legacy-acc-inventory|v3-release-record|v3-release-integration-inventory|v3-version-identity|ast-lifetime-governance)$'
+   ```
+3. The complete eight-batch, exactly-20-change program is registered in
+   `docs/implementation_plan_v3.md`. It freezes cumulative performance
+   comparison to `ed5ca693704edd277ec3f055ed7d9ed0e3048f2d`, with each
+   benchmark configuration's median end-to-end time and median per-run peak
+   RSS limited to 110% of that baseline. This registration does not claim that
+   the baseline or any performance gate has passed.
+4. Mandatory real-project coverage includes `reed_solomon` `rs_codec_tb` and
+   `rs_thru_tb`, the same `rs-vhdl` testbenches through mixed-language VHDL
+   binding, and `rs_codex` decoder-reference modes 0/1 with one/two input
+   frames plus default and direct-syndrome throughput cases. Sources under
+   `/home/colin/vprojects` remain read-only and unvendored. A baseline failure
+   is a blocking prerequisite, not permission to omit a workload or start an
+   unrelated language repair.
+5. Changes 1-19 use focused validation. Every Change 20 owns clean warnings-
+   as-errors Release-first qualification, final Debug and Release suites, the
+   cumulative benchmark matrix, documentation, cohesive publication, and the
+   exact-head four-lane LLVM-only hosted Linux/Windows Debug/Release monitor-
+   and-correct loop. Batch 188I Change 20 additionally owns local LLVM-enabled
+   ASan/UBSan, the full applicable suite, and lifetime stress. Batch 190 keeps
+   its planned parallel/race qualification.
+6. Delegate bounded implementation work to as many as three `gpt-5.6-luna`
+   workers at xhigh reasoning effort. The primary agent retains orchestration,
+   shared-interface decisions, integration review, centralized non-overlapping
+   builds and tests, qualification, commits, pushes, and hosted monitoring.
+   Local builds use at least eight workers; qualification commands retain
+   120-minute timeouts and hosted jobs retain current parallelism.
+7. The program authorizes direct typed SystemC C++ interface work and necessary
+   documented C++ source-compatibility changes while preserving CLI behavior,
+   the native C/plugin ABI, Accellera integration, TLM, and SCV. Preserve
+   existing format byte order, bump only changed serialized layouts, reject
+   affected old artifacts with regeneration diagnostics, and add no
+   compatibility readers or dual-write paths.
+8. Preserve AST-free compiled HIR, distinct semantic/HIR, DesignIR, and runtime
+   representations, driven/forced state, wide-value coherence, scheduler
+   order, safe points, observer mutation behavior, and external-input
+   validation. Retire historical gates only after migrating their useful
+   obligations and preserve their documentation.
+9. Change 2 is complete. The accepted
+   `docs/simplification-gate-migration.md` inventory verifies the actual CTest
+   sets after fixture expansion: 423 complete tests, 414 tests excluding
+   labels, 171 label-selected tests, and 162 tests in their overlap. The
+   nested early-return run remains separate. The source-package manifest now
+   owns all four new documentation, manifest, script, and unit-test files;
+   `fsim.source-package-manifest` passes 1/1 in 1.26 seconds. The focused
+   `fsim.ctest-command-uniqueness` and `fsim.source-line-budget` pair passes
+   2/2 in 7.44 seconds.
+10. Changes 3-5 remain partial. The benchmark script, manifest, and unit-test
+    source are present. Central validation passes all 13 unit tests, including
+    incomplete corpus/subset rejection, regression limits, missing samples,
+    and timeout cleanup. Command-only preflight expands all 60 active
+    case/configuration/variant combinations without executing HDL workloads
+    or claiming qualification. Incomplete results cannot report success;
+    measured commands have 7,200-second timeouts and terminate their process
+    group on timeout. Source and dependency identity hashing, profiling and
+    native-coverage reporting, and
+    all six repository long-runtime workload categories remain unimplemented.
+    Repository-case entries are pending placeholders, not implemented
+    workloads.
+
+    ```text
+    python3 -B -m unittest discover -s scripts -p test_qualify_simplification_performance.py -v
+    python3 -B scripts/qualify-simplification-performance.py --preflight-only
+    ```
+11. Change 6 is blocked on a mandatory fixed-baseline prerequisite. The
+    baseline `fsim` target rebuilt successfully with:
+
+    ```text
+    cmake --build build/ci-linux-release --parallel 8 --target fsim
+    ```
+
+    The configuration is Release Clang 22.1.8, LLVM 22.1.8, and warnings as
+    errors. The binary SHA-256 is
+    `151e17104c401d773c1d3278cd7f7356f469a2a5b6536340f02cb4b820022f84`.
+    This successful target build does not qualify the baseline.
+12. All three representative preflight cases compile and then fail
+    elaboration. `original_codec` fails at `gf_mult.v:44` with
+    `FSIM-ELAB-HIR-001` because HIR cannot lower the `red[0]` wire-array
+    assignment; a standalone `gf_mult` top reproduces it. `mixed_codec` fails
+    at `rs_encoder_top.vhd:101` with `FSIM-ELAB-HIR-001` because `skid_par_cl`
+    has no parser-free signal adapter. `codex_reference_mode0_frames1` fails at
+    `rs_decoder_axi.sv:57` with `FSIM-ELAB-GEN-001` because the conditional-
+    generate constant cannot be evaluated. Strict Verilog-2005 rejects
+    `$fatal`; explicit SystemVerilog-2017 compilation succeeds.
+13. Preflight stdout, stderr, artifacts, and major-phase timings are under
+    `/tmp/fsim-188b-baseline-preflight.2tXoQE`. No simulation run or seven-
+    sample qualification occurred. There were no compiler/runtime changes,
+    hosted checks, sanitizer runs, commits, pushes, or tags. Changes 7-20 have
+    not started. Continuing past this hard prerequisite requires a user
+    decision on the pre-existing correctness repairs and fixed-baseline policy;
+    do not silently replace the baseline. Preserve the intentional untracked
+    `phase.fst` and do not clean or reset it.
+14. Final centralized integration recheck passed 11/11 in 7.88 seconds: the
+    eight governance checks in item 2 plus source-package ownership, CTest
+    command uniqueness, and source-line structure. All eight new batch lists
+    still contain exactly Changes 1-20, and `git diff --check` passes. The
+    three delegated workers have handed off; no background implementation
+    remains active while awaiting the user's prerequisite-repair decision.
+
+## Batch 188B 2026-09-22 newest-baseline authorization
+
+1. This checkpoint supersedes the preceding wait for a baseline-policy
+   decision. The user authorized using the newest baseline and the active
+   goal remains completion through Batch 188I. Read-only remote verification
+   (`git ls-remote origin refs/heads/codex/v3`) confirms that the newest remote
+   revision, local HEAD, and local tracking ref all remain
+   `ed5ca693704edd277ec3f055ed7d9ed0e3048f2d`.
+2. Repair the correctness prerequisites needed by the mandatory real-design
+   workloads, then freeze the corrected source and binary/dependency
+   identities before simplification. Preserve the original failing-baseline
+   evidence. Keep the corrected baseline fixed cumulatively through 188I;
+   do not silently rebaseline each batch or omit failed cases. The manifest
+   still records the original revision until a replacement is validated and
+   frozen. No baseline performance result is accepted yet.
+3. Three `gpt-5.6-sol` medium workers own independent prerequisite repairs:
+   SystemVerilog array-assignment HIR lowering, VHDL signal subtype/layout
+   adaptation, and SystemVerilog selected-parameter constant evaluation.
+   The hierarchy implementation has a single owner; shared-file changes and
+   test ownership must be coordinated. Builds and tests remain centralized
+   with at least eight build workers and bounded execution times.
+4. Changes 3-5 remain partial and Change 6 is now in progress, not blocked on
+   authorization. Changes 7-20 and Batches 188C-188I are not started. Preserve
+   the existing worktree foundation and the user's untracked `phase.fst`.
+5. Complete real-case compile/elaboration discovery is recorded in
+   `/tmp/fsim-188b-all-case-preflight.m1n0xv_8`. All ten cases compile; all ten
+   fail elaboration before simulation. The original codec fails the wire-array
+   assignment, original throughput fails a dynamic indexed part-select at
+   `rs_decoder_top.v:317`, mixed codec fails the numeric signal subtype, mixed
+   throughput fails a constant mixed-language port actual at `rs_thru_tb.v:51`,
+   and all six Codex cases fail the parameter bit-select condition at
+   `rs_decoder_axi.sv:57`. This discovery is not performance qualification.
+   Rebuild once the first cohesive repair wave is handed off, then rerun the
+   complete case set and group any newly exposed failures by implementation
+   seam. Do not run a monolithic suite as the discovery loop.
+6. Prerequisite repair validation now proves constant bit-select handling:
+   the updated `fsim_semantic_tests` target builds with eight workers and
+   `fsim.semantic` passes, including ascending/descending ranges, X/Z and
+   out-of-range selects, signed literal sizing, and declaration-width
+   conversion. The rebuilt Codex representative advances past line 57 and
+   now fails at line 61, the `rs_gcd` constant-function call. The current
+   diagnostic binary is not a frozen or qualified baseline.
+7. Diagnostic evidence under
+   `/tmp/fsim-188b-wave2-elaboration.rlkf362y` disproves the initial VHDL type
+   adapter hypothesis: `skid_par_cl` has the normal unresolved built-in
+   `unsigned` spelling, but its `PW-1` left bound is unevaluable, with
+   `PW = clog2(2*T+1)`. The speculative type fallback and synthetic regression
+   are being removed; fix the actual constant-function evaluation seam.
+   The VHDL-focused regression run failed on invalid synthetic IEEE type
+   visibility and is not accepted validation. Remove temporary diagnostics
+   before qualifying any repaired baseline.
+8. The wire-array lowering portion compiles and uses existing
+   `WriteUpdateSlice` operations with driver masks derived by the existing
+   finalization pass. Its behavioral regression awaits the coordinated
+   hierarchy-side flattened-net/container alias materialization. It is not
+   yet a passing array repair. No runtime opcode or artifact schema has been
+   changed, and no real-design simulation has passed yet.
+9. The benchmark foundation now captures ordered source/header/generated
+   wrapper hashes, binary/compiler/build identities, linked runtime library
+   hashes, and tool identities before execution, then rejects post-run drift.
+   Declared Git provenance is explicitly distinct from verified binary
+   identity. All 15 harness unit tests pass centrally. Untimed profiling and
+   native-coverage evidence are delegated next; all six repository workload
+   categories and baseline qualification remain incomplete.
+10. The third cohesive build includes constant-function loop evaluation,
+    fixed unpacked net-array signal aliases, continuous slice driver writes,
+    and mixed-language constant input actuals. Its first attempt exposed a
+    compile error inserting an adapter into a const read-only-signal view;
+    this is not accepted repair validation. Keep all prerequisite changes
+    unqualified until the repaired build, focused behavior tests, and full
+    ten-case elaboration discovery complete.
+11. The corrected third build succeeds; log:
+    `/tmp/fsim-188b-wave3-rebuild.log`. Binary SHA-256 is
+    `9a2567cd9ab03fe41994020b713241e3cf8a09b3f858f9deaf024a73ffbcbda1`.
+    Full `fsim.elaboration` passes in 1.99 seconds, including mixed-language
+    constant input propagation and rejection of constant output actuals.
+    `fsim.semantic` fails because the new VHDL test fixture cannot specialize;
+    `fsim.application.hir_lowering` still fails its new array assignment.
+    These two failures remain under repair; no assertion is waived.
+12. Complete real-case elaboration discovery for that binary is recorded in
+    `/tmp/fsim-188b-wave3-elaboration.mvry3jjd`. All ten still fail before
+    simulation. All six Codex cases advance past `rs_gcd` to line 64's field
+    primitivity check. Both mixed cases advance past the original subtype and
+    constant-port failures, exposing static generic/ROM evaluation and
+    overload/conversion/callable-local lowering gaps. Original codec and
+    throughput failures are unchanged. Reuse existing dynamic-part-select
+    execution: static inspection found no compound-index capability gap;
+    investigate effective range/width materialization before changing it.
+13. The fourth build passes (`/tmp/fsim-188b-wave4-build.log`), and
+    `fsim.semantic` passes in 0.01 seconds after using a specializeable VHDL
+    entity fixture and adding checked selected-bit distances with negative
+    and extreme-bound regressions. A temporary array diagnostic identifies
+    the remaining integration failure precisely: valid fixed net type and
+    indices, but no writable container/signal alias. Remove that diagnostic
+    after repairing the causal hierarchy/materialization path.
+14. Untimed phase/native profiling is implemented and all 19 benchmark unit
+    tests pass. The real twenty-cycle generated-counter smoke test under
+    `/tmp/fsim-188b-profile-smoke.daec4nxt` passes its output oracle and profile
+    parsing for interpreter, LLVM O0, and LLVM O2. Both native runs report
+    five process records and 85 resumes. Reports distinguish static operation
+    counts, generated template IDs, attempted modules, observed resumes, and
+    ambiguous truncated fallback identities. No universal-native or v2
+    speedup requirement is introduced. The worker is implementing four
+    repository CLI cases next; observer/history workloads remain pending.
+15. The next bounded constant-evaluation wave handles SystemVerilog packed
+    slices required by `gf_alpha_has_full_period` and VHDL case selection
+    required by `default_prim_poly`. Later VHDL ROM/composite failures remain
+    separate. Continue real-case discovery after each cohesive repair wave;
+    the baseline is still neither frozen nor qualified.
+16. The fifth cohesive build passes (`/tmp/fsim-188b-wave5-build.log`), with
+    binary SHA-256
+    `78734d067981d7ebefb6f183ab1b716da784aa8fbb75bd54373ff7501d8569d0`.
+    Focused validation passes 3/3 in 0.62 seconds: semantic, HIR application,
+    and full elaboration suites. The array test now verifies live update
+    propagation, undriven Z, conflicting-driver X, unchanged variable-array
+    representation, and read-only input rejection. All temporary diagnostics
+    from the preceding array discovery have been removed.
+17. The fifth full real-case elaboration matrix is under
+    `/tmp/fsim-188b-wave5-elaboration.3fhk5qm0`. Original codec passes its array
+    failure and now shares throughput's indexed-slice failure at decoder
+    line 317. All six Codex cases pass the constant-configuration guards and
+    reach the runtime case statement at `rs_decoder_multi_scheduler.sv:759`.
+    Mixed codec clears its polynomial generic association; VHDL overload,
+    conversion, ROM/composite, and callable-local failures remain. No real
+    case has yet passed elaboration or entered simulation.
+18. Progress audit at 2026-09-22 14:59 UTC: there is concrete net progress in
+    six prerequisite seams and the benchmark identity/profile foundation,
+    but no baseline qualification or batch completion. The shortest remaining
+    dependency is still mandatory real-design correctness, not gate cleanup.
+    Continue independent bounded repairs for the shared original-design slice
+    failure and Codex selection lowering, keeping hierarchy ownership single
+    and building once per cohesive wave. The semantic worker first closes
+    review-found ascending indexed-slice direction and unmatched VHDL-case
+    negatives. Four repository CLI workloads are being implemented in
+    parallel; observer/history workloads remain separate and pending.
+19. Sixth-wave direction and fail-closed case tests pass with the full focused
+    set, 3/3 in 0.60 seconds. The seventh diagnostic build passes after
+    removing a probe's invalid reference to another translation unit's local
+    helper. Evidence under
+    `/tmp/fsim-188b-wave7-selection-probe.mlw886y0` shows that original-design
+    slice source ranges and result-width constants are correct, but parameter
+    names such as `M`, `WIDTH`, and `LOG2T2` have no inferred width/domain
+    despite valid integral values. Repair that profile loss; do not add an
+    arbitrary-width dynamic-selection fallback. Temporary probes remain in
+    the worktree and must be removed before accepting the next repair wave.
+20. VHDL overload investigation explicitly disproved a tempting shortcut:
+    `Name.selected` can mean only one visible name, not a checked call with
+    valid arguments. Do not bypass overload/arity/nominal/shape validation
+    merely because that field is populated. A separate worker owns the
+    callable resolver and overload tests to find the actual profile loss.
+21. All 22 benchmark unit tests pass. Four repository CLI cases are active
+    but marked implementation-unverified. Interpreter preflight evidence is
+    `/tmp/fsim-188b-repository-preflight.9kdezr7u`: mixed bare passes every
+    counter/inversion check for sixteen instances and 100,000 cycles, taking
+    4.49 seconds end-to-end with 76,752 KiB peak RSS. Coverage failed because
+    its generated SV display used adjacent string literals; that fixture is
+    corrected but not yet rerun. VCD/FST fail the existing 1,048,576-record
+    retention limit. Before baseline freeze, keep the same mixed simulation
+    and select four top-level counters plus four inverted outputs (roughly
+    800,000 trace changes). Do not raise the production cap or implement
+    Batch 188F streaming early. Its separate million-plus-event stress test
+    remains mandatory. None of these preflights is performance qualification.
+22. The benchmark worker next owns a small test-only helper for genuine
+    signal-observer and VPI historical-value workloads, with explicit helper
+    binary/dependency identities. No production CLI/API expansion is approved
+    for this helper; source-package ownership and central validation remain
+    the primary agent's responsibility.
+23. At 2026-09-22 15:23 UTC the user changed the worker policy to
+    `gpt-5.6-luna` with xhigh reasoning. This supersedes the earlier sol/medium
+    policy without changing implementation scope or acceptance gates. Freeze
+    and hand off the existing workers before launching replacement workers;
+    preserve exclusive file ownership and centralized builds/validation.
+24. All three sol workers acknowledged frozen handoffs and were stopped.
+    Their luna/xhigh replacements are `luna_benchmark`, `luna_vhdl`, and
+    `luna_sv_selection`. The shared VHDL repair now preserves declared INTEGER
+    generic occurrence profiles before generic-actual redirection in the
+    existing domain, width, and subtype helpers; the callable resolver has no
+    changes. New overload negatives retain arity and user-operator result
+    checks. SV parameter-profile fixes and all temporary-probe removals are
+    included in the pending eighth build, along with the test-only driver.
+25. A separate mixed LLVM O2 profiling preflight passes the 100,000-cycle
+    oracle under `/tmp/fsim-188b-repository-profile-recheck.e9e2m913`.
+    It reports 37 selected/observed native processes, 960 static operations,
+    33 attempted modules, no retained fallback processes, and 5,100,124
+    resumes. This is profiling evidence, not seven-sample performance
+    qualification. The coverage rerun passed its simulation oracle but did
+    not save its database; calibrated trace reruns selected the wrong root
+    aliases and failed the event threshold. Explicit coverage saving and
+    case-ID-root trace filters are now implemented but await validation.
+26. The eighth build passes (`/tmp/fsim-188b-wave8-build.log`), including the
+    test-only driver. The fsim SHA-256 is
+    `994cfce5236863fa72ffe78c99a0acd9d69091887942c9c1d1674a1eb95cb979`;
+    driver SHA-256 is
+    `9b1a80474e089bfbadd238b345a70ffe49c48ebf805f2b15204f624da1c603ca`.
+    Focused semantic, HIR application, and elaboration suites pass 3/3 in
+    0.55 seconds; all 23 harness unit tests pass. Real-case discovery under
+    `/tmp/fsim-188b-wave8-elaboration.4pjmuahf` still has ten failures:
+    both original SV cases advance past decoder line 317 to a generated
+    assignment in `chien_forney.v:197`; all six Codex and both mixed-case
+    failure sets remain unchanged. Focused generic-profile success does not
+    establish that the real mixed overload failures are repaired.
+27. Repository preflight evidence is
+    `/tmp/fsim-188b-six-repository-preflight.m7mdyflr`. Bare, VCD, and FST
+    interpreter cases pass, with VCD validating 800,221 changes and decoded
+    FST 800,311. Coverage saving still fails. Observer receives 3,200,032
+    events and the testbench PASS marker but fails its helper acceptance;
+    history likewise sees the testbench PASS marker but fails helper
+    acceptance. Investigate the precise status/value checks before modifying
+    them. All six cases remain implementation-unverified across the required
+    engine matrix; none is performance-qualified.
+28. The driver is owned by the source-package manifest. Package ownership,
+    CTest command uniqueness, and source-line structure checks pass 3/3 in
+    7.55 seconds after its addition. No full clean build, hosted CI lane,
+    sanitizer qualification, commit, or push has occurred.
+29. Bare, VCD, and FST repository workloads also pass single LLVM O0 and
+    LLVM O2 preflights under
+    `/tmp/fsim-188b-repository-native-preflight.j7zrhzjc`. Normalized VCD
+    declaration/event hashes match across interpreter, O0, and O2; decoded
+    FST hashes likewise match across the three engines. These nine passing
+    case/engine checks do not replace the remaining coverage/helper checks,
+    mandatory real-design correctness, or seven-sample baseline qualification.
+30. The helper-only rebuild passes
+    (`/tmp/fsim-188b-helper-rebuild.log`); helper SHA-256 is
+    `fe4aa1fbde01d2065e5b54d229710dede8b670c461520f5fd6d91a38d82149f2`.
+    Normal `$finish` reports stopped rather than completed. The helper now
+    accepts either status while retaining the testbench marker, nonzero-status
+    rejection, event-count, final-value, and report-error checks. Observer
+    preflights pass in all three engines with 3,200,032 events and identical
+    checksum `ef0eb833ca00a845`. Interpreter evidence is under
+    `/tmp/fsim-188b-central-preflight.rt3giyrb`; LLVM evidence is under
+    `/tmp/fsim-188b-central-preflight.a8kvg7y4`. History now reaches its first
+    query but fails the expected counter value/time at 6 ns. Coverage's
+    zero return does not establish a usable report: the required report
+    rejects the saved database. Do not accept either workload yet.
+31. Separate observer profiling passes in all three engines under
+    `/tmp/fsim-188b-central-preflight.6jidq7ig`. Both LLVM profiles report
+    37 resumed native processes, 5,100,124 resumes, 960 static operations,
+    and 33 attempted modules; all observer hashes remain identical. Root's
+    reusable validation driver is `/tmp/fsim-188b-preflight.py`, with durable
+    `preflight-results.json` in each evidence directory. Workers are preparing
+    bounded real-call overload and first-unsupported-selection diagnostics;
+    the next product build must wait for explicit freeze handoffs.
+32. Direct inspection corrects the initial coverage inference: the latest
+    saved database exists (17,108 bytes, `FSIMSVCV` version 7 with functional
+    covergroup data), but `fsim coverage report` rejects it. Investigate the
+    functional/code-coverage artifact and reader contract; do not infer an
+    absent file or waive persistence/report validation from the zero status.
+33. The ninth build passes (`/tmp/fsim-188b-wave9-build.log`). Semantic and
+    full elaboration suites pass, but the new generated SV integer-condition
+    regression fails in HIR application lowering. The same small fixture
+    fails on the prior binary, so it is a useful reproduction, not a passing
+    repair. Real probes are under `/tmp/fsim-188b-wave9-probe.szvx3olq`.
+    The VHDL probe identifies `get_slice` argument 2 with actual domain Bit2
+    and no subtype versus formal Integer; some other occurrences correctly
+    retain Integer. SV capability probes emit nothing at either failing
+    real case, contradicting the assumed preflight rejection location.
+    Trace the actual diagnostic/lowering path before changing admission.
+34. History now passes the interpreter under
+    `/tmp/fsim-188b-central-preflight.ewqgf2sv`: the public `Time` query returns
+    the requested position while reading the latest historical value at or
+    before it, rather than returning that value's change timestamp. The
+    helper now checks this contract, retains all value/previous-change
+    assertions, and reports precise mismatches. Native validation is pending.
+35. Coverage scope remains the repository pure-SV workload's existing
+    functional-coverage oracle and a supported functional save/readback
+    check. Adding missing production statement-hit instrumentation is not
+    an approved prerequisite merely because an initial harness chose the
+    wrong unified-report reader. The worker is selecting an existing
+    functional decoder/roundtrip seam without changing production APIs or
+    formats. Temporary split-path/strict-code-save edits remain unqualified
+    and must be replaced or removed before accepting this workload.
+36. Progress audit at 2026-09-22 15:50 UTC: repository bare/trace/observer
+    engine equivalence and the history query contract are concrete progress,
+    but all mandatory real designs still fail elaboration and no batch is
+    complete. Several static hypotheses failed live confirmation; do not
+    expand coverage scope or repeat ineffective SV probes. The shortest
+    remaining dependency is exact provenance of the VHDL actual profile
+    and the executed SV rejection path. Keep workers on those bounded seams,
+    then rebuild once for their coordinated repairs and rerun affected cases.
+37. History preflights also pass LLVM O0/O2 under
+    `/tmp/fsim-188b-central-preflight.827pxzyp`; separate untimed profiles pass
+    all three engines under `/tmp/fsim-188b-central-preflight.qlg6egps`.
+    All six runs share checksum `fb3704ffc493194b`, retaining nine historical
+    position/value checks. The coverage worker is authorized to implement a
+    functional-only helper using the existing public state decoder, requiring
+    nonempty reports/instances and the 100% functional oracle. Remove the
+    code-coverage save/report assumptions and flags; preserve the mandatory
+    pure-SV compile/elaboration workload and helper identity checks.
+38. All nine separate bare/VCD/FST profiling preflights pass under
+    `/tmp/fsim-188b-central-preflight.obfb51cc`. Along with observer/history,
+    all five mixed repository categories now have a passing single
+    correctness run and untimed profile in interpreter, LLVM O0, and LLVM O2.
+    This remains foundation validation, not cumulative performance acceptance.
+    All real-design correctness prerequisites and functional-coverage
+    readback must pass before freezing a corrected baseline.
+39. The tenth product build initially failed in temporary diagnostic output
+    because an optional expression ID was streamed instead of its numeric
+    value. The two-line correction rebuild passes
+    (`/tmp/fsim-188b-wave10-rebuild.log`). Semantic and full elaboration tests
+    pass; the generated SV conditional regression remains red. Real probes
+    under `/tmp/fsim-188b-wave10-probe.17s6y6qy` now show correct Integer
+    profiles and accepted `gen_poly`/`get_slice` overloads. Mixed codec moves
+    to missing callable-local `g` binding at `rs_pkg.vhd:194`; mixed throughput
+    moves to missing local `r` at line 285. Codex selection fails because
+    choice expression 14145 has no width, not because of an alternative body.
+    Original codec still fails assignment 662 at `chien_forney.v:197`, with
+    target expression 7424 and XOR value expression 7427.
+40. The functional-only helper builds
+    (`/tmp/fsim-188b-functional-helper-build.log`) and all 24 Python unit
+    tests pass. All six repository workloads pass their oracles in all three
+    engines under `/tmp/fsim-188b-central-preflight.t0rchwj1`; all 18 separate
+    profiles pass under `/tmp/fsim-188b-central-preflight.4wuzhctv`. Fsim SHA-256:
+    `58df0225784484f2a548a1ee34d42a2184bc9a911a1de04e4a8c33a826a7892c`;
+    helper SHA-256:
+    `af321d1074d4a22d85fb893c0a56431dddc196c5b5a47a96703c58e6283e7762`.
+    All functional stdout hashes match across engines. Trace hashes match,
+    but raw functional-coverage state hashes differ: both files are 17,108
+    bytes, with repeated zero-to-one byte differences starting at offset 4623.
+    Identify the decoded fields before defining semantic equivalence; do not
+    normalize real hit/value differences away. Foundation Changes 3-5 remain
+    open pending this closure review; baseline Change 6 remains incomplete.
+41. Current ownership: `luna_sv_selection` owns capability and SV
+    statement/expression/process repairs plus its HIR application tests;
+    `luna_vhdl` owns callable-local repair, internal callable declarations,
+    and VHDL overload tests; `luna_benchmark` owns harness/manifest/helper
+    coverage-equivalence closure. All use luna/xhigh; builds/tests remain
+    central. Latest graph refresh is 16:02 UTC, project
+    `fsim-v3-simplification`, with 48,055 nodes and 218,835 edges. All central
+    process handles are terminal at this checkpoint. Review worker handoffs,
+    remove transient probes after causal proof, freeze changes before the
+    next build, and retain the full real-design baseline requirement.
+42. Wave 11 removes the temporary VHDL resolver diagnostics and marks VHDL
+    function activations automatic at the existing callable-type construction
+    point. A repeated runtime-signal-argument local-variable regression passes
+    in the full elaboration test. Review rejected an SV enum literal-count
+    width fallback; the patch now uses the declared enum type and fails closed
+    if its width cannot be resolved. The first build caught invalid enum
+    field accesses; the corrected rebuild passes
+    (`/tmp/fsim-188b-wave11-rebuild.log`). Focused semantic and elaboration
+    tests pass; HIR application still fails the generated conditional test
+    (`/tmp/fsim-188b-wave11-focused.log`, 4.73 seconds).
+43. All four real-design probes still fail at their previous locations under
+    `/tmp/fsim-188b-wave11-probe.daworxsw`. The automatic-lifetime fix does not
+    resolve constrained-array locals `g` and `r`; investigate their actual
+    subtype/storage binding rather than infer another general frame defect.
+    Broad SV container diagnostics emitted many unrelated misses without a
+    target-7424 binding failure. Remove those probes and identify the exact
+    generated-assignment failing return before another speculative repair.
+    VHDL now owns callable/process files; SV owns capability/statement/expression
+    files. Shared-file changes require coordination. Both workers remain
+    luna/xhigh and must leave builds/tests to the root.
+44. Functional-coverage canonicalization copies the fully decoded state,
+    normalizes only callback execution-mode provenance, then reserializes
+    with the existing public codec. Raw artifact SHA remains separate.
+    `/tmp/fsim-188b-coverage-oracle.rr_5l0nj` passes twelve checks: original
+    six-cycle and changed ten-cycle fixtures, three engines, and separate
+    timed/profile passes. Original semantic SHA is
+    `bc1df2699aa82f82055475238b0eef1337c56243a04014d953fbefbd7ba7c2bc`;
+    changed-hit SHA is
+    `6a4e0decc4a65dddb1ffa61cfd6ed313722694d79e72e52fa63990b2383eb7ac`.
+    Both fixtures retain final value 2 and 100% coverage, proving the digest
+    distinguishes actual history rather than only the summary. Current fsim
+    SHA is `deb0cba67b938a5b9f9a7db709b3f8dd71d15782fe6f58d0d248e9a5975ff112`;
+    helper SHA is
+    `8e2823d6f3909eaa659e002533fc255a6689b5a722f93b89410e489c7c61b5d0`.
+    All 25 Python tests passed before the final whitespace/length-negative
+    parser additions; rerun them and the full repository matrix before
+    marking foundation implementation verified. No baseline is frozen.
+45. Latest-binary repository validation passes all 18 correctness runs under
+    `/tmp/fsim-188b-central-preflight.vayi9at7` and all 18 separate profiles
+    under `/tmp/fsim-188b-central-preflight.uxtgqmjp`. Root assertions verify
+    equal functional output and semantic observation hashes across all
+    engines and timed/profile paths. Fsim/helper hashes from item 44 remain
+    unchanged after the matrix. Exactly six repository manifest entries now
+    have `implementation_verified`; real-project cases and baseline metadata
+    remain unchanged. The negative unit fixture now explicitly clones and
+    marks a case unverified rather than relying on the live manifest state.
+    All 25 tests pass (`/tmp/fsim-188b-foundation-units-final.log`), command-only
+    preflight expands 96 combinations, and source-package/CTest uniqueness/
+    translation-unit checks pass 3/3 in 8.70 seconds. Changes 3-5 are complete
+    as implementation foundations. Change 6, baseline freeze, seven-sample
+    qualification, Changes 7-20, and Batches 188C-188I remain incomplete.
+46. Next bounded wave: VHDL owns capability.cpp temporarily for constrained
+    occurrence-width resolution before callable-local storage allocation,
+    plus callable/process files and its regressions. SV has frozen narrow
+    statement diagnostics for enum-choice provenance and generated indexed
+    assignments; broad capability/container probes are removed. Set
+    `FSIM_HIR_TRACE_GENERATED_ASSIGNMENT=1` alongside
+    `FSIM_HIR_LOWER_TRACE_FAILURES=1` on the next representative probe and
+    minimal application regression. Do not infer a repaired real workload
+    from a passing unrelated scalar-local test. Wait for VHDL freeze ACK,
+    rebuild centrally, run focused tests, and inspect the exact rejection
+    paths. All central build/test/profile/workload handles are terminal at
+    this checkpoint; workers remain luna/xhigh.
+47. Wave 12 builds successfully (`/tmp/fsim-188b-wave12-build.log`). The
+    worker's final patch was already on disk before the build: generic actual
+    lookup moved binding frames ahead of materialized-local protection, and
+    constrained local occurrences no longer borrowed a nominal definition
+    width. This is not accepted repair evidence. Focused semantic passes;
+    HIR application now reaches and fails the relocated sparse-enum test,
+    and full elaboration regresses at the existing contextual-result test
+    (`elaborator_vhdl_function_test.cpp:412`, local `answer` initializer,
+    VHARRAYAGG-007/005). Both real mixed probes still fail on local `g`/`r`.
+    The worker is instructed to revert only those two newest changes,
+    preserve the earlier validated activation/profile fixes, and collect
+    actual local-binding rejection state before a replacement repair.
+48. The narrow SV probes finally establish the executed failure paths.
+    `/tmp/fsim-188b-wave12-probe.qw9xbjw4` shows original statement 662 enters
+    the fixed-net path and fails specifically at RHS value lowering, not
+    target binding. The standalone conditional fixture confirms the same
+    `fixed-net-value` failure under
+    `/tmp/fsim-188b-wave12-minimal.TKrQa1`. Codex choice 14145 reports
+    `declaration=none`; the enum-width patch is not reached. The next bounded
+    SV work is direct conditional-expression lowering and enum-name
+    resolution, not further container alias or width guesses. Wave-12 fsim
+    SHA is `3cdf97d83a75f9cb5bbd4e0dfdafb841879d401a9ecce16ceb5e4ea3a8fc97e2`;
+    helper SHA is
+    `3868b715bb018f4f6ff9b095ca598947738fcbde41c53fb0f7183fa5606bd6c6`.
+    These contain the unaccepted VHDL regression and are not baseline binaries.
+49. Net-progress audit at 16:47 UTC: benchmark foundations closed Changes
+    3-5 with full semantic-equivalence proof and negative oracles. Mandatory
+    real-design elaboration has not advanced in the last two compiler waves;
+    speculative type/storage edits are causing churn. The shortest remaining
+    dependency is now observed: repair the exact conditional RHS rejection
+    and missing enum declaration, while restoring the prior VHDL test result
+    and obtaining one targeted `g`/`r` binding-state trace. Do not add broad
+    diagnostics or another inferred fallback. Builds/tests remain centralized,
+    all current handles are terminal, no baseline is frozen, and the goal
+    through Batch 188I remains active. Next progress audit is due by 17:47 UTC.
+50. Wave 13 build passes (`/tmp/fsim-188b-wave13-build.log`) after reverting
+    the two wave-12 VHDL changes. Focused semantic passes. The prior
+    contextual-result failure no longer occurs; full elaboration now stops
+    on the new constrained-local regression's `packed` variable, the intended
+    missing-runtime-binding case. HIR application still stops at the sparse
+    enum regression. Logs: `/tmp/fsim-188b-wave13-focused.log`.
+    Current fsim SHA:
+    `0503b1ff1354665deebbd6cb8abdb9a8587342abd75b8bec9bc35ae35cbfc587`;
+    helper SHA:
+    `64f6d583822e19c47655f7ccc26c2471dce2c55fd556c5af1adec3ef3fb7c53e`.
+51. `/tmp/fsim-188b-wave13-probe.tg3p9h05` supplies the actual missing
+    profiles. Original conditional expression 7433 has condition 7434 with
+    no width or domain, while result width 8/domain 2 is valid. Standalone
+    `/tmp/fsim-188b-wave13-minimal.ZpNWqu` reproduces the same failure with
+    result width 2. Investigate generated-genvar constant profiling, not
+    target storage. VHDL `g` is declaration 103/scope 62/type 15 and `r` is
+    declaration 139/scope 66/unresolved type ID. Both have matching process
+    scopes, `require_storage=0`, no materialized local, domain 3, width 0,
+    and one constraint with an unresolved bound expression (64 or 163).
+    Width rejection is now observed rather than inferred. Preserve formal
+    expression conversions while resolving only bound constants.
+52. Root also compiled `/tmp/fsim-188b-sparse-enum.sv`; its enum initializer
+    is accepted, but case choice 9 has `declaration=none`, matching Codex.
+    `luna_benchmark` now investigates enum resolution read-only, while
+    `luna_sv_selection` focuses on generated conditional profiling and
+    `luna_vhdl` owns capability/callable/process/VHDL-test changes for local
+    bounds. Shared capability edits must remain serialized. All central
+    handles are terminal at this checkpoint; no new qualification or baseline
+    claims are made. Changes 1-5 remain complete, Change 6 remains active.
+53. A controlled standalone VHDL probe narrows the next repair:
+    `/tmp/fsim-188b-vhdl-local-width.vhd` contains identical callable-local
+    vectors with literal, entity-generic, or function-formal bounds.
+    All compile into `/tmp/fsim-188b-vhdl-local-width.fsimobj`. Literal and
+    entity-generic variants elaborate successfully; the formal-dependent
+    variant fails local `packed` at source line 52 despite receiving constant
+    actual 4. Preserve this distinction: local widths are not universally
+    unsupported. The larger constrained-local regression also contains a
+    nested array type and must be investigated separately if its generic
+    vector behaves differently. Root has sent this evidence to the VHDL
+    worker; retain formal value-domain conversions while evaluating bounds.
+54. Wave 14 builds (`/tmp/fsim-188b-wave14-build.log`) with a narrowly scoped
+    SV repair: only an SV conditional lacking a condition width may obtain
+    its one-bit truth from the existing integral constant evaluator; normal
+    lowering failures and VHDL behavior are unchanged. Original codec advances
+    past `chien_forney.v:197` to `kes_block.v:181`, whose `(wk >= tt_l)` mixes a
+    generated constant and runtime value. That condition cannot be folded as
+    a whole; its genvar operand needs its actual profile. Evidence is under
+    `/tmp/fsim-188b-wave14-probe.ztvi49p8`. The minimal generated array clears
+    lowering but fails DesignIR projection (`/tmp/fsim-188b-wave14-minimal.89smRw`).
+    Root controls in `/tmp/fsim-188b-projection-controls.sv` isolate that seam:
+    plain fixed net-array assignments fail the same projection check, while
+    generated scalar conditional assignments pass artifact elaboration.
+    The SV worker added gated exact-predicate diagnostics to
+    `application_design_ir.cpp` (`FSIM_TRACE_DESIGN_IR_PROJECTION=1`); these
+    have not yet been built and are temporary, not relaxed validation.
+55. Enum investigation finds duplicate synthetic local-parameter and canonical
+    enum-literal declarations. Existing constant evaluation ranks the canonical
+    enum above the synthetic parameter, but generic name resolution reports
+    ambiguity. The enum worker now owns the resolver and semantic tests for a
+    narrow reuse of that ranking, preserving genuinely ambiguous imports.
+    VHDL released the resolver untouched and implemented a binding-context
+    overload on the existing integral evaluator instead of a second arithmetic
+    engine. Evaluated local call-frame values retain precedence. After enum
+    handoff, VHDL must wire this context only into residual subtype-bound
+    evaluation and verify formal-bound positives plus actual callback-cycle
+    and unresolved-bound negatives. Its first negative test drafts needed
+    strengthening because frontend rejection or skipped parsing would not
+    prove evaluator behavior. These newest changes remain unbuilt/unverified.
+56. Root review before wave 15 found that canonical enum literals and parser
+    synthetic local parameters share scope, source span, and name, but not
+    origin IDs: projection allocates fresh origins under different parents.
+    The narrow duplicate guard must therefore compare the former identities
+    and exact forms, not origin equality. VHDL now owns resolver/semantic-test
+    files to incorporate this correction alongside residual-bound callback
+    wiring; enum investigation is read-only. The SV worker has implemented
+    iterative-generate identity profiling and is adding declaration-shadowing
+    protection and runtime-comparison coverage. All changes remain unbuilt.
+    Root prepared `/tmp/fsim-188b-controls.py` for seven serial artifact
+    elaboration controls and enabled exact projection diagnostics in
+    `/tmp/fsim-188b-real-probe.py`. Next action is one frozen cohesive build,
+    then focused tests, these controls, and four representative real probes.
+57. Wave 15 builds after correcting two temporary diagnostic expressions that
+    treated integer runtime specialization IDs as wrappers. Logs are
+    `/tmp/fsim-188b-wave15-build.log` (failed logging compilation only) and
+    `/tmp/fsim-188b-wave15-build-retry.log` (pass). Semantic and HIR application
+    tests pass, including sparse enums and generated runtime comparisons.
+    Full elaboration stops at the existing wide generated-slice fusion
+    assertion (`elaborator_generate_slice_test.cpp:89`). A serial run of all
+    69 existing elaboration selectors finds 67 passing and exactly two failing:
+    `test_generate_elaboration` and `test_vhdl_callable_overloads`.
+    Evidence: `/tmp/fsim-188b-wave15-elaboration-matrix.cmrzba1e` and
+    `/tmp/fsim-188b-wave15-focused.log`. The VHDL test still fails its new
+    constrained-local regression; it was not reached by the full invocation.
+    It now clears missing local storage and fails aggregate/index layout.
+58. Corrected CLI controls are under
+    `/tmp/fsim-188b-wave15-controls-corrected._fpkjolh`: sparse enum, generated
+    scalar, VHDL literal bounds, and VHDL entity-generic bounds pass artifact
+    elaboration. Formal-dependent VHDL bounds now clear storage binding but
+    fail contextual aggregate layout at line 54 and indexing at line 55.
+    The first controls directory `...controls.ubck8huw` omitted `(rtl)` from
+    VHDL tops and is not evidence about VHDL semantics. Plain/generated arrays
+    report exact missing short container paths `values`/`generated`.
+    Projection's shared path map lets the signal alias suppress the container
+    alias. The projection worker has a kind-aware producer fix and regression
+    ready, unbuilt; validation is not relaxed.
+59. All four real probes advance in
+    `/tmp/fsim-188b-wave15-probe.rr5b6l1n`, but none passes elaboration yet.
+    Original codec clears `kes_block.v:181` and now reports untyped localparam
+    case widths (32 versus 3) and `conv_half.v:50` concatenation lowering.
+    Codex clears enum choices and reaches `rs_decoder_output.sv:218` sized
+    cast `3'(START_DELAY)`. Mixed codec clears `g`/`r` bindings and reaches
+    `rs_pkg.vhd:196` local `res` aggregate layout. Mixed throughput reaches
+    residual loop bounds, conversion shapes, and a clock-domain mismatch.
+    These failures remain prerequisite work, not baseline qualification.
+    Wave-15 fsim SHA is
+    `ab26a6bda1465884c51449d5d4a6c201d9564051528d0bccfeb5e1b25245ccd0`;
+    helper remains wave 13 at
+    `64f6d583822e19c47655f7ccc26c2471dce2c55fd556c5af1adec3ef3fb7c53e`.
+    All central build/test/probe handles are terminal at this checkpoint.
+    SV owns fusion/profile/cast fixes, VHDL owns residual bound-context work,
+    and the projection worker owns its producer fix and application regression.
+60. Root expanded wave-15 elaboration discovery to all ten mandatory real
+    cases; the remaining six are in `/tmp/fsim-188b-wave15-probe.zf29pbob`.
+    Original throughput fails a concatenation at `euclid_solver.v:137`,
+    another zero-length-replication candidate. Codex mode-0/frame-2 shares
+    the sized-cast failure. Both mode-1 reference cases and both throughput
+    cases fail the true slice of `NARROW_DESCRIPTOR ? ... : ...` at
+    `rs_decoder_ingress.sv:167` (expected width 301, no intrinsic width).
+    The projection worker is investigating that separate slice/conditional
+    seam read-only while its projection patch remains frozen. All ten cases
+    still fail elaboration; no correctness or timing qualification is claimed.
+61. Wave 16 build passes (`/tmp/fsim-188b-wave16-build.log`), including
+    `fsim_application_tests`. Semantic and application-specialization tests
+    pass; the latter verifies both signal and container objects at the short
+    array path. HIR application stops at the new numeric sized-cast fixture,
+    and full elaboration still stops at the wide generated-slice fusion test.
+    Focused log: `/tmp/fsim-188b-wave16-focused.log`. Direct VHDL-overload
+    selection still fails the new constrained-local test, but only at its
+    nested-array condition (line 16); earlier aggregate/index statements now
+    lower. Log: `/tmp/fsim-188b-wave16-vhdl-overloads.log`.
+62. All eleven CLI controls ran against wave 16 in
+    `/tmp/fsim-188b-wave16-controls.2jg6i5jl`. Nine pass, including both net
+    arrays, all three VHDL bound variants, implicit localparam case sizing,
+    and zero-count replication within concatenation. Numeric `3'(DELAY)`
+    remains rejected by the independent unit cast-visibility validator;
+    constant inactive out-of-range slices remain rejected as expected before
+    their pending repair. The four new SV reproductions are in
+    `/tmp/fsim-188b-sv-profile-controls.sv` and were first shown failing against
+    wave 15 under `/tmp/fsim-188b-wave15-controls-corrected.coatu40j`.
+    Wave-16 fsim SHA:
+    `0ee9325dc1b16531d74fe1e2a55fe6d710cdaf13b629dce6bac2fede75b944eb`.
+63. Four representative real probes remain failing in
+    `/tmp/fsim-188b-wave16-probe.ocmyp_j8`. Original now reaches the nested
+    genvar-constant conditional in `conv_full.v:74`, sharing the Codex inactive
+    slice seam. Codex reaches continuous assignment into a `logic` array at
+    `rs_chien_forney_datapath.sv:54`, distinct from the fixed-net-array path.
+    Mixed codec still fails local `res` initializer layout at `rs_pkg.vhd:196`
+    despite the body-assignment formal-bound control passing. Mixed throughput
+    retains the loop-bound/conversion/clock diagnostics. No real simulation
+    or corrected baseline qualification has passed.
+64. Net-progress audit at 17:47 UTC: waves 15-16 close several independently
+    reproduced prerequisite seams and advance real SV designs, but the wide
+    fusion assertion survived two proposed conversion fixes. Require the
+    actual unfused process operation sequence before another fusion edit;
+    do not infer its path again. The shortest other dependencies are the
+    observed cast-visibility validator, inactive constant-conditional arm,
+    and callable initializer/nested-array bound contexts. Ownership is now
+    SV: capability/expression/statement and HIR tests; projection worker:
+    `hierarchy_packages.cpp` numeric cast validator plus its frozen DesignIR
+    producer/test fix; VHDL: resolver/specialization/callable and its tests.
+    Shared lowerer files require explicit handoff. All central handles are
+    terminal. Next progress audit is due by 18:47 UTC. The goal through 188I
+    remains active; B6 is still prerequisite work, with no baseline frozen.
+65. Wave 17 builds (`/tmp/fsim-188b-wave17-build.log`). Twelve of thirteen
+    CLI controls pass in `/tmp/fsim-188b-wave17-controls.gxxy1bmq`, including
+    numeric sized casts and both new VHDL declaration-initializer variants.
+    The latter were independently red against wave 16 under
+    `/tmp/fsim-188b-wave16-controls.5c270mxt`; their source is
+    `/tmp/fsim-188b-vhdl-initializer-control.vhd`. The raw initializer subtype
+    was replaced by its existing effective subtype. Nested array selection
+    also stopped overwriting newly materialized bounds with raw constraints.
+    Every VHDL elaboration selector now passes, including new local-storage
+    and initializer regressions. Constant inactive-slice artifact validation
+    remains red even though the new lowering path prunes the inactive arm.
+66. Wave-17 full focused results are not green. The 69-selector matrix at
+    `/tmp/fsim-188b-wave17-elaboration-matrix.60if4k4d` passes 66 groups and
+    fails typed constants, selection/assignment, and direct HIR composite
+    expressions. Broad constant rematerialization regressed packed signed
+    extension; the SV worker has restricted its three new sites to unresolved
+    generated SV names, not declared constants or `$signed` expressions.
+    That correction is unbuilt. Direct HIR's literal conditional was folded,
+    invalidating its structural `ConditionalSelect` assertion; preserve its
+    semantic checks and retain real runtime/unknown-merge coverage, rather
+    than suppressing folding solely to satisfy the old operation assertion.
+    The wide-fusion selector now passes: `/tmp/fsim-188b-wave17-fusion.log`
+    records one `continuous_fused_128` process. Temporary tracing remains.
+67. Application specialization's new numeric-cast negative used the wrong
+    limit (one Mi-bit). The authoritative existing limit is 16 Mi-bits, so
+    the test was corrected to `16777217`, without changing production limits.
+    This correction is unbuilt. Positive numeric cast simulation passes up
+    to the negative assertion; the root's independent artifact cast control
+    also passes. Logs: `/tmp/fsim-188b-wave17-focused.log`. Inactive-slice
+    `FSIM-ELAB-068` is independently produced by
+    `validate_compiled_systemverilog_unit` in `hierarchy_packages.cpp`, not
+    by the now-pruned lowering path. That file transfers from the projection
+    worker to SV for reachability-aware shape validation, preserving active
+    and unresolved-condition rejection checks.
+68. Real original codec passes artifact elaboration for the first time in
+    `/tmp/fsim-188b-wave17-probe.0gqvwr3f`; this is not simulation or baseline
+    qualification, and the binary still has the known signed-value regression.
+    Codex remains at continuous assignment into `logic` array elements.
+    Mixed codec clears `res` initialization and reaches formal-dependent loop
+    bounds and `to_unsigned` sizes. Mixed throughput retains related bound,
+    conversion, and clock diagnostics. Wave-17 fsim SHA is
+    `28289d086192bd2faebd3ed452dcce7f982b712e6f8cc771dc01c9ddc7e4a4f1`.
+69. After SV's signed-constant correction, statement-file ownership transfers
+    to VHDL for a narrow loop-bound callback using recorded constant actuals.
+    Do not change general expression profile redirection. Unconstrained
+    `v'range` needs actual occurrence bounds/orientation and cannot be replaced
+    by an inferred zero-based width. The projection worker is investigating
+    variable-array continuous-write ownership read-only; the existing signal
+    alias/`WriteUpdateSlice` mechanism may be reused only with correct
+    per-element writer and read-only checks. No new runtime IR is authorized.
+70. Original throughput also passes wave-17 artifact elaboration in
+    `/tmp/fsim-188b-wave17-probe.mc6fhzz1`. Both original designs now reach
+    the simulation prerequisite, but neither has been simulated with a
+    regression-clean corrected binary yet. All central handles are terminal
+    at this checkpoint; worker repairs remain pending for the next build.
+71. The user changed worker selection to `gpt-6-luna` with xhigh reasoning.
+    The primary agent retains orchestration and central validation. Wave 18
+    integrates the signed-constant restriction, inactive conditional shape
+    validation, runtime/X conditional coverage, corrected numeric-cast limit
+    test, and formal-dependent VHDL loop bounds. Review corrected the new
+    descending null-range comparison: equal bounds execute once, with a new
+    readback regression. Build handle 34476 is active, with evidence at
+    `/tmp/fsim-188b-wave18-build.log`; no tests have run against it yet.
+    Sources are frozen. New-model workers investigate variable-array driver
+    policy and review expression reachability read-only during the build.
+72. Wave 18 build and all four focused suites pass: semantic, full elaboration,
+    HIR application, and application specialization. Logs are
+    `/tmp/fsim-188b-wave18-build.log` and
+    `/tmp/fsim-188b-wave18-focused.log`. All thirteen artifact controls pass
+    at `/tmp/fsim-188b-wave18-controls.9o77rs6a`. The fsim binary SHA-256 is
+    `3ff1f93f2fa5901a36cc3377a3e2ac8eeaa43d1fe3cee2e14241a3a9e1967b0c`.
+    The original codec and throughput interpreter correctness preflight is
+    now running serially under handle 88406, with evidence directory
+    `/tmp/fsim-188b-central-preflight.80heoi73` and log
+    `/tmp/fsim-188b-wave18-original-preflight.log`. Do not overlap another
+    build/test/profile with this live handle. This is prerequisite correctness
+    evidence, not seven-sample qualification or a frozen baseline.
+73. The wave-18 original codec interpreter simulation completed normally at
+    tick 154305000, delta 1, but its correctness oracle failed: zero of eleven
+    expected `CODEC_OK` markers, with invalid encoded words and unknown
+    decoded values reported. Evidence is the original-codec `simulate.stdout`
+    and `simulate.time` under item 72's directory. Artifact elaboration and
+    focused regression success do not establish real-design correctness.
+    Handle 88406 continues with original throughput; do not restart or overlap
+    it. Investigate signal/container bridge data coherence using a bounded
+    reproduction after this preflight finishes, without changing the HDL
+    corpus or weakening its oracle. No baseline has been frozen.
+74. The serial original-design interpreter preflight ended with both required
+    cases failing their unchanged oracles. Codec finished all scenarios but
+    had zero of eleven `CODEC_OK` markers; throughput finished all six cases
+    with `errs=3060` and zero `PASS` markers. Logs and artifacts remain under
+    item 72's evidence directory; handle 88406 is terminal. A bounded trace
+    rerun of the same codec artifact to 10,000 ns ended normally and produced
+    `/tmp/fsim-188b-wave18-d3.vcd` and corresponding `.stdout`/`.stderr`.
+    In the small RS(15,11) encoder instance `d3`, message input and echoed
+    output agree, while `enc.p_top` and `enc.fb` stay unknown after reset and
+    parity output becomes unknown. The HDL declares `p` as a fixed unpacked
+    procedural array and continuously reads `p[NCELL-1]` into `p_top`.
+    Source inspection shows container-read lowering adds an implicit signal
+    dependency only when a readable container-signal alias exists. Current
+    producer creates those aliases only for nets. A missing wakeup is the
+    leading hypothesis, pending a focused regression and corrected real-run
+    proof. The next bounded repair is a coherent variable-array alias with
+    correct X initialization, procedural/continuous ownership checks, and
+    preservation of disjoint slice writes. A separate review found the unit-
+    global inactive-branch ID set can suppress a shared live expression; an
+    independent worker is repairing that reachability logic and its tests.
+75. A minimal standalone witness confirms the leading array-wakeup hypothesis
+    on the wave-18 binary. `/tmp/fsim-188b-variable-array-wakeup.sv` declares
+    a procedural `reg [3:0] parity [0:3]`, writes elements with nonblocking
+    assignments on the clock, and continuously reads `parity[3]` into `top`.
+    Compile and artifact elaboration pass, but interpreter simulation prints
+    `TOP=xxxx` at tick 32 where the program requires `TOP=1010`. The source,
+    object, and design remain in `/tmp`; no external benchmark source changed.
+    This is a focused red regression for the coherent variable-array alias
+    repair, stronger than inferring the cause from the real trace alone.
+76. Wave 19 source is frozen and a central eight-worker build is running
+    under handle 67040; log `/tmp/fsim-188b-wave19-build.log`. It integrates
+    the candidate/live reachability repair with shared-ID negative tests,
+    variable-array signal aliases, exact continuous driver regions, aliased
+    procedural object-write conflict checks, and regressions for disjoint,
+    overlapping, fused, and procedural array writes. The new alias retains
+    variable type metadata, unresolved resolution, and Logic4 X / Bit2 zero
+    initialization. Input-port variable aliases are not writable. The red
+    `/tmp/fsim-188b-variable-array-wakeup.sv` witness is the first validation
+    target after build; then the focused suites and required real designs.
+    A separate read-only review is examining active generate-region roots in
+    the reachability pass. No baseline is frozen or qualified.
+77. Wave 19 build failed before linking or tests. The only reported compiler
+    errors are six `unit.systemverilog` accesses in the new reachability
+    live-root pass: `unit` there is already `semantic::sv::Unit`. Evidence is
+    `/tmp/fsim-188b-wave19-build.log`; handle 67040 is terminal with exit 1.
+    Shared-file ownership passed back from the frozen variable-array producer
+    worker to the reachability worker for this bounded type correction. The
+    producer alias remains unvalidated, and the wave-18 binary is still the
+    latest validated one. Rebuild after the file freezes; do not run tests
+    against an incomplete wave-19 build.
+78. The bounded reachability type correction built successfully on retry:
+    `/tmp/fsim-188b-wave19-build-retry.log`, terminal handle 75946. The same
+    standalone array witness re-elaborated and simulated on wave 19 now prints
+    `TOP=1010` at tick 32, compared with wave 18's `TOP=xxxx`. This proves
+    procedural variable-array writes wake a continuous element reader in the
+    minimal case. Focused semantic, application-specialization, and source-
+    line-budget tests pass. HIR application stops at an obsolete assertion
+    that a module-level variable-array container has no signal alias; the new
+    intended alias gives it one. Elaboration stops at a new test's assumption
+    that two generated assignments plus a separate third have fused into a
+    `continuous_fused_*` process; elaboration itself passes. Logs:
+    `/tmp/fsim-188b-wave19-focused.log`. The driver worker owns narrow test
+    corrections while production source is frozen. A serial original codec
+    and throughput interpreter preflight is live under handle 97540; log
+    `/tmp/fsim-188b-wave19-original-preflight.log`. Do not overlap other
+    top-level builds/tests/profiles until it terminates. The real baseline is
+    still unproven and unfrozen.
+79. The wave-19 original codec/throughput preflight ended before simulation:
+    both artifact elaborations reject true dual-port RAM `mem` objects with
+    `FSIM-ELAB-DRV-001`. Evidence is
+    `/tmp/fsim-188b-central-preflight.i512qhhx`, and handle 97540 is
+    terminal with exit 1. The project's `mem_ram_tdp.v` has two clocked
+    dynamic-address procedural write ports and states their addresses do not
+    coincide in its use; wave 18 accepted this arrangement. The new alias-
+    backed driver audit incorrectly treats those two procedural writers as a
+    static conflict. Preserve the previous procedural-only RAM policy while
+    rejecting overlap when a continuous variable-array producer is present.
+    The driver worker owns that bounded policy correction and focused fixture
+    updates. No real simulation result exists for wave 19; the passing small
+    array wakeup remains local proof only.
+80. Hourly net-progress audit at 18:46 UTC: wave 18 established all four
+    focused suites and thirteen controls passing, plus real simulations that
+    exposed a parity-array wakeup failure. Wave 19 made a minimal previously
+    red procedural-array witness pass (`TOP=1010`), but its expanded driver
+    ownership check rejected the original design's legal dual-port procedural
+    RAM before simulation. This is new localized evidence and a bounded repair
+    path, not a frozen baseline. The shortest remaining dependency is restoring
+    artifact elaboration while retaining continuous/procedural conflict checks,
+    then rerunning the original codec/throughput unchanged oracles. The worker
+    froze the procedural-only exemption and focused test corrections. A central
+    eight-worker wave-20 build is now live under handle 61943 with log
+    `/tmp/fsim-188b-wave20-build.log`; no other top-level work may overlap it.
+    The active generate-region reachability root seam remains recorded for a
+    bounded later correction before qualification. Batch 188B Change 6 and
+    the goal through 188I remain active.
+81. Wave 20 builds successfully with eight workers:
+    `/tmp/fsim-188b-wave20-build.log`; fsim SHA-256 is
+    `831dd493a7d08cdd1112ac18cd93fb0be57ddcaaa5ce934cdd950c1290a4d700`.
+    It retains the passing array-wakeup repair and exempts procedural-only
+    alias-backed variable arrays from signal driver conflict checking while
+    auditing signals with any continuous producer. Focused semantic,
+    application-specialization, and source-line-budget tests pass. Two new
+    assertions in `/tmp/fsim-188b-wave20-focused.log` fail: scratch alias
+    packed readback expects `XX01` despite index-zero occupying the high
+    element bits, and a small variable-array fixture assumes a fused process
+    where the implementation emits ordinary continuous processes. The worker
+    owns test-only corrections. A serial original codec/throughput interpreter
+    preflight is live under handle 54178; evidence directory
+    `/tmp/fsim-188b-central-preflight.x3ie1q8z`, log
+    `/tmp/fsim-188b-wave20-original-preflight.log`. Do not overlap central
+    builds/tests/profiles with it. The corrected baseline remains unfrozen.
+82. The user changed the real-project execution matrix: use the JIT flow for
+    real designs because interpreter simulation is too slow. The root stopped
+    the live wave-20 interpreter preflight with SIGINT; handle 54178 ended
+    with exit 130. That partial run is not correctness evidence. A serial LLVM
+    O2 JIT preflight of original codec and throughput is live under handle
+    97302 with log `/tmp/fsim-188b-wave20-original-jit-preflight.log` and
+    evidence directory `/tmp/fsim-188b-central-preflight.y8yngq0k`.
+    The governing plan now requires LLVM O0/O2 JIT for all ten real-project
+    cases and retains interpreter/O0/O2 for six repository cases. A worker
+    owns per-case runner/manifest/unit-test adaptation; the prior 96-command
+    preflight is historical evidence for the old all-three matrix, not proof
+    of the new required 76 case/configuration/variant combinations. Do not
+    freeze or qualify until the new matrix is validated.
+83. The user reported a severe JIT performance regression and requested a
+    direct fallback profile. The wave-20 LLVM O2 original codec preflight
+    completed simulation but failed its unchanged oracle: only 5 of 11
+    `CODEC_OK` cases passed; `simulate.time` records 231.23 seconds and
+    1,684,820 KiB peak RSS. The serial throughput continuation was stopped
+    with SIGINT; handle 97302 is terminal with exit 130. A direct rerun of
+    that exact elaborated codec artifact with `FSIM_PROFILE_JIT=1`,
+    `FSIM_PROFILE_JIT_PROCESSES=1`,
+    `FSIM_PROFILE_JIT_PROCESSES_ALL=1`, and
+    `FSIM_PROFILE_JIT_MODULES=1` completed under handle 40439. Evidence is
+    `/tmp/fsim-188b-wave20-native-profile.{stdout,stderr}`. It reports
+    94,201 considered process instances, 70,985 interpreter-retained process
+    instances, 1,169 lowered process bodies across 147 successfully
+    materialized modules, zero unsupported modules, and 334,025,144 native
+    resumes. Thus JIT is actually executing; it is not wholly falling back
+    to the interpreter. This heavy per-resume profile took 358.94 seconds
+    wall and should not be used as an uninstrumented performance number.
+    A lower-output aggregate `FSIM_PROFILE_PROCESSES=1` rerun of the same
+    artifact completed under handle 82188, writing
+    `/tmp/fsim-188b-wave20-process-profile.{stdout,stderr}`. Its final
+    runtime row reports 165,486 processes, 219,022,350 calls, 99,913,757
+    interpreted instructions, and 215,085,255 single-dispatch native
+    resumes. The last count and its 195,051 ms native time exclude native
+    cohort members; they are lower bounds, not total native activity or a
+    reliable native-time fraction. Instrumented wall time is 324.12 seconds.
+    Its functional
+    stdout matches the unprofiled simulation exactly after omitting the
+    profiling footer. The early all-zero process row belongs to a setup-time
+    interpreter object, not the run. The detailed JIT process profiler
+    disables cohort update batching in `application_executors.cpp`, so its
+    334-million resumes and 358.94-second timing are invasive and not an
+    apples-to-apples production comparison. These profiles rule out wholesale
+    interpreter fallback but not a contribution from the deliberately retained
+    tier or scheduler overhead. The uninstrumented O2 run remains 231.23
+    seconds, and the JIT correctness oracle remains red. Do not freeze or
+    qualify this baseline.
+84. Wave 21 centrally integrated the frozen worker changes with an eight-
+    worker Release build (`/tmp/fsim-188b-wave21-build.log`, terminal handle
+    65933). The corrected HIR application test has a separate CMake target;
+    it was rebuilt with eight workers in
+    `/tmp/fsim-188b-wave21-hir-build.log` (terminal handle 48039). The new
+    real-design LLVM O0/O2 configuration mapping passes all 29 Python runner
+    tests (`/tmp/fsim-188b-wave21-runner-unit.log`), and command-only
+    preflight emits all 76 required case/configuration/variant combinations
+    (`/tmp/fsim-188b-wave21-command-preflight.log`). Four of five focused
+    CTests pass; `fsim.application.hir_lowering` newly fails at the worker's
+    inactive constant-slice conditional test (`:696`), not the now-corrected
+    array readback or mixed-driver fixture. Evidence:
+    `/tmp/fsim-188b-wave21-focused-retry.log`. The conditional-selection
+    worker owns that narrow correction. A fresh LLVM O2 compile/elaborate-
+    only probe of `mixed_codec` and `codex_reference_mode0_frames1` finished
+    under terminal handle 75937; evidence directory
+    `/tmp/fsim-188b-central-preflight.geh7cvwo`. Mixed fails at VHDL
+    `rs_pkg.vhd` locally-static `to_unsigned` sizes and loop bound plus
+    `rs_encoder_top.vhd:259` deferred port-actual lowering. Codex fails at
+    `rs_kes_euclid.sv:462` case-item width 32 versus selector width 6 and
+    `rs_sync_tdp_ram.sv:84-88` a variable-array indexed part-select write.
+    Neither new probe reached simulation. Workers are investigating the
+    original codec JIT correction failure and mixed VHDL elaboration while
+    the root retains integration and qualification ownership. No corrected
+    real-design baseline is frozen; Change 6 remains in progress.
+85. Wave 22 centrally built the conditional-selection worker's first
+    artifact-round-trip fallback with eight workers (terminal handle 90580,
+    `/tmp/fsim-188b-wave22-build.log`). The five focused CTests remain 4/5:
+    `fsim.application.hir_lowering` now reports `FSIM-ELAB-068` for the
+    inactive constant-slice arm (`/tmp/fsim-188b-wave22-focused.log`). A
+    read-only root inspection found that the reachability pass uses
+    `evaluate_specialization_integer` when pruning the inactive statement
+    arm, but the later live-statement walk uses the narrower
+    `evaluate_integral_expression` directly; on restored parameter/localparam
+    names it can mark the inactive branch live again. The same worker owns a
+    bounded correction; no central build may run until the source freezes.
+    A read-only mixed-VHDL triage clustered its fresh failures on constant
+    package function evaluation: `to_unsigned` sizes, locally bounded loops,
+    vector-returning `gf_pow_u`/`gen_poly`, and downstream `GEN(...)` port
+    actual lowering. No mixed source repair is implemented yet. Separate
+    workers own a JIT-only deterministic RS(15,11) correction probe and
+    Codex SystemVerilog case-sizing/RAM lvalue repairs. Original project
+    sources remain read-only and the baseline remains unfrozen.
+86. Wave 23 centrally built the corrected case-comparison sizing and the
+    conditional-selection worker's shared-evaluator change with eight
+    workers (`/tmp/fsim-188b-wave23-build.log`, terminal handle 5286).
+    `fsim.elaboration` passes, including the new mismatch-width case item
+    and retained VHDL negative test; the focused set remains 4/5 because
+    `fsim.application.hir_lowering` still reports `FSIM-ELAB-068` for the
+    inactive constant-slice arm (`/tmp/fsim-188b-wave23-focused.log`).
+    The worker has frozen a bounded `FSIM_TRACE_INACTIVE_CONSTANT_SLICE`
+    diagnostic, awaiting a central targeted build and test. An original-
+    HDL-read-only RS(15,11) JIT-only probe compiled and elaborated at LLVM
+    O0 and O2. Both modes produced byte-identical simulation output: the
+    clean frame passes and the two-error frame fails with two unchanged
+    symbols. A cleanly closed O2 VCD is at
+    `/tmp/fsim-188b-rs15-jit-probe-trace1/decoder-O2.vcd`. The injected
+    bytes and syndrome `0x06b9` are correct for errors at positions 3 and
+    9; KES/Berlekamp-Massey emits locator `0x261`, whereas the expected
+    coefficients are `[1,8,2]` (`0x281`). The emitted locator has no GF16
+    roots, so Chien-Forney reports zero roots and an uncorrectable frame.
+    This narrows the failure to KES/BM state or its simulator execution, not
+    a wholesale JIT fallback, O2-only optimization, or wrong input
+    injection. A read-only worker is comparing the first BM state update
+    against the VCD and original RTL before any repair is assigned. The
+    bounded VHDL constant-function loop patch is frozen but untested; it
+    does not yet support the package's vector-valued constant-function
+    chain. Codex RAM dynamic part-select NBA repair is in progress under
+    exclusive worker ownership. No correctness baseline has been frozen.
+87. Wave 24 centrally built the frozen hierarchy trace and bounded VHDL
+    loop patch with eight workers (`/tmp/fsim-188b-wave24-targeted-build.log`).
+    The focused `fsim.semantic` test passes, including the new bounded
+    function loop. `fsim.application.hir_lowering` remains red; its gated
+    trace in `/tmp/fsim-188b-wave24-targeted-tests.log` shows expression
+    190 selects false operand 196, prunes true operand 192, but the later
+    live traversal visits 192-195 without recognizing the pruned root and
+    reaches invalid selection 192 (`FSIM-ELAB-068`). The selection worker
+    owns this precise mark/traversal mismatch. The next bounded integration
+    is that correction plus a new focused build/test, followed by full
+    real-design O0/O2 compile/elaborate probes. This wave does not establish
+    a corrected workload baseline or any performance qualification.
+88. The 2026-09-22 19:40 UTC net-progress audit finds the new semantic
+    function-loop regression green, the conditional-selection failure
+    narrowed to expression-root reseeding, and the JIT probe narrowed to a
+    wrong KES locator despite a correct syndrome. This is a smaller failure
+    matrix than the previous audit, not repeat qualification churn. The
+    shortest next dependency is a central focused build/test of the frozen
+    expression-root correction; only after it passes should the root rerun
+    the real-design LLVM O0/O2 compile/elaborate matrix. The RAM deferred-
+    write bridge and BM trace remain separate worker-owned seams. No
+    interpreter run of the ten real designs is permitted by the current
+    benchmark contract.
+89. A Wave23-binary LLVM O0/O2 differential ROM probe was run from the
+    original read-only `mem_rom_sync.v` plus
+    `/tmp/fsim-188b-rom-init-diff.sv`; evidence is in
+    `/tmp/fsim-188b-rom-init-probe1`. Both JIT modes print identical,
+    correct literal and constant-function packed INIT values
+    (`834a5c2f67bde910`) and return all 16 expected GF(16) inverse
+    entries. This rules out a universal failure of constant-function table
+    evaluation, parameter propagation, time-zero ROM fill, or synchronous
+    read in the isolated two-arm topology; it does not clear the observed
+    original KES failure. The original decoder VCD first diverges when
+    inverse(1) is zero at the first BM update. The flattened ROM aggregate
+    order in that VCD is not yet proven, so it does not establish which
+    initialization stage first went wrong. The RAM worker has frozen a deferred
+    dynamic-slice NBA bridge and bumped `FSIMRUN1` runtime schema 62 to 63;
+    root updated the existing schema assertion. Central build/test awaits a
+    safe semantic-worker freeze so source integration is coherent.
+90. A second Wave23-binary differential used original read-only `gf_inv.v`
+    and `mem_rom_sync.v` with a small wrapper/KES-context fixture
+    (`/tmp/fsim-188b-rom-context-diff.sv`). The corrected fixture has a
+    20-bit KES sigma port; the first elaboration failed only because the
+    fixture declared it 12 bits and is retained as historical evidence.
+    LLVM O0 and O2 simulations from
+    `/tmp/fsim-188b-rom-context-probe2` are byte-identical: the literal
+    ROM returns every expected inverse, while a direct actual `gf_inv`
+    wrapper with `M=4`, `PRIM_POLY=0x13` returns zero for address 1 and
+    wrong values for most addresses. This reproduces the original BM
+    symptom without nesting under KES. The narrow next differential is a
+    direct wrapper with a literal versus forwarded polynomial parameter,
+    then a focused simulator fix and regression test. It is not evidence
+    that JIT fell back to the interpreter. No corrected baseline is frozen.
+91. A third Wave23-binary LLVM O0/O2 JIT probe
+    (`/tmp/fsim-188b-gfinv-poly-probe2`) instantiates two original
+    `gf_inv` wrappers: one receives the decoder-style derived `POLY`, and
+    one receives literal `32'h13`. Both produce byte-identical wrong
+    inverse outputs (address 1 returns zero), so polynomial-parameter
+    forwarding is not the distinguishing cause. An initial diagnostic
+    fixture with hierarchical continuous assignments failed HIR lowering;
+    those probe-only assignments were removed for this successful run.
+    Wave 25 central eight-worker build attempted frozen hierarchy, RAM,
+    and typed VHDL constant-evaluator patches but stopped on a compile
+    initializer mismatch in `compiled_design_specialization.cpp:2370`
+    (`/tmp/fsim-188b-wave25-build.log`). The semantic worker fixed the
+    seven-field `CallFrame` aggregate and refroze it; no central retry has
+    yet run. A read-only review of the RAM bridge confirmed assignment-
+    time captures, queue ordering, JIT liveness/cache-key wiring, and the
+    schema bump, and found malformed dynamic metadata/base should fail
+    closed. The RAM worker owns that bounded hardening. The next central
+    build waits for this source freeze, then runs focused semantic,
+    elaboration, runtime, HIR application, and artifact tests. No real-
+    design correctness baseline or performance qualification exists.
+92. The Wave25B eight-worker integration build reached elaboration source
+    and then stopped on the sole new `WriteContainerObjectElement`
+    aggregate missing its trailing optional dynamic-part field in
+    `lowerer_hir_expression.cpp:11916`
+    (`/tmp/fsim-188b-wave25b-build.log`). Root added the explicit
+    `std::nullopt`; graph-augmented use search found no other legacy
+    initializer outside already updated worker files. The old Wave23
+    binary separately ran a parameterized-child constant-function probe.
+    After correcting a probe-only tick-zero observation race with `#1`,
+    the top and child packed inverse tables all equal
+    `834a5c2f67bde910` (`/tmp/fsim-188b-child-constant-probe2`). A
+    follow-up child fixture with localparam versus parameter `DEPTH`, both
+    feeding original `mem_rom_sync.v`, passes all 16 reads and matches
+    byte-for-byte across LLVM O0/O2
+    (`/tmp/fsim-188b-localdepth-probe1`). Thus neither child
+    specialization nor localparam `DEPTH` alone reproduces the actual
+    `gf_inv` failure. The next shortest differential compares exact
+    wrapper observability and `ROM_BRAM` forwarding; no simulator repair
+    is assigned until it identifies a failing seam. Wave25C central build
+    is running on frozen sources; it has not yet validated these patches.
+93. Wave25C reached a second legacy aggregate initializer in
+    `lowerer_hir_statement.cpp:3460`, missing the new trailing optional
+    dynamic-part field (`/tmp/fsim-188b-wave25c-build.log`). Root added
+    the explicit `std::nullopt` and updated two older runtime test
+    initializers after graph-augmented use discovery; no other older
+    initializer was found. A further old-binary LLVM O0/O2 clone probe
+    (`/tmp/fsim-188b-gfinv-clone-probe1`) exports the correct
+    `INV_INIT=834a5c2f67bde910` from a gf_inv-equivalent child, but the
+    actual original wrapper and all three clones return the same wrong
+    inverse ROM values. Their O0/O2 output is byte-identical. This
+    strengthens the boundary after table computation, while the separate
+    localparam-depth fixture's ROM remains correct. A read-only worker is
+    reducing the difference before a repair is authorized. Wave25D
+    central eight-worker build is active on frozen source; focused tests
+    and real-design probes remain pending.
+94. Wave25D and Wave25E each stopped on one `-Wshadow` site in the new
+    application container callback (`source`, then `index`); root renamed
+    these locals to `element_value` and `element_index`. Wave25F linked
+    `fsim` but stopped compiling the new LLVM validator test because it
+    referenced `dynamic_part_write_process` before declaring that lambda;
+    root moved the assertion after its declaration. Wave25G then built
+    all selected targets successfully with eight workers
+    (`/tmp/fsim-188b-wave25g-build.log`). Its focused nine-CTest matrix
+    is 5/9: LLVM, runtime, artifact phases, SV-container selector, and
+    source-line-budget pass; semantic packed constant-function test fails
+    at its new `evaluated` assertion, inactive constant-slice HIR
+    application test still fails, and both the elaboration memory dynamic
+    part-select fixture and compiled-artifact SV conformance fixture fail
+    dynamic part-select NBA lowering. Evidence:
+    `/tmp/fsim-188b-wave25g-focused.log`. Three workers now own those
+    separate semantic, hierarchy-reachability, and RAM-lowerer seams;
+    no central build runs while they edit. The JIT ROM investigation is
+    paused after recording its smallest next differential, preserving
+    worker slots for this shorter correctness dependency. An instrumented
+    O0/O2 ROM probe with linked binary SHA `ebcc0d12e8a092d43c88b51de6420984fd156ef729f7ee7e42250e6183880833`
+    showed correct parent INIT, clone child-bound INIT, clone post-fill
+    contents, and clone reads, while a side-by-side untouched `gf_inv`
+    still read wrong. This is context-sensitive; neither universal ROM
+    fill corruption nor a definite cache-key cause is established.
+95. Wave 26 centrally built frozen semantic and two gated diagnostic traces
+    with eight workers (`/tmp/fsim-188b-wave26-diagnostic-build.log`).
+    `fsim.semantic` now passes: the typed VHDL evaluator's failure came
+    from comparing normalized call names with underscored spellings, and
+    the semantic worker corrected that. The three other targeted CTests
+    remain red (`/tmp/fsim-188b-wave26-diagnostic-tests.log`). For the
+    inactive constant-slice case, the live traversal first follows the
+    conditional's selected false arm 196-199, then separately re-enters
+    the marked-unreachable true arm 192-195; a second root outside the
+    conditional walk is implicated. For dynamic memory-element part-
+    select NBA, both elaboration and application fixtures reach an
+    `element-target-rejection` with `has_selection=0` although their
+    parsed target is `+:`, and the new branch records `eligibility`.
+    The hierarchy and lowerer workers own those precise corrections and
+    will remove temporary traces after validation. The next bounded
+    central integration is one build and the same focused nine-CTest
+    matrix, before any real-design or performance qualification.
+96. The 2026-09-22 20:38 UTC net-progress audit finds the full integration
+    build green, semantic vector-function evaluation newly green, and the
+    remaining two failure clusters reduced to exact reachability and
+    selection-attachment predicates. The ROM diagnostic is paused with
+    artifacts preserved, so no competing probe consumes the validation
+    window. This is measurable net progress, not repeated broad-suite
+    churn. The shortest remaining dependency is the two frozen-worker
+    corrections followed by one central focused build/test wave; only then
+    rerun the three representative real-design LLVM O0/O2 preflights.
+97. Wave 27 centrally built the frozen dynamic-memory prepass correction
+    and richer hierarchy trace with eight workers
+    (`/tmp/fsim-188b-wave27-diagnostic-build.log`). The three targeted
+    CTests are now 2/3: `fsim.elaboration` and
+    `fsim.application.sv_conformance` pass, including the new `.fsimdesign`
+    round-trip compiled-engine LLVM O0/O2 NBA composition and four-state
+    assertions (`/tmp/fsim-188b-wave27-diagnostic-tests.log`). The Codex
+    memory lvalue was previously rejected by an older packed-element
+    prepass before the new dynamic partial-write branch; that prepass now
+    defers only eligible `+:`/`-:` direct-memory-object writes. The sole
+    remaining focused failure is inactive constant-slice HIR validation.
+    Its trace shows conditional expression 190 has `pruned=1` and follows
+    selected arm 196-199, then directly re-enters unselected 192-195
+    without another expression-root marker. The hierarchy worker owns
+    reconciliation of the expression's duplicate edge collections and
+    removal of temporary trace. No real-design baseline is frozen yet.
+98. Wave 28 centrally built the hierarchy duplicate-edge correction with
+    eight workers (`/tmp/fsim-188b-wave28-build.log`). The same nine
+    focused CTests now pass 9/9 in 23.63 seconds
+    (`/tmp/fsim-188b-wave28-focused.log`): semantic, HIR application,
+    elaboration, SV-container, LLVM, runtime, artifact phases, compiled
+    SV conformance, and source-line-budget. The conditional `?:` arm had
+    been duplicated in `operands` and `call_arguments`/`associations`;
+    live traversal now deduplicates the same edge while preserving genuine
+    shared-ID reachability, and temporary hierarchy tracing is removed.
+    The new linked `fsim` binary SHA-256 is
+    `76ab5eaa260229397b66acac88d4334410961477cff28e423cd82f11f01a1d3b`.
+    `git diff --check` passes. A fresh representative original/mixed/Codex
+    LLVM O2 compile/elaborate-only preflight is now running centrally;
+    the focused green matrix does not yet establish that real designs
+    elaborate or meet functional/performance oracles.
+99. The Wave28 JIT-only real-design compile/elaborate preflight completed in
+    both LLVM O0 and O2 (`/tmp/fsim-188b-wave28-real-o0-elaborate.log`,
+    `/tmp/fsim-188b-wave28-real-o2-elaborate.log`). `original_codec` and
+    `codex_reference_mode0_frames1` pass in both modes. `mixed_codec` fails
+    identically in both modes: `rs_pkg.vhd` rejects formal-dependent
+    `to_unsigned` sizes and a sequential loop bound while lowering pure
+    `gen_poly` dependencies, then `rs_encoder_top.vhd:259` cannot lower
+    the GEN slice port actual after its deferred callable body fails.
+    Evidence is under `/tmp/fsim-188b-central-preflight.ba303n5r` (O2)
+    and `/tmp/fsim-188b-central-preflight.8kl68379` (O0). The next
+    shortest dependency is a bounded typed constant-evaluator extension
+    for local arrays/indexed and packed-slice writes, in parallel with a
+    fail-closed lowerer adapter that folds proven-static pure calls before
+    deferred-body lowering. An independent read-only worker is reducing
+    the original `gf_inv` JIT ROM-context defect without central builds
+    or real-design workloads. No corrected real-design functional or
+    performance baseline has been frozen. The two direct profiles establish
+    mixed native/interpreter execution, but not an attributable wall-time
+    regression. Once the functional oracle is green, profile the normal
+    uninstrumented JIT run before changing selective-compilation policy;
+    the per-resume diagnostic disables cohort batching and is unsuitable
+    for a speed comparison.
+100. A Wave28-binary, JIT-only O0/O2 inverse-ROM observation matrix
+     (`/tmp/fsim-188b-gfinv-observation-wave28/matrix-log-rerun.txt`)
+     reproduced the original `gf_inv` failure in an exact function/localparam
+     clone under each of seven one-root-at-a-time observation variants.
+     Addresses 1, 2, and 9 read 0, 1, and 4 instead of 1, 9, and 2 in
+     both optimization modes. The clone's parent `INV_INIT` is the correct
+     `0x834a5c2f67bde910`, while the same instance's diagnostic child
+     sees packed parameter `INIT=0xba7aa747f48e0100`; its filled memory
+     contents and reads match that wrong child value. The simultaneous
+     parent/child evidence is in `parent-child-O0.vcd` and
+     `parent-child-O2.vcd` under that evidence directory, with commands in
+     `parent-child-trace-log.txt`. The defect is before ROM fill/read, on
+     the parent-to-child packed parameter actual/specialization path; its
+     exact source seam remains under read-only graph tracing. This result
+     supersedes the less controlled cross-binary clone comparisons, and
+     does not itself establish the performance-regression cause.
+101. The typed VHDL A2 evaluator, fail-closed lowerer adapter, and gated
+     packed-parameter diagnostic were integrated in a central full Release
+     build with eight workers. The first build stopped only on `-Wshadow`
+     in the diagnostic local; root renamed it, and the second full build
+     passed. The linked `fsim` SHA-256 is
+     `061a9fa360474d1788edacb3535081dff1f503ee03b9093b5ecde1ed61cf4294`.
+     The same nine focused CTests are 8/9: semantic, HIR application,
+     source-line-budget, SV-container, LLVM, artifact phases, compiled SV
+     conformance, and runtime pass; `fsim.elaboration` aborts only in the
+     new packed-parameter fixture because it queries a parent localparam
+     through `SpecializationInfo.parameter_values`, which holds parameter
+     values. Its worker owns that test-only correction. A fresh JIT-only
+     LLVM O2 elaborate of the archived mixed objects remains byte-identical
+     to the Wave28 failure at `rs_pkg.vhd:201/205/145` and
+     `rs_encoder_top.vhd:259`; semantic and lowerer workers are finding why
+     the real GEN expression misses the focused pure-call fold. No source
+     fix for the packed-parameter corruption has been selected yet; the
+     first diagnostic trace covered only the correct literal child actual,
+     not the function-derived path.
+102. A central targeted eight-worker rebuild of `fsim` and
+     `fsim_elaboration_tests` passed after adding gated VHDL-fold and
+     association-identity traces. The focused elaboration test now reaches
+     its function-derived packed check and fails because the parent
+     `INV_INIT` association remains an unresolved `sv-expression-v1`
+     identity; the literal control becomes the correct 64-bit `svconst-v3`
+     before child normalization. This is the first observed SV divergence,
+     not a child conversion or ROM read failure. A fresh mixed O2 elaborate
+     with `FSIM_TRACE_VHDL_CONSTANT_FOLD=1` shows `gen_poly` call 2673,
+     `gf_pow_u` 3796, `gf_mul_u` 3825, and `GEN` slice 2883 all pass the
+     lowerer's static/pure eligibility gate but the typed evaluator returns
+     no value. Read-only semantic tracing found the first missing body form:
+     `eff_prim_poly(PRIM_POLY=0,M=8)` calls `default_prim_poly(8)`, which
+     uses a VHDL case statement projected as HIR `selection`; the evaluator
+     has no `selection` executor arm. The semantic worker owns a bounded
+     static-case implementation and exact branch/default/negative tests.
+     The SV worker is tracing why function-derived packed localparams do not
+     evaluate at the parent association. No corrected real-design baseline
+     exists and no performance qualification has run.
+103. The bounded VHDL typed `selection` arm and focused branch/default,
+     duplicate/unresolved-choice tests are frozen. A central eight-worker
+     `fsim_semantic_tests` target build passed, and `fsim.semantic` passes
+     1/1. This validates the new static-case evaluator in isolation; the
+     `fsim` executable has not yet been relinked with it, so the mixed
+     real-design O0/O2 preflight remains pending. The SV worker is separately
+     implementing bounded per-call local unpacked integer-array storage in
+     the existing constant evaluator for the function-derived packed
+     `INIT` path; no JIT-only real-design oracle is green yet.
+104. The 2026-09-22 21:34 UTC net-progress audit finds measurable
+     convergence since the prior 20:38 audit: the nine focused Wave28
+     gates are green; original and Codex real designs elaborate in O0/O2;
+     the mixed evaluator miss is reduced to a specific unsupported VHDL
+     `selection` statement whose isolated semantic tests now pass; and
+     the original codec's incorrect inverse table is localized to an
+     unevaluated parent packed parameter expression caused by missing
+     local unpacked-array function storage. The shortest dependency is the
+     SV array worker's bounded source freeze, followed by one central
+     relink/focused-gate wave and JIT-only O0/O2 real-design preflights.
+     No rolling baseline, interpreter run of real designs, or Batch 188B
+     Change 7 work is authorized before the corrected oracle/baseline.
+105. The central eight-worker relink with the SV local-array evaluator
+     passed. The new SV packed-parameter test advanced past its parent
+     equality check but initially compared decimal display text with a
+     binary literal; a gated trace showed both function-derived and literal
+     child `INIT` identities are the same exact correct 64-bit `svconst-v3`
+     before and after child normalization. The test was corrected to compare
+     canonical identities and temporary SV handoff tracing removed. A
+     regenerated-schema JIT-only RS(15,11) probe now passes clean and
+     two-error-correction scenarios with `failures=0` in both LLVM O0 and
+     O2. A full original-codec LLVM O2 run on the newly elaborated design
+     exited successfully with all 11 `CODEC_OK` markers and
+     `ALL_CODEC_DONE`, compared with the prior 5/11 result. This was an
+     uninstrumented correctness run but not a controlled timed sample, so
+     it does not establish performance qualification.
+106. The next central eight-worker target build passed after adding a
+     behavior-neutral VHDL evaluator failure trace and fixing the SV test
+     display assertion. `fsim.semantic` passes, but `fsim.elaboration` now
+     reaches an older VHDL generated-block package-generic test and fails
+     its expected integer 6 at `elaborator_generate_test.cpp:1714`; the
+     narrow VHDL fold adapter is under read-only regression diagnosis.
+     Mixed O2 elaborate remains red. With
+     `FSIM_HIR_VHDL_CONSTANT_TRACE=1`, the first nested failure is
+     `gf_pow_u` at `callable-return-coercion` for expression 3796;
+     `gen_poly` then cannot assign that value. `gf_pow_u` returns an
+     unconstrained `unsigned` from `val(M-1 downto 0)`; the semantic worker
+     owns a bounded return-shape correction and exact test. No mixed
+     real-design simulation or baseline freeze is yet valid.
+107. After a user interruption, root reverified live `codex/v3` status and
+     `HEAD=origin/codex/v3=ed5ca693704edd277ec3f055ed7d9ed0e3048f2d`;
+     all prerequisite-repair edits and the intentional untracked
+     `phase.fst` remain present. The preceding goal turn made concrete
+     progress (original codec 11/11 LLVM O2, RS15 two-error O0/O2) rather
+     than an idle wait. The user now requires a codebase-memory MCP reindex
+     after each frozen batch of code changes. Root reindexed project
+     `fsim-v3-simplification` in fast mode before further structural
+     exploration and owns subsequent reindexes. Two `gpt-6-luna` xhigh
+     workers resumed exclusive VHDL return-shape and lowerer package-
+     binding regression seams; a third is doing read-only JIT performance
+     assessment. No central build or workload is active while they edit.
+108. Read-only review of the generated-block elaboration regression found
+     that the narrow VHDL constant-fold adapter could evaluate a pure
+     function through an instantiated package generic without carrying the
+     package binding frame. A `gpt-6-luna` worker froze a fail-closed guard
+     against such candidate/transitive pure-call package-instance or
+     nonempty generic-binding paths, plus a nested
+     `increment(selected_math.apply(2)) == 6` regression. Source remains
+     unbuilt. An independent JIT profile review confirms substantial native
+     execution and intentional retained interpreter work, but warns that
+     profile counters and invasive profiler timing cannot attribute the
+     multi-minute wall time. Correctness-gated, uninstrumented repeated
+     timing is still required. The user requires a codebase-memory MCP
+     reindex after each frozen batch of code changes; root will reindex
+     this combined lowerer/semantic wave before graph-based review.
+109. The combined semantic return-shape and first lowerer package-binding
+     patch passed the central eight-worker target build and `fsim.semantic`,
+     but `fsim.elaboration` failed the ordinary `packed_fold_pkg.encode(9)`
+     constant-fold expectation. Mixed-codec LLVM O2 elaborate remained red
+     at `rs_pkg.vhd:201/205/145` and the `GEN` initializer/port actual, so
+     the return-shape correction did not yet clear this real-design gate.
+     The lowerer worker narrowed the guard to nonempty generic-binding
+     frames and froze that refinement; the semantic worker is investigating
+     the remaining mixed-codec failure. Root will reindex the next frozen
+     code batch, rebuild centrally, and rerun focused tests and JIT-only
+     preflight. The performance review found substantial native JIT work
+     alongside intentionally retained interpreter processes; it did not
+     establish a wall-time cause or a qualifying baseline.
+110. Root reindexed `fsim-v3-simplification` after the frozen lowerer
+     refinement, then `git diff --check` and the central eight-worker
+     `fsim`/semantic/elaboration target build passed. `fsim.semantic` passed,
+     but `fsim.elaboration` still failed the ordinary packed-function fold
+     assertion at `elaborator_vhdl_function_test.cpp:95`. The lowerer worker
+     is investigating the actual fold rejection; the semantic worker is
+     investigating the separate mixed-codec gate. Neither real-design
+     preflight nor baseline qualification can be advanced from this result.
+111. A frozen, opt-in lowerer fold trace was reindexed and linked in a
+     central eight-worker build. The focused elaboration run shows the
+     ordinary `packed_fold_pkg.encode(9)` call is an eligible safe candidate
+     (expression 22, expected/inferred width 4, declared bounds 3:0), but
+     the semantic packed evaluator returns no value; GEN slices similarly
+     return no value. The package-binding veto is not the cause of this
+     assertion. Evidence is `/tmp/fsim-188b-wave35-elab-trace.log:65-68`.
+     The lowerer worker is removing temporary tracing; the semantic worker
+     owns return-path diagnosis and will request a bounded central trace if
+     source inspection is insufficient. No mixed real-design simulation or
+     qualifying performance baseline has run.
+112. Root reindexed after removing lowerer tracing and adding a bounded
+     semantic evaluator trace, then centrally relinked `fsim` and the
+     elaboration test with eight workers. The focused elaboration trace at
+     `/tmp/fsim-188b-wave36-semantic-fold-trace.log:12-15` identifies
+     `callable-return-coercion` in nested `encode_inner`, followed by
+     `encode` statement failure; the lowerer had accepted the candidate.
+     A JIT-only mixed-codec LLVM O2 elaborate trace at
+     `/tmp/fsim-188b-wave36-mixed-O2-trace.log` still fails and identifies
+     `callable-return-coercion` in nested `gf_pow_u` plus a separate
+     `clamp_par` call-actual miss. The semantic worker owns the exact
+     return-subtype fix and focused regression. One independent read-only
+     `gpt-6-luna` xhigh worker is reviewing that seam. No real-design
+     simulation or baseline qualification is yet justified.
+113. A frozen strict return-subtype normalization patch was reindexed and
+     linked with the central eight-worker `fsim`/semantic/elaboration build.
+     `git diff --check` and `fsim.semantic` pass, including new synthetic
+     constrained-alias, unconstrained-unsigned, and mismatch assertions.
+     However `fsim.elaboration` still fails its parsed ordinary packed-fold
+     assertion at line 95, and mixed-codec LLVM O2 elaborate retains the
+     same `rs_pkg.vhd:201/205/145` diagnostics. The synthetic semantic
+     fixture therefore does not reproduce some parsed-HIR condition; the
+     semantic worker is adding a bounded trace of effective subtype and
+     strict reject predicates before any further behavior change. No
+     real-design simulation or qualification baseline is valid yet.
+114. The 2026-09-22 22:30 UTC net-progress audit finds concrete forward
+     movement since 21:34: original codec now has an 11/11 LLVM O2
+     correctness run, RS(15,11) correction passes O0/O2, JIT profiling
+     disproves wholesale fallback, and the remaining ordinary packed-fold
+     regression is isolated to parsed-HIR callable return coercion rather
+     than the lowerer package-binding veto. Mixed codec remains unelaborated
+     and a corrected whole-workload rolling baseline does not exist. The
+     shortest remaining dependency is a precise parsed-HIR effective-return
+     subtype trace, then one bounded semantic repair and central focused
+     gate wave. Do not start Batch 188B Change 7 or a real-design
+     interpreter run; real designs remain LLVM O0/O2 JIT only.
+115. After a frozen effective-return diagnostic batch was reindexed and
+     centrally linked with eight workers, the parsed packed-fold test still
+     fails but emits no return-coercion rejection. Mixed LLVM O2 elaborate
+     remains red; its trace at `/tmp/fsim-188b-wave38-mixed-trace.log:1-2`
+     gives a precise `gf_pow_u` reject: raw/effective unconstrained
+     `unsigned` has placeholder executable width 1 while the returned
+     packed value is 8 bits with bounds 7:0. Strict coercion currently
+     checks executable width before unconstrained shape, so the semantic
+     worker is verifying a bounded precedence correction. A lowerer worker
+     is re-adding a narrow opt-in trace to determine why the parsed
+     ordinary package fold still misses after its return no longer rejects.
+116. The unconstrained-return precedence fix and a narrow lowerer fold trace
+     were frozen, reindexed, and centrally built with eight workers.
+     `git diff --check` and `fsim.semantic` pass. `fsim.elaboration` still
+     fails at the packed-fold assertion, but the trace at
+     `/tmp/fsim-188b-wave39-fold-trace.log:49-56` proves the two GEN slices
+     evaluate to exact `10` (bounds 3:2) and `11` (bounds 1:0), with matching
+     two-bit widths and domain; the lowerer rejects solely because
+     `hir_expression_range` is absent. It also shows direct `encode` and
+     `encode_inner` calls still return no semantic value. Mixed-codec LLVM
+     O2 elaborate remains red; all relevant calls are safe candidates but
+     return no evaluator value in
+     `/tmp/fsim-188b-wave39-mixed-fold-trace.log`. The lowerer worker owns
+     a narrow shape-proof fix for constant-rooted slices; the semantic
+     worker owns the next nested evaluator miss. No baseline freeze.
+117. A narrow constant-rooted slice shape proof and bounded semantic
+     failure trace were frozen, reindexed, and centrally built with eight
+     workers. `fsim.semantic` passes; `fsim.elaboration` advances beyond
+     the packed-fold `LoadConstant` assertion and now fails a test-only
+     exact-name lookup for `dynamic_bits` SignalInfo at line 107. The
+     lowerer worker corrected that lookup by the resolved SignalId while
+     retaining all type/range checks; central validation is pending.
+     Mixed-codec LLVM O2 elaborate still fails, but the first nested
+     evaluator miss moved past `gf_pow_u` return coercion to
+     `gf_mul_u` formal coercion at expression 3816, then `gen_poly`
+     assignment failure (`/tmp/fsim-188b-wave40-mixed-stage-trace.log:1-7`).
+     The semantic worker owns the formal-shape seam. No simulation or
+     qualifying baseline is valid yet.
+118. The focused test lookup fix and formal-coercion detail trace were
+     reindexed and centrally built with eight workers. `fsim.semantic`
+     passes; `fsim.elaboration` now passes the ordinary packed-fold test and
+     reaches the new package-generic regression, whose fixture currently
+     fails `parsed.ok()` at line 161. The lowerer worker owns a syntax-
+     faithful fixture correction. Mixed-codec LLVM O2 still fails, and
+     `/tmp/fsim-188b-wave41-formal-trace.log:2-8` confirms `gf_mul_u`
+     formal `a` is unconstrained `unsigned` with placeholder executable
+     width 1 and no constraints, while its actual has 8 bits and bounds
+     7:0. The semantic worker owns the bounded unconstrained-shape
+     precedence fix for formal coercion, with positive/negative tests.
+119. The bounded unconstrained-formal coercion fix and valid architecture-
+     scoped package-instance fixture were frozen, reindexed, and centrally
+     built with eight workers. `git diff --check`, `fsim.semantic`, and
+     `fsim.elaboration` all pass; the latter includes the ordinary packed
+     fold and new package-binding regression. Mixed-codec LLVM O2 elaborate
+     still fails at `rs_pkg.vhd:201/205/145` with downstream GEN/port
+     diagnostics. The semantic worker is restoring a bounded failure-stage
+     trace to identify the next nested evaluator miss. Until mixed and the
+     remaining mandatory JIT-only designs pass, no corrected whole-workload
+     rolling baseline or Change 7 qualification is valid.
+120. The semantic stage trace was restored, reindexed, and linked in a
+     central eight-worker `fsim` build. Mixed-codec LLVM O2 elaborate is
+     still red with the same deferred-callable `to_unsigned`/loop and GEN
+     port diagnostics, but `/tmp/fsim-188b-wave43-mixed-stage-trace.log`
+     no longer reports nested `gf_pow_u`, `gf_mul_u`, or `gen_poly` evaluator
+     failures after the formal-shape fix. It reports only depth-zero
+     `clamp_par`, `gf_pow_u`, and `gf_mul_u` call-actual misses. This is
+     evidence of semantic progress, not proof that GEN was emitted as a
+     folded lowerer constant: a read-only lowerer investigation is now
+     identifying whether strict HIR shape metadata and unconditional
+     deferred-callable lowering are the remaining dependencies. No real-
+     design simulation or performance qualification has started.
+121. Read-only lowerer review confirmed `gen_poly` returns a packed
+     `std_logic_vector`, not the local `gfa_t` array, so the public
+     evaluator's array-export boundary is not the GEN blocker. The call's
+     unconstrained return profile carries placeholder width 1 and range
+     0:0, while the enclosing `GEN : std_logic_vector(GW-1 downto 0)`
+     declaration supplies a constrained 264-bit target in this design.
+     Current pure-call folding requires evaluator bits to match the call's
+     placeholder width/range and can therefore reject a valid value.
+     Deferred callable bodies are queued by runtime call lowering and
+     drained after the process body; a GEN-site fold can avoid queuing its
+     call but cannot suppress independently queued callsites. The lowerer
+     worker is adding one bounded value/shape trace for GEN and its slice
+     before a scoped target-subtype proof is selected. Mixed remains red;
+     this is a hypothesis awaiting that trace, not a validated fix.
+122. A bounded GEN-fold trace was frozen, reindexed, and linked in a central
+     eight-worker `fsim` build. Mixed LLVM O2 elaborate remains red, but
+     `/tmp/fsim-188b-wave44-gen-fold-trace.log:1-2` gives exact proof:
+     `gen_poly` expression 2673 evaluates to 264 packed bits at 263:0 and
+     matches expected width 264/domain, yet its HIR call profile says
+     inferred width 1/range 0:0, so the lowerer vetoes it. The direct GEN
+     slice expression 2883 has expected/inferred width 8 but its semantic
+     evaluator returns no value and has no HIR range. The lowerer worker
+     owns a narrow declaration-target subtype proof for the initializer;
+     the semantic worker is doing read-only diagnosis of the independent
+     constant-rooted slice miss. Deferred callable diagnostics may remain
+     after those fixes, so no baseline or simulation is asserted.
+123. The exact constant-initializer subtype proof and a bounded semantic
+     GEN-slice trace were frozen, reindexed, and centrally built with eight
+     workers. `fsim.semantic` passes, while `fsim.elaboration` now fails a
+     new negative fixture that incorrectly assumed a mismatched packed
+     initializer must make elaboration fail; the worker is changing it to
+     assert the unsafe fold is absent. Mixed O2 elaborate remains red.
+     `/tmp/fsim-188b-wave45-gen-slice-trace.log:2` proves the GEN base
+     resolves as 264 packed bits at 263:0, but both slice selector bounds
+     are unresolved. Their operand walks contain `gj` generated-iterator
+     names with no hierarchy-identity hit, while M resolves by declaration.
+     The semantic worker is reviewing the existing specialization identity
+     seam before a bounded selector fix. No baseline freeze.
+124. The negative-fixture correction was frozen, reindexed, and centrally
+     rebuilt with eight workers, but `fsim.elaboration` still fails that
+     fixture because it assumed a retained SimIR `Call` after successful
+     elaboration. That operation layout is not a guaranteed observation of
+     constant-initializer lowering; the worker is replacing it with an
+     observable shape/value assertion without claiming a particular
+     implementation path. The GEN-slice trace establishes that its base is
+     packed 264 bits and both selector endpoints fail because generated
+     iterator `gj` lacks a typed-evaluator hierarchy-identity hit. The
+     semantic/lowerer workers are comparing the existing specialization-
+     aware bound APIs before choosing a minimal fix. Mixed real-design
+     elaborate remains red and no baseline is qualified.
+125. The final negative fixture now checks observable 5-bit range/value
+     behavior instead of requiring a particular SimIR `Call` layout.
+     Semantic trace-only instrumentation was removed. Root reindexed this
+     frozen batch, passed `git diff --check`, centrally rebuilt with eight
+     workers, and `fsim.semantic` plus `fsim.elaboration` both pass again.
+     A separate hierarchy-handoff review found no source evidence that
+     `port_actual_specialization` drops occurrence identities: it clones
+     the working specialization with hierarchy identities retained.
+     Therefore the next discriminator is a bounded lowerer trace of
+     `hir_constant_integer` for both GEN selector endpoints and the active
+     occurrence identity. No hierarchy source change is authorized from
+     the current `hierarchy=0` trace alone. Mixed remains unelaborated.
+126. A frozen lowerer endpoint trace was reindexed and linked in a central
+     eight-worker `fsim` build. Mixed LLVM O2 elaborate remains red, but
+     `/tmp/fsim-188b-wave48-slice-endpoint-trace.log:1` proves the active
+     generated occurrence carries one hierarchy identity (`gj=0`) and
+     `Lowerer::hir_constant_integer` resolves the GEN slice endpoints
+     exactly to 7 and 0. The semantic slice evaluator alone returns no
+     value and HIR range remains absent. Thus there is no demonstrated
+     hierarchy handoff defect; the bounded repair is a lowerer-only
+     constant-rooted slice selection from the already evaluated packed
+     GEN base with exact declared bounds, endpoint/direction, width, and
+     domain checks. A `gpt-6-luna` xhigh worker owns that source seam;
+     another owns a generated-port actual regression test only. No
+     hierarchy source edit or parallel evaluator is warranted.
+127. The 2026-09-22 23:25 UTC net-progress audit finds real convergence
+     since 22:30: focused semantic/elaboration suites are green, the
+     nested `gen_poly` constant evaluator now yields the exact 264-bit
+     packed result, direct GEN initializer folding has a strict target-
+     subtype proof, and the remaining generated slice miss is reduced to
+     one known API boundary. Active lowerer specialization contains
+     `gj=0` and resolves selectors 7:0; the typed semantic slice evaluator
+     lacks that occurrence-bound selector context. The shortest dependency
+     is the bounded lowerer constant-rooted packed slice fallback plus its
+     generated-port regression, followed by one central rebuild and
+     JIT-only mixed elaborate. If mixed then remains red, classify only
+     the new first error rather than starting broad repairs. No rolling
+     baseline, real-design interpreter run, or Change 7 work is authorized
+     until all mandatory correctness gates pass.
+128. The frozen lowerer constant-rooted slice fallback and generated-port
+     regression were reindexed, centrally built with eight workers, and
+     validated by `fsim.semantic` and `fsim.elaboration` (both PASS). Mixed
+     codec LLVM O2 elaboration now passes the prior `GEN`/`rs_pkg` blockers
+     and first fails at `gf_mult.vhd:35:59`: `FSIM-ELAB-VHNUM-002` for the
+     `to_unsigned(..., M)` size in `gf_mult_school`, followed by its local
+     `prim_low` initializer and deferred-callable diagnostics. The next
+     bounded dependency is to determine whether that function formal `M`
+     is specialized to a constant at the callsite or whether lowering needs
+     a dynamic-width representation. A lowerer worker owns a narrow fix
+     and an independent worker is reviewing the binding path read-only.
+     No real-design simulation, rolling baseline, or performance gate has
+     been claimed.
+129. Read-only profile-policy review found that the prior original-codec
+     profile is a mixed execution, not wholesale interpreter fallback:
+     1,169 lowered bodies and hundreds of millions of native resumes coexist
+     with 70,985 interpreter-retained instances and 99,913,757 interpreted
+     operations. The ten hottest one-shot ROM fallbacks account for roughly
+     4.7 million interpreted operations and 385-392 ms cumulative process
+     time each; these counters do not explain the full uninstrumented wall
+     time. `FSIM_JIT_PROCESS_IDS` is a whitelist that disables the default
+     selective policy, so it cannot be used to add a few candidates to that
+     policy. After the corrected mandatory JIT design gates are green, use
+     identical-output, uninstrumented LLVM JIT-only repeated comparisons
+     of default selective compilation against a bounded compile-all or
+     threshold variant. Do not use the interpreter for real designs or
+     treat invasive profile timing as a performance baseline.
+130. The frozen callable static-integer specialization and exponent guard
+     were reindexed, centrally built with eight workers, and validated by
+     `fsim.semantic` and `fsim.elaboration` (both PASS). The positive VHDL
+     regression checks two widths sharing a callable return shape; negative
+     fixtures preserve diagnostics for dynamic size and exponent. Mixed
+     codec LLVM O2 elaboration now passes the prior `gf_mult.vhd` size
+     blocker. It first reports `FSIM-ELAB-GEN-011` for generated decoder
+     constants `apow_rom` and `bfcr_rom`, followed by an `rs_pkg.vhd:287-288`
+     deferred-callable statement failure at `rs_decoder_top.vhd:235`.
+     Independent read-only reviews own those two candidate seams; no
+     simulation, rolling baseline, or performance qualification has begun.
+131. A bounded mixed O2 rerun with `FSIM_HIR_LOWER_TRACE_FAILURES=1`
+     identified the deferred `get_slice` failure as statement 77's RHS
+     expression (`v(v'low + idx*w + j)`), not the local target assignment.
+     The callable frame preserves the unconstrained vector formal's value
+     and width but not its actual packed bounds, so a scoped range handoff
+     is being implemented with cache-context isolation and a nonzero-bound
+     regression. Separately, `apow_rom` and `bfcr_rom` are generated arrays
+     of packed vectors indexed by a runtime signal. Their generated-
+     constant gate currently demands an integral value; simply bypassing
+     that gate cannot serve the runtime reads. The existing semantic
+     evaluator has bounded typed arrays, and a separate worker owns a
+     narrow public packed-array projection and exact-shape tests before
+     hierarchy validation and read-only lowerer materialization are
+     considered. No broad dynamic array evaluator or interpreter real-
+     design run is authorized.
+132. The 2026-09-23 00:25 UTC net-progress audit finds concrete progress
+     since 23:25: the generated GEN slice and `gf_mult` static callable
+     width/exponent blockers are repaired and focused semantic/elaboration
+     gates passed after those waves; mixed O2 now reaches decoder ROM and
+     `get_slice` seams. The new bounded public packed-array projection is
+     built and `fsim.semantic` passes. The new callable-range fixture still
+     fails on the RHS array-index expression; an opt-in trace is frozen to
+     locate its precise missing predicate. Hierarchy array-constant
+     validation is frozen but has not passed a complete central build yet
+     because that trace contains one compile-only optional cast error. The
+     shortest dependency is to correct that trace, reindex, rebuild, run
+     focused tests with trace, and repair the verified RHS predicate;
+     then complete read-only runtime ROM materialization against the
+     checked semantic array API. No unrelated refactoring, rolling
+     baseline, or performance qualification is warranted yet.
+133. The frozen semantic ROM and callable-range probes were reindexed and
+     centrally built with eight workers. Per-case elaboration selectors
+     avoid the unrelated earlier assertion. The ROM trace reports effective
+     `rom_t` width 8 but `declaration-value-unavailable` before any
+     `build_rom` body stage, so its parsed initializer call lookup is the
+     next semantic discriminator. The callable trace for the failing RHS
+     reports an index expression with two operands, no whole-node
+     referenced declaration, and an active frame with formals `value`,
+     `index_value`, `width_value` but zero range-map entries. Thus neither
+     the frame's actual-range capture nor indexed-root resolution is proven
+     correct; those are now the bounded lowerer repair targets. Both
+     focused positive elaboration fixtures remain red. `fsim.semantic`
+     passed before the probes; no real-design JIT baseline is qualified.
+134. A refined reindexed per-case probe identifies both immediate causes.
+     The ROM initializer is expression 249, a zero-argument `build_rom`
+     call with selected declaration 208 and one overload, but the typed
+     evaluator returns no value before entering the callable body. The
+     callable range capture sees `value` formal 7 as unconstrained but
+     rejects its predefined `std_logic_vector` because its subtype has no
+     user-defined type target/array definition. The failing index node's
+     operand 0 does resolve to formal 7; only the whole index node has no
+     declaration reference. The lowerer worker owns a bounded predefined-
+     packed-formal eligibility fix and index-root selection; the semantic
+     worker owns the zero-argument array-return call dispatch. No broad
+     dynamic-index rewrite or hierarchy gate bypass is justified.
+135. The bounded predefined packed-formal range repair and zero-argument
+     array-return callable dispatch were frozen, reindexed, and centrally
+     built with eight workers. Their generated-ROM and distinct-bound
+     callable cases both pass. An existing direct-HIR fixture now takes
+     the range-checked `DynamicPartSelect` branch for its one-bit
+     `bit_vector` and still passes its dynamic write and interpreter result;
+     its operation assertion accepts that exact alternative. Full
+     `fsim.semantic` and `fsim.elaboration` are green. Mixed codec LLVM O2
+     elaboration advances past both prior `GEN-011` ROM declarations and
+     `get_slice` RHS failure. New first errors are two VHDL conversion
+     shape diagnostics at decoder lines 622/365, a nonstatic sequential
+     loop bound in `rs_pkg.vhd:296`, and runtime-indexed ROM use at decoder
+     line 447. Workers are diagnosing those independently before any
+     further source edit; no simulation or performance qualification yet.
+136. A checked read-only constant-array materialization and intrinsic-width
+     predefined vector conversion patch were frozen, reindexed, and built.
+     The parsed runtime ROM selection fixture passes at ascending indices
+     3 and 4, and `fsim.semantic` remains green. The new operator-derived
+     `popcount` fixture is red with `FSIM-ELAB-VHARRAYATTR-001` and
+     `FSIM-ELAB-071`; a bounded trace shows direct actual ranges captured,
+     but the parsed `and`/`not` expressions carry no selected IEEE operator
+     declaration or concrete expression subtype, so the conservative
+     range proof rejects them. A diagnostic mixed O2 rerun confirms the
+     earlier conversion and runtime ROM diagnostics are gone; it now
+     reports only the `rs_pkg.vhd:296` loop bound and a new `u_syn.clk`
+     `FSIM-ELAB-BIND-019` value-domain mismatch. One worker owns the loop
+     proof boundary; another is diagnosing the independent binding error
+     read-only. No baseline or performance claim is made.
+137. The 2026-09-23 01:25 UTC net-progress audit finds substantial
+     convergence since 00:25: full focused semantic/elaboration gates were
+     green after the generated ROM declaration, static callable width,
+     and direct `get_slice` repairs; the parsed runtime-indexed ROM test
+     now passes for a nonzero ascending array; and mixed O2 advances past
+     the previous GEN, `gf_mult`, conversion, and ROM-read diagnostics.
+     The active shortest dependency is a sound, bounded proof of the
+     parsed IEEE vector operator result range for `popcount` actuals;
+     current HIR lacks a selected operator declaration, so the lowerer
+     worker must establish an identity handoff or stop before inferring
+     semantics from spelling alone. An independent read-only worker owns
+     the new `u_syn.clk` binding-domain mismatch. Full elaboration suite
+     is temporarily red only because the new operator-range fixture
+     fails; no rolling baseline, real-design simulation, or performance
+     qualification is justified yet.
+138. The next bounded VHDL repair wave added a package-identity proof for
+     predefined vector logic operators and a guarded semantic-domain check
+     for nested VHDL ports backed by an SV/VHDL `state_domain_alias`.
+     Both source batches were reindexed through codebase-memory and built
+     with eight workers. The positive nested SV-to-VHDL-to-VHDL fixture now
+     elaborates, retains process-free state-domain aliases, and preserves
+     `Z`; its new negative fixture still needs a diagnostic assertion
+     correction. The operator fixture remains red: its subtype carries
+     `std_logic_vector` spelling and a concrete range but no type target,
+     and the attempted lexical resolution is not unique. The owner worker
+     is tracing the resolver candidates before any further proof expansion.
+     Real mixed-codec LLVM O2 elaboration no longer reports `u_syn.clk`
+     `BIND-019`; it now reports `rs_pkg.vhd:296` `ELAB-071`,
+     `syndrome_calc.vhd:40` `GEN-011`, `gf_inv.vhd:29` `GENERIC-004`, and
+     `chien_forney.vhd:123` `GEN-001`. These are new exposed prerequisites,
+     not a corrected baseline or a performance result. No real-design
+     interpreter run, rolling baseline, simulation, or qualification ran.
+139. The package-identity lookup could not prove a standard vector type:
+     the focused HIR has no type target, resolver candidate, or builtin
+     package entry. The speculative operator-range path and failing fixture
+     were removed, preserving earlier formal-range fixes; explicit semantic
+     builtin/operator provenance is the next bounded design prerequisite.
+     A separate checked VHDL integer `**` route and focused overflow,
+     negative-exponent, generic-actual, and conditional-generate regression
+     were frozen and reindexed. After one unused-variable rollback cleanup,
+     central eight-worker `fsim`, semantic, and elaboration builds pass;
+     full `fsim.semantic` and `fsim.elaboration` pass 2/2. Mixed codec LLVM
+     O2 elaboration now clears the scalar `DEPTH` generic and conditional
+     generate errors, but still fails at `rs_pkg.vhd:296` operator-derived
+     loop bounds, several generated packed constants in `syndrome_calc` and
+     `chien_forney`, packed `gf_inv` `INIT`, and `rs_pkg.vhd:145`
+     `to_unsigned` result size in a deferred callable. The typed packed
+     constant/generate-iterator seam is next under focused repair. No
+     corrected baseline, simulation, or timed JIT qualification is claimed.
+140. The 2026-09-23 02:20 UTC net-progress audit confirms measurable
+     convergence since 01:25: mixed-codec elaboration now passes the
+     nested `u_syn.clk` boundary, checked scalar exponentiation clears
+     `DEPTH` and conditional-generate failures, and the full semantic and
+     elaboration gates are green 2/2. The attempted lowerer-only IEEE
+     operator inference consumed a trace/rollback cycle without a sound
+     identity proof; that path was stopped rather than accumulating more
+     spelling-based heuristics. The shortest remaining dependencies are
+     (a) explicit semantic VHDL builtin type/operator provenance for the
+     `popcount` range, being staged with overload/visibility guards and a
+     VHDL HIR-only schema bump, and (b) occurrence-local typed evaluation
+     of generated packed constants, being repaired with negative shadow and
+     width cases. No baseline freeze, JIT timing claim, or Change 7 start
+     is authorized. Audit net progress again by 03:20 UTC.
+141. A staged VHDL HIR builtin-provenance producer and checked generated
+     packed-constant evaluator were frozen, reindexed, and built centrally
+     with eight workers. The HIR state schema moved from 5 to 6; the
+     unrelated runtime schema hunk was preserved. `fsim.elaboration` passes,
+     but `fsim.semantic` is red on the new critical negative: a visible
+     user-defined `and` overload is incorrectly stamped as the IEEE builtin.
+     No lowerer operator-range consumer is enabled. Repair the provenance
+     candidate veto before treating this interface as valid; missing-import
+     and shadow-type negatives remain to add. A separate read-only review
+     isolated the packed `gf_inv.INIT` generic projection and deferred
+     callable `to_unsigned(1, M+1)` size expression as distinct next seams.
+     The packed-generic projection is now under bounded independent repair.
+     No corrected real-design baseline or JIT timing qualification exists.
+142. The 2026-09-23 03:16 UTC net-progress audit finds a sounder path but no
+     corrected baseline since 02:20. Full `fsim.semantic` is green with
+     explicit IEEE-import positive and non-vacuous user-overload,
+     missing-import, and shadowed-type negatives. The packed generated
+     iterator and named pure packed-function generic regressions pass, with
+     width/domain rejection retained. VHDL HIR schema 6 rejects old schema-5
+     mixed objects as intended, so all real-design objects must be
+     regenerated before the next mixed JIT elaboration. Full elaboration is
+     temporarily red only on the operator-derived callable range fixture:
+     direct vectors capture correctly, but parsed `not`/`and` nodes have no
+     builtin operator identity because the linker skipped nodes without a
+     `referenced_name`. A bounded producer fix and parsed overload negative
+     are being frozen now; no spelling-only lowerer fallback is permitted.
+     Explicit schema-6 round-trip and schema-5 rejection tests have been
+     added but not yet centrally validated. The next shortest dependency is
+     a green parsed-operator fixture, followed by a source-fresh mixed O0/O2
+     compile/elaborate diagnostic. Change 7 and performance qualification
+     remain out of scope until the corrected baseline is frozen. Audit net
+     progress again by 04:16 UTC.
+143. The parsed-operator producer and focused linked-HIR fixture were
+     frozen, reindexed, and built centrally. `fsim.semantic`,
+     `fsim.elaboration`, and `fsim.application.artifact_phases` pass 3/3;
+     source-line-budget and source-package-manifest checks also pass 2/2.
+     Explicit non-default VHDL builtin identities round-trip through
+     FSIMVHIR schema 6, and schema 5 is rejected with regeneration text.
+     Fresh mixed VHDL/SV objects were compiled under schema 6 at
+     `/tmp/fsim-188b-schema6-mixed.9iKiFA`, preserving the older schema-5
+     objects. Both LLVM O0 and O2 JIT elaboration now pass the earlier
+     `popcount` loop, generated packed constants, scalar conditional
+     generate, and nested boundary blockers. Both stop on exactly the
+     packed `gf_inv.vhd:29` `INIT` generic (`GENERIC-004`) and the deferred
+     `rs_pkg.vhd:145` `to_unsigned(1, M+1)` result size (`VHNUM-002`,
+     cascading HIR-001). Two workers own these independent seams with
+     non-overlapping files and focused regressions. No mixed simulation,
+     corrected baseline freeze, or performance qualification has run.
+144. The 2026-09-23 04:12 UTC net-progress audit confirms that the
+     source-fresh mixed O2 JIT elaboration has moved beyond the deferred
+     `to_unsigned(1, M+1)` result-size failure after a nested-call static
+     generic binding repair. Full `fsim.elaboration` passes, but the new
+     semantic `numeric_std.to_integer` fixture is red and `gf_inv.INIT`
+     remains `GENERIC-004`; a precise type/value rejection is under repair.
+     The next mixed diagnostics are a genuinely runtime sequential loop
+     bound in `gf_pow_u` (`rs_pkg.vhd:149`, `ELAB-072`), runtime
+     `get_slice` overload resolution in `chien_forney.vhd:122,149`
+     (`VHOVER-002`), a dynamic slice of an unconstrained `basis` formal
+     (`rs_pkg.vhd:183`, `VHSLICE-001`), and generated iterator `wk`
+     operand width for `to_unsigned(wk, PW)` (`kes_block.vhd:183`,
+     `VHNUM-003`). The shortest dependencies remain fixing the failing
+     semantic fixture and deciding a bounded dynamic-loop lowering path;
+     no corrected real-design baseline, mixed simulation, JIT timing claim,
+     or Change 7 start is authorized. Audit net progress again by 05:12 UTC.
+145. The bounded runtime VHDL integer `for` lowering was frozen,
+     reindexed, and built centrally with eight workers. It captures both
+     bounds at entry, preserves null/directional ranges and `next`/`exit`,
+     and raises an explicit runtime failure above one million iterations;
+     the former rejection fixture now checks execution and an unsupported
+     runtime-sized subtype remains a negative. Full `fsim.semantic` and
+     `fsim.elaboration` pass 2/2. Source-fresh mixed LLVM O2 JIT
+     elaboration no longer reports the `rs_pkg.vhd:149` loop bound, leaving
+     `gf_inv.INIT` (`GENERIC-004`), two `get_slice` calls in
+     `chien_forney.vhd` (`VHOVER-002`), `mul_by_basis`'s unconstrained
+     `basis` slice (`VHSLICE-001`), and `to_unsigned(wk, PW)` in
+     `kes_block.vhd` (`VHNUM-003`). Semantic constant-evaluator integer
+     array support and unconstrained callable shape handling are under
+     read-only triage. No corrected baseline or timing qualification exists.
+146. The 2026-09-23 05:10 UTC net-progress audit confirms convergence
+     since 04:12: the nested `M+1` size and runtime `gf_pow_u` loop
+     diagnostics are absent from fresh mixed LLVM O2 JIT elaboration,
+     while full `fsim.semantic` and `fsim.elaboration` pass 2/2. A bounded
+     typed integer-array constant evaluator with 513-write regression is
+     green, but real `gf_inv_table` still returns no packed INIT value;
+     a capped stage trace is being staged to identify the next exact
+     guard. A current shape trace identifies `get_slice` argument 1
+     (generated iterator `gi`) as missing width/domain and shows
+     `mul_by_basis` captures a proven 64-bit actual range but its dynamic
+     slice sees only width 1 and no accepted range. Proof-based iterator
+     profile and active-frame formal width repairs are being staged with
+     negative tests; no spelling-only or placeholder-width fallback is
+     allowed. `to_unsigned(wk, PW)` remains a separate generated-iterator
+     operand-width diagnostic. No corrected baseline, mixed simulation,
+     JIT timing claim, or Change 7 work exists. Audit again by 06:10 UTC.
+147. The proof-based generated-iterator and callable formal-range patch was
+     frozen, reindexed, built centrally with eight workers, and passed
+     `fsim.semantic`, `fsim.elaboration`, source-line-budget, and
+     source-package-manifest checks 4/4. A source-fresh mixed LLVM O2 JIT
+     elaboration no longer reports the prior `get_slice` overload,
+     `mul_by_basis` dynamic slice, or generated `to_unsigned(wk, PW)` width
+     errors. A capped typed-evaluator trace now pinpoints `gf_inv_table`
+     failure at local `gf_exp` initialization: the parsed `int_arr` element
+     subtype is rejected by the integer-element domain proof, despite the
+     synthetic 513-write regression passing. Downstream failures now group
+     around VHDL array attributes, aggregate/index context, fixed slice
+     placement, and case-choice range in `kes_block`, `bm_algorithm`,
+     `conv_half`, and `euclid_solver`; these are under per-site read-only
+     triage, not bundled into an unproved global fallback. No mixed
+     simulation, corrected baseline freeze, JIT timing claim, or Change 7
+     work has run.
+148. The 2026-09-23 06:01 UTC net-progress audit finds that the fresh mixed
+     LLVM O2 JIT elaboration no longer reports either packed-vector
+     `VHDLCASE-002` site in `bm_algorithm` or `conv_half`: exact IEEE vector
+     identity/width checks remain, and signed constant representations are
+     normalized only as proven-width packed bit patterns. The evaluator now
+     accepts the exact full predefined INTEGER range carried by parsed HIR,
+     with constrained/user-type negatives, but the parsed local integer-array
+     generic regression still fails `GENERIC-005` and real `gf_inv.INIT`
+     remains `GENERIC-004`; a function-scoped trace pins the latter to element
+     metadata rejection. Central build, `fsim.semantic`, source-line-budget,
+     and source-package-manifest pass; `fsim.elaboration` remains red only on
+     the new parsed fixture, so the full gate is 3/4. The next shortest
+     dependency is resolving that exact evaluator proof, while aggregate
+     context `VHARRAYAGG-002` and generated-slice `VHARRAYSEL-004` are
+     separate lowerer seams. The unprotected `mem_ram_tdp.mem` shared variable
+     is invalid in VHDL-2008; a VHDL-1993 compile probe failed on other
+     VHDL-2008-only array syntax, so no silent standards downgrade or source
+     edit is authorized. No corrected baseline, mixed simulation, JIT timing
+     qualification, or Change 7 work exists. Audit net progress again by
+     07:01 UTC.
+149. The 2026-09-23 06:53 UTC net-progress audit confirms that a bounded
+     selected-slice context repair cleared `VHARRAYAGG-002` from
+     `kes_block` and both `euclid_solver` sites in fresh mixed LLVM O2 JIT
+     elaboration; its parsed descending/ascending slice regression and
+     mismatch negative pass after correcting the expectation for undriven
+     halves. Both packed-vector `VHDLCASE-002` sites also remain clear.
+     Before the latest diagnostic-only fixture extension, central build,
+     `fsim.semantic`, `fsim.elaboration`, source-line-budget, and
+     source-package-manifest passed 4/4. The extended packed-generic fixture
+     now reproduces real `gf_inv_table` failure at `rs_pkg.vhd:262`:
+     `numeric_std.to_integer(xu(M-1 downto 0))` has no linked selected
+     declaration, overload candidates, or `unsigned` type target in either
+     parsed or real HIR, despite an exact IEEE import. The current parsed
+     fixture is red pending a proof-based standard builtin resolution; no
+     spelling-only fallback is authorized. The two remaining `conv_half`
+     `VHARRAYSEL-004` sites were traced to null `H-1 downto H` slices in
+     false pad generate bodies under `ERASURE_DECODING=1`; an active-scope
+     validator repair is in progress. Unprotected `mem_ram_tdp.mem` remains
+     a separate VHDL-2008 legality decision, with no source edit or silent
+     standard downgrade. No corrected mixed baseline, simulation, timing
+     qualification, or Change 7 work exists. Audit net progress again by
+     07:53 UTC.
+150. The 2026-09-23 07:46 UTC net-progress audit confirms that the exact
+     predefined INTEGER domain, IEEE `numeric_std.to_integer` virtual-builtin
+     proof, and inactive conditional-generate slice validation now pass their
+     focused positive and shadow/active-scope negatives. A parsed M=8
+     `gf_inv_table` mirror passes its full 2,048-bit identity and eight
+     independently calculated inverse bytes. The latest central build and
+     semantic, elaboration, source-line-budget, and source-package-manifest
+     checks pass 4/4. Fresh mixed LLVM O2 JIT elaboration now reports only
+     `gf_inv.vhd:29:72` `GENERIC-004` and `mem_ram_tdp.vhd:38:5`
+     `VHPROTECTED-008`. An opt-in binding trace proves that `INV_INIT`
+     evaluates to 2,048 packed bits, but the VHDL-to-VHDL association projects
+     it through a one-bit formal layout. The callee declares unconstrained
+     `std_logic_vector` `INIT`; the shortest remaining code dependency is a
+     proof-preserving unconstrained-generic actual-width repair with constrained
+     mismatch regression. The shared-variable diagnostic is a separate
+     VHDL-2008 source-legality decision; the external tree remains untouched.
+     Native JIT profiling proved substantial native execution, but no
+     corrected mixed simulation or uninstrumented comparative timing exists.
+     No baseline freeze, Change 7 work, commit, or push ran. Audit net progress
+     again by 08:46 UTC.
+151. The 2026-09-23 08:42 UTC net-progress audit confirms that fresh mixed
+     LLVM O2 JIT elaboration has cleared `gf_inv.INV_INIT` generic association:
+     a proof-limited unconstrained `std_logic_vector` formal now takes the
+     concrete 2,048-bit selected constant actual while a constrained-width
+     mismatch remains rejected. The next real diagnostic is
+     `mem_rom_sync.vhd:42:5` `HIR-001` for `rom : rom_t := init_rom`.
+     A dedicated one-dimensional packed-array signal-initializer path now
+     requires canonical nominal type identity, exact bounds and element
+     metadata, and checked flattening; a parsed nonzero-bound fixture verifies
+     ordered bytes, a typed constant, and distinct-type/bounds negatives.
+     Unique pure zero-formal callable Name dispatch and a bounded nested
+     `others` aggregate fill make that parsed fixture pass. Central build and
+     semantic, elaboration, source-line-budget, and source-package-manifest
+     checks pass 4/4. In the real ROM, a capped stage trace now pinpoints
+     failure at `init_rom`'s loop assignment value, the dynamic packed slice
+     of generic `INIT`; the shortest next dependency is exact slice-evaluator
+     classification, not another generic or aggregate fallback. The separate
+     VHDL-2008 unprotected shared RAM source issue remains unresolved and the
+     external tree remains read-only. Native JIT has been profiled active, but
+     no corrected mixed simulation, comparative timing, baseline freeze,
+     Change 7 work, commit, or push exists. Audit net progress again by
+     09:42 UTC.
+152. The 2026-09-23 09:32 UTC checkpoint confirms that the temporary
+     diagnostics were removed, the eight-worker central build is green, and
+     `fsim.semantic`, `fsim.elaboration`, source-line-budget, and
+     source-package-manifest pass 4/4. A fresh untraced mixed LLVM O2 JIT
+     elaboration from the source-fresh schema-6 objects reports exactly one
+     diagnostic: `mem_ram_tdp.vhd:38:5` `VHPROTECTED-008`, because an ordinary
+     RAM array is a shared variable under VHDL-2008. The former `gf_inv`
+     generic and `mem_rom_sync.init_rom` initializer diagnostics are clear.
+     Focused regressions now prove the constrained/unconstrained packed
+     generic boundary, typed zero-formal array initializer, generic-dependent
+     packed element range, and distinct sibling `INIT` bindings. The external
+     read-only source is unchanged. A global VHDL-1993 downgrade previously
+     failed on VHDL-2008-only syntax, and permissive acceptance would be
+     nonstandard. The next dependency is an explicit user choice between a
+     separately hashed VHDL-2008-compliant benchmark overlay of the RAM file
+     and retaining the exact external source as a hard blocker. Until that
+     choice, no corrected mixed simulation, timing/RSS qualification, baseline
+     freeze, Change 7 work, commit, or push is authorized. Audit net progress
+     again by 10:32 UTC if work resumes.
+153. The 2026-09-23 09:48 UTC overlay probe used only `/tmp` artifacts after
+     the user clarified that Reed-Solomon designs and test scaffolding must
+     not be placed in the source tree. A VHDL-2008 process-local RAM overlay
+     compiled and elaborated, and a scratch-only LLVM O2 JIT test passed
+     dual-port retention and old-data reads (`OVERLAY_RAM_OK`). The scratch
+     root is `/tmp/fsim-rs-vhdl-overlay.ip4MEA`, with overlay RAM SHA-256
+     `3c454a6d82984e13671113bfa46f3a51cb2c31e7e6c61c75ff228bdf3c354b84`;
+     the isolated RAM test is in `/tmp/fsim-vhdl08-overlay.VZRhG8`.
+     The full mixed source set and SV codec bench compiled from the scratch
+     root into `/tmp/fsim-rs-overlay-eval.5DYc57`;
+     elaboration cleared `VHPROTECTED-008` and next failed at
+     `rs_encoder_top.vhd:215:26` `FSIM-ELAB-GENERIC-004` for `u_gen_rom`'s
+     `gen_table(...)` generic actual. The overlay and its package ownership
+     changes were removed from the repository; `fsim.source-package-manifest`
+     passes. The user clarified that existing generic benchmark harness
+     infrastructure may remain, but no Reed-Solomon source code or overlay
+     may be checked into this repository. The external Reed-Solomon checkout
+     was not modified. No corrected mixed simulation,
+     baseline freeze, Change 7 work, commit, or push ran. The next dependency
+     is the generic-evaluation seam; audit net progress again by 10:32 UTC
+     if work resumes.
+154. The 2026-09-23 persistent-artifact correction copied the scratch
+     Reed-Solomon overlay source root, isolated RAM test, and mixed elaboration
+     evidence into `.local-artifacts/rs-vhdl-overlay/{source-root,ram-validation,
+     mixed-elaboration}`. `.gitignore` excludes `.local-artifacts/`, and the
+     source-package exclusion inventory omits that root; the manifest check
+     passes. The persistent RAM SHA-256 matches the scratch original. These
+     are local ignored inputs/evidence, not tracked or packaged design code.
+     No external source tree was modified. The generic-evaluation seam from
+     item 153 remains active; no mixed correctness oracle or timing gate has
+     passed.
+155. The 2026-09-23 elaboration-performance read-only audit found a masked
+     inner cost in the controlled Batch 188A AST/HIR pair. The small mixed
+     fixture's Callgrind `fsim::elaboration::elaborate` edge rose from
+     199,610,178 to 340,245,320 instructions (1.705x), while whole CLI
+     instructions fell from 955,334,421 to 871,832,393 and final seven-sample
+     mixed elaboration wall ratio was 1.006031. The current failed large mixed
+     elaboration has a 15,556-sample `perf` profile under
+     `.local-artifacts/rs-vhdl-overlay/mixed-elaboration/current-failed.perf.data`:
+     `primary_vhdl_unit` accounts for 9.80% self samples,
+     `SpecializedHirUnit::find_declaration` 7.39%, and
+     `Lowerer::hir_runtime_binding` 7.05%. `primary_vhdl_unit` scans all VHDL
+     units on each resolution; several whole-design HIR scans also occur under
+     per-instance VHDL hierarchy construction. These are prioritized
+     hypotheses, not yet a controlled large-design baseline comparison.
+     The AST/HIR Callgrind pair and final qualification JSON are preserved
+     under `.local-artifacts/elaboration-perf-evidence`.
+156. The 2026-09-23 10:32 UTC net-progress audit confirms that the persistent
+     ignored VHDL-2008 RAM overlay cleared the previous protected-shared-
+     variable blocker and a full mixed source-set compile passed. A bounded
+     temporary constant-evaluator trace isolated the next failure to packed
+     `xor` inside the `gen_table`/`gen_poly` pure-call chain; the temporary
+     trace code has been removed. A gpt-6-luna xhigh worker has implemented a
+     standard-overload-gated positional packed-XOR fix and a synthetic,
+     non-Reed-Solomon regression. The eight-worker full build passes; semantic,
+     source-line-budget, and source-package-manifest pass. The new elaboration
+     test still fails in its own process lowerer after one test-only adjustment,
+     so neither its expected result nor full mixed elaboration is yet proven.
+     The shortest next dependency is to simplify/correct that synthetic
+     regression, rerun the four focused gates, and only then retry the frozen
+     mixed objects. No real-design simulation, timing qualification, baseline
+     freeze, Change 7 work, commit, or push ran. Audit net progress again by
+     11:32 UTC if work continues.
+157. The first standard-overload-gated XOR implementation did not clear the
+     large mixed design: an untraced LLVM O2 elaboration of the frozen mixed
+     objects still reports `rs_encoder_top.vhd:215:26`
+     `FSIM-ELAB-GENERIC-004` after 174.37 seconds and 693,136 KiB peak RSS.
+     Evidence is in `.local-artifacts/rs-vhdl-overlay/mixed-elaboration/`
+     `postxor-elaborate.{stderr,time}`. Two versions of the synthetic
+     elaboration regression failed in unrelated generic-formal and HIR
+     process/initializer paths; they do not establish the XOR evaluator's
+     behavior. The shortest next dependency is a direct compiled-HIR
+     constant-evaluator regression reproducing the package-body overload
+     metadata, followed by one targeted code correction and focused gates.
+     No corrected mixed simulation or comparative timing exists.
+158. The 2026-09-23 11:30 UTC net-progress audit finds real but incomplete
+     movement on Batch 188B Change 6. The original-codec 5/11 result in the
+     plan was historical: resume item 105 records a later 11/11 LLVM O2
+     correctness run, and the plan now distinguishes it from unqualified
+     timing. Source-derived GF and Reed-Solomon test fixtures were replaced
+     with independent local-array, generate-shape, callable-profile, and
+     based-integer fixtures; tracked test/source scans now find no GF or
+     Reed-Solomon algorithm identifiers. The codebase-memory MCP project was
+     reindexed after each frozen edit batch. A bounded evaluator extension
+     now has paths for positional known-bit vector AND/OR/NAND/NOR/XOR/XNOR with
+     IEEE package-specific result ranges and user-overload guards; the
+     shared numeric_std/numeric_bit export catalog now lists all six.
+     Eight-worker builds pass. The semantic, frontend, source-line-budget,
+     and source-package-manifest focused gates pass, but `fsim.elaboration`
+     remains red in the new direct-HIR regression. Instrumented checks found
+     that the frontend marks an unsigned AND as a std_logic operator; the
+     evaluator now selects by effective operand family and the direct
+     unsigned AND result has the correct `3 downto 0` range. The next direct
+     unsigned NAND result is unresolved; a single all-six HIR-shape probe is
+     the shortest dependency before another targeted correction and then a
+     fresh full mixed O2 elaboration of the frozen external objects. The
+     package-body indexed-array operand also remains unresolved outside a
+     callable frame, so it is not used as the synthetic operator gate. No
+     mixed simulation, corrected baseline, seven-sample timing qualification,
+     Change 7, commit, or push has run. Audit again by 12:30 UTC.
+159. The 2026-09-23 12:22 UTC net-progress audit records a bounded Change 6
+     correctness advance. The root agent took over the packed-operator seam
+     after the worker began cycling through test failures. Direct compiled-HIR
+     assertions now pass for all six known-bit vector AND/OR/NAND/NOR/XOR/XNOR
+     operators on both `std_logic_vector` and `numeric_std.unsigned`, including
+     the families' distinct result ranges. A full frozen mixed-codec LLVM O2
+     elaboration then reached the constant evaluator's 64-million-unit limit
+     in a pure function's local packed-array element update. Changing that
+     local-variable path from whole-array copy/charge to in-place element
+     update cleared elaboration; the successful run took 175.61 seconds and
+     1,783,404 KiB peak RSS. A 512-element independent packed-array fixture
+     exercises the repaired path. A separate nested static-call formal lookup
+     correction and neutral test-fixture generic-name correction made the
+     focused semantic, frontend, elaboration, source-line-budget, and
+     source-package-manifest gates pass 5/5. Temporary traces were removed,
+     `git diff --check` passed, and the codebase-memory MCP project was
+     reindexed after this edit batch. The first compiled O2 simulation of the
+     elaborated mixed design stops before its oracle with a VHDL integer
+     subtype range check at SimIR process 669, instruction 2334, under
+     `rs_codec_tb.d0.dec.g_erasure.u_eloc`; a bounded read-only diagnosis is
+     in progress. Its shortest next dependency is mapping that check to the
+     offending source/binding and making one focused correction. No mixed
+     correctness oracle, corrected baseline, comparative timing, Change 7,
+     commit, or push has run. Audit net progress again by 13:22 UTC.
+160. A temporary compiled-JIT failure-site probe identified the first mixed
+     runtime abort as `IntegerCheck` register 1504: value 7 against erroneous
+     bounds `0..0`, nearest debug point at `rs_pkg.vhd:155:9`, the return slice
+     of a pure function whose width depends on a static formal. The artifact
+     predated the nested-formal correction in item 159. Re-elaborating the
+     frozen mixed objects with that correction passed in 189.69 seconds at
+     1,782,044 KiB peak RSS; its LLVM O2 JIT simulation then completed in
+     121.29 seconds at 2,778,644 KiB peak RSS without a range exception. It
+     emitted `ALL_CODEC_DONE` but only three `CODEC_OK` summaries, so the
+     required 11/11 oracle fails. The two full-size mode-0 instances and a
+     small-field mode-1 instance pass; other larger-field/correction-mode
+     configurations fail. Logs and artifacts are under ignored
+     `.local-artifacts/rs-vhdl-overlay/mixed-elaboration/` with the
+     `post-static-width-fix` prefix. The temporary JIT error probe was
+     removed after diagnosis. The next dependency is an isolated complete
+     failure matrix clustered by shared correction seam, not a timing or
+     baseline declaration. No interpreter run of this real design, corrected
+     mixed baseline, seven-sample timing qualification, Change 7, commit, or
+     push has run.
+161. A diagnostic LLVM O0 JIT simulation of the same corrected mixed design,
+     seed, and delta limit completed in 394.92 seconds at 3,672,920 KiB peak
+     RSS. Its individual `PASS`/`FAIL` lines and all 11 `CODEC_OK`/`CODEC_FAILS`
+     summaries are byte-identical to the O2 verdict stream; both have only
+     three passing configurations. This rules out an O2-only difference in the
+     observed cases, but does not separate shared lowering/runtime behavior
+     from a source-design defect or selective-JIT retention. The O0 log and
+     cache use the `post-static-width-fix-o0` prefix in ignored local
+     artifacts. The O0/O2 runs are diagnostic and not a qualified comparison;
+     the shortest dependency remains a small, isolated failing case with
+     process/observable localization before another implementation change.
+162. The root agent isolated the remaining mixed-codec failure to a
+     generic-sized VHDL constant in the erasure locator, not the source
+     algorithm. Compiled O2 VCDs first diverged at the locator polynomial;
+     the VHDL location register reset to `0001` where the matching Verilog
+     register reset to `1001`. A minimal ignored probe showed the pure
+     function evaluator correctly computes `1001`, but elaboration lowered
+     its unconstrained call result through a one-bit placeholder and
+     materialized `0001`. The constant-target shape lookup searched only
+     the selected unit's replacement declarations; it now also sees the
+     complete linked VHDL HIR declaration catalog, retaining the existing
+     exact initializer identity, subtype, width, range, and domain checks.
+     A source-neutral nested pure-function/generic-width regression and
+     `fsim.elaboration` pass. The isolated error-plus-erasure LLVM O2 JIT
+     case now passes all seven transactions. A full mixed-design LLVM O2
+     elaboration took 176.92 seconds and 1,784,632 KiB peak RSS, and its
+     compiled O2 simulation took 102.06 seconds and 2,659,328 KiB peak
+     RSS, emitting all eleven `CODEC_OK` summaries with no failure markers
+     and `ALL_CODEC_DONE`. The diagnostic artifacts use the `full-fold`
+     prefix under ignored `.local-artifacts/rs-vhdl-overlay/`.
+     `fsim.source-line-budget`, `fsim.source-package-manifest`, and
+     `git diff --check` pass; the codebase-memory MCP project was reindexed
+     after the source/test change batch. No tracked source derived from the
+     external design was added. These single runs establish correctness,
+     not seven-sample performance qualification. A matching compiled O0 run
+     is underway; the next dependency is its exact verdict comparison,
+     followed by corrected-baseline identity freeze and qualification.
+163. The 2026-09-23 13:21 UTC net-progress audit finds clear Change 6
+     convergence rather than test churn: the same external mixed design
+     advanced from three to eleven passing configurations, the isolated
+     failing transaction now passes, the independent elaboration gate passes,
+     and the full elaboration and O2 simulation completed without a new
+     source-design workaround. The retained one-line lookup expansion scans
+     the design-wide declaration catalog for each eligible pure call; a
+     read-only review confirmed its initializer-ID/shape safety but noted a
+     possible repeated-scan cost and stale replacement-record risk. The
+     measured full elaboration did not regress against the previous single
+     diagnostic run (176.92 versus 189.69 seconds), but this is not a
+     controlled performance claim. The shortest remaining Change 6
+     dependency is to finish the running compiled O0 verdict comparison,
+     rebuild and freeze exact corrected-baseline binary/source identities,
+     and then run governed qualification. Change 7's required-set migration
+     was scoped read-only; no Change 7 files were edited before the freeze.
+     Audit net progress again by 14:21 UTC.
+164. The corrected full mixed-design LLVM O0 JIT run completed in 376.36
+     seconds at 3,590,620 KiB peak RSS. It emitted all eleven `CODEC_OK`
+     summaries, no failure markers, and `ALL_CODEC_DONE`. Its ordered
+     transaction-level `PASS` lines and completion summaries are
+     byte-identical to the corrected O2 run; `diff -u` exits zero. Both runs
+     used seed 1 and a 100,000,000-delta limit on the same elaborated design.
+     This verifies O0/O2 JIT functional equivalence, not a seven-sample or
+     interpreter comparison. The next bounded action is rebuilding the
+     unchanged-source binaries after the final explanatory comment, freezing
+     their identities, then running governed baseline preflight/qualification.
+165. The corrected pre-simplification baseline is frozen as ignored evidence
+     in `.local-artifacts/188b-corrected-baseline/`, without committing or
+     altering the user-owned `phase.fst`. The rebuilt Release Clang/LLVM
+     executable SHA-256 is
+     `3a2bc711e19b939cf4c880abbaa1013ae2769c8dc4ac12dbd53e59e4698ca258`;
+     the benchmark-helper SHA-256 is
+     `5df4cea2dccd811f35f91e10d78dfe06e5f1cc4fdcf2007d064bbb45db8683c6`.
+     The snapshot also preserves the exact tracked diff as a patch, copies
+     the five then-untracked harness/document inputs, records their hashes
+     and the ignored mixed-source-root hash, and names the unchanged
+     `ed5ca693704edd277ec3f055ed7d9ed0e3048f2d` HEAD/tracking
+     revision. The benchmark command-only preflight with the RAM-overlaid
+     ignored mixed root expands the intended 76 case/configuration/variant
+     combinations. The final source-aligned rebuild and focused semantic,
+     frontend, elaboration, source-line-budget, and source-package-manifest
+     gates pass 5/5; `git diff --check` is clean, and MCP reindex reports
+     indexed. A bounded native-JIT profile is now running on the frozen
+     executable. No seven-sample qualification or Change 7 implementation
+     has begun.
+166. The frozen corrected executable's one bounded mixed-design LLVM O2
+     profile exited successfully with all eleven `CODEC_OK` summaries and
+     `ALL_CODEC_DONE`. It selected 6,819 processes for JIT, retained 2,350,
+     lowered 3,600 process bodies, recorded no unsupported-process or
+     unsupported-module entries, and executed 29,674,523 native resumes.
+     The evidence is `.local-artifacts/188b-corrected-baseline/profile.*`.
+     Its 39.89-second wall time and 1,446,492-KiB peak RSS are diagnostic
+     only: the run enabled three profiling modes, and the earlier 102.06-second
+     O2 record does not capture enough executable/cache identity to explain
+     the difference. The user confirms the VHDL design was previously
+     verified functionally identical to the Verilog design; retain the
+     11/11 external oracle rather than treating a source-language mismatch
+     as an expected failure. The benchmark runner has no baseline-only mode;
+     a byte-identical baseline self-comparison can characterize timing/RSS
+     but cannot qualify a simplification candidate. A seven-sample selected
+     `repository_pure_sv_coverage`/LLVM O2 runner smoke collected matching
+     output and untimed profile pairs, 0.12852-second baseline and candidate
+     end-to-end medians, and 90,320/87,368-KiB peak-RSS medians. Its exit 1
+     is the expected omitted-case/configuration incompleteness gate, not an
+     execution failure; evidence is under ignored `.local-artifacts/188b-self-smoke/`.
+     Change 6 remains open.
+167. The first Codex reference design, `codex_reference_mode0_frames1`,
+     passed one frozen-baseline LLVM O2 JIT compile/elaborate/simulate sequence
+     with the exact manifest oracle. Its source identity stayed unchanged and
+     the fresh native object cache contains 124 LLVM objects. The one-shot
+     phase measurements were compile groups 14.08/0.02 seconds, elaboration
+     2.88 seconds, and simulation 0.48 seconds; summed monotonic end-to-end
+     time was 17.5784 seconds and per-run peak RSS 210,520 KiB. Evidence is
+     under ignored `.local-artifacts/188b-corrected-baseline/codex-reference-o2/`.
+     This is a diagnostic baseline sample only. The remaining real-design
+     configurations and separate untimed native profiles still need
+     collection before Change 6 can close; no Change 7 edits have begun.
+168. A generic ignored one-shot diagnostic runner now reuses the benchmark
+     harness's exact compile/elaborate/simulate commands and separate profile
+     pass, captures source/manifest/executable/dependency identities before
+     and after, and explicitly reports `qualification: false`. Its repository
+     coverage LLVM O2 smoke passed with seven native process bodies and 75
+     native resumes. The frozen SHA-256 executable/helper identities match
+     item 165. All six Codex reference/throughput cases then passed one
+     LLVM O2 and one LLVM O0 baseline sample and separate profile apiece,
+     with unchanged identities and no failures. For every case, O0 and O2
+     simulator output hashes are identical, as are the corresponding timed
+     and profiled functional output hashes; all twelve profiles report
+     nonzero native resumes. O2 end-to-end samples range 15.922-17.126
+     seconds and 199,768-228,228 KiB peak RSS; O0 samples range
+     16.026-17.229 seconds and 199,728-233,264 KiB. Evidence is under
+     `.local-artifacts/188b-one-shot/evidence/diagnostic-oyy4ydh6/` and
+     `diagnostic-v3zrlpec/`. These are single diagnostic runs, not the
+     seven-sample cumulative performance gate. Original and mixed real
+     projects remain to be screened on the frozen baseline.
+169. A fresh frozen-baseline original-codec LLVM O2 diagnostic passed all
+     eleven `CODEC_OK` summaries and `ALL_CODEC_DONE`; timed and profiled
+     functional output hashes match and source/binary identities stayed
+     fixed. Its one timed sample took 250.862 seconds end to end (219.988
+     seconds simulation) at 1,682,780 KiB peak RSS. The separate untimed
+     profile recorded 94,201 selected processes and 333,036,381 native
+     resumes across all 147 attempted modules, with no unsupported modules.
+     The automatic selector retained 70,985 processes / 600,978 static
+     operations. That is substantial retention and substantial JIT activity,
+     not wholesale interpreter fallback. The profile lacks per-process
+     interpreter execution times or counts, so retention cannot yet be
+     assigned causal responsibility for the performance regression; the
+     instrumented run's elapsed time is not a controlled timing sample.
+     Evidence is under ignored `.local-artifacts/188b-one-shot/evidence/diagnostic-g8mbc81i/`.
+     Original throughput LLVM O2 is running next. Change 6 remains open.
+170. The original throughput LLVM O2 one-shot baseline also passed its
+     manifest oracle with unchanged source/binary identities and identical
+     timed/profile functional output. Timed end-to-end wall was 293.481
+     seconds, peak RSS 925,032 KiB. The separate native profile recorded
+     358,282,389 resumes, 49,714 selected processes, 35,677 retained
+     processes, and no unsupported modules. Evidence is under ignored
+     `.local-artifacts/188b-one-shot/evidence/diagnostic-qvzvbe_t/`.
+     Neither single-run time/RSS nor the instrumented profile qualifies a
+     candidate regression. The mixed-codec LLVM O2 one-shot is running next.
+171. The 2026-09-23 14:22 UTC net-progress audit finds clear Change 6
+     convergence since 13:21: the mixed 11/11 O0/O2 correctness fix is
+     frozen, the corrected baseline identities and native profile are
+     captured, the benchmark runner passed a seven-sample single-case smoke,
+     all six Codex cases passed one O0 and one O2 timed/profile diagnostic
+     pair with identical cross-optimization functional output, and the
+     original codec and throughput O2 timed/profile pairs passed with
+     hundreds of millions of native resumes. No repeated failing-test churn
+     is present; Change 7 remains unedited. The shortest remaining Change 6
+     dependency is the running mixed-codec O2 diagnostic, followed by the
+     unscreened real-design configurations and repository baseline pairs.
+     These one-shots establish corrected-baseline behavior and phase data,
+     not the seven-alternating-sample candidate acceptance gate. Audit net
+     progress again by 15:22 UTC.
+172. The frozen-baseline mixed-codec LLVM O2 one-shot using the ignored RAM
+     overlay passed the full eleven-case oracle. Timed end-to-end wall was
+     281.874 seconds, including 175.249 seconds elaboration and 100.178
+     seconds simulation, at 2,671,772 KiB peak RSS. The separate profile
+     had identical functional output, 29,204,419 native resumes, 6,819
+     selected and 2,350 retained processes, and no unsupported modules;
+     all source/binary identities remained unchanged. Evidence is under
+     ignored `.local-artifacts/188b-one-shot/evidence/diagnostic-kuf9c0pv/`.
+     This is one diagnostic sample, not a median or regression gate. Mixed
+     throughput LLVM O2 is running next.
+173. Mixed throughput LLVM O2 also passed one frozen-baseline timed/profile
+     diagnostic pair with identical functional output and unchanged input
+     identities. Timed end-to-end wall was 175.468 seconds (86.944 seconds
+     elaboration, 82.127 seconds simulation), peak RSS 1,970,644 KiB.
+     The separate profile recorded 24,382,209 native resumes, 3,702
+     selected and 1,313 retained processes, and no unsupported modules.
+     Evidence is under ignored `.local-artifacts/188b-one-shot/evidence/diagnostic-zqhttj3r/`.
+     All ten mandatory real-design cases now have one passing O2 timed/profile
+     pair. O0 remains only for the two original and two mixed cases; the six
+     Codex O0 pairs are already green. Mixed throughput O0 runs next.
+174. Mixed throughput LLVM O0 passed the same frozen-baseline oracle and
+     emitted byte-identical simulator output to LLVM O2. Its one timed sample
+     took 504.470 seconds end to end (84.733 seconds elaboration, 413.290
+     seconds simulation) at 2,530,180 KiB peak RSS. The separate profile
+     matched functional output, recorded 24,448,622 native resumes with
+     3,702 selected and 1,313 retained processes, and reported no
+     unsupported modules; identities stayed unchanged. Evidence is under
+     ignored `.local-artifacts/188b-one-shot/evidence/diagnostic-or0zbhay/`.
+     The user directed us to stop after collecting throughput data, so only
+     original throughput LLVM O0 remains in scope for this turn. Do not
+     begin codec O0 screening or Change 7; pause the active goal after the
+     final throughput pair is recorded.
+175. Original throughput LLVM O0 completed the user-requested throughput
+     collection and passed its manifest oracle. Its timed simulator output is
+     byte-identical to LLVM O2; timed and profiled O0 functional output also
+     matches, with unchanged source/binary identities. The one timed sample
+     took 353.689 seconds end to end (4.077 seconds compile, 6.083 seconds
+     elaboration, 343.529 seconds simulation) at 923,500 KiB peak RSS.
+     The separate untimed profile recorded 358,282,389 native resumes,
+     49,714 selected and 35,677 retained processes, and no unsupported
+     modules. Evidence is under ignored `.local-artifacts/188b-one-shot/evidence/diagnostic-v2xq7wwz/`.
+     Throughput data now covers original, mixed, and both Codex throughput
+     cases at LLVM O0/O2 with one timed sample and one separate native
+     profile each. All have passing oracles, matching timed/profile output,
+     stable identities, and nonzero native resumes; original and mixed
+     O0/O2 simulator outputs are byte-identical. These are diagnostic
+     one-shots, not seven-sample baseline/candidate qualification. Change 6
+     remains open: original/mixed codec O0 frozen-baseline screening,
+     remaining repository pairs, and the governed seven-sample candidate
+     matrix are outstanding. Per the user's explicit instruction, stop now
+     and await further direction. Do not start Change 7 or another workload.
+176. The user added a future best-in-class performance requirement: fsim must
+     beat Vivado Simulator's compile-plus-elaborate-plus-simulation wall time
+     on the reference designs, with lower per-run peak RSS preferred. The
+     comparison needs matching workloads/oracles and controlled repeated
+     measurements; the current one-shot XSim results under ignored
+     `.local-artifacts/xsim-throughput/` do not establish acceptance. This
+     requirement does not replace the current frozen-fsim-baseline 110% gate
+     or resume the paused Batch 188B-I implementation goal.
+177. The user explicitly resumed the Batch 188B-I implementation goal on
+     2026-09-23. The 15:49 UTC net-progress audit finds Change 6 still open,
+     with the corrected executable/helper identities frozen as in item 165.
+     The original-codec LLVM O0 frozen-baseline timed sample has passed its
+     11/11 oracle; its separate native profile is running. The mixed-codec
+     LLVM O0 frozen-baseline sample has compiled and elaborated and is in
+     simulation. Sixteen missing repository-case/configuration one-shots are
+     being collected without changing the shared runner or frozen binaries.
+     These are diagnostic samples, not seven-alternating-sample candidate
+     qualification. Do not start Change 7 before the Change 6 baseline
+     evidence and acceptance boundary are checked. Audit net progress again
+     by 16:49 UTC.
+178. The frozen-baseline repository screening now covers all six repository
+     cases in interpreter, LLVM O0, and LLVM O2: 18/18 case/configuration
+     pairs have one timed sample and one separate untimed profile. Sixteen
+     missing pairs were added under ignored `.local-artifacts/188b-one-shot/evidence/`;
+     the two earlier pure-SV coverage pairs retain their existing reports.
+     All 36 timed/profile outputs pass the manifest oracles, each case's
+     cross-engine simulator output and semantic observations match, source
+     and binary identities are unchanged, and every compiled profile records
+     native execution with zero unsupported modules. The frozen fsim/helper
+     SHA-256 identities remain those in item 165. These 18 diagnostic
+     one-shots do not satisfy the seven-sample candidate gate.
+179. Batch 188B Change 6 baseline readiness is complete. The final
+     `mixed_codec/llvm_o0` timed/profile pair under ignored
+     `.local-artifacts/188b-one-shot/evidence/diagnostic-5jruss30/` passed
+     11/11 oracle cases, produced output byte-identical to LLVM O2, and
+     preserved source/manifest/frozen-binary/helper/root identities. Its
+     diagnostic end-to-end wall was 581.898 seconds and peak RSS 3,688,556
+     KiB; the separate profile recorded 29,395,325 native resumes, 6,819
+     selected and 2,350 retained processes, and no unsupported modules.
+     Original-codec LLVM O0 under `diagnostic-2gbx8voi/` likewise passed
+     11/11 with O2-identical output, 356.800 seconds end to end and
+     1,733,660 KiB peak RSS; its profile recorded 333,036,381 native
+     resumes with no unsupported modules. An independent report audit found
+     exactly the manifest's 38 active case/configuration pairs, each with
+     one timed sample, one matching untimed profile, unchanged identities,
+     passing oracle, and cross-configuration identical simulator output.
+     Every compiled profile had nonzero native resumes and no unsupported
+     modules. The 38 baseline pairs are now ready for subsequent Change 20
+     candidate comparisons. None of these diagnostic one-shots is a
+     seven-sample baseline/candidate qualification. Change 7 may begin.
+180. Batch 188B Change 7 is complete, with no historical gate retired. The
+     new `fsim.v3-current-obligations` gate validates 91 exact required IDs,
+     66 required CTest names, safe existing evidence paths, registered owners,
+     uniqueness, and additive growth. Its helper self-test exercises missing,
+     duplicate, additive, unsafe-path, and missing-owner cases. The cache
+     crosswalk now distinguishes native LLVM object-cache namespace identity
+     (`fsim.v3-v2-input-rejection`) from native cold/warm/corruption behavior
+     (`fsim.llvm`); no direct historical-v116 object fixture is claimed.
+     The focused 16-test license/package/ABI/language slice, 3-test
+     cache/required-set slice, and resource-portability contract passed.
+     Existing schema-governance copies were updated to runtime 63 and VHDL
+     HIR 6; `fsim.v3-schema-freeze`, `fsim.v3-v2-input-rejection`, nested
+     portable freeze, stale-schema policy, and resource-portability contract
+     pass. The source-package manifest owns the seven new checker/fixture/
+     ledger files. Change 8 must prove preservation of v1 case identities,
+     conformance and portability evidence mappings before retiring any v1
+     release-record gate. No full suite, seven-sample candidate gate,
+     commit, push, or hosted CI ran for Change 7.
+181. The 16:49 UTC net-progress audit finds Change 7 complete and Change 8
+     opened without retirement. The shortest remaining dependency is a
+     current, additive owner for v1 conformance marker identities and
+     portability evidence mappings. `CheckV1ConformanceCorpus.cmake` still
+     enforces meaningful marker/source/expectation and execution-mode rules,
+     but also pins an obsolete exact count and digest. The portability corpus
+     still enforces evidence markers and required modes but pins exactly 20
+     rows. Preserve those substantive rules and stable IDs when migrating the
+     two gates; only then retire the historical release wrappers. No
+     repeated failing-test churn is present. Audit net progress again by
+     17:49 UTC.
+182. Batch 188B Change 8 is complete. Fourteen `fsim.v1-*` release/audit
+     registrations were removed and the two surviving substantive corpus
+     registrations are `fsim.conformance-corpus` and
+     `fsim.portability-corpus`; generated CTest metadata has 413 tests and
+     zero `fsim.v1-*` names. Historical v1 documents, corpus manifests,
+     source scripts, and package membership remain. The conformance gate
+     preserves 100 required marker identity/path/owner/source/expectation
+     mappings; the portability gate preserves PORT-001 through PORT-020,
+     evidence markers and required modes. Both now validate actual generated
+     CTest registration and safe source paths while permitting additive
+     cases. `fsim.release-case-ids` preserves 19 V1-SV/V1-VH/ML executable
+     identities. `fsim.authored-license-inventory` validates approved SPDX
+     notices across packaged authored files without a count pin; a companion
+     SPDX file covers the unchanged JSON benchmark manifest. Current UVM,
+     Verilog, and VHDL/PSL closure audits use the current license/package
+     owner instead of historical v1 output counts, and the MSVC Debug gate no
+     longer pins the old release-matrix hashing code. A pre-retirement run
+     exposed three wrappers failing solely on exact authored-file/status
+     pins. After migration, the focused 11-test owner slice, 11-test
+     registration/closure slice, and 12-test release-governance slice pass;
+     `fsim.verilog-closure-audit` also passed its 61-second run. The current
+     obligation set now has 95 required IDs and 97 required CTest names,
+     including all 36 conformance/portability corpus owners. No full suite,
+     hosted CI, performance qualification, commit, or push ran. Change 9 is
+     next; keep v2 historical records and `CheckV2SupplyChain.cmake` until
+     its current archive-safety and content owners are proven.
+183. Batch 188B Change 9 is complete. The generated Release CTest set has
+     409 tests and none of `fsim.v2-release-records`,
+     `fsim.v2-qualification-inventory`, `fsim.v2-performance-baselines`, or
+     `fsim.release-candidate-log-audit`. The v2 release/support/example
+     records, 19-row qualification and 44-row performance ledgers, optional
+     Batch 176 evidence, archived scripts, and all source-package entries are
+     unchanged. `CheckV2SupplyChain.cmake` remains packaged; it was not
+     deleted or run in this change. `fsim.windows-llvm-contract` now checks
+     the current ABI evidence normalization rather than the retired v2
+     release/performance scripts. The eleven-test current package/archive,
+     provenance, Windows LLVM, release, and required-set slice passes,
+     including deterministic archive safety/ordering/negative probes. No
+     v2 historical performance observation is reused as a current gate.
+     No full suite, hosted CI, seven-sample comparison, commit, or push ran.
+     Change 10 is next: migrate current-release prose/count pins without
+     removing behavioral closure, documentation, diagnostics, or licensing.
+184. Batch 188B Change 10 is partially implemented, not complete. The
+     generated Release suite has 406 tests after retiring the three
+     prose-only FST/SDF release wrappers and merging the warning audit into
+     the current hosted-lane check. The FST, SDF application, and
+     VITAL/SDF current inventories preserve 51 C02-C18 identities mapped to
+     45 behavioral CTests; a fixture-expanded closure slice passed 49/49.
+     The six v3 release-integration domains and all 13 retained profile IDs
+     now have additive current checks; the retained-profile selection,
+     behavior, and artifact slice passed 9/9. Release-documentation,
+     release-record, supply-chain, deterministic-artifact, and version-identity
+     gates now avoid historical row/digest/prose pins while retaining safe
+     paths, manifest coverage, parsed SBOM fields, archive identity, and
+     build-derived version checks. The hosted lane gate requires all four
+     Linux/Windows Debug/Release LLVM and warnings-as-errors lanes and bounded
+     timeout/parallelism; the two old checker scripts and inventories remain
+     packaged. A new compiled `fsim.schema-identity` test reads exported
+     project/foreign-ABI/object/library/design/checkpoint and native-cache
+     identities, with the authoritative cache namespace moved into one
+     internal header. The six-domain schema umbrella now checks additive IDs
+     and named compiled/behavioral owners instead of child output row/digest
+     pins; the six focused compatibility CTests remain registered. The
+     current required ledgers contain 197 IDs and 163 named
+     CTests. Focused source-package, obligation, archive
+     byte-comparison, and migrated gate slices pass, as does `git diff
+     --check`. The MCP project index was refreshed after each code-change
+     wave. Next, complete the schema-freeze and v2-input negative-evidence
+     crosswalk before retiring its source-token checks; then audit remaining
+     release gates. The installed-archive derived-count pin belongs to
+     Change 17 and remains deferred to that change.
+     Do not mark Change 10 complete or begin Change 11
+     until all substantive owners and negative probes pass. No full suite,
+     seven-sample performance qualification, hosted CI, commit, or push ran.
+     Audit net progress again by 17:49 UTC.
+185. The 17:44 UTC net-progress audit finds Change 10 still open but advancing:
+     seven current-release gate families have moved off prose/digest pins,
+     three FST/SDF wrappers and the separate warning wrapper are retired, and
+     the six-domain schema umbrella now has a compiled identity witness. The
+     focused schema-owner slice passed 11/11; the v2 rejection owner slice
+     passed 9/9, but it does not seed a genuine historical-v116 native-cache
+     object. The old v2-input rejection wrapper remains active to avoid
+     weakening that obligation. Its cache row in the current obligation
+     ledger now points at `fsim.llvm` behavior, while
+     `fsim.schema-identity` directly freezes the current native namespace.
+     The shortest remaining Change 10 dependency is an executable negative
+     evidence crosswalk for all 14 `V3REJECT-*` IDs, with an explicit direct
+     v116 cache fixture or a documented stronger equivalent before retirement.
+     No repeated failing-test churn is present. Audit net progress again by
+     18:44 UTC.
+186. Batch 188B Change 10 is complete. The current v2-input rejection gate
+     now binds all fourteen `V3REJECT-*` IDs to safe evidence and registered
+     negative-test owners, without historical row/family totals, source-token
+     searches, ledger digest, or batch-owner strings. The cache exception is
+     covered by a behavioral namespace test in `fsim.cache`: a v116-style
+     key and the current v168 key differ for identical remaining inputs, and
+     an entry stored under the former misses under the latter. The compiled
+     `fsim.schema-identity` witness freezes the production namespace, while
+     `fsim.llvm` covers cold/warm, corruption, and incompatible-object paths.
+     This is a key/lookup equivalence proof, not a claim that a historical
+     v116 native object file was executed. The 15-test rejection-owner slice,
+     11-test schema-owner slice, and all eleven current `fsim.v3-*` gates
+     pass; source packaging, CTest command uniqueness, and `git diff --check`
+     pass. Generated Release metadata has 406 tests, with 197 required IDs
+     and 164 exact required CTest names. Historical checker scripts and
+     records remain packaged, but the retired FST/SDF and warning wrappers
+     are no longer registered. The Windows installed-archive count pins are
+     Change 17 work. No full suite, seven-sample candidate qualification,
+     hosted CI, commit, or push ran for Change 10. Change 11 is next:
+     replace resource-portability source-token checks with focused boundary
+     and behavioral owners. The next net-progress audit remains due by
+     18:44 UTC.
+187. Batch 188B Change 11 has started, but the resource-portability umbrella
+     remains active. A compiled Release assertion witness now fails on
+     `NDEBUG` and checks that `assert` executes its operand; it passes in the
+     Release LLVM build alongside the MSVC Release contract. The new
+     `fsim.contract.build-resources` checker validates a six-ID additive owner
+     ledger, the configured positive/eight-or-fewer Ninja link pool, compact
+     Debug footprint option, registered hosted/Windows/MSVC/CTest owners, and
+     all explicit generated CTest timeouts within 7,200 seconds. Its focused
+     four-test slice passes; the source-package manifest and MCP index were
+     refreshed. Generated metadata now has 408 tests, 204 required IDs, and
+     166 required named CTests. Seven other resource-domain crosswalks remain
+     before the 6,682-line source-token umbrella can retire. No full suite,
+     candidate performance gate, hosted CI, commit, or push ran for Change 11.
+188. Batch 188B Change 11 now has all eight proposed focused gate identities
+     registered: build resources, Release assertions, coverage resources,
+     foreign-ABI lifetime, trace resources, language resources, SystemC/SCV
+     resources, and artifact resources. The six domain gates bind 79 stable IDs
+     to safe evidence paths and named CTest owners; their negative fixture
+     rejects missing, duplicate, unsafe, ownerless, and cross-domain rows.
+     The expanded required sets pass with 285 exact IDs and 201 exact named
+     CTests among 415 registered tests. The focused gate/registration
+     slice, 25 newly mapped behavioral owners, and earlier 33-test expanded
+     owner/umbrella slice pass; source-package manifest and `git diff --check`
+     pass. MCP was reindexed after the code and ledger change set. The old
+     6,682-line resource-portability umbrella is still registered: named
+     owner presence does not prove all old substantive checks have equivalent
+     behavior, and recursive SystemC/SCV closure and pinned Boost policy need
+     further parity audit. No full suite, candidate performance qualification,
+     hosted CI, commit, or push ran. Change 11 remains open.
+189. Batch 188B Change 11 is complete. The 6,682-line
+     `fsim.resource-portability-contract` is no longer registered, but its
+     checker remains packaged. Its active obligations are bound to the eight
+     focused gates, 79 domain IDs, seven build IDs, a compiled Release
+     assertion witness, and registered behavioral owners. The ABI/schema
+     matrix's 18 resource cells now map to focused owners and safe ledger
+     paths; its old whole-file digest and the Windows LLVM token check for
+     that digest implementation are gone. Generated metadata has 414 tests,
+     285 required IDs, and 200 required named CTests. The fixture-expanded
+     migration slice passed 119/119, and the full Accellera/SystemC, SCV,
+     SDF, SDF-application, SDF-VITAL, VHDL standard-mode (15/15), and
+     Verilog/SystemVerilog standard-mode (16/16) closure drivers passed with
+     retained logs. The focused Windows LLVM and ABI matrix witnesses,
+     source-package manifest, current required sets, and `git diff --check`
+     pass. Reindex MCP after this final code/doc wave. No full suite,
+     seven-sample candidate performance qualification, hosted CI, commit, or
+     push ran. Proceed only to Batch 188B Change 12: retire the disabled
+     source-line wrapper while retaining translation-unit structure.
+190. A focused post-retirement audit found that `fsim.verilog-closure-audit`
+     still invoked the retired 6,682-line checker directly. It failed after
+     63.32 seconds because that checker requires its old CTest registration.
+     The active audit now composes `CheckCurrentResourceDomain.cmake` for the
+     language domain with explicit build/CTest inputs and expects its current
+     evidence output. The focused audit passes in 1.41 seconds; the four
+     active SystemVerilog, Verilog, VHDL/PSL, and UVM closure audits pass 4/4.
+     Change 11 remains complete. Reindex MCP after this code/doc wave, then
+     proceed only to Change 12.
+191. Batch 188B Change 12 is complete. The active
+     `fsim.source-line-budget` registration was replaced by
+     `fsim.translation-unit-structure`, directly running
+     `CheckTranslationUnitStructure.cmake`. A new self-test verifies clean
+     structure and negative `.tpp` cases separately in `include`, `src`, and
+     `tests`. The Verilog, VHDL/PSL, and UVM active closure audits now compose
+     the direct checker; the two SDF closure selectors use the renamed CTest.
+     The old delegating script remains packaged for historical ledger paths
+     but has no active CTest owner. Generated metadata has 415 tests, 287
+     required IDs, and 201 required named CTests. The nine-test focused
+     registration/structure/audit/package slice and the full standalone SDF
+     and SDF-application closures pass. No physical source-line ceiling was
+     restored. No full suite, seven-sample candidate qualification, hosted
+     CI, commit, or push ran. Reindex MCP after this code/doc wave, then
+     proceed only to Change 13: consolidate CMake registration without
+     changing test commands, properties, fixtures, or environment.
+192. Batch 188B Change 13 is complete. A narrow
+     `fsim_register_simple_test` helper replaces 109 repeated target-backed
+     `add_test`/label pairs in `tests/CMakeLists.txt`; 143 specialized direct
+     `add_test` calls remain. The generated CTest metadata digest over all 415
+     names, commands, and properties is identical before and after:
+     `c7929043de7d4e19d2e5ce24ed7d8d08c9b7b82ca92556a1d40a8fd55d028553`.
+     Neither `fsim_configure_test` nor platform assertion flags changed. The
+     core API contract's one brittle `NAME fsim.api.abi` source token was
+     generalized to the stable name; exact registration remains required by
+     the current CTest set. The 70-test SDF fixture/inventory slice, all 58
+     inventory/audit/contract checks, CTest command uniqueness, and Release
+     assertion/MSVC Release checks pass. MCP was reindexed after the code
+     wave, and `git diff --check` passes. No full suite, candidate performance
+     qualification, hosted CI, commit, or push ran. Proceed only to Change
+     14: consolidate repeated test setup and fixture declarations without
+     changing the generated metadata.
+193. The 18:40 UTC net-progress audit finds Batch 188B Changes 11-13 complete
+     and Change 14 next. The active resource umbrella and line-budget CTest
+     registrations are retired, with focused resource and structure owners
+     passing. The root CMake file now uses one helper for 109 simple
+     target-backed registrations; generated CTest name/command/property
+     metadata is byte-identical to the pre-consolidation snapshot. All 58
+     inventory/audit/contract checks pass after the one API source-spelling
+     adjustment. No worker churn, unrelated source edits, full suite, hosted
+     CI, performance qualification, commit, or push occurred. The shortest
+     remaining dependency is Change 14's narrowly scoped setup/fixture
+     deduplication, with metadata equivalence checked before and after.
+194. Batch 188B Change 14 is complete. A shared one-source test-target helper
+     now owns the executable/configure/link sequence for 18 coverage targets,
+     with identical Ninja command digests across both migration waves. The
+     regex fixture helper delegates driver ownership and witness setup to
+     the explicit-witness helper. All 415 CTest names, commands, and properties
+     retain their pre-Change-13/14 digest
+     `c7929043de7d4e19d2e5ce24ed7d8d08c9b7b82ca92556a1d40a8fd55d028553`,
+     including fixture setup/required edges. All 18 migrated tests and
+     `fsim.ctest-command-uniqueness` pass. The project was reconfigured and
+     the affected targets built with eight workers. `git diff --check` passes;
+     reindex MCP after this code/doc wave. No full suite, seven-sample
+     candidate qualification, hosted CI, commit, or push ran. Proceed only
+     to Change 15: retire redundant recursive closure drivers while keeping
+     standalone execution and failure attribution through one shared runner.
+195. Batch 188B Change 15 is complete. One packaged
+     `cmake/RunClosureWitnesses.cmake` helper owns nested CTest execution for
+     the nine SystemC, SCV, SDF, VHDL, and Verilog closure profiles. The four
+     per-witness language matrices additionally share stage-log accumulation
+     and failure attribution. Their named scripts remain as directly
+     invocable profiles because each owns distinct selectors or transcript
+     assertions referenced by retained evidence. All nine standalone
+     profiles pass, including VHDL 15/15, Verilog/SystemVerilog standard-mode
+     16/16, SystemVerilog 26/26, and Verilog 23/23; all nine deduplicated
+     entry points return before nested CTest even with `/usr/bin/false` as
+     the command. A forced-failure VHDL invocation names the failing witness
+     and retained log. The 415-test CTest metadata digest is unchanged at
+     `c7929043de7d4e19d2e5ce24ed7d8d08c9b7b82ca92556a1d40a8fd55d028553`.
+     Source-package, application-deduplication, and CTest-command-uniqueness
+     gates pass 3/3; `git diff --check` passes. MCP was reindexed after the
+     code wave. No full suite, seven-sample candidate qualification, hosted
+     CI, commit, or push ran. Proceed only to Change 16: eliminate the outer
+     CI selector overlap after fixture expansion without losing any required
+     test identity.
+196. Batch 188B Change 16 is complete. The historical Linux Debug split now
+     emits 406 `-LE` names and 173 `-L` names, overlapping on 164 fixture
+     witnesses among the 415 currently registered tests (eight approved
+     historical gates were retired earlier in this batch). Linux and Windows
+     Debug/Release workflows now each run one unfiltered CTest invocation;
+     the Linux Debug second closure step is removed. The active hosted-lane
+     checker requires exactly one unfiltered invocation per job and reads
+     generated CTest JSON to reject duplicate names. It reports all 415
+     identities selected once while CTest retains fixture ordering. The
+     hosted-lane, source-package, application-deduplication, and
+     CTest-command-uniqueness checks pass 4/4. Only the hosted-lane checker's
+     CTest command changed; the new full metadata digest is
+     `a38526818790a5ec600ac53ef116b2f2da1af635e1caf86131e1661c540aa9b9`.
+     MCP was reindexed after the code wave. No full suite, seven-sample
+     candidate qualification, hosted CI, commit, or push ran. Proceed only
+     to Change 17: replace remaining CTest/archive count pins with required
+     identity and required-content validators.
+197. Batch 188B Change 17 is complete. The Windows install workflow no longer
+     pins 423 CTests or 1,269 archive entries. Its archive audit enumerates
+     configured CTests, validates the current required-name set, and compares
+     the sole green regression summary with the derived count. A new licensed
+     seven-path required installed-entry set replaces the total archive count
+     while root containment, duplicate/unsafe path checks, extraction,
+     version/pkg-config validation, and uninstall remain. The audit work
+     directory must resolve inside the build before recursive cleanup. A
+     synthetic ZIP accepts additive content and rejects stale test totals,
+     missing required tests/entries, duplicate required entries, and unsafe
+     required paths. The generated set has 416 tests and metadata digest
+     `95a04f88a4a11d40530e7dcf66c564e4bd20c7da034e3da3a2117570a1011860`.
+     The six-test Windows package, hosted-lane, current-obligations,
+     source-package, archive-required-set, and CTest-uniqueness slice passes.
+     MCP was reindexed after the code wave; `git diff --check` passes. No
+     full suite, seven-sample candidate qualification, hosted CI, commit, or
+     push ran. Proceed only to Change 18: remove batch-specific hosted
+     workflow naming while retaining all four LLVM lanes.
+198. Batch 188B Change 18 is complete. The four Linux/Windows Debug/Release
+     LLVM lane logs and Windows archive/install logs use stable `ci-*` names;
+     hosted and warning ledgers now use `V3-HOSTED-CI` ownership. The active
+     hosted-lane checker rejects batch-numbered workflow text, requires stable
+     retained/package-log names, and preserves all four LLVM/warnings lane
+     relationships, timeout and bounded parallelism. The workflow parses as
+     YAML. Hosted/current, Windows package/LLVM, MSVC Debug/Release,
+     source-package, and CTest-command checks pass 8/8. The 416-test CTest
+     metadata digest remains
+     `95a04f88a4a11d40530e7dcf66c564e4bd20c7da034e3da3a2117570a1011860`.
+     MCP was reindexed after the code wave; `git diff --check` passes. No
+     full suite, seven-sample candidate qualification, hosted CI, commit, or
+     push ran. Proceed only to Change 19: migration failure probes and a
+     read-only generated-registration comparison.
+199. Batch 188B Change 19 is complete. A new focused probe rejects an
+     uncovered ABI/schema evidence cell, forbidden AST-lifetime owner token,
+     and missing child-directory fixture ownership. Existing required-set
+     fixtures reject missing/duplicate tests and IDs, malformed IDs,
+     unsafe/missing source paths, and missing owners. The installed-archive
+     fixture now additionally rejects duplicate and unsafe raw archive
+     entries, alongside missing required content, stale test totals, and
+     invalid required paths. Current-obligations and CTest-command gates
+     compare generated registrations read-only. The ten-gate focused slice
+     passes 10/10. CTest metadata has 417 entries and digest
+     `db543a53f67d54be3a1f4ea3591549cdd79141a488dd7c3cdace1333359b0f3d`;
+     filtering out only the new probe reproduces the previous 416-entry
+     digest exactly. MCP was reindexed after the code wave; `git diff --check`
+     passes. No full suite, seven-sample candidate qualification, hosted CI,
+     commit, or push ran. Proceed only to Change 20: clean Release/Debug
+     qualification, controlled performance comparison, hosted monitoring,
+     and batch handoff to 188C.
+200. Batch 188B Change 20 local qualification is underway. The separate
+     Clang/LLVM 22 warnings-as-errors Release and Debug builds pass with
+     eight build workers. The unfiltered suites pass 417/417 in Release
+     (140.15 seconds) and Debug (155.41 seconds), with four CTest workers
+     and 7,200-second per-test timeouts. Release initially exposed a stale
+     `PORT-020` owner reference; the ledger now names the focused
+     `fsim.contract.build-resources` test, and the complete Release rerun
+     passes. Benchmark command preflight expands all 76 required combinations
+     against the ignored VHDL RAM-overlay root. The first full benchmark
+     launch stopped before timing because separately built SystemC/SCV
+     libraries had different hashes; a process-local library path aligned
+     both executables with the frozen baseline's shared libraries, and the
+     next launch passed provenance checks. The user then waived the
+     seven-sample benchmark for this batch, and that run was interrupted
+     before completing its first timed sample. No candidate performance or
+     native-coverage result is claimed. A comparison against the frozen
+     Change 6 patch shows only one post-baseline `src/`/`include/` edit:
+     relocating the same native-cache schema literal into a header for
+     focused schema ownership, with no algorithmic change. This waiver is
+     specific to Batch 188B; later performance-relevant simplifications
+     retain the standard benchmark gate. The latest baseline-commit hosted
+     CI has Linux Debug/Release and Windows Debug green; Windows Release
+     failed `fsim.cache` at the concurrent-publisher assertion in
+     `tests/compiler/cache_test.cpp` (the pre-existing commit's line 253).
+     Review the complete diff and migration obligations,
+     then commit/push and monitor all four new hosted lanes before declaring
+     188B complete. Do not alter the frozen baseline or user-owned `phase.fst`.

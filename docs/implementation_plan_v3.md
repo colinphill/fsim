@@ -29,6 +29,14 @@ starts on branch codex/v3 from clean v2 checkpoint
   Its Change 20 owns one four-lane, LLVM-enabled-only hosted matrix: Linux
   Debug/Release and Windows Debug/Release. It does not repeat sanitizers before
   Batch 190 and creates no release tag.
+- Batches 188B through 188I are eight one-time, exactly twenty-change
+  simplification batches after completed Batch 188A and before Batch 189.
+  They do not renumber or replace Batches 189-197 and create no release tag.
+  Changes 1-19 accumulate with focused validation. Each Change 20 owns the
+  standard closure defined below, including an exact-head, four-lane,
+  LLVM-enabled hosted matrix: Linux Debug/Release and Windows Debug/Release.
+  Batch 188I Change 20 additionally owns local LLVM-enabled ASan/UBSan
+  qualification; Batch 190 retains its planned parallel/race qualification.
 - Whenever the governing cadence authorizes a new hosted CI run, inspect the
   most recent applicable run first, including the status and failing job logs,
   and identify existing errors before triggering the new run. Resolve known
@@ -6386,6 +6394,713 @@ workers. Relative to baseline `a867847c`, representative cold compile plus
 elaborate time and peak RSS may regress by no more than five percent, with
 compile and elaboration timings reported separately. Work proceeds in four
 cohesive waves with focused validation only at wave boundaries.
+
+### Batches 188B-188I - simplification program
+
+These eight batches execute after completed Batch 188A and before Batch 189.
+They preserve the AST-free compiled-HIR pipeline and keep semantic/HIR,
+DesignIR, and runtime representations distinct. The original baseline was
+`ed5ca693704edd277ec3f055ed7d9ed0e3048f2d`. On 2026-09-22 the user
+authorized using the newest baseline after the required real designs failed
+elaboration. The remote and local newest revision still match that original
+commit, so first repair the required workload correctness prerequisites.
+Freeze the resulting validated source and binary/dependency identities before
+starting simplification, then use that one corrected baseline cumulatively
+through Batch 188I. This is not permission for rolling per-batch rebaselines,
+omitted workloads, or unrelated language implementation. Preserve original
+failure evidence and the intentional untracked `phase.fst`.
+Keep Reed-Solomon HDL and source-derived test fixtures out of the tracked
+repository; use external source roots and the ignored, package-excluded
+`.local-artifacts/` directory for local overlays and evidence.
+
+Delegate implementation to as many as three `gpt-6-luna` workers at xhigh
+reasoning effort. The primary agent owns orchestration, interface decisions,
+integration review, qualification, commits, pushes, and hosted-CI monitoring.
+Give every worker a bounded task, exclusive file ownership, required tests,
+and explicit invariants; land shared interfaces before distributing consumer
+migrations. Workers do not commit, push, launch full builds, or edit another
+worker's files. Run builds and tests centrally with at least eight local build
+workers, without overlapping builds, qualification suites, or profiling runs.
+After each frozen batch of code changes, reindex the `fsim-v3-simplification`
+codebase-memory MCP project before graph-based structural review of the new
+source; the primary agent coordinates reindexing to avoid concurrent indexes.
+Audit progress at least hourly and resolve shared failures in coherent repair
+waves.
+
+Direct, typed C++ calls replace the SystemC kernel wire protocol while
+preserving lifecycle, synchronization, observation, rollback, and error
+behavior, the native plugin C ABI, Accellera integration, TLM, and SCV.
+Necessary documented C++ source-compatibility changes are authorized and
+affected consumers must rebuild; CLI behavior and C/plugin ABIs remain stable.
+Share byte-codec primitives with explicit endianness without changing existing
+format byte order. Bump only schemas whose serialized layouts change, reject
+affected older artifacts with regeneration diagnostics, and add no
+compatibility readers or dual-write paths. Retire historical v1/v2 gates only
+after migrating their useful obligations, while retaining historical
+documentation.
+
+Preserve driven versus forced values, wide-value coherence, scheduler
+ordering, safe-point placement, observer mutation semantics, and external-
+input validation. Do not introduce a new template IR, universal result or
+limits framework, calendar queue, ready-bitmap scheduler, flat-opcode
+interpreter, or speculative constant pool.
+
+#### Batch 188B - baselines and verification simplification
+
+1. **Complete.** Register all eight batches and their cadence exceptions.
+2. **Complete.** Inventory current tests and map every retiring gate to retained obligations.
+3. **Complete.** Define benchmark manifests, source hashes, commands, seeds, and success criteria.
+4. **Complete.** Generalize the existing Batch 188A performance harness without discarding historical evidence.
+5. **Complete.** Add long-running runtime, tracing, allocation, and retention workloads.
+6. **Complete.** Establish baseline correctness, timing, RSS, and native-execution coverage.
+7. **Complete.** Migrate substantive licensing, packaging, ABI, and language obligations into current checks.
+8. **Complete.** Remove superseded v1 release-record gates.
+9. **Complete.** Remove superseded v2 release-record gates.
+10. **Complete.** Remove redundant current-release prose checks and derived-number pins.
+11. **Complete.** Replace resource-portability source-token checks with boundary and behavioral tests.
+12. **Complete.** Remove the disabled line-budget wrapper; retain meaningful translation-unit rules.
+13. **Complete.** Consolidate CMake test registration while preserving assertions, arguments,
+    fixtures, labels, and environment.
+14. **Complete.** Consolidate repeated test setup and fixture ownership declarations.
+15. **Complete.** Retire redundant recursive closure execution bodies;
+    preserve standalone execution through one shared runner.
+16. **Complete.** Make each CI lane execute its required test set once.
+17. **Complete.** Replace test/archive count pins with required-test and
+    required-content validation.
+18. **Complete.** Remove obsolete batch-specific workflow naming while
+    retaining all four LLVM lanes.
+19. **Complete.** Verify the gate migration with missing-test,
+    missing-package-content, and invalid-input failure probes.
+20. Run standard closure and hand off to 188C.
+
+Change 2's obligation inventory is `docs/simplification-gate-migration.md`.
+Its selected CTest accounting records 423 complete tests, 414 tests excluding
+labels, 171 tests selected by labels, and 162 tests in their overlap after
+fixture expansion; the nested early-return run remains separate. Changes 3-5
+now have implementation-verified benchmark foundations. All 25 Python tests
+pass, including incomplete corpus/subset rejection, regression limits,
+missing samples, timeout cleanup, source/header and linked-dependency drift,
+and malformed or incomplete profile evidence. Command-only preflight expands
+all 96 case/configuration/variant combinations and explicitly does not qualify
+them. Incomplete results cannot report qualification success; measured
+commands have 7,200-second timeouts. Source and linked-dependency identity
+hashing and separate untimed profiling are implemented.
+
+All six repository cases pass 18 correctness runs and 18 separate untimed
+profiles across interpreter, LLVM O0, and LLVM O2. Cross-engine and
+timed/profile functional outputs and semantic observation hashes match.
+The sixteen-instance, 100,000-cycle mixed bare, VCD, FST, observer, and history
+workloads retain per-cycle and observation oracles. VCD/FST select eight
+top-level signals and validate more than 800,000 changes within the existing
+one-million-record retention limit. The separate Batch 188F million-plus-event
+stress obligation is unchanged. Functional-coverage readback uses the existing
+public codec and hashes the full decoded/reserialized state after normalizing
+only callback execution-mode provenance; the raw artifact hash is retained.
+A ten-cycle variant has a different semantic digest despite the same final
+counter value and 100% summary, proving genuine hit/history differences remain
+observable. Evidence is under `/tmp/fsim-188b-central-preflight.vayi9at7`,
+`/tmp/fsim-188b-central-preflight.uxtgqmjp`, and
+`/tmp/fsim-188b-coverage-oracle.rr_5l0nj`. Implementation verification does not
+establish a corrected real-design baseline or seven-sample qualification.
+
+The source-package manifest owns the five new documentation, manifest, script,
+unit-test, and test-only driver files. With the driver included,
+`fsim.source-package-manifest`, `fsim.ctest-command-uniqueness`, and
+`fsim.source-line-budget` pass 3/3 in 8.70 seconds. Foundation unit and command
+preflight logs are `/tmp/fsim-188b-foundation-units-final.log` and
+`/tmp/fsim-188b-foundation-commands.log`. These results complete implementation
+Changes 3-5, not baseline correctness/performance Change 6.
+
+Change 6 initially had correctness prerequisites under repair. The original baseline `fsim` target
+rebuilt successfully in `build/ci-linux-release` with Release Clang 22.1.8,
+LLVM 22.1.8, warnings as errors, and eight workers. The binary SHA-256 is
+`151e17104c401d773c1d3278cd7f7356f469a2a5b6536340f02cb4b820022f84`.
+Strict Verilog-2005 compilation rejects `$fatal`, while explicit
+SystemVerilog-2017 compilation succeeds. All three representative preflight
+cases compile and then fail elaboration on pre-existing correctness gaps:
+
+- `original_codec` fails at `gf_mult.v:44` with `FSIM-ELAB-HIR-001`: the HIR
+  cannot lower the `red[0]` wire-array assignment. A standalone `gf_mult` top
+  reproduces the same failure.
+- `mixed_codec` fails at `rs_encoder_top.vhd:101` with `FSIM-ELAB-HIR-001`:
+  `skid_par_cl` has no parser-free signal adapter.
+- `codex_reference_mode0_frames1` fails at `rs_decoder_axi.sv:57` with
+  `FSIM-ELAB-GEN-001`: the conditional-generate constant cannot be evaluated.
+
+The evidence is under `/tmp/fsim-188b-baseline-preflight.2tXoQE`, including
+the `original-sv`, `original-elaborate`, `mixed-vhdl`, `mixed-tb`,
+`mixed-elaborate`, `codex-rtl`, `codex-tb`, `codex-elaborate`, and
+`gf-mult-only` stdout/stderr files and major-phase timing files. No simulation
+or seven-sample qualification ran. The user's newest-baseline authorization
+now permits proceeding with the required correctness prerequisites and an
+explicitly recorded corrected baseline. Do not claim qualification or replace
+the manifest's original identity until that corrected baseline is frozen.
+Changes 7-20 have not started.
+
+The current command-only preflight is 76 required combinations, not the
+historical 96: six repository cases retain interpreter/O0/O2, while all ten
+real-design cases use LLVM O0/O2 only. All 29 runner unit tests pass. The
+original codec now compiles, elaborates, and simulates with LLVM O2. Its first
+functional run passed only 5 of 11 oracle cases and took 231.23 seconds;
+after the local unpacked-array constant-function repair, a regenerated
+LLVM O2 correctness run passed all 11 cases. Neither run qualifies timing.
+Direct profiling of the earlier run reports 94,201 compiled process instances,
+70,985 interpreter-retained instances, and 334,025,144 native JIT resumes;
+JIT is executing, so wholesale interpreter fallback is not the cause of
+the reported regression. The detailed profiler changes cohort scheduling
+and its timing is not a production performance measurement. An earlier small
+JIT-only RS(15,11) O0/O2 probe narrowed two-error correction failure to a
+wrong KES locator after a correct syndrome; a regenerated probe later passed
+clean and two-error cases under both O0 and O2. Wave28's nine focused tests
+pass, including the SystemVerilog conditional-arm reachability and dynamic
+memory-element part-select fixes. Fresh LLVM O0/O2 compile/elaborate
+preflights pass the original codec and Codex reference, but the mixed VHDL
+codec still fails on formal-dependent pure constant functions and a GEN
+port slice. A typed evaluator extension and fail-closed static-call
+materialization adapter are under bounded repair; the JIT ROM-context
+defect is independently under read-only reduction. These are prerequisite
+diagnostics and implementation results, not a frozen corrected baseline,
+seven-sample qualification, or permission to begin Changes 7-20. The
+detailed evidence and next action are in `docs/v3-resume.md` items 83-99.
+
+Change 6 baseline readiness closed on 2026-09-23 against the corrected frozen
+executable/helper identities in `docs/v3-resume.md` item 165. All 38 mandatory
+case/configuration pairs have one oracle-passing timed sample and a separate
+untimed profile with verified source, manifest, executable, helper, and root
+identities. The six repository cases cover interpreter/O0/O2; all ten real
+cases cover O0/O2 JIT. Cross-configuration simulator output is byte-identical
+within every case, and every compiled profile records native resumes with no
+unsupported modules. Evidence is under ignored
+`.local-artifacts/188b-one-shot/evidence/`; the exact final audit is in the
+resume checkpoint. These are baseline diagnostics, not a simplification
+candidate. The seven-alternating-sample baseline/candidate performance gate
+remains required at Change 20 after changes have been made.
+
+Change 7 installed additive required-ID and required-CTest validators with
+positive and negative fixtures for missing, duplicate, unsafe, and ownerless
+entries. The current ledger binds 91 required IDs to existing evidence files
+and registered owners; the required test set contains 66 exact names. It
+includes all retained v3 profile and v2-input-rejection identities, current
+license/package/ABI/language owners, and native LLVM object-cache behavior.
+The v116-to-v168 cache namespace identity remains owned by
+`fsim.v3-v2-input-rejection`, while `fsim.llvm` verifies cold/warm,
+corruption, and incompatible-object behavior. The latter does not directly
+seed a historical v116 object. A focused 16-test license/package/ABI/language
+slice, the 3-test native-cache/required-set slice, and the resource-portability
+contract all passed. Stale 62/5 schema copies in the existing governance
+checks were synchronized to the live 63/6 identities and their focused gates
+pass. No historical CTest or source record retired in Change 7. Change 8
+must preserve the v1 case IDs and source evidence before retiring its gates;
+the full qualification and seven-sample comparison remain Change 20 work.
+
+Change 8 retired fourteen `fsim.v1-*` CTests and renamed the two substantive
+corpus gates to `fsim.conformance-corpus` and `fsim.portability-corpus`.
+Historical documents, source scripts, manifests, and case identities remain
+in the source package; generated CTest metadata now contains zero `fsim.v1-*`
+names. The conformance gate preserves 100 required marker identities with
+their fixture, registered owner, source, and expectation mappings, while
+allowing additional valid markers. The portability gate preserves all 20
+required IDs, evidence markers, required modes, safe paths, and registered
+owners while permitting additive rows. `fsim.release-case-ids` preserves the
+19 required executable V1-SV, V1-VH, and ML-005/006 rows. The current authored
+license gate checks every packaged authored file's SPDX notice without an
+authored-file count pin; the unchanged JSON benchmark manifest uses a
+companion SPDX license file so its frozen content hash is not changed.
+Current Verilog, VHDL/PSL, and UVM closure audits now compose current license
+and package owners instead of historical v1 audit output sentences; the MSVC
+Debug contract no longer reads old release-matrix hash code. All 97 exact
+required CTest names, including the 36 conformance/portability corpus owners,
+are registered, and 95 required current-obligation IDs remain valid. Focused
+migration and release/registration slices pass, including `fsim.llvm`,
+`fsim.api`, `fsim.installed-public-contract`, and upstream provenance. The
+three failing historical wrappers were exact-count/status pins; they are no
+longer registered. The full suite, hosted lanes, and seven-sample performance
+gate remain Change 20 work. Change 9 may begin.
+
+Change 9 retired `fsim.v2-release-records`,
+`fsim.v2-qualification-inventory`, `fsim.v2-performance-baselines`, and
+`fsim.release-candidate-log-audit` from generated CTest metadata. The 19
+qualification and 44 performance rows, v2 release/support/example records,
+optional Batch 176 logs, historical checkers, and source-package entries are
+unchanged; `CheckV2SupplyChain.cmake` stays packaged for historical archive
+workflows. No current pass/fail gate uses old v2 timing observations or
+candidate-log counts. The Windows LLVM contract no longer token-checks the
+retired v2 release/performance scripts, while retaining its active ABI
+evidence normalization check. Current deterministic source/binary packaging
+checks archive path safety, ordering, content, and malformed-manifest
+rejection; v3 supply chain, binary install, source package, and upstream
+provenance remain registered owners. Generated metadata has 409 tests and
+none of the four retired names; the focused eleven-test current-owner slice
+passed. Hosted archive evidence, full-suite, and seven-sample candidate
+qualification remain Change 20 work. Change 10 may begin.
+
+Change 10 is complete. The FST, SDF application, and
+VITAL/SDF inventories now validate all 51 stable C02-C18 identities against
+additive required IDs, semantic scopes, safe evidence paths, and their 45
+registered behavioral owners; the three prose-only release wrappers were
+retired. The six v3 release-integration domains and thirteen retained language
+profiles use current additive owner checks rather than historical totals,
+digests, or status wording. Current release-documentation, release-record,
+supply-chain, deterministic-artifact, version-identity, and hosted-lane gates
+now validate
+required identities, source/package paths, parsed SBOM fields, archive entries,
+build-derived version consistency, all four LLVM/warnings-as-errors hosted
+lanes, and timeout/parallel bounds without their old whole-file digests or
+derived row counts. A compiled schema-identity witness now reads the exported
+project, foreign ABI, object, library, design, checkpoint, and native-cache
+constants directly. The six-domain schema umbrella now validates additive
+IDs and registered compiled/behavioral owners without copying child row counts
+or output digests; the focused compatibility CTests remain registered. The
+required-set ledgers contain 197 IDs and 164 exact
+CTest names. Focused inventory, behavioral, closure, archive, packaging, and
+version slices pass; the codebase-memory index has been refreshed after each
+code-change wave. The v2-input gate now binds all 14 required IDs to
+registered negative-test owners without source-token, fixed-row, or digest
+pins; its focused behavioral/owner slice passed 15/15. The native cache
+equivalent uses the same key builder as production: the v116-style schema key
+and current v168 key differ for identical remaining inputs, an entry stored
+under the legacy key misses under the current key, the compiled witness
+freezes v168, and `fsim.llvm` covers cold/warm, corruption, and incompatible
+object behavior. It does not claim to execute a historical v116 object file.
+All eleven current `fsim.v3-*` gates pass. The hosted installed-archive
+test/archive count pins remain expressly Change 17 work. Neither the full
+suite nor Change 20 candidate performance/hosted qualification has run.
+Change 11 may begin.
+
+Change 11 is complete. `fsim.contract.build-resources` checks
+the configured positive/eight-or-fewer Ninja link pool, compact Debug objects,
+and every explicit generated CTest timeout against the 7,200-second bound. Its
+seven-ID ledger binds hosted, Windows stack, MSVC Release, Windows LLVM, CTest,
+and configured Boost.PFR version/hash/header owners. A compiled Release witness
+rejects `NDEBUG` and proves `assert` evaluates its operand. Six further focused
+resource gates now bind 79 stable
+coverage, foreign-ABI, trace, language, SystemC/SCV, and artifact IDs to safe
+evidence paths and registered behavioral owners. Their validator accepts
+additive same-domain rows and rejects missing/duplicate IDs, unsafe paths,
+unregistered owners, and cross-domain IDs. The current required-set gate now
+checks 285 IDs and 200 named tests among 414 registered tests. The
+6,682-line source-token umbrella is no longer registered; its checker file
+remains packaged as a historical record. Eighteen ABI/schema resource cells
+now name their relevant focused owners and safe ledger evidence; the matrix
+validator keeps its 18-by-11 semantic coverage without a whole-file digest.
+The Windows LLVM contract no longer pins the retired digest implementation.
+The fixture-expanded migration slice passed 119/119, as did the 25 newly
+mapped behavioral owners and the earlier 33-test owner/umbrella slice before
+retirement. Actual Accellera/SystemC, SCV, SDF, SDF-application, SDF-VITAL,
+VHDL standard-mode (15/15), and Verilog/SystemVerilog standard-mode (16/16)
+closure drivers passed with retained logs. Source packaging and
+`git diff --check` pass. The active Verilog closure audit now composes the
+focused language-resource gate rather than executing the retired checker;
+all four active language closure audits pass. No full suite, candidate
+performance qualification,
+hosted CI, commit, or push has run for Change 11. Change 12 may begin.
+
+Change 12 is complete. `fsim.translation-unit-structure` now directly runs
+`CheckTranslationUnitStructure.cmake`; the misleading
+`fsim.source-line-budget` registration is gone. A small self-test proves the
+positive case and rejection of `.tpp` files under `include`, `src`, and
+`tests`. Three active language closure audits compose the direct checker and
+expect its structural result. Both SDF closure selectors use the new exact
+test name; their full standalone runs pass. The old delegating script stays
+packaged only to preserve historical ledger paths. Required sets now contain
+287 IDs and 201 exact test names among 415 registered tests. The focused
+nine-test structural, audit, packaging, and registration slice passes;
+`git diff --check` passes. No physical source-line ceiling was restored. No
+full suite, seven-sample candidate qualification, hosted CI, commit, or push
+ran for Change 12. Change 13 may begin.
+
+Change 13 is complete. A narrow `fsim_register_simple_test` helper now owns
+109 repeated target-backed CTest name/command/label registrations in the root
+test CMake file. Specialized argument, fixture, timeout, and environment
+registrations remain explicit for Change 14. The helper rejects a missing
+target; it does not alter `fsim_configure_test` or platform assertion flags.
+The generated metadata digest over every test's name, command, and properties
+is byte-identical before and after the 109 conversions
+(`c7929043de7d4e19d2e5ce24ed7d8d08c9b7b82ca92556a1d40a8fd55d028553`).
+The one source-spelling assumption in the core API validator now checks the
+stable test name, which the required-CTest set also owns. The 70-test SDF
+fixture/inventory slice, 58-test inventory/audit/contract slice,
+`fsim.ctest-command-uniqueness`, Release assertion witness, and MSVC Release
+contract all pass. The MCP index was refreshed; `git diff --check` passes.
+No full suite, seven-sample candidate qualification, hosted CI, commit, or
+push ran for Change 13. Change 14 may begin.
+
+Change 14 is complete. `fsim_add_single_source_test_target` now owns the
+repeated executable/configure/link sequence for 18 one-source coverage targets;
+their Ninja command digests are unchanged. Regex-based fixture discovery now
+delegates driver ownership and witness setup to the existing explicit-witness
+helper. The generated metadata digest over all 415 CTest names, commands, and
+properties remains
+`c7929043de7d4e19d2e5ce24ed7d8d08c9b7b82ca92556a1d40a8fd55d028553`,
+including every fixture setup/required relationship. All 18 migrated tests
+and `fsim.ctest-command-uniqueness` pass, as does `git diff --check`. The MCP
+index was refreshed after the code wave. No full suite, seven-sample candidate
+qualification, hosted CI, commit, or push ran for Change 14. Change 15 may
+begin.
+
+Change 15 is complete. One packaged `RunClosureWitnesses.cmake` runner now
+owns nested CTest process execution for the nine SystemC, SCV, SDF, VHDL, and
+Verilog closure profiles; the four per-witness language matrices also share
+their stage-log and failure-attribution loop. The nine named scripts remain as
+thin, directly invocable profiles because their selectors and domain-specific
+transcript assertions are distinct and referenced by preserved ledgers. All
+nine profiles passed standalone, including the 15/15 VHDL, 16/16
+Verilog/SystemVerilog standard-mode, 26/26 SystemVerilog, and 23/23 Verilog
+matrices. All nine deduplicated entry points suppressed nested CTest when
+given a deliberately failing command. A forced-failure run identified the
+first failing VHDL witness and its retained log. The generated 415-test
+name/command/property digest remains
+`c7929043de7d4e19d2e5ce24ed7d8d08c9b7b82ca92556a1d40a8fd55d028553`;
+the source-package, application-deduplication, and CTest-command-uniqueness
+gates pass. The MCP index was refreshed and `git diff --check` passes. No full
+suite, seven-sample candidate qualification, hosted CI, commit, or push ran
+for Change 15. Change 16 may begin.
+
+Change 16 is complete. After the intentional retirement of eight historical
+CTest gates, the generated set contains 415 tests. The old Linux Debug
+`-LE`/`-L` split emitted 406 and 173 names, with 164 repeated fixture
+witnesses. Linux and Windows now use one unfiltered CTest invocation per
+Debug/Release lane, so every currently registered identity is selected once
+and CTest retains fixture ordering. The active hosted-lane checker enforces
+one unfiltered invocation per job and enumerates unique generated names;
+it reports all 415. The sole changed CTest command is that checker's added
+build-directory argument, producing metadata digest
+`a38526818790a5ec600ac53ef116b2f2da1af635e1caf86131e1661c540aa9b9`.
+The hosted-lane, source-package, application-deduplication, and
+CTest-command-uniqueness checks pass 4/4. MCP was reindexed after the code
+wave. No full suite, seven-sample candidate qualification, hosted CI, commit,
+or push ran for Change 16. Change 17 may begin.
+
+Change 17 is complete. The Windows install lane no longer carries the stale
+423-test or 1,269-entry constants. `CheckV3InstalledArchive.cmake` enumerates
+the configured CTests, validates the current required-name set, and requires
+the one green regression summary to match that derived count. A licensed
+seven-path required archive set replaces the total-entry pin while retaining
+root containment, duplicate/unsafe entry rejection, extraction, executable
+version, pkg-config, and removal checks. The archive work directory is
+validated as a build child before recursive cleanup. A synthetic ZIP with an
+additive entry passes; stale test counts, missing required tests/entries,
+duplicate required entries, and unsafe required paths fail in focused
+fixtures. The 416-test generated metadata digest is
+`95a04f88a4a11d40530e7dcf66c564e4bd20c7da034e3da3a2117570a1011860`.
+The six-test Windows package/hosted/current-obligations/source-package/
+archive-required/CTest-uniqueness slice passes. MCP was reindexed and
+`git diff --check` passes. No full suite, seven-sample candidate
+qualification, hosted CI, commit, or push ran for Change 17. Change 18 may
+begin.
+
+Change 18 is complete. All four Linux/Windows Debug/Release LLVM lane logs
+and the Windows archive/install logs now use stable `ci-*` names; the hosted
+and warning ledgers use `V3-HOSTED-CI` ownership rather than a completed batch
+change. The active hosted-lane checker rejects batch-numbered job text,
+requires stable retained/package-log names, and preserves LLVM version,
+warnings-as-errors, timeout, bounded parallelism, and four required lane
+relationships. YAML parsing succeeds and the eight-test hosted/current/
+Windows/MSVC/package/CTest slice passes. The generated 416-test metadata
+digest is unchanged from Change 17. MCP was reindexed; `git diff --check`
+passes. No full suite, seven-sample candidate qualification, hosted CI,
+commit, or push ran for Change 18. Change 19 may begin.
+
+Change 19 is complete. A focused migration probe rejects an uncovered
+ABI/schema evidence cell, a forbidden AST owner token, and missing
+child-directory fixture ownership. The required-set self-test rejects missing
+or duplicate tests/IDs, malformed IDs, unsafe and absent source paths, and
+missing owners; the installed-archive fixture rejects missing package content,
+stale test counts, duplicate required/raw archive entries, and unsafe
+required/raw archive paths while accepting additive safe content. The
+current-obligations and CTest-command gates compare the generated
+registration read-only against required names and fixture/command ownership.
+All ten focused positive/negative gates pass. Generated metadata has 417
+tests and digest
+`db543a53f67d54be3a1f4ea3591549cdd79141a488dd7c3cdace1333359b0f3d`;
+removing only the new probe's registration reproduces Change 17/18's
+416-test digest exactly. MCP was reindexed and `git diff --check` passes. No
+full suite, seven-sample candidate qualification, hosted CI, commit, or push
+ran for Change 19. Change 20 owns those remaining closure steps.
+
+For Batch 188B only, the user waived Change 20's seven-sample
+baseline/candidate benchmark on 2026-09-23. Comparing the frozen Change 6
+tracked patch with the current `include/` and `src/` diff found one later
+source edit: the unchanged native-object cache schema string moved from
+`llvm_jit_cache_key.cpp` into `native_cache_schema.hpp` so focused schema
+checks can own it. No compiler, elaboration, or simulation algorithm changed
+after the corrected baseline. The benchmark command preflight expanded all 76
+required combinations, but no candidate performance qualification is claimed;
+an attempted full run was stopped at the user's direction before completing
+its first timed sample. The standard performance gate remains in force for
+subsequent simplification batches that change performance-relevant code.
+
+#### Batch 188C - shared utilities and duplicated infrastructure
+
+1. Establish byte-equivalence and malformed-input fixtures before codec migration.
+2. Introduce shared bounded byte readers/writers with explicit byte order.
+3. Migrate artifact framing and payload primitives.
+4. Migrate coverage database codecs without changing their wire format.
+5. Migrate compiler and cache persistence primitives.
+6. Migrate surviving SystemC/TLM/SCV codecs; exclude kernel codecs scheduled for deletion.
+7. Migrate applicable trace/archive codec primitives.
+8. Test overflow, truncation, signed values, floating-point bit patterns, and length accounting.
+9. Introduce shared 128-bit identity primitives while preserving strong domain types.
+10. Consolidate identity hashing and formatting without changing identity values.
+11. Share identical string utilities while preserving language-specific case rules.
+12. Consolidate equivalent path and file helpers with unchanged error behavior.
+13. Consolidate identical diagnostic construction helpers without erasing domain-specific errors.
+14. Remove redundant language coverage forwarders while retaining language-specific discovery.
+15. Inline genuinely trivial leaf accessors where this introduces no implementation dependency.
+16. Recombine artificial file splits and remove duplicated preambles along
+    cohesive subsystem boundaries.
+17. Remove repeated trusted-state validation; retain boundary validation and
+    meaningful resource budgets.
+18. Share duplicated test builders without removing distinct behavioral assertions.
+19. Account for each duplicated codec/helper as migrated, deliberately
+    retained, or scheduled for deletion.
+20. Run standard closure and hand off to 188D.
+
+#### Batch 188D - hierarchy decomposition and build-time algorithmics
+
+1. Remove unused hierarchy checkpoints, rollback code, and their write-only journals.
+2. Introduce explicit instantiation contexts with documented ownership and lifetimes.
+3. Replace copied parent binding maps with scoped parent views and local overlays.
+4. Extract SystemVerilog parameter and port handling.
+5. Extract SystemVerilog declaration handling.
+6. Extract SystemVerilog generate and instance handling.
+7. Extract SystemVerilog process and callable binding.
+8. Extract VHDL generic and port handling.
+9. Extract VHDL declaration and component handling.
+10. Extract VHDL generate and instance handling.
+11. Extract VHDL process, subprogram, and resolution handling.
+12. Reduce both language entrypoints to readable orchestration without
+    introducing another elaboration engine.
+13. Index DesignIR parent and specialization ownership, preserving deepest-ancestor selection.
+14. Index declaration, value, direction, and SystemC projection lookups.
+15. Reuse builder-local sorted path views with explicit invalidation and lifetime rules.
+16. Canonicalize source identities once, preserving Windows case and relocation behavior.
+17. Index compiled-HIR references by owner and avoid unnecessary index rebuilding.
+18. Relocate source names during serialization; remove whole-design relocation
+    copies and duplicate validation.
+19. Validate direct/object/cache/library paths, hierarchy shadowing, mixed-
+    language binding, and scaling.
+20. Run standard closure and hand off to 188E.
+
+#### Batch 188E - direct SystemC kernel interface
+
+1. Capture existing lifecycle and failure behavior as transport-independent tests.
+2. Define direct request/result types using existing semantic identities and payloads.
+3. Replace byte exchange with typed kernel operations; remove handshake negotiation.
+4. Implement session creation, ownership, and idempotent shutdown.
+5. Migrate object construction and parameter validation.
+6. Migrate endpoint binding with existing rollback guarantees.
+7. Migrate elaboration and publication.
+8. Migrate start and advance operations.
+9. Migrate input application.
+10. Migrate next-activity queries and output draining.
+11. Migrate reporting, inspection, and snapshots.
+12. Migrate transaction observation while preserving SCV/TLM behavior.
+13. Adapt synchronization with unchanged time, delta, region, and session ordering.
+14. Adapt application and plugin integration.
+15. Adapt channel inventories and trace routing.
+16. Delete unused framing, protocol codecs, loopback transport, and message-accounting machinery.
+17. Update installed headers, examples, contract checks, and C++ migration documentation.
+18. Exercise invalid transitions, plugin failures, partial construction, rollback, and shutdown.
+19. Qualify mixed-language execution and unchanged native plugin C ABI behavior.
+20. Run standard closure and hand off to 188F.
+
+#### Batch 188F - bounded lifetimes, tracing, and observers
+
+1. Define cancellation handles using owner identity, slot index, and generation.
+2. Implement reusable cancellation slots and release completed/cancelled task payloads.
+3. Adapt handle queries and cancellation without allowing stale handles to affect reused slots.
+4. Reclaim cancelled queue entries through amortized compaction without changing scheduling order.
+5. Make reset, destruction, foreign-owner handles, and generation exhaustion safe.
+6. Migrate timer users and add long-running cancellation/reuse stress tests.
+7. Make observation retention explicit: streaming by default, bounded capture on request.
+8. Replace history scans for late snapshots with maintained ordering metadata.
+9. Adapt CLI and SystemC tracing; make capture-dependent tests request retention explicitly.
+10. Cache trace identities, declaration lookups, and selection metadata.
+11. Reuse encoding buffers while preserving all supported value kinds.
+12. Add bounded FST event buffering with sorted temporary runs and bounded-fan-in merging.
+13. Assemble the existing FST container incrementally, avoiding whole-history/
+    container memory copies.
+14. Preserve arbitrary event submission order, non-seekable output, flush/close
+    semantics, and deterministic cleanup.
+15. Reuse observer snapshots between registration changes while preserving in-
+    flight callback behavior.
+16. Install optional observation hooks only while required; retain existing public defaults.
+17. Index VPI value-change registrations by signal.
+18. Avoid empty PSL observation work and use stable binding identities.
+19. Test capture limits, callback failures, disk/output failures, and traces
+    exceeding one million events.
+20. Run standard closure and hand off to 188G.
+
+FST memory must scale with declarations, current values, and a bounded working
+buffer, not elapsed event count. Use a 64 MiB default event-work budget with
+explicit failure when an individual payload exceeds its permitted budget.
+Preserve existing format bytes where encoding is unchanged.
+
+#### Batch 188G - scheduler and runtime storage
+
+1. Freeze ordering tests covering complete `StableOrder`, insertion sequence, regions, and deltas.
+2. Preserve capacity across all eight delta-region queues.
+3. Add typed internal task descriptors while retaining public callback scheduling.
+4. Migrate internal process wakeups and timers without dropping origin or generation information.
+5. Optimize interrupt polling and compose safe-point hooks without changing callback placement.
+6. Separate frequently accessed process state from cold execution metadata.
+7. Store static fanout contiguously with explicit rebuilding when topology changes.
+8. Use stable dynamic-wait registrations with safe invalidation and compaction.
+9. Decode transitions once and separate transaction-sensitive fanout.
+10. Index named-event membership and maintain it across alias rebinding.
+11. Maintain switch-network connectivity incrementally instead of rescanning all processes.
+12. Replace separate driver maps with ordered inline-single-entry driver
+    records and overflow storage.
+13. Add allocation-free four-state resolution for widths up to 64 bits.
+14. Implement word-based force/release transformations with correct masks and
+    copy-on-write handling.
+15. Group hot signal fields and move optional metadata into cold storage.
+16. Materialize narrow packed mirrors lazily while retaining distinct driven and published values.
+17. Update native, interpreter, tracing, foreign-interface, reset, and timing-
+    check access paths together.
+18. Reuse cohort and batch scratch storage.
+19. Run scheduler/resolution differential tests, alias mutation, force/release,
+    and width-boundary stress.
+20. Run standard closure and hand off to 188H.
+
+Retain the ordered future-time map. Do not replace full scheduler ordering with
+process-ID bitmap order.
+
+#### Batch 188H - JIT metadata, cache keys, and execution boundary
+
+1. Define exhaustive operation traits with explicit stable operation tags.
+2. Implement one canonical semantic-field encoder using existing reflection
+   support and typed leaf encoders.
+3. Replace duplicated per-operation cache-key serializers.
+4. Version the affected native cache and test semantic-field and dependency mutations.
+5. Compute reusable process summaries for cache, signal-access, and admission metadata.
+6. Reuse preflight keys during compilation.
+7. Define effective-body identity including overrides, remapping, and external compilation context.
+8. Reuse elaboration body sharing with typed grouping keys and exact equality checks.
+9. Enable eligible narrow Logic9 direct reads and test all nine states.
+10. Sample diagnostic/profiling environment settings once per simulation construction.
+11. Consolidate buffered-update flushing and avoid empty virtual-access sequences.
+12. Track native-update eligibility per signal instead of applying avoidable design-wide exclusions.
+13. Scope historical-value sampling to proven dependencies; retain conservative
+    handling for unknown dependencies.
+14. Extend existing direct-update machinery to eligible blocking and delayed writes.
+15. Add direct native callbacks for coverage sampling, class-property access,
+    and event-trigger queries.
+16. Pre-partition unsupported processes; retry unsupported packs individually
+    rather than discarding every member.
+17. Simplify signal remapping and Logic9 register marshalling without weakening coherence.
+18. Reuse executor/cohort state with explicit generation invalidation.
+19. Validate cold-cache identity, native coverage, observer interactions, and
+    interpreter/LLVM equivalence.
+20. Run standard closure and hand off to 188I.
+
+Keep semantic validation and lowering as distinct passes. Pointer identity alone
+must never establish semantic equality or persistent cache identity.
+
+#### Batch 188I - shared paths, persistence, and final qualification
+
+1. Introduce project-owned interned hierarchy paths with stable handles and
+   explicit lifetime ownership.
+2. Make `SourceName` interning perform heterogeneous lookup before allocating.
+3. Migrate elaborated hierarchy names and lookup maps.
+4. Migrate DesignIR paths and public C++ accessors.
+5. Adapt hierarchy indexes without recreating owning strings.
+6. Share path storage with trace declarations.
+7. Adapt VPI/VHPI/PLI, Tcl, and debugger consumers with correct string lifetimes.
+8. Adapt SystemC path inventories without changing the plugin C ABI.
+9. Store one canonical hierarchy-path table across runtime and DesignIR artifact sections.
+10. Bump affected schemas and their enclosing format dependencies only.
+11. Remove duplicated serialized path strings while retaining distinct semantic projections.
+12. Validate path references, counts, uniqueness, ordering, and allocation budgets during decoding.
+13. Reject affected old artifacts with actionable regeneration diagnostics.
+14. Verify artifact determinism separately across worker counts and checkout relocation.
+15. Test ownership through copy/move, artifact loading, observer removal, and plugin teardown.
+16. Document all C++ migrations and remove superseded internal adapters.
+17. Complete the audit disposition record, including recommendations rejected
+    on correctness grounds.
+18. Validate installed headers, downstream C/C++ consumers, and package contents.
+19. Complete long-run retention, scaling, and final differential regression fixtures.
+20. Run standard closure plus final local ASan/UBSan qualification; hand off to
+    Batch 189 without tagging a release.
+
+Canonical artifact path IDs derive from sorted path content, not allocation
+order. Standalone component serialization includes its own required path table.
+
+#### Mandatory workloads and cumulative performance gate
+
+Use repository compile/elaboration cases and long-running mixed-language cases
+that exercise bare execution, VCD, FST, observers, and historical-value
+sampling. All three real projects under `/home/colin/vprojects` are mandatory:
+
+- `reed_solomon`: `rs_codec_tb` and `rs_thru_tb`.
+- `rs-vhdl`: the same testbenches against VHDL RTL through mixed-language binding.
+- `rs_codex`: decoder reference in modes 0/1 with one/two input frames, plus
+  default and direct-syndrome throughput cases.
+
+Derive source order, defines, parameters, and expected results from the
+projects' existing runners. Keep design sources read-only and unvendored;
+generated configurations, caches, and output belong in isolated benchmark
+directories. A required case that cannot pass on the fixed baseline is a
+blocking prerequisite, not permission to omit it or expand into unrelated
+language implementation.
+
+Compare every candidate with the corrected baseline frozen under the newest-
+baseline authorization above, never the preceding batch. Use identical
+inputs, seeds, toolchain, optimization settings, host,
+and resource settings. Run at least seven alternating baseline/candidate
+samples with fresh artifact and native caches. The six repository cases use
+interpreter, LLVM O0, and LLVM O2; the ten mandatory real-project cases use
+LLVM O0 and LLVM O2 JIT. The user removed interpreter execution for real
+designs on 2026-09-22 because it is too slow. For every required case and
+configuration, median end-to-end time and median
+per-run peak RSS must each be at or below 110% of baseline. End-to-end time
+includes compilation, elaboration, native setup, and simulation, with component
+timings reported separately. Keep profiling separate from timing, report
+native coverage and fallback reasons, do not average away a failing workload,
+and do not import historical v2 speedup requirements. Accept a modest
+within-limit regression only with a documented structural simplification.
+
+Future best-in-class performance requirement, separate from the Batch 188B-I
+frozen-baseline acceptance gate: on the reference designs, fsim must have
+strictly lower end-to-end wall time than Vivado Simulator for the same
+compile, elaborate, and simulation workload. Compare fsim's complete flow
+with the sum of Vivado's `xvhdl`/`xvlog`, `xelab`, and snapshot-simulation
+phases using matching sources and correctness oracles under controlled,
+repeated measurements. Lower per-run peak RSS than Vivado is strongly
+preferred; report peak RSS even when the wall-time requirement is met. The
+initial one-shot throughput comparison is diagnostic, not evidence that this
+future requirement has been satisfied.
+
+Correctness evidence covers interpreter/LLVM equivalence, supported language
+profiles, mixed-language and foreign execution; widths 1/64/65 and wide
+vectors, four/nine-state values, strengths, aliases, and force/release;
+scheduler ordering, cancellation reuse, stale handles, reset/destruction,
+callback mutation, and safe points; trace order, capture overflow, long-run
+memory, FST round trips, and I/O failures; artifact corruption, resource
+bounds, unchanged-format byte equivalence, and changed-format rejection; and
+worker-count determinism at 1/2/4/8 workers plus relocation at a fixed worker
+count.
+
+#### Standard Change 20 closure
+
+1. Review the complete diff, migration obligations, and latest applicable hosted-CI results.
+2. Build clean warnings-as-errors Release first, then qualify clean Debug and
+   Release against final code.
+3. Run the benchmark matrix and record cumulative baseline comparisons.
+4. Update authoritative progress and evidence documents.
+5. Publish one cohesive implementation commit and push.
+6. Monitor all four LLVM-only hosted lanes: Linux Debug/Release and Windows Debug/Release.
+7. Make bounded in-scope CI repair commits as necessary; do not advance with a
+   required lane failing.
+
+Retain 120-minute qualification-command timeouts and current hosted
+parallelism. Batch 188I additionally requires a local LLVM-enabled ASan/UBSan
+build, the full applicable suite, and lifetime stress tests. Completion means
+reduced duplication and retained state, preserved behavior, passing
+compatibility boundaries, cumulative performance within the agreed allowance,
+and an exact handoff to Batch 189. No line-count target, weakened gate, omitted
+benchmark, or release tag substitutes for those outcomes.
 
 ## v3.1.0
 

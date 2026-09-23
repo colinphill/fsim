@@ -735,6 +735,31 @@ void add_primary_operation_cache_key(
                             builder, "transaction-signal",
                             *value.transaction_signal);
                     }
+                    add_key_u64(
+                        builder, "has-dynamic-part",
+                        value.dynamic_part.has_value() ? 1U : 0U);
+                    if (value.dynamic_part) {
+                        const auto& part = *value.dynamic_part;
+                        add_key_u64(
+                            builder, "dynamic-part-base", part.base);
+                        add_key_u64(
+                            builder, "dynamic-part-left",
+                            static_cast<std::uint64_t>(part.left));
+                        add_key_u64(
+                            builder, "dynamic-part-right",
+                            static_cast<std::uint64_t>(part.right));
+                        add_key_u64(
+                            builder, "dynamic-part-base-offset",
+                            part.base_offset);
+                        add_key_u64(
+                            builder, "dynamic-part-width", part.width);
+                        add_key_u64(
+                            builder, "dynamic-part-increasing",
+                            part.increasing ? 1U : 0U);
+                        add_key_u64(
+                            builder, "dynamic-part-source-descending",
+                            part.source_descending ? 1U : 0U);
+                    }
                 } else if constexpr (std::is_same_v<
                                          OperationType,
                                          runtime::simir::ContainerStringRead>) {

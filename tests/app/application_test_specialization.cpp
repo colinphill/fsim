@@ -1069,6 +1069,144 @@ assert(
     == 1);
 #endif
 
+const auto numeric_sized_cast_config =
+    [&](const std::filesystem::path& source_path,
+        const std::string_view top_name) {
+      auto result = config;
+      result.project.name =
+          std::string { top_name } + "-numeric-sized-cast-test";
+      result.project.top = "sv:work." + std::string { top_name };
+      result.build.optimization =
+          fsim::project::Optimization::o2;
+      result.build.cache_path = directory
+          / (std::string { top_name } + "-numeric-sized-cast-cache");
+      result.source_sets.clear();
+      fsim::project::SourceSet sources;
+      sources.language = fsim::project::Language::system_verilog;
+      sources.standard = "2017";
+      sources.library = "work";
+      sources.compilation_unit = "file";
+      sources.files = {source_path};
+      result.source_sets.push_back(std::move(sources));
+      return result;
+    };
+const auto write_numeric_sized_cast_source =
+    [&](const std::string_view top_name,
+        const std::string_view cast_size) {
+      const auto source_path = directory
+          / (std::string { top_name } + "-numeric-sized-cast.sv");
+      std::ofstream output(source_path);
+      output << "module " << top_name
+             << "(output logic [2:0] value);\n"
+                "initial value = "
+             << cast_size << "'(5'd17);\nendmodule\n";
+      assert(output.good());
+      return source_path;
+    };
+const auto positive_numeric_sized_cast_source =
+    write_numeric_sized_cast_source("positive_numeric_sized_cast", "3");
+const auto positive_numeric_sized_cast_config = numeric_sized_cast_config(
+    positive_numeric_sized_cast_source, "positive_numeric_sized_cast");
+fsim::diagnostic::Engine positive_numeric_sized_cast_diagnostics;
+auto positive_numeric_sized_cast_project = fsim::app::build_project(
+    positive_numeric_sized_cast_config,
+    positive_numeric_sized_cast_diagnostics);
+if (!positive_numeric_sized_cast_project) {
+  fsim::diagnostic::print_text(
+      std::cerr, positive_numeric_sized_cast_diagnostics);
+}
+assert(positive_numeric_sized_cast_project);
+assert(!positive_numeric_sized_cast_diagnostics.has_error());
+const auto positive_numeric_sized_cast_capture = capture_simulation(
+    std::move(*positive_numeric_sized_cast_project),
+    fsim::app::SimulationEngine::interpreter);
+assert((positive_numeric_sized_cast_capture.final_values
+    == std::vector<std::string> {"001"}));
+
+const auto expect_numeric_sized_cast_rejection =
+    [&](const std::string_view top_name,
+        const std::string_view cast_size,
+        const std::string_view diagnostic_code) {
+      const auto source_path = write_numeric_sized_cast_source(
+          top_name, cast_size);
+      const auto test_config = numeric_sized_cast_config(
+          source_path, top_name);
+      fsim::diagnostic::Engine diagnostics;
+      const auto project = fsim::app::build_project(
+          test_config, diagnostics);
+      assert(!project);
+      assert(std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [&](const auto& diagnostic) {
+            return diagnostic.code == diagnostic_code;
+          }));
+    };
+expect_numeric_sized_cast_rejection(
+    "zero_numeric_sized_cast", "0", "FSIM-SV-SEM-188");
+expect_numeric_sized_cast_rejection(
+    "bounded_numeric_sized_cast", "16777217", "FSIM-ELAB-SVCAST-002");
+expect_numeric_sized_cast_rejection(
+    "overflow_numeric_sized_cast", "4294967296", "FSIM-ELAB-SVCAST-002");
+
+const auto fixed_net_array_source =
+    directory / "fixed_net_array_projection.sv";
+{
+  std::ofstream output(fixed_net_array_source);
+  output << R"(
+module fixed_net_array_projection(
+  input logic [1:0] input_value,
+  output wire [1:0] output_value
+);
+wire [1:0] values [0:1];
+assign values[0] = 2'b00;
+assign values[1] = input_value;
+assign output_value = values[1];
+endmodule
+)";
+  assert(output.good());
+}
+auto fixed_net_array_config = config;
+fixed_net_array_config.project.name =
+    "fixed-net-array-projection-test";
+fixed_net_array_config.project.top =
+    "sv:work.fixed_net_array_projection";
+fixed_net_array_config.build.optimization =
+    fsim::project::Optimization::o2;
+fixed_net_array_config.build.cache_path =
+    directory / "fixed-net-array-projection-cache";
+fixed_net_array_config.source_sets.clear();
+fsim::project::SourceSet fixed_net_array_sources;
+fixed_net_array_sources.language =
+    fsim::project::Language::system_verilog;
+fixed_net_array_sources.standard = "2017";
+fixed_net_array_sources.library = "work";
+fixed_net_array_sources.compilation_unit = "file";
+fixed_net_array_sources.files = {fixed_net_array_source};
+fixed_net_array_config.source_sets.push_back(
+    std::move(fixed_net_array_sources));
+fsim::diagnostic::Engine fixed_net_array_diagnostics;
+const auto fixed_net_array_project = fsim::app::build_project(
+    fixed_net_array_config, fixed_net_array_diagnostics);
+if (!fixed_net_array_project) {
+  fsim::diagnostic::print_text(
+      std::cerr, fixed_net_array_diagnostics);
+}
+assert(fixed_net_array_project);
+assert(!fixed_net_array_diagnostics.has_error());
+const auto has_projected_object =
+    [&](const fsim::semantic::design::ObjectKind kind,
+        const std::string_view path) {
+      return std::ranges::any_of(
+          fixed_net_array_project->design_ir.objects(),
+          [&](const auto& object) {
+            return object.kind == kind && object.path == path;
+          });
+    };
+assert(has_projected_object(
+    fsim::semantic::design::ObjectKind::signal, "values"));
+assert(has_projected_object(
+    fsim::semantic::design::ObjectKind::container, "values"));
+
 }
 
 }  // namespace fsim::test

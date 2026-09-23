@@ -857,17 +857,36 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     ? PackedLogic4::from_aval_bval(width, aval, bval)
                     : state.executor->read_register(id, width);
             };
-            state.context->write_container_object_element(
-                write_element->object,
-                packed_input(
-                    write_element->index, input0_aval, input0_bval),
-                write_element->signed_index,
-                write_element->linear_index,
-                packed_input(
-                    write_element->source, input1_aval, input1_bval),
-                state.generated_process,
-                instruction,
-                write_element->nonblocking);
+            const auto element_index = packed_input(
+                write_element->index, input0_aval, input0_bval);
+            const auto element_value = packed_input(
+                write_element->source, input1_aval, input1_bval);
+            if (write_element->dynamic_part) {
+                const auto& selection = *write_element->dynamic_part;
+                const auto base = state.executor->read_register(
+                    selection.base, 32U);
+                state.context->write_container_object_dynamic_part_element(
+                    write_element->object,
+                    element_index,
+                    write_element->signed_index,
+                    write_element->linear_index,
+                    element_value,
+                    base,
+                    selection,
+                    state.generated_process,
+                    instruction,
+                    write_element->nonblocking);
+            } else {
+                state.context->write_container_object_element(
+                    write_element->object,
+                    element_index,
+                    write_element->signed_index,
+                    write_element->linear_index,
+                    element_value,
+                    state.generated_process,
+                    instruction,
+                    write_element->nonblocking);
+            }
             if (write_element->transaction_signal) {
                 state.context->write_update_word(
                     *write_element->transaction_signal,

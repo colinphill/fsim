@@ -1335,19 +1335,99 @@ void run_composite_expression_test()
                        runtime::simir::Concatenate>(&operation)
                 != nullptr;
         }));
-    assert(std::ranges::any_of(
-        operations,
-        [](const runtime::simir::Operation& operation) {
-            return runtime::simir::operation_get_if<
-                       runtime::simir::ConditionalSelect>(&operation)
-                != nullptr;
-        }));
     const auto q = result.design->find_signal("q");
     assert(q);
     auto interpreter = result.design->create_interpreter();
     interpreter->start();
     (void)interpreter->run();
     assert(interpreter->signal_value(*q).to_msb_string() == "0");
+
+    // Keep structural ConditionalSelect coverage on a runtime, four-state
+    // condition. The composite condition above is specialization-constant,
+    // so folding it is both valid and expected to remove the operation.
+    auto runtime_fixture = systemverilog_hir_fixture(true);
+    const auto runtime_process = runtime_fixture.compiled.find_process(
+        runtime_fixture.process);
+    assert(runtime_process && runtime_process->systemverilog != nullptr);
+    const auto runtime_scope = runtime_process->systemverilog->scope;
+    const auto runtime_source = runtime_process->systemverilog->source;
+    const auto runtime_origin = runtime_process->systemverilog->origin;
+    auto& runtime_declarations
+        = runtime_fixture.compiled.systemverilog_hir.mutable_declarations();
+    const auto q_declaration = std::ranges::find(
+        runtime_declarations,
+        "q",
+        &semantic::sv::Declaration::name);
+    assert(q_declaration != runtime_declarations.end());
+    const auto condition_declaration
+        = runtime_fixture.compiled.semantics.add_declaration(
+            runtime_scope,
+            semantic::DeclarationKind::signal,
+            "condition",
+            runtime_source,
+            runtime_origin);
+    auto condition_record = *q_declaration;
+    condition_record.id = condition_declaration;
+    condition_record.name = "condition";
+    condition_record.direction = semantic::sv::Direction::input;
+    runtime_declarations.push_back(condition_record);
+    runtime_fixture.compiled.systemverilog_hir.mutable_units()
+        .front()
+        .declarations.push_back(condition_declaration);
+
+    const auto condition_name = add_systemverilog_expression(
+        runtime_fixture,
+        semantic::sv::ExpressionKind::name,
+        "condition");
+    auto condition_expression = std::ranges::find(
+        runtime_fixture.compiled.systemverilog_hir.mutable_expressions(),
+        condition_name,
+        &semantic::sv::Expression::id);
+    assert(condition_expression
+        != runtime_fixture.compiled.systemverilog_hir.mutable_expressions()
+               .end());
+    condition_expression->referenced_name.emplace();
+    condition_expression->referenced_name->spelling = "condition";
+    condition_expression->referenced_name->source = runtime_source;
+    condition_expression->referenced_name->selected = condition_declaration;
+    const auto runtime_zero = add_systemverilog_expression(
+        runtime_fixture,
+        semantic::sv::ExpressionKind::integer_literal,
+        "1'b0");
+    const auto runtime_conditional = add_systemverilog_expression(
+        runtime_fixture,
+        semantic::sv::ExpressionKind::call,
+        "?:",
+        { condition_name, runtime_fixture.literal, runtime_zero });
+    runtime_fixture.compiled.systemverilog_hir.mutable_statements().front()
+        .value = runtime_conditional;
+    assert(runtime_fixture.compiled.valid());
+    auto runtime_result = elaborate_compiled(
+        runtime_fixture.compiled,
+        "sv:work.hir_direct",
+        "hir_direct");
+    assert(runtime_result.ok() && runtime_result.design);
+    const auto runtime_condition
+        = runtime_result.design->find_signal("condition");
+    const auto runtime_q = runtime_result.design->find_signal("q");
+    assert(runtime_condition && runtime_q);
+    const auto& runtime_operations
+        = runtime_result.design->processes().front().operations;
+    assert(std::ranges::any_of(
+        runtime_operations,
+        [](const runtime::simir::Operation& operation) {
+            return runtime::simir::operation_get_if<
+                       runtime::simir::ConditionalSelect>(&operation)
+                != nullptr;
+        }));
+    auto runtime_interpreter = runtime_result.design->create_interpreter();
+    runtime_interpreter->deposit_signal(
+        *runtime_condition,
+        runtime::PackedLogic4::from_msb_string("X"));
+    runtime_interpreter->start();
+    (void)runtime_interpreter->run();
+    assert(runtime_interpreter->signal_value(*runtime_q).to_msb_string()
+        == "X");
 
     auto excessive = systemverilog_hir_fixture(true);
     const auto huge_count = add_systemverilog_expression(
@@ -1362,6 +1442,131 @@ void run_composite_expression_test()
     excessive.compiled.systemverilog_hir.mutable_statements().front().value
         = huge_replication;
     require_systemverilog_hir_rejection(std::move(excessive));
+}
+
+void run_conditional_shape_reachability_test()
+{
+    const auto add_dynamic_width_slice = [](SystemVerilogHirFixture& fixture) {
+        const auto dynamic_width = add_systemverilog_expression(
+            fixture,
+            semantic::sv::ExpressionKind::name,
+            "dynamic_width");
+        return add_systemverilog_expression(
+            fixture,
+            semantic::sv::ExpressionKind::slice,
+            "+:",
+            { fixture.literal, fixture.literal, dynamic_width });
+    };
+    const auto require_slice_rejection = [](SystemVerilogHirFixture fixture) {
+        require_systemverilog_hir_rejection(
+            std::move(fixture), "FSIM-ELAB-SVEXPR-004");
+    };
+
+    auto shared = systemverilog_hir_fixture(true);
+    const auto invalid_shared_slice = add_dynamic_width_slice(shared);
+    const auto repeat_count = add_systemverilog_expression(
+        shared,
+        semantic::sv::ExpressionKind::integer_literal,
+        "32'd2");
+    const auto unreachable_replication = add_systemverilog_expression(
+        shared,
+        semantic::sv::ExpressionKind::replication,
+        "replication",
+        { repeat_count, invalid_shared_slice });
+    (void)add_systemverilog_expression(
+        shared,
+        semantic::sv::ExpressionKind::call,
+        "?:",
+        { shared.literal, invalid_shared_slice, unreachable_replication });
+    // The conditional is an expression-table root but is not lowered by the
+    // process. Its selected and unselected paths deliberately share one ID.
+    require_slice_rejection(std::move(shared));
+
+    auto active = systemverilog_hir_fixture(true);
+    const auto active_slice = add_dynamic_width_slice(active);
+    (void)add_systemverilog_expression(
+        active,
+        semantic::sv::ExpressionKind::call,
+        "?:",
+        { active.literal, active_slice, active.literal });
+    require_slice_rejection(std::move(active));
+
+    auto runtime = systemverilog_hir_fixture(true);
+    const auto runtime_process = runtime.compiled.find_process(runtime.process);
+    assert(runtime_process && runtime_process->systemverilog != nullptr);
+    const auto runtime_scope = runtime_process->systemverilog->scope;
+    const auto runtime_source = runtime_process->systemverilog->source;
+    const auto runtime_origin = runtime_process->systemverilog->origin;
+    auto& declarations
+        = runtime.compiled.systemverilog_hir.mutable_declarations();
+    const auto q_declaration = std::ranges::find(
+        declarations,
+        "q",
+        &semantic::sv::Declaration::name);
+    assert(q_declaration != declarations.end());
+    const auto condition_declaration = runtime.compiled.semantics.add_declaration(
+        runtime_scope,
+        semantic::DeclarationKind::signal,
+        "condition",
+        runtime_source,
+        runtime_origin);
+    auto condition_record = *q_declaration;
+    condition_record.id = condition_declaration;
+    condition_record.name = "condition";
+    condition_record.direction = semantic::sv::Direction::input;
+    declarations.push_back(condition_record);
+    runtime.compiled.systemverilog_hir.mutable_units()
+        .front()
+        .declarations.push_back(condition_declaration);
+    const auto condition = add_systemverilog_expression(
+        runtime,
+        semantic::sv::ExpressionKind::name,
+        "condition");
+    auto condition_expression = std::ranges::find(
+        runtime.compiled.systemverilog_hir.mutable_expressions(),
+        condition,
+        &semantic::sv::Expression::id);
+    assert(condition_expression
+        != runtime.compiled.systemverilog_hir.mutable_expressions().end());
+    condition_expression->referenced_name.emplace();
+    condition_expression->referenced_name->spelling = "condition";
+    condition_expression->referenced_name->source = runtime_source;
+    condition_expression->referenced_name->selected = condition_declaration;
+    const auto runtime_slice = add_dynamic_width_slice(runtime);
+    (void)add_systemverilog_expression(
+        runtime,
+        semantic::sv::ExpressionKind::call,
+        "?:",
+        { condition, runtime_slice, runtime.literal });
+    require_slice_rejection(std::move(runtime));
+
+    auto shared_statement = systemverilog_hir_fixture(true);
+    const auto statement_slice = add_dynamic_width_slice(shared_statement);
+    const auto child_id = clone_systemverilog_assignment(shared_statement);
+    auto child = std::ranges::find(
+        shared_statement.compiled.systemverilog_hir.mutable_statements(),
+        child_id,
+        &semantic::sv::Statement::id);
+    assert(child
+        != shared_statement.compiled.systemverilog_hir.mutable_statements()
+               .end());
+    child->value = statement_slice;
+    semantic::sv::Statement conditional_statement;
+    conditional_statement.id
+        = shared_statement.compiled.semantics.add_statement_identity(
+            child->scope, child->source, child->origin);
+    conditional_statement.scope = child->scope;
+    conditional_statement.kind = semantic::sv::StatementKind::conditional;
+    conditional_statement.source = child->source;
+    conditional_statement.origin = child->origin;
+    conditional_statement.condition = shared_statement.literal;
+    conditional_statement.statements.push_back(child_id);
+    conditional_statement.else_statements.push_back(child_id);
+    shared_statement.compiled.systemverilog_hir.mutable_statements()
+        .push_back(std::move(conditional_statement));
+    // The same statement ID is selected and unselected. Dead-statement
+    // pruning must preserve the expression through its selected use.
+    require_slice_rejection(std::move(shared_statement));
 }
 
 void run_dynamic_packed_selection_test()
@@ -2570,7 +2775,10 @@ end architecture;
         [](const runtime::simir::Operation& operation) {
             return runtime::simir::operation_get_if<
                        runtime::simir::DynamicExtract>(&operation)
-                != nullptr;
+                    != nullptr
+                || runtime::simir::operation_get_if<
+                       runtime::simir::DynamicPartSelect>(&operation)
+                    != nullptr;
         }));
     assert(std::ranges::any_of(
         dynamic_operations,
@@ -2593,6 +2801,88 @@ end architecture;
     (void)dynamic_interpreter->run();
     assert(dynamic_interpreter->signal_value(*dynamic_q).to_msb_string()
         == "1");
+}
+
+void run_mixed_vhdl_constant_actual_test()
+{
+    const auto parent = frontend::parse_text(
+        "mixed_constant_parent.sv",
+        R"(
+module mixed_constant_parent;
+  mixed_constant_child child(.data({4{1'b0}}));
+endmodule
+)",
+        frontend::Language::SystemVerilog2017);
+    const auto child = frontend::parse_text(
+        "mixed_constant_child.vhd",
+        R"(
+entity mixed_constant_child is
+  port (data : in std_logic_vector(3 downto 0));
+end entity;
+architecture rtl of mixed_constant_child is
+begin
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(parent.ok() && child.ok());
+    auto mixed = parent.design;
+    mixed.units.insert(
+        mixed.units.end(), child.design.units.begin(), child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> bindings {{
+        "mixed_constant_parent.child",
+        "vhdl:work.mixed_constant_child(rtl)",
+        std::nullopt,
+    }};
+    const auto elaborated = compile_and_elaborate(
+        mixed,
+        "sv:work.mixed_constant_parent",
+        bindings);
+    assert(elaborated.ok() && elaborated.design);
+    const auto adapter = elaborated.design->find_signal(
+        "mixed_constant_parent.child.$actual_data");
+    const auto formal = elaborated.design->find_signal(
+        "mixed_constant_parent.child.data");
+    assert(adapter && formal);
+    auto interpreter = elaborated.design->create_interpreter();
+    interpreter->start();
+    assert(interpreter->signal_value(*adapter).to_msb_string() == "0000");
+    assert(interpreter->signal_value(*formal).to_msb_string() == "0000");
+
+    const auto output_child = frontend::parse_text(
+        "mixed_constant_output.vhd",
+        R"(
+entity mixed_constant_output is
+  port (data : out std_logic);
+end entity;
+architecture rtl of mixed_constant_output is
+begin
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    const auto output_parent = frontend::parse_text(
+        "mixed_constant_output_parent.sv",
+        R"(
+module mixed_constant_output_parent;
+  mixed_constant_output child(.data(1'b0));
+endmodule
+)",
+        frontend::Language::SystemVerilog2017);
+    assert(output_parent.ok() && output_child.ok());
+    auto invalid = output_parent.design;
+    invalid.units.insert(
+        invalid.units.end(),
+        output_child.design.units.begin(),
+        output_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> output_bindings {{
+        "mixed_constant_output_parent.child",
+        "vhdl:work.mixed_constant_output(rtl)",
+        std::nullopt,
+    }};
+    const auto rejected = compile_and_elaborate(
+        invalid,
+        "sv:work.mixed_constant_output_parent",
+        output_bindings);
+    assert(has_diagnostic(rejected, "FSIM-ELAB-HIR-001"));
 }
 
 void run_linked_child_occurrence_test()
@@ -2765,11 +3055,13 @@ void test_direct_hir_lowering()
     run_residual_overlay_boundary_test();
     run_conservative_expression_boundary_tests();
     run_composite_expression_test();
+    run_conditional_shape_reachability_test();
     run_dynamic_packed_selection_test();
     run_statically_bounded_loop_test();
     run_local_nonblocking_boundary_test();
     run_systemverilog_equality_test();
     run_vhdl_direct_hir_test();
+    run_mixed_vhdl_constant_actual_test();
     run_linked_child_occurrence_test();
 }
 

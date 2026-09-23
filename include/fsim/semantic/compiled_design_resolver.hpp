@@ -317,6 +317,13 @@ public:
     [[nodiscard]] bool vhdl_standard_package_member_visible(
         const vhdl::Name&, ScopeId use_scope) const;
 
+    /// Return whether an exact compiler-owned package member is imported
+    /// into a VHDL use scope. Unlike the generic governed-package query,
+    /// this does not accept a same-spelled member from another package.
+    [[nodiscard]] bool vhdl_builtin_package_member_imported(
+        std::string_view library, std::string_view package,
+        std::string_view member, ScopeId use_scope) const;
+
     /// Return whether a compiler-owned type spelling, whether retained as
     /// `@builtin:std.env.time_record`, selected, or directly imported,
     /// denotes a visible governed package member in the selected unit's

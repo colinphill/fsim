@@ -896,6 +896,22 @@ void validate_prefix_operation(
                     (void)operation.object;
                     record_use(operation.index, index);
                     record_use(operation.source, index);
+                    if (operation.dynamic_part) {
+                        if (const auto error
+                            = validate_dynamic_part_index_metadata(
+                                *operation.dynamic_part)) {
+                            reject(process, index, *error);
+                        } else {
+                            constrain_width(
+                                operation.source,
+                                operation.dynamic_part->width,
+                                index);
+                        }
+                        record_use(
+                            operation.dynamic_part->base, index);
+                        constrain_width(
+                            operation.dynamic_part->base, 32U, index);
+                    }
                     if (operation.transaction_signal) {
                         (void)referenced_signal_width(
                             *operation.transaction_signal, index);

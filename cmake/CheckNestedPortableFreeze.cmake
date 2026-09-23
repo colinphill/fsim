@@ -20,7 +20,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "6b7b6b81d199152a9c31108f84f56e9525c1ded44501dc05ca66910aae765867")
+  "32fc7870f8e57917eb99af841ae5d96e30eb7cab2837c9425fc445229fa798c5")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "nested portable contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -120,7 +120,7 @@ set(FSIM_COMPILED_HIR_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 62"
+  "kRuntimeStateSchema = 63"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 4"
   "kCompiledHirBundleSchema = 1"
@@ -128,7 +128,7 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
   "kSystemVerilogConstraintHirStateSchema = 8"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 5")
+  "kVhdlHirStateSchema = 6")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC_INTERNAL}"
   "kMaximumNesting = 1024"
   "design state string exceeds the payload"
@@ -143,12 +143,12 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "deserialize<runtime::SystemVerilogCoverageState>"
   "coverage state is inconsistent with compiled HIR")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 62"
+  "kRuntimeStateSchema == 63"
   "kCompiledHirBundleSchema == 1"
   "kSystemVerilogConstraintHirStateSchema == 8"
   "kSystemVerilogCoverageStateSchema == 7"
   "kSystemVerilogUvmStateSchema == 3"
-  "kVhdlHirStateSchema == 5"
+  "kVhdlHirStateSchema == 6"
   "future-coverage-state.bin"
   "truncated-coverage-state.bin"
   "future_uvm")

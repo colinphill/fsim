@@ -374,6 +374,55 @@ struct ContainerWrite {
     bool string_index { };
 };
 
+/// Runtime base and fixed-width metadata shared by indexed part-select writes.
+struct DynamicPartIndex {
+    DynamicPartIndex() = default;
+    DynamicPartIndex(
+        const RegisterId dynamic_base,
+        const std::int64_t dynamic_left,
+        const std::int64_t dynamic_right,
+        const std::uint32_t dynamic_base_offset,
+        const std::uint32_t dynamic_width,
+        const bool dynamic_increasing,
+        const bool dynamic_source_descending)
+        : left(dynamic_left)
+        , right(dynamic_right)
+        , base(dynamic_base)
+        , base_offset(dynamic_base_offset)
+        , width(dynamic_width)
+        , increasing(dynamic_increasing)
+        , source_descending(dynamic_source_descending)
+    {
+    }
+
+    std::int64_t left { };
+    std::int64_t right { };
+    RegisterId base { };
+    std::uint32_t base_offset { };
+    std::uint32_t width { };
+    bool increasing { };
+    bool source_descending { };
+
+    friend bool operator==(
+        const DynamicPartIndex&, const DynamicPartIndex&) = default;
+};
+
+inline auto archive_fields(const DynamicPartIndex& selection)
+{
+    return std::tie(
+        selection.base, selection.left, selection.right,
+        selection.base_offset, selection.width,
+        selection.increasing, selection.source_descending);
+}
+
+inline auto archive_fields(DynamicPartIndex& selection)
+{
+    return std::tie(
+        selection.base, selection.left, selection.right,
+        selection.base_offset, selection.width,
+        selection.increasing, selection.source_descending);
+}
+
 /// Update one packed/scalar element of a container object without
 /// materializing the complete object in a temporary container register.
 struct WriteContainerObjectElement {
@@ -386,6 +435,9 @@ struct WriteContainerObjectElement {
     /// current time slot's nonblocking-update phase.
     bool nonblocking { };
     std::optional<SignalId> transaction_signal;
+    /// Apply a packed part-write to the current element at update time. The
+    /// base register is captured with the address and value for NBA writes.
+    std::optional<DynamicPartIndex> dynamic_part;
 };
 
 struct ContainerStringRead {
@@ -669,55 +721,6 @@ struct DynamicPartSelect {
     bool increasing,
     bool source_descending,
     bool two_state);
-
-/// Runtime base and fixed-width metadata shared by indexed part-select writes.
-struct DynamicPartIndex {
-    DynamicPartIndex() = default;
-    DynamicPartIndex(
-        const RegisterId dynamic_base,
-        const std::int64_t dynamic_left,
-        const std::int64_t dynamic_right,
-        const std::uint32_t dynamic_base_offset,
-        const std::uint32_t dynamic_width,
-        const bool dynamic_increasing,
-        const bool dynamic_source_descending)
-        : left(dynamic_left)
-        , right(dynamic_right)
-        , base(dynamic_base)
-        , base_offset(dynamic_base_offset)
-        , width(dynamic_width)
-        , increasing(dynamic_increasing)
-        , source_descending(dynamic_source_descending)
-    {
-    }
-
-    std::int64_t left { };
-    std::int64_t right { };
-    RegisterId base { };
-    std::uint32_t base_offset { };
-    std::uint32_t width { };
-    bool increasing { };
-    bool source_descending { };
-
-    friend bool operator==(
-        const DynamicPartIndex&, const DynamicPartIndex&) = default;
-};
-
-inline auto archive_fields(const DynamicPartIndex& selection)
-{
-    return std::tie(
-        selection.base, selection.left, selection.right,
-        selection.base_offset, selection.width,
-        selection.increasing, selection.source_descending);
-}
-
-inline auto archive_fields(DynamicPartIndex& selection)
-{
-    return std::tie(
-        selection.base, selection.left, selection.right,
-        selection.base_offset, selection.width,
-        selection.increasing, selection.source_descending);
-}
 
 /// The representable intersection of an indexed part-select write.
 struct DynamicPartWrite {

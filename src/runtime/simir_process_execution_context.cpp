@@ -92,6 +92,23 @@ void ProcessExecutionContext::write_container_object_element(
     };
 }
 
+void ProcessExecutionContext::write_container_object_dynamic_part_element(
+    ContainerObjectId,
+    const PackedLogic4&,
+    bool,
+    bool,
+    const PackedLogic4&,
+    const PackedLogic4&,
+    const DynamicPartIndex&,
+    ProcessId,
+    InstructionIndex,
+    bool)
+{
+    throw std::logic_error {
+        "alternate process executor does not support dynamic part writes to container-object elements"
+    };
+}
+
 [[nodiscard]] FileHandle ProcessExecutionContext::open_file(
     std::string_view, std::string_view)
 {

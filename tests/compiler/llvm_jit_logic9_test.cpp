@@ -613,6 +613,32 @@ void test_rejections()
     expect_error(
         [&] {
             jit.add_process(
+                "unrepresentable_dynamic_part_container_write",
+                dynamic_part_write_process(
+                    WriteContainerObjectElement {
+                        0,
+                        2,
+                        1,
+                        false,
+                        false,
+                        true,
+                        std::nullopt,
+                        DynamicPartIndex {
+                            2,
+                            std::int64_t { 1 } << 32,
+                            0,
+                            0,
+                            4,
+                            true,
+                            true,
+                        },
+                    }),
+                no_signals);
+        },
+        "dynamic part-select write bounds must fit signed 32-bit integers");
+    expect_error(
+        [&] {
+            jit.add_process(
                 "zero_width_dynamic_part_insert",
                 dynamic_part_write_process(
                     DynamicPartInsert {

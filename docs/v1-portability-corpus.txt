@@ -19,4 +19,4 @@ PORT-016|MSVC Debug host|Debug+path+newline+resources|fsim.msvc-debug-contract|c
 PORT-017|MSVC Release host|Release+abi+resources|fsim.msvc-release-contract|cmake/CheckMsvcReleaseContract.cmake|MSVC Release contract
 PORT-018|Windows LLVM host|Debug+Release+LLVM-O0+LLVM-O2+cold+warm+edit+debugger+abi|fsim.windows-llvm-contract|cmake/CheckWindowsLlvmContract.cmake|Windows LLVM contract
 PORT-019|SystemC host portability|Debug+Release+plugin+abi+cold+warm+edit|fsim.systemc-portability-contract|cmake/CheckSystemCPortabilityContract.cmake|SystemC portability contract
-PORT-020|host resources|Debug+Release+resources|fsim.resource-portability-contract|cmake/CheckResourcePortabilityContract.cmake|resource portability contract
+PORT-020|host resources|Debug+Release+resources|fsim.contract.build-resources|cmake/CheckCurrentBuildResources.cmake|build resources:

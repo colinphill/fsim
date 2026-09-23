@@ -625,7 +625,36 @@ begin
   begin
     raw_value <= lane_math.selected_value;
     generated_alias <= architecture_adjust(raw_value);
-  end generate lanes;
+end generate lanes;
+end architecture;
+)";
+    generated_vhdl_source += R"(
+entity generated_vhdl_slice_port_leaf is
+  port (
+    slice_value : in bit_vector(1 downto 0);
+    captured_value : out bit_vector(1 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_slice_port_leaf is
+begin
+  captured_value <= slice_value;
+end architecture;
+
+entity generated_vhdl_iterative_slice_actual is
+end entity;
+architecture rtl of generated_vhdl_iterative_slice_actual is
+  constant M : natural := 2;
+  constant GEN : bit_vector(7 downto 0) := "11001001";
+begin
+  glane: for gj in 0 to 3 generate
+    signal captured_value : bit_vector(1 downto 0);
+  begin
+    child: entity work.generated_vhdl_slice_port_leaf(rtl)
+      port map (
+        slice_value => GEN((gj + 1) * M - 1 downto gj * M),
+        captured_value => captured_value
+      );
+  end generate glane;
 end architecture;
 )";
     generated_vhdl_source += R"(
@@ -876,6 +905,44 @@ begin
     constant bad_value : positive := 0;
   begin
   end block invalid_scope;
+end architecture;
+
+entity generated_vhdl_packed_array_constant is
+  port (
+    index_value : in integer range 3 to 4;
+    selected_value : out bit_vector(3 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_packed_array_constant is
+  type rom_t is array (3 to 4) of bit_vector(3 downto 0);
+  function build_rom return rom_t is
+    variable rom_value : rom_t := (others => "0101");
+  begin
+    rom_value(3) := "1010";
+    return rom_value;
+  end function build_rom;
+begin
+  selected: if true generate
+    constant rom : rom_t := build_rom;
+  begin
+    selected_value <= rom(index_value);
+  end generate selected;
+end architecture;
+
+entity generated_vhdl_bad_packed_array_constant is
+end entity;
+architecture rtl of generated_vhdl_bad_packed_array_constant is
+  type rom_t is array (0 to 1) of bit_vector(3 downto 0);
+  function build_rom return rom_t is
+    variable rom_value : rom_t;
+  begin
+    return rom_value;
+  end function build_rom;
+begin
+  selected: if true generate
+    constant rom : rom_t := build_rom;
+  begin
+  end generate selected;
 end architecture;
 
 entity generated_vhdl_forward_generated_type is
@@ -1425,6 +1492,70 @@ end architecture;
             .to_msb_string()
         == "0111");
 
+    const auto generated_vhdl_packed_array_constant
+        = compile_and_elaborate(generated_design,
+            "vhdl:work.generated_vhdl_packed_array_constant(rtl)");
+    if (!generated_vhdl_packed_array_constant.ok()) {
+      const auto& diagnostics
+          = generated_vhdl_packed_array_constant.diagnostics;
+      const auto count = diagnostics.size() < 8U
+          ? diagnostics.size()
+          : 8U;
+      for (std::size_t index = 0U; index < count; ++index) {
+        std::cerr << diagnostics[index].code << ": "
+                  << diagnostics[index].message << '\n';
+      }
+      if (diagnostics.size() > count) {
+        std::cerr << "additional generated packed-array diagnostics: "
+                  << diagnostics.size() - count << '\n';
+      }
+    }
+    assert(generated_vhdl_packed_array_constant.ok());
+    const auto generated_vhdl_rom_index =
+        generated_vhdl_packed_array_constant.design->find_signal(
+            "index_value");
+    const auto generated_vhdl_rom_selected =
+        generated_vhdl_packed_array_constant.design->find_signal(
+            "selected_value");
+    assert(generated_vhdl_rom_index && generated_vhdl_rom_selected);
+    auto generated_vhdl_rom_first_interpreter
+        = generated_vhdl_packed_array_constant.design->create_interpreter();
+    generated_vhdl_rom_first_interpreter->deposit_signal(
+        *generated_vhdl_rom_index,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "00000000000000000000000000000011"));
+    assert(
+        generated_vhdl_rom_first_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_rom_first_interpreter
+            ->signal_value(*generated_vhdl_rom_selected)
+            .to_msb_string()
+        == "1010");
+
+    auto generated_vhdl_rom_second_interpreter
+        = generated_vhdl_packed_array_constant.design->create_interpreter();
+    generated_vhdl_rom_second_interpreter->deposit_signal(
+        *generated_vhdl_rom_index,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "00000000000000000000000000000100"));
+    assert(
+        generated_vhdl_rom_second_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_rom_second_interpreter
+            ->signal_value(*generated_vhdl_rom_selected)
+            .to_msb_string()
+        == "0101");
+
+    const auto generated_vhdl_bad_packed_array_constant
+        = compile_and_elaborate(generated_design,
+            "vhdl:work.generated_vhdl_bad_packed_array_constant(rtl)");
+    assert(!generated_vhdl_bad_packed_array_constant.ok());
+    assert(has_diagnostic(
+        generated_vhdl_bad_packed_array_constant,
+        "FSIM-ELAB-GEN-011"));
+
     const auto generated_sv_loop_behavior =
         compile_and_elaborate(
             generated_design,
@@ -1537,6 +1668,39 @@ end architecture;
       assert(
           generated_vhdl_type_identities.insert(
               typed_info.nominal_type).second);
+    }
+
+    const auto generated_vhdl_iterative_slice_actual =
+        compile_and_elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_iterative_slice_actual(rtl)");
+    for (const auto& diagnostic :
+         generated_vhdl_iterative_slice_actual.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+    assert(generated_vhdl_iterative_slice_actual.ok());
+    auto generated_vhdl_iterative_slice_interpreter =
+        generated_vhdl_iterative_slice_actual.design
+            ->create_interpreter();
+    assert(
+        generated_vhdl_iterative_slice_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const std::array<std::string_view, 4>
+        generated_vhdl_iterative_slice_values{
+            "01", "10", "00", "11"};
+    for (std::size_t index = 0; index <
+         generated_vhdl_iterative_slice_values.size(); ++index) {
+      const auto signal =
+          generated_vhdl_iterative_slice_actual.design->find_signal(
+              "glane[" + std::to_string(index)
+              + "].captured_value");
+      assert(signal);
+      assert(
+          generated_vhdl_iterative_slice_interpreter
+              ->signal_value(*signal)
+              .to_msb_string()
+          == generated_vhdl_iterative_slice_values[index]);
     }
 
     const auto generated_sv_implicit_behavior =

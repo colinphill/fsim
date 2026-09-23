@@ -1046,6 +1046,56 @@ endmodule
             == fsim::runtime::RunStatus::stopped
         && procedural_memory_result.time == 16);
 
+    const auto memory_dynamic_part_parsed = fsim::frontend::parse_text(
+        "memory-dynamic-part.sv",
+        R"(
+module memory_dynamic_part;
+  logic [15:0] words[0:1];
+  integer address;
+  integer lane;
+  logic [7:0] data;
+  initial begin
+    words[0] = 16'h0000;
+    words[1] = 16'h0000;
+    address = 0;
+    lane = 0;
+    data = 8'h12;
+    words[address][lane * 8 +: 8] <= data;
+    lane = 1;
+    data = 8'h34;
+    words[address][lane * 8 +: 8] <= data;
+    lane = 0;
+    data = 8'h56;
+    words[address][lane * 8 +: 8] <= data;
+    address = 1;
+    lane = 0;
+    data = 8'bx1010101;
+    words[address][lane * 8 +: 8] <= data;
+    address = 0;
+    lane = 1;
+    data = 8'hee;
+    #1;
+    assert (words[0] == 16'h3456);
+    assert (words[1][7:0] === 8'bx1010101);
+    $finish;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(memory_dynamic_part_parsed.ok());
+    const auto memory_dynamic_part_elaborated = compile_and_elaborate(
+        memory_dynamic_part_parsed.design,
+        "memory_dynamic_part");
+    assert(memory_dynamic_part_elaborated.ok());
+    auto memory_dynamic_part_interpreter
+        = memory_dynamic_part_elaborated.design->create_interpreter();
+    const auto memory_dynamic_part_result
+        = memory_dynamic_part_interpreter->run();
+    assert(
+        memory_dynamic_part_result.status
+            == fsim::runtime::RunStatus::stopped
+        && memory_dynamic_part_result.time == 1);
+
     const auto function_memory_parsed = fsim::frontend::parse_text(
         "function-memory.sv",
         R"(

@@ -27,14 +27,14 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 62);
+    static_assert(app::kRuntimeStateSchema == 63);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 4);
     static_assert(app::kCompiledHirBundleSchema == 1);
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 8);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 5);
+    static_assert(app::kVhdlHirStateSchema == 6);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -810,6 +810,46 @@ end architecture;
         vhdl_hir_codec_diagnostics);
     assert(repeated_vhdl_hir == vhdl_hir_bytes);
 
+    // Exercise the schema-6 provenance fields independently of whatever the
+    // frontend happens to infer for this broader artifact fixture.
+    auto vhdl_hir_with_builtin_identities = coverage_checkpoint->vhdl_hir;
+    assert(!vhdl_hir_with_builtin_identities.types().empty());
+    assert(!vhdl_hir_with_builtin_identities.expressions().empty());
+    constexpr auto builtin_type_identity
+        = semantic::vhdl::BuiltinTypeIdentity::
+            ieee_std_logic_1164_std_logic_vector;
+    constexpr auto builtin_operator_identity
+        = semantic::vhdl::BuiltinOperatorIdentity::
+            ieee_std_logic_1164_not;
+    vhdl_hir_with_builtin_identities.mutable_types().front().base.builtin_type
+        = builtin_type_identity;
+    vhdl_hir_with_builtin_identities.mutable_expressions().front()
+        .builtin_operator = builtin_operator_identity;
+    diagnostic::Engine vhdl_hir_identity_codec_diagnostics;
+    const auto vhdl_hir_identity_bytes = app::serialize_vhdl_hir_state(
+        vhdl_hir_with_builtin_identities, coverage_checkpoint->semantics,
+        vhdl_hir_identity_codec_diagnostics);
+    assert(vhdl_hir_identity_bytes
+        && !vhdl_hir_identity_codec_diagnostics.has_error());
+    const auto restored_vhdl_hir_with_builtin_identities
+        = app::deserialize_vhdl_hir_state(
+            *vhdl_hir_identity_bytes, "vhdl-hir-identities.bin",
+            coverage_checkpoint->semantics,
+            vhdl_hir_identity_codec_diagnostics);
+    assert(restored_vhdl_hir_with_builtin_identities
+        && !vhdl_hir_identity_codec_diagnostics.has_error());
+    assert(restored_vhdl_hir_with_builtin_identities->types().front()
+            .base.builtin_type
+        == builtin_type_identity);
+    assert(restored_vhdl_hir_with_builtin_identities->expressions().front()
+            .builtin_operator
+        == builtin_operator_identity);
+    assert(app::serialize_vhdl_hir_state(
+               *restored_vhdl_hir_with_builtin_identities,
+               coverage_checkpoint->semantics,
+               vhdl_hir_identity_codec_diagnostics)
+        == vhdl_hir_identity_bytes);
+
     auto vhdl_2019_hir = *restored_vhdl_hir;
     assert(
         vhdl_2019_hir.declarations().size() >= 2U
@@ -1033,6 +1073,19 @@ end architecture;
     assert(!app::deserialize_vhdl_hir_state(
         future_vhdl_hir, "future-vhdl-hir.bin",
         coverage_checkpoint->semantics, future_vhdl_hir_diagnostics));
+    auto schema5_vhdl_hir = *vhdl_hir_bytes;
+    schema5_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema - 1U);
+    diagnostic::Engine schema5_vhdl_hir_diagnostics;
+    assert(!app::deserialize_vhdl_hir_state(
+        schema5_vhdl_hir, "schema5-vhdl-hir.bin",
+        coverage_checkpoint->semantics, schema5_vhdl_hir_diagnostics));
+    assert(std::ranges::any_of(
+        schema5_vhdl_hir_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message.find("schema 5") != std::string::npos
+                && diagnostic.message.find("schema 6") != std::string::npos
+                && diagnostic.message.find("regenerate") != std::string::npos;
+        }));
     auto v2_vhdl_hir = *vhdl_hir_bytes;
     v2_vhdl_hir[8] = static_cast<char>(1U);
     diagnostic::Engine v2_vhdl_hir_diagnostics;

@@ -8,6 +8,7 @@
 #include "../../src/elaboration/elaboration_targets.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -62,7 +63,8 @@ int main()
         "endmodule "
         "module direct_sv #(parameter int SELECT = 1) "
         "(input logic [1:0] a, output logic q, "
-        "output logic r); "
+        "output logic r, output wire [7:0] array_observe, "
+        "output wire [1:0] dynamic_observe); "
         "import \"DPI-C\" pure dpi_identity_c = function int "
         "dpi_identity(input int value); "
         "direct_leaf #(.W(2)) leaf(.i(a), .o()); "
@@ -75,14 +77,57 @@ int main()
         "if (!SELECT) begin : rejected_gen "
         "direct_leaf #(.W(2)) rejected(.i(a), .o()); "
         "end "
+        "wire [1:0] red [0:3]; "
+        "logic [1:0] scratch [0:1]; "
+        "localparam integer SLICE_WIDTH = 2; "
+        "wire [7:0] dynamic_source = 8'b11100100; "
         "initial begin "
         "q = dpi_identity(a[0]); "
         "q = a[1] ? {2{a[0]}} : a[1:0]; "
         "repeat (2) q = 1'b1; "
         "for (int i = 0; i < 2; i++) q = 1'b1; "
         "while (1'b0) q = 1'b0; "
+        "scratch[0] = 2'b01; "
         "end "
+        "assign red[0] = a; "
+        "assign red[1] = 2'b10; "
+        "assign red[2] = 2'b00; "
+        "assign red[2] = 2'b11; "
+        "assign array_observe = {red[0], red[1], red[3], red[2]}; "
+        "assign dynamic_observe = dynamic_source["
+        "a[0]*SLICE_WIDTH +: SLICE_WIDTH]; "
         "always @* r = q; endmodule "
+        "module generated_integer_condition(input logic [1:0] a, "
+        "output wire [1:0] y); "
+        "wire [1:0] generated [0:1]; "
+        "genvar xi; generate "
+        "for (xi = 0; xi < 2; xi = xi + 1) begin : xse "
+        "assign generated[xi] = (xi & 1) ? a : {2{1'b0}}; "
+        "end endgenerate "
+        "assign y = generated[1]; endmodule "
+        "module generated_runtime_genvar_condition(input logic [1:0] a, "
+        "input logic [1:0] threshold, output wire [1:0] y); "
+        "wire [1:0] generated; genvar wk; generate "
+        "for (wk = 0; wk < 2; wk = wk + 1) begin : runtime_g "
+        "assign generated[wk] = (wk >= threshold) ? a[wk] : 1'b0; "
+        "end endgenerate assign y = generated; endmodule "
+        "module implicit_parameter_sized_cast(output logic [2:0] y); "
+        "localparam READY = 3'd1; "
+        "initial begin case (3'd1) READY: y = 3'(READY); "
+        "default: y = 3'd0; endcase end endmodule "
+        "module inactive_constant_slice(input logic [7:0] a, "
+        "output wire [7:0] y); localparam bit NARROW = 0; "
+        "assign y = NARROW ? a[4+:8] : a[0+:8]; endmodule "
+        "module sparse_enum_case(output logic y); "
+        "typedef enum logic [4:0] {E_ZERO = 5'd0, "
+        "E_SPARSE = 5'd17, E_HIGH = 5'd31} enum_t; "
+        "enum_t state; "
+        "initial begin state = E_SPARSE; case (state) "
+        "E_ZERO: y = 1'b0; E_SPARSE: y = 1'b1; "
+        "E_HIGH: y = 1'b0; default: y = 1'b0; endcase end "
+        "endmodule "
+        "module read_only_array(input logic [1:0] values [0:1]); "
+        "initial values[0] = 2'b01; endmodule "
         "module duplicate_top; duplicate_leaf selected(); endmodule "
         "config duplicate_configuration; "
         "design work.duplicate_top; "
@@ -249,7 +294,7 @@ end architecture;
     assert(decoded_specialization->selected_generates().size() == 2U);
     const auto systemverilog_ports
         = unit_ports(*restored, *systemverilog_unit);
-    assert(systemverilog_ports && systemverilog_ports->size() == 3U);
+    assert(systemverilog_ports && systemverilog_ports->size() == 5U);
     assert((*systemverilog_ports)[0]
         && (*systemverilog_ports)[0].name() == "a"
         && (*systemverilog_ports)[0].mode() == CompiledPortMode::input
@@ -396,7 +441,7 @@ end architecture;
         }
     }
     assert(matched.ok() && matched.design);
-    assert(matched.design->processes().size() == 3U);
+    assert(matched.design->processes().size() == 10U);
     const auto has_specialization_parameter
         = [&](const std::string_view instance,
               const std::string_view name,
@@ -466,12 +511,30 @@ end architecture;
         }
     }
     assert(elaborated.ok() && elaborated.design);
-    assert(elaborated.design->processes().size() == 3U);
+    assert(elaborated.design->processes().size() == 10U);
+    const auto sv_a = elaborated.design->find_signal("sv_root.a");
     const auto sv_q = elaborated.design->find_signal("sv_root.q");
     const auto sv_r = elaborated.design->find_signal("sv_root.r");
+    const auto sv_array_observe = elaborated.design->find_signal(
+        "sv_root.array_observe");
+    const auto sv_dynamic_observe = elaborated.design->find_signal(
+        "sv_root.dynamic_observe");
+    const auto sv_scratch = elaborated.design->find_container(
+        "sv_root.scratch");
+    const auto sv_scratch_signal = elaborated.design->find_signal(
+        "sv_root.scratch");
     const auto vh_a = elaborated.design->find_signal("vhdl_root.a");
     const auto vh_q = elaborated.design->find_signal("vhdl_root.q");
-    assert(sv_q && sv_r && vh_a && vh_q);
+    assert(sv_a && sv_q && sv_r && sv_array_observe
+        && sv_dynamic_observe && sv_scratch && sv_scratch_signal
+        && vh_a && vh_q);
+    const auto& sv_scratch_info
+        = elaborated.design->signals().at(*sv_scratch_signal);
+    assert(sv_scratch_info.width == 4U);
+    assert(sv_scratch_info.systemverilog_net_type.empty());
+    assert(
+        sv_scratch_info.resolution
+        == fsim::runtime::simir::ResolutionKind::none);
     const auto wildcard = std::ranges::find_if(
         elaborated.design->processes(),
         [&](const fsim::runtime::simir::Process& process) {
@@ -539,12 +602,216 @@ end architecture;
             return actuals.front();
         });
     interpreter->deposit_signal(
+        *sv_a, fsim::runtime::PackedLogic4::from_msb_string("10"));
+    interpreter->deposit_signal(
         *vh_a, fsim::runtime::PackedLogic4::from_msb_string("1"));
     interpreter->start();
     (void)interpreter->run();
+    assert(
+        interpreter->signal_value(*sv_scratch_signal).to_msb_string()
+        == "01XX");
+    assert(interpreter->signal_value(*sv_array_observe).to_msb_string()
+        == "1010ZZXX");
+    assert(interpreter->signal_value(*sv_dynamic_observe).to_msb_string()
+        == "00");
     assert(interpreter->signal_value(*sv_q).to_msb_string() == "1");
     assert(interpreter->signal_value(*sv_r).to_msb_string() == "1");
     assert(interpreter->signal_value(*vh_q).to_msb_string() == "1");
     assert(invoked_dpi);
+    interpreter->deposit_signal(
+        *sv_a, fsim::runtime::PackedLogic4::from_msb_string("01"));
+    (void)interpreter->run();
+    assert(interpreter->signal_value(*sv_array_observe).to_msb_string()
+        == "0110ZZXX");
+    assert(interpreter->signal_value(*sv_dynamic_observe).to_msb_string()
+        == "01");
+
+    const std::array sparse_enum_case_roots {
+        fsim::elaboration::Root {
+            "sv:work.sparse_enum_case",
+            "sparse_enum_case",
+        },
+    };
+    auto sparse_enum_case = fsim::elaboration::elaborate(
+        *restored,
+        sparse_enum_case_roots,
+        { },
+        { },
+        nullptr,
+        { });
+    assert(sparse_enum_case.ok() && sparse_enum_case.design);
+    const auto sparse_enum_y = sparse_enum_case.design->find_signal(
+        "sparse_enum_case.y");
+    assert(sparse_enum_y);
+    auto sparse_enum_interpreter
+        = sparse_enum_case.design->create_interpreter();
+    sparse_enum_interpreter->start();
+    (void)sparse_enum_interpreter->run();
+    assert(sparse_enum_interpreter->signal_value(*sparse_enum_y)
+               .to_msb_string()
+        == "1");
+
+    const std::array implicit_parameter_sized_cast_roots {
+        fsim::elaboration::Root {
+            "sv:work.implicit_parameter_sized_cast",
+            "implicit_parameter_sized_cast",
+        },
+    };
+    auto implicit_parameter_sized_cast = fsim::elaboration::elaborate(
+        *restored,
+        implicit_parameter_sized_cast_roots,
+        { },
+        { },
+        nullptr,
+        { });
+    assert(implicit_parameter_sized_cast.ok()
+        && implicit_parameter_sized_cast.design);
+    const auto implicit_parameter_sized_cast_y
+        = implicit_parameter_sized_cast.design->find_signal(
+            "implicit_parameter_sized_cast.y");
+    assert(implicit_parameter_sized_cast_y);
+    auto implicit_parameter_sized_cast_interpreter
+        = implicit_parameter_sized_cast.design->create_interpreter();
+    implicit_parameter_sized_cast_interpreter->start();
+    (void)implicit_parameter_sized_cast_interpreter->run();
+    assert(implicit_parameter_sized_cast_interpreter
+               ->signal_value(*implicit_parameter_sized_cast_y)
+               .to_msb_string()
+        == "001");
+
+    const std::array inactive_constant_slice_roots {
+        fsim::elaboration::Root {
+            "sv:work.inactive_constant_slice",
+            "inactive_constant_slice",
+        },
+    };
+    auto inactive_constant_slice = fsim::elaboration::elaborate(
+        *restored,
+        inactive_constant_slice_roots,
+        { },
+        { },
+        nullptr,
+        { });
+    assert(inactive_constant_slice.ok()
+        && inactive_constant_slice.design);
+    const auto inactive_slice_a
+        = inactive_constant_slice.design->find_signal(
+            "inactive_constant_slice.a");
+    const auto inactive_slice_y
+        = inactive_constant_slice.design->find_signal(
+            "inactive_constant_slice.y");
+    assert(inactive_slice_a && inactive_slice_y);
+    auto inactive_slice_interpreter
+        = inactive_constant_slice.design->create_interpreter();
+    inactive_slice_interpreter->deposit_signal(
+        *inactive_slice_a,
+        fsim::runtime::PackedLogic4::from_msb_string("10100101"));
+    inactive_slice_interpreter->start();
+    (void)inactive_slice_interpreter->run();
+    assert(inactive_slice_interpreter->signal_value(*inactive_slice_y)
+               .to_msb_string()
+        == "10100101");
+
+    const std::array generated_integer_condition_roots {
+        fsim::elaboration::Root {
+            "sv:work.generated_integer_condition",
+            "generated_integer_condition",
+        },
+    };
+    auto generated_integer_condition = fsim::elaboration::elaborate(
+        *restored,
+        generated_integer_condition_roots,
+        { },
+        { },
+        nullptr,
+        { });
+    if (!generated_integer_condition.ok()) {
+        for (const auto& diagnostic : generated_integer_condition.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(generated_integer_condition.ok()
+        && generated_integer_condition.design);
+    const auto generated_a = generated_integer_condition.design->find_signal(
+        "generated_integer_condition.a");
+    const auto generated_y = generated_integer_condition.design->find_signal(
+        "generated_integer_condition.y");
+    assert(generated_a && generated_y);
+    auto generated_interpreter
+        = generated_integer_condition.design->create_interpreter();
+    generated_interpreter->deposit_signal(
+        *generated_a, fsim::runtime::PackedLogic4::from_msb_string("10"));
+    generated_interpreter->start();
+    (void)generated_interpreter->run();
+    assert(generated_interpreter->signal_value(*generated_y).to_msb_string()
+        == "10");
+    generated_interpreter->deposit_signal(
+        *generated_a, fsim::runtime::PackedLogic4::from_msb_string("01"));
+    (void)generated_interpreter->run();
+    assert(generated_interpreter->signal_value(*generated_y).to_msb_string()
+        == "01");
+
+    const std::array generated_runtime_genvar_condition_roots {
+        fsim::elaboration::Root {
+            "sv:work.generated_runtime_genvar_condition",
+            "generated_runtime_genvar_condition",
+        },
+    };
+    auto generated_runtime_genvar_condition = fsim::elaboration::elaborate(
+        *restored,
+        generated_runtime_genvar_condition_roots,
+        { },
+        { },
+        nullptr,
+        { });
+    assert(generated_runtime_genvar_condition.ok()
+        && generated_runtime_genvar_condition.design);
+    const auto runtime_a
+        = generated_runtime_genvar_condition.design->find_signal(
+            "generated_runtime_genvar_condition.a");
+    const auto runtime_threshold
+        = generated_runtime_genvar_condition.design->find_signal(
+            "generated_runtime_genvar_condition.threshold");
+    const auto runtime_y
+        = generated_runtime_genvar_condition.design->find_signal(
+            "generated_runtime_genvar_condition.y");
+    assert(runtime_a && runtime_threshold && runtime_y);
+    auto runtime_interpreter
+        = generated_runtime_genvar_condition.design->create_interpreter();
+    runtime_interpreter->deposit_signal(
+        *runtime_a, fsim::runtime::PackedLogic4::from_msb_string("10"));
+    runtime_interpreter->deposit_signal(
+        *runtime_threshold,
+        fsim::runtime::PackedLogic4::from_msb_string("01"));
+    runtime_interpreter->start();
+    (void)runtime_interpreter->run();
+    assert(runtime_interpreter->signal_value(*runtime_y).to_msb_string()
+        == "10");
+    runtime_interpreter->deposit_signal(
+        *runtime_threshold,
+        fsim::runtime::PackedLogic4::from_msb_string("10"));
+    (void)runtime_interpreter->run();
+    assert(runtime_interpreter->signal_value(*runtime_y).to_msb_string()
+        == "00");
+
+    const std::array read_only_roots {
+        fsim::elaboration::Root {
+            "sv:work.read_only_array", "read_only_array"
+        },
+    };
+    const auto rejected_read_only = fsim::elaboration::elaborate(
+        *restored,
+        read_only_roots,
+        { },
+        { },
+        nullptr,
+        { });
+    assert(!rejected_read_only.ok());
+    assert(std::ranges::any_of(
+        rejected_read_only.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVPORT-009";
+        }));
     std::cout << "decoded compiled-HIR lowering tests passed\n";
 }

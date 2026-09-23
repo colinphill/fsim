@@ -136,8 +136,8 @@ set(FSIM_COMPOSED_OUTPUT)
 foreach(FSIM_GATE IN ITEMS
     CheckVhdlPslGapInventory.cmake
     CheckDiagnosticCatalog.cmake
-    CheckSourceLineBudget.cmake
-    CheckV1ConformanceAudit.cmake)
+    CheckTranslationUnitStructure.cmake
+    CheckAuthoredLicenseInventory.cmake)
   execute_process(
     COMMAND "${CMAKE_COMMAND}" "-DFSIM_SOURCE_DIR=${FSIM_SOURCE_DIR}"
       -P "${FSIM_SOURCE_DIR}/cmake/${FSIM_GATE}"
@@ -155,8 +155,8 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "33 rows split 29 supported, 0 unresolved, 4 deferred"
     "diagnostic catalog covers 2765 production codes"
-    "The physical source-line ceiling is disabled; checking translation-unit structure only"
-    "v1 conformance audit: 572 authored test/control files")
+    "Translation-unit structure checked: 0 forbidden .tpp files"
+    "authored license inventory:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR

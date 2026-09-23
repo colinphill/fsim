@@ -137,9 +137,9 @@ fsim_require_v2_rejection_tokens(tests/app/application_test_non_project_cli.cpp
 fsim_require_v2_rejection_tokens(tests/app/application_test_classes.cpp
   "{ 6U, fsim::app::kSystemVerilogConstraintHirStateSchema + 1U }"
   "incompatible-sv-constraint-hir.bin")
-fsim_require_v2_rejection_tokens(src/compiler/llvm_jit_cache_key.cpp
+fsim_require_v2_rejection_tokens(src/compiler/native_cache_schema.hpp
   "fsim-llvm-native-object-v168")
-file(READ "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key.cpp"
+file(READ "${FSIM_SOURCE_DIR}/src/compiler/native_cache_schema.hpp"
   FSIM_CACHE_KEY_TEXT)
 string(FIND "${FSIM_CACHE_KEY_TEXT}" "fsim-llvm-native-object-v116"
   FSIM_V2_CACHE_FOUND)
@@ -176,7 +176,7 @@ fsim_require_v2_rejection_tokens(tests/CMakeLists.txt
   "CheckV3V2InputRejection.cmake")
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 set(FSIM_EXPECTED_DIGEST
-  "87effc6360402a0e595d134d8fa9c197410ea28300aeb12d52f7172633d55915")
+  "691bed3caf845284997714b2c94acbaa5ba6b11096a027b149deda0aeda003ae")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 v2-input rejection digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")

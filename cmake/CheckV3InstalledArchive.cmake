@@ -4,27 +4,91 @@ cmake_minimum_required(VERSION 3.25)
 foreach(required IN ITEMS FSIM_SOURCE_DIR FSIM_ARCHIVE_AUDIT_BINARY_DIR
     FSIM_ARCHIVE_AUDIT_ARCHIVE FSIM_ARCHIVE_AUDIT_ROOT
     FSIM_ARCHIVE_AUDIT_REGRESSION_LOG FSIM_ARCHIVE_AUDIT_WORK_DIR
-    FSIM_ARCHIVE_AUDIT_EXPECTED_TESTS FSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES
+    FSIM_ARCHIVE_AUDIT_REQUIRED_CTESTS FSIM_ARCHIVE_AUDIT_REQUIRED_ENTRIES
     FSIM_ARCHIVE_AUDIT_TOOLCHAIN)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
 endforeach()
-if(NOT FSIM_ARCHIVE_AUDIT_EXPECTED_TESTS MATCHES "^[0-9]+$"
-    OR NOT FSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES MATCHES "^[0-9]+$")
-  message(FATAL_ERROR "v3 installed-archive counts must be decimal integers")
+if(NOT FSIM_ARCHIVE_AUDIT_ROOT MATCHES "^[A-Za-z0-9][A-Za-z0-9._-]*$")
+  message(FATAL_ERROR "v3 installed-archive root is unsafe")
+endif()
+get_filename_component(FSIM_BINARY_ROOT
+  "${FSIM_ARCHIVE_AUDIT_BINARY_DIR}" REALPATH)
+get_filename_component(FSIM_WORK_ROOT
+  "${FSIM_ARCHIVE_AUDIT_WORK_DIR}" ABSOLUTE)
+string(FIND "${FSIM_WORK_ROOT}/" "${FSIM_BINARY_ROOT}/"
+  FSIM_WORK_PREFIX)
+if(NOT FSIM_WORK_PREFIX EQUAL 0 OR FSIM_WORK_ROOT STREQUAL FSIM_BINARY_ROOT)
+  message(FATAL_ERROR "v3 installed-archive work directory must be inside the build")
+endif()
+if(EXISTS "${FSIM_WORK_ROOT}")
+  get_filename_component(FSIM_EXISTING_WORK_ROOT "${FSIM_WORK_ROOT}" REALPATH)
+  string(FIND "${FSIM_EXISTING_WORK_ROOT}/" "${FSIM_BINARY_ROOT}/"
+    FSIM_EXISTING_WORK_PREFIX)
+  if(NOT FSIM_EXISTING_WORK_PREFIX EQUAL 0)
+    message(FATAL_ERROR
+      "v3 installed-archive work directory resolves outside the build")
+  endif()
 endif()
 if(NOT EXISTS "${FSIM_ARCHIVE_AUDIT_ARCHIVE}"
-    OR NOT EXISTS "${FSIM_ARCHIVE_AUDIT_REGRESSION_LOG}")
+    OR NOT EXISTS "${FSIM_ARCHIVE_AUDIT_REGRESSION_LOG}"
+    OR NOT EXISTS "${FSIM_ARCHIVE_AUDIT_REQUIRED_CTESTS}"
+    OR NOT EXISTS "${FSIM_ARCHIVE_AUDIT_REQUIRED_ENTRIES}")
   message(FATAL_ERROR "v3 installed-archive evidence is missing")
 endif()
 
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}"
+    --test-dir "${FSIM_ARCHIVE_AUDIT_BINARY_DIR}"
+    --show-only=json-v1
+  RESULT_VARIABLE FSIM_CTEST_RESULT
+  OUTPUT_VARIABLE FSIM_CTEST_JSON
+  ERROR_VARIABLE FSIM_CTEST_ERROR)
+if(NOT FSIM_CTEST_RESULT EQUAL 0)
+  message(FATAL_ERROR
+    "cannot enumerate v3 installed-archive CTests: ${FSIM_CTEST_ERROR}")
+endif()
+string(JSON FSIM_REGISTERED_TEST_COUNT LENGTH "${FSIM_CTEST_JSON}" tests)
+if(FSIM_REGISTERED_TEST_COUNT LESS 1)
+  message(FATAL_ERROR "v3 installed-archive CTest set is empty")
+endif()
+file(MAKE_DIRECTORY "${FSIM_WORK_ROOT}")
+set(FSIM_REGISTERED_TESTS_FILE "${FSIM_WORK_ROOT}/registered-ctests.txt")
+file(WRITE "${FSIM_REGISTERED_TESTS_FILE}" "")
+math(EXPR FSIM_LAST_TEST "${FSIM_REGISTERED_TEST_COUNT} - 1")
+foreach(FSIM_INDEX RANGE 0 ${FSIM_LAST_TEST})
+  string(JSON FSIM_TEST_NAME GET "${FSIM_CTEST_JSON}"
+    tests ${FSIM_INDEX} name)
+  file(APPEND "${FSIM_REGISTERED_TESTS_FILE}" "${FSIM_TEST_NAME}\n")
+endforeach()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_REQUIRED_CTESTS_FILE=${FSIM_ARCHIVE_AUDIT_REQUIRED_CTESTS}"
+    "-DFSIM_REGISTERED_CTESTS_FILE=${FSIM_REGISTERED_TESTS_FILE}"
+    -P "${FSIM_SOURCE_DIR}/cmake/CheckRequiredCTestSet.cmake"
+  RESULT_VARIABLE FSIM_REQUIRED_TEST_RESULT
+  OUTPUT_VARIABLE FSIM_REQUIRED_TEST_OUTPUT
+  ERROR_VARIABLE FSIM_REQUIRED_TEST_ERROR)
+if(NOT FSIM_REQUIRED_TEST_RESULT EQUAL 0)
+  message(FATAL_ERROR
+    "v3 installed archive lost required CTests: "
+    "${FSIM_REQUIRED_TEST_OUTPUT}${FSIM_REQUIRED_TEST_ERROR}")
+endif()
+
 file(READ "${FSIM_ARCHIVE_AUDIT_REGRESSION_LOG}" regression)
-string(FIND "${regression}"
-  "100% tests passed, 0 tests failed out of ${FSIM_ARCHIVE_AUDIT_EXPECTED_TESTS}"
-  pass_offset)
-if(pass_offset EQUAL -1)
-  message(FATAL_ERROR "v3 installed-archive regression log is not green")
+string(REGEX MATCHALL "100% tests passed, 0 tests failed out of [0-9]+"
+  FSIM_PASS_SUMMARIES "${regression}")
+list(LENGTH FSIM_PASS_SUMMARIES FSIM_PASS_COUNT)
+if(NOT FSIM_PASS_COUNT EQUAL 1)
+  message(FATAL_ERROR
+    "v3 installed-archive regression log must contain one green CTest run")
+endif()
+list(GET FSIM_PASS_SUMMARIES 0 FSIM_PASS_SUMMARY)
+if(NOT FSIM_PASS_SUMMARY STREQUAL
+    "100% tests passed, 0 tests failed out of ${FSIM_REGISTERED_TEST_COUNT}")
+  message(FATAL_ERROR
+    "v3 installed-archive regression count differs from registered CTests")
 endif()
 
 execute_process(
@@ -37,10 +101,6 @@ string(REPLACE "\r\n" "\n" listing "${listing}")
 string(REGEX REPLACE "\n$" "" listing "${listing}")
 string(REPLACE "\n" ";" entries "${listing}")
 list(LENGTH entries entry_count)
-if(NOT entry_count EQUAL FSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES)
-  message(FATAL_ERROR
-    "v3 installed archive expected ${FSIM_ARCHIVE_AUDIT_EXPECTED_ENTRIES} entries, found ${entry_count}")
-endif()
 set(seen)
 foreach(entry IN LISTS entries)
   string(FIND "${entry}" "${FSIM_ARCHIVE_AUDIT_ROOT}/" root_offset)
@@ -52,21 +112,41 @@ foreach(entry IN LISTS entries)
   list(APPEND seen "${entry}")
 endforeach()
 
+if(DEFINED FSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX)
+  set(suffix "${FSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX}")
+else()
+  set(suffix "")
+endif()
+file(STRINGS "${FSIM_ARCHIVE_AUDIT_REQUIRED_ENTRIES}"
+  FSIM_REQUIRED_ENTRY_LINES)
+set(FSIM_REQUIRED_PATHS)
+foreach(path IN LISTS FSIM_REQUIRED_ENTRY_LINES)
+  if(path STREQUAL "" OR path STREQUAL
+      "# SPDX-License-Identifier: Apache-2.0")
+    continue()
+  endif()
+  string(REPLACE "@EXE@" "${suffix}" path "${path}")
+  if(IS_ABSOLUTE "${path}" OR path MATCHES "(^|/)\\.\\.?(/|$)"
+      OR path MATCHES "[/\\\\]$" OR path MATCHES "\\\\"
+      OR path MATCHES "@" OR path IN_LIST FSIM_REQUIRED_PATHS)
+    message(FATAL_ERROR "unsafe or duplicate required archive path: ${path}")
+  endif()
+  if(NOT "${FSIM_ARCHIVE_AUDIT_ROOT}/${path}" IN_LIST seen)
+    message(FATAL_ERROR "v3 installed archive omits required entry: ${path}")
+  endif()
+  list(APPEND FSIM_REQUIRED_PATHS "${path}")
+endforeach()
+if(NOT FSIM_REQUIRED_PATHS)
+  message(FATAL_ERROR "v3 installed archive has no required entry set")
+endif()
+
 file(REMOVE_RECURSE "${FSIM_ARCHIVE_AUDIT_WORK_DIR}")
 file(MAKE_DIRECTORY "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract")
 file(ARCHIVE_EXTRACT INPUT "${FSIM_ARCHIVE_AUDIT_ARCHIVE}"
   DESTINATION "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract")
 set(prefix
   "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract/${FSIM_ARCHIVE_AUDIT_ROOT}")
-if(DEFINED FSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX)
-  set(suffix "${FSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX}")
-else()
-  set(suffix "")
-endif()
-foreach(path IN ITEMS
-    "bin/fsim${suffix}" "bin/fsim-sv${suffix}" "bin/fsim-vhdl${suffix}"
-    "include/fsim/api.h" "include/fsim/version.hpp"
-    "lib/pkgconfig/fsim.pc" "share/doc/fsim/LICENSE")
+foreach(path IN LISTS FSIM_REQUIRED_PATHS)
   if(NOT EXISTS "${prefix}/${path}")
     message(FATAL_ERROR "v3 installed archive omits ${path}")
   endif()
@@ -89,4 +169,5 @@ if(EXISTS "${prefix}")
   message(FATAL_ERROR "v3 installed archive removal check failed")
 endif()
 message(STATUS
-  "v3 installed archive passed: ${FSIM_ARCHIVE_AUDIT_TOOLCHAIN}, ${entry_count} entries, ${FSIM_ARCHIVE_AUDIT_EXPECTED_TESTS} tests")
+  "v3 installed archive passed: ${FSIM_ARCHIVE_AUDIT_TOOLCHAIN}, "
+  "${entry_count} entries, ${FSIM_REGISTERED_TEST_COUNT} tests")

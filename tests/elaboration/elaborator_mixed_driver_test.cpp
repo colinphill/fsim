@@ -327,6 +327,232 @@ module sv_logic_z(output logic value); assign value = 1'bz; endmodule
   assert(std_logic_interpreter->signal_value(
              *std_logic.design->find_signal("released")).to_msb_string()
          == "1");
+
+  const auto fused_variable_array = fsim::frontend::parse_text(
+      "fused_variable_array_driver.sv",
+      R"(
+module fused_variable_array_driver;
+  logic [3:0] terms [0:2];
+  genvar index;
+  generate
+    for (index = 0; index < 1; index = index + 1) begin : generated_terms
+      assign terms[index] = 4'hA;
+      assign terms[index + 1] = 4'hB;
+    end
+  endgenerate
+  assign terms[2] = 4'h5;
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(fused_variable_array.ok());
+  const auto fused_variable_array_result = compile_and_elaborate(
+      fused_variable_array.design,
+      "sv:work.fused_variable_array_driver");
+  if (!fused_variable_array_result.ok()) {
+    for (const auto& diagnostic : fused_variable_array_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(fused_variable_array_result.ok());
+  const auto variable_array_signal
+      = fused_variable_array_result.design->find_signal("terms");
+  assert(variable_array_signal);
+  const auto& variable_array_info
+      = fused_variable_array_result.design->signals().at(
+          *variable_array_signal);
+  assert(variable_array_info.systemverilog_net_type.empty());
+  assert(
+      variable_array_info.resolution
+      == fsim::runtime::simir::ResolutionKind::none);
+  std::vector<fsim::runtime::simir::Process::DriverRegion>
+      variable_array_regions;
+  for (const auto& process
+      : fused_variable_array_result.design->processes()) {
+    for (const auto& region : process.driver_regions) {
+      if (region.signal != *variable_array_signal) {
+        continue;
+      }
+      const auto leaf = std::string_view { process.name }.substr(
+          process.name.find_last_of('.') + 1U);
+      assert(leaf.starts_with("concurrent_"));
+      variable_array_regions.push_back(region);
+    }
+  }
+  assert(variable_array_regions.size() == 3U);
+  assert(std::ranges::all_of(
+      variable_array_regions,
+      [&](const auto& region) {
+        return !region.whole && region.width == 4U;
+      }));
+  const auto has_offset = [&](const std::uint32_t offset) {
+    return std::ranges::any_of(
+        variable_array_regions,
+        [&](const auto& region) { return region.offset == offset; });
+  };
+  assert(has_offset(0U) && has_offset(4U) && has_offset(8U));
+
+  const auto overlapping_variable_array = fsim::frontend::parse_text(
+      "overlapping_variable_array_driver.sv",
+      R"(
+module overlapping_variable_array_driver;
+  logic [3:0] terms [0:1];
+  assign terms[0] = 4'hA;
+  assign terms[0] = 4'h5;
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(overlapping_variable_array.ok());
+  const auto overlapping_variable_array_result = compile_and_elaborate(
+      overlapping_variable_array.design,
+      "sv:work.overlapping_variable_array_driver");
+  assert(!overlapping_variable_array_result.ok());
+  assert(has_diagnostic(
+      overlapping_variable_array_result, "FSIM-ELAB-DRV-001"));
+
+  const auto overlapping_fused_variable_array
+      = fsim::frontend::parse_text(
+          "overlapping_fused_variable_array_driver.sv",
+          R"(
+module overlapping_fused_variable_array_driver;
+  logic [3:0] terms [0:1];
+  genvar index;
+  generate
+    for (index = 0; index < 1; index = index + 1) begin : generated_terms
+      assign terms[index] = 4'hA;
+      assign terms[index] = 4'h5;
+    end
+  endgenerate
+endmodule
+)",
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(overlapping_fused_variable_array.ok());
+  const auto overlapping_fused_variable_array_result
+      = compile_and_elaborate(
+          overlapping_fused_variable_array.design,
+          "sv:work.overlapping_fused_variable_array_driver");
+  assert(!overlapping_fused_variable_array_result.ok());
+  assert(has_diagnostic(
+      overlapping_fused_variable_array_result, "FSIM-ELAB-DRV-001"));
+
+  const auto procedural_variable_array = fsim::frontend::parse_text(
+      "procedural_variable_array_driver.sv",
+      R"(
+module procedural_variable_array_driver;
+  logic [3:0] terms [0:1];
+  logic [3:0] source;
+  assign terms[0] = source;
+  always_comb terms[0] = source;
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(procedural_variable_array.ok());
+  const auto procedural_variable_array_result = compile_and_elaborate(
+      procedural_variable_array.design,
+      "sv:work.procedural_variable_array_driver");
+  assert(!procedural_variable_array_result.ok());
+  assert(has_diagnostic(
+      procedural_variable_array_result, "FSIM-ELAB-DRV-001"));
+
+  const auto procedural_dual_writer_array
+      = fsim::frontend::parse_text(
+          "procedural_dual_writer_array.sv",
+          R"(
+module procedural_dual_writer_array(
+  input logic clk,
+  input logic write_a,
+  input logic write_b,
+  input logic [1:0] address_a,
+  input logic [1:0] address_b,
+  input logic [7:0] data_a,
+  input logic [7:0] data_b
+);
+  reg [7:0] mem [0:3];
+  always @(posedge clk)
+    if (write_a) mem[address_a] <= data_a;
+  always @(posedge clk)
+    if (write_b) mem[address_b] <= data_b;
+endmodule
+)",
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(procedural_dual_writer_array.ok());
+  const auto procedural_dual_writer_array_result = compile_and_elaborate(
+      procedural_dual_writer_array.design,
+      "sv:work.procedural_dual_writer_array");
+  if (!procedural_dual_writer_array_result.ok()) {
+    for (const auto& diagnostic :
+        procedural_dual_writer_array_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(procedural_dual_writer_array_result.ok());
+  const auto dual_writer_mem
+      = procedural_dual_writer_array_result.design->find_signal("mem");
+  assert(dual_writer_mem);
+  const auto& dual_writer_mem_info
+      = procedural_dual_writer_array_result.design->signals().at(
+          *dual_writer_mem);
+  assert(dual_writer_mem_info.systemverilog_net_type.empty());
+  assert(
+      dual_writer_mem_info.resolution
+      == fsim::runtime::simir::ResolutionKind::none);
+
+  const auto procedural_array_wakeup = fsim::frontend::parse_text(
+      "procedural_array_wakeup.sv",
+      R"(
+module procedural_array_wakeup;
+  reg clk = 1'b0;
+  always #5 clk = ~clk;
+  reg resetn = 1'b0;
+  reg [3:0] parity [0:3];
+  wire [3:0] top = parity[3];
+  integer index;
+
+  always @(posedge clk) begin
+    if (!resetn) begin
+      for (index = 0; index < 4; index = index + 1)
+        parity[index] <= 4'h0;
+    end else begin
+      parity[3] <= 4'hA;
+    end
+  end
+
+  initial begin
+    #12 resetn = 1'b1;
+    #20 $finish;
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(procedural_array_wakeup.ok());
+  const auto procedural_array_wakeup_result = compile_and_elaborate(
+      procedural_array_wakeup.design,
+      "sv:work.procedural_array_wakeup");
+  if (!procedural_array_wakeup_result.ok()) {
+    for (const auto& diagnostic : procedural_array_wakeup_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(procedural_array_wakeup_result.ok());
+  assert(!has_diagnostic(
+      procedural_array_wakeup_result, "FSIM-ELAB-DRV-001"));
+  const auto parity_signal
+      = procedural_array_wakeup_result.design->find_signal("parity");
+  assert(parity_signal);
+  const auto& parity_info
+      = procedural_array_wakeup_result.design->signals().at(*parity_signal);
+  assert(parity_info.systemverilog_net_type.empty());
+  assert(
+      parity_info.resolution == fsim::runtime::simir::ResolutionKind::none);
+  auto procedural_array_interpreter
+      = procedural_array_wakeup_result.design->create_interpreter();
+  static_cast<void>(procedural_array_interpreter->run());
+  const auto top_signal
+      = procedural_array_wakeup_result.design->find_signal("top");
+  assert(top_signal);
+  assert(
+      procedural_array_interpreter->signal_value(*top_signal)
+          .to_msb_string()
+      == "1010");
 }
 
 }  // namespace fsim::tests::elaboration

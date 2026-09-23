@@ -1572,6 +1572,98 @@ private:
             validate_value(value, source);
         };
 
+        struct AggregateChoiceRange {
+            std::int64_t left { };
+            std::int64_t right { };
+            bool descending { };
+            bool null { };
+        };
+        const auto range_choice = [&](const semantic::ExpressionId id)
+            -> std::optional<AggregateChoiceRange> {
+            const auto choice = specialization_.find_expression(id);
+            if (!choice || choice->vhdl == nullptr
+                || choice->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::call
+                || (choice->vhdl->text != "'range"
+                    && choice->vhdl->text != "'reverse_range")
+                || choice->vhdl->operands.empty()
+                || choice->vhdl->operands.size() > 2U) {
+                return std::nullopt;
+            }
+            auto prefix = expression_subtype(
+                choice->vhdl->operands.front());
+            if (!prefix) {
+                return std::nullopt;
+            }
+            std::unordered_set<std::uint32_t> visiting;
+            const auto prefix_profile = profile(*prefix, visiting);
+            if (prefix_profile.kind != ProfileKind::array) {
+                return std::nullopt;
+            }
+            std::int64_t dimension { 1 };
+            if (choice->vhdl->operands.size() == 2U) {
+                std::unordered_set<std::uint32_t> active;
+                const auto selected = static_integer(
+                    choice->vhdl->operands[1], active);
+                if (!selected) {
+                    return std::nullopt;
+                }
+                dimension = *selected;
+            }
+            if (dimension <= 0
+                || static_cast<std::uint64_t>(dimension)
+                    > prefix_profile.dimensions.size()) {
+                return std::nullopt;
+            }
+            const auto selected_index
+                = static_cast<std::size_t>(dimension - 1);
+            std::optional<RangeConstraint> selected_range;
+            std::size_t constrained_dimension { };
+            for (const auto& constraint : prefix->constraints) {
+                if (constraint.kind != RangeKind::array_index) {
+                    continue;
+                }
+                if (constrained_dimension++ == selected_index) {
+                    selected_range = constraint;
+                    break;
+                }
+            }
+            if (!selected_range) {
+                const auto* definition = root_definition(*prefix);
+                if (definition != nullptr
+                    && definition->form == TypeForm::array
+                    && selected_index
+                        < definition->array_dimensions.size()) {
+                    const auto& array_dimension
+                        = definition->array_dimensions[selected_index];
+                    selected_range = array_dimension.constraint;
+                }
+            }
+            if (!selected_range) {
+                return std::nullopt;
+            }
+            const auto left = bound(
+                selected_range->left,
+                selected_range->left_expression);
+            const auto right = bound(
+                selected_range->right,
+                selected_range->right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            auto selected_left = *left;
+            auto selected_right = *right;
+            auto descending = selected_range->descending;
+            const auto null = selected_range->null
+                || (descending ? *left < *right : *left > *right);
+            if (choice->vhdl->text == "'reverse_range") {
+                std::swap(selected_left, selected_right);
+                descending = !descending;
+            }
+            return AggregateChoiceRange {
+                selected_left, selected_right, descending, null };
+        };
+
         for (const auto& association : aggregate.associations) {
             if (!association.choice_spelling.empty()
                 && association.choices.empty()) {
@@ -1651,6 +1743,67 @@ private:
                         if ((step < 0 && index < *right)
                             || (step > 0 && index > *right)) {
                             break;
+                        }
+                    }
+                    return;
+                }
+                if (value.kind
+                        == semantic::vhdl::ExpressionKind::call
+                    && (value.text == "'range"
+                        || value.text == "'reverse_range")) {
+                    const auto bounds = range_choice(choice_id);
+                    if (!bounds) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-003",
+                            "VHDL array range choices require a concrete, "
+                                "bounded array range",
+                            value.source);
+                        return;
+                    }
+                    const auto left = bounds->left;
+                    const auto right = bounds->right;
+                    if (bounds->null) {
+                        return;
+                    }
+                    const auto low = std::min(left, right);
+                    const auto high = std::max(left, right);
+                    if (low < minimum || high > maximum) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-003",
+                            "VHDL array aggregate index is outside the "
+                                "contextual range",
+                            value.source);
+                        return;
+                    }
+                    const auto distance
+                        = static_cast<std::uint64_t>(high)
+                        - static_cast<std::uint64_t>(low);
+                    if (distance >= element_count) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-003",
+                            "VHDL array range choice exceeds the contextual "
+                                "range",
+                            value.source);
+                        return;
+                    }
+                    auto index = left;
+                    while (true) {
+                        assign(index, association.value, association.source);
+                        if (index == right) {
+                            break;
+                        }
+                        if (bounds->descending) {
+                            if (index
+                                == std::numeric_limits<std::int64_t>::min()) {
+                                return;
+                            }
+                            --index;
+                        } else {
+                            if (index
+                                == std::numeric_limits<std::int64_t>::max()) {
+                                return;
+                            }
+                            ++index;
                         }
                     }
                     return;
@@ -2108,6 +2261,104 @@ private:
                 && (scopes[scope.value()].unit == entity_.id
                     || scopes[scope.value()].unit == architecture_.id);
         };
+        struct InactiveGenerateBranch {
+            semantic::ScopeId body_scope;
+            semantic::ScopeId active_else_scope;
+        };
+        std::vector<InactiveGenerateBranch> inactive_generate_branches;
+        std::unordered_set<std::uint32_t> generate_condition_expressions;
+        // A generate condition can share its branch scope, but remains active
+        // because it decides whether that branch exists.
+        const auto collect_expression_tree = [&](const auto& self,
+                                                 const semantic::ExpressionId id)
+            -> void {
+            if (!generate_condition_expressions.insert(id.value()).second) {
+                return;
+            }
+            const auto expression = specialization_.find_expression(id);
+            if (!expression || expression->vhdl == nullptr) {
+                return;
+            }
+            for (const auto operand : expression->vhdl->operands) {
+                self(self, operand);
+            }
+            for (const auto& association : expression->vhdl->associations) {
+                for (const auto choice : association.choices) {
+                    self(self, choice);
+                }
+                self(self, association.value);
+            }
+        };
+        const auto is_within_scope = [&](semantic::ScopeId scope,
+                                         const semantic::ScopeId ancestor) {
+            const auto& scopes
+                = specialization_.design().semantics.scopes();
+            std::size_t remaining = scopes.size();
+            while (scope.valid() && scope.value() < scopes.size()
+                && remaining > 0U) {
+                --remaining;
+                if (scope == ancestor) {
+                    return true;
+                }
+                const auto& parent = scopes[scope.value()].parent;
+                if (!parent) {
+                    return false;
+                }
+                scope = *parent;
+            }
+            return false;
+        };
+        const auto inactive_generate_scope = [&](const semantic::ScopeId scope) {
+            return std::ranges::any_of(
+                inactive_generate_branches,
+                [&](const InactiveGenerateBranch& branch) {
+                    return is_within_scope(scope, branch.body_scope)
+                        && (!branch.active_else_scope.valid()
+                            || !is_within_scope(
+                                scope, branch.active_else_scope));
+                });
+        };
+        const auto collect_inactive_generate_branches =
+            [&](const auto& self,
+                const std::span<const semantic::vhdl::GenerateRegion> regions)
+                -> void {
+            for (const auto& region : regions) {
+                if (region.kind == semantic::vhdl::GenerateKind::conditional
+                    && region.condition) {
+                    const auto condition
+                        = specialization_.evaluate_integral_expression(
+                            *region.condition);
+                    if (condition && *condition == 0) {
+                        if (!inactive_generate_scope(region.scope)) {
+                            collect_expression_tree(
+                                collect_expression_tree, *region.condition);
+                        }
+                        auto else_scope = semantic::ScopeId { };
+                        const auto else_label
+                            = region.alternative_label.empty()
+                            ? region.label + ".else"
+                            : region.alternative_label;
+                        const auto alternative = std::ranges::find_if(
+                            region.nested,
+                            [&](const semantic::vhdl::GenerateRegion& child) {
+                                return name_equal(child.label, else_label);
+                            });
+                        if (alternative != region.nested.end()) {
+                            else_scope = alternative->scope;
+                        }
+                        if (region.scope.valid()) {
+                            // The retained else arm is represented as a nested
+                            // scope under the then arm in VHDL HIR.
+                            inactive_generate_branches.push_back(
+                                { region.scope, else_scope });
+                        }
+                    }
+                }
+                self(self, region.nested);
+            }
+        };
+        collect_inactive_generate_branches(
+            collect_inactive_generate_branches, architecture_.generates);
         std::unordered_set<std::uint32_t> discrete_range_attributes;
         std::unordered_set<std::uint32_t> negated_integer_minimum_literals;
         for (const auto& stored :
@@ -2123,6 +2374,44 @@ private:
                 && statement.loop_initial && !statement.loop_limit) {
                 discrete_range_attributes.insert(
                     statement.loop_initial->value());
+            }
+        }
+        const auto mark_aggregate_range_choice = [&](const auto& self,
+                                                     const semantic::ExpressionId id)
+            -> void {
+            const auto choice = specialization_.find_expression(id);
+            if (!choice || choice->vhdl == nullptr) {
+                return;
+            }
+            const auto& source = *choice->vhdl;
+            if (source.kind == semantic::vhdl::ExpressionKind::binary
+                && source.text == "|" && source.operands.size() == 2U) {
+                self(self, source.operands[0]);
+                self(self, source.operands[1]);
+                return;
+            }
+            if (source.kind == semantic::vhdl::ExpressionKind::call
+                && (source.text == "'range"
+                    || source.text == "'reverse_range")) {
+                discrete_range_attributes.insert(id.value());
+            }
+        };
+        for (const auto& stored :
+            specialization_.design().vhdl_hir.expressions()) {
+            const auto effective = specialization_.find_expression(
+                stored.id);
+            if (!effective || effective->vhdl == nullptr
+                || effective->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::aggregate
+                || !selected_scope(effective->vhdl->scope)) {
+                continue;
+            }
+            for (const auto& association :
+                effective->vhdl->associations) {
+                for (const auto choice : association.choices) {
+                    mark_aggregate_range_choice(
+                        mark_aggregate_range_choice, choice);
+                }
             }
         }
         if (architecture_.standard != "2019") {
@@ -2201,7 +2490,11 @@ private:
                     == semantic::vhdl::ExpressionKind::index
                 || expression.kind
                     == semantic::vhdl::ExpressionKind::slice) {
-                validate_selection(expression.id);
+                if (!generate_condition_expressions.contains(
+                        expression.id.value())
+                    && !inactive_generate_scope(expression.scope)) {
+                    validate_selection(expression.id);
+                }
             }
             if (expression.kind
                     != semantic::vhdl::ExpressionKind::binary
