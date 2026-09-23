@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/coverage_database_psl.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -46,32 +47,18 @@ namespace {
         return false;
     }
 
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8> bytes;
-        for (std::size_t index = 0; index < bytes.size(); ++index) {
-            bytes[index] = static_cast<std::byte>(
-                value >> ((bytes.size() - 1U - index) * 8U));
-        }
-        hash.update(bytes);
-    }
-
     void update_text(
         support::Sha256& hash, const std::string_view value) noexcept
     {
-        update_u64(hash, value.size());
+        support::sha256_update_u64_be(hash, value.size());
         hash.update(value);
     }
 
     CoverageDatabaseIdentity identity_from_digest(
         const support::Sha256::Digest& digest) noexcept
     {
-        CoverageDatabaseIdentity result;
-        for (std::size_t index = 0; index < 8U; ++index) {
-            result.high = (result.high << 8U) | digest[index];
-            result.low = (result.low << 8U) | digest[index + 8U];
-        }
-        return result;
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     CoverageDatabaseIdentity instance_identity(
@@ -92,10 +79,11 @@ namespace {
         update_text(hash, "fsim-psl-coverage-bin-v3");
         update_text(hash, item.name);
         update_text(hash, item.process);
-        update_u64(hash, static_cast<std::uint8_t>(item.kind));
-        update_u64(hash, item.slot);
-        update_u64(hash, source_identity.high);
-        update_u64(hash, source_identity.low);
+        support::sha256_update_u64_be(hash,
+            static_cast<std::uint8_t>(item.kind));
+        support::sha256_update_u64_be(hash, item.slot);
+        support::sha256_update_u64_be(hash, source_identity.high);
+        support::sha256_update_u64_be(hash, source_identity.low);
         update_text(hash, role);
         return identity_from_digest(hash.finish());
     }

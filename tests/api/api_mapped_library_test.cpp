@@ -20,6 +20,13 @@ std::string_view view(const fsim_string_view_t value) {
 }  // namespace
 
 void test_mapped_library_api(const std::filesystem::path& directory) {
+  fsim::diagnostic::Engine accessor_diagnostics;
+  assert(accessor_diagnostics.empty());
+  assert(accessor_diagnostics.diagnostics().empty());
+  accessor_diagnostics.note("TEST", "accessor probe");
+  assert(!accessor_diagnostics.empty());
+  assert(accessor_diagnostics.diagnostics().size() == 1);
+
   const auto source = directory / "api_mapped_library.sv";
   {
     std::ofstream output(source, std::ios::binary);

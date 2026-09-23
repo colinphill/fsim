@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_source_identity.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/path.hpp"
 
 #include <array>
@@ -10,27 +11,19 @@
 namespace fsim::frontend {
 namespace {
 
-    void update_size(support::Sha256& hash, const std::size_t value) noexcept
-    {
-        const auto encoded = static_cast<std::uint64_t>(value);
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>((bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((encoded >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
-
     support::Sha256::Digest composite_digest(const std::string_view logical_path,
         const std::size_t content_bytes,
         const support::Sha256::Digest& content_digest) noexcept
     {
         support::Sha256 hash;
-        update_size(hash, kCodeCoverageSourceIdentitySchema.size());
+        support::sha256_update_u64_be(hash,
+            static_cast<std::uint64_t>(kCodeCoverageSourceIdentitySchema.size()));
         hash.update(kCodeCoverageSourceIdentitySchema);
-        update_size(hash, logical_path.size());
+        support::sha256_update_u64_be(
+            hash, static_cast<std::uint64_t>(logical_path.size()));
         hash.update(logical_path);
-        update_size(hash, content_bytes);
+        support::sha256_update_u64_be(
+            hash, static_cast<std::uint64_t>(content_bytes));
 
         std::array<std::byte, 32U> digest_bytes { };
         for (std::size_t index = 0U; index < digest_bytes.size(); ++index) {

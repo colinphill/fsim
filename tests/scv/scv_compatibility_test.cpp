@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/systemc/scv.hpp"
+#include "../systemc/sc_main_export.hpp"
 
 #include <cassert>
 #include <string>
 #include <string_view>
 #include <vector>
 
-extern "C" int sc_main(int, char*[])
+extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char*[])
 {
     static_assert(fsim::systemc::scv_version == "2.0.1");
     static_assert(fsim::systemc::scv_header_version == "2.0.0-20140417");

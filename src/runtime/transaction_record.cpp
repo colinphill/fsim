@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/transaction_record.hpp"
+#include "fsim/support/bounded_bytes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,25 +18,36 @@ namespace {
 
     class Writer {
     public:
-        void u8(const std::uint8_t value) { bytes.push_back(std::byte { value }); }
+        explicit Writer(const std::size_t maximum_bytes)
+            : bounded_writer { bytes, maximum_bytes }
+        {
+        }
+
+        void append(const std::span<const std::byte> value)
+        {
+            note_write(bounded_writer.append(value));
+        }
+
+        void u8(const std::uint8_t value)
+        {
+            note_write(bounded_writer.write_u8(value));
+        }
+
         void u16(const std::uint16_t value)
         {
-            for (unsigned shift = 0; shift < 16U; shift += 8U) {
-                u8(static_cast<std::uint8_t>(value >> shift));
-            }
+            note_write(bounded_writer.write_u16_le(value));
         }
+
         void u32(const std::uint32_t value)
         {
-            for (unsigned shift = 0; shift < 32U; shift += 8U) {
-                u8(static_cast<std::uint8_t>(value >> shift));
-            }
+            note_write(bounded_writer.write_u32_le(value));
         }
+
         void u64(const std::uint64_t value)
         {
-            for (unsigned shift = 0; shift < 64U; shift += 8U) {
-                u8(static_cast<std::uint8_t>(value >> shift));
-            }
+            note_write(bounded_writer.write_u64_le(value));
         }
+
         void id(const TransactionStableId value)
         {
             u64(value.high);
@@ -44,58 +56,69 @@ namespace {
         void string(const std::string_view value)
         {
             u32(static_cast<std::uint32_t>(value.size()));
-            bytes.insert(bytes.end(),
-                reinterpret_cast<const std::byte*>(value.data()),
-                reinterpret_cast<const std::byte*>(value.data() + value.size()));
+            note_write(bounded_writer.append(value));
         }
+
+        [[nodiscard]] bool complete() const noexcept { return writes_succeeded; }
+
         std::vector<std::byte> bytes;
+
+    private:
+        void note_write(const bool succeeded) noexcept
+        {
+            writes_succeeded = succeeded && writes_succeeded;
+        }
+
+        support::BoundedByteWriter<std::vector<std::byte>> bounded_writer;
+        bool writes_succeeded { true };
     };
 
     class Reader {
     public:
-        explicit Reader(const std::span<const std::byte> input)
-            : bytes(input)
+        Reader(const std::span<const std::byte> input,
+            const std::size_t maximum_bytes)
+            : bounded_reader { input, maximum_bytes }
         {
         }
+
+        void skip(const std::size_t count)
+        {
+            std::span<const std::byte> ignored;
+            (void)bounded_reader.take(count, ignored);
+        }
+
         std::optional<std::uint8_t> u8()
         {
-            if (offset >= bytes.size())
+            std::uint8_t result { };
+            if (!bounded_reader.read_u8(result))
                 return std::nullopt;
-            return std::to_integer<std::uint8_t>(bytes[offset++]);
+            return result;
         }
+
         std::optional<std::uint16_t> u16()
         {
-            std::uint32_t result { };
-            for (unsigned shift = 0; shift < 16U; shift += 8U) {
-                const auto value = u8();
-                if (!value)
-                    return std::nullopt;
-                result |= static_cast<std::uint32_t>(*value) << shift;
-            }
-            return static_cast<std::uint16_t>(result);
+            std::uint16_t result { };
+            if (!bounded_reader.read_u16_le(result))
+                return std::nullopt;
+            return result;
         }
+
         std::optional<std::uint32_t> u32()
         {
             std::uint32_t result { };
-            for (unsigned shift = 0; shift < 32U; shift += 8U) {
-                const auto value = u8();
-                if (!value)
-                    return std::nullopt;
-                result |= static_cast<std::uint32_t>(*value) << shift;
-            }
+            if (!bounded_reader.read_u32_le(result))
+                return std::nullopt;
             return result;
         }
+
         std::optional<std::uint64_t> u64()
         {
             std::uint64_t result { };
-            for (unsigned shift = 0; shift < 64U; shift += 8U) {
-                const auto value = u8();
-                if (!value)
-                    return std::nullopt;
-                result |= static_cast<std::uint64_t>(*value) << shift;
-            }
+            if (!bounded_reader.read_u64_le(result))
+                return std::nullopt;
             return result;
         }
+
         std::optional<TransactionStableId> id()
         {
             const auto high = u64();
@@ -107,16 +130,24 @@ namespace {
         std::optional<std::string> string(const std::size_t maximum)
         {
             const auto size = u32();
-            if (!size || *size > maximum || *size > bytes.size() - offset) {
+            if (!size || *size > maximum) {
                 return std::nullopt;
             }
-            const auto* first = reinterpret_cast<const char*>(bytes.data() + offset);
-            std::string result { first, first + *size };
-            offset += *size;
+            std::span<const std::byte> value;
+            if (!bounded_reader.take(*size, value))
+                return std::nullopt;
+            const auto* first = reinterpret_cast<const char*>(value.data());
+            std::string result { first, value.size() };
             return result;
         }
-        std::span<const std::byte> bytes;
-        std::size_t offset { };
+
+        [[nodiscard]] bool finished() const noexcept
+        {
+            return bounded_reader.finished();
+        }
+
+    private:
+        support::BoundedByteReader bounded_reader;
     };
 
     bool valid_limits(
@@ -385,8 +416,8 @@ std::optional<std::vector<std::byte>> serialize_transaction_record(
     if (!validate_transaction_record(record, limits, diagnostics)) {
         return std::nullopt;
     }
-    Writer writer;
-    writer.bytes.insert(writer.bytes.end(), magic.begin(), magic.end());
+    Writer writer { limits.max_message_bytes };
+    writer.append(std::span<const std::byte> { magic });
     writer.u32(record.schema);
     writer.u32(0U);
     writer.id(record.stream);
@@ -419,7 +450,7 @@ std::optional<std::vector<std::byte>> serialize_transaction_record(
         writer.u32(0U);
         writer.id(object.object);
     }
-    if (writer.bytes.size() > limits.max_message_bytes) {
+    if (!writer.complete()) {
         diagnostics.error(
             "FSIM-SCV-T003", "serialized transaction record exceeds its limit");
         return std::nullopt;
@@ -439,8 +470,8 @@ std::optional<TransactionRecord> deserialize_transaction_record(
             "FSIM-SCV-T001", "transaction record has bad magic or size");
         return std::nullopt;
     }
-    Reader reader { bytes };
-    reader.offset = magic.size();
+    Reader reader { bytes, limits.max_message_bytes };
+    reader.skip(magic.size());
     const auto schema = reader.u32();
     const auto reserved0 = reader.u32();
     const auto stream = reader.id();
@@ -519,9 +550,9 @@ std::optional<TransactionRecord> deserialize_transaction_record(
         result.correlated_objects.push_back(
             { static_cast<TransactionObjectDomain>(*domain), *object });
     }
-    if (reader.offset != bytes.size()
+    if (!reader.finished()
         || !validate_transaction_record(result, limits, diagnostics)) {
-        if (reader.offset != bytes.size()) {
+        if (!reader.finished()) {
             diagnostics.error(
                 "FSIM-SCV-T002", "transaction record has trailing bytes");
         }

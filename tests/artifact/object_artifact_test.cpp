@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -87,6 +88,15 @@ int main() {
     metadata.compilation_digest = fsim::artifact::compute_object_compilation_digest(metadata);
 
     const auto encoded = fsim::artifact::serialize_object_metadata(metadata);
+    assert(checksum(encoded)
+        == "52e4d0689ec62986d1451563c9a63ed8a5a397a150a50bec2b34364a2dcdb1ed");
+    for (std::size_t length = 0U; length < 20U; ++length) {
+        fsim::diagnostic::Engine truncated_diagnostics;
+        assert(!fsim::artifact::deserialize_object_metadata(
+            encoded.substr(0U, length), "truncated-prefix",
+            truncated_diagnostics));
+        assert(truncated_diagnostics.has_error());
+    }
     assert(encoded == fsim::artifact::serialize_object_metadata(metadata));
     fsim::diagnostic::Engine decode_diagnostics;
     const auto decoded = fsim::artifact::deserialize_object_metadata(

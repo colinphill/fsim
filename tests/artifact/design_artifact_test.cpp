@@ -450,6 +450,15 @@ int main() {
   metadata.design_digest = fsim::artifact::compute_design_digest(metadata);
 
   const auto encoded = fsim::artifact::serialize_design_metadata(metadata);
+  assert(checksum(encoded)
+      == "948aa79cec6340ffc53a9a46589493fe40b6c6a78ae6544bc401d2533e4edc30");
+  for (std::size_t length = 0U; length < 20U; ++length) {
+    fsim::diagnostic::Engine truncated_diagnostics;
+    assert(!fsim::artifact::deserialize_design_metadata(
+        encoded.substr(0U, length), "truncated-prefix",
+        truncated_diagnostics));
+    assert(truncated_diagnostics.has_error());
+  }
   assert(encoded == fsim::artifact::serialize_design_metadata(metadata));
   fsim::diagnostic::Engine decode_diagnostics;
   assert(fsim::artifact::deserialize_design_metadata(
@@ -719,6 +728,17 @@ int main() {
       {metadata.payloads[7].artifact, binding_inventory_bytes},
       {metadata.payloads[8].artifact, systemc_observation_bytes},
       {metadata.payloads[9].artifact, fst_output.str()}};
+  auto traversal_metadata = metadata;
+  traversal_metadata.payloads[0].artifact = "../escape.fsimir";
+  auto traversal_payloads = payloads;
+  traversal_payloads[0].path = traversal_metadata.payloads[0].artifact;
+  const auto traversal_directory = std::filesystem::path {
+      directory.string() + "-traversal" };
+  fsim::diagnostic::Engine traversal_diagnostics;
+  assert(!fsim::artifact::publish_design(traversal_directory,
+      traversal_metadata, traversal_payloads, traversal_diagnostics));
+  assert(traversal_diagnostics.has_error());
+  assert(!std::filesystem::exists(traversal_directory));
   auto stale_publication_metadata = metadata;
   stale_publication_metadata.format = fsim::artifact::kDesignFormatVersion - 1U;
   const auto stale_publication_directory = std::filesystem::path { directory.string() + "-stale-publication" };

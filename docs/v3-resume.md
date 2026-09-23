@@ -14730,3 +14730,302 @@ remain available for local development but are not hosted jobs.
      Review the complete diff and migration obligations,
      then commit/push and monitor all four new hosted lanes before declaring
      188B complete. Do not alter the frozen baseline or user-owned `phase.fst`.
+201. Batch 188B implementation commit `c2507598` was pushed to
+     `origin/codex/v3` after the local 417/417 Release and Debug suites.
+     The seven-sample performance comparison was waived for this batch.
+     At the user's explicit direction, do not monitor the post-push CI;
+     advance to Batch 188C without claiming a hosted four-lane pass.
+     The pre-push baseline run's Windows Release `fsim.cache` failure
+     remains unverified against `c2507598`. Preserve the intentionally
+     untracked `phase.fst` and `scripts/__pycache__/`.
+202. Batch 188C Change 1 is complete as an uncommitted test-only wave.
+     Nineteen stable pre-migration SHA-256 fixtures cover object/design
+     metadata, coverage database, library metadata, five SystemC value
+     variants, five trace-archive kinds, TLM1/TLM2, SCV protocol/transport,
+     and application runtime state. A new exact V1 object-cache envelope
+     fixture rejects truncated, corrupt, and trailing input. Targeted
+     malformed-prefix checks were added around artifact, coverage,
+     application runtime, SystemC value/TLM, SCV transport, and trace
+     archives. Six previously hidden SystemC/SCV `sc_main` test entry
+     points now export the C symbol required by the shared launcher;
+     before this correction their tests could exit through its fallback
+     without executing assertions. The seven primary fixtures, eight
+     activated SystemC/SCV tests, and application runtime fixture pass
+     in both warnings-as-errors Release and Debug. The five focused
+     license/source-package/current-obligations/CTest/translation-unit
+     gates pass in Release, `git diff --check` is clean, and MCP was
+     reindexed after the code wave. The generated CTest set has 418
+     entries. No codec implementation has changed; proceed to Batch
+     188C Change 2 only. Do not monitor the 188B post-push CI under
+     the user's instruction.
+203. Batch 188C Change 2 is complete on the uncommitted worktree. The
+     new shared bounded byte writer and reader support string/byte-vector
+     sinks, transactional bounds checks, and explicit little- and
+     big-endian unsigned integer primitives. The focused
+     `fsim.support.bounded-bytes` test passes in warnings-as-errors
+     Release and Debug builds and is registered in the source manifest
+     and current required CTest set. Changes 3 and 4 may migrate codec
+     primitives under the frozen Change 1 wire fixtures. The 188B
+     post-push CI remains intentionally unmonitored by user direction.
+204. Batch 188C Changes 3 and 4 are complete on the uncommitted
+     worktree. A gpt-6-luna xhigh worker migrated object/design binary
+     framing and payload primitives to the shared bounded byte utility;
+     root integrated that work and migrated the separate coverage
+     database codec with its big-endian wire order. The object, design,
+     and coverage database codec fixture tests pass 3/3 in each
+     warnings-as-errors Release and Debug build, including the frozen
+     wire fingerprints and malformed-input assertions. The library
+     metadata codec remains intentionally stream-based because its
+     key/value wire format is textual, not binary framing. MCP was
+     reindexed after the code wave, and `git diff --check` passes.
+     Proceed to Change 5 compiler/cache persistence primitives without
+     touching user-owned `phase.fst` or `scripts/__pycache__/`.
+205. Batch 188C Change 5 is complete on the uncommitted worktree. A
+     gpt-6-luna xhigh worker migrated the LLVM JIT metadata and native
+     cache-record binary primitives to the shared bounded byte utility.
+     Root retained the four-byte in-place metadata patch loop to avoid
+     a heap allocation per record and added an independent production
+     native-record header check to `fsim.llvm`: fixed magic/schema
+     bytes, little-endian lengths and process count, zero alignment
+     padding, and object-size accounting. The existing `ObjectCache`
+     V1 checksum envelope is textual/stream-based and was deliberately
+     left alone. Warnings-as-errors Release and Debug `fsim_llvm_tests`
+     builds and the full `fsim.llvm` CTest pass in each configuration.
+     MCP was reindexed after the code wave. No full suite or batch
+     performance qualification has run. Proceed
+     to Change 6 surviving SystemC/TLM/SCV codecs; exclude kernel
+     protocol codecs scheduled for Batch 188E removal.
+206. Batch 188C Change 6 is complete on the uncommitted worktree. Root
+     pinned deterministic SHA-256 wire fixtures for both incremental
+     SystemC object and plugin metadata before migration; a gpt-6-luna
+     xhigh worker migrated the live `incremental_artifact.cpp` binary
+     primitives to the shared bounded byte utility. The full
+     `fsim.systemc.incremental` test passes in warnings-as-errors Release
+     and Debug, preserving those fingerprints, round trips, malformed
+     inputs, and diagnostic behavior. Caller-graph review showed that
+     TLM1/TLM2 observation serializers and SCV transport envelopes feed
+     the kernel loopback/message path scheduled for Batch 188E deletion;
+     the worker reversed its tentative edits to those three files and
+     left kernel/backend protocol codecs untouched. MCP was reindexed
+     after this wave and `git diff --check` passes. Proceed to Change 7
+     trace/archive primitives. No full suite, performance matrix,
+     hosted CI, commit, or push has run for 188C yet.
+207. Batch 188C Change 7 is complete on the uncommitted worktree. A
+     gpt-6-luna xhigh worker migrated trace, SDF effective, SDF schema,
+     and SDF portable archive byte primitives; root repaired the trace
+     reader constructor, reviewed the schema writer's move-by-value
+     lifetime, and verified preserved partial-read/cursor semantics.
+     Pre-migration SHA-256 fixtures for all five trace and all five
+     effective-SDF archive kinds and the schema archive pass, as does
+     the portable archive's fixed-header/round-trip/corruption coverage.
+     `fsim.application.trace_archive`, `fsim.application.sdf_effective_archive`,
+     `fsim.application.sdf_schema`, `fsim.application.sdf_artifact_identity`,
+     and `fsim.application.sdf_application_corpus` pass in warnings-as-errors
+     Release and Debug. The VITAL adapter has no local byte codec; FST's
+     external format is outside this shared application-archive migration.
+     MCP was reindexed after the SDF code wave and `git diff --check`
+     passes. Change 8 may finish the shared bounds/bit-pattern matrix.
+208. Batch 188C Change 8 is complete on the uncommitted worktree. Root
+     extended `fsim.support.bounded-bytes` to cover every integer byte
+     order, bounded and transactional failure, truncation, signed -42,
+     negative-zero float bits, double bits, and cursor/length accounting.
+     The 12-test focused codec/cache/archive matrix passes 12/12 in each
+     warnings-as-errors Release and Debug configuration. The five
+     source-package/current-obligations/license/translation-unit/CTest
+     governance checks pass in Release, and `git diff --check` is clean.
+     Proceed to Change 9 shared 128-bit identity primitives without
+     changing any domain identity values.
+209. Batch 188C Change 9 is complete on the uncommitted worktree. A
+     gpt-6-luna xhigh worker added field-based 128-bit nonzero/hex and
+     SHA-256 digest-word/big-endian-update helpers in
+     `include/fsim/support/identity128.hpp`. Existing strong domain
+     structs, public high/low fields, comparison semantics, hash inputs,
+     and wire codecs are unchanged; SystemC/SCV backend protocol IDs
+     remain outside this migration because their message path is slated
+     for Batch 188E deletion. Root added and registered
+     `fsim.support.identity128`, which passes in warnings-as-errors
+     Release and Debug along with five source/package/current-obligations/
+     CTest governance checks. MCP was reindexed after this code wave.
+     Change 10 may consolidate duplicated live identity hashing and
+     formatting under the frozen identity fixtures.
+210. Batch 188C Change 10 is complete on the uncommitted worktree. A
+     gpt-6-luna xhigh worker replaced duplicated big-endian SHA u64
+     update and digest-word extraction in the two core coverage
+     identities and eight coverage FSM/toggle/PSL implementations;
+     root additionally consolidated PSL's digest extraction. A final
+     worker wave migrated the matching SystemVerilog coverage database
+     and application coverage digest extraction. The distinct
+     little-endian `Simulation::Impl::coverage_hash_u64` input remains
+     unchanged, as do zero-ID normalization, public strong types,
+     hashing order, schemas, and error behavior. Exact frozen point
+     and instance identity values pass; the 12-test focused coverage
+     matrix and four additional database/application tests pass in
+     warnings-as-errors Release and Debug. Five governance checks and
+     `git diff --check` pass; MCP was reindexed. Proceed to Change 11
+     identical string helpers, preserving language-specific case rules.
+211. Batch 188C Change 11 is complete on the uncommitted worktree. A
+     gpt-6-luna xhigh worker added private `src/frontend/string_case.hpp`
+     and shared `include/fsim/support/ctype_whitespace.hpp`, migrating
+     five equivalent lowercase sites, four symmetric uppercase compares,
+     and five equivalent ctype-whitespace trim views. Distinct asymmetric
+     SDF lexer, case-sensitive SystemVerilog, narrower space/tab/CR,
+     explicit-ASCII, and token-level semantics remain local. Root added
+     `fsim.frontend.string-case` and `fsim.support.ctype-whitespace` tests;
+     both pass in warnings-as-errors Release and Debug, alongside the
+     affected frontend/SDF, coverage, semantic, and artifact slices.
+     Five governance checks and `git diff --check` pass. Proceed with
+     Change 12 path/file helpers, preserving diagnostic behavior.
+212. Batch 188C Change 13 is complete on the uncommitted worktree, ahead
+     of Change 12's final path-helper wave. A gpt-6-luna xhigh worker
+     replaced 19 exact span-required SDF diagnostic constructors with
+     one private `src/app/sdf_diagnostic.hpp` helper. Root froze and
+     verified one mapping-conflict diagnostic's exact severity, code,
+     message, span, and empty expansion stack. All 39 SDF application
+     tests pass in warnings-as-errors Release and Debug builds; five
+     governance checks and `git diff --check` pass. The project index
+     was refreshed. Change 12 remains open; do not mark it complete
+     until the shared path/file helper wave is qualified.
+213. Batch 188C Change 14 is complete as a deliberate retention audit,
+     with no production edit. A gpt-6-luna xhigh worker traced the
+     language coverage entry points and callers. The Verilog/VHDL
+     condition adapters enforce unsupported-language behavior and the
+     VHDL standard check absent from the generic discovery API; toggle
+     and statement-point discovery are substantive language-specific
+     passes. Removing them would change validation or source-header API.
+     All four focused condition/toggle tests pass in Release and Debug.
+     The plan wording now explicitly limits removal to genuinely
+     redundant forwarders. Change 12 path permissions and Change 15
+     accessor qualification remain in progress.
+214. Batch 188C Change 12 is complete on the uncommitted worktree.
+     A gpt-6-luna xhigh worker extracted object/design safe-relative-path
+     and staging-name logic into private `path_validation.hpp`, preserving
+     each TU's independent sequence atomic, and extracted the identical
+     object/design/SystemC read-only permission walk into private
+     `tree_permissions.hpp`. Each publisher still owns its exact error
+     code/message and reporting point; library path/permission behavior
+     and SystemC staging naming remain distinct. Root pinned a design
+     traversal rejection and a POSIX SystemC owner-write-bit assertion
+     before migration and registered the new helper header in the source
+     manifest. `fsim.artifact.object`, `fsim.artifact.design`, and
+     `fsim.systemc.incremental` pass 3/3 in Release and Debug; five
+     governance checks and `git diff --check` pass. Reindex MCP after
+     this code wave before Change 15 qualification.
+215. Batch 188C Change 15 is complete on the uncommitted worktree.
+     A gpt-6-luna xhigh worker inlined only the diagnostic engine's
+     field-only `empty()` and `diagnostics()` accessors in the existing
+     complete-type header, removed the out-of-line bodies, and added
+     direct empty/nonempty assertions to `fsim.api`. The API suite
+     passes in warnings-as-errors Release and Debug builds. The five
+     governance checks from the same integration wave passed, and
+     `git diff --check` is clean. No old accessor symbol was exported
+     by `libfsim_api.so`. Proceed to Changes 16-18's bounded seams;
+     reindex MCP after their code wave.
+216. Batch 188C Changes 16-18 are complete on the uncommitted worktree.
+     The residual one-function design-artifact codec validation TU was
+     folded into its 349-line sole caller, and its dead source/header,
+     includes, CMake entry, and package entries were removed. An exact
+     absolute-source-path `FSIM-ART-0013` regression passes. The much
+     larger Verilog parser coverage TU was deliberately not enlarged.
+     The FSM runtime builder's final self-validation was removed while
+     all input/resource checks and mutable public-model validations at
+     record/summary boundaries remain. A private UVM test helper now
+     serves three identical sequence descriptor builders; local wrappers
+     and distinct assertions remain. `fsim.application.artifact_phases`,
+     `fsim.application.compiled_hir_cache`, `fsim.runtime.coverage_fsm`,
+     and `fsim.runtime` pass 4/4 in warnings-as-errors Release and Debug.
+     Five governance checks and `git diff --check` pass; MCP was
+     reindexed. Proceed to Change 19 duplicate accounting, then Change
+     20 standard closure.
+217. On 2026-09-23 the user waived the seven-sample baseline/candidate
+     performance matrix for all batches until 188I. Treat this as
+     Batches 188C-188H; the full matrix resumes at 188I. This supersedes
+     the earlier 188B-only prospective performance-gate note. For each
+     affected Change 20, record the waiver without claiming benchmark
+     acceptance. Clean warnings-as-errors builds, unfiltered Release/
+     Debug suites, source/package governance, review, commit/push, and
+     applicable exact-head hosted CI remain required. Do not modify the
+     benchmark runner merely to work around the now-waived matrix.
+218. On 2026-09-23 the user additionally waived post-push CI monitoring
+     until Batch 188I. Treat this as Batches 188C-188H. Before each
+     commit/push, inspect the latest applicable hosted CI run and its
+     failures for any needed changes. After push, do not monitor the
+     newly triggered run; report its status as unverified and proceed
+     to the next batch. Exact-head four-lane monitoring and bounded
+     repair resume at Batch 188I. The seven-sample waiver in item 217
+     remains separate; all local correctness and full-suite gates remain.
+219. Change 20 ordering clarification from the user: inspect the latest
+     applicable prior CI run and make any in-scope correction before the
+     full clean Debug/Release matrices. Those expensive matrices must
+     qualify the corrected final code, avoiding needless reruns. This
+     inspection also satisfies the required pre-commit/push CI check;
+     Batches 188C-188H still do not monitor the new post-push run.
+220. Before Batch 188C's full matrices, root inspected all four retained
+     lanes of the latest pushed run, `35915260057` at `c2507598`. Each
+     lane built successfully but `fsim.contract.build-resources` failed
+     because the fetched Boost.PFR include path was usable as a normal
+     CMake variable but persisted as `NOTFOUND` in `CMakeCache.txt`.
+     The fallback now forces the fetched path into the `PATH` cache entry;
+     the local focused contract test passes, while hosted fallback remains
+     unverified until a later hosted run. Windows Debug and Release also
+     failed `fsim.application.named_events` with heap corruption; Debug's
+     `fsim.elaboration` failed the same way, causing two closure-matrix
+     dependency skips rather than separate failures. Valgrind found 36
+     invalid-memory errors in the previous Release named-events binary:
+     nested HIR constant calls reallocated `call_frames_` while an outer
+     map insertion still held a frame reference. The evaluator now
+     computes recursive initializers before accessing the active frame;
+     a nested-call local-initializer regression was added. The focused
+     named-events and elaboration tests pass 2/2 in both Release and
+     Debug; the corrected Release named-events binary has zero Valgrind
+     errors. This is strong local evidence, not a claim that Windows CI
+     has passed. Complete Change 19 before starting clean qualification.
+221. Batch 188C Change 19 is complete on the uncommitted worktree. A
+     gpt-6-luna xhigh worker migrated the standalone transaction-record
+     little-endian byte loops to the bounded utility and pinned its
+     434-byte wire image with SHA-256, all truncation prefixes, and exact
+     existing diagnostics. Another worker shared only the byte-identical
+     SDF cell/endpoint field encoding and case-policy comparisons. The
+     final read-only audit found a missed coverage-source identity SHA
+     size encoder; the same worker migrated its three uses to the shared
+     big-endian helper and pinned the exact composite digest. A separate
+     worker repaired self-aliasing bounded-writer append before resize
+     and proved vector/string and span/string-view reallocation cases.
+     The fourth identical UVM sequence test builder also uses the shared
+     private fixture. Focused transaction-record, SDF cell/endpoint,
+     coverage-source identity, bounded-byte, and UVM runtime tests pass
+     in warnings-as-errors Release and Debug; `git diff --check` passes,
+     all new headers/tests are in the source-package manifest, and MCP
+     was reindexed. The retained design-state stream/checksum codec,
+     textual envelopes, partial-read fallbacks, and distinct language or
+     boundary contracts are recorded in the plan; kernel/TLM/SCV message
+     codecs remain scheduled for 188E deletion. Change 20 can now run
+     clean Release then Debug qualification on the corrected code; the
+     seven-sample matrix and post-push CI monitoring waivers still apply.
+222. Batch 188C Change 20 local qualification has started after the
+     prior-run CI review/correction in item 220. A fresh Clang/LLVM 22
+     warnings-as-errors Release build with eight workers passed, and its
+     unfiltered CTest suite passed 422/422 with four workers and 7,200-
+     second per-test timeouts in 159.75 seconds. The source-package,
+     current-obligations, build-resource, named-events, and elaboration
+     tests are included in that pass. The first Release build attempt
+     was interrupted only by the sandboxed network failing to download
+     pinned Tcl 9.0.4; the archive from an existing local build matched
+     `FSIM_TCL_SOURCE_SHA256` and was copied into this build's dependency
+     cache before the successful continuation. A separate clean Debug
+     tree is configured with the same Clang/LLVM and warning settings;
+     the same validated Tcl archive was preseeded and its full build is
+     underway. Do not mark Change 20 complete until Debug's unfiltered
+     suite, final diff/process/governance review, commit, and push pass.
+223. The separate clean Clang/LLVM 22 warnings-as-errors Debug build
+     passed with eight workers, and its unfiltered CTest suite passed
+     422/422 with four workers and 7,200-second per-test timeouts in
+     161.69 seconds. Release and Debug therefore both pass 422/422;
+     the Release suite took 159.75 seconds. No seven-sample performance
+     comparison is claimed under the Batch 188C-188H user waiver. The
+     documentation-sensitive governance slice passes 7/7 in each
+     configuration after the final plan/resume edits. Final diff/process
+     review and `git diff --check` pass. A pre-commit `gh run list`
+     confirms `35915260057` at `c2507598` is still the latest pushed
+     run; its relevant failures have the local corrections in item 220.
+     One cohesive implementation commit/push closes Change 20 and hands
+     off to 188D. Do not monitor the new post-push run or claim it passed.

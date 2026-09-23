@@ -2,12 +2,15 @@
 
 #include "fsim/app/sdf_effective_archive.hpp"
 
+#include "fsim/support/bounded_bytes.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
 #include <ranges>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
 
@@ -43,44 +46,50 @@ namespace {
     public:
         void raw(const std::span<const std::byte> bytes)
         {
-            bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
+            require_write(writer_.append(bytes));
         }
-        void u8(const std::uint8_t value) { bytes_.push_back(std::byte { value }); }
+        void u8(const std::uint8_t value)
+        {
+            require_write(writer_.write_u8(value));
+        }
         void u32(const std::uint32_t value)
         {
-            for (unsigned shift = 0; shift < 32U; shift += 8U)
-                u8(static_cast<std::uint8_t>(value >> shift));
+            require_write(writer_.write_u32_le(value));
         }
         void u64(const std::uint64_t value)
         {
-            for (unsigned shift = 0; shift < 64U; shift += 8U)
-                u8(static_cast<std::uint8_t>(value >> shift));
+            require_write(writer_.write_u64_le(value));
         }
         void string(const std::string_view value)
         {
-            u64(value.size());
+            u64(static_cast<std::uint64_t>(value.size()));
             raw(std::as_bytes(std::span { value }));
         }
         [[nodiscard]] std::vector<std::byte> take() { return std::move(bytes_); }
 
     private:
+        static void require_write(const bool succeeded)
+        {
+            if (!succeeded)
+                throw std::length_error(
+                    "Effective SDF archive exceeds the output size limit.");
+        }
+
         std::vector<std::byte> bytes_;
+        support::BoundedByteWriter<std::vector<std::byte>> writer_ {
+            bytes_, bytes_.max_size() };
     };
 
     class Reader final {
     public:
         explicit Reader(const std::span<const std::byte> bytes)
-            : bytes_(bytes)
+            : reader_(bytes)
         {
         }
 
         bool raw(const std::size_t count, std::span<const std::byte>& result)
         {
-            if (count > bytes_.size() - position_)
-                return false;
-            result = bytes_.subspan(position_, count);
-            position_ += count;
-            return true;
+            return reader_.take(count, result);
         }
         bool u8(std::uint8_t& result)
         {
@@ -93,6 +102,8 @@ namespace {
         bool u32(std::uint32_t& result)
         {
             result = 0U;
+            if (reader_.remaining() >= sizeof(result))
+                return reader_.read_u32_le(result);
             for (unsigned shift = 0; shift < 32U; shift += 8U) {
                 std::uint8_t byte { };
                 if (!u8(byte))
@@ -104,6 +115,8 @@ namespace {
         bool u64(std::uint64_t& result)
         {
             result = 0U;
+            if (reader_.remaining() >= sizeof(result))
+                return reader_.read_u64_le(result);
             for (unsigned shift = 0; shift < 64U; shift += 8U) {
                 std::uint8_t byte { };
                 if (!u8(byte))
@@ -126,12 +139,11 @@ namespace {
         }
         [[nodiscard]] bool empty() const noexcept
         {
-            return position_ == bytes_.size();
+            return reader_.finished();
         }
 
     private:
-        std::span<const std::byte> bytes_;
-        std::size_t position_ { };
+        support::BoundedByteReader reader_;
     };
 
     bool portable_identity(const std::string_view value) noexcept

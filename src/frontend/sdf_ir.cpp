@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/sdf.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -26,21 +26,6 @@ namespace {
     void append_number(std::string& output, const std::uint64_t value)
     {
         append_field(output, std::to_string(value));
-    }
-
-    [[nodiscard]] bool ascii_iequals(const std::string_view left,
-        const std::string_view right) noexcept
-    {
-        if (left.size() != right.size())
-            return false;
-        auto right_character = right.begin();
-        for (const char left_character : left) {
-            if (std::toupper(static_cast<unsigned char>(left_character))
-                != std::toupper(static_cast<unsigned char>(*right_character++))) {
-                return false;
-            }
-        }
-        return true;
     }
 
     [[nodiscard]] std::string cell_identity(const SdfCell& source)
@@ -67,7 +52,8 @@ namespace {
         if (node.kind == SdfConstructKind::NetDelay)
             return "sdf21:netdelay";
         if (node.kind == SdfConstructKind::PathPulsePercent
-            && ascii_iequals(node.keyword_spelling, "GLOBALPATHPULSE")) {
+            && detail::ctype_upper_equal(
+                node.keyword_spelling, "GLOBALPATHPULSE")) {
             return "sdf21:globalpathpulse";
         }
         return { };

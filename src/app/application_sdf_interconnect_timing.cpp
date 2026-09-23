@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_interconnect_timing.hpp"
+#include "sdf_diagnostic.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,15 +14,9 @@
 namespace fsim::app {
 namespace {
     using frontend::Diagnostic;
-    using frontend::DiagnosticSeverity;
     using frontend::SourceSpan;
 
-    void diagnose(std::vector<Diagnostic>& diagnostics, std::string code,
-        std::string message, const SourceSpan& span)
-    {
-        diagnostics.push_back(Diagnostic { DiagnosticSeverity::Error,
-            std::move(code), std::move(message), span, { } });
-    }
+    using sdf_detail::diagnose;
 
     void append_field(std::string& target, const std::string_view value)
     {

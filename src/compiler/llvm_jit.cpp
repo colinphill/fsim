@@ -4,6 +4,7 @@
 #include "llvm_jit_internal.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
+#include "fsim/support/bounded_bytes.hpp"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/ExecutionEngine/ObjectCache.h>
@@ -96,26 +97,22 @@ namespace llvm_detail {
     public:
         void append_u8(const std::uint8_t value)
         {
-            bytes_.push_back(static_cast<std::byte>(value));
+            require_write(writer_.write_u8(value));
         }
 
         void append_u32(const std::uint32_t value)
         {
-            for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
-                append_u8(static_cast<std::uint8_t>(value >> shift));
-            }
+            require_write(writer_.write_u32_le(value));
         }
 
         void append_u64(const std::uint64_t value)
         {
-            for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
-                append_u8(static_cast<std::uint8_t>(value >> shift));
-            }
+            require_write(writer_.write_u64_le(value));
         }
 
         void append_bytes(const std::span<const std::byte> bytes)
         {
-            bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
+            require_write(writer_.append(bytes));
         }
 
         void append_u32_vector(const std::span<const std::uint32_t> values)
@@ -156,63 +153,55 @@ namespace llvm_detail {
         }
 
     private:
+        static void require_write(const bool succeeded)
+        {
+            if (!succeeded) {
+                throw LlvmJitError("LLVM cache metadata is too large");
+            }
+        }
+
         std::vector<std::byte> bytes_;
+        support::BoundedByteWriter<std::vector<std::byte>> writer_ {
+            bytes_, kMaximumJitMetadataBytes
+        };
     };
 
     class JitMetadataReader final {
     public:
         explicit JitMetadataReader(const std::span<const std::byte> bytes)
             : bytes_(bytes)
+            , reader_(bytes, kMaximumJitMetadataBytes)
         {
         }
 
         [[nodiscard]] bool read_u8(std::uint8_t& value)
         {
-            if (offset_ == bytes_.size()) {
-                return false;
-            }
-            value = std::to_integer<std::uint8_t>(bytes_[offset_++]);
-            return true;
+            return reader_.read_u8(value);
         }
 
         [[nodiscard]] bool read_u32(std::uint32_t& value)
         {
-            value = 0U;
-            for (std::uint32_t byte = 0U; byte < 4U; ++byte) {
-                std::uint8_t part { };
-                if (!read_u8(part)) {
-                    return false;
-                }
-                value |= static_cast<std::uint32_t>(part) << (byte * 8U);
-            }
-            return true;
+            return reader_.read_u32_le(value);
         }
 
         [[nodiscard]] bool read_u64(std::uint64_t& value)
         {
-            value = 0U;
-            for (std::uint32_t byte = 0U; byte < 8U; ++byte) {
-                std::uint8_t part { };
-                if (!read_u8(part)) {
-                    return false;
-                }
-                value |= static_cast<std::uint64_t>(part) << (byte * 8U);
-            }
-            return true;
+            return reader_.read_u64_le(value);
         }
 
         [[nodiscard]] bool read_bytes(
             const std::span<const std::byte>& expected)
         {
-            if (offset_ > bytes_.size()
-                || expected.size() > bytes_.size() - offset_
+            const auto offset = reader_.position();
+            if (offset > bytes_.size()
+                || expected.size() > bytes_.size() - offset
                 || !std::equal(
                     expected.begin(), expected.end(),
-                    bytes_.begin() + static_cast<std::ptrdiff_t>(offset_))) {
+                    bytes_.begin() + static_cast<std::ptrdiff_t>(offset))) {
                 return false;
             }
-            offset_ += expected.size();
-            return true;
+            std::span<const std::byte> ignored;
+            return reader_.take(expected.size(), ignored);
         }
 
         [[nodiscard]] bool read_u32_vector(
@@ -220,7 +209,7 @@ namespace llvm_detail {
         {
             std::uint32_t count { };
             if (!read_u32(count)
-                || count > (bytes_.size() - offset_) / 4U) {
+                || count > reader_.remaining() / 4U) {
                 return false;
             }
             values.resize(count);
@@ -234,12 +223,12 @@ namespace llvm_detail {
 
         [[nodiscard]] bool finished() const noexcept
         {
-            return offset_ == bytes_.size();
+            return reader_.finished();
         }
 
     private:
         std::span<const std::byte> bytes_;
-        std::size_t offset_ { };
+        support::BoundedByteReader reader_;
     };
 
     struct JitCacheRecordView {
@@ -259,64 +248,57 @@ namespace llvm_detail {
                 > std::numeric_limits<std::size_t>::max() - object_offset) {
             throw LlvmJitError("LLVM native cache record is too large");
         }
+        const auto record_size = object_offset + object.size();
         std::vector<std::byte> result;
-        result.reserve(object_offset + object.size());
-        result.insert(
-            result.end(),
-            kJitCacheRecordMagic.begin(), kJitCacheRecordMagic.end());
-        const auto append_u32 = [&](const std::uint32_t value) {
-            for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
-                result.push_back(static_cast<std::byte>(
-                    static_cast<std::uint8_t>(value >> shift)));
+        result.reserve(record_size);
+        support::BoundedByteWriter<std::vector<std::byte>> writer {
+            result, record_size
+        };
+        const auto require_write = [](const bool succeeded) {
+            if (!succeeded) {
+                throw LlvmJitError("LLVM native cache record is too large");
             }
         };
-        const auto append_u64 = [&](const std::uint64_t value) {
-            for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
-                result.push_back(static_cast<std::byte>(
-                    static_cast<std::uint8_t>(value >> shift)));
-            }
-        };
-        append_u32(kJitCacheRecordSchema);
-        append_u32(static_cast<std::uint32_t>(metadata.size()));
-        append_u64(static_cast<std::uint64_t>(object.size()));
-        result.insert(result.end(), metadata.begin(), metadata.end());
-        result.resize(object_offset);
-        result.insert(result.end(), object.begin(), object.end());
+        require_write(writer.append(kJitCacheRecordMagic));
+        require_write(writer.write_u32_le(kJitCacheRecordSchema));
+        require_write(writer.write_u32_le(
+            static_cast<std::uint32_t>(metadata.size())));
+        require_write(writer.write_u64_le(
+            static_cast<std::uint64_t>(object.size())));
+        require_write(writer.append(metadata));
+        constexpr std::array<std::byte, 7> zero_padding { };
+        const auto padding_size = object_offset - result.size();
+        require_write(writer.append(std::span<const std::byte> {
+            zero_padding.data(), padding_size
+        }));
+        require_write(writer.append(object));
         return result;
     }
 
     [[nodiscard]] std::optional<JitCacheRecordView> parse_jit_cache_record(
         const std::span<const std::byte> bytes)
     {
-        if (bytes.size() < 24U
-            || !std::equal(
-                kJitCacheRecordMagic.begin(), kJitCacheRecordMagic.end(),
-                bytes.begin())) {
+        if (bytes.size() < 24U) {
             return std::nullopt;
         }
-        const auto read_u32 = [&](const std::size_t offset) {
-            std::uint32_t value { };
-            for (std::uint32_t byte = 0U; byte < 4U; ++byte) {
-                value |= static_cast<std::uint32_t>(
-                             std::to_integer<std::uint8_t>(
-                                 bytes[offset + byte]))
-                    << (byte * 8U);
-            }
-            return value;
-        };
-        const auto read_u64 = [&](const std::size_t offset) {
-            std::uint64_t value { };
-            for (std::uint32_t byte = 0U; byte < 8U; ++byte) {
-                value |= static_cast<std::uint64_t>(
-                             std::to_integer<std::uint8_t>(
-                                 bytes[offset + byte]))
-                    << (byte * 8U);
-            }
-            return value;
-        };
-        const auto schema = read_u32(8U);
-        const auto metadata_size = static_cast<std::size_t>(read_u32(12U));
-        const auto object_size = read_u64(16U);
+        support::BoundedByteReader reader { bytes };
+        std::span<const std::byte> magic;
+        if (!reader.take(kJitCacheRecordMagic.size(), magic)
+            || !std::equal(
+                kJitCacheRecordMagic.begin(), kJitCacheRecordMagic.end(),
+                magic.begin())) {
+            return std::nullopt;
+        }
+        std::uint32_t schema { };
+        std::uint32_t encoded_metadata_size { };
+        std::uint64_t object_size { };
+        if (!reader.read_u32_le(schema)
+            || !reader.read_u32_le(encoded_metadata_size)
+            || !reader.read_u64_le(object_size)) {
+            return std::nullopt;
+        }
+        const auto metadata_size
+            = static_cast<std::size_t>(encoded_metadata_size);
         const auto object_offset
             = (24U + metadata_size + 7U) & ~std::size_t { 7U };
         if (schema != kJitCacheRecordSchema
@@ -328,9 +310,18 @@ namespace llvm_detail {
                 != bytes.size() - object_offset) {
             return std::nullopt;
         }
+        std::span<const std::byte> metadata;
+        std::span<const std::byte> padding;
+        std::span<const std::byte> object;
+        if (!reader.take(metadata_size, metadata)
+            || !reader.take(object_offset - reader.position(), padding)
+            || !reader.take(static_cast<std::size_t>(object_size), object)
+            || !reader.finished()) {
+            return std::nullopt;
+        }
         return JitCacheRecordView {
-            bytes.subspan(24U, metadata_size),
-            bytes.subspan(object_offset)
+            metadata,
+            object
         };
     }
 

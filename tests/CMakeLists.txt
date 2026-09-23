@@ -158,6 +158,16 @@ endif()
 
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
+add_executable(fsim_frontend_string_case_tests frontend/string_case_test.cpp)
+fsim_configure_test(fsim_frontend_string_case_tests)
+target_include_directories(
+  fsim_frontend_string_case_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/frontend)
+fsim_register_simple_test(
+  fsim.frontend.string-case
+  fsim_frontend_string_case_tests
+  "fast;frontend;string;case;vhdl;sdf;positive;negative"
+)
+
 fsim_add_single_source_test_target(
   fsim_coverage_point_identity_tests
   frontend/coverage_point_identity_test.cpp
@@ -1060,6 +1070,31 @@ fsim_configure_test(fsim_project_tests)
 target_link_libraries(fsim_project_tests PRIVATE fsim_project)
 add_test(NAME fsim.project COMMAND fsim_project_tests)
 
+add_executable(fsim_bounded_bytes_tests support/bounded_bytes_test.cpp)
+fsim_configure_test(fsim_bounded_bytes_tests)
+fsim_register_simple_test(
+  fsim.support.bounded-bytes
+  fsim_bounded_bytes_tests
+  "fast;support;codec;bytes;bounds;endianness;positive;negative"
+)
+
+add_executable(fsim_ctype_whitespace_tests support/ctype_whitespace_test.cpp)
+fsim_configure_test(fsim_ctype_whitespace_tests)
+fsim_register_simple_test(
+  fsim.support.ctype-whitespace
+  fsim_ctype_whitespace_tests
+  "fast;support;string;whitespace;positive;negative"
+)
+
+add_executable(fsim_identity128_tests support/identity128_test.cpp)
+fsim_configure_test(fsim_identity128_tests)
+target_link_libraries(fsim_identity128_tests PRIVATE fsim_support)
+fsim_register_simple_test(
+  fsim.support.identity128
+  fsim_identity128_tests
+  "fast;support;identity;sha256;positive;negative"
+)
+
 add_executable(fsim_library_tests library/library_artifact_test.cpp)
 fsim_configure_test(fsim_library_tests)
 target_link_libraries(fsim_library_tests PRIVATE fsim_library)
@@ -1288,6 +1323,18 @@ target_include_directories(
 )
 target_link_libraries(fsim_cache_tests PRIVATE fsim_object_cache)
 add_test(NAME fsim.cache COMMAND fsim_cache_tests)
+
+add_executable(
+  fsim_cache_wire_fixture_tests
+  compiler/cache_wire_fixture_test.cpp
+)
+fsim_configure_test(fsim_cache_wire_fixture_tests)
+target_link_libraries(fsim_cache_wire_fixture_tests PRIVATE fsim_object_cache)
+fsim_register_simple_test(
+  fsim.cache-wire-fixture
+  fsim_cache_wire_fixture_tests
+  "fast;cache;artifact;codec;positive;negative"
+)
 
 add_test(
   NAME fsim.diagnostics-catalog

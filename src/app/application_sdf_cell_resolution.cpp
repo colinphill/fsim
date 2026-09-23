@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/sdf_cell_resolution.hpp"
+#include "sdf_diagnostic.hpp"
+#include "sdf_resolution_helpers.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -13,7 +14,6 @@ namespace fsim::app {
 namespace {
 
     using frontend::Diagnostic;
-    using frontend::DiagnosticSeverity;
     using frontend::SdfInstanceSelectorKind;
     using frontend::SdfIrCell;
     using frontend::SourceSpan;
@@ -24,32 +24,9 @@ namespace {
         std::vector<SdfHierarchyCasePolicy> segment_policies;
     };
 
-    void diagnose(std::vector<Diagnostic>& diagnostics, std::string code,
-        std::string message, const SourceSpan& span)
-    {
-        diagnostics.push_back(Diagnostic { DiagnosticSeverity::Error,
-            std::move(code), std::move(message), span, { } });
-    }
-
-    void append_field(std::string& target, const std::string_view value)
-    {
-        target += std::to_string(value.size());
-        target += ':';
-        target += value;
-    }
-
-    bool segment_matches(const std::string_view left, const std::string_view right,
-        const SdfHierarchyCasePolicy policy)
-    {
-        if (left.size() != right.size())
-            return false;
-        if (policy == SdfHierarchyCasePolicy::Sensitive)
-            return left == right;
-        return std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-            return std::tolower(static_cast<unsigned char>(lhs))
-                == std::tolower(static_cast<unsigned char>(rhs));
-        });
-    }
+    using sdf_detail::diagnose;
+    using sdf_detail::append_field;
+    using sdf_detail::equal_under_case_policy;
 
     std::optional<std::string> configuration_entity(
         const elaboration::SpecializationInfo& specialization)
@@ -292,7 +269,8 @@ namespace {
             return false;
         }
         for (std::size_t index = 0U; index < sdf_segments.size(); ++index) {
-            if (!segment_matches(candidate.segments[index + offset], sdf_segments[index],
+            if (!equal_under_case_policy(
+                    candidate.segments[index + offset], sdf_segments[index],
                     candidate.segment_policies[index + offset])) {
                 return false;
             }
@@ -341,7 +319,8 @@ namespace {
     {
         std::vector<SdfResolvedInstance> matches;
         for (const auto& candidate : candidates) {
-            if (segment_matches(cell.cell_type, candidate.resolved.cell_type,
+            if (equal_under_case_policy(
+                    cell.cell_type, candidate.resolved.cell_type,
                     candidate.resolved.case_policy)
                 && matches_selector(candidate, cell)) {
                 if (matches.size() >= limits.max_matches) {

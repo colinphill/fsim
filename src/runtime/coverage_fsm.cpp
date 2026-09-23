@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/coverage_fsm.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
-#include <array>
 #include <limits>
 #include <map>
 #include <new>
@@ -41,31 +41,10 @@ namespace {
         return { object.high, object.low, from.high, from.low, to.high, to.low };
     }
 
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>(
-                (bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
-
     void update_string(support::Sha256& hash, const std::string_view value) noexcept
     {
-        update_u64(hash, value.size());
+        support::sha256_update_u64_be(hash, value.size());
         hash.update(value);
-    }
-
-    std::uint64_t digest_word(
-        const support::Sha256::Digest& digest, const std::size_t first) noexcept
-    {
-        std::uint64_t value { };
-        for (std::size_t index = first; index < first + 8U; ++index) {
-            value = (value << 8U) | digest[index];
-        }
-        return value;
     }
 
     CodeCoveragePointId bin_identity(const CodeCoveragePointId instance,
@@ -76,18 +55,19 @@ namespace {
         support::Sha256 hash;
         update_string(hash, kCoverageFsmRuntimeSchema);
         update_string(hash, role);
-        update_u64(hash, instance.high);
-        update_u64(hash, instance.low);
-        update_u64(hash, object.high);
-        update_u64(hash, object.low);
-        update_u64(hash, first.high);
-        update_u64(hash, first.low);
+        support::sha256_update_u64_be(hash, instance.high);
+        support::sha256_update_u64_be(hash, instance.low);
+        support::sha256_update_u64_be(hash, object.high);
+        support::sha256_update_u64_be(hash, object.low);
+        support::sha256_update_u64_be(hash, first.high);
+        support::sha256_update_u64_be(hash, first.low);
         if (second) {
-            update_u64(hash, second->high);
-            update_u64(hash, second->low);
+            support::sha256_update_u64_be(hash, second->high);
+            support::sha256_update_u64_be(hash, second->low);
         }
         const auto digest = hash.finish();
-        return { digest_word(digest, 0U), digest_word(digest, 8U) };
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     bool valid_saturation(const std::uint64_t hits, const bool overflow) noexcept
@@ -373,10 +353,6 @@ CoverageFsmBuildResult make_coverage_fsm_runtime_model(
             return transition_key(
                 bin.current_state_object, bin.from_state, bin.to_state);
         });
-        const auto validation = validate_model(model, limits);
-        if (validation.error != Error::None) {
-            return reject(validation.error, validation.index);
-        }
         result.model = std::move(model);
         result.error = Error::None;
         result.index = 0U;

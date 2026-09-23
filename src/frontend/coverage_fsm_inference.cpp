@@ -2,10 +2,11 @@
 #include "fsim/frontend/coverage_fsm_inference.hpp"
 
 #include "fsim/frontend/source.hpp"
+#include "fsim/support/ctype_whitespace.hpp"
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <functional>
 #include <map>
@@ -64,31 +65,10 @@ namespace {
         }
     };
 
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>(
-                (bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
-
     void update_string(support::Sha256& hash, const std::string_view value) noexcept
     {
-        update_u64(hash, value.size());
+        support::sha256_update_u64_be(hash, value.size());
         hash.update(value);
-    }
-
-    std::uint64_t digest_word(
-        const support::Sha256::Digest& digest, const std::size_t first) noexcept
-    {
-        std::uint64_t value { };
-        for (std::size_t index = first; index < first + 8U; ++index) {
-            value = (value << 8U) | digest[index];
-        }
-        return value;
     }
 
     runtime::CodeCoveragePointId object_identity(
@@ -99,13 +79,14 @@ namespace {
         support::Sha256 hash;
         update_string(hash, kCoverageFsmInferenceSchema);
         update_string(hash, role);
-        update_u64(hash, source_point.high);
-        update_u64(hash, source_point.low);
-        update_u64(hash, instance.high);
-        update_u64(hash, instance.low);
+        support::sha256_update_u64_be(hash, source_point.high);
+        support::sha256_update_u64_be(hash, source_point.low);
+        support::sha256_update_u64_be(hash, instance.high);
+        support::sha256_update_u64_be(hash, instance.low);
         update_string(hash, path);
         const auto digest = hash.finish();
-        return { digest_word(digest, 0U), digest_word(digest, 8U) };
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     runtime::CodeCoveragePointId legal_state_set_identity(
@@ -115,15 +96,16 @@ namespace {
         support::Sha256 hash;
         update_string(hash, kCoverageFsmInferenceSchema);
         update_string(hash, "legal-state-set");
-        update_u64(hash, current.high);
-        update_u64(hash, current.low);
-        update_u64(hash, states.size());
+        support::sha256_update_u64_be(hash, current.high);
+        support::sha256_update_u64_be(hash, current.low);
+        support::sha256_update_u64_be(hash, states.size());
         for (const auto& state : states) {
-            update_u64(hash, state.high);
-            update_u64(hash, state.low);
+            support::sha256_update_u64_be(hash, state.high);
+            support::sha256_update_u64_be(hash, state.low);
         }
         const auto digest = hash.finish();
-        return { digest_word(digest, 0U), digest_word(digest, 8U) };
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     runtime::CodeCoveragePointId state_identity(
@@ -133,12 +115,13 @@ namespace {
         support::Sha256 hash;
         update_string(hash, kCoverageFsmInferenceSchema);
         update_string(hash, "state");
-        update_u64(hash, object.high);
-        update_u64(hash, object.low);
-        update_u64(hash, ordinal);
+        support::sha256_update_u64_be(hash, object.high);
+        support::sha256_update_u64_be(hash, object.low);
+        support::sha256_update_u64_be(hash, ordinal);
         update_string(hash, name);
         const auto digest = hash.finish();
-        return { digest_word(digest, 0U), digest_word(digest, 8U) };
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     bool invalid_text(const std::string_view text) noexcept
@@ -241,21 +224,6 @@ namespace {
         return value;
     }
 
-    std::string_view trim_ascii(const std::string_view value) noexcept
-    {
-        std::size_t first = 0U;
-        while (first < value.size()
-            && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
-            ++first;
-        }
-        auto last = value.size();
-        while (last > first
-            && std::isspace(static_cast<unsigned char>(value[last - 1U])) != 0) {
-            --last;
-        }
-        return value.substr(first, last - first);
-    }
-
     std::optional<std::string> pragma_string(
         const frontend::SystemVerilogFsmPragmaSpecification& specification,
         const std::size_t maximum_bytes)
@@ -266,7 +234,8 @@ namespace {
             || !specification.value->decoded_string) {
             return std::nullopt;
         }
-        const auto trimmed = trim_ascii(*specification.value->decoded_string);
+        const auto trimmed = support::trim_ctype_whitespace(
+            *specification.value->decoded_string);
         if (trimmed.empty() || trimmed.size() > maximum_bytes
             || invalid_text(trimmed)) {
             return std::nullopt;
@@ -285,7 +254,8 @@ namespace {
             const auto end = comma == std::string_view::npos
                 ? value.size()
                 : comma;
-            const auto state = trim_ascii(value.substr(begin, end - begin));
+            const auto state = support::trim_ctype_whitespace(
+                value.substr(begin, end - begin));
             if (state.empty() || state.size() > maximum_name_bytes
                 || invalid_text(state) || !unique.emplace(state).second) {
                 return std::nullopt;

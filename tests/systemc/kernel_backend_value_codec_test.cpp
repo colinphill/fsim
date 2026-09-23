@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/kernel_backend_value_codec.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <limits>
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -168,6 +170,21 @@ void audit_exact_round_trips()
     const auto logic9_bytes = round_trip(make_logic9());
     const auto enum_bytes = round_trip(make_enumeration());
     const auto time_bytes = round_trip(make_time());
+    const auto expect_sha256 = [](const std::vector<std::byte>& bytes,
+        const std::string_view expected) {
+        assert(fsim::support::Sha256::hex(
+            fsim::support::Sha256::digest(std::span { bytes })) == expected);
+    };
+    expect_sha256(bit2_bytes,
+        "6ccd3c92186b81dea346170477cbe4e298de33e53082411a68501ace1d43fa49");
+    expect_sha256(logic4_bytes,
+        "2bf78c53eb85bd4ea67cb8681ec0e365701032f56c58f30cfef107a9f308f16a");
+    expect_sha256(logic9_bytes,
+        "993e68985408088b4bd57341bcf8c3a1743bdf267ffbf014a3c1949ad460fbb4");
+    expect_sha256(enum_bytes,
+        "67acb32310dfbf8e82d9844ca256500dd3897a3d5021a3827cbb37e86ca6c380");
+    expect_sha256(time_bytes,
+        "4473fab6fc1f753f6f18c836b87f284ffb15d0a0c8ea87afd59a6acfcf816b5e");
     assert(bit2_bytes != logic4_bytes);
     assert(logic4_bytes != logic9_bytes);
     assert(enum_bytes != time_bytes);
@@ -249,6 +266,13 @@ void audit_metadata_rejections()
 void audit_payload_rejections()
 {
     const auto canonical = round_trip(make_logic4());
+
+    for (std::size_t length = 0U; length < 20U; ++length) {
+        const auto prefix = std::span { canonical }.first(length);
+        fsim::diagnostic::Engine diagnostics;
+        assert(!deserialize_systemc_kernel_value(prefix, { }, diagnostics));
+        assert(diagnostics.has_error());
+    }
 
     auto bytes = canonical;
     bytes[0] = std::byte { 0U };

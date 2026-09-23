@@ -62,7 +62,8 @@ module memoized_function_child #(
     leaf = OFFSET + value;
   endfunction
   function automatic [7:0] build_value(input integer ignored);
-    build_value = leaf(1);
+    integer local_value = leaf(1);
+    build_value = local_value;
   endfunction
   localparam logic [7:0] VALUE = build_value(0);
 endmodule

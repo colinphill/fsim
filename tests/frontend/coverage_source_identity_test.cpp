@@ -77,8 +77,9 @@ void test_relocation_and_normalization()
     require(code_coverage_source_content_hex(*first.identity)
             == "bbfca2afc8562f8675a4e3f474a685b4f47d7728ae08df9a2f1a2a8bb77826e7",
         "source content must retain its exact SHA-256 identity");
-    require(code_coverage_source_identity_hex(*first.identity).size() == 64U,
-        "the composite source identity must retain all SHA-256 bits");
+    require(code_coverage_source_identity_hex(*first.identity)
+            == "3c0104bc131c8211cc6046593a22f6979d2e95b494e380a34b94297b6de3227f",
+        "the composite source identity must retain its exact SHA-256 identity");
 }
 
 void test_path_and_content_distinctions()

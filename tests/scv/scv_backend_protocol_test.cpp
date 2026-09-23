@@ -2,6 +2,7 @@
 
 #include "fsim/systemc/scv_backend_protocol.hpp"
 #include "fsim/systemc/scv_resources.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <array>
@@ -202,6 +203,9 @@ int main()
     fsim::diagnostic::Engine receipt_diagnostics;
     const auto receipt_bytes = serialize_scv_backend_message(
         receipt, limits, receipt_diagnostics);
+    assert(receipt_bytes && fsim::support::Sha256::hex(
+        fsim::support::Sha256::digest(std::span { *receipt_bytes }))
+        == "8565e7c7b60a1ad9ff26a36ddec1444dd2c97373ec50a294f1e537e64b2dfbc6");
     const auto decoded_receipt = deserialize_scv_backend_message(
         *receipt_bytes, limits, receipt_diagnostics);
     assert(decoded_receipt == receipt && !receipt_diagnostics.has_error());

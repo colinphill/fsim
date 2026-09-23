@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_fsm_hints.hpp"
+#include "fsim/support/ctype_whitespace.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -26,21 +27,6 @@ namespace {
     bool invalid_text(const std::string_view text) noexcept
     {
         return text.find('\0') != std::string_view::npos;
-    }
-
-    std::string_view trim_ascii(const std::string_view value) noexcept
-    {
-        std::size_t first = 0U;
-        while (first < value.size()
-            && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
-            ++first;
-        }
-        auto last = value.size();
-        while (last > first
-            && std::isspace(static_cast<unsigned char>(value[last - 1U])) != 0) {
-            --last;
-        }
-        return value.substr(first, last - first);
     }
 
     std::string vhdl_name(std::string value)
@@ -100,7 +86,8 @@ namespace {
             const auto end = comma == std::string_view::npos
                 ? value.size()
                 : comma;
-            auto state = std::string { trim_ascii(value.substr(begin, end - begin)) };
+            auto state = std::string { support::trim_ctype_whitespace(
+                value.substr(begin, end - begin)) };
             if (vhdl) {
                 state = vhdl_name(std::move(state));
             }
@@ -187,7 +174,8 @@ CoverageFsmHintResult make_coverage_fsm_hints(
                 return reject(Error::InvalidAttributeSpecification, index);
             }
             entity_name_count += attribute.entity_names.size();
-            const auto value = trim_ascii(*attribute.value.decoded_string);
+            const auto value = support::trim_ctype_whitespace(
+                *attribute.value.decoded_string);
             if (value.empty() || invalid_text(value)) {
                 return reject(Error::InvalidAttributeSpecification, index);
             }

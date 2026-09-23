@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_point_identity.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <array>
@@ -8,16 +9,6 @@
 
 namespace fsim::frontend {
 namespace {
-
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>((bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
 
     void update_digest(support::Sha256& hash,
         const support::Sha256::Digest& digest) noexcept
@@ -27,16 +18,6 @@ namespace {
             bytes[index] = static_cast<std::byte>(digest[index]);
         }
         hash.update(bytes);
-    }
-
-    std::uint64_t digest_word(
-        const support::Sha256::Digest& digest, const std::size_t first) noexcept
-    {
-        std::uint64_t value { };
-        for (std::size_t index = first; index < first + 8U; ++index) {
-            value = (value << 8U) | digest[index];
-        }
-        return value;
     }
 
 } // namespace
@@ -67,19 +48,19 @@ CodeCoveragePointIdentityResult make_code_coverage_point_identity(
     }
 
     support::Sha256 hash;
-    update_u64(hash, kCodeCoveragePointIdentitySchema.size());
+    support::sha256_update_u64_be(hash, kCodeCoveragePointIdentitySchema.size());
     hash.update(kCodeCoveragePointIdentitySchema);
     update_digest(hash, source.digest);
-    update_u64(hash, static_cast<std::uint8_t>(language));
-    update_u64(hash, static_cast<std::uint8_t>(construct));
-    update_u64(hash, span.begin_offset);
-    update_u64(hash, span.end_offset);
+    support::sha256_update_u64_be(hash, static_cast<std::uint8_t>(language));
+    support::sha256_update_u64_be(hash, static_cast<std::uint8_t>(construct));
+    support::sha256_update_u64_be(hash, span.begin_offset);
+    support::sha256_update_u64_be(hash, span.end_offset);
     const auto digest = hash.finish();
     const runtime::CodeCoveragePointId identity {
-        digest_word(digest, 0U),
-        digest_word(digest, 8U),
+        support::sha256_digest_word_be(digest, 0U),
+        support::sha256_digest_word_be(digest, 8U),
     };
-    if (!runtime::is_code_coverage_identity_valid(identity)) {
+    if (!support::identity128_nonzero(identity)) {
         return { { }, CodeCoveragePointIdentityError::ZeroIdentity };
     }
     return { identity, CodeCoveragePointIdentityError::None };
@@ -88,17 +69,7 @@ CodeCoveragePointIdentityResult make_code_coverage_point_identity(
 std::string code_coverage_point_identity_hex(
     const runtime::CodeCoveragePointId identity)
 {
-    constexpr std::string_view digits = "0123456789abcdef";
-    std::string result(32U, '0');
-    const std::array<std::uint64_t, 2U> words { identity.high, identity.low };
-    std::size_t output = 0U;
-    for (const auto word : words) {
-        for (std::size_t nibble = 0U; nibble < 16U; ++nibble) {
-            const auto shift = static_cast<unsigned>((15U - nibble) * 4U);
-            result[output++] = digits[(word >> shift) & 0xfU];
-        }
-    }
-    return result;
+    return support::identity128_hex(identity);
 }
 
 } // namespace fsim::frontend

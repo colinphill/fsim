@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/sdf.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -12,20 +12,6 @@
 
 namespace fsim::frontend {
 namespace {
-
-    [[nodiscard]] bool ascii_iequals(const std::string_view left,
-        const std::string_view right) noexcept
-    {
-        if (left.size() != right.size())
-            return false;
-        for (std::size_t index = 0; index < left.size(); ++index) {
-            if (std::toupper(static_cast<unsigned char>(left[index]))
-                != std::toupper(static_cast<unsigned char>(right[index]))) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     [[nodiscard]] std::string decode_string(const std::string_view spelling)
     {
@@ -104,7 +90,7 @@ namespace {
             { "NEGEDGE", SdfConstructKind::Edge },
         });
         const auto found = std::ranges::find_if(kinds, [&](const auto& entry) {
-            return ascii_iequals(spelling, entry.first);
+            return detail::ctype_upper_equal(spelling, entry.first);
         });
         return found == kinds.end() ? SdfConstructKind::Unknown : found->second;
     }
@@ -213,13 +199,16 @@ namespace {
         if (node.atoms.size() < 2U)
             return 0U;
         const auto& first = node.atoms[0].spelling;
-        if (ascii_iequals(first, "01") || ascii_iequals(first, "10")
-            || ascii_iequals(first, "0z") || ascii_iequals(first, "z1")
-            || ascii_iequals(first, "1z") || ascii_iequals(first, "z0")) {
+        if (detail::ctype_upper_equal(first, "01")
+            || detail::ctype_upper_equal(first, "10")
+            || detail::ctype_upper_equal(first, "0z")
+            || detail::ctype_upper_equal(first, "z1")
+            || detail::ctype_upper_equal(first, "1z")
+            || detail::ctype_upper_equal(first, "z0")) {
             return 1U;
         }
         if (node.atoms.size() >= 3U && first == "0"
-            && ascii_iequals(node.atoms[1].spelling, "z")) {
+            && detail::ctype_upper_equal(node.atoms[1].spelling, "z")) {
             return 2U;
         }
         return 0U;
@@ -238,7 +227,7 @@ namespace {
             if (!file_.has_revision)
                 return;
             for (const auto& form : file_.body_forms) {
-                if (!ascii_iequals(form.keyword_spelling, "CELL"))
+                if (!detail::ctype_upper_equal(form.keyword_spelling, "CELL"))
                     continue;
                 auto root = parse_form(form);
                 parse_cell(std::move(root));

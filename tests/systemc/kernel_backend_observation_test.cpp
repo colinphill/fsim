@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/kernel_backend_observation.hpp"
+#include "sc_main_export.hpp"
 
 #include <systemc>
 
@@ -309,7 +310,7 @@ void test_codec_and_limits(const Identities& ids,
 
 } // namespace
 
-int sc_main(int, char**)
+extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
 {
     const auto ids = make_identities();
     fsim::systemc::SystemCKernelSafePointObserver observer {

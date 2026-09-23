@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "parser_support.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -12,13 +13,7 @@ namespace fsim::frontend::detail {
 
 std::string ascii_lower(const std::string_view value)
 {
-    std::string result;
-    result.reserve(value.size());
-    for (const char character : value) {
-        result.push_back(static_cast<char>(
-            std::tolower(static_cast<unsigned char>(character))));
-    }
-    return result;
+    return ctype_lower_copy(value);
 }
 
 bool iequals(const std::string_view left, const std::string_view right)

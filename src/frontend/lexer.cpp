@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/token.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,16 +18,6 @@ namespace {
         const std::string_view word) noexcept
     {
         return std::ranges::find(words, word) != words.end();
-    }
-
-    [[nodiscard]] std::string ascii_lower(std::string_view text)
-    {
-        std::string result { text };
-        std::ranges::transform(result, result.begin(), [](const char character) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(character)));
-        });
-        return result;
     }
 
     [[nodiscard]] bool vhdl_reserved_word_impl(
@@ -315,7 +306,7 @@ class Lexer {
             "contain adjacent or trailing underscores",
             begin);
       }
-      const auto lower = ascii_lower(text);
+      const auto lower = detail::ctype_lower_copy(text);
       const bool follows_explicit_width = begin.offset != 0U && std::isdigit(static_cast<unsigned char>(source_.text[begin.offset - 1U]));
       if (vhdl_standard_ < VhdlStandard::Vhdl2008 && peek() == '"' && vhdl_2008_bit_string_specifier(lower) && !follows_explicit_width) {
           diagnose_revision_feature(
@@ -404,7 +395,7 @@ class Lexer {
             ++letters;
         }
         if (letters != 0U && peek(letters) == '"') {
-            const auto specifier = ascii_lower(source_.text.substr(
+            const auto specifier = detail::ctype_lower_copy(source_.text.substr(
                 current_location().offset, letters));
             if (specifier == "b" || specifier == "o" || specifier == "x" || vhdl_2008_bit_string_specifier(specifier)) {
                 diagnose_revision_feature(
@@ -497,7 +488,7 @@ class Lexer {
     }
     if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008 && terminated && !result_.tokens.empty()) {
         const auto& specifier_token = result_.tokens.back();
-        const auto specifier = ascii_lower(specifier_token.text);
+        const auto specifier = detail::ctype_lower_copy(specifier_token.text);
         if (specifier_token.kind == TokenKind::Identifier && specifier_token.span.end.offset == begin.offset && (specifier == "b" || specifier == "o" || specifier == "x")) {
             const auto digits = source_.text.substr(
                 begin.offset + 1U,
@@ -845,7 +836,7 @@ LexResult lex(
 bool is_vhdl_reserved_word(
     const std::string_view word, const VhdlStandard standard)
 {
-    return vhdl_reserved_word_impl(ascii_lower(word), standard);
+    return vhdl_reserved_word_impl(detail::ctype_lower_copy(word), standard);
 }
 
 const char* to_string(TokenKind kind) noexcept {

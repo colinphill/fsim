@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/coverage_instance_identity.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
-#include <array>
 #include <new>
 #include <stdexcept>
 #include <tuple>
@@ -13,31 +13,10 @@
 namespace fsim::elaboration {
 namespace {
 
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>(
-                (bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
-
     void update_string(support::Sha256& hash, const std::string_view value) noexcept
     {
-        update_u64(hash, value.size());
+        support::sha256_update_u64_be(hash, value.size());
         hash.update(value);
-    }
-
-    std::uint64_t digest_word(
-        const support::Sha256::Digest& digest, const std::size_t first) noexcept
-    {
-        std::uint64_t value { };
-        for (std::size_t index = first; index < first + 8U; ++index) {
-            value = (value << 8U) | digest[index];
-        }
-        return value;
     }
 
     std::string_view language_identity(
@@ -142,16 +121,17 @@ CoverageInstanceIdentityResult make_coverage_instance_identity(
         update_string(hash, language);
         update_string(hash, input.library);
         update_string(hash, input.unit);
-        update_u64(hash, parameters.size());
+        support::sha256_update_u64_be(hash, parameters.size());
         for (const auto* parameter : parameters) {
             update_string(hash, parameter->first);
             update_string(hash, parameter->second);
         }
         const auto digest = hash.finish();
         const CoverageInstanceIdentity identity {
-            digest_word(digest, 0U), digest_word(digest, 8U)
+            support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U)
         };
-        if (!is_coverage_instance_identity_valid(identity)) {
+        if (!support::identity128_nonzero(identity)) {
             return { { }, Error::ZeroIdentity };
         }
         return { identity, Error::None };
@@ -165,17 +145,7 @@ CoverageInstanceIdentityResult make_coverage_instance_identity(
 std::string coverage_instance_identity_hex(
     const CoverageInstanceIdentity identity)
 {
-    constexpr std::string_view digits = "0123456789abcdef";
-    std::string result(32U, '0');
-    const std::array<std::uint64_t, 2U> words { identity.high, identity.low };
-    std::size_t output = 0U;
-    for (const auto word : words) {
-        for (std::size_t nibble = 0U; nibble < 16U; ++nibble) {
-            const auto shift = static_cast<unsigned>((15U - nibble) * 4U);
-            result[output++] = digits[(word >> shift) & 0xfU];
-        }
-    }
-    return result;
+    return support::identity128_hex(identity);
 }
 
 } // namespace fsim::elaboration

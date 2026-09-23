@@ -311,6 +311,53 @@ cached_object_paths(const std::filesystem::path& root)
     return result;
 }
 
+void expect_native_record_header(const std::filesystem::path& cache_directory,
+    const std::filesystem::path& object_path)
+{
+    fsim::compiler::ObjectCache storage {
+        cache_directory / "llvm" / "objects"
+    };
+    std::error_code error;
+    const auto record = storage.load(object_path.stem().string(), error);
+    assert(record && !error && record->size() >= 44U);
+    constexpr std::array record_magic {
+        std::byte { 'F' }, std::byte { 'S' }, std::byte { 'I' },
+        std::byte { 'M' }, std::byte { 'J' }, std::byte { 'O' },
+        std::byte { '3' }, std::byte { 0 }
+    };
+    constexpr std::array metadata_magic {
+        std::byte { 'F' }, std::byte { 'S' }, std::byte { 'I' },
+        std::byte { 'M' }, std::byte { 'J' }, std::byte { 'M' },
+        std::byte { '3' }, std::byte { 0 }
+    };
+    assert(std::equal(record_magic.begin(), record_magic.end(), record->begin()));
+    assert(std::equal(metadata_magic.begin(), metadata_magic.end(),
+        record->begin() + 24));
+
+    const auto u32_le = [&](const std::size_t offset) {
+        std::uint32_t result { };
+        for (std::size_t byte = 0U; byte < 4U; ++byte) {
+            result |= static_cast<std::uint32_t>(
+                std::to_integer<std::uint8_t>((*record)[offset + byte]))
+                << (byte * 8U);
+        }
+        return result;
+    };
+    assert(u32_le(8U) == 1U && u32_le(32U) == 1U);
+    const auto metadata_size = static_cast<std::size_t>(u32_le(12U));
+    assert(metadata_size >= 20U && metadata_size <= record->size() - 24U);
+    assert(u32_le(36U) == metadata_size && u32_le(40U) == 1U);
+    const auto object_offset = (24U + metadata_size + 7U) & ~std::size_t { 7U };
+    assert(object_offset < record->size());
+    const auto object_size = static_cast<std::uint64_t>(u32_le(16U))
+        | (static_cast<std::uint64_t>(u32_le(20U)) << 32U);
+    assert(object_size == record->size() - object_offset);
+    assert(std::all_of(record->begin() + static_cast<std::ptrdiff_t>(
+        24U + metadata_size),
+        record->begin() + static_cast<std::ptrdiff_t>(object_offset),
+        [](const std::byte value) { return value == std::byte { 0 }; }));
+}
+
 void test_process_module_grouping_at_level(
     const JitOptimizationLevel optimization,
     const std::filesystem::path& cache_directory)
@@ -623,6 +670,8 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
         expect_cache_statistics(cold, 0, 1, 1);
     }
     assert(cached_object_paths(cache_directory).size() == 1);
+    expect_native_record_header(
+        cache_directory, cached_object_paths(cache_directory).front());
 
     {
         LlvmJit warm { options };

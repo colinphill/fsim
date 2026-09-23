@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_conditional_analysis_internal.hpp"
+#include "fsim/support/ctype_whitespace.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,34 +17,6 @@ namespace fsim::frontend {
 namespace {
 
     constexpr std::size_t max_conditional_depth = 128U;
-
-    [[nodiscard]] char ascii_lower(const char value) noexcept
-    {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    }
-
-    [[nodiscard]] std::string lower_copy(const std::string_view value)
-    {
-        std::string result { value };
-        std::ranges::transform(result, result.begin(), ascii_lower);
-        return result;
-    }
-
-    [[nodiscard]] std::string_view trim(const std::string_view value) noexcept
-    {
-        std::size_t begin = 0U;
-        while (begin != value.size()
-            && std::isspace(static_cast<unsigned char>(value[begin]))) {
-            ++begin;
-        }
-        std::size_t end = value.size();
-        while (end != begin
-            && std::isspace(static_cast<unsigned char>(value[end - 1U]))) {
-            --end;
-        }
-        return value.substr(begin, end - begin);
-    }
 
     enum class ExpressionTokenKind {
         Identifier,
@@ -112,7 +86,8 @@ namespace {
                     ++position_;
                 }
                 return { ExpressionTokenKind::Identifier,
-                    lower_copy(text_.substr(begin, position_ - begin)) };
+                    detail::ctype_lower_copy(
+                        text_.substr(begin, position_ - begin)) };
             }
             if (value == '"') {
                 std::string result;
@@ -406,7 +381,8 @@ namespace {
                 && std::isalpha(static_cast<unsigned char>(value[end])) != 0) {
                 ++end;
             }
-            return { value.substr(0U, end), trim(value.substr(end)) };
+            return { value.substr(0U, end),
+                support::trim_ctype_whitespace(value.substr(end)) };
         }
 
         [[nodiscard]] static std::pair<std::string_view, std::string_view>
@@ -418,13 +394,14 @@ namespace {
                     || value[end] == '_')) {
                 ++end;
             }
-            return { value.substr(0U, end), trim(value.substr(end)) };
+            return { value.substr(0U, end),
+                support::trim_ctype_whitespace(value.substr(end)) };
         }
 
         [[nodiscard]] static std::optional<std::string>
         directive_string(std::string_view value)
         {
-            value = trim(value);
+            value = support::trim_ctype_whitespace(value);
             if (value.size() < 2U || value.front() != '"') {
                 return std::nullopt;
             }
@@ -439,7 +416,8 @@ namespace {
                     ++index;
                     continue;
                 }
-                return trim(value.substr(index + 1U)).empty()
+                return support::trim_ctype_whitespace(
+                           value.substr(index + 1U)).empty()
                     ? std::optional<std::string> { std::move(result) }
                     : std::nullopt;
             }
@@ -506,7 +484,7 @@ namespace {
         {
             const auto [raw_keyword, arguments]
                 = split_protection_word(remainder);
-            const auto keyword = lower_copy(raw_keyword);
+            const auto keyword = detail::ctype_lower_copy(raw_keyword);
             const bool reporting = active();
             const bool supported = standard_ >= VhdlStandard::Vhdl2008;
             const bool control_reporting = reporting && supported;
@@ -564,7 +542,7 @@ namespace {
         [[nodiscard]] std::optional<bool> condition(
             std::string_view text, const SourceSpan& span)
         {
-            text = trim(text);
+            text = support::trim_ctype_whitespace(text);
             const auto [last, before_last] = [&]() {
                 const auto position = text.find_last_not_of(" \t");
                 if (position == std::string_view::npos) {
@@ -576,10 +554,10 @@ namespace {
                                                                             : word_begin + 1U,
                                        position - (word_begin == std::string_view::npos ? 0U : word_begin + 1U)
                                            + 1U),
-                    trim(text.substr(0U,
+                    support::trim_ctype_whitespace(text.substr(0U,
                         word_begin == std::string_view::npos ? 0U : word_begin)) };
             }();
-            if (lower_copy(last) != "then" || before_last.empty()) {
+            if (detail::ctype_lower_copy(last) != "then" || before_last.empty()) {
                 diagnose("FSIM-VHDL-CA-002",
                     "a conditional analysis `if or `elsif directive requires a condition followed by then",
                     span);
@@ -603,15 +581,16 @@ namespace {
             }
             if (protection_ && protection_->encrypted) {
                 if (first != line_end && source_.text[first] == '`') {
-                    const auto protected_text = trim(strip_line_comment(
-                        std::string_view { source_.text }.substr(
-                            first + 1U, line_end - first - 1U)));
+                    const auto protected_text = support::trim_ctype_whitespace(
+                        strip_line_comment(
+                            std::string_view { source_.text }.substr(
+                                first + 1U, line_end - first - 1U)));
                     const auto [directive_word, directive_remainder]
                         = split_word(protected_text);
-                    if (lower_copy(directive_word) == "protect") {
+                    if (detail::ctype_lower_copy(directive_word) == "protect") {
                         const auto [keyword, arguments]
                             = split_protection_word(directive_remainder);
-                        const auto control = lower_copy(keyword);
+                        const auto control = detail::ctype_lower_copy(keyword);
                         if (control == "begin" || control == "begin_protected"
                             || control == "end"
                             || control == "end_protected") {
@@ -638,9 +617,10 @@ namespace {
 
             const auto span = line_span(line_begin, line_end, line, first);
             const auto [word, remainder] = split_word(
-                trim(strip_line_comment(std::string_view { source_.text }.substr(
-                    first + 1U, line_end - first - 1U))));
-            const auto directive = lower_copy(word);
+                support::trim_ctype_whitespace(strip_line_comment(
+                    std::string_view { source_.text }.substr(
+                        first + 1U, line_end - first - 1U))));
+            const auto directive = detail::ctype_lower_copy(word);
             if (directive != "if" && directive != "elsif" && directive != "else"
                 && directive != "end" && directive != "warning"
                 && directive != "error" && directive != "protect") {
@@ -690,7 +670,8 @@ namespace {
                     (void)condition(remainder, span);
                 } else if (directive == "end") {
                     const auto [ending_word, ending_remainder] = split_word(remainder);
-                    if ((!ending_word.empty() && lower_copy(ending_word) != "if")
+                    if ((!ending_word.empty()
+                            && detail::ctype_lower_copy(ending_word) != "if")
                         || !ending_remainder.empty()) {
                         diagnose("FSIM-VHDL-CA-002",
                             "a conditional analysis closing directive must be `end or `end if",
@@ -756,7 +737,8 @@ namespace {
             }
 
             const auto [ending_word, ending_remainder] = split_word(remainder);
-            if ((!ending_word.empty() && lower_copy(ending_word) != "if")
+            if ((!ending_word.empty()
+                    && detail::ctype_lower_copy(ending_word) != "if")
                 || !ending_remainder.empty()) {
                 diagnose("FSIM-VHDL-CA-002",
                     "a conditional analysis closing directive must be `end or `end if", span);

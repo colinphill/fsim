@@ -53,8 +53,11 @@ class Engine {
   void fatal(std::string code, std::string message, SourceSpan span = {});
 
   [[nodiscard]] bool has_error() const noexcept;
-  [[nodiscard]] bool empty() const noexcept;
-  [[nodiscard]] const std::vector<Diagnostic>& diagnostics() const noexcept;
+  [[nodiscard]] bool empty() const noexcept { return diagnostics_.empty(); }
+  [[nodiscard]] const std::vector<Diagnostic>& diagnostics() const noexcept
+  {
+    return diagnostics_;
+  }
   void clear() noexcept;
 
  private:

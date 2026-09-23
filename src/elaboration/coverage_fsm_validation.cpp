@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/coverage_fsm_validation.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
-#include <array>
 #include <map>
 #include <new>
 #include <ranges>
@@ -61,31 +61,10 @@ namespace {
         return false;
     }
 
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>(
-                (bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
-
     void update_string(support::Sha256& hash, const std::string_view value) noexcept
     {
-        update_u64(hash, value.size());
+        support::sha256_update_u64_be(hash, value.size());
         hash.update(value);
-    }
-
-    std::uint64_t digest_word(
-        const support::Sha256::Digest& digest, const std::size_t first) noexcept
-    {
-        std::uint64_t value { };
-        for (std::size_t index = first; index < first + 8U; ++index) {
-            value = (value << 8U) | digest[index];
-        }
-        return value;
     }
 
     runtime::CodeCoveragePointId diagnostic_identity(
@@ -93,18 +72,22 @@ namespace {
     {
         support::Sha256 hash;
         update_string(hash, kCoverageFsmValidationSchema);
-        update_u64(hash, static_cast<std::uint8_t>(diagnostic.kind));
-        update_u64(hash, static_cast<std::uint8_t>(diagnostic.subject));
-        update_u64(hash, diagnostic.instance_identity.high);
-        update_u64(hash, diagnostic.instance_identity.low);
+        support::sha256_update_u64_be(hash,
+            static_cast<std::uint8_t>(diagnostic.kind));
+        support::sha256_update_u64_be(hash,
+            static_cast<std::uint8_t>(diagnostic.subject));
+        support::sha256_update_u64_be(hash, diagnostic.instance_identity.high);
+        support::sha256_update_u64_be(hash, diagnostic.instance_identity.low);
         update_string(hash, diagnostic.instance);
         update_string(hash, diagnostic.object);
-        update_u64(hash, diagnostic.origins.size());
+        support::sha256_update_u64_be(hash, diagnostic.origins.size());
         for (const auto origin : diagnostic.origins) {
-            update_u64(hash, static_cast<std::uint8_t>(origin));
+            support::sha256_update_u64_be(hash,
+                static_cast<std::uint8_t>(origin));
         }
         const auto digest = hash.finish();
-        return { digest_word(digest, 0U), digest_word(digest, 8U) };
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     DiagnosticKey key(const CoverageFsmDescriptionIssueCandidate& candidate)

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/transaction_record.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <span>
 #include <string_view>
 
 namespace {
@@ -15,6 +17,18 @@ bool has_code(
 {
     for (const auto& diagnostic : diagnostics.diagnostics()) {
         if (diagnostic.code == code)
+            return true;
+    }
+    return false;
+}
+
+bool has_diagnostic(
+    const fsim::diagnostic::Engine& diagnostics,
+    const std::string_view code,
+    const std::string_view message)
+{
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+        if (diagnostic.code == code && diagnostic.message == message)
             return true;
     }
     return false;
@@ -63,6 +77,11 @@ int main()
     const auto bytes = serialize_transaction_record(value, limits, diagnostics);
     const auto repeated = serialize_transaction_record(value, limits, diagnostics);
     assert(bytes && repeated == bytes && !diagnostics.has_error());
+    assert(bytes->size() == 434U);
+    assert(fsim::support::Sha256::hex(
+               fsim::support::Sha256::digest(
+                   std::span<const std::byte> { *bytes }))
+        == "03830635bd90147ab2248d70b4005ac64171cedc5fc9a9e6fe7bffc65832241a");
     const auto decoded = deserialize_transaction_record(
         *bytes, limits, diagnostics);
     assert(decoded == value && !diagnostics.has_error());
@@ -107,29 +126,54 @@ int main()
     assert(!validate_transaction_record(value, small_limits, resource_diagnostics));
     assert(has_code(resource_diagnostics, "FSIM-SCV-T003"));
 
+    small_limits = limits;
+    small_limits.max_message_bytes = bytes->size() - 1U;
+    fsim::diagnostic::Engine message_limit_diagnostics;
+    assert(!serialize_transaction_record(value, small_limits, message_limit_diagnostics));
+    assert(has_diagnostic(message_limit_diagnostics, "FSIM-SCV-T003",
+        "serialized transaction record exceeds its limit"));
+
     auto corrupt = *bytes;
     corrupt.front() = std::byte { 0U };
     fsim::diagnostic::Engine magic_diagnostics;
     assert(!deserialize_transaction_record(corrupt, limits, magic_diagnostics));
-    assert(has_code(magic_diagnostics, "FSIM-SCV-T001"));
+    assert(has_diagnostic(magic_diagnostics, "FSIM-SCV-T001",
+        "transaction record has bad magic or size"));
     corrupt = *bytes;
     corrupt[8] = std::byte { 2U };
     fsim::diagnostic::Engine future_diagnostics;
     assert(!deserialize_transaction_record(corrupt, limits, future_diagnostics));
-    assert(has_code(future_diagnostics, "FSIM-SCV-T001"));
+    assert(has_diagnostic(future_diagnostics, "FSIM-SCV-T001",
+        "transaction record has invalid schema or identity"));
     corrupt = *bytes;
     corrupt[12] = std::byte { 1U };
     fsim::diagnostic::Engine reserved_diagnostics;
     assert(!deserialize_transaction_record(corrupt, limits, reserved_diagnostics));
-    assert(has_code(reserved_diagnostics, "FSIM-SCV-T002"));
+    assert(has_diagnostic(reserved_diagnostics, "FSIM-SCV-T002",
+        "transaction record header is truncated or malformed"));
+
+    for (std::size_t prefix_size = 0U; prefix_size < bytes->size(); ++prefix_size) {
+        const auto prefix = std::span<const std::byte> { *bytes }.first(prefix_size);
+        fsim::diagnostic::Engine prefix_diagnostics;
+        assert(!deserialize_transaction_record(prefix, limits, prefix_diagnostics));
+        if (prefix_size < 8U) {
+            assert(has_diagnostic(prefix_diagnostics, "FSIM-SCV-T001",
+                "transaction record has bad magic or size"));
+        } else {
+            assert(has_code(prefix_diagnostics, "FSIM-SCV-T002"));
+        }
+    }
+
     corrupt = *bytes;
     corrupt.pop_back();
     fsim::diagnostic::Engine truncated_diagnostics;
     assert(!deserialize_transaction_record(corrupt, limits, truncated_diagnostics));
-    assert(has_code(truncated_diagnostics, "FSIM-SCV-T002"));
+    assert(has_diagnostic(truncated_diagnostics, "FSIM-SCV-T002",
+        "transaction correlated object is truncated"));
     corrupt = *bytes;
     corrupt.push_back(std::byte { 0U });
     fsim::diagnostic::Engine trailing_diagnostics;
     assert(!deserialize_transaction_record(corrupt, limits, trailing_diagnostics));
-    assert(has_code(trailing_diagnostics, "FSIM-SCV-T002"));
+    assert(has_diagnostic(trailing_diagnostics, "FSIM-SCV-T002",
+        "transaction record has trailing bytes"));
 }

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/kernel_backend_tlm1.hpp"
+#include "fsim/support/sha256.hpp"
+#include "sc_main_export.hpp"
 
 #include <systemc>
 #include <tlm>
@@ -199,10 +201,19 @@ void test_registry_and_bridge()
         systemc::SystemCKernelTlm1State::completed, value(109U), diagnostics));
     const auto encoded = systemc::serialize_systemc_kernel_tlm1_transaction(
         bridge.transactions().front(), { }, diagnostics);
+    assert(encoded && support::Sha256::hex(
+        support::Sha256::digest(std::span { *encoded }))
+        == "de41700388ec44f32acefd73598de85fc0630f170844d1fc97e7cf94e093e846");
     assert(encoded && !diagnostics.has_error());
     const auto decoded = systemc::deserialize_systemc_kernel_tlm1_transaction(
         *encoded, { }, diagnostics);
     assert(decoded == bridge.transactions().front());
+    for (std::size_t length = 0U; length < 20U; ++length) {
+        diagnostic::Engine prefix_diagnostics;
+        assert(!systemc::deserialize_systemc_kernel_tlm1_transaction(
+            std::span { *encoded }.first(length), { }, prefix_diagnostics));
+        assert(prefix_diagnostics.has_error());
+    }
 
     auto truncated = *encoded;
     truncated.pop_back();
@@ -288,7 +299,7 @@ void test_registry_and_bridge()
 
 } // namespace
 
-int sc_main(int, char**)
+extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
 {
     NativeTlmRoot root { "native" };
     sc_core::sc_start();

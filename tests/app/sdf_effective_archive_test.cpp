@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_effective_archive.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <array>
@@ -57,11 +58,24 @@ void test_artifact_cache_checkpoint_round_trips()
         SdfEffectiveArchiveKind::Design, SdfEffectiveArchiveKind::Library,
         SdfEffectiveArchiveKind::NativeCache,
         SdfEffectiveArchiveKind::Checkpoint };
+    constexpr std::array<std::string_view, 5> wire_fingerprints {
+        "ecb584edd5cc10d9441080b568b96b0d40f5815c0e2f06351744086d1e39549e",
+        "35fb59356a53caf6702843457169081a731d97eb5ab3420e462ab38604dc9ccf",
+        "92fd2a258c2a43f29f104732f87b7d20566588c11936d4646f6146dc0f183a69",
+        "8177364db7b04572570e28acf2c7c24c18ef8ea2ef4ecebb8896b9b270ea6a8b",
+        "79ddd67281701d59d9cfb10d67cb70e20a78c2e3d900301bbbee2cd89e9b2d6f"
+    };
     for (const auto kind : kinds) {
         const auto encoded = encode_sdf_effective_archive(
             snapshot(), kind, "work:sv:top");
         require(encoded.ok() && !encoded.archive_identity.empty(),
             "effective SDF artifact encode must succeed");
+        const auto wire_kind = static_cast<std::size_t>(kind);
+        require(wire_kind < wire_fingerprints.size()
+                && fsim::support::Sha256::hex(
+                       fsim::support::Sha256::digest(encoded.archive))
+                    == wire_fingerprints[wire_kind],
+            "effective SDF archive wire fingerprint must remain stable");
         const auto decoded = decode_sdf_effective_archive(encoded.archive,
             kind, "work:sv:top",
             "policy:max:preserve-events:preserve-history");

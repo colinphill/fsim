@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/sdf.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <limits>
@@ -23,16 +23,6 @@ namespace {
         DecimalStatus status { DecimalStatus::Invalid };
         SdfExactDecimal value;
     };
-
-    [[nodiscard]] std::string ascii_lower(const std::string_view text)
-    {
-        std::string result { text };
-        std::ranges::transform(result, result.begin(), [](const char character) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(character)));
-        });
-        return result;
-    }
 
     [[nodiscard]] bool checked_add(const std::int64_t left,
         const std::int64_t right, std::int64_t& result) noexcept
@@ -237,7 +227,7 @@ namespace {
     [[nodiscard]] std::optional<SdfTimeUnit> time_unit(
         const std::string_view spelling) noexcept
     {
-        const auto unit = ascii_lower(spelling);
+        const auto unit = detail::ctype_lower_copy(spelling);
         if (unit == "s")
             return SdfTimeUnit::Second;
         if (unit == "ms")
@@ -496,7 +486,7 @@ namespace {
                 return result;
             }
             if (atom.kind == SdfTokenKind::Keyword)
-                return "keyword:" + ascii_lower(atom.spelling);
+                return "keyword:" + detail::ctype_lower_copy(atom.spelling);
             if (atom.kind == SdfTokenKind::Identifier
                 || atom.kind == SdfTokenKind::EscapedIdentifier) {
                 if (atom.spelling.find(divider_) != std::string::npos
@@ -528,7 +518,7 @@ namespace {
             node.canonical_identity = to_string(node.kind);
             node.canonical_identity.push_back('{');
             if (node.kind == SdfConstructKind::Edge) {
-                node.canonical_identity += ascii_lower(node.keyword_spelling);
+                node.canonical_identity += detail::ctype_lower_copy(node.keyword_spelling);
             } else if (node.exact_value) {
                 node.canonical_identity += node.exact_value->canonical;
             } else {

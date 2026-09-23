@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/systemc/scv_backend_transport.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -58,6 +59,9 @@ int main()
     assert(direct_receipt.status == ScvBackendTransportStatus::accepted);
     assert(worker_receipt.status == ScvBackendTransportStatus::accepted);
     assert(direct_receipt.bytes == worker_receipt.bytes);
+    assert(fsim::support::Sha256::hex(fsim::support::Sha256::digest(
+        std::span { direct_receipt.bytes }))
+        == "26fd478918819f50d5ec901a1dbbc6041d4bbbf4742765977160e5ed450afff2");
     assert(direct.queued_records() == 1U && direct.queued_bytes() > 64U);
     assert(worker.queued_records() == 1U);
     assert(direct.drain() == worker.drain());
@@ -68,6 +72,13 @@ int main()
     assert(replayed.status == ScvBackendTransportStatus::accepted);
     assert(replayed.bytes == direct_receipt.bytes);
     assert(replay.drain().front() == first);
+    for (std::size_t length = 0U; length < 20U; ++length) {
+        fsim::diagnostic::Engine prefix_diagnostics;
+        assert(!deserialize_scv_transport_envelope(
+            std::span { direct_receipt.bytes }.first(length), { },
+            prefix_diagnostics));
+        assert(prefix_diagnostics.has_error());
+    }
 
     ScvBackendRecordTransport worker_a(
         ScvBackendTransportKind::worker_loopback, island_a);

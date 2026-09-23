@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/sdf.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
 #include <array>
@@ -35,16 +36,6 @@ namespace {
             }
         }
         return true;
-    }
-
-    [[nodiscard]] std::string ascii_lower(const std::string_view text)
-    {
-        std::string result { text };
-        std::ranges::transform(result, result.begin(), [](const char character) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(character)));
-        });
-        return result;
     }
 
     [[nodiscard]] std::string decode_string(const std::string_view spelling)
@@ -481,7 +472,7 @@ namespace {
                     "TIMESCALE header requires a scale and time unit", span);
                 return { };
             }
-            const auto unit = ascii_lower(values.back()->spelling);
+            const auto unit = detail::ctype_lower_copy(values.back()->spelling);
             const bool valid_scale = legacy
                 ? std::ranges::find(sdf21_scales, values.front()->spelling) != sdf21_scales.end()
                 : std::ranges::find(scales, values.front()->spelling) != scales.end();

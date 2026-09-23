@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/sdf.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -10,20 +10,6 @@
 
 namespace fsim::frontend {
 namespace {
-
-    [[nodiscard]] bool ascii_iequals(const std::string_view left,
-        const std::string_view right) noexcept
-    {
-        if (left.size() != right.size())
-            return false;
-        for (std::size_t index = 0; index < left.size(); ++index) {
-            if (std::toupper(static_cast<unsigned char>(left[index]))
-                != std::toupper(static_cast<unsigned char>(right[index]))) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     [[nodiscard]] std::size_t child_count(const SdfSyntaxNode& node,
         const SdfConstructKind kind) noexcept
@@ -102,7 +88,8 @@ namespace {
                 || node.kind == SdfConstructKind::Label
                 || node.kind == SdfConstructKind::Mipd;
             const bool old_pulse = node.kind == SdfConstructKind::PathPulsePercent
-                && ascii_iequals(node.keyword_spelling, "GLOBALPATHPULSE");
+                && detail::ctype_upper_equal(
+                    node.keyword_spelling, "GLOBALPATHPULSE");
             if (removed || old_pulse) {
                 diagnose("FSIM-SDF-30-001",
                     std::string { to_string(node.kind) }

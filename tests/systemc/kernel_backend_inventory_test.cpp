@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/kernel_backend_inventory.hpp"
 #include "fsim/systemc/kernel_backend_inventory_accellera.hpp"
+#include "sc_main_export.hpp"
 
 #include <systemc>
 
@@ -220,7 +221,7 @@ void test_negative_registration(const NativeRoot& root)
 
 } // namespace
 
-int sc_main(int, char**)
+extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
 {
     NativeRoot root { "native" };
     sc_core::sc_start(sc_core::SC_ZERO_TIME);

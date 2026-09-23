@@ -237,6 +237,12 @@ void test_duplicate_conflict_and_unconsumed_rejection()
         = require_diagnostic(conflict, "FSIM-SDF-MAP-003");
     require(conflict_diagnostic.span.begin.line != 0U,
         "mapping conflict must retain the SDF coordinate");
+    require(conflict_diagnostic.severity
+            == fsim::frontend::DiagnosticSeverity::Error
+            && conflict_diagnostic.message
+                == "SDF endpoint mapping has a width, direction, or selector conflict"
+            && conflict_diagnostic.expansion_stack.empty(),
+        "mapping conflict must retain its exact error and empty expansion stack");
 
     auto unsupported_nodes = nodes;
     unsupported_nodes.front().endpoints.front().object_kind

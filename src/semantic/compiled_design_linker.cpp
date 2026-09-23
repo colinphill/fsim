@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/ctype_whitespace.hpp"
 
 #include "compiled_design_linker_classes.hpp"
 
@@ -1791,19 +1792,6 @@ std::vector<std::string_view> selected_name_parts(
     return result;
 }
 
-std::string_view trim_ascii_space(std::string_view text)
-{
-    while (!text.empty()
-        && std::isspace(static_cast<unsigned char>(text.front()))) {
-        text.remove_prefix(1U);
-    }
-    while (!text.empty()
-        && std::isspace(static_cast<unsigned char>(text.back()))) {
-        text.remove_suffix(1U);
-    }
-    return text;
-}
-
 std::pair<std::string_view, std::string_view> vhdl_entity_aspect(
     const vhdl::Name& name)
 {
@@ -1818,8 +1806,9 @@ std::pair<std::string_view, std::string_view> vhdl_entity_aspect(
     if (open == std::string_view::npos) {
         return { spelling, { } };
     }
-    const auto entity = trim_ascii_space(spelling.substr(0, open));
-    const auto architecture = trim_ascii_space(
+    const auto entity = support::trim_ctype_whitespace(
+        spelling.substr(0, open));
+    const auto architecture = support::trim_ctype_whitespace(
         spelling.substr(open + 1U, close - open - 1U));
     if (entity.empty() || architecture.empty()) {
         return { spelling, { } };

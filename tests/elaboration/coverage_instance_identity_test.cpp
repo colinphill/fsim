@@ -53,8 +53,7 @@ void test_determinism_and_hierarchy()
     assert(fsim::elaboration::is_coverage_instance_identity_valid(
         *first.identity));
     assert(fsim::elaboration::coverage_instance_identity_hex(*first.identity)
-               .size()
-        == 32U);
+        == "fd508d254260e9f1f88cce3177595d03");
 
     const std::array reversed_parameters {
         kParameters[1], kParameters[0]

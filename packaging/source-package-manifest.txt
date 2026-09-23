@@ -529,7 +529,10 @@ include/fsim/semantic/model.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/vhdl_hir.hpp
+include/fsim/support/bounded_bytes.hpp
+include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/environment.hpp
+include/fsim/support/identity128.hpp
 include/fsim/support/path.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
@@ -617,8 +620,6 @@ src/app/application_debug_coverage.cpp
 src/app/application_debugger.cpp
 src/app/application_design_artifact_codec.cpp
 src/app/application_design_artifact_codec_internal.hpp
-src/app/application_design_artifact_codec_validation.cpp
-src/app/application_design_artifact_codec_validation.hpp
 src/app/application_design_artifact_hir_codec.cpp
 src/app/application_design_ir.cpp
 src/app/application_executor_container_operation.cpp
@@ -726,6 +727,8 @@ src/app/application_vhdl_hir_types.cpp
 src/app/application_vhdl_mode_view.cpp
 src/app/application_vhdl_psl.cpp
 src/app/application_vpi.cpp
+src/app/sdf_diagnostic.hpp
+src/app/sdf_resolution_helpers.hpp
 src/app/tcl.cpp
 src/app/tcl.hpp
 src/app/tcl_commands.cpp
@@ -747,6 +750,8 @@ src/artifact/coverage_report_render_support.cpp
 src/artifact/coverage_report_render_text.cpp
 src/artifact/design.cpp
 src/artifact/object.cpp
+src/artifact/path_validation.hpp
+src/artifact/tree_permissions.hpp
 src/cli/driver.cpp
 src/compiler/llvm_jit.cpp
 src/compiler/llvm_jit_cache_key.cpp
@@ -888,6 +893,7 @@ src/frontend/sdf_ir.cpp
 src/frontend/sdf_lexer.cpp
 src/frontend/sdf_normalization.cpp
 src/frontend/sdf_parser.cpp
+src/frontend/string_case.hpp
 src/frontend/systemverilog_scalar_folding.cpp
 src/frontend/systemverilog_standard_package.cpp
 src/frontend/verilog_coverage_conditions.cpp
@@ -1416,6 +1422,7 @@ tests/cmake/CheckTranslationUnitStructureSelfTest.cmake
 tests/cmake/CheckV3InstalledArchiveRequiredSet.cmake
 tests/cmake/release_assertion_witness.cpp
 tests/compiler/cache_test.cpp
+tests/compiler/cache_wire_fixture_test.cpp
 tests/compiler/jit_runtime_c_test.c
 tests/compiler/llvm_jit_cache_advanced_test.cpp
 tests/compiler/llvm_jit_cache_test.cpp
@@ -1657,6 +1664,7 @@ tests/frontend/sdf_ir_test.cpp
 tests/frontend/sdf_lexer_test.cpp
 tests/frontend/sdf_normalization_test.cpp
 tests/frontend/sdf_parser_test.cpp
+tests/frontend/string_case_test.cpp
 tests/fuzz/CMakeLists.txt
 tests/fuzz/corpus/frontend/malformed
 tests/fuzz/corpus/frontend/minimal_sv
@@ -1815,6 +1823,7 @@ tests/runtime/tf_time_test.cpp
 tests/runtime/tf_value_test.cpp
 tests/runtime/trace_model_tests.cpp
 tests/runtime/transaction_record_test.cpp
+tests/runtime/uvm_test_builders.hpp
 tests/runtime/veriuser_abi_c_test.c
 tests/runtime/veriuser_abi_test.cpp
 tests/runtime/vhpi_reference_plugin_c.c
@@ -1846,6 +1855,9 @@ tests/scv/scv_upstream_provenance_test.cmake
 tests/semantic/compiled_design_test.cpp
 tests/semantic/semantic_model_test.cpp
 tests/semantic/systemverilog_class_specialization_test.cpp
+tests/support/bounded_bytes_test.cpp
+tests/support/ctype_whitespace_test.cpp
+tests/support/identity128_test.cpp
 tests/systemc/accellera_systemc_corpus_test.cpp
 tests/systemc/accellera_upstream_sc_main.cpp
 tests/systemc/empty_plugin.cpp
@@ -1871,6 +1883,7 @@ tests/systemc/no_factory_plugin.cpp
 tests/systemc/plugin_compiler_test.cpp
 tests/systemc/plugin_loader_test.cpp
 tests/systemc/plugin_matrix_test.cpp
+tests/systemc/sc_main_export.hpp
 tests/systemc/systemc_abi_c_test.c
 tests/systemc/systemc_compatibility_test.cpp
 tests/systemc/systemc_shared_runtime_test.cpp

@@ -2,6 +2,9 @@
 #include "fsim/artifact/object.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
+#include "path_validation.hpp"
+#include "tree_permissions.hpp"
+#include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -14,12 +17,15 @@
 #include <limits>
 #include <sstream>
 #include <span>
+#include <stdexcept>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace fsim::artifact {
 namespace {
+
+using detail::safe_relative_path;
 
 constexpr std::array<char, 8> kMagic{'F', 'S', 'I', 'M', 'O', 'B', 'J', '\0'};
 constexpr std::string_view kSchemaCode = "FSIM-ART-0001";
@@ -37,18 +43,6 @@ void error(
   span.begin = {1, 1, 0};
   span.end = span.begin;
   diagnostics.error(std::string{code}, std::move(message), std::move(span));
-}
-
-bool safe_relative_path(const std::filesystem::path& path) {
-  if (path.empty() || path.is_absolute() || path.has_root_name()
-      || path.has_root_directory()) {
-    return false;
-  }
-  const auto normalized = path.lexically_normal();
-  return normalized == path
-      && std::ranges::none_of(path, [](const auto& component) {
-           return component == ".." || component == ".";
-         });
 }
 
 bool checksum_spelling(const std::string_view value) {
@@ -76,26 +70,24 @@ bool library_name(const std::string_view value) {
 class Writer {
  public:
   void bytes(const std::span<const char> value) {
-    output_.append(value.data(), value.size());
+    append(std::string_view{value.data(), value.size()});
   }
 
   void u32(const std::uint32_t value) {
-    for (std::size_t shift = 0; shift < 32; shift += 8) {
-      output_.push_back(static_cast<char>((value >> shift) & 0xffU));
-    }
+    require_write(writer_.write_u32_le(value));
   }
 
   void u64(const std::uint64_t value) {
-    for (std::size_t shift = 0; shift < 64; shift += 8) {
-      output_.push_back(static_cast<char>((value >> shift) & 0xffU));
-    }
+    require_write(writer_.write_u64_le(value));
   }
 
-  void boolean(const bool value) { output_.push_back(value ? '\1' : '\0'); }
+  void boolean(const bool value) {
+    require_write(writer_.write_u8(static_cast<std::uint8_t>(value ? 1U : 0U)));
+  }
 
   void string(const std::string_view value) {
-    u64(value.size());
-    output_.append(value);
+    u64(static_cast<std::uint64_t>(value.size()));
+    append(value);
   }
 
   void path(const std::filesystem::path& value) {
@@ -115,53 +107,58 @@ class Writer {
   }
 
  private:
+  static void require_write(const bool succeeded) {
+    if (!succeeded) {
+      throw std::length_error("Object metadata exceeds the output size limit.");
+    }
+  }
+
+  void append(const std::string_view value) {
+    require_write(writer_.append(value));
+  }
+
   std::string output_;
+  support::BoundedByteWriter<std::string> writer_{output_, output_.max_size()};
 };
 
 class Reader {
  public:
-  explicit Reader(const std::string_view input) : input_(input) {}
+  explicit Reader(const std::string_view input)
+      : input_(input),
+        reader_(std::as_bytes(std::span{input.data(), input.size()})) {}
 
   bool bytes(const std::span<const char> expected) {
     if (expected.size() > remaining()
-        || input_.substr(position_, expected.size())
+        || input_.substr(reader_.position(), expected.size())
             != std::string_view{expected.data(), expected.size()}) {
       return false;
     }
-    position_ += expected.size();
-    return true;
+    std::span<const std::byte> ignored;
+    return reader_.take(expected.size(), ignored);
   }
 
   std::optional<std::uint32_t> u32() {
-    if (remaining() < 4) {
+    std::uint32_t value{};
+    if (!reader_.read_u32_le(value)) {
       return std::nullopt;
-    }
-    std::uint32_t value = 0;
-    for (std::size_t shift = 0; shift < 32; shift += 8) {
-      value |= static_cast<std::uint32_t>(
-          static_cast<unsigned char>(input_[position_++])) << shift;
     }
     return value;
   }
 
   std::optional<std::uint64_t> u64() {
-    if (remaining() < 8) {
+    std::uint64_t value{};
+    if (!reader_.read_u64_le(value)) {
       return std::nullopt;
-    }
-    std::uint64_t value = 0;
-    for (std::size_t shift = 0; shift < 64; shift += 8) {
-      value |= static_cast<std::uint64_t>(
-          static_cast<unsigned char>(input_[position_++])) << shift;
     }
     return value;
   }
 
   std::optional<bool> boolean() {
-    if (remaining() == 0
-        || static_cast<unsigned char>(input_[position_]) > 1) {
+    std::uint8_t value{};
+    if (!reader_.read_u8(value) || value > 1U) {
       return std::nullopt;
     }
-    return input_[position_++] != 0;
+    return value != 0U;
   }
 
   std::optional<std::string> string() {
@@ -170,8 +167,14 @@ class Reader {
         || *size > std::numeric_limits<std::size_t>::max()) {
       return std::nullopt;
     }
-    std::string result{input_.substr(position_, static_cast<std::size_t>(*size))};
-    position_ += static_cast<std::size_t>(*size);
+    std::span<const std::byte> value;
+    if (!reader_.take(static_cast<std::size_t>(*size), value)) {
+      return std::nullopt;
+    }
+    std::string result;
+    if (!value.empty()) {
+      result.assign(reinterpret_cast<const char*>(value.data()), value.size());
+    }
     return result;
   }
 
@@ -191,12 +194,12 @@ class Reader {
   }
 
   [[nodiscard]] std::size_t remaining() const noexcept {
-    return input_.size() - position_;
+    return reader_.remaining();
   }
 
  private:
   std::string_view input_;
-  std::size_t position_{};
+  support::BoundedByteReader reader_;
 };
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
@@ -386,11 +389,7 @@ bool validate_metadata(
 }
 
 std::filesystem::path staging_path(const std::filesystem::path& destination) {
-  const auto sequence = staging_sequence.fetch_add(1, std::memory_order_relaxed);
-  const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-  return destination.parent_path()
-      / ("." + destination.filename().string() + ".staging-"
-         + std::to_string(nonce) + "-" + std::to_string(sequence));
+  return detail::staging_path(destination, staging_sequence);
 }
 
 class StagingCleanup {
@@ -448,35 +447,7 @@ bool write_file(
 bool make_tree_read_only(
     const std::filesystem::path& root,
     diagnostic::Engine& diagnostics) {
-  std::error_code error;
-  for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
-       !error && iterator != end;
-       iterator.increment(error)) {
-    const auto permissions = iterator->is_directory()
-        ? std::filesystem::perms::owner_read
-            | std::filesystem::perms::owner_exec
-            | std::filesystem::perms::group_read
-            | std::filesystem::perms::group_exec
-            | std::filesystem::perms::others_read
-            | std::filesystem::perms::others_exec
-        : std::filesystem::perms::owner_read
-            | std::filesystem::perms::group_read
-            | std::filesystem::perms::others_read;
-    std::filesystem::permissions(
-        iterator->path(), permissions,
-        std::filesystem::perm_options::replace, error);
-  }
-  if (!error) {
-    std::filesystem::permissions(
-        root,
-        std::filesystem::perms::owner_read
-            | std::filesystem::perms::owner_exec
-            | std::filesystem::perms::group_read
-            | std::filesystem::perms::group_exec
-            | std::filesystem::perms::others_read
-            | std::filesystem::perms::others_exec,
-        std::filesystem::perm_options::replace, error);
-  }
+  const auto error = detail::set_tree_read_only_permissions(root);
   if (error) {
     fsim::artifact::error(
         diagnostics, kIoCode,

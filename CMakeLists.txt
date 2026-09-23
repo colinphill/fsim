@@ -276,7 +276,9 @@ if(NOT FSIM_BOOST_PFR_INCLUDE_DIR)
     "Boost.PFR was not found; fetching pinned Boost ${FSIM_BOOST_VERSION}"
   )
   FetchContent_MakeAvailable(fsim_boost)
-  set(FSIM_BOOST_PFR_INCLUDE_DIR "${fsim_boost_SOURCE_DIR}")
+  # The build-resource contract inspects the configured path from CMakeCache.
+  set(FSIM_BOOST_PFR_INCLUDE_DIR "${fsim_boost_SOURCE_DIR}"
+    CACHE PATH "Boost.PFR include directory" FORCE)
 endif()
 add_library(fsim_boost_pfr_headers INTERFACE)
 target_include_directories(
@@ -1169,7 +1171,6 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_design_ir.cpp
       src/app/application_design_artifact_codec.cpp
       src/app/application_design_artifact_hir_codec.cpp
-      src/app/application_design_artifact_codec_validation.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_vital.cpp

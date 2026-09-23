@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
 
+#include "fsim/support/identity128.hpp"
+
 namespace fsim::app {
 
 [[nodiscard]] artifact::CoverageDatabaseIdentity
@@ -8,10 +10,8 @@ Simulation::Impl::coverage_identity_from_digest(
     const support::Sha256::Digest& digest) noexcept
 {
     artifact::CoverageDatabaseIdentity identity;
-    for (std::size_t index = 0U; index < 8U; ++index) {
-        identity.high = (identity.high << 8U) | digest[index];
-        identity.low = (identity.low << 8U) | digest[index + 8U];
-    }
+    identity.high = support::sha256_digest_word_be(digest, 0U);
+    identity.low = support::sha256_digest_word_be(digest, 8U);
     if (identity.high == 0U && identity.low == 0U) {
         identity.low = 1U;
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_database_systemverilog.hpp"
 
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -40,12 +41,8 @@ namespace {
         hash.update(std::string_view { "\0", 1U });
         hash.update(value);
         const auto digest = hash.finish();
-        CoverageDatabaseIdentity result;
-        for (std::size_t index = 0; index < 8U; ++index) {
-            result.high = (result.high << 8U) | digest[index];
-            result.low = (result.low << 8U) | digest[index + 8U];
-        }
-        return result;
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     std::string_view source_name(const SourceSpan& span) noexcept

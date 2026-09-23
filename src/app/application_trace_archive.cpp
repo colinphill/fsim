@@ -2,6 +2,7 @@
 #include "fsim/app/trace_archive.hpp"
 
 #include "fsim/runtime/fst_compression.hpp"
+#include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -10,6 +11,7 @@
 #include <limits>
 #include <ranges>
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 namespace fsim::app {
@@ -35,53 +37,56 @@ namespace {
     public:
         void raw(const std::span<const std::byte> bytes)
         {
-            bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
+            require_write(writer_.append(bytes));
         }
 
         void u8(const std::uint8_t value)
         {
-            bytes_.push_back(std::byte { value });
+            require_write(writer_.write_u8(value));
         }
 
         void u32(const std::uint32_t value)
         {
-            for (unsigned shift = 0; shift < 32U; shift += 8U)
-                u8(static_cast<std::uint8_t>(value >> shift));
+            require_write(writer_.write_u32_le(value));
         }
 
         void u64(const std::uint64_t value)
         {
-            for (unsigned shift = 0; shift < 64U; shift += 8U)
-                u8(static_cast<std::uint8_t>(value >> shift));
+            require_write(writer_.write_u64_le(value));
         }
 
         void string(const std::string_view value)
         {
-            u64(value.size());
+            u64(static_cast<std::uint64_t>(value.size()));
             raw(std::as_bytes(std::span { value }));
         }
 
         [[nodiscard]] std::vector<std::byte> take() { return std::move(bytes_); }
 
     private:
+        static void require_write(const bool succeeded)
+        {
+            if (!succeeded)
+                throw std::length_error(
+                    "Trace archive exceeds the output size limit.");
+        }
+
         std::vector<std::byte> bytes_;
+        support::BoundedByteWriter<std::vector<std::byte>> writer_ {
+            bytes_, bytes_.max_size() };
     };
 
     class Reader final {
     public:
         explicit Reader(const std::span<const std::byte> bytes)
-            : bytes_(bytes)
+            : reader_(bytes)
         {
         }
 
         [[nodiscard]] bool raw(const std::size_t count,
             std::span<const std::byte>& value)
         {
-            if (count > bytes_.size() - offset_)
-                return false;
-            value = bytes_.subspan(offset_, count);
-            offset_ += count;
-            return true;
+            return reader_.take(count, value);
         }
 
         [[nodiscard]] bool u8(std::uint8_t& value)
@@ -96,6 +101,8 @@ namespace {
         [[nodiscard]] bool u32(std::uint32_t& value)
         {
             value = 0;
+            if (reader_.remaining() >= sizeof(value))
+                return reader_.read_u32_le(value);
             for (unsigned shift = 0; shift < 32U; shift += 8U) {
                 std::uint8_t byte { };
                 if (!u8(byte))
@@ -108,6 +115,8 @@ namespace {
         [[nodiscard]] bool u64(std::uint64_t& value)
         {
             value = 0;
+            if (reader_.remaining() >= sizeof(value))
+                return reader_.read_u64_le(value);
             for (unsigned shift = 0; shift < 64U; shift += 8U) {
                 std::uint8_t byte { };
                 if (!u8(byte))
@@ -130,11 +139,10 @@ namespace {
             return true;
         }
 
-        [[nodiscard]] bool empty() const noexcept { return offset_ == bytes_.size(); }
+        [[nodiscard]] bool empty() const noexcept { return reader_.finished(); }
 
     private:
-        std::span<const std::byte> bytes_;
-        std::size_t offset_ { };
+        support::BoundedByteReader reader_;
     };
 
     [[nodiscard]] bool valid_kind(const TraceArchiveKind kind) noexcept

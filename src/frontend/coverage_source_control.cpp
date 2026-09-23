@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_source_control.hpp"
+#include "fsim/support/ctype_whitespace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,16 +30,6 @@ std::string_view trim_left(std::string_view value) noexcept
     while (!value.empty()
         && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
         value.remove_prefix(1U);
-    }
-    return value;
-}
-
-std::string_view trim(std::string_view value) noexcept
-{
-    value = trim_left(value);
-    while (!value.empty()
-        && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
-        value.remove_suffix(1U);
     }
     return value;
 }
@@ -109,7 +100,8 @@ CoverageSourceControlError parse_directive(
         const auto equal = input.find('=');
         if (equal == std::string_view::npos)
             return CoverageSourceControlError::MalformedDirective;
-        const auto key = trim(input.substr(0U, equal));
+        const auto key = support::trim_ctype_whitespace(
+            input.substr(0U, equal));
         if (key.empty() || key.find_first_of(" \t\r\n") != std::string_view::npos)
             return CoverageSourceControlError::MalformedDirective;
         input.remove_prefix(equal + 1U);

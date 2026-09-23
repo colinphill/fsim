@@ -109,14 +109,6 @@ bool Engine::has_error() const noexcept {
   });
 }
 
-bool Engine::empty() const noexcept {
-  return diagnostics_.empty();
-}
-
-const std::vector<Diagnostic>& Engine::diagnostics() const noexcept {
-  return diagnostics_;
-}
-
 void Engine::clear() noexcept {
   diagnostics_.clear();
 }

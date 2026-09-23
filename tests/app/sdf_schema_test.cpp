@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_schema.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <array>
@@ -169,6 +170,10 @@ void test_revision_and_deterministic_envelopes()
     const auto first = encoded_fixture(sdf40);
     const auto second = encoded_fixture(sdf40);
     require(first == second, "identical schema inputs must encode identically");
+    require(fsim::support::Sha256::hex(
+                fsim::support::Sha256::digest(first))
+            == "1060a81894da0ca644939dc8ffc598a0d0640e6842e8017dadd4ee713815329f",
+        "SDF schema archive wire fingerprint must remain stable");
     const auto decoded21 = fsim::app::decode_sdf_schema(
         encoded_fixture(sdf21), "fsim-compiler-compat-v1");
     const auto decoded30 = fsim::app::decode_sdf_schema(

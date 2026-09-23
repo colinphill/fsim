@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/sdf.hpp"
+#include "string_case.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -10,20 +10,6 @@
 
 namespace fsim::frontend {
 namespace {
-
-    [[nodiscard]] bool ascii_iequals(const std::string_view left,
-        const std::string_view right) noexcept
-    {
-        if (left.size() != right.size())
-            return false;
-        for (std::size_t index = 0; index < left.size(); ++index) {
-            const auto lhs = static_cast<unsigned char>(left[index]);
-            const auto rhs = static_cast<unsigned char>(right[index]);
-            if (std::toupper(lhs) != std::toupper(rhs))
-                return false;
-        }
-        return true;
-    }
 
     [[nodiscard]] bool old_timing_check(const SdfConstructKind kind) noexcept
     {
@@ -269,7 +255,8 @@ namespace {
                     node.span);
             }
             if (node.kind == SdfConstructKind::PathPulsePercent
-                && !ascii_iequals(node.keyword_spelling, "GLOBALPATHPULSE")) {
+                && !detail::ctype_upper_equal(
+                    node.keyword_spelling, "GLOBALPATHPULSE")) {
                 diagnose("FSIM-SDF-21-001",
                     "SDF 2.1 uses GLOBALPATHPULSE rather than PATHPULSEPERCENT",
                     node.span);

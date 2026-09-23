@@ -4,10 +4,10 @@
 #include "fsim/frontend/verilog_toggle_inventory.hpp"
 #include "fsim/frontend/vhdl_toggle_inventory.hpp"
 #include "fsim/frontend/source.hpp"
+#include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <functional>
 #include <limits>
@@ -41,31 +41,10 @@ namespace {
         std::uint64_t line { };
     };
 
-    void update_u64(support::Sha256& hash, const std::uint64_t value) noexcept
-    {
-        std::array<std::byte, 8U> bytes { };
-        for (std::size_t index = 0U; index < bytes.size(); ++index) {
-            const auto shift = static_cast<unsigned>(
-                (bytes.size() - index - 1U) * 8U);
-            bytes[index] = static_cast<std::byte>((value >> shift) & 0xffU);
-        }
-        hash.update(bytes);
-    }
-
     void update_string(support::Sha256& hash, const std::string_view value) noexcept
     {
-        update_u64(hash, value.size());
+        support::sha256_update_u64_be(hash, value.size());
         hash.update(value);
-    }
-
-    std::uint64_t digest_word(
-        const support::Sha256::Digest& digest, const std::size_t first) noexcept
-    {
-        std::uint64_t value { };
-        for (std::size_t index = first; index < first + 8U; ++index) {
-            value = (value << 8U) | digest[index];
-        }
-        return value;
     }
 
     runtime::CodeCoveragePointId exclusion_identity(
@@ -76,17 +55,19 @@ namespace {
     {
         support::Sha256 hash;
         update_string(hash, kCoverageToggleSelectionSchema);
-        update_u64(hash, source_point.high);
-        update_u64(hash, source_point.low);
-        update_u64(hash, instance.high);
-        update_u64(hash, instance.low);
+        support::sha256_update_u64_be(hash, source_point.high);
+        support::sha256_update_u64_be(hash, source_point.low);
+        support::sha256_update_u64_be(hash, instance.high);
+        support::sha256_update_u64_be(hash, instance.low);
         update_string(hash, hierarchy_path);
-        update_u64(hash, reasons.size());
+        support::sha256_update_u64_be(hash, reasons.size());
         for (const auto reason : reasons) {
-            update_u64(hash, static_cast<std::uint8_t>(reason));
+            support::sha256_update_u64_be(hash,
+                static_cast<std::uint8_t>(reason));
         }
         const auto digest = hash.finish();
-        return { digest_word(digest, 0U), digest_word(digest, 8U) };
+        return { support::sha256_digest_word_be(digest, 0U),
+            support::sha256_digest_word_be(digest, 8U) };
     }
 
     std::optional<frontend::CodeCoverageLanguage> coverage_language(

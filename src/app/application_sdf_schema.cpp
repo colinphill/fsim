@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_schema.hpp"
 
+#include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -32,20 +34,23 @@ namespace {
     public:
         void u16(const std::uint16_t value)
         {
-            bytes_.push_back(static_cast<std::byte>(value & 0xffU));
-            bytes_.push_back(static_cast<std::byte>((value >> 8U) & 0xffU));
+            support::BoundedByteWriter<std::vector<std::byte>> writer {
+                bytes_, bytes_.max_size() };
+            require_write(writer.write_u16_le(value));
         }
 
         void u32(const std::uint32_t value)
         {
-            for (unsigned shift = 0U; shift < 32U; shift += 8U)
-                bytes_.push_back(static_cast<std::byte>((value >> shift) & 0xffU));
+            support::BoundedByteWriter<std::vector<std::byte>> writer {
+                bytes_, bytes_.max_size() };
+            require_write(writer.write_u32_le(value));
         }
 
         void u64(const std::uint64_t value)
         {
-            for (unsigned shift = 0U; shift < 64U; shift += 8U)
-                bytes_.push_back(static_cast<std::byte>((value >> shift) & 0xffU));
+            support::BoundedByteWriter<std::vector<std::byte>> writer {
+                bytes_, bytes_.max_size() };
+            require_write(writer.write_u64_le(value));
         }
 
         bool string(const std::string_view value, const SdfSchemaLimits& limits)
@@ -55,9 +60,7 @@ namespace {
                 return false;
             }
             u32(static_cast<std::uint32_t>(value.size()));
-            bytes_.insert(bytes_.end(),
-                reinterpret_cast<const std::byte*>(value.data()),
-                reinterpret_cast<const std::byte*>(value.data() + value.size()));
+            append(value);
             return true;
         }
 
@@ -69,7 +72,7 @@ namespace {
             }
             u16(id);
             u32(static_cast<std::uint32_t>(payload.bytes_.size()));
-            bytes_.insert(bytes_.end(), payload.bytes_.begin(), payload.bytes_.end());
+            append(std::span<const std::byte> { payload.bytes_ });
             return true;
         }
 
@@ -84,47 +87,57 @@ namespace {
         }
 
     private:
+        static void require_write(const bool succeeded)
+        {
+            if (!succeeded)
+                throw std::length_error("SDF schema exceeds the output size limit.");
+        }
+
+        void append(const std::string_view value)
+        {
+            support::BoundedByteWriter<std::vector<std::byte>> writer {
+                bytes_, bytes_.max_size() };
+            require_write(writer.append(value));
+        }
+
+        void append(const std::span<const std::byte> value)
+        {
+            support::BoundedByteWriter<std::vector<std::byte>> writer {
+                bytes_, bytes_.max_size() };
+            require_write(writer.append(value));
+        }
+
         std::vector<std::byte> bytes_;
     };
 
     class Reader final {
     public:
         explicit Reader(const std::span<const std::byte> bytes)
-            : bytes_(bytes)
+            : reader_(bytes)
         {
         }
 
         [[nodiscard]] std::optional<std::uint16_t> u16()
         {
-            if (remaining() < 2U)
+            std::uint16_t result{};
+            if (!reader_.read_u16_le(result))
                 return std::nullopt;
-            const auto result = static_cast<std::uint16_t>(value(cursor_))
-                | static_cast<std::uint16_t>(value(cursor_ + 1U) << 8U);
-            cursor_ += 2U;
             return result;
         }
 
         [[nodiscard]] std::optional<std::uint32_t> u32()
         {
-            if (remaining() < 4U)
+            std::uint32_t result{};
+            if (!reader_.read_u32_le(result))
                 return std::nullopt;
-            std::uint32_t result = 0U;
-            for (unsigned index = 0U; index < 4U; ++index)
-                result |= static_cast<std::uint32_t>(value(cursor_ + index))
-                    << (index * 8U);
-            cursor_ += 4U;
             return result;
         }
 
         [[nodiscard]] std::optional<std::uint64_t> u64()
         {
-            if (remaining() < 8U)
+            std::uint64_t result{};
+            if (!reader_.read_u64_le(result))
                 return std::nullopt;
-            std::uint64_t result = 0U;
-            for (unsigned index = 0U; index < 8U; ++index)
-                result |= static_cast<std::uint64_t>(value(cursor_ + index))
-                    << (index * 8U);
-            cursor_ += 8U;
             return result;
         }
 
@@ -136,10 +149,12 @@ namespace {
                 || string_count >= limits.max_strings) {
                 return std::nullopt;
             }
-            const auto* begin
-                = reinterpret_cast<const char*>(bytes_.data() + cursor_);
-            std::string result(begin, begin + *size);
-            cursor_ += *size;
+            std::span<const std::byte> bytes;
+            if (!reader_.take(static_cast<std::size_t>(*size), bytes))
+                return std::nullopt;
+            std::string result;
+            if (!bytes.empty())
+                result.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
             ++string_count;
             return result;
         }
@@ -151,26 +166,24 @@ namespace {
             const auto size = u32();
             if (!id || !size || *id != expected_id || *size > remaining())
                 return std::nullopt;
-            Reader result(bytes_.subspan(cursor_, *size));
-            cursor_ += *size;
-            return result;
+            std::span<const std::byte> bytes;
+            if (!reader_.take(static_cast<std::size_t>(*size), bytes))
+                return std::nullopt;
+            return Reader { bytes };
         }
 
-        [[nodiscard]] std::size_t cursor() const noexcept { return cursor_; }
-        [[nodiscard]] bool empty() const noexcept { return cursor_ == bytes_.size(); }
+        [[nodiscard]] std::size_t cursor() const noexcept
+        {
+            return reader_.position();
+        }
+        [[nodiscard]] bool empty() const noexcept { return reader_.finished(); }
         [[nodiscard]] std::size_t remaining() const noexcept
         {
-            return bytes_.size() - cursor_;
+            return reader_.remaining();
         }
 
     private:
-        [[nodiscard]] unsigned value(const std::size_t index) const noexcept
-        {
-            return std::to_integer<unsigned>(bytes_[index]);
-        }
-
-        std::span<const std::byte> bytes_;
-        std::size_t cursor_ { };
+        support::BoundedByteReader reader_;
     };
 
     [[nodiscard]] bool write_location(

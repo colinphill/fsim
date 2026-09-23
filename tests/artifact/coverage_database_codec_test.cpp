@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/coverage_database_codec.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <array>
 #include <cassert>
@@ -93,6 +94,14 @@ int main()
     const auto canonical = make_coverage_database_contents(example());
     assert(canonical.ok());
     const auto first = serialize_coverage_database(example());
+    assert(fsim::support::Sha256::hex(
+        fsim::support::Sha256::digest(std::span { first.bytes }))
+        == "0ccba0a7c6ac3ca288c4b7aa1f27b04049db7cc626e965d52e37dcb286793abb");
+    for (std::size_t length = 0U;
+         length < kCoverageDatabasePayloadOffset; ++length) {
+        const auto prefix = std::span { first.bytes }.first(length);
+        assert(!deserialize_coverage_database(prefix).ok());
+    }
     const auto second = serialize_coverage_database(example());
     assert(first.ok() && second.ok() && first.bytes == second.bytes
         && first.bytes.size() > kCoverageDatabasePayloadOffset);

@@ -218,6 +218,55 @@ int run_clang_cl_fake_compiler(const int argc, char* const* argv)
     return 0;
 }
 
+void test_incremental_wire_fixtures()
+{
+    fsim::systemc::IncrementalObjectMetadata object;
+    object.runtime_abi = 1U;
+    object.systemc_abi = 4U;
+    object.scv_compatibility = "scv-test";
+    object.producer = "fsim-test";
+    object.toolchain = "clang";
+    object.target = "portable-target";
+    object.compiler_fingerprint = std::string(64U, 'a');
+    object.input_digest = std::string(64U, 'b');
+    object.compilation_digest = std::string(64U, 'c');
+    object.defines = { "WIDTH=8" };
+    object.compile_options = { "-O2" };
+    object.inputs = { { "unit.cpp", std::string(64U, 'd') } };
+    object.defines_plugin_entry_point = true;
+    object.object = "native/unit.o";
+    object.object_checksum = std::string(64U, 'e');
+
+    fsim::systemc::IncrementalPluginMetadata plugin;
+    plugin.runtime_abi = 1U;
+    plugin.systemc_abi = 4U;
+    plugin.scv_compatibility = "scv-test";
+    plugin.producer = "fsim-test";
+    plugin.logical_library = "work";
+    plugin.toolchain = "clang";
+    plugin.target = "portable-target";
+    plugin.compiler_fingerprint = std::string(64U, 'a');
+    plugin.input_digest = std::string(64U, 'b');
+    plugin.link_digest = std::string(64U, 'c');
+    plugin.object_digests = { std::string(64U, 'd') };
+    plugin.link_options = { "-shared" };
+    plugin.libraries = { "m" };
+    plugin.factories = { { "Factory", { { "WIDTH", 2U, true, -42 } } } };
+    plugin.library = "native/plugin.so";
+    plugin.library_checksum = std::string(64U, 'e');
+
+    const auto object_bytes
+        = fsim::systemc::serialize_incremental_object_metadata(object);
+    const auto plugin_bytes
+        = fsim::systemc::serialize_incremental_plugin_metadata(plugin);
+    assert(fsim::support::Sha256::hex(
+               fsim::support::Sha256::digest(object_bytes))
+        == "dd3e8087ae9215a271273b521fa86aa836c7e8e719d4a824820299aeab1384bb");
+    assert(fsim::support::Sha256::hex(
+               fsim::support::Sha256::digest(plugin_bytes))
+        == "2d1450e5f25ed81014703521991f17e38d809861a0e8e7c2bf3dedcb054a3ddf");
+}
+
 } // namespace
 
 int main(const int argc, char** argv)
@@ -228,6 +277,7 @@ int main(const int argc, char** argv)
             argc, argv, "/DFSIM_TEST_CLANG_CL_INCREMENTAL_COMPILER=1")) {
         return run_clang_cl_fake_compiler(argc, argv);
     }
+    test_incremental_wire_fixtures();
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path()
@@ -270,6 +320,14 @@ int main(const int argc, char** argv)
     }
     assert(first_compiled);
     assert(!diagnostics.has_error());
+
+#if !defined(_WIN32)
+    // POSIX mode bits make the published native artifact tree read-only.
+    assert(
+        (std::filesystem::status(first_request.output).permissions()
+            & std::filesystem::perms::owner_write)
+        == std::filesystem::perms::none);
+#endif
 
 #if !defined(_WIN32)
     // Exercise clang-cl's Make dependency-file route on every host with a

@@ -6827,34 +6827,280 @@ checks can own it. No compiler, elaboration, or simulation algorithm changed
 after the corrected baseline. The benchmark command preflight expanded all 76
 required combinations, but no candidate performance qualification is claimed;
 an attempted full run was stopped at the user's direction before completing
-its first timed sample. The standard performance gate remains in force for
-subsequent simplification batches that change performance-relevant code.
+its first timed sample. The standard performance gate was originally
+expected to resume for later performance-relevant batches.
+
+On 2026-09-23, the user extended the seven-sample matrix waiver to all
+remaining batches before 188I: Batches 188C-188H. This supersedes the
+preceding prospective gate sentence for those batches. Record the waiver
+at each Change 20; do not claim a measured performance pass. The full
+seven-sample matrix resumes at Batch 188I. All correctness, clean-build,
+full-suite, source-package, commit/push, and applicable hosted-CI
+requirements remain in force.
+
+The user also waived post-push CI monitoring for Batches 188C-188H.
+Before each commit/push, inspect the latest applicable hosted run and
+its failures for any changes needed in the batch. Then commit/push
+without waiting for the newly pushed run, and record hosted status as
+unverified rather than passed. Exact-head four-lane monitoring and
+bounded CI repair resume at Batch 188I.
+
+Batch 188B was committed and pushed as `c2507598` after the clean
+warnings-as-errors Release and Debug builds and both unfiltered 417/417
+local suites passed. The user directed that the post-push CI not be
+monitored and that work proceed immediately to Batch 188C. Accordingly,
+no four-lane hosted pass is claimed for 188B; this is an explicit
+batch-specific departure from Standard Change 20, not evidence that the
+hosted obligation passed or that the general closure rule changed.
 
 #### Batch 188C - shared utilities and duplicated infrastructure
 
-1. Establish byte-equivalence and malformed-input fixtures before codec migration.
-2. Introduce shared bounded byte readers/writers with explicit byte order.
-3. Migrate artifact framing and payload primitives.
-4. Migrate coverage database codecs without changing their wire format.
-5. Migrate compiler and cache persistence primitives.
-6. Migrate surviving SystemC/TLM/SCV codecs; exclude kernel codecs scheduled for deletion.
-7. Migrate applicable trace/archive codec primitives.
-8. Test overflow, truncation, signed values, floating-point bit patterns, and length accounting.
-9. Introduce shared 128-bit identity primitives while preserving strong domain types.
-10. Consolidate identity hashing and formatting without changing identity values.
-11. Share identical string utilities while preserving language-specific case rules.
-12. Consolidate equivalent path and file helpers with unchanged error behavior.
-13. Consolidate identical diagnostic construction helpers without erasing domain-specific errors.
-14. Remove redundant language coverage forwarders while retaining language-specific discovery.
-15. Inline genuinely trivial leaf accessors where this introduces no implementation dependency.
-16. Recombine artificial file splits and remove duplicated preambles along
+1. [x] Establish byte-equivalence and malformed-input fixtures before codec migration.
+2. [x] Introduce shared bounded byte readers/writers with explicit byte order.
+3. [x] Migrate artifact framing and payload primitives.
+4. [x] Migrate coverage database codecs without changing their wire format.
+5. [x] Migrate compiler and cache persistence primitives.
+6. [x] Migrate surviving SystemC/TLM/SCV codecs; exclude kernel codecs scheduled for deletion.
+7. [x] Migrate applicable trace/archive codec primitives.
+8. [x] Test overflow, truncation, signed values, floating-point bit patterns, and length accounting.
+9. [x] Introduce shared 128-bit identity primitives while preserving strong domain types.
+10. [x] Consolidate identity hashing and formatting without changing identity values.
+11. [x] Share identical string utilities while preserving language-specific case rules.
+12. [x] Consolidate equivalent path and file helpers with unchanged error behavior.
+13. [x] Consolidate identical diagnostic construction helpers without erasing domain-specific errors.
+14. [x] Audit language coverage forwarders; remove only redundant ones while retaining language-specific validation and discovery.
+15. [x] Inline genuinely trivial leaf accessors where this introduces no implementation dependency.
+16. [x] Recombine artificial file splits and remove duplicated preambles along
     cohesive subsystem boundaries.
-17. Remove repeated trusted-state validation; retain boundary validation and
+17. [x] Remove repeated trusted-state validation; retain boundary validation and
     meaningful resource budgets.
-18. Share duplicated test builders without removing distinct behavioral assertions.
-19. Account for each duplicated codec/helper as migrated, deliberately
+18. [x] Share duplicated test builders without removing distinct behavioral assertions.
+19. [x] Account for each duplicated codec/helper as migrated, deliberately
     retained, or scheduled for deletion.
-20. Run standard closure and hand off to 188D.
+20. [x] Run standard closure and hand off to 188D.
+
+Change 1 is complete on the uncommitted Batch 188C worktree. Existing
+object, design, coverage-database, library, SystemC value, TLM1/TLM2,
+SCV protocol/transport, application runtime-state, and trace-archive
+tests now pin 19 stable SHA-256 wire fingerprints and retain or extend
+malformed-input rejection. A new `fsim.cache-wire-fixture` test pins the
+complete V1 cache envelope byte-for-byte and rejects truncation,
+corruption, and trailing bytes; 418 tests are registered. The SystemC
+fixture work also exposed six hidden `sc_main` test entry points that
+had been resolving the shared-runtime fallback instead of executing
+their assertions. Those six entry points now export the expected C
+symbol, and all affected tests execute and pass in Release and Debug.
+The focused fixture suites and source-package, current-obligations,
+license, translation-unit, and CTest-command checks pass. No codec
+implementation has migrated yet. Change 2 may introduce the bounded
+byte reader/writer utilities under these frozen format checks.
+
+Change 2 is complete on the uncommitted worktree. The shared
+`support::BoundedByteWriter` and `support::BoundedByteReader` provide
+bounded, transactional byte appends/reads and explicit little- and
+big-endian integer primitives for string and byte-vector sinks. The
+focused `fsim.support.bounded-bytes` test exercises exact bytes,
+endianness, bounds, and no-mutation failures in warnings-as-errors
+Release and Debug builds. Changes 3 and 4 are the next codec migration
+wave, with their existing wire fixtures retained as acceptance checks.
+
+Changes 3 and 4 are complete on the uncommitted worktree. The object
+and design binary artifact wrappers now use the shared little-endian
+byte primitives for framing and payloads; the coverage-database wrapper
+uses the shared big-endian primitives. All three frozen wire/malformed
+fixture tests pass in warnings-as-errors Release and Debug builds. The
+library metadata codec deliberately remains stream-based because its
+format is textual key/value metadata rather than binary framing. The
+project index was refreshed after this code wave. Change 5 may migrate
+compiler/cache persistence primitives next.
+
+Change 5 is complete on the uncommitted worktree. LLVM JIT metadata
+and native cache-record framing now use the shared little-endian byte
+primitives. The existing `ObjectCache` V1 text/checksum envelope remains
+stream-based; it has no duplicated binary integer codec to migrate. The
+`fsim.llvm` cache test now independently checks the generated native
+record and metadata header bytes, lengths, alignment, and object size
+before exercising its cold/warm/corruption paths. Warnings-as-errors
+Release and Debug builds and `fsim.llvm` pass. Change 6 may migrate
+surviving SystemC/TLM/SCV codecs while excluding kernel codecs planned
+for deletion in 188E.
+
+Change 6 is complete on the uncommitted worktree. The live incremental
+SystemC object/plugin persistence codec now uses the shared little-endian
+byte primitives; deterministic pre-migration SHA-256 fixtures for both
+formats and the full `fsim.systemc.incremental` test pass in Release and
+Debug. TLM1/TLM2 observation serializers, SCV transport envelopes,
+SCV/backend protocol framing, and kernel backend codecs were inventoried
+as consumers of the loopback/message path scheduled for Batch 188E
+replacement and were deliberately not migrated. The project index was
+refreshed after this code wave. Change 7 may migrate applicable
+trace/archive primitives under their own wire fixtures.
+
+Change 7 is complete on the uncommitted worktree. The trace archive and
+SDF effective, schema, and portable archive byte primitives now use the
+shared bounded reader/writer. Pre-migration trace and SDF wire fixtures
+remain exact, while the portable archive retains its fixed header,
+round-trip, corruption, relocation, and resource-limit checks. The
+SDF readers preserve their distinct partial-read and cursor behavior;
+the schema writer keeps its record-by-value move safe by constructing
+short-lived bounded writers. The SDF VITAL adapter has no local byte
+codec to migrate, and FST uses its own external container format.
+The five focused trace/SDF tests pass in warnings-as-errors Release
+and Debug builds. The project index was refreshed after the SDF wave.
+Change 8 may complete the cross-codec bounds and bit-pattern matrix.
+
+Change 8 is complete on the uncommitted worktree. The bounded-byte test
+now checks all integer byte orders, transactional failed writes/reads,
+truncated fields, cursor and remaining-length accounting, a negative
+signed 64-bit value, negative-zero float bits, and double bits. Existing
+archive/cache malformed-input and wire fixtures remain active. The
+12-test focused codec matrix passes in both warnings-as-errors Release
+and Debug; the five source/package/current-obligations/CTest governance
+checks also pass. Change 9 may introduce shared 128-bit identity
+primitives while preserving the existing domain types and values.
+
+Change 9 is complete on the uncommitted worktree. New header-only
+`support::identity128_nonzero`, `identity128_hex`,
+`sha256_digest_word_be`, and `sha256_update_u64_be` helpers operate on
+the existing high/low fields without introducing a shared stored ID
+type or changing any domain struct, comparison operator, hash input,
+or wire codec. The independent `fsim.support.identity128` test checks
+zero/nonzero domain examples, exact 32-digit lowercase formatting,
+digest-word order, and SHA input equivalence; it passes in Release
+and Debug, as do the five source/package/current-obligations/CTest
+governance checks. The project index was refreshed. Change 10 may
+replace the verified duplicated hash/format loops with these helpers.
+
+Change 10 is complete on the uncommitted worktree. Ten live coverage
+identity/hash implementations now use the shared big-endian SHA input
+and digest-word helpers; coverage point and instance ID formatting
+uses the shared exact 32-digit lowercase helper. Two additional
+database/application digest-extraction loops were consolidated while
+preserving the simulation coverage path's distinct little-endian SHA
+input and zero-ID normalization. The frozen point and instance hex
+values remain exact. Twelve coverage identity/toggle/FSM/PSL tests
+and four database/application coverage tests pass in both
+warnings-as-errors Release and Debug, and the five governance checks
+pass in Release. MCP was reindexed after the code wave. Change 11
+may share genuinely identical string helpers while preserving
+language-specific identifier case rules.
+
+Change 11 is complete on the uncommitted worktree. A private frontend
+case helper now serves five equivalent lowercase sites and four
+symmetric uppercase comparisons, while the asymmetric SDF lexer and
+other distinct language rules remain local. A shared ctype-whitespace
+trim-view helper serves five equivalent sites, retaining narrower
+space/tab/CR, token-level, and explicit-ASCII grammars where their
+behavior differs. Independent string-case and whitespace tests pass
+in warnings-as-errors Release and Debug, as do the affected SDF,
+frontend, coverage, semantic, object, design, and library slices.
+The five governance checks and `git diff --check` pass. Change 12
+may consolidate equivalent path/file helpers without changing errors.
+
+Change 13 is complete on the uncommitted worktree. Nineteen byte-identical,
+span-required SDF application diagnostic constructors now use one private
+helper. Caller-owned diagnostic codes and messages, severity, source span,
+and empty expansion stack are unchanged; constructors with missing or
+different span/stack semantics remain separate. The exact mapping-conflict
+diagnostic regression and all 39 SDF application tests pass in both
+warnings-as-errors Release and Debug builds. Five governance checks and
+`git diff --check` pass. The project index was refreshed after the code wave.
+
+Change 14 is complete as an evidence-backed retention decision; no
+language coverage forwarder proved redundant under the existing error
+contracts. The Verilog and VHDL condition adapters reject unsupported
+languages, and the VHDL adapter additionally validates the requested
+standard before calling generic discovery. Toggle inventories and
+statement-point discovery are substantial language-specific passes.
+Removing these boundaries would change rejection behavior or source
+API; they remain deliberately local. The four focused condition/toggle
+tests pass in Release and Debug. No production code changed in this item.
+
+Change 12 is complete on the uncommitted worktree. Object and design
+artifacts share their exact safe-relative-path predicate and staging-name
+construction, passing each caller's original atomic sequence counter.
+Object, design, and SystemC incremental publication share the identical
+read-only permission walk, but retain caller-specific diagnostic codes,
+messages, and reporting points. Library path and permission policies and
+SystemC's distinct staging-name scheme remain local. A design traversal
+regression and a POSIX SystemC owner-write-bit assertion were pinned
+before migration. Object, design, and SystemC incremental focused tests
+pass in warnings-as-errors Release and Debug; five governance checks and
+`git diff --check` pass. The project index was refreshed.
+
+Change 15 is complete on the uncommitted worktree. The diagnostic
+engine's two field-only `empty()` and `diagnostics()` accessors are
+defined inline in their existing header, with no added implementation
+dependency. Direct empty/nonempty assertions were added to the API
+test. `fsim.api` passes in warnings-as-errors Release and Debug builds;
+the prior five governance checks cover this header/test edit, and
+`git diff --check` is clean. No exported shared-library symbol was
+removed. The project index will be refreshed with the following code wave.
+
+Changes 16-18 are complete on the uncommitted worktree. The residual
+one-function design-artifact codec validation split was recombined with
+its sole caller, removing the now-dead declaration header, source, and
+duplicated preamble/build entries; the much larger Verilog coverage TU
+was deliberately not enlarged. An exact `FSIM-ART-0013` absolute-source
+path rejection is pinned. The FSM runtime builder no longer repeats a
+full validation of its own sorted, unpublished model, while definition
+checks, budgets, and validation of mutable public models at record and
+summary boundaries remain. Four identical UVM sequence descriptor
+test builders now share a private fixture helper; local wrappers and
+all distinct assertions remain. Artifact phases, compiled-HIR cache,
+FSM coverage, and runtime/UVM tests pass 4/4 in warnings-as-errors
+Release and Debug; five governance checks and `git diff --check` pass.
+MCP was reindexed after the code wave. Change 19 must account for
+remaining duplicates before standard closure.
+
+Change 19 is complete on the uncommitted worktree. The final duplicate
+inventory is explicit:
+
+- Migrated: the remaining standalone transaction-record little-endian
+  reader/writer, the exact SDF cell/endpoint field and case-policy helpers,
+  the coverage-source big-endian SHA size encoder, and a fourth identical
+  UVM sequence test builder. Transaction-record output is pinned at 434
+  bytes and its exact SHA-256 digest; all truncation prefixes and existing
+  diagnostic codes/messages are checked. The source-identity composite
+  digest is pinned exactly. The bounded writer now stages self-aliasing
+  input before resize; vector/string and span/string-view reallocation
+  cases pass without changing any codec call site or wire format.
+- Deliberately retained: the recursive design-state stream/checksum codec
+  with type-width-specific scalar encoding; textual library and ObjectCache
+  envelopes; trace/SDF partial-read fallbacks; distinct little-endian
+  simulation coverage hashing; language-specific case, whitespace,
+  condition validation, staging-name, and diagnostic contracts; and
+  mutable-model boundary validation.
+- Scheduled for Batch 188E deletion rather than migration: TLM1/TLM2
+  observation serializers, SCV backend transport/protocol envelopes, and
+  kernel/backend message framing and loopback.
+
+The transaction-record, SDF cell/endpoint, coverage-source identity,
+bounded-byte, and UVM runtime focused tests pass in warnings-as-errors
+Release and Debug builds. The source-package manifest includes every new
+header/test. `git diff --check` passes; MCP was reindexed after the code
+wave. Change 20 may begin after reviewing the prior hosted run and making
+its in-scope corrections, before the full clean matrices.
+
+Change 20 local qualification is green on the corrected code. The latest
+prior pushed run, `35915260057` at `c2507598`, exposed the Boost.PFR
+fallback cache-path contract failure in all four lanes and Windows heap
+corruption in named-events (also elaboration in Debug). The fetched path
+is now persisted in CMakeCache; a nested-call HIR evaluator use-after-free
+was reproduced with 36 Valgrind errors in the prior binary and eliminated
+locally with zero errors in the corrected named-events binary. Focused
+Release and Debug tests pass. Separate clean Clang/LLVM 22 warnings-as-
+errors Release and Debug builds pass, followed by unfiltered 422/422 CTest
+suites in 159.75 and 161.69 seconds respectively. The pinned Tcl archive
+was reused from a verified local build after sandboxed network download
+failed; its SHA-256 matches the project pin. No seven-sample performance
+qualification is claimed under the user waiver. Final governance,
+diff/process review, and latest prior-CI recheck passed: the seven-test
+documentation-sensitive governance slice passes in both configurations,
+`git diff --check` is clean, and `35915260057` remains the latest run with
+its relevant failures corrected locally. The cohesive implementation
+commit and push close Change 20. The newly pushed hosted run is unverified
+under the explicit post-push monitoring waiver; no hosted pass is claimed.
 
 #### Batch 188D - hierarchy decomposition and build-time algorithmics
 
@@ -7084,23 +7330,32 @@ count.
 
 #### Standard Change 20 closure
 
-1. Review the complete diff, migration obligations, and latest applicable hosted-CI results.
+1. Review the complete diff, migration obligations, and latest applicable
+   hosted-CI results. Make any in-scope corrections indicated by the prior
+   run before starting the full local Debug/Release matrices, so they qualify
+   the intended final code and do not need avoidable reruns.
 2. Build clean warnings-as-errors Release first, then qualify clean Debug and
    Release against final code.
-3. Run the benchmark matrix and record cumulative baseline comparisons.
+3. Run the benchmark matrix and record cumulative baseline comparisons,
+   except for the user-waived seven-sample matrix in Batches 188C-188H;
+   record the waiver explicitly and do not claim a performance pass.
 4. Update authoritative progress and evidence documents.
 5. Publish one cohesive implementation commit and push.
-6. Monitor all four LLVM-only hosted lanes: Linux Debug/Release and Windows Debug/Release.
-7. Make bounded in-scope CI repair commits as necessary; do not advance with a
-   required lane failing.
+6. Monitor all four LLVM-only hosted lanes: Linux Debug/Release and Windows
+   Debug/Release, except for the user-waived post-push monitoring in Batches
+   188C-188H; still inspect the latest applicable run before commit/push.
+7. Make bounded in-scope CI repair commits as necessary where monitoring is
+   required; do not advance with a required lane failing. For waived batches,
+   report the new run as unverified and proceed without monitoring it.
 
 Retain 120-minute qualification-command timeouts and current hosted
 parallelism. Batch 188I additionally requires a local LLVM-enabled ASan/UBSan
 build, the full applicable suite, and lifetime stress tests. Completion means
 reduced duplication and retained state, preserved behavior, passing
-compatibility boundaries, cumulative performance within the agreed allowance,
-and an exact handoff to Batch 189. No line-count target, weakened gate, omitted
-benchmark, or release tag substitutes for those outcomes.
+compatibility boundaries, cumulative performance within the agreed allowance
+when that gate is required, and an exact handoff to Batch 189. No line-count
+target, weakened gate, omitted required benchmark, or release tag substitutes
+for those outcomes.
 
 ## v3.1.0
 

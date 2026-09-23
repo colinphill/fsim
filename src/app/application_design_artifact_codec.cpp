@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_design_artifact_codec_internal.hpp"
 #include "application_internal.hpp"
+#include "fsim/support/path.hpp"
+
+#include <filesystem>
 
 namespace fsim::app {
 namespace codec_detail {
@@ -70,6 +73,23 @@ bool read_operation(Reader& reader, runtime::simir::Operation& operation)
     case 8: return select_operation_group<runtime::simir::ClassOperationGroup>(reader, operation);
     default: return reader.invalid_variant();
     }
+}
+
+bool portable_semantics(
+    const semantic::ModelRecords& records,
+    diagnostic::Engine& diagnostics)
+{
+    for (const auto& file : records.source_files) {
+        if (support::path_is_portably_absolute(
+                support::path_from_utf8(file.physical_name))) {
+            diagnostics.error(
+                std::string { kCode },
+                "semantic state contains a producer-absolute source path: "
+                    + file.physical_name);
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace codec_detail

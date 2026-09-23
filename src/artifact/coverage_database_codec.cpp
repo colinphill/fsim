@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/coverage_database_codec.hpp"
 
+#include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -25,47 +26,34 @@ namespace {
     class Writer {
     public:
         explicit Writer(const std::uint64_t limit) noexcept
-            : limit_(limit)
+            : writer_(bytes_, static_cast<std::size_t>(std::min<std::uint64_t>(
+                  limit, std::numeric_limits<std::size_t>::max())))
         {
         }
 
         bool raw(const std::span<const std::byte> value)
         {
-            if (value.size() > limit_ - std::min<std::uint64_t>(bytes_.size(), limit_)) {
-                return false;
-            }
-            bytes_.insert(bytes_.end(), value.begin(), value.end());
-            return true;
+            return writer_.append(value);
         }
 
         bool raw(const std::string_view value)
         {
-            return raw(std::as_bytes(std::span { value.data(), value.size() }));
+            return writer_.append(value);
         }
 
         bool u8(const std::uint8_t value)
         {
-            return raw(std::span { reinterpret_cast<const std::byte*>(&value), 1U });
+            return writer_.write_u8(value);
         }
 
         bool u32(const std::uint32_t value)
         {
-            std::array<std::byte, 4> bytes;
-            for (std::size_t index = 0; index < bytes.size(); ++index) {
-                bytes[index] = static_cast<std::byte>(
-                    value >> ((bytes.size() - 1U - index) * 8U));
-            }
-            return raw(bytes);
+            return writer_.write_u32_be(value);
         }
 
         bool u64(const std::uint64_t value)
         {
-            std::array<std::byte, 8> bytes;
-            for (std::size_t index = 0; index < bytes.size(); ++index) {
-                bytes[index] = static_cast<std::byte>(
-                    value >> ((bytes.size() - 1U - index) * 8U));
-            }
-            return raw(bytes);
+            return writer_.write_u64_be(value);
         }
 
         bool text(const std::string_view value)
@@ -107,61 +95,35 @@ namespace {
         }
 
     private:
-        std::uint64_t limit_;
         std::vector<std::byte> bytes_;
+        support::BoundedByteWriter<std::vector<std::byte>> writer_;
     };
 
     class Reader {
     public:
         explicit Reader(const std::span<const std::byte> bytes) noexcept
-            : bytes_(bytes)
+            : bytes_(bytes), reader_(bytes)
         {
         }
 
         bool raw(const std::size_t count, std::span<const std::byte>& result) noexcept
         {
-            if (offset_ > bytes_.size() || count > bytes_.size() - offset_) {
-                return false;
-            }
-            result = bytes_.subspan(offset_, count);
-            offset_ += count;
-            return true;
+            return reader_.take(count, result);
         }
 
         bool u8(std::uint8_t& result) noexcept
         {
-            std::span<const std::byte> bytes;
-            if (!raw(1U, bytes)) {
-                return false;
-            }
-            result = std::to_integer<std::uint8_t>(bytes.front());
-            return true;
+            return reader_.read_u8(result);
         }
 
         bool u32(std::uint32_t& result) noexcept
         {
-            std::span<const std::byte> bytes;
-            if (!raw(4U, bytes)) {
-                return false;
-            }
-            result = 0U;
-            for (const auto value : bytes) {
-                result = (result << 8U) | std::to_integer<std::uint8_t>(value);
-            }
-            return true;
+            return reader_.read_u32_be(result);
         }
 
         bool u64(std::uint64_t& result) noexcept
         {
-            std::span<const std::byte> bytes;
-            if (!raw(8U, bytes)) {
-                return false;
-            }
-            result = 0U;
-            for (const auto value : bytes) {
-                result = (result << 8U) | std::to_integer<std::uint8_t>(value);
-            }
-            return true;
+            return reader_.read_u64_be(result);
         }
 
         bool identity(CoverageDatabaseIdentity& result) noexcept
@@ -195,13 +157,13 @@ namespace {
             return true;
         }
 
-        [[nodiscard]] std::size_t offset() const noexcept { return offset_; }
+        [[nodiscard]] std::size_t offset() const noexcept { return reader_.position(); }
         [[nodiscard]] std::size_t size() const noexcept { return bytes_.size(); }
-        [[nodiscard]] bool done() const noexcept { return offset_ == bytes_.size(); }
+        [[nodiscard]] bool done() const noexcept { return reader_.finished(); }
 
     private:
         std::span<const std::byte> bytes_;
-        std::size_t offset_ { };
+        support::BoundedByteReader reader_;
     };
 
     CoverageDatabaseDigest digest_bytes(const std::span<const std::byte> bytes) noexcept

@@ -9,7 +9,6 @@
 #define FSIM_DESIGN_ARTIFACT_CODEC_VHDL_HIR
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/support/sha256.hpp"
-#include "application_design_artifact_codec_validation.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
 

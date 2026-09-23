@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/sdf_portable_archive.hpp"
 
+#include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <limits>
 #include <ranges>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -36,32 +38,32 @@ namespace {
 
     class Writer {
     public:
-        void u8(const std::uint8_t value) { bytes_.push_back(std::byte { value }); }
+        void u8(const std::uint8_t value)
+        {
+            require_write(writer_.write_u8(value));
+        }
         void u32(const std::uint32_t value)
         {
-            for (unsigned shift = 0; shift != 32U; shift += 8U)
-                u8(static_cast<std::uint8_t>(value >> shift));
+            require_write(writer_.write_u32_le(value));
         }
         void u64(const std::uint64_t value)
         {
-            for (unsigned shift = 0; shift != 64U; shift += 8U)
-                u8(static_cast<std::uint8_t>(value >> shift));
+            require_write(writer_.write_u64_le(value));
         }
         void boolean(const bool value) { u8(value ? 1U : 0U); }
         void string(const std::string_view value)
         {
-            u64(value.size());
-            const auto* first = reinterpret_cast<const std::byte*>(value.data());
-            bytes_.insert(bytes_.end(), first, first + value.size());
+            u64(static_cast<std::uint64_t>(value.size()));
+            require_write(writer_.append(value));
         }
         void blob(const std::span<const std::byte> value)
         {
-            u64(value.size());
-            bytes_.insert(bytes_.end(), value.begin(), value.end());
+            u64(static_cast<std::uint64_t>(value.size()));
+            raw(value);
         }
         void raw(const std::span<const std::byte> value)
         {
-            bytes_.insert(bytes_.end(), value.begin(), value.end());
+            require_write(writer_.append(value));
         }
         [[nodiscard]] std::span<const std::byte> view() const noexcept
         {
@@ -70,7 +72,16 @@ namespace {
         [[nodiscard]] std::vector<std::byte> take() && { return std::move(bytes_); }
 
     private:
+        static void require_write(const bool succeeded)
+        {
+            if (!succeeded)
+                throw std::length_error(
+                    "Portable SDF archive exceeds the output size limit.");
+        }
+
         std::vector<std::byte> bytes_;
+        support::BoundedByteWriter<std::vector<std::byte>> writer_ {
+            bytes_, bytes_.max_size() };
     };
 
     class Reader {
@@ -78,38 +89,41 @@ namespace {
         Reader(const std::span<const std::byte> bytes, const std::size_t string_limit)
             : bytes_(bytes)
             , string_limit_(string_limit)
+            , reader_(bytes)
         {
         }
         bool raw(const std::span<const std::byte> value)
         {
             if (remaining() < value.size()
-                || !std::ranges::equal(bytes_.subspan(position_, value.size()), value))
+                || !std::ranges::equal(
+                    bytes_.subspan(reader_.position(), value.size()), value))
                 return false;
-            position_ += value.size();
-            return true;
+            std::span<const std::byte> ignored;
+            return reader_.take(value.size(), ignored);
         }
         std::optional<std::uint8_t> u8()
         {
-            if (remaining() == 0U)
+            std::uint8_t value{};
+            if (!reader_.read_u8(value))
                 return std::nullopt;
-            return std::to_integer<std::uint8_t>(bytes_[position_++]);
+            return value;
         }
         std::optional<std::uint32_t> u32()
         {
             if (remaining() < 4U)
                 return std::nullopt;
-            std::uint32_t result { };
-            for (unsigned shift = 0; shift != 32U; shift += 8U)
-                result |= static_cast<std::uint32_t>(*u8()) << shift;
+            std::uint32_t result{};
+            if (!reader_.read_u32_le(result))
+                return std::nullopt;
             return result;
         }
         std::optional<std::uint64_t> u64()
         {
             if (remaining() < 8U)
                 return std::nullopt;
-            std::uint64_t result { };
-            for (unsigned shift = 0; shift != 64U; shift += 8U)
-                result |= static_cast<std::uint64_t>(*u8()) << shift;
+            std::uint64_t result{};
+            if (!reader_.read_u64_le(result))
+                return std::nullopt;
             return result;
         }
         std::optional<bool> boolean()
@@ -125,9 +139,12 @@ namespace {
             if (!size || *size > remaining() || *size > string_limit_)
                 return std::nullopt;
             const auto count = static_cast<std::size_t>(*size);
-            std::string result(reinterpret_cast<const char*>(bytes_.data() + position_),
-                count);
-            position_ += count;
+            std::span<const std::byte> value;
+            if (!reader_.take(count, value))
+                return std::nullopt;
+            std::string result;
+            if (!value.empty())
+                result.assign(reinterpret_cast<const char*>(value.data()), value.size());
             return result;
         }
         std::optional<std::vector<std::byte>> blob()
@@ -136,23 +153,25 @@ namespace {
             if (!size || *size > remaining())
                 return std::nullopt;
             const auto count = static_cast<std::size_t>(*size);
-            const auto begin = bytes_.begin()
-                + static_cast<std::ptrdiff_t>(position_);
-            std::vector<std::byte> result(
-                begin, begin + static_cast<std::ptrdiff_t>(count));
-            position_ += count;
+            std::span<const std::byte> value;
+            if (!reader_.take(count, value))
+                return std::nullopt;
+            std::vector<std::byte> result(value.begin(), value.end());
             return result;
         }
-        [[nodiscard]] std::size_t position() const noexcept { return position_; }
+        [[nodiscard]] std::size_t position() const noexcept
+        {
+            return reader_.position();
+        }
         [[nodiscard]] std::size_t remaining() const noexcept
         {
-            return bytes_.size() - position_;
+            return reader_.remaining();
         }
 
     private:
         std::span<const std::byte> bytes_;
         std::size_t string_limit_ { };
-        std::size_t position_ { };
+        support::BoundedByteReader reader_;
     };
 
     template <typename Values, typename Callback>

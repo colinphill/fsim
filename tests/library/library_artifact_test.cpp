@@ -92,6 +92,9 @@ int main()
     static_assert(fsim::library::kCompiledHirSchemaVersion == 1);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
+    assert(fsim::support::Sha256::hex(
+        fsim::support::Sha256::digest(serialized))
+        == "5959f55b12a09d8a1faad8dd7139c9688b22d3b5e765befc98ccd708b5643bf7");
     assert(serialized.starts_with(
         "format = 6\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
     assert(serialized.find("compiled_hir_schema = 1")

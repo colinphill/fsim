@@ -3,6 +3,7 @@
 #include "fsim/runtime/uvm_object.hpp"
 #include "fsim/runtime/uvm_objection.hpp"
 #include "fsim/runtime/uvm_register_model.hpp"
+#include "uvm_test_builders.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,26 +40,8 @@ void require_error(const std::string_view code, Function &&function,
 
 SystemVerilogClassDescriptor class_descriptor(
     const std::string_view specialization) {
-  SystemVerilogClassDescriptor result;
-  result.dynamic_type = std::string{specialization};
-  result.specialization_identity = std::string{specialization};
-  if (specialization == kSequencerType) {
-    result.declared_type = "uvm_pkg::uvm_sequencer";
-    result.assignable_declared_types = {
-        std::string{kSequencerType}, "uvm_pkg::uvm_sequencer",
-        "uvm_pkg::uvm_component", "uvm_pkg::uvm_object"};
-  } else if (specialization == kSequenceType) {
-    result.declared_type = "uvm_pkg::uvm_sequence";
-    result.assignable_declared_types = {
-        std::string{kSequenceType}, "uvm_pkg::uvm_sequence",
-        "uvm_pkg::uvm_sequence_item", "uvm_pkg::uvm_object"};
-  } else {
-    result.declared_type = "uvm_pkg::uvm_sequence_item";
-    result.assignable_declared_types = {
-        std::string{specialization}, "uvm_pkg::uvm_sequence_item",
-        "uvm_pkg::uvm_object"};
-  }
-  return result;
+  return test_support::make_sequence_class_descriptor(
+      specialization, kSequencerType, kSequenceType);
 }
 
 SystemVerilogUvmSequenceProfile sequence_profile() {

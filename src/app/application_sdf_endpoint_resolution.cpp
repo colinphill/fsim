@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_endpoint_resolution.hpp"
+#include "sdf_diagnostic.hpp"
+#include "sdf_resolution_helpers.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <charconv>
 #include <limits>
 #include <optional>
@@ -18,7 +19,6 @@
 namespace fsim::app {
 namespace {
     using frontend::Diagnostic;
-    using frontend::DiagnosticSeverity;
     using frontend::SdfConstructKind;
     using frontend::SdfIrNode;
     using frontend::SourceSpan;
@@ -38,31 +38,9 @@ namespace {
         SdfEndpointObjectKind kind { SdfEndpointObjectKind::HdlNet };
     };
 
-    void diagnose(std::vector<Diagnostic>& diagnostics, std::string code,
-        std::string message, const SourceSpan& span)
-    {
-        diagnostics.push_back(Diagnostic { DiagnosticSeverity::Error,
-            std::move(code), std::move(message), span, { } });
-    }
-
-    void append_field(std::string& target, const std::string_view value)
-    {
-        target += std::to_string(value.size());
-        target.push_back(':');
-        target.append(value);
-    }
-
-    [[nodiscard]] bool ascii_equal(
-        const std::string_view left, const std::string_view right,
-        const SdfHierarchyCasePolicy policy)
-    {
-        if (policy == SdfHierarchyCasePolicy::Sensitive)
-            return left == right;
-        return std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-            return std::tolower(static_cast<unsigned char>(lhs))
-                == std::tolower(static_cast<unsigned char>(rhs));
-        });
-    }
+    using sdf_detail::diagnose;
+    using sdf_detail::append_field;
+    using sdf_detail::equal_under_case_policy;
 
     [[nodiscard]] std::optional<std::vector<std::string>> decode_fields(
         const std::string_view atom, const std::string_view prefix)
@@ -293,13 +271,14 @@ namespace {
         const auto local = joined_path(spec.segments);
         std::vector<std::string> alternatives;
         alternatives.push_back(target.instance_path + '.' + local);
-        if (!ascii_equal(local, target.instance_path, target.case_policy))
+        if (!equal_under_case_policy(
+                local, target.instance_path, target.case_policy))
             alternatives.push_back(local);
         std::vector<const Candidate*> result;
         for (const auto& candidate : candidates) {
             if (std::ranges::any_of(alternatives,
                     [&](const std::string& path) {
-                        return ascii_equal(
+                        return equal_under_case_policy(
                             candidate.path, path, target.case_policy);
                     })) {
                 if (!std::ranges::any_of(result,
@@ -399,7 +378,8 @@ namespace {
         const SdfHierarchyCasePolicy policy)
     {
         for (const auto& conversion : elaborated.boundary_conversions()) {
-            if (!ascii_equal(conversion.path, endpoint.object_path, policy))
+            if (!equal_under_case_policy(
+                    conversion.path, endpoint.object_path, policy))
                 continue;
             if (conversion.formal_signal == endpoint.signal) {
                 endpoint.conversion = conversion.kind;
@@ -648,7 +628,7 @@ namespace {
         return event.edge == runtime::simir::ModulePathEdge::edge
             && std::ranges::any_of(event.edge_descriptors,
                 [&](const std::string_view descriptor) {
-                    return ascii_equal(descriptor, *token,
+                    return equal_under_case_policy(descriptor, *token,
                         SdfHierarchyCasePolicy::AsciiInsensitive);
                 });
     }
@@ -786,7 +766,7 @@ namespace {
         const elaboration::VerilogSpecifyPathInfo* match = nullptr;
         std::optional<PathEndpointBinding> match_binding;
         for (const auto& path : elaborated.verilog_specify_paths()) {
-            if (!ascii_equal(
+            if (!equal_under_case_policy(
                     path.instance, target.instance_path, target.case_policy)
                 || !path_edge_matches(resolved, path)
                 || !path_condition_matches(resolved, path)) {

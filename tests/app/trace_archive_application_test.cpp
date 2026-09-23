@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/trace_archive.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -53,9 +55,25 @@ void test_round_trip_all_boundaries()
         app::TraceArchiveKind::Design, app::TraceArchiveKind::Library,
         app::TraceArchiveKind::NativeCache,
         app::TraceArchiveKind::Checkpoint };
+    constexpr std::array expected_hashes {
+        "779b6f8f73006db685a29a72afd415bc80fc7240e3be9ecc334f1fa5efd9a23c",
+        "3b7f57e090543871596304d12291182a170c4a14e022b72a3b28718f710de9c8",
+        "333c37fafb09d13fffab3484e448b4789159b901aade4ce042b4aa7452ea41b4",
+        "c95a75f9f7cc2a147ff32425296a4e24ffe53c1e770baf21814a3b887a6fb98e",
+        "0add33956b36eebfd19d8ba43ae53b629f6c4b70549919c85582036f5bc406f5",
+    };
     const auto expected = snapshot();
     for (const auto kind : kinds) {
         const auto encoded = app::encode_trace_archive(expected, kind);
+        require(support::Sha256::hex(
+                    support::Sha256::digest(std::span { encoded.archive }))
+                == expected_hashes[static_cast<std::size_t>(kind)],
+            "archive wire bytes must match the frozen pre-migration fixture");
+        for (std::size_t length = 0U; length < 20U; ++length) {
+            require(!app::decode_trace_archive(
+                        std::span { encoded.archive }.first(length), kind).ok(),
+                "truncated archive prefix must reject");
+        }
         require(encoded.ok(), "trace archive encoding must succeed");
         const auto decoded = app::decode_trace_archive(encoded.archive, kind,
             project::TraceFormat::fst, expected.profile_identity);

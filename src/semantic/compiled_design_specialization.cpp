@@ -4387,7 +4387,6 @@ private:
         call_frames_.push_back(CallFrame {
             *selection.package_instance, { }, { }, { }, { }, std::nullopt,
             std::nullopt });
-        auto& frame = call_frames_.back();
         for (const auto& binding : selection.generic_bindings) {
             const auto declaration = unit_.find_declaration(binding.formal);
             if (!declaration || declaration->vhdl == nullptr) {
@@ -4400,10 +4399,13 @@ private:
                     call_frames_.pop_back();
                     return false;
                 }
-                frame.values.emplace(
-                    binding.formal, evaluate(*binding.expression));
-                frame.string_values.emplace(
-                    binding.formal, evaluate_string(*binding.expression));
+                const auto value = evaluate(*binding.expression);
+                auto string_value
+                    = evaluate_string(*binding.expression);
+                call_frames_.back().values.emplace(
+                    binding.formal, value);
+                call_frames_.back().string_values.emplace(
+                    binding.formal, std::move(string_value));
             }
         }
         return true;
@@ -5750,12 +5752,15 @@ private:
                 continue;
             }
             const auto initializer = local->systemverilog->initializer;
-            call_frames_.back().values.emplace(child,
-                initializer ? evaluate(*initializer)
-                            : std::optional<std::int64_t> { 0 });
-            call_frames_.back().string_values.emplace(child,
-                initializer ? evaluate_string(*initializer)
-                            : std::nullopt);
+            const auto value = initializer
+                ? evaluate(*initializer)
+                : std::optional<std::int64_t> { 0 };
+            auto string_value = initializer
+                ? evaluate_string(*initializer)
+                : std::nullopt;
+            call_frames_.back().values.emplace(child, value);
+            call_frames_.back().string_values.emplace(
+                child, std::move(string_value));
         }
         const auto flow = [&]() {
             for (const auto statement : declaration.statements) {
@@ -6007,10 +6012,10 @@ private:
                 || local->vhdl->form != vhdl::DeclarationForm::variable) {
                 continue;
             }
-            call_frames_.back().values.emplace(child,
-                local->vhdl->initializer
-                    ? evaluate(*local->vhdl->initializer)
-                    : std::optional<std::int64_t> { 0 });
+            const auto value = local->vhdl->initializer
+                ? evaluate(*local->vhdl->initializer)
+                : std::optional<std::int64_t> { 0 };
+            call_frames_.back().values.emplace(child, value);
         }
         StatementFlow flow = StatementFlow::normal;
         for (const auto statement : declaration.statements) {

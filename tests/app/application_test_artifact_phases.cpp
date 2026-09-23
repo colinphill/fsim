@@ -7,6 +7,7 @@
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/sha256.hpp"
 #include "fsim/version.hpp"
 
 #include <array>
@@ -1000,6 +1001,32 @@ end architecture;
     assert(
         vhdl_2019_runtime_bytes
         && !vhdl_2019_runtime_diagnostics.has_error());
+    elaboration::ElaboratedDesignState codec_fixture;
+    codec_fixture.top = "fixture";
+    codec_fixture.roots = { "fixture" };
+    std::ostringstream codec_fixture_output(std::ios::binary);
+    diagnostic::Engine codec_fixture_diagnostics;
+    assert(app::serialize_runtime_state(
+        codec_fixture, codec_fixture_output, codec_fixture_diagnostics));
+    assert(!codec_fixture_diagnostics.has_error());
+    const auto codec_fixture_bytes = codec_fixture_output.str();
+    assert(support::Sha256::hex(
+        support::Sha256::digest(codec_fixture_bytes))
+        == "6c9e3b584d04c1636e58724f3a38d52e22e4e6975759f1aad7616144c465e701");
+    diagnostic::Engine codec_fixture_decode_diagnostics;
+    const auto codec_fixture_restored = app::deserialize_runtime_state(
+        codec_fixture_bytes, "codec-fixture", codec_fixture_decode_diagnostics);
+    assert(codec_fixture_restored && !codec_fixture_decode_diagnostics.has_error());
+    assert(codec_fixture_restored->top() == "fixture"
+        && codec_fixture_restored->roots()
+            == std::vector<std::string> { "fixture" });
+    for (std::size_t length = 0U; length < 20U; ++length) {
+        diagnostic::Engine prefix_diagnostics;
+        assert(!app::deserialize_runtime_state(
+            std::string_view { codec_fixture_bytes }.substr(0U, length),
+            "truncated-codec-fixture", prefix_diagnostics));
+        assert(prefix_diagnostics.has_error());
+    }
     for (const auto schema : std::array {
              48U,
              app::kRuntimeStateSchema - 1U,
@@ -1384,6 +1411,24 @@ end architecture;
         for (const auto& file : built->semantics.source_files()) {
             assert(!std::filesystem::path(file.physical_name).is_absolute());
         }
+        auto nonportable_records = built->semantics.records();
+        assert(!nonportable_records.source_files.empty());
+        const auto nonportable_source_path = support::path_to_utf8(
+            std::filesystem::absolute(directory / "producer-source.sv"));
+        nonportable_records.source_files.front().physical_name
+            = nonportable_source_path;
+        auto nonportable_semantics = semantic::Model::from_records(
+            std::move(nonportable_records));
+        assert(nonportable_semantics);
+        diagnostic::Engine nonportable_diagnostics;
+        assert(!app::serialize_semantic_state(
+            *nonportable_semantics, nonportable_diagnostics));
+        assert(nonportable_diagnostics.diagnostics().size() == 1U);
+        assert(nonportable_diagnostics.diagnostics().front().code
+            == "FSIM-ART-0013");
+        assert(nonportable_diagnostics.diagnostics().front().message
+            == "semantic state contains a producer-absolute source path: "
+                + nonportable_source_path);
         const auto verilog_provenance =
             app::verilog_scope_provenance(*built);
         assert(!verilog_provenance.empty());

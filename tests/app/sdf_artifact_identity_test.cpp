@@ -3,6 +3,7 @@
 
 #include "fsim/support/sha256.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -286,6 +287,16 @@ void test_library_design_relocation_and_source_hidden_archive()
     require(encoded.ok() && !encoded.snapshot->normalized().empty()
             && !encoded.snapshot->mappings().empty(),
         "portable SDF archive must retain normalized and resolved records");
+    constexpr std::array wire_prefix {
+        std::byte { 'F' }, std::byte { 'S' }, std::byte { 'D' },
+        std::byte { 'F' }, std::byte { 'P' }, std::byte { 'O' },
+        std::byte { 'R' }, std::byte { 'T' }, std::byte { 1 },
+        std::byte { 0 }, std::byte { 0 }, std::byte { 0 }
+    };
+    require(encoded.bytes.size() >= wire_prefix.size()
+            && std::equal(wire_prefix.begin(), wire_prefix.end(),
+                encoded.bytes.begin()),
+        "portable SDF archive must retain its exact wire header");
     const auto decoded = fsim::app::decode_sdf_portable_archive(
         encoded.bytes, identity);
     require(decoded.ok()
