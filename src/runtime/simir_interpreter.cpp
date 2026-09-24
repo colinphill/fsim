@@ -183,7 +183,6 @@ SignalId Interpreter::add_signal(Signal signal)
         std::move(signal.initial_value), signal.value_kind);
     impl_->driven_values.push_back(signal.initial_value);
     impl_->driver_values.emplace_back();
-    impl_->driver_strengths.emplace_back();
     impl_->direct_single_driver_routes.emplace_back();
     impl_->direct_single_driver_word_scratch.emplace_back();
     impl_->direct_single_driver_logic9_word_scratch.emplace_back();
@@ -286,15 +285,44 @@ SignalId Interpreter::add_signal(Signal signal)
             impl_->direct_wide_signal_logic9_plane3.end(),
             plane3.begin(), plane3.end());
     }
-    impl_->signals.push_back(std::move(signal));
+    SignalHot hot {
+        .initial_value = std::move(signal.initial_value),
+        .resolution = signal.resolution,
+        .value_kind = signal.value_kind,
+        .systemverilog_scalar = signal.systemverilog_scalar,
+        .event_variable = signal.event_variable,
+        .has_implicit_driver = signal.implicit_driver.has_value(),
+        .has_charge_strength = signal.charge_strength.has_value(),
+    };
+    SignalCold cold {
+        .name = std::move(signal.name),
+        .implicit_driver = std::move(signal.implicit_driver),
+        .implicit_drive_strength = signal.implicit_drive_strength,
+        .charge_strength = std::move(signal.charge_strength),
+        .charge_decay = std::move(signal.charge_decay),
+    };
+    impl_->signals.push_back(std::move(hot));
+    try {
+        impl_->signal_cold.push_back(std::move(cold));
+    } catch (...) {
+        impl_->signals.pop_back();
+        throw;
+    }
+    impl_->switch_endpoint_adjacency.emplace_back();
+    impl_->switch_control_adjacency.emplace_back();
+    impl_->invalidate_switch_components();
     impl_->event_identities.push_back(id);
-    impl_->static_fanout.emplace_back();
+    impl_->event_identity_members.emplace_back();
+    if (impl_->signals.back().event_variable) {
+        impl_->event_identity_members.back().push_back(id);
+    }
     impl_->dynamic_fanout.emplace_back();
     impl_->event_states.emplace_back();
     impl_->signal_events.emplace_back();
     impl_->signal_transactions.emplace_back();
     impl_->signal_container_aliases.emplace_back();
     impl_->signal_value_revisions.push_back(1U);
+    impl_->static_fanout_dirty = true;
     return id;
 }
 
@@ -565,13 +593,6 @@ ProcessId Interpreter::add_process_impl(
             throw std::invalid_argument(
                 "edge sensitivity currently requires a scalar signal");
         }
-        const auto trigger_mask
-            = sensitivity_index < 63U
-                && !process.static_trigger_regions.empty()
-            ? UINT64_C(1) << sensitivity_index
-            : Process::full_static_trigger_mask;
-        impl_->static_fanout[signal.signal].push_back(
-            { id, signal.edge, trigger_mask });
         if (signal.edge == EdgeKind::transaction) {
             observe_signal_transaction(signal.signal);
         }
@@ -706,9 +727,12 @@ ProcessId Interpreter::add_process_impl(
         throw std::overflow_error { "SimIR process generation overflow" };
     }
     state.generation = impl_->next_process_generation++;
-    state.random_state = Impl::initial_random_state(
+    state.id = id;
+    state.cold().random_state = Impl::initial_random_state(
         impl_->root_seed, id);
     state.design_process = id;
+    state.execution_phase = process_execution_phase(
+        process.observed, process.reactive, process.postponed);
     state.static_trigger_mask = process.initialize
         ? Process::full_static_trigger_mask
         : 0U;
@@ -727,14 +751,39 @@ ProcessId Interpreter::add_process_impl(
                         &operation);
                 return read && read->kind != SignalReadKind::current;
             });
-    impl_->has_bidirectional_switches
-        = impl_->has_bidirectional_switches || switch_connection;
-    if (owned_process != nullptr) {
-        state.program = std::move(*owned_process);
-    } else {
-        state.program.id = id;
+    if (switch_connection) {
+        impl_->switch_endpoint_adjacency.resize(impl_->signals.size());
+        impl_->switch_control_adjacency.resize(impl_->signals.size());
+        const auto connection_index = impl_->switch_connections.size();
+        impl_->switch_connections.push_back(Impl::SwitchConnection {
+            .source = *process.switch_source,
+            .target = *process.switch_target,
+            .control = process.switch_control,
+            .source_offset = process.switch_source_offset,
+            .target_offset = process.switch_target_offset,
+            .width = process.switch_width,
+            .active_high = process.switch_active_high,
+            .resistive = process.switch_resistive
+        });
+        impl_->switch_endpoint_adjacency[*process.switch_source]
+            .push_back(connection_index);
+        if (*process.switch_target != *process.switch_source) {
+            impl_->switch_endpoint_adjacency[*process.switch_target]
+                .push_back(connection_index);
+        }
+        if (process.switch_control) {
+            impl_->switch_control_adjacency[*process.switch_control]
+                .push_back(connection_index);
+        }
+        impl_->invalidate_switch_components();
+        impl_->has_bidirectional_switches = true;
     }
+    if (owned_process != nullptr) {
+        state.program() = std::move(*owned_process);
+    }
+    state.program().id = id;
     impl_->processes.push_back(std::move(state));
+    impl_->static_fanout_dirty = true;
     if (owned_process != nullptr) {
         impl_->register_static_sensitivity_cohort(id);
     }
@@ -1135,11 +1184,11 @@ void Interpreter::reannotate_vital_timing(
         definitions;
     for (const auto& annotation : annotations) {
         if (annotation.process >= impl_->processes.size()
-            || impl_->processes[annotation.process].program.id
+            || impl_->processes[annotation.process].id
                 != annotation.process
             || annotation.instruction
                 >= impl_->processes[annotation.process]
-                    .program.operations.size()) {
+                    .program().operations.size()) {
             throw std::invalid_argument {
                 "SimIR VITAL reannotation references a stale call"
             };
@@ -1151,7 +1200,7 @@ void Interpreter::reannotate_vital_timing(
         }
         auto& process = impl_->processes[annotation.process];
         const auto& process_operations
-            = std::as_const(process.program.operations);
+            = std::as_const(process.program().operations);
         const auto& operation
             = process_operations[annotation.instruction];
         if (annotation.timing_check) {
@@ -1226,19 +1275,19 @@ void Interpreter::reannotate_vital_timing(
     }
     for (const auto& replacement : replacements) {
         auto& operation
-            = replacement.process->program.operations[replacement.instruction];
+            = replacement.process->program().operations[replacement.instruction];
         if (replacement.timing_check) {
             auto* check = operation_get_if<VitalTimingCheck>(&operation);
             std::copy_n(replacement.values.begin(), 4U,
                 check->limits.begin());
             if (reset_timing_state) {
-                replacement.process->vital_timing_states.erase(
+                replacement.process->cold().vital_timing_states.erase(
                     replacement.instruction);
             }
             continue;
         }
         for (const auto& definition : replacement.definitions) {
-            replacement.process->program.operations[definition.instruction]
+            replacement.process->program().operations[definition.instruction]
                 = LoadConstant { definition.target,
                       PackedLogic4::from_aval_bval(
                           64U, definition.value, 0U) };
@@ -1279,11 +1328,11 @@ void Interpreter::set_deferred_process_executor(
             "deferred SimIR process executor requires both callbacks");
     }
     auto& state = impl_->get_process(process);
-    if (state.executor || state.deferred_executor) {
+    if (state.executor || state.cold().deferred_executor) {
         throw std::logic_error(
             "a SimIR process executor is already installed or deferred");
     }
-    state.deferred_executor.emplace(
+    state.cold().deferred_executor.emplace(
         Impl::ProcessState::DeferredExecutor {
             std::move(ready), std::move(take) });
 }
@@ -1294,9 +1343,9 @@ void Interpreter::materialize_ready_process_executors()
         return;
     }
     for (auto& process : impl_->processes) {
-        if (!process.executor && process.deferred_executor
+        if (!process.executor && process.cold().deferred_executor
             && Impl::can_install_deferred_executor(process)
-            && process.deferred_executor->ready()) {
+            && process.cold().deferred_executor->ready()) {
             impl_->install_deferred_executor(process);
         }
     }
@@ -1311,6 +1360,7 @@ void Interpreter::start()
     if (impl_->started) {
         return;
     }
+    impl_->rebuild_static_fanout();
     impl_->started = true;
     if (impl_->requires_sampled_values) {
         impl_->sampled_defaults.reserve(impl_->signals.size());
@@ -1360,7 +1410,7 @@ void Interpreter::start()
         for (const auto cohort : cohorts | std::views::take(20U)) {
             const auto& members
                 = impl_->static_sensitivity_cohorts[cohort].members;
-            const auto& first = impl_->processes[members.front()].program;
+            const auto& first = impl_->processes[members.front()].program();
             std::cerr << "  size=" << members.size()
                       << " sensitivity=" << first.static_sensitivity.size()
                       << " first=" << first.name << '\n';
@@ -1371,19 +1421,19 @@ void Interpreter::start()
         impl_->processes.size(), false);
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
         auto& process = impl_->processes[id];
-        if (!process.program.initialize || process.program.final
-            || process.program.static_sensitivity.empty()
-            || process.program.operations.empty()
+        if (!process.program().initialize || process.program().final
+            || process.program().static_sensitivity.empty()
+            || process.program().operations.empty()
             || !operation_holds<WaitSensitivity>(
-                process.program.operations.front())) {
+                process.program().operations.front())) {
             continue;
         }
         impl_->execute(id);
         prearmed_static_waits[id] = true;
     }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-        if (impl_->processes[id].program.initialize
-            && !impl_->processes[id].program.final
+        if (impl_->processes[id].program().initialize
+            && !impl_->processes[id].program().final
             && !prearmed_static_waits[id]) {
             impl_->queue_at(id, impl_->scheduler.now());
         }
@@ -1410,7 +1460,7 @@ RunResult Interpreter::run(std::optional<SimulationTick> until)
         impl_->scheduler.clear_stop();
     }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-        if (impl_->processes[id].program.final) {
+        if (impl_->processes[id].program().final) {
             impl_->queue_at(id, impl_->scheduler.now());
         }
     }
@@ -1453,7 +1503,7 @@ RunResult Interpreter::finish()
     impl_->scheduler.discard_pending();
     impl_->scheduler.clear_stop();
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-        if (impl_->processes[id].program.final) {
+        if (impl_->processes[id].program().final) {
             impl_->queue_at(id, impl_->scheduler.now());
         }
     }
@@ -1632,7 +1682,9 @@ Interpreter::scalar_signal_snapshots() const
         if (stored.systemverilog_scalar == SystemVerilogScalarKind::None) {
             continue;
         }
-        result.push_back({ signal, stored.name, scalar_signal_value(signal) });
+        result.push_back({ signal,
+            impl_->get_signal_cold(signal).name,
+            scalar_signal_value(signal) });
     }
     return result;
 }
@@ -1684,7 +1736,7 @@ ProcessId Interpreter::design_process(const ProcessId process) const
 
 const Process& Interpreter::process_program(const ProcessId process) const
 {
-    return impl_->get_process(process).program;
+    return impl_->get_process(process).program();
 }
 
 InstructionIndex Interpreter::process_instruction(
@@ -1696,20 +1748,20 @@ InstructionIndex Interpreter::process_instruction(
 void Interpreter::track_process_interpreter_operations(
     const ProcessId process)
 {
-    impl_->get_process(process).track_interpreter_operations = true;
+    impl_->get_process(process).cold().track_interpreter_operations = true;
 }
 
 std::uint64_t Interpreter::process_interpreter_operations(
     const ProcessId process) const
 {
-    return impl_->get_process(process).interpreter_operations;
+    return impl_->get_process(process).cold().interpreter_operations;
 }
 
 ProcessId Interpreter::dynamic_process_root(const ProcessId process) const
 {
     auto root = process;
-    while (const auto parent = impl_->get_process(root).fork_parent) {
-        if (!impl_->get_process(*parent).fork_parent) {
+    while (const auto parent = impl_->get_process(root).cold().fork_parent) {
+        if (!impl_->get_process(*parent).cold().fork_parent) {
             return root;
         }
         root = *parent;
@@ -1728,10 +1780,10 @@ PackedLogic4 Interpreter::read_debug_local(
     const std::size_t local_index) const
 {
     auto& state = impl_->get_process(process);
-    if (local_index >= state.program.debug_locals.size()) {
+    if (local_index >= state.program().debug_locals.size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
-    const auto& local = state.program.debug_locals[local_index];
+    const auto& local = state.program().debug_locals[local_index];
     if (state.executor) {
         return state.executor->read_register(
             local.register_id, local.width);
@@ -1749,10 +1801,10 @@ SystemVerilogScalarValue Interpreter::read_debug_scalar_local(
     const std::size_t local_index) const
 {
     auto& state = impl_->get_process(process);
-    if (local_index >= state.program.debug_locals.size()) {
+    if (local_index >= state.program().debug_locals.size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
-    const auto& local = state.program.debug_locals[local_index];
+    const auto& local = state.program().debug_locals[local_index];
     if (local.systemverilog_scalar == SystemVerilogScalarKind::None) {
         throw std::logic_error { "SimIR debug local is not a scalar value" };
     }
@@ -1771,10 +1823,10 @@ void Interpreter::write_debug_scalar_local(
     const SystemVerilogScalarValue value)
 {
     auto& state = impl_->get_process(process);
-    if (local_index >= state.program.debug_locals.size()) {
+    if (local_index >= state.program().debug_locals.size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
-    const auto& local = state.program.debug_locals[local_index];
+    const auto& local = state.program().debug_locals[local_index];
     if (value.kind != local.systemverilog_scalar) {
         throw std::invalid_argument { "SimIR scalar debug-local kind mismatch" };
     }
@@ -1790,10 +1842,10 @@ std::string Interpreter::read_debug_string_local(
     const std::size_t local_index) const
 {
     auto& state = impl_->get_process(process);
-    if (local_index >= state.program.debug_string_locals.size()) {
+    if (local_index >= state.program().debug_string_locals.size()) {
         throw std::out_of_range { "invalid SimIR string debug-local index" };
     }
-    const auto& local = state.program.debug_string_locals[local_index];
+    const auto& local = state.program().debug_string_locals[local_index];
     if (state.executor) {
         return state.executor->read_string_register(local.register_id);
     }
@@ -1806,12 +1858,12 @@ ContainerValue Interpreter::read_debug_container_local(
     const std::size_t local_index) const
 {
     auto& state = impl_->get_process(process);
-    if (local_index >= state.program.debug_container_locals.size()) {
+    if (local_index >= state.program().debug_container_locals.size()) {
         throw std::out_of_range {
             "invalid SimIR container debug-local index"
         };
     }
-    const auto& local = state.program.debug_container_locals[local_index];
+    const auto& local = state.program().debug_container_locals[local_index];
     if (state.executor) {
         return state.executor->read_container_register(local.register_id);
     }

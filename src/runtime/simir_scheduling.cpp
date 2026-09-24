@@ -15,7 +15,7 @@ void Interpreter::Impl::stage_update_unrouted(
     const std::optional<std::size_t> offset)
 {
     if (driver && (process_profile_enabled || update_profile_enabled)) {
-        processes[*driver].profile_updates += 1U;
+        processes[*driver].cold().profile_updates += 1U;
     }
     const auto value_index = pending_update_values.size();
     pending_update_values.push_back(std::move(value));
@@ -886,7 +886,7 @@ void Interpreter::Impl::handle_external_boundary(
     const InstructionIndex next_instruction,
     const ExternalSuspension& suspension)
 {
-    if (instruction >= process.program.operations.size()) {
+    if (instruction >= process.program().operations.size()) {
         process.pc = instruction;
         fail(process, "executor returned an invalid dynamic boundary instruction");
     }
@@ -908,56 +908,57 @@ void Interpreter::Impl::handle_external_boundary(
     case ExternalSuspendKind::wait_for:
         process.status = ProcessStatus::waiting;
         if (suspension.delay == 0) {
-            queue_next_delta(process.program.id);
+            queue_next_delta(process.id);
         } else {
             if (suspension.delay
                 > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
                 process.pc = instruction;
                 fail(process, "simulation time overflow in dynamic wait");
             }
-            queue_at(process.program.id, scheduler.now() + suspension.delay);
+            queue_at(process.id, scheduler.now() + suspension.delay);
         }
         break;
-    case ExternalSuspendKind::wait_on:
+    case ExternalSuspendKind::wait_on: {
         process.status = ProcessStatus::waiting;
         if (suspension.sensitivity.empty()) {
             process.pc = instruction;
             fail(process, "dynamic wait requires at least one event");
         }
         process.waiting_on_signal = true;
-        process.dynamic_sensitivity = suspension.sensitivity;
+        auto& cold = process.cold();
+        cold.dynamic_sensitivity = suspension.sensitivity;
         std::sort(
-            process.dynamic_sensitivity.begin(),
-            process.dynamic_sensitivity.end(),
+            cold.dynamic_sensitivity.begin(),
+            cold.dynamic_sensitivity.end(),
             [](const Sensitivity& lhs, const Sensitivity& rhs) {
                 return lhs.signal < rhs.signal
                     || (lhs.signal == rhs.signal && lhs.edge < rhs.edge);
             });
-        process.dynamic_sensitivity.erase(
+        cold.dynamic_sensitivity.erase(
             std::unique(
-                process.dynamic_sensitivity.begin(),
-                process.dynamic_sensitivity.end()),
-            process.dynamic_sensitivity.end());
-        process.dynamic_wait_all = suspension.wait_all;
-        process.dynamic_triggered.assign(
-            process.dynamic_sensitivity.size(), false);
-        for (const auto& sensitivity : process.dynamic_sensitivity) {
+                cold.dynamic_sensitivity.begin(),
+                cold.dynamic_sensitivity.end()),
+            cold.dynamic_sensitivity.end());
+        cold.dynamic_wait_all = suspension.wait_all;
+        cold.dynamic_triggered.assign(
+            cold.dynamic_sensitivity.size(), false);
+        for (const auto& sensitivity : cold.dynamic_sensitivity) {
             (void)get_signal(sensitivity.signal);
             if (sensitivity.edge != EdgeKind::any) {
                 process.pc = instruction;
                 fail(process, "dynamic event wait must use any-change sensitivity");
             }
-            dynamic_fanout[sensitivity.signal].push_back(
-                { process.program.id, sensitivity.edge });
         }
+        register_dynamic_wait_fanout(process);
         if (suspension.timeout) {
             begin_wait_timeout(
                 process, instruction, *suspension.timeout, std::nullopt);
         }
         break;
+    }
     case ExternalSuspendKind::wait_sensitivity:
         process.status = ProcessStatus::waiting;
-        if (process.program.static_sensitivity.empty()) {
+        if (process.program().static_sensitivity.empty()) {
             process.pc = instruction;
             fail(process, "dynamic static wait has no sensitivity list");
         }
@@ -966,7 +967,7 @@ void Interpreter::Impl::handle_external_boundary(
         break;
     case ExternalSuspendKind::yield:
         process.status = ProcessStatus::waiting;
-        queue_next_delta(process.program.id);
+        queue_next_delta(process.id);
         break;
     case ExternalSuspendKind::halt:
         complete_process(process, ProcessStatus::finished);
@@ -974,13 +975,13 @@ void Interpreter::Impl::handle_external_boundary(
     }
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
-        process.current_source);
+        process.cold().current_source);
 }
 
 [[noreturn]] void Interpreter::Impl::fail(const ProcessState& process,
     const std::string& message) const
 {
-    throw InterpreterError(process.program.id, process.pc, message);
+    throw InterpreterError(process.id, process.pc, message);
 }
 
 } // namespace fsim::runtime::simir

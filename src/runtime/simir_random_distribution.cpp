@@ -300,7 +300,7 @@ void Interpreter::Impl::execute_random_distribution(
     const auto report_warning = [&](const std::string_view message) {
         if (report_hook) {
             report_hook(
-                process.program.id, message, AssertionSeverity::warning,
+                process.id, message, AssertionSeverity::warning,
                 operation.source, scheduler.now(), scheduler.delta());
         }
     };

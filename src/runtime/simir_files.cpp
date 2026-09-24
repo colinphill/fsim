@@ -564,7 +564,7 @@ FileHandle Interpreter::Impl::known_file_handle(
         || word.aval
             > std::numeric_limits<FileHandle>::max()) {
         throw InterpreterError {
-            process.program.id,
+            process.id,
             process.pc,
             "file handle must be a known 32-bit integral value"
         };
@@ -589,7 +589,7 @@ void Interpreter::Impl::execute_file(
             return;
         }
         const auto handle = open_file(
-            process.program.id,
+            process.id,
             get_string_register(process, operation.path),
             get_string_register(process, operation.mode));
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, handle, 0);
@@ -608,7 +608,7 @@ void Interpreter::Impl::execute_file(
             return;
         }
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -620,12 +620,12 @@ void Interpreter::Impl::execute_file(
     try {
         const auto handle = known_file_handle(process, operation.handle);
         if (handle != 0) {
-            close_file(process.program.id, handle);
+            close_file(process.id, handle);
         } else if (!operation.ignore_zero) {
             if (operation.clear_handle) {
                 throw std::runtime_error { "VHDL file object is not open" };
             }
-            close_file(process.program.id, handle);
+            close_file(process.id, handle);
         }
         if (operation.clear_handle) {
             get_register(process, operation.handle) = PackedLogic4::from_aval_bval(32, 0, 0);
@@ -635,7 +635,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -646,7 +646,7 @@ void Interpreter::Impl::execute_file(
 {
     try {
         write_file(
-            process.program.id,
+            process.id,
             known_file_handle(process, operation.handle),
             operation.text,
             operation.newline);
@@ -655,7 +655,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -700,7 +700,7 @@ void Interpreter::Impl::execute_file(
                 operation.scalar_kind);
         }
         write_file(
-            process.program.id,
+            process.id,
             known_file_handle(process, operation.handle),
             text,
             operation.newline);
@@ -709,7 +709,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -720,7 +720,7 @@ void Interpreter::Impl::execute_file(
 {
     try {
         write_file(
-            process.program.id,
+            process.id,
             known_file_handle(process, operation.handle),
             operation.prefix
                 + get_string_register(process, operation.source)
@@ -734,7 +734,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -748,7 +748,7 @@ void Interpreter::Impl::execute_file(
         const auto handle = known_file_handle(process, operation.handle);
         if (operation.kind == FileReadKind::line) {
             std::uint32_t count { };
-            auto line = read_file_line(process.program.id, handle, count);
+            auto line = read_file_line(process.id, handle, count);
             if (operation.vhdl_textio) {
                 if (count == 0) {
                     throw std::runtime_error { "VHDL readline reached end of file" };
@@ -768,21 +768,21 @@ void Interpreter::Impl::execute_file(
                     break;
                 case FileTextTargetKind::packed_signal:
                     commit_driver(
-                        process.program.id, operation.target,
+                        process.id, operation.target,
                         pack_file_text(line, operation.target_width));
                     break;
                 }
             }
             result = static_cast<std::int32_t>(count);
         } else if (operation.kind == FileReadKind::character) {
-            result = read_file_character(process.program.id, handle);
+            result = read_file_character(process.id, handle);
         } else {
             const auto character = get_register(process, operation.source).low_word();
             if (character.bval == 0) {
                 const auto requested = static_cast<std::int32_t>(
                     static_cast<std::uint32_t>(character.aval));
                 result = unread_file_character(
-                             process.program.id, handle, requested)
+                             process.id, handle, requested)
                         == requested
                     ? 0
                     : -1;
@@ -797,7 +797,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -811,15 +811,15 @@ void Interpreter::Impl::execute_file(
         bool eof { };
         if (operation.lookahead) {
             const auto character = read_file_character(
-                process.program.id, handle);
+                process.id, handle);
             eof = character < 0;
-            if (!eof && unread_file_character(process.program.id, handle, character) != character) {
+            if (!eof && unread_file_character(process.id, handle, character) != character) {
                 throw std::runtime_error {
                     "VHDL endfile could not preserve lookahead"
                 };
             }
         } else {
-            eof = file_end_of_file(process.program.id, handle);
+            eof = file_end_of_file(process.id, handle);
         }
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
             operation.lookahead ? 1U : 32U,
@@ -829,7 +829,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -841,7 +841,7 @@ void Interpreter::Impl::execute_file(
     try {
         bool has_error { };
         auto message = file_error(
-            process.program.id,
+            process.id,
             known_file_handle(process, operation.handle),
             has_error);
         switch (operation.target_kind) {
@@ -853,7 +853,7 @@ void Interpreter::Impl::execute_file(
             break;
         case FileTextTargetKind::packed_signal:
             commit_driver(
-                process.program.id, operation.target,
+                process.id, operation.target,
                 pack_file_text(message, operation.target_width));
             break;
         }
@@ -864,7 +864,7 @@ void Interpreter::Impl::execute_file(
         throw;
     } catch (const std::exception& error) {
         throw InterpreterError {
-            process.program.id, process.pc, error.what()
+            process.id, process.pc, error.what()
         };
     }
 }
@@ -884,10 +884,10 @@ void Interpreter::Impl::execute_file(
         } else {
             const auto handle = known_file_handle(process, operation.handle);
             const std::function<std::int32_t()> read = [&] {
-                return read_file_character(process.program.id, handle);
+                return read_file_character(process.id, handle);
             };
             const std::function<void(std::int32_t)> unread = [&](const auto value) {
-                if (unread_file_character(process.program.id, handle, value) != value) {
+                if (unread_file_character(process.id, handle, value) != value) {
                     throw std::runtime_error { "failed to preserve file scan lookahead" };
                 }
             };
@@ -917,7 +917,7 @@ void Interpreter::Impl::execute_file(
                 get_register(process, target.id) = std::move(value.packed);
                 break;
             case InputScanTargetKind::packed_signal:
-                commit_driver(process.program.id, target.id, std::move(value.packed));
+                commit_driver(process.id, target.id, std::move(value.packed));
                 break;
             case InputScanTargetKind::string_register:
                 get_string_register(process, target.id) = std::move(value.text);
@@ -933,7 +933,7 @@ void Interpreter::Impl::execute_file(
     } catch (const InterpreterError&) {
         throw;
     } catch (const std::exception& error) {
-        throw InterpreterError { process.program.id, process.pc, error.what() };
+        throw InterpreterError { process.id, process.pc, error.what() };
     }
 }
 
@@ -957,7 +957,7 @@ void Interpreter::Impl::execute_file(
         }
         const auto handle = known_file_handle(process, operation.handle);
         const std::function<std::int32_t()> read = [&] {
-            return read_file_character(process.program.id, handle);
+            return read_file_character(process.id, handle);
         };
         auto result = read_binary_file(
             operation, std::move(container),
@@ -974,7 +974,7 @@ void Interpreter::Impl::execute_file(
             break;
         case FileBinaryTargetKind::packed_signal:
             commit_driver(
-                process.program.id, operation.target, std::move(result.packed));
+                process.id, operation.target, std::move(result.packed));
             break;
         case FileBinaryTargetKind::container_register:
             get_container_register(process, operation.target) = std::move(*result.container);
@@ -988,7 +988,7 @@ void Interpreter::Impl::execute_file(
     } catch (const InterpreterError&) {
         throw;
     } catch (const std::exception& error) {
-        throw InterpreterError { process.program.id, process.pc, error.what() };
+        throw InterpreterError { process.id, process.pc, error.what() };
     }
 }
 
@@ -1006,7 +1006,7 @@ void Interpreter::Impl::execute_file(
                 static_cast<std::uint32_t>(word.aval));
         };
         const auto result = position_file(
-            process.program.id,
+            process.id,
             known_file_handle(process, operation.handle),
             operation.kind,
             operation.kind == FilePositionKind::seek
@@ -1021,7 +1021,7 @@ void Interpreter::Impl::execute_file(
     } catch (const InterpreterError&) {
         throw;
     } catch (const std::exception& error) {
-        throw InterpreterError { process.program.id, process.pc, error.what() };
+        throw InterpreterError { process.id, process.pc, error.what() };
     }
 }
 
@@ -1030,7 +1030,7 @@ void Interpreter::Impl::execute_file(
 {
     try {
         flush_file(
-            process.program.id,
+            process.id,
             operation.all
                 ? std::nullopt
                 : std::optional { known_file_handle(process, operation.handle) });
@@ -1038,7 +1038,7 @@ void Interpreter::Impl::execute_file(
     } catch (const InterpreterError&) {
         throw;
     } catch (const std::exception& error) {
-        throw InterpreterError { process.program.id, process.pc, error.what() };
+        throw InterpreterError { process.id, process.pc, error.what() };
     }
 }
 

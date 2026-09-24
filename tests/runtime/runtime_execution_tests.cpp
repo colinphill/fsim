@@ -29,6 +29,140 @@ namespace {
         }
     }
 
+    void verify_simir_transaction_sensitive_fanout()
+    {
+        using namespace fsim::runtime;
+        using namespace fsim::runtime::simir;
+
+        Interpreter interpreter;
+        const auto watched = interpreter.add_signal(
+            { "fanout.watched", PackedLogic4::from_msb_string("0") });
+        const auto transaction_count = interpreter.add_signal(
+            { "fanout.transaction_count",
+                PackedLogic4::from_msb_string("00") });
+        const auto value_edge_count = interpreter.add_signal(
+            { "fanout.value_edge_count", PackedLogic4::from_msb_string("00") });
+        const auto last_active = interpreter.add_signal(
+            { "fanout.last_active",
+                PackedLogic4::from_aval_bval(64, 1, 0) });
+        const auto transaction_time = interpreter.add_signal(
+            { "fanout.transaction_time",
+                PackedLogic4::from_aval_bval(64, 0, 0) });
+
+        Process transaction_observer;
+        transaction_observer.id = 0;
+        transaction_observer.name = "transaction_sensitive_observer";
+        transaction_observer.register_count = 6;
+        transaction_observer.static_sensitivity = {
+            { watched, EdgeKind::transaction }
+        };
+        transaction_observer.operations = {
+            WaitSensitivity { },
+            SignalActive { 0, watched },
+            Branch { 0, 3, 7 },
+            ReadSignal { 1, transaction_count },
+            LoadConstant { 2, PackedLogic4::from_msb_string("01") },
+            Binary { BinaryOperator::add_unsigned, 3, 1, 2 },
+            WriteBlocking { transaction_count, 3 },
+            SignalLastActive { 4, watched },
+            WriteBlocking { last_active, 4 },
+            ReadSimulationTime { 5 },
+            WriteBlocking { transaction_time, 5 },
+            Jump { 0 },
+        };
+        (void)interpreter.add_process(std::move(transaction_observer));
+
+        Process value_edge_observer;
+        value_edge_observer.id = 1;
+        value_edge_observer.name = "value_edge_observer";
+        value_edge_observer.register_count = 3;
+        value_edge_observer.static_sensitivity = {
+            { watched, EdgeKind::any }
+        };
+        value_edge_observer.operations = {
+            WaitSensitivity { },
+            ReadSignal { 0, value_edge_count },
+            LoadConstant { 1, PackedLogic4::from_msb_string("01") },
+            Binary { BinaryOperator::add_unsigned, 2, 0, 1 },
+            WriteBlocking { value_edge_count, 2 },
+            Jump { 0 },
+        };
+        (void)interpreter.add_process(std::move(value_edge_observer));
+
+        Process driver;
+        driver.id = 2;
+        driver.name = "transaction_sensitive_driver";
+        driver.register_count = 2;
+        driver.operations = {
+            LoadConstant { 0, PackedLogic4::from_msb_string("0") },
+            LoadConstant { 1, PackedLogic4::from_msb_string("1") },
+            WaitFor { 1 },
+            WriteBlocking { watched, 0 },
+            WaitFor { 1 },
+            WriteBlocking { watched, 0 },
+            WaitFor { 1 },
+            WriteBlocking { watched, 1 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(driver));
+
+        struct ObservedChange {
+            SignalId signal { };
+            SimulationTick time { };
+            std::string value;
+        };
+        std::vector<ObservedChange> fanout_order;
+        std::vector<std::pair<std::uint64_t, SimulationTick>> timestamps;
+        interpreter.set_signal_change_hook(
+            [&](const SignalId signal,
+                const PackedLogic4& value,
+                const SimulationTick time) {
+                if (signal == transaction_count
+                    || signal == value_edge_count) {
+                    fanout_order.push_back(
+                        { signal, time, value.to_msb_string() });
+                }
+                if (signal == transaction_time) {
+                    timestamps.emplace_back(value.low_word().aval, time);
+                }
+            });
+
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed && result.time == 3,
+            "transaction and value-edge observers complete at the final write");
+        require(
+            interpreter.signal_value(transaction_count).to_msb_string()
+                    == "11"
+                && interpreter.signal_value(value_edge_count).to_msb_string()
+                    == "01",
+            "same-value writes wake transaction observers without value-edge fanout");
+        require(
+            interpreter.signal_value(last_active).low_word().aval == 0U,
+            "SignalLastActive reports the latest same-value transaction time");
+        require(
+            timestamps
+                == std::vector<std::pair<std::uint64_t, SimulationTick>> {
+                    { 1, 1 }, { 2, 2 }, { 3, 3 }
+                },
+            "transaction observers read each transaction timestamp");
+        require(
+            fanout_order.size() == 4U
+                && fanout_order[0].signal == transaction_count
+                && fanout_order[0].time == 1
+                && fanout_order[0].value == "01"
+                && fanout_order[1].signal == transaction_count
+                && fanout_order[1].time == 2
+                && fanout_order[1].value == "10"
+                && fanout_order[2].signal == transaction_count
+                && fanout_order[2].time == 3
+                && fanout_order[2].value == "11"
+                && fanout_order[3].signal == value_edge_count
+                && fanout_order[3].time == 3
+                && fanout_order[3].value == "01",
+            "transaction and value-edge fanout retain stable process order");
+    }
+
 } // namespace
 
 void test_checked_vhdl_integer_operations()
@@ -552,10 +686,110 @@ void test_simir_force_release()
         "final selected release must reveal the complete underlying value");
 }
 
+void test_simir_event_alias_lifecycle()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    Interpreter interpreter;
+    Signal first_signal {
+        "event_alias.first", PackedLogic4::from_msb_string("0")
+    };
+    first_signal.event_variable = true;
+    const auto first = interpreter.add_signal(std::move(first_signal));
+    Signal replacement_signal {
+        "event_alias.replacement", PackedLogic4::from_msb_string("0")
+    };
+    replacement_signal.event_variable = true;
+    const auto replacement = interpreter.add_signal(
+        std::move(replacement_signal));
+    Signal alias_signal {
+        "event_alias.alias", PackedLogic4::from_msb_string("0")
+    };
+    alias_signal.event_variable = true;
+    const auto alias = interpreter.add_signal(std::move(alias_signal));
+    const auto after_rebind = interpreter.add_signal(
+        { "event_alias.after_rebind", PackedLogic4::from_msb_string("0") });
+    const auto after_stale_identity = interpreter.add_signal(
+        { "event_alias.after_stale_identity",
+            PackedLogic4::from_msb_string("1") });
+    const auto after_clear = interpreter.add_signal(
+        { "event_alias.after_clear", PackedLogic4::from_msb_string("0") });
+    const auto cleared_triggered = interpreter.add_signal(
+        { "event_alias.cleared_triggered",
+            PackedLogic4::from_msb_string("1") });
+
+    Process waiter;
+    waiter.id = 0;
+    waiter.name = "event_alias_rebinding_waiter";
+    waiter.register_count = 1;
+    waiter.operations = {
+        EventAlias { alias, first, true },
+        WaitOn { { alias } },
+        EventAlias { alias, replacement, true },
+        WaitOn { { alias } },
+        ReadSignal { 0, alias },
+        WriteBlocking { after_rebind, 0 },
+        EventAlias { alias, 0U, false },
+        WaitOn { { replacement } },
+        EventTriggered { 0, alias },
+        WriteBlocking { cleared_triggered, 0 },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(waiter));
+
+    Process observer;
+    observer.id = 1;
+    observer.name = "event_alias_stale_identity_observer";
+    observer.register_count = 1;
+    observer.operations = {
+        WaitFor { 3 },
+        ReadSignal { 0, alias },
+        WriteBlocking { after_stale_identity, 0 },
+        WaitFor { 3 },
+        ReadSignal { 0, alias },
+        WriteBlocking { after_clear, 0 },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(observer));
+
+    Process driver;
+    driver.id = 2;
+    driver.name = "event_alias_lifecycle_driver";
+    driver.register_count = 2;
+    driver.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("0") },
+        LoadConstant { 1, PackedLogic4::from_msb_string("1") },
+        WaitFor { 1 },
+        WriteBlocking { first, 0 },
+        WaitFor { 1 },
+        WriteBlocking { first, 1 },
+        WaitFor { 2 },
+        WriteBlocking { replacement, 1 },
+        WaitFor { 1 },
+        WriteBlocking { replacement, 0 },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(driver));
+
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed && result.time == 6
+            && interpreter.signal_value(after_rebind).to_msb_string() == "1"
+            && interpreter.signal_value(after_stale_identity)
+                   .to_msb_string() == "0"
+            && interpreter.signal_value(after_clear).to_msb_string() == "1"
+            && interpreter.signal_value(cleared_triggered)
+                   .to_msb_string() == "0",
+        "event alias membership must follow rebinding, reject stale identities, and clear null aliases");
+}
+
 void test_simir_wait_order()
 {
     using namespace fsim::runtime;
     using namespace fsim::runtime::simir;
+
+    test_simir_event_alias_lifecycle();
 
     {
         Interpreter interpreter;
@@ -662,6 +896,63 @@ void test_simir_wait_order()
                     == "0",
             "wait_order reports an out-of-order listed event");
     }
+
+    {
+        Interpreter interpreter;
+        Signal event_signal {
+            "order.rearmed_event", PackedLogic4::from_msb_string("0")
+        };
+        event_signal.event_variable = true;
+        const auto event = interpreter.add_signal(std::move(event_signal));
+        const auto observed = interpreter.add_signal(
+            { "order.rearmed_success", PackedLogic4::from_msb_string("0") });
+
+        Process waiter;
+        waiter.id = 0;
+        waiter.name = "wait_order_rearmed_registration";
+        waiter.register_count = 1;
+        waiter.operations = {
+            WaitOn { { event } },
+            WaitOrder { { event, event }, 0 },
+            WriteBlocking { observed, 0 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(waiter));
+
+        Process keeper;
+        keeper.id = 1;
+        keeper.name = "wait_order_registration_keeper";
+        keeper.operations = {
+            WaitOn { { event } },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(keeper));
+
+        Process driver;
+        driver.id = 2;
+        driver.name = "wait_order_rearmed_registration_driver";
+        driver.register_count = 1;
+        driver.operations = {
+            LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+            WaitFor { 1 },
+            WriteBlocking { event, 0 },
+            WaitFor { 1 },
+            WriteBlocking { event, 0 },
+            WaitFor { 1 },
+            WriteBlocking { event, 0 },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(driver));
+
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed
+                && result.time == 3
+                && interpreter.signal_value(observed).to_msb_string() == "1",
+            "a removed WaitOn registration must not count twice after a WaitOrder rearm");
+    }
+
+    verify_simir_transaction_sensitive_fanout();
 }
 
 void test_simir_postponed_process_ordering()
@@ -1369,6 +1660,93 @@ void test_simir_alternate_executor_dynamic_wait()
                 != std::string_view::npos,
             "dynamic edge width diagnostic");
     }
+
+    Interpreter wait_pla_rearm;
+    ContainerType memory_type;
+    memory_type.fixed = true;
+    memory_type.dimensions.emplace_back(0, 0);
+    const auto memory = wait_pla_rearm.add_container_object({
+        "top.memory",
+        ContainerValue {
+            memory_type,
+            { PackedLogic4::from_msb_string("0") },
+            { }
+        },
+        std::nullopt
+    });
+    const auto zero_value = wait_pla_rearm.add_container_object({
+        "top.zero_value",
+        ContainerValue {
+            memory_type,
+            { PackedLogic4::from_msb_string("0") },
+            { }
+        },
+        std::nullopt
+    });
+    const auto one_value = wait_pla_rearm.add_container_object({
+        "top.one_value",
+        ContainerValue {
+            memory_type,
+            { PackedLogic4::from_msb_string("1") },
+            { }
+        },
+        std::nullopt
+    });
+    const auto wait_pla_observed = wait_pla_rearm.add_signal(
+        { "top.wait_pla_observed", PackedLogic4::from_msb_string("0") });
+
+    Process wait_pla_waiter;
+    wait_pla_waiter.id = 0;
+    wait_pla_waiter.name = "wait_pla_rearm_waiter";
+    wait_pla_waiter.register_count = 1;
+    wait_pla_waiter.operations = {
+        WaitPla { memory, { } },
+        LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+        WriteBlocking { wait_pla_observed, 0 },
+        WaitPla { memory, { } },
+        LoadConstant { 0, PackedLogic4::from_msb_string("0") },
+        WriteBlocking { wait_pla_observed, 0 },
+        Halt { },
+    };
+    (void)wait_pla_rearm.add_process(std::move(wait_pla_waiter));
+
+    Process wait_pla_driver;
+    wait_pla_driver.id = 1;
+    wait_pla_driver.name = "wait_pla_rearm_driver";
+    wait_pla_driver.container_register_count = 1;
+    wait_pla_driver.container_register_types = { memory_type };
+    wait_pla_driver.operations = {
+        WaitFor { 1 },
+        ReadContainerObject { 0, one_value },
+        WriteContainerObject { memory, 0, std::nullopt },
+        WaitFor { 1 },
+        ReadContainerObject { 0, zero_value },
+        WriteContainerObject { memory, 0, std::nullopt },
+        Halt { },
+    };
+    (void)wait_pla_rearm.add_process(std::move(wait_pla_driver));
+
+    std::vector<Change> wait_pla_changes;
+    wait_pla_rearm.set_signal_change_hook(
+        [&](const SignalId signal,
+            const PackedLogic4& value,
+            const SimulationTick time) {
+            if (signal == wait_pla_observed) {
+                wait_pla_changes.push_back(
+                    { time, wait_pla_rearm.scheduler().delta(),
+                        value.to_msb_string() });
+            }
+        });
+    const auto wait_pla_result = wait_pla_rearm.run();
+    require(
+        wait_pla_result.status == RunStatus::completed
+            && wait_pla_result.time == 2
+            && wait_pla_changes.size() == 2U
+            && wait_pla_changes[0].time == 1
+            && wait_pla_changes[0].value == "1"
+            && wait_pla_changes[1].time == 2
+            && wait_pla_changes[1].value == "0",
+        "WaitPla must remove and re-register one container waiter per rearm");
 }
 
 void test_simir_timed_dynamic_wait_rearm()

@@ -205,6 +205,96 @@ Capture execute(
   return capture;
 }
 
+struct AliasRebindingCapture {
+  fsim::runtime::RunResult result;
+  std::string first_caught;
+  std::string second_caught;
+  std::string second_caught_before_replacement;
+  std::size_t compiled_processes{};
+};
+
+AliasRebindingCapture execute_alias_rebinding(
+    fsim::app::BuiltProject project,
+    const fsim::app::SimulationEngine engine) {
+  fsim::app::Simulation simulation{std::move(project), 1000, engine};
+  const auto first_caught =
+      simulation.find_signal("event_alias_rebinding_test.first_caught");
+  const auto second_caught =
+      simulation.find_signal("event_alias_rebinding_test.second_caught");
+  const auto second_caught_before_replacement = simulation.find_signal(
+      "event_alias_rebinding_test.second_caught_before_replacement");
+  assert(first_caught && second_caught && second_caught_before_replacement);
+
+  AliasRebindingCapture capture;
+  capture.compiled_processes = simulation.compiled_process_count();
+  capture.result = simulation.run();
+  capture.first_caught =
+      simulation.read_signal(*first_caught).to_msb_string();
+  capture.second_caught =
+      simulation.read_signal(*second_caught).to_msb_string();
+  capture.second_caught_before_replacement =
+      simulation.read_signal(*second_caught_before_replacement)
+          .to_msb_string();
+  return capture;
+}
+
+void test_event_alias_rebinding(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "event-alias-rebinding-test";
+  config.project.top = "sv:work.event_alias_rebinding_test";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "alias-rebinding-cache-o0"
+             : "alias-rebinding-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2023";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project = fsim::app::build_project(config, diagnostics);
+  auto compiled_project = fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(reference_project && compiled_project);
+
+  const auto reference = execute_alias_rebinding(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto compiled = execute_alias_rebinding(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled);
+  for (const auto* capture : {&reference, &compiled}) {
+    assert(capture->result.status == fsim::runtime::RunStatus::stopped);
+    assert(capture->result.time == 4);
+    assert(capture->first_caught == "1");
+    assert(capture->second_caught == "1");
+    assert(capture->second_caught_before_replacement == "0");
+  }
+#if defined(FSIM_HAS_LLVM)
+  assert(reference.compiled_processes == 0);
+  assert(compiled.compiled_processes > 0);
+#else
+  assert(reference.compiled_processes == 0);
+  assert(compiled.compiled_processes == 0);
+#endif
+}
+
 void test_named_events(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
@@ -316,6 +406,8 @@ int main() {
       / ("fsim-named-event-test-" + std::to_string(nonce))};
   std::filesystem::create_directories(directory.path);
   const auto source = directory.path / "named_event_test.sv";
+  const auto alias_rebinding_source =
+      directory.path / "event_alias_rebinding_test.sv";
   {
     std::ofstream output(source);
     output << R"(
@@ -476,11 +568,49 @@ module named_event_test;
 endmodule
 )";
   }
+  {
+    std::ofstream output(alias_rebinding_source);
+    output << R"(
+module event_alias_rebinding_test;
+  event original_event;
+  event replacement_event;
+  event event_alias;
+  bit first_caught;
+  bit second_caught;
+  bit second_caught_before_replacement;
+
+  initial begin
+    event_alias = original_event;
+    @(event_alias);
+    first_caught = 1'b1;
+    event_alias = replacement_event;
+    @(event_alias);
+    second_caught = 1'b1;
+  end
+
+  initial begin
+    #1 -> original_event;
+    #1 -> original_event;
+    #0 second_caught_before_replacement = second_caught;
+    #1 -> replacement_event;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
 
   test_named_events(
       directory.path, source, fsim::project::Optimization::o0);
   test_named_events(
       directory.path, source, fsim::project::Optimization::o2);
+  test_event_alias_rebinding(
+      directory.path,
+      alias_rebinding_source,
+      fsim::project::Optimization::o0);
+  test_event_alias_rebinding(
+      directory.path,
+      alias_rebinding_source,
+      fsim::project::Optimization::o2);
   std::cout << "named event application tests passed\n";
   return 0;
 }

@@ -19,7 +19,7 @@ template <typename Owner>
     const ProcessId process,
     const SignalId signal) {
   static_cast<void>(owner.get_signal(signal));
-  const auto& regions = owner.get_process(process).program.driver_regions;
+  const auto& regions = owner.get_process(process).program().driver_regions;
   return std::ranges::any_of(regions, [signal](const auto& region) {
     return region.signal == signal;
   });

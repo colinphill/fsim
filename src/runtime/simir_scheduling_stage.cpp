@@ -61,20 +61,48 @@ void Interpreter::Impl::schedule_update_commit()
             if (update_profile_enabled) {
                 ++update_profile_commits;
             }
-            bool has_non_switch_update { };
             if (has_bidirectional_switches) {
-                has_non_switch_update = std::ranges::any_of(
-                    pending_updates, [&](const PendingUpdate& update) {
-                        return !update.driver_present()
-                            || !switch_process(update.driver);
-                    });
-            }
-            if (has_non_switch_update) {
-                reset_switch_drivers();
+                for (const auto& update : pending_updates) {
+                    if (update.driver_present()
+                        && switch_process(update.driver)) {
+                        const auto& connection
+                            = get_process(update.driver).program();
+                        if (connection.switch_source) {
+                            mark_switch_network_dirty(
+                                *connection.switch_source);
+                        }
+                        if (connection.switch_target) {
+                            mark_switch_network_dirty(
+                                *connection.switch_target);
+                        }
+                    } else {
+                        mark_switch_network_dirty(
+                            update.signal, true);
+                    }
+                }
+                for (const auto component : dirty_switch_components) {
+                    if (switch_components[component]
+                            .has_non_switch_update) {
+                        reset_switch_drivers(component);
+                    }
+                }
                 std::erase_if(
                     pending_updates, [&](const PendingUpdate& update) {
-                        return update.driver_present()
-                            && switch_process(update.driver);
+                        if (!update.driver_present()
+                            || !switch_process(update.driver)) {
+                            return false;
+                        }
+                        const auto& connection
+                            = get_process(update.driver).program();
+                        if (!connection.switch_source) {
+                            return false;
+                        }
+                        const auto component
+                            = switch_component_by_signal.at(
+                                *connection.switch_source);
+                        return component != no_switch_component
+                            && switch_components[component]
+                                .has_non_switch_update;
                     });
             }
             if (unresolved_update_scratch.size() < signals.size()) {
@@ -123,8 +151,8 @@ void Interpreter::Impl::schedule_update_commit()
                         if (signal.resolution == ResolutionKind::sv_wire
                             && values.size() == 1U
                             && !external_driver_values[pending.signal]
-                            && !signal.implicit_driver
-                            && !signal.charge_strength) {
+                            && !signal.has_implicit_driver
+                            && !signal.has_charge_strength) {
                             ++update_profile_resolved_single_driver;
                         }
                     }
@@ -134,7 +162,7 @@ void Interpreter::Impl::schedule_update_commit()
                     : std::nullopt;
                 if (has_bidirectional_switches
                     && driver && switch_process(*driver)) {
-                    const auto& connection = get_process(*driver).program;
+                    const auto& connection = get_process(*driver).program();
                     if (connection.switch_source) {
                         mark_resolved(*connection.switch_source);
                     }
@@ -158,11 +186,17 @@ void Interpreter::Impl::schedule_update_commit()
                     }
                     destination = &*staged;
                 } else {
-                    const auto& direct_route
-                        = direct_single_driver_routes[pending.signal];
+                    const auto* direct_record
+                        = direct_single_driver_record(pending.signal);
+                    const bool switch_endpoint
+                        = has_bidirectional_switches
+                        && pending.signal
+                            < switch_endpoint_adjacency.size()
+                        && !switch_endpoint_adjacency[pending.signal].empty();
                     const bool direct_single_driver
-                        = driver && direct_route.value != nullptr
-                        && direct_route.process == *driver
+                        = !switch_endpoint && driver
+                        && direct_record != nullptr
+                        && direct_record->process == *driver
                         && !external_driver_values[pending.signal]
                         && !forced_driver_values[pending.signal];
                     if (direct_single_driver) {
@@ -175,7 +209,7 @@ void Interpreter::Impl::schedule_update_commit()
                                 staged.emplace(pending_value(pending));
                                 continue;
                             }
-                            staged.emplace(*direct_route.value);
+                            staged.emplace(direct_record->value);
                         }
                         destination = &*staged;
                     } else {
@@ -222,14 +256,6 @@ void Interpreter::Impl::schedule_update_commit()
                     *destination = pending_value(pending);
                 }
             }
-            if (has_non_switch_update) {
-                for (const auto& state : processes) {
-                    if (!state.program.switch_bidirectional)
-                        continue;
-                    mark_resolved(*state.program.switch_source);
-                    mark_resolved(*state.program.switch_target);
-                }
-            }
             pending_updates.clear();
             pending_update_values.clear();
             update_commit_scheduled = false;
@@ -244,7 +270,8 @@ void Interpreter::Impl::schedule_update_commit()
                 const auto process = staged.process;
                 staged.active = 0U;
                 const auto& route = direct_single_driver_routes[signal];
-                if (route.value == nullptr || route.process != process
+                if (!route.active || route.process != process
+                    || direct_single_driver_record(signal) == nullptr
                     || external_driver_values[signal]
                     || forced_driver_values[signal]) {
                     set_driver(
@@ -269,10 +296,20 @@ void Interpreter::Impl::schedule_update_commit()
                     return;
                 }
                 materialize_direct_signal(signal);
+                auto* record = direct_single_driver_record(signal);
+                if (record == nullptr) {
+                    set_driver(
+                        process,
+                        signal,
+                        PackedLogic4::from_aval_bval(
+                            value.width, value.aval, value.bval));
+                    mark_resolved(signal);
+                    return;
+                }
                 const bool driver_changed
-                    = !route.value->matches_word(value, 0U);
+                    = !record->value.matches_word(value, 0U);
                 if (driver_changed) {
-                    route.value->assign_word(value);
+                    record->value.assign_word(value);
                     if (driver_change_hook) {
                         driver_change_hook(process, signal, scheduler.now());
                     }
@@ -316,23 +353,13 @@ void Interpreter::Impl::schedule_update_commit()
                 const auto written_mask = staged.mask;
                 staged.active = 0U;
                 staged.mask = 0U;
-                const auto& route = direct_single_driver_routes[signal];
                 if (!can_publish_native_logic9_word(signal, process)
-                    || route.value == nullptr
-                    || route.process != process) {
-                    auto driver = route.value != nullptr
-                            && route.process == process
-                        ? route.value
-                        : [&]() -> PackedLogic4* {
-                              const auto found
-                                  = driver_values[signal].find(process);
-                              return found == driver_values[signal].end()
-                                  ? nullptr
-                                  : &found->second;
-                          }();
+                    || direct_single_driver_record(signal) == nullptr) {
+                    auto* record = driver_values[signal].find(process);
                     auto merged = value;
-                    if (driver != nullptr && written_mask != 0U) {
-                        const auto previous = driver->logic9_low_word();
+                    if (record != nullptr && written_mask != 0U) {
+                        const auto previous
+                            = record->value.logic9_low_word();
                         for (std::size_t plane = 0U;
                             plane < merged.planes.size(); ++plane) {
                             merged.planes[plane]
@@ -353,14 +380,15 @@ void Interpreter::Impl::schedule_update_commit()
             for (const auto signal : direct_single_driver_update_signals) {
                 auto& staged = unresolved_update_scratch[signal];
                 auto& values = driver_values[signal];
-                if (!staged || values.size() != 1U) {
+                auto* record = values.sole();
+                if (!staged || record == nullptr) {
                     throw std::logic_error {
                         "direct single-driver update lost its staged value"
                     };
                 }
-                const auto process = values.begin()->first;
-                if (values.begin()->second != *staged) {
-                    values.begin()->second = *staged;
+                const auto process = record->process;
+                if (record->value != *staged) {
+                    record->value = *staged;
                     if (driver_change_hook) {
                         driver_change_hook(process, signal, scheduler.now());
                     }
@@ -523,7 +551,7 @@ void Interpreter::Impl::stage_update_words(
     const std::span<const ProcessUpdateWord> updates)
 {
     if (process_profile_enabled || update_profile_enabled) {
-        processes[process].profile_updates += updates.size();
+        processes[process].cold().profile_updates += updates.size();
     }
     pending_updates.reserve(pending_updates.size() + updates.size());
     bool staged { };
@@ -603,7 +631,7 @@ void Interpreter::Impl::stage_validated_update_words(
         return;
     }
     if (process_profile_enabled || update_profile_enabled) {
-        processes[process].profile_updates += updates.size();
+        processes[process].cold().profile_updates += updates.size();
     }
     if (unresolved_update_scratch.size() < signals.size()) {
         unresolved_update_scratch.resize(signals.size());
@@ -633,8 +661,8 @@ void Interpreter::Impl::stage_validated_update_words(
                 if (signal.resolution == ResolutionKind::sv_wire
                     && values.size() == 1U
                     && !external_driver_values[update.signal]
-                    && !signal.implicit_driver
-                    && !signal.charge_strength) {
+                    && !signal.has_implicit_driver
+                    && !signal.has_charge_strength) {
                     ++update_profile_resolved_single_driver;
                 }
             }
@@ -663,17 +691,18 @@ void Interpreter::Impl::stage_validated_update_words(
             continue;
         }
 
-        const auto& direct_route = direct_single_driver_routes[update.signal];
+        const auto* direct_record
+            = direct_single_driver_record(update.signal);
         const bool direct_single_driver
-            = direct_route.value != nullptr
-            && direct_route.process == process
+            = direct_record != nullptr
+            && direct_record->process == process
             && !external_driver_values[update.signal]
             && !forced_driver_values[update.signal];
         if (!disable_direct_word_commit && direct_single_driver
-            && direct_route.value->width() <= 64U) {
+            && direct_record->value.width() <= 64U) {
             auto& staged = direct_single_driver_word_scratch[update.signal];
             const auto direct_width = static_cast<std::uint32_t>(
-                direct_route.value->width());
+                direct_record->value.width());
             const auto current = staged.active != 0U
                 ? Logic4Word { staged.width, staged.aval, staged.bval }
                 : Logic4Word {
@@ -721,10 +750,14 @@ void Interpreter::Impl::stage_validated_update_words(
             continue;
         }
         if (direct_single_driver) {
+            // The native word path may have left the packed driver and
+            // published value behind their direct planes. The fallback below
+            // merges slices into those packed values.
+            materialize_direct_signal(update.signal);
             auto& staged = unresolved_update_scratch[update.signal];
             const auto& current = staged
                 ? *staged
-                : *direct_route.value;
+                : direct_record->value;
             if (!signal_transaction_observed[update.signal]
                 && current.matches_word(
                     update.value, offset.value_or(0U))) {
@@ -746,7 +779,7 @@ void Interpreter::Impl::stage_validated_update_words(
                     staged_any = true;
                     continue;
                 }
-                staged.emplace(driver_values[update.signal].begin()->second);
+                staged.emplace(direct_record->value);
             }
             if (offset) {
                 staged->insert_word(update.value, *offset);
@@ -1037,10 +1070,11 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
 
             const auto signal = slot.signal;
             const bool complete_slot = slot_full(slot);
-            const auto& direct_route = direct_single_driver_routes[signal];
+            const auto* direct_record
+                = direct_single_driver_record(signal);
             const bool direct_single_driver
-                = direct_route.value != nullptr
-                && direct_route.process == batch.process
+                = direct_record != nullptr
+                && direct_record->process == batch.process
                 && !external_driver_values[signal]
                 && !forced_driver_values[signal];
             if (!disable_direct_word_commit && direct_single_driver
@@ -1098,8 +1132,16 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
             }
             if (direct_single_driver) {
                 materialize_direct_signal(signal);
+                auto* record = direct_single_driver_record(signal);
+                if (record == nullptr
+                    || record->process != batch.process) {
+                    throw std::logic_error {
+                        "direct driver route changed during materialization"
+                    };
+                }
                 auto& staged = unresolved_update_scratch[signal];
-                const auto& current = staged ? *staged : *direct_route.value;
+                const auto& current
+                    = staged ? *staged : record->value;
                 if (!signal_transaction_observed[signal]
                     && slot_matches(current, slot)) {
                     if (native_update_profile_enabled) {
@@ -1114,7 +1156,7 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
                     if (complete_slot) {
                         staged.emplace(materialize_slot(slot));
                     } else {
-                        staged.emplace(*direct_route.value);
+                        staged.emplace(record->value);
                         merge_slot(*staged, slot);
                     }
                 } else {
@@ -1303,6 +1345,8 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         if (profile.enabled) {
             ++profile.active_slots;
         }
+        const auto* direct_record
+            = direct_single_driver_record(slot.signal);
         if (slot.planes == nullptr || slot.signal >= signals.size()
             || slot.signal >= direct_single_driver_routes.size()
             || slot.width == 0U || slot.width > 64U
@@ -1312,9 +1356,8 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
             // Adding it from inside the direct-word commit is one phase late.
             || signals[slot.signal].resolution != ResolutionKind::none
             || signals[slot.signal].initial_value.width() != slot.width
-            || direct_single_driver_routes[slot.signal].value == nullptr
-            || direct_single_driver_routes[slot.signal].process
-                != batch.process) {
+            || direct_record == nullptr
+            || direct_record->process != batch.process) {
             consumed_all = false;
             if (profile.enabled) {
                 ++profile.rejected_slot;

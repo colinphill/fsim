@@ -272,7 +272,7 @@ void Interpreter::Impl::build_native_static_regions()
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
     for (std::size_t id = 0; id < processes.size(); ++id) {
         auto& state = processes[id];
-        const auto& process = state.program;
+        const auto& process = state.program();
         const auto cohort = id < static_sensitivity_cohort_by_process.size()
             ? static_sensitivity_cohort_by_process[id]
             : no_cohort;
@@ -290,9 +290,9 @@ void Interpreter::Impl::build_native_static_regions()
         if (!static_region_shape) {
             continue;
         }
-        if (!state.executor && state.deferred_executor
+        if (!state.executor && state.cold().deferred_executor
             && can_install_deferred_executor(state)
-            && state.deferred_executor->ready()) {
+            && state.cold().deferred_executor->ready()) {
             install_deferred_executor(state);
         }
         candidate[id] = state.executor
@@ -321,11 +321,11 @@ void Interpreter::Impl::build_native_static_regions()
             continue;
         }
         std::set<SignalId> outputs;
-        for (const auto& driver : processes[id].program.driver_regions) {
+        for (const auto& driver : processes[id].program().driver_regions) {
             outputs.insert(driver.signal);
         }
         if (outputs.empty()) {
-            for (const auto& operation : processes[id].program.operations) {
+            for (const auto& operation : processes[id].program().operations) {
                 if (const auto signal = output_signal(operation)) {
                     outputs.insert(*signal);
                 }
@@ -336,7 +336,7 @@ void Interpreter::Impl::build_native_static_regions()
                     signal, static_cast<ProcessId>(id))) {
                 continue;
             }
-            for (const auto& fanout : static_fanout[signal]) {
+            for (const auto& fanout : static_fanout_for(signal)) {
                 const auto target
                     = static_cast<std::size_t>(fanout.process);
                 if (fanout.edge == EdgeKind::any
@@ -397,6 +397,14 @@ std::size_t Interpreter::Impl::execute_native_static_region(
     auto& region = native_static_regions[region_id];
     std::ranges::fill(region.active, UINT8_C(0));
     region.ready_offsets.clear();
+    struct ClearOffsets {
+        std::vector<std::size_t>& offsets;
+
+        ~ClearOffsets()
+        {
+            offsets.clear();
+        }
+    } clear_offsets { region.ready_offsets };
     for (const auto id : ready) {
         if (id >= native_static_region_by_process.size()
             || native_static_region_by_process[id] != region_id) {
@@ -411,9 +419,9 @@ std::size_t Interpreter::Impl::execute_native_static_region(
              ++offset) {
             auto& state = get_process(region.members[offset]);
             restore_callable_context(state);
-            if (!state.executor && state.deferred_executor
+            if (!state.executor && state.cold().deferred_executor
                 && can_install_deferred_executor(state)
-                && state.deferred_executor->ready()) {
+                && state.cold().deferred_executor->ready()) {
                 install_deferred_executor(state);
             }
             if (!state.executor
@@ -507,16 +515,16 @@ void Interpreter::Impl::execute_vhdl_report(
     }
     const auto formatted = format_vhdl_assert_message(
         vhdl_assert_formats[level], message, severity,
-        process.program.name, scheduler.now(),
+        process.program().name, scheduler.now(),
         time_format.resolution_femtoseconds);
     if (report_hook) {
         report_hook(
-            process.program.id, formatted, severity, source,
+            process.id, formatted, severity, source,
             scheduler.now(), scheduler.delta());
     }
     if (severity == AssertionSeverity::failure) {
         throw AssertionError(
-            process.program.id, instruction,
+            process.id, instruction,
             formatted.empty()
                 ? (standalone ? "report failure" : "assertion failed")
                 : formatted,
@@ -1247,7 +1255,16 @@ SchedulerBatchResult Interpreter::Impl::execute(
                 }
                 ++end;
             }
-            std::vector<ProcessId> ready;
+            auto& ready = native_region_ready_scratch;
+            ready.clear();
+            struct ClearReady {
+                std::vector<ProcessId>& members;
+
+                ~ClearReady()
+                {
+                    members.clear();
+                }
+            } clear_ready { ready };
             ready.reserve(end - batch_index);
             for (auto index = batch_index; index < end; ++index) {
                 ready.push_back(static_cast<ProcessId>(
@@ -1293,19 +1310,9 @@ SchedulerBatchResult Interpreter::Impl::execute(
             ++result.executed;
             break;
         }
-        auto& cohort = static_sensitivity_cohorts[
-            static_cast<std::size_t>(raw_cohort)];
-        if (cohort.ready.empty()) {
-            result.failure = std::make_exception_ptr(
-                std::logic_error(
-                    "scheduler batch references an empty static cohort"));
-            ++result.executed;
-            break;
-        }
-        auto ready = std::move(cohort.ready);
-        cohort.ready.clear();
         try {
-            execute_static_cohort(ready);
+            execute_queued_static_cohort(
+                static_cast<std::size_t>(raw_cohort));
         } catch (...) {
             result.failure = std::current_exception();
         }

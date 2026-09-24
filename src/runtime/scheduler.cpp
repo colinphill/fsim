@@ -7,6 +7,7 @@
 #include <map>
 #include <sstream>
 #include <utility>
+#include <variant>
 
 namespace fsim::runtime {
 
@@ -91,18 +92,36 @@ namespace {
         return static_cast<std::size_t>(phase);
     }
 
+    struct BatchEntry {
+        SchedulerBatchTask* task { };
+        std::uint64_t payload { };
+        Scheduler::Task fallback;
+    };
+
+    using EntryTask = std::variant<
+        Scheduler::Task, BatchEntry, detail::SchedulerTaskDescriptor>;
+
     struct Entry {
         StableOrder order { };
         std::uint64_t sequence { };
-        Scheduler::Task task;
+        EntryTask task;
         CancellationSlots* cancel_slots { };
         CancellationSlots::Identity cancellation { };
-        SchedulerBatchTask* batch_task { };
-        std::uint64_t batch_payload { };
 
         [[nodiscard]] bool is_cancelled() const noexcept
         {
             return cancel_slots && !cancel_slots->active(cancellation);
+        }
+
+        [[nodiscard]] SchedulerBatchTask* batch_task() const noexcept
+        {
+            const auto* batch = std::get_if<BatchEntry>(&task);
+            return batch == nullptr ? nullptr : batch->task;
+        }
+
+        [[nodiscard]] std::uint64_t batch_payload() const noexcept
+        {
+            return std::get<BatchEntry>(task).payload;
         }
 
         void complete() noexcept
@@ -115,7 +134,18 @@ namespace {
         {
             if (cancel_slots)
                 return cancel_slots->take(cancellation);
-            return std::move(task);
+            return std::move(std::get<Scheduler::Task>(task));
+        }
+
+        [[nodiscard]] Scheduler::Task take_batch_fallback() noexcept
+        {
+            return std::move(std::get<BatchEntry>(task).fallback);
+        }
+
+        [[nodiscard]] detail::SchedulerTaskDescriptor take_descriptor() noexcept
+        {
+            return std::move(
+                std::get<detail::SchedulerTaskDescriptor>(task));
         }
     };
 
@@ -337,7 +367,21 @@ struct Scheduler::Impl {
     std::shared_ptr<CancellationSlots> cancel_slots
         = std::make_shared<CancellationSlots>();
     SlotStartHook slot_start_hook;
-    SafePointHook safe_point_hook;
+    std::shared_ptr<const SafePointHook> safe_point_hook;
+    using SafePointHookEntry
+        = std::pair<SafePointHookToken, std::shared_ptr<const SafePointHook>>;
+    std::vector<SafePointHookEntry> safe_point_hooks;
+    std::vector<std::shared_ptr<const SafePointHook>> safe_point_hook_snapshot;
+    SafePointHookToken next_safe_point_hook_token { 1U };
+    struct DiscardHookEntry {
+        DiscardHookToken token { };
+        void* context { };
+        DiscardHook callback { };
+    };
+    std::vector<DiscardHookEntry> discard_hooks;
+    DiscardHookToken next_discard_hook_token { 1U };
+    std::vector<Entry> batch_entries;
+    std::vector<std::uint64_t> batch_payloads;
     std::vector<RuntimeSignalId> recent_signals;
     std::size_t recent_signal_cursor { };
     std::size_t cancellations_since_compaction { };
@@ -370,6 +414,7 @@ struct Scheduler::Impl {
     {
         const auto was_discarding = discarding;
         discarding = true;
+        clear_batch_scratch();
         auto discarded_current = std::move(current);
         current.reset();
         std::map<SimulationTick, Bucket> discarded_future;
@@ -390,13 +435,32 @@ struct Scheduler::Impl {
         discarding = was_discarding;
     }
 
+    void notify_discard_hooks() noexcept
+    {
+        for (const auto& hook : discard_hooks)
+            hook.callback(hook.context);
+    }
+
+    void discard_queued_and_notify() noexcept
+    {
+        const auto was_discarding = discarding;
+        discarding = true;
+        discard_queued();
+        notify_discard_hooks();
+        discarding = was_discarding;
+    }
+
+    void clear_batch_scratch() noexcept
+    {
+        batch_entries.clear();
+        batch_payloads.clear();
+    }
+
     [[nodiscard]] Entry make_entry(
         StableOrder order,
         Task task,
         CancellationSlots* cancellation_slots = nullptr,
-        const CancellationSlots::Identity cancellation = { },
-        SchedulerBatchTask* batch_task = nullptr,
-        const std::uint64_t batch_payload = 0U)
+        const CancellationSlots::Identity cancellation = { })
     {
         if (!task) {
             throw std::invalid_argument("cannot schedule an empty task");
@@ -405,9 +469,102 @@ struct Scheduler::Impl {
             throw std::overflow_error("scheduler insertion sequence overflow");
         }
         return Entry {
-            order, next_sequence++, std::move(task), cancellation_slots,
-            cancellation, batch_task, batch_payload
+            order, next_sequence++, EntryTask { std::move(task) },
+            cancellation_slots, cancellation
         };
+    }
+
+    [[nodiscard]] Entry make_batch_entry(
+        StableOrder order,
+        SchedulerBatchTask& batch_task,
+        const std::uint64_t batch_payload,
+        Task fallback_task)
+    {
+        if (!fallback_task) {
+            throw std::invalid_argument(
+                "cannot schedule a batch with an empty fallback task");
+        }
+        if (next_sequence == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("scheduler insertion sequence overflow");
+        }
+        return Entry {
+            order, next_sequence++,
+            EntryTask { BatchEntry {
+                &batch_task, batch_payload, std::move(fallback_task) } },
+            nullptr, { }
+        };
+    }
+
+    [[nodiscard]] Entry make_internal_entry(
+        StableOrder order,
+        detail::SchedulerTaskDescriptor task)
+    {
+        if (task.invoke == nullptr) {
+            throw std::invalid_argument(
+                "cannot schedule an empty task descriptor");
+        }
+        if (next_sequence == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("scheduler insertion sequence overflow");
+        }
+        return Entry {
+            order, next_sequence++, EntryTask { std::move(task) }, nullptr, { }
+        };
+    }
+
+    void enqueue_at(
+        const SimulationTick time,
+        SchedulerPhase phase,
+        Entry entry,
+        const bool adjust_reactive_regions = true)
+    {
+        if (time < now) {
+            throw std::invalid_argument("cannot schedule an event in the past");
+        }
+        if (adjust_reactive_regions && current && time == current->time
+            && current->phase < phase_count) {
+            const auto current_phase
+                = static_cast<SchedulerPhase>(current->phase);
+            if (phase == SchedulerPhase::inactive
+                && current_phase >= SchedulerPhase::reactive
+                && current_phase <= SchedulerPhase::re_update) {
+                phase = SchedulerPhase::re_inactive;
+            } else if (phase == SchedulerPhase::update
+                && current_phase >= SchedulerPhase::reactive
+                && current_phase <= SchedulerPhase::re_update) {
+                phase = SchedulerPhase::re_update;
+            }
+        }
+        const auto index = phase_index(phase);
+        if (index >= phase_count) {
+            throw std::invalid_argument("invalid scheduler phase");
+        }
+
+        if (current && time == current->time) {
+            const bool phase_finished = index < current->phase;
+            auto& bucket = phase_finished ? current->next_delta : current->current;
+            bucket.queues[index].push(std::move(entry));
+            if (!phase_finished && index == current->phase) {
+                ++current_phase_revision;
+            }
+            return;
+        }
+        future[time].queues[index].push(std::move(entry));
+    }
+
+    void enqueue_next_delta(
+        const SchedulerPhase phase,
+        Entry entry)
+    {
+        const auto index = phase_index(phase);
+        if (index >= phase_count) {
+            throw std::invalid_argument("invalid scheduler phase");
+        }
+        if (current) {
+            current->next_delta.queues[index].push(std::move(entry));
+            return;
+        }
+        // Before a run begins, "next delta" means the initial delta at now.
+        future[now].queues[index].push(std::move(entry));
     }
 
     void load_next_slot()
@@ -445,17 +602,42 @@ Scheduler::Scheduler(SchedulerOptions options)
 Scheduler::~Scheduler()
 {
     if (impl_)
-        impl_->discard_queued();
+        impl_->discard_queued_and_notify();
 }
-Scheduler::Scheduler(Scheduler&&) noexcept = default;
+Scheduler::Scheduler(Scheduler&& other)
+{
+    if (other.impl_
+        && (other.impl_->in_run || other.impl_->discarding)) {
+        throw std::logic_error(
+            "cannot move a running or releasing scheduler");
+    }
+    if (other.impl_ && !other.impl_->discard_hooks.empty()) {
+        other.impl_->discard_queued_and_notify();
+        other.impl_->discard_hooks.clear();
+    }
+    impl_ = std::move(other.impl_);
+}
 Scheduler& Scheduler::operator=(Scheduler&& other) noexcept
 {
     if (this == &other || (impl_ && (impl_->discarding || impl_->in_run))
         || (other.impl_ && (other.impl_->discarding || other.impl_->in_run)))
         return *this;
-    if (impl_)
-        impl_->discard_queued();
+    std::vector<Impl::DiscardHookEntry> retained_hooks;
+    DiscardHookToken next_discard_hook_token { 1U };
+    if (impl_) {
+        impl_->discard_queued_and_notify();
+        retained_hooks = std::move(impl_->discard_hooks);
+        next_discard_hook_token = impl_->next_discard_hook_token;
+    }
+    if (other.impl_ && !other.impl_->discard_hooks.empty()) {
+        other.impl_->discard_queued_and_notify();
+        other.impl_->discard_hooks.clear();
+    }
     impl_ = std::move(other.impl_);
+    if (impl_) {
+        impl_->discard_hooks = std::move(retained_hooks);
+        impl_->next_discard_hook_token = next_discard_hook_token;
+    }
     return *this;
 }
 
@@ -468,34 +650,7 @@ void Scheduler::schedule_at(SimulationTick time, SchedulerPhase phase,
         throw std::invalid_argument("cannot schedule an event in the past");
     }
     auto entry = impl_->make_entry(stable_order, std::move(task));
-    if (impl_->current && time == impl_->current->time
-        && impl_->current->phase < phase_count) {
-        const auto current = static_cast<SchedulerPhase>(impl_->current->phase);
-        if (phase == SchedulerPhase::inactive
-            && current >= SchedulerPhase::reactive
-            && current <= SchedulerPhase::re_update) {
-            phase = SchedulerPhase::re_inactive;
-        } else if (phase == SchedulerPhase::update
-            && current >= SchedulerPhase::reactive
-            && current <= SchedulerPhase::re_update) {
-            phase = SchedulerPhase::re_update;
-        }
-    }
-    const auto index = phase_index(phase);
-    if (index >= phase_count) {
-        throw std::invalid_argument("invalid scheduler phase");
-    }
-
-    if (impl_->current && time == impl_->current->time) {
-        const bool phase_finished = index < impl_->current->phase;
-        auto& bucket = phase_finished ? impl_->current->next_delta : impl_->current->current;
-        bucket.queues[index].push(std::move(entry));
-        if (!phase_finished && index == impl_->current->phase) {
-            ++impl_->current_phase_revision;
-        }
-        return;
-    }
-    impl_->future[time].queues[index].push(std::move(entry));
+    impl_->enqueue_at(time, phase, std::move(entry));
 }
 
 void Scheduler::schedule_after(SimulationTick delay, SchedulerPhase phase,
@@ -526,21 +681,13 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
         throw std::invalid_argument("invalid scheduler phase");
     }
     auto entry = impl_->make_entry(stable_order, std::move(task));
-    const auto cancellation = impl_->cancel_slots->acquire(std::move(entry.task));
+    const auto cancellation = impl_->cancel_slots->acquire(
+        std::move(std::get<Task>(entry.task)));
     entry.cancel_slots = impl_->cancel_slots.get();
     entry.cancellation = cancellation;
 
     try {
-        if (impl_->current && time == impl_->current->time) {
-            const bool phase_finished = index < impl_->current->phase;
-            auto& bucket = phase_finished ? impl_->current->next_delta : impl_->current->current;
-            bucket.queues[index].push(std::move(entry));
-            if (!phase_finished && index == impl_->current->phase) {
-                ++impl_->current_phase_revision;
-            }
-        } else {
-            impl_->future[time].queues[index].push(std::move(entry));
-        }
+        impl_->enqueue_at(time, phase, std::move(entry), false);
     } catch (...) {
         impl_->cancel_slots->release(cancellation);
         throw;
@@ -575,17 +722,7 @@ void Scheduler::schedule_next_delta(SchedulerPhase phase,
     if (impl_->discarding)
         return;
     auto entry = impl_->make_entry(stable_order, std::move(task));
-    const auto index = phase_index(phase);
-    if (index >= phase_count) {
-        throw std::invalid_argument("invalid scheduler phase");
-    }
-    if (impl_->current) {
-        impl_->current->next_delta.queues[index].push(std::move(entry));
-        return;
-    }
-
-    // Before a run begins, "next delta" means the initial delta at now.
-    impl_->future[impl_->now].queues[index].push(std::move(entry));
+    impl_->enqueue_next_delta(phase, std::move(entry));
 }
 
 void Scheduler::schedule_next_delta_batchable(
@@ -597,19 +734,44 @@ void Scheduler::schedule_next_delta_batchable(
 {
     if (impl_->discarding)
         return;
-    auto entry = impl_->make_entry(
-        stable_order, std::move(fallback_task), nullptr, { },
-        &batch_task, batch_payload);
-    const auto index = phase_index(phase);
-    if (index >= phase_count) {
-        throw std::invalid_argument("invalid scheduler phase");
-    }
-    if (impl_->current) {
-        impl_->current->next_delta.queues[index].push(std::move(entry));
-        return;
-    }
+    auto entry = impl_->make_batch_entry(
+        stable_order, batch_task, batch_payload, std::move(fallback_task));
+    impl_->enqueue_next_delta(phase, std::move(entry));
+}
 
-    impl_->future[impl_->now].queues[index].push(std::move(entry));
+void Scheduler::schedule_internal_at(
+    const SimulationTick time,
+    const SchedulerPhase phase,
+    const StableOrder stable_order,
+    detail::SchedulerTaskDescriptor task)
+{
+    if (impl_->discarding)
+        return;
+    if (time < impl_->now) {
+        throw std::invalid_argument("cannot schedule an event in the past");
+    }
+    auto entry = impl_->make_internal_entry(stable_order, std::move(task));
+    impl_->enqueue_at(time, phase, std::move(entry));
+}
+
+void Scheduler::schedule_internal(
+    const SchedulerPhase phase,
+    const StableOrder stable_order,
+    detail::SchedulerTaskDescriptor task)
+{
+    schedule_internal_at(
+        impl_->now, phase, stable_order, std::move(task));
+}
+
+void Scheduler::schedule_internal_next_delta(
+    const SchedulerPhase phase,
+    const StableOrder stable_order,
+    detail::SchedulerTaskDescriptor task)
+{
+    if (impl_->discarding)
+        return;
+    auto entry = impl_->make_internal_entry(stable_order, std::move(task));
+    impl_->enqueue_next_delta(phase, std::move(entry));
 }
 
 void Scheduler::note_signal_change(RuntimeSignalId signal)
@@ -642,8 +804,18 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
     impl_->in_run = true;
     RunGuard guard { impl_->in_run };
     const auto initial_callbacks = impl_->callbacks;
-    std::vector<Entry> batch_entries;
-    std::vector<std::uint64_t> batch_payloads;
+    auto& batch_entries = impl_->batch_entries;
+    auto& batch_payloads = impl_->batch_payloads;
+    struct RunScratchGuard {
+        std::vector<Entry>& entries;
+        std::vector<std::uint64_t>& payloads;
+
+        ~RunScratchGuard()
+        {
+            entries.clear();
+            payloads.clear();
+        }
+    } scratch_guard { batch_entries, batch_payloads };
 
     auto result = [&](RunStatus status) {
         if (!impl_->current && impl_->future.empty()) {
@@ -658,11 +830,10 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
     };
 
     while (true) {
-        if (impl_->stop.load(std::memory_order_relaxed)) {
-            return result(RunStatus::stopped);
-        }
-
         if (!impl_->current) {
+            if (impl_->stop.load(std::memory_order_relaxed)) {
+                return result(RunStatus::stopped);
+            }
             while (!impl_->future.empty()
                 && impl_->future.begin()->second.empty()) {
                 impl_->future.erase(impl_->future.begin());
@@ -686,6 +857,9 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
 
         auto& slot = *impl_->current;
         if (slot.phase == phase_count) {
+            if (impl_->stop.load(std::memory_order_relaxed)) {
+                return result(RunStatus::stopped);
+            }
             if (slot.next_delta.empty()) {
                 impl_->current.reset();
                 continue;
@@ -695,8 +869,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     slot.time, impl_->options.max_delta_cycles,
                     impl_->pending_next_orders(), impl_->recent_signals);
             }
-            slot.current = std::move(slot.next_delta);
-            slot.next_delta = { };
+            std::swap(slot.current, slot.next_delta);
             ++slot.delta;
             slot.phase = 0;
             continue;
@@ -704,25 +877,29 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
 
         auto& queue = slot.current.queues[slot.phase];
         const auto phase = static_cast<SchedulerPhase>(slot.phase);
+        if (queue.empty()
+            && impl_->stop.load(std::memory_order_relaxed)) {
+            return result(RunStatus::stopped);
+        }
         while (!queue.empty()) {
             if (impl_->stop.load(std::memory_order_relaxed)) {
                 return result(RunStatus::stopped);
             }
             auto entry = queue.pop();
-            if (entry.batch_task != nullptr) {
+            if (entry.batch_task() != nullptr) {
                 batch_entries.clear();
                 batch_payloads.clear();
-                auto* const batch_task = entry.batch_task;
+                auto* const batch_task = entry.batch_task();
                 batch_entries.push_back(std::move(entry));
                 while (const auto* next = queue.next()) {
-                    if (next->batch_task != batch_task) {
+                    if (next->batch_task() != batch_task) {
                         break;
                     }
                     batch_entries.push_back(queue.pop());
                 }
                 batch_payloads.reserve(batch_entries.size());
                 for (const auto& candidate : batch_entries) {
-                    batch_payloads.push_back(candidate.batch_payload);
+                    batch_payloads.push_back(candidate.batch_payload());
                 }
 
                 impl_->in_callback = true;
@@ -734,6 +911,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     for (auto& candidate : batch_entries) {
                         queue.push(std::move(candidate));
                     }
+                    impl_->clear_batch_scratch();
                     impl_->in_callback = false;
                     throw;
                 }
@@ -741,6 +919,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     for (auto& candidate : batch_entries) {
                         queue.push(std::move(candidate));
                     }
+                    impl_->clear_batch_scratch();
                     impl_->in_callback = false;
                     throw std::logic_error(
                         "scheduler batch consumed an invalid task count");
@@ -753,9 +932,11 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                         index < batch_entries.size(); ++index) {
                         queue.push(std::move(batch_entries[index]));
                     }
+                    impl_->clear_batch_scratch();
                     fallback.complete();
                     try {
-                        fallback.task(*this);
+                        auto task = fallback.take_batch_fallback();
+                        task(*this);
                     } catch (...) {
                         impl_->in_callback = false;
                         throw;
@@ -772,6 +953,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     index < batch_entries.size(); ++index) {
                     queue.push(std::move(batch_entries[index]));
                 }
+                impl_->clear_batch_scratch();
                 impl_->callbacks += consumed;
                 impl_->in_callback = false;
                 if (batch_result.failure) {
@@ -779,10 +961,16 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                 }
                 continue;
             }
-            auto task = entry.take_task();
             impl_->in_callback = true;
             try {
-                task(*this);
+                if (std::holds_alternative<
+                        detail::SchedulerTaskDescriptor>(entry.task)) {
+                    auto descriptor = entry.take_descriptor();
+                    descriptor(*this);
+                } else {
+                    auto task = entry.take_task();
+                    task(*this);
+                }
             } catch (...) {
                 impl_->in_callback = false;
                 throw;
@@ -793,17 +981,37 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
         queue.clear_consumed();
 
         ++slot.phase;
-        if (impl_->safe_point_hook) {
+        if (impl_->safe_point_hook || !impl_->safe_point_hooks.empty()) {
+            const auto safe_point_hook = impl_->safe_point_hook;
+            auto& safe_point_hook_snapshot
+                = impl_->safe_point_hook_snapshot;
+            safe_point_hook_snapshot.clear();
+            if (safe_point_hook_snapshot.capacity()
+                < impl_->safe_point_hooks.size()) {
+                safe_point_hook_snapshot.reserve(
+                    impl_->safe_point_hooks.size());
+            }
+            for (const auto& [token, hook] : impl_->safe_point_hooks) {
+                (void)token;
+                safe_point_hook_snapshot.push_back(hook);
+            }
             // Advance the phase cursor before exposing the safe point. A callback
             // that schedules into the just-completed phase must enter the next
             // delta rather than an already-consumed queue.
             impl_->in_safe_point = true;
             try {
-                impl_->safe_point_hook(*this, phase);
+                if (safe_point_hook) {
+                    (*safe_point_hook)(*this, phase);
+                }
+                for (const auto& hook : safe_point_hook_snapshot) {
+                    (*hook)(*this, phase);
+                }
             } catch (...) {
+                safe_point_hook_snapshot.clear();
                 impl_->in_safe_point = false;
                 throw;
             }
+            safe_point_hook_snapshot.clear();
             impl_->in_safe_point = false;
         }
     }
@@ -826,15 +1034,19 @@ bool Scheduler::stop_requested() const noexcept
 
 void Scheduler::discard_pending()
 {
+    if (!impl_ || impl_->discarding)
+        return;
     if (impl_->in_run || impl_->in_callback) {
         throw std::logic_error(
             "cannot discard scheduler work while it is running");
     }
-    impl_->discard_queued();
+    impl_->discard_queued_and_notify();
 }
 
 void Scheduler::reset()
 {
+    if (!impl_ || impl_->discarding)
+        return;
     discard_pending();
     impl_->now = 0;
     impl_->callbacks = 0;
@@ -889,7 +1101,75 @@ std::uint64_t Scheduler::current_phase_revision() const noexcept
 
 void Scheduler::set_safe_point_hook(SafePointHook hook)
 {
-    impl_->safe_point_hook = std::move(hook);
+    std::shared_ptr<const SafePointHook> replacement;
+    if (hook) {
+        replacement = std::make_shared<const SafePointHook>(std::move(hook));
+    }
+    auto previous = std::move(impl_->safe_point_hook);
+    impl_->safe_point_hook = std::move(replacement);
+    previous.reset();
+}
+
+Scheduler::SafePointHookToken Scheduler::add_safe_point_hook(
+    SafePointHook hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("safe-point observer cannot be empty");
+    }
+    if (impl_->next_safe_point_hook_token == 0U) {
+        throw std::overflow_error("safe-point observer token space exhausted");
+    }
+    const auto token = impl_->next_safe_point_hook_token;
+    auto callback = std::make_shared<const SafePointHook>(std::move(hook));
+    impl_->safe_point_hooks.emplace_back(token, std::move(callback));
+    ++impl_->next_safe_point_hook_token;
+    return token;
+}
+
+void Scheduler::remove_safe_point_hook(const SafePointHookToken token) noexcept
+{
+    if (token == 0U) {
+        return;
+    }
+    const auto found = std::find_if(
+        impl_->safe_point_hooks.begin(),
+        impl_->safe_point_hooks.end(),
+        [token](const auto& entry) { return entry.first == token; });
+    if (found == impl_->safe_point_hooks.end()) {
+        return;
+    }
+    auto removed = std::move(found->second);
+    impl_->safe_point_hooks.erase(found);
+    removed.reset();
+}
+
+Scheduler::DiscardHookToken Scheduler::add_discard_hook(
+    void* context, const DiscardHook hook)
+{
+    if (hook == nullptr) {
+        throw std::invalid_argument("discard observer cannot be empty");
+    }
+    if (!impl_ || impl_->next_discard_hook_token == 0U) {
+        throw std::overflow_error("discard observer token space exhausted");
+    }
+    const auto token = impl_->next_discard_hook_token;
+    impl_->discard_hooks.push_back({ token, context, hook });
+    ++impl_->next_discard_hook_token;
+    return token;
+}
+
+void Scheduler::remove_discard_hook(
+    const DiscardHookToken token) noexcept
+{
+    if (token == 0U || !impl_) {
+        return;
+    }
+    const auto found = std::find_if(
+        impl_->discard_hooks.begin(), impl_->discard_hooks.end(),
+        [token](const auto& entry) { return entry.token == token; });
+    if (found != impl_->discard_hooks.end()) {
+        impl_->discard_hooks.erase(found);
+    }
 }
 
 void Scheduler::set_slot_start_hook(SlotStartHook hook)

@@ -1736,7 +1736,7 @@ Logic9 Interpreter::Impl::execute_vital_timing_check(
     const ProcessId process,
     const InstructionIndex instruction,
     const VitalTimingCheck& operation) {
-  auto& state = get_process(process).vital_timing_states[instruction];
+  auto& state = get_process(process).cold().vital_timing_states[instruction];
   const auto event = [&](const SignalId signal) {
     (void)get_signal(signal);
     const auto& stamp = signal_events[signal];
@@ -1786,7 +1786,7 @@ void Interpreter::Impl::execute_vital_delay(
     const InstructionIndex instruction,
     const VitalDelay& operation,
     const VitalDelayRuntimeValues& values) {
-  auto& state = get_process(process).vital_delay_states[instruction];
+  auto& state = get_process(process).cold().vital_delay_states[instruction];
   auto delay = vital_transition_delay(
       state.last_value, values.source,
       operation.shape, values.default_delays);

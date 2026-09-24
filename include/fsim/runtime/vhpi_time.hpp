@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -125,6 +126,8 @@ class VhdlVhpiTimeSystem final {
   std::uint64_t simulation_identity_{};
   std::uint32_t system_identity_{};
   Scheduler* scheduler_{};
+  Scheduler::SafePointHookToken safe_point_hook_token_{};
+  std::shared_ptr<bool> safe_point_alive_;
   VhdlVhpiTimeProfile profile_;
   std::uint32_t next_callback_{1};
   std::uint64_t next_ordinal_{};

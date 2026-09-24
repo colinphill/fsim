@@ -28,6 +28,36 @@ struct Logic4Word {
     friend bool operator==(const Logic4Word&, const Logic4Word&) = default;
 };
 
+/// Allocation-free resolution accumulator for one narrow Logic4 word.
+/// Construct it only after the caller has established that every driver is
+/// a Logic4 value with this width; Logic9 and wide values use the packed
+/// resolution fallback instead.
+class Logic4ResolutionAccumulator final {
+public:
+    /// Width must be in the inclusive range [1, 64].
+    explicit Logic4ResolutionAccumulator(std::size_t width);
+
+    /// Add one aval/bval driver with exactly the configured width.
+    void add(Logic4Word driver);
+
+    /// Return the resolved value. An accumulator with no drivers resolves to Z.
+    [[nodiscard]] Logic4Word result() const noexcept;
+
+private:
+    std::size_t width_ { };
+    std::uint64_t width_mask_ { };
+    std::uint64_t zero_seen_ { };
+    std::uint64_t one_seen_ { };
+    std::uint64_t unknown_seen_ { };
+};
+
+/// Overlay selected bits from `forced` on `driven`, preserving the width and
+/// all unselected Logic4 bits. Both words must have a width in [1, 64].
+[[nodiscard]] Logic4Word apply_force_word(
+    Logic4Word driven,
+    const Logic4Word& forced,
+    std::uint64_t mask);
+
 /// Four bit-planes carrying the ordinal encoding of up to 64 Logic9 values.
 ///
 /// This is intentionally separate from the aval/bval ABI used by Logic4.

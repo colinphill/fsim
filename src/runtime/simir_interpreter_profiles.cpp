@@ -139,16 +139,16 @@ Interpreter::~Interpreter()
                       << " word_fanout_ready="
                       << impl_->native_process_word_fanout_ready_counts[id]
                       << " sensitivity="
-                      << impl_->processes[id].program.static_sensitivity.size()
+                      << impl_->processes[id].program().static_sensitivity.size()
                       << " operations="
-                      << impl_->processes[id].program.operations.size()
-                      << " name='" << impl_->processes[id].program.name
+                      << impl_->processes[id].program().operations.size()
+                      << " name='" << impl_->processes[id].program().name
                       << "'\n";
-            if (!impl_->processes[id].program.static_sensitivity.empty()) {
+            if (!impl_->processes[id].program().static_sensitivity.empty()) {
                 std::cerr << "fsim-profile: native-process-sensitivity id=" << id
                           << " signals=";
                 const auto& sensitivity
-                    = impl_->processes[id].program.static_sensitivity;
+                    = impl_->processes[id].program().static_sensitivity;
                 for (std::size_t item = 0; item < sensitivity.size(); ++item) {
                     if (item != 0U) {
                         std::cerr << ',';
@@ -156,7 +156,8 @@ Interpreter::~Interpreter()
                     const auto signal = sensitivity[item].signal;
                     std::cerr << static_cast<std::size_t>(signal);
                     if (signal < impl_->signals.size()) {
-                        std::cerr << ":'" << impl_->signals[signal].name << "'";
+                        std::cerr << ":'" << impl_->signal_cold[signal].name
+                                  << "'";
                     }
                 }
                 std::cerr << '\n';
@@ -216,7 +217,7 @@ Interpreter::~Interpreter()
                 && singles
                     == impl_->native_process_single_static_wait_counts[id]
                 && impl_->native_process_cohort_resume_counts[id] == 0U
-                && !impl_->processes[id].program.static_sensitivity.empty();
+                && !impl_->processes[id].program().static_sensitivity.empty();
             if (eligible[id]) {
                 ++eligible_processes;
                 eligible_resumes += singles;
@@ -243,7 +244,7 @@ Interpreter::~Interpreter()
                 continue;
             }
             auto& outputs = process_outputs[id];
-            const auto& program = impl_->processes[id].program;
+            const auto& program = impl_->processes[id].program();
             for (const auto& region : program.driver_regions) {
                 outputs.insert(region.signal);
             }
@@ -255,10 +256,7 @@ Interpreter::~Interpreter()
                 }
             }
             for (const auto signal : outputs) {
-                if (signal >= impl_->static_fanout.size()) {
-                    continue;
-                }
-                for (const auto& fanout : impl_->static_fanout[signal]) {
+                for (const auto& fanout : impl_->static_fanout_for(signal)) {
                     const auto target
                         = static_cast<std::size_t>(fanout.process);
                     if (target >= process_count || !eligible[target]) {
@@ -327,10 +325,7 @@ Interpreter::~Interpreter()
                 } else {
                     ++component_unsafe_outputs[component];
                 }
-                if (signal >= impl_->static_fanout.size()) {
-                    continue;
-                }
-                for (const auto& fanout : impl_->static_fanout[signal]) {
+                for (const auto& fanout : impl_->static_fanout_for(signal)) {
                     const auto kind = static_cast<std::size_t>(fanout.edge);
                     if (kind < sensitivity_kinds.size()) {
                         ++sensitivity_kinds[kind];
@@ -480,7 +475,7 @@ Interpreter::~Interpreter()
                       << (first == process_count
                               ? std::string_view { }
                               : std::string_view {
-                                    impl_->processes[first].program.name })
+                                    impl_->processes[first].program().name })
                       << "'\n";
         }
     }
@@ -571,13 +566,13 @@ void Interpreter::Impl::report_process_profile()
     std::iota(order.begin(), order.end(), std::size_t { });
     std::ranges::sort(order, [&](const auto left, const auto right) {
         if (update_profile_enabled
-            && processes[left].profile_updates
-                != processes[right].profile_updates) {
-            return processes[left].profile_updates
-                > processes[right].profile_updates;
+            && processes[left].cold().profile_updates
+                != processes[right].cold().profile_updates) {
+            return processes[left].cold().profile_updates
+                > processes[right].cold().profile_updates;
         }
-        return processes[left].profile_total_nanoseconds
-            > processes[right].profile_total_nanoseconds;
+        return processes[left].cold().profile_total_nanoseconds
+            > processes[right].cold().profile_total_nanoseconds;
     });
     std::uint64_t total_nanoseconds { };
     std::uint64_t native_nanoseconds { };
@@ -585,11 +580,11 @@ void Interpreter::Impl::report_process_profile()
     std::uint64_t native_resumes { };
     std::uint64_t interpreter_operations { };
     for (const auto& process : processes) {
-        total_nanoseconds += process.profile_total_nanoseconds;
-        native_nanoseconds += process.profile_native_nanoseconds;
-        calls += process.profile_calls;
-        native_resumes += process.profile_native_resumes;
-        interpreter_operations += process.profile_interpreter_operations;
+        total_nanoseconds += process.cold().profile_total_nanoseconds;
+        native_nanoseconds += process.cold().profile_native_nanoseconds;
+        calls += process.cold().profile_calls;
+        native_resumes += process.cold().profile_native_resumes;
+        interpreter_operations += process.cold().profile_interpreter_operations;
     }
     std::cerr << "fsim-profile: process-summary processes=" << processes.size()
               << " calls=" << calls
@@ -607,27 +602,27 @@ void Interpreter::Impl::report_process_profile()
     for (std::size_t rank = 0; rank < count; ++rank) {
         const auto id = order[rank];
         const auto& process = processes[id];
-        if (process.profile_calls == 0U) {
+        if (process.cold().profile_calls == 0U) {
             break;
         }
         std::cerr << "fsim-profile: process rank=" << rank + 1U
                   << " id=" << id
                   << " compiled=" << (process.executor ? 1 : 0)
-                  << " static_operations=" << process.program.operations.size()
+                  << " static_operations=" << process.program().operations.size()
                   << " sensitivity="
-                  << process.program.static_sensitivity.size()
-                  << " calls=" << process.profile_calls
+                  << process.program().static_sensitivity.size()
+                  << " calls=" << process.cold().profile_calls
                   << " interpreter_operations="
-                  << process.profile_interpreter_operations
-                  << " native_resumes=" << process.profile_native_resumes
-                  << " updates=" << process.profile_updates
+                  << process.cold().profile_interpreter_operations
+                  << " native_resumes=" << process.cold().profile_native_resumes
+                  << " updates=" << process.cold().profile_updates
                   << " total_ms="
-                  << static_cast<double>(process.profile_total_nanoseconds)
+                  << static_cast<double>(process.cold().profile_total_nanoseconds)
                 / 1'000'000.0
                   << " native_ms="
-                  << static_cast<double>(process.profile_native_nanoseconds)
+                  << static_cast<double>(process.cold().profile_native_nanoseconds)
                 / 1'000'000.0
-                  << " name=" << process.program.name << '\n';
+                  << " name=" << process.program().name << '\n';
     }
 }
 

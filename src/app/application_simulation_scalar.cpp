@@ -23,7 +23,7 @@ void Simulation::Impl::rebuild_signal_observer_snapshot()
 void Simulation::Impl::compact_signal_observer_snapshot() noexcept
 {
     if (!signal_observer_snapshot_dirty
-        || !signal_observer_snapshot.unique()) {
+        || signal_observer_snapshot.use_count() != 1) {
         return;
     }
     std::erase_if(
@@ -68,7 +68,7 @@ void Simulation::Impl::rebuild_scalar_signal_observer_snapshot()
 void Simulation::Impl::compact_scalar_signal_observer_snapshot() noexcept
 {
     if (!scalar_signal_observer_snapshot_dirty
-        || !scalar_signal_observer_snapshot.unique()) {
+        || scalar_signal_observer_snapshot.use_count() != 1) {
         return;
     }
     std::erase_if(

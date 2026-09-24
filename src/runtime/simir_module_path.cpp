@@ -96,7 +96,7 @@ std::optional<SimulationTick> module_path_transition_delay(
 
 void validate_module_path_expression(
     const ModulePathExpression& expression,
-    const std::span<const Signal> signals) {
+    const std::span<const SignalHot> signals) {
   if (expression.empty()) return;
   if (expression.root >= expression.nodes.size()
       || expression.nodes.size()

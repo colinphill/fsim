@@ -8,17 +8,11 @@ Batches 188G-188I and Standard Change 20 closure, before acting. Verify the
 branch, HEAD, tracking ref, worktree, active agents, and any running build or
 test handle; this checkpoint is a locator, not a substitute for live evidence.
 
-The commit containing this checkpoint closes Batch 188F on `codex/v3` and
-hands off to Batch 188G Change 1. Its parent was Batch 188E head
-`2dca7f742f310509bf7e67c3aff8036efd7bd243`; verify the new local and
+The parent of the Batch 188G closure commit is Batch 188F head
+`6bdf4d52af2cb998188280e329192a3a87b11500`. Verify the new local and
 tracking HEAD live. The user-owned untracked `phase.fst` and
 `scripts/__pycache__/` must be preserved. Do not clean, reset, commit, or
 package them.
-
-The latest applicable hosted run inspected before the Batch 188F push was
-`35997982063` at Batch 188E head `2dca7f74`. All four LLVM-only
-Linux/Windows Debug/Release lanes passed. The newly pushed Batch 188F run
-is unverified under the user's post-push monitoring waiver.
 
 ## Fixed baseline and qualification contract
 
@@ -34,6 +28,11 @@ The original HEAD/tracking revision for that frozen patch was
 and native-profile evidence for all required case/configuration pairs is
 under `.local-artifacts/188b-one-shot/evidence/`. These diagnostics do not
 qualify a simplification candidate.
+For Batch 188I's full matrix, use
+`scripts/qualify-simplification-performance.py` with
+`scripts/simplification_benchmarks.json` and override the mixed-language root
+to `.local-artifacts/rs-vhdl-overlay/source-root`; the manifest's default
+project checkout is not the corrected frozen source.
 
 The user's seven-sample cumulative performance waiver applies to Batches
 188C-188H; record it at each close and do not claim a performance pass.
@@ -57,26 +56,39 @@ scheduler order, observer mutation semantics, format/ABI compatibility
 boundaries, and the fixed baseline. Keep private standards read-only and out
 of repository artifacts; use LLDB on Linux and Windows.
 
-## Batch 188F closure and next action
+## Batch 188G closure and next action
 
-All twenty Batch 188F changes are marked complete in the plan. They cover
-scheduler cancellation lifetime, streaming trace retention and FST writing,
-trace metadata, observer hooks, VPI indexing, and PSL bindings. Focused
-Release tests passed 14/14, including a 1,000,001-event FST round trip.
-The final FST workspace uses private creation on POSIX and an owner-only
-inherited Windows ACL. The corrected VCD governance anchors passed 3/3.
+The commit containing this checkpoint closes Batch 188G; all twenty changes
+are marked complete in the plan. It includes typed scheduler tasks, compact
+hot/cold process and signal records, flat fanout, stable dynamic waits,
+incremental switch components, inline-first driver records, narrow resolution,
+word force/release, lazy packed mirrors, and reusable cohort scratch. Scheduler
+discard/reset/move hooks were repaired after review. The two observer snapshot
+`shared_ptr::unique()` calls were changed to `use_count() != 1` for Windows.
+No release tag is made.
 
-The final-source Clang/LLVM 22 Release build passed 3,079/3,079 steps and
-its unfiltered suite passed 421/421. After a CMake dependency rescan, the
-Debug build passed 1,927/1,927 pending steps without cleaning and its
-unfiltered suite passed 421/421. Both builds used twelve workers;
-`git diff --check` passed. The user waived the seven-sample performance
-matrix and post-push hosted monitoring for Batch 188F; neither is claimed
-as a pass. There is no release tag.
+After CMake dependency rescans, the warnings-as-errors Clang/LLVM 22 Release
+build passed 2,345/2,345 steps and Debug passed 1,895/1,895 remaining steps.
+The first full Release CTest run had 418 passes, two failures, and one
+dependent not-run gate because three new private headers were absent from the
+source-package manifest. The manifest was fixed; a targeted rerun passed
+19/19 including all three gates and their dependencies. The user authorized
+proceeding to Debug without a full Release rerun. The unfiltered Debug suite
+passed 421/421, and `git diff --check` passed. Logs are under
+`/tmp/fsim-g20-{release,debug}-{build,ctest}.log` and
+`/tmp/fsim-g20-release-repair.log`.
 
-Next: begin Batch 188G Change 1. Worker read-only maps identified scheduler
-Changes 1-3/5 as one file-ownership lane, process/fanout changes 6-11 as
-staged SIMIR work, and driver/force changes 12-18 as a later shared-state
-wave. Keep `simir_internal.hpp` and SIMIR dispatch owners exclusive; freeze
-each shared API before client migrations. Mark each plan item complete when
-focused validation closes it. Continue through Batch 188I.
+The latest applicable hosted run inspected before the G push was CI
+36013514908 at the 188F head: Linux Debug/Release passed, Windows
+Debug/Release failed on `shared_ptr::unique()`. The new G head is unverified
+under the user's post-push monitoring waiver. The seven-sample cumulative
+performance matrix was also waived and is not a claimed pass.
+
+Next: begin Batch 188H Change 1. Worker read-only mapping located the
+operation alternatives in `simir_operation_storage.hpp`, duplicated cache-key
+encoders in `llvm_jit_cache_key_operations_{primary,secondary}.cpp`, and
+contextual signal-width dependencies that the canonical encoder must retain.
+Use explicit stable operation tags, typed semantic leaves, compile-time
+exhaustiveness, and the native-cache schema bump without changing unrelated
+metadata format. Avoid `shared_ptr::unique()` on Windows. Continue through
+Batch 188I under the plan.

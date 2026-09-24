@@ -33,14 +33,14 @@ void Interpreter::Impl::execute(ProcessId id)
 
         ~ProcessProfileScope()
         {
-            if (process.track_interpreter_operations) {
-                process.interpreter_operations += interpreted_operations;
+            if (process.cold().track_interpreter_operations) {
+                process.cold().interpreter_operations += interpreted_operations;
             }
             if (!enabled) {
                 return;
             }
-            ++process.profile_calls;
-            process.profile_total_nanoseconds += static_cast<std::uint64_t>(
+            ++process.cold().profile_calls;
+            process.cold().profile_total_nanoseconds += static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - started)
                     .count());
@@ -57,9 +57,9 @@ void Interpreter::Impl::execute(ProcessId id)
         return;
     }
     restore_callable_context(process);
-    if (!process.executor && process.deferred_executor
+    if (!process.executor && process.cold().deferred_executor
         && can_install_deferred_executor(process)
-        && process.deferred_executor->ready()) {
+        && process.cold().deferred_executor->ready()) {
         install_deferred_executor(process);
     }
     if (!process.halted) {
@@ -106,8 +106,8 @@ void Interpreter::Impl::execute(ProcessId id)
                 }
             }
             if (process_profile_enabled) {
-                ++process.profile_native_resumes;
-                process.profile_native_nanoseconds += static_cast<std::uint64_t>(
+                ++process.cold().profile_native_resumes;
+                process.cold().profile_native_nanoseconds += static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::steady_clock::now() - native_started)
                     .count());
@@ -126,19 +126,19 @@ void Interpreter::Impl::execute(ProcessId id)
     }
 
     while (!process.halted) {
-        if (process.pc >= process.program.operations.size()) {
+        if (process.pc >= process.program().operations.size()) {
             fail(process, "program counter is outside the operation stream");
         }
 
         const auto instruction = process.pc;
-        if (process.track_interpreter_operations) {
+        if (process.cold().track_interpreter_operations) {
             ++interpreted_operations;
         }
         if (process_profile_enabled) {
-            ++process.profile_interpreter_operations;
+            ++process.cold().profile_interpreter_operations;
         }
         const auto& operation
-            = std::as_const(process.program.operations)[instruction];
+            = std::as_const(process.program().operations)[instruction];
         bool boundary = false;
         const auto selected_offset =
             [&](const DynamicIndex& selection) -> std::uint32_t {
@@ -255,20 +255,20 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDriving>) {
                     const auto driving = signal_attribute_detail::driving(
-                        *this, process.program.id, op.signal);
+                        *this, process.id, op.signal);
                     get_register(process, op.destination) = PackedLogic4(
                         1, driving ? Logic4::one : Logic4::zero);
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDrivingValue>) {
                     if (!signal_attribute_detail::driving(
-                            *this, process.program.id, op.signal)) {
+                            *this, process.id, op.signal)) {
                         fail(process,
                             "VHDL 'driving_value queried a signal without a driver");
                     }
                     get_register(process, op.destination) = coerce_value_kind(
                         signal_attribute_detail::driving_value(
-                            *this, process.program.id, op.signal),
+                            *this, process.id, op.signal),
                         register_value_kind(process, op.destination));
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
@@ -313,7 +313,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 : std::string { });
                     }
                     const auto handle = class_allocate_hook(
-                        process.program.name,
+                        process.program().name,
                         op.specialization_identity,
                         op.declared_type,
                         actuals,
@@ -634,7 +634,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             : VcdControlKind::begin_ports;
                         scheduler.schedule(
                             SchedulerPhase::postponed,
-                            process.program.id,
+                            process.id,
                             [this, begin_kind](Scheduler& runtime) {
                                 if (!vcd_control_hook) {
                                     return;
@@ -933,7 +933,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 bits = bits.substr(
                                     0U, maximum_bits) + "...";
                             }
-                            message += " [process=" + process.program.name
+                            message += " [process=" + process.program().name
                                 + ", register="
                                 + std::to_string(op.source)
                                 + ", width="
@@ -963,23 +963,23 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     commit_driver(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value));
                 } else if constexpr (std::is_same_v<OperationType, WriteUpdate>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     stage_update(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value));
                 } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     scheduler.schedule_after(
-                        op.delay, SchedulerPhase::update, process.program.id,
+                        op.delay, SchedulerPhase::update, process.id,
                         [this,
-                            driver = process.program.id,
+                            driver = process.id,
                             signal = op.signal,
                             value = std::move(value)](Scheduler&) mutable {
                             stage_update(
@@ -989,7 +989,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     schedule_inertial(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         std::nullopt,
@@ -998,7 +998,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     schedule_projected(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         value,
                         std::nullopt,
@@ -1015,7 +1015,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     ++process.pc;
                     schedule_projected_waveform(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         elements,
                         std::nullopt,
@@ -1025,7 +1025,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     commit_driver_slice(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         op.offset);
@@ -1033,7 +1033,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     stage_update_slice(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         op.offset);
@@ -1043,9 +1043,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     scheduler.schedule_after(
                         op.delay,
                         SchedulerPhase::update,
-                        process.program.id,
+                        process.id,
                         [this,
-                            driver = process.program.id,
+                            driver = process.id,
                             signal = op.signal,
                             offset = op.offset,
                             value = std::move(value)](
@@ -1060,7 +1060,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     schedule_inertial(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         op.offset,
@@ -1069,7 +1069,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     auto value = get_register(process, op.source);
                     ++process.pc;
                     schedule_projected(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         value,
                         op.offset,
@@ -1086,7 +1086,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     ++process.pc;
                     schedule_projected_waveform(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         elements,
                         op.offset,
@@ -1097,7 +1097,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
                     commit_driver_slice(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         offset);
@@ -1106,7 +1106,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
                     stage_update_slice(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         offset);
@@ -1117,9 +1117,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     scheduler.schedule_after(
                         op.delay,
                         SchedulerPhase::update,
-                        process.program.id,
+                        process.id,
                         [this,
-                            driver = process.program.id,
+                            driver = process.id,
                             signal = op.signal,
                             offset,
                             value = std::move(value)](
@@ -1139,7 +1139,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         ++process.pc;
                         if (write) {
                             commit_driver_slice(
-                                process.program.id,
+                                process.id,
                                 op.signal,
                                 write->value,
                                 write->offset);
@@ -1156,7 +1156,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         ++process.pc;
                         if (write) {
                             stage_update_slice(
-                                process.program.id,
+                                process.id,
                                 op.signal,
                                 write->value,
                                 write->offset);
@@ -1175,9 +1175,9 @@ void Interpreter::Impl::execute(ProcessId id)
                             scheduler.schedule_after(
                                 op.delay,
                                 SchedulerPhase::update,
-                                process.program.id,
+                                process.id,
                                 [this,
-                                    driver = process.program.id,
+                                    driver = process.id,
                                     signal = op.signal,
                                     write = std::move(*write)](
                                     Scheduler&) mutable {
@@ -1198,7 +1198,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             : op.offset;
                         if (op.driving_value) {
                             force_driver_slice(
-                                process.program.id,
+                                process.id,
                                 op.signal,
                                 get_register(process, op.source),
                                 offset);
@@ -1219,7 +1219,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             : op.offset;
                         if (op.driving_value) {
                             release_driver_slice(
-                                process.program.id, op.signal, offset, op.width);
+                                process.id, op.signal, offset, op.width);
                         } else {
                             release_slice(op.signal, offset, op.width);
                         }
@@ -1232,7 +1232,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
                     schedule_inertial(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         std::move(value),
                         offset,
@@ -1248,7 +1248,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         ++process.pc;
                         if (write) {
                             schedule_inertial(
-                                process.program.id,
+                                process.id,
                                 op.signal,
                                 std::move(write->value),
                                 write->offset,
@@ -1262,7 +1262,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
                     schedule_projected(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         value,
                         offset,
@@ -1280,7 +1280,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
                     schedule_projected_waveform(
-                        process.program.id,
+                        process.id,
                         op.signal,
                         elements,
                         offset,
@@ -1352,7 +1352,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     || std::is_same_v<OperationType, SemaphorePut>) {
                     boundary = true;
                 } else if constexpr (std::is_same_v<OperationType, Jump>) {
-                    if (op.target >= process.program.operations.size()) {
+                    if (op.target >= process.program().operations.size()) {
                         fail(process, "jump target is outside the operation stream");
                     }
                     process.pc = op.target;
@@ -1368,9 +1368,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     if (pointer.aval >= op.stack.capacity) {
                         fail(process, "call-stack capacity is exhausted");
                     }
-                    if (op.target >= process.program.operations.size()
+                    if (op.target >= process.program().operations.size()
                         || op.return_target
-                            >= process.program.operations.size()) {
+                            >= process.program().operations.size()) {
                         fail(process, "call target is outside the operation stream");
                     }
                     get_register(
@@ -1401,7 +1401,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                             .low_word();
                     if (target.bval != 0
                         || target.aval
-                            >= process.program.operations.size()) {
+                            >= process.program().operations.size()) {
                         fail(process, "call-stack return target is invalid");
                     }
                     get_register(process, op.stack.pointer) = PackedLogic4::from_aval_bval(
@@ -1432,7 +1432,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     } else {
                         target = value == Logic4::one ? op.when_true : op.when_false;
                     }
-                    if (target >= process.program.operations.size()) {
+                    if (target >= process.program().operations.size()) {
                         fail(process, "branch target is outside the operation stream");
                     }
                     process.pc = target;
@@ -1444,7 +1444,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         const auto message = op.message.empty()
                             ? std::string_view { "assertion failed" }
                             : std::string_view { op.message };
-                        if (process.program.language_standard == "2019") {
+                        if (process.program().language_standard == "2019") {
                             execute_vhdl_report(
                                 process, process.pc, message, op.severity,
                                 op.source, false);
@@ -1454,7 +1454,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         if (op.severity != AssertionSeverity::failure
                             && report_hook) {
                             report_hook(
-                                process.program.id,
+                                process.id,
                                 message,
                                 op.severity,
                                 op.source,
@@ -1463,7 +1463,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         }
                         if (op.severity == AssertionSeverity::failure) {
                             throw AssertionError(
-                                process.program.id,
+                                process.id,
                                 process.pc,
                                 std::string { message },
                                 op.severity,
@@ -1475,9 +1475,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     if (op.postponed) {
                         scheduler.schedule(
                             SchedulerPhase::postponed,
-                            process.program.id,
+                            process.id,
                             [this,
-                                process_id = process.program.id,
+                                process_id = process.id,
                                 text = op.text,
                                 newline = op.newline](Scheduler& runtime) {
                                 if (output_hook) {
@@ -1491,7 +1491,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             });
                     } else if (output_hook) {
                         output_hook(
-                            process.program.id,
+                            process.id,
                             op.text,
                             op.newline,
                             scheduler.now(),
@@ -1513,9 +1513,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     if (op.postponed) {
                         scheduler.schedule(
                             SchedulerPhase::postponed,
-                            process.program.id,
+                            process.id,
                             [this,
-                                process_id = process.program.id,
+                                process_id = process.id,
                                 text = std::move(text),
                                 newline = op.newline](Scheduler& runtime) {
                                 if (output_hook) {
@@ -1529,7 +1529,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             });
                     } else if (output_hook) {
                         output_hook(
-                            process.program.id,
+                            process.id,
                             text,
                             op.newline,
                             scheduler.now(),
@@ -1543,9 +1543,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     if (op.postponed) {
                         scheduler.schedule(
                             SchedulerPhase::postponed,
-                            process.program.id,
+                            process.id,
                             [this,
-                                process_id = process.program.id,
+                                process_id = process.id,
                                 text = std::move(text),
                                 newline = op.newline](Scheduler& runtime) {
                                 if (output_hook) {
@@ -1559,7 +1559,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             });
                     } else if (output_hook) {
                         output_hook(
-                            process.program.id,
+                            process.id,
                             text,
                             op.newline,
                             scheduler.now(),
@@ -1581,14 +1581,14 @@ void Interpreter::Impl::execute(ProcessId id)
                         | (encoded.get(1) == Logic4::one ? 2U : 0U);
                     const auto severity = static_cast<AssertionSeverity>(ordinal);
                     const auto& message = get_string_register(process, op.message);
-                    if (process.program.language_standard == "2019") {
+                    if (process.program().language_standard == "2019") {
                         execute_vhdl_report(
                             process, process.pc, message, severity,
                             op.source, op.standalone);
                     } else if (severity == AssertionSeverity::failure) {
                         if (op.standalone && report_hook) {
                             report_hook(
-                                process.program.id,
+                                process.id,
                                 message,
                                 severity,
                                 op.source,
@@ -1596,7 +1596,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 scheduler.delta());
                         }
                         throw AssertionError(
-                            process.program.id,
+                            process.id,
                             process.pc,
                             message.empty()
                                 ? (op.standalone
@@ -1608,7 +1608,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             op.standalone);
                     } else if (report_hook) {
                         report_hook(
-                            process.program.id,
+                            process.id,
                             message,
                             severity,
                             op.source,
@@ -1629,9 +1629,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     if (op.postponed) {
                         scheduler.schedule(
                             SchedulerPhase::postponed,
-                            process.program.id,
+                            process.id,
                             [this,
-                                process_id = process.program.id,
+                                process_id = process.id,
                                 text = std::move(text),
                                 newline = op.newline](Scheduler& runtime) {
                                 if (output_hook) {
@@ -1645,7 +1645,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             });
                     } else if (output_hook) {
                         output_hook(
-                            process.program.id,
+                            process.id,
                             text,
                             op.newline,
                             scheduler.now(),
@@ -1653,7 +1653,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
-                    install_monitor(process.program.id, op);
+                    install_monitor(process.id, op);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
                     set_monitor_enabled(op.enabled);
@@ -1810,7 +1810,7 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (
                     std::is_same_v<OperationType, CodeCoverageHit>) {
                     const auto counter
-                        = process.program.operations.code_coverage_counter(
+                        = process.program().operations.code_coverage_counter(
                             process.pc, op.counter);
                     const auto update = code_coverage_counters.record(counter);
                     if (update == CodeCoverageCounterUpdate::Unavailable) {
@@ -1836,7 +1836,7 @@ void Interpreter::Impl::execute(ProcessId id)
                           }
                         : std::nullopt;
                     get_register(process, op.destination) = random_value(
-                        process.program.id,
+                        process.id,
                         op.kind,
                         maximum,
                         minimum);
@@ -1885,7 +1885,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 solver,
                                 variables,
                                 op.inline_constraints,
-                                process.program.name + "::std::randomize@"
+                                process.program().name + "::std::randomize@"
                                     + std::to_string(process.pc));
                         };
                     }
@@ -1894,23 +1894,23 @@ void Interpreter::Impl::execute(ProcessId id)
                         32, result.language_result(), 0);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
-                    if (process.program.language_standard == "2019") {
+                    if (process.program().language_standard == "2019") {
                         execute_vhdl_report(
                             process, process.pc, op.message, op.severity,
                             op.source, true);
                     } else if (report_hook) {
                         report_hook(
-                            process.program.id,
+                            process.id,
                             op.message,
                             op.severity,
                             op.source,
                             scheduler.now(),
                             scheduler.delta());
                     }
-                    if (process.program.language_standard != "2019"
+                    if (process.program().language_standard != "2019"
                         && op.severity == AssertionSeverity::failure) {
                         throw AssertionError(
-                            process.program.id,
+                            process.id,
                             process.pc,
                             op.message.empty() ? "report failure" : op.message,
                             op.severity,
@@ -1947,11 +1947,11 @@ void Interpreter::Impl::execute(ProcessId id)
         if (boundary) {
             const bool debug_boundary = fsim::runtime::simir::operation_holds<DebugPoint>(operation);
             if (fsim::runtime::simir::operation_holds<Fork>(operation)
-                && !process.executor && process.deferred_executor
+                && !process.executor && process.cold().deferred_executor
                 && can_install_deferred_executor(process)
-                && process.deferred_executor->ready()) {
+                && process.cold().deferred_executor->ready()) {
                 install_deferred_executor(process);
-                queue_current(process.program.id);
+                queue_current(process.id);
                 return;
             }
             const bool immediate_process_boundary = is_immediate_process_boundary(operation);

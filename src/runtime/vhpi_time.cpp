@@ -37,16 +37,21 @@ VhdlVhpiTimeSystem::VhdlVhpiTimeSystem(
         & 0x00ffffffU;
   }
   if (valid()) {
-    scheduler_->set_safe_point_hook(
-        [this](Scheduler&, const SchedulerPhase phase) {
-          safe_point(phase);
+    safe_point_alive_ = std::make_shared<bool>(true);
+    const std::weak_ptr<bool> alive = safe_point_alive_;
+    safe_point_hook_token_ = scheduler_->add_safe_point_hook(
+        [this, alive](Scheduler&, const SchedulerPhase phase) {
+          if (alive.lock()) {
+            safe_point(phase);
+          }
         });
   }
 }
 
 VhdlVhpiTimeSystem::~VhdlVhpiTimeSystem() {
+  safe_point_alive_.reset();
   if (scheduler_ != nullptr) {
-    scheduler_->set_safe_point_hook({});
+    scheduler_->remove_safe_point_hook(safe_point_hook_token_);
   }
 }
 

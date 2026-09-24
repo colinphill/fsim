@@ -7261,30 +7261,139 @@ pass is claimed. This cohesive implementation commit and push close Change
 
 #### Batch 188G - scheduler and runtime storage
 
-1. Freeze ordering tests covering complete `StableOrder`, insertion sequence, regions, and deltas.
-2. Preserve capacity across all eight delta-region queues.
-3. Add typed internal task descriptors while retaining public callback scheduling.
-4. Migrate internal process wakeups and timers without dropping origin or generation information.
-5. Optimize interrupt polling and compose safe-point hooks without changing callback placement.
-6. Separate frequently accessed process state from cold execution metadata.
-7. Store static fanout contiguously with explicit rebuilding when topology changes.
-8. Use stable dynamic-wait registrations with safe invalidation and compaction.
-9. Decode transitions once and separate transaction-sensitive fanout.
-10. Index named-event membership and maintain it across alias rebinding.
-11. Maintain switch-network connectivity incrementally instead of rescanning all processes.
-12. Replace separate driver maps with ordered inline-single-entry driver
-    records and overflow storage.
-13. Add allocation-free four-state resolution for widths up to 64 bits.
-14. Implement word-based force/release transformations with correct masks and
-    copy-on-write handling.
-15. Group hot signal fields and move optional metadata into cold storage.
-16. Materialize narrow packed mirrors lazily while retaining distinct driven and published values.
-17. Update native, interpreter, tracing, foreign-interface, reset, and timing-
-    check access paths together.
-18. Reuse cohort and batch scratch storage.
-19. Run scheduler/resolution differential tests, alias mutation, force/release,
-    and width-boundary stress.
-20. Run standard closure and hand off to 188H.
+1. **Complete.** Freeze ordering tests covering complete `StableOrder`,
+   insertion sequence, regions, and deltas. The runtime test covers all eight
+   regions, orders 0, 2^32, 2^63, and UINT64_MAX, equal-order insertion, and
+   three delta waves; focused Debug `fsim.runtime` passed.
+2. **Complete.** Preserve capacity across all eight delta-region queues.
+   Rotating current and next-delta buckets with `std::swap` retains their
+   queue storage; the all-region delta-wave runtime regression passed.
+3. **Complete.** Add typed internal task descriptors while retaining public
+   callback scheduling. Compact, trivially copyable descriptors share the
+   scheduler's ordering and dispatch with public callbacks and batch entries;
+   their time, delta, and interleaving tests passed in focused Debug runtime.
+4. **Complete.** Migrate internal process wakeups and timers without dropping
+   origin or generation information. Single-process wakes/timers use typed
+   descriptors; variable-size static-cohort work uses generation-checked,
+   reusable snapshots with a pending token for coalescing. Dispatch clears the
+   token before execution so a later wake can rearm. Scheduler discard/reset,
+   stop, exception, and teardown paths reconcile pending members. A CMake-
+   rescanned warnings-as-errors Debug build, `fsim.runtime`, and six focused
+   application selectors passed, including stale-token, external discard/reset,
+   and cohort order regressions. Review then found active scheduler move
+   construction and discard-hook reentrancy hazards. Move construction now
+   rejects an active run, and the discard guard covers hook notification;
+   new callback-move and reentrant discard/reset/move/destruction regressions,
+   the CMake-rescanned warnings-as-errors Debug build, `fsim.runtime`, and six
+   focused application selectors passed after repair.
+5. **Complete.** Optimize interrupt polling and compose safe-point hooks
+   without changing callback placement. Boundary polling and tokenized
+   additive hooks retain the legacy hook order; mutation, exception, and
+   VHPI teardown tests passed in focused Debug runtime.
+6. **Complete.** Separate frequently accessed process state from cold execution
+   metadata. The compact inline state retains IDs, PC, scheduling flags,
+   generation, and cached phase; a per-process sidecar owns the program and
+   cold execution metadata. Root and fork initialization, the warnings-as-errors
+   Debug runtime build, and seven focused Debug tests passed.
+7. **Complete.** Store static fanout contiguously with explicit rebuilding
+   when topology changes. A single flat entry array and per-signal offsets
+   rebuild at simulation start and after nonempty fork waves from canonical
+   process declarations; order, duplicate sensitivities, and trigger masks
+   remain intact. The warnings-as-errors Debug runtime build and focused
+   `fsim.runtime` fork/fanout tests passed.
+8. **Complete.** Use stable dynamic-wait registrations with safe invalidation
+   and compaction. Process/wait generations and per-sensitivity slots reject
+   stale dispatch, invalidate in owned-slot time, and compact tombstones at a
+   bounded threshold; WaitOn/WaitOrder, timeout rearm, and repeated WaitPla
+   regressions passed in focused Debug runtime.
+9. **Complete.** Decode transitions once and separate transaction-sensitive
+   fanout. Category spans index the canonical ordered fanout; native and
+   generic publication decode a scalar edge once, while same-value writes
+   still stamp and dispatch transaction sensitivities. Named-event commit
+   retains its full ordered span. The warnings-as-errors Debug build and seven
+   focused Debug tests passed.
+10. **Complete.** Index named-event membership and maintain it across alias
+    rebinding. Per-identity sorted SignalId buckets replace full signal scans
+    in event commit and trigger; rebind/clear update membership while dynamic
+    waits retain their captured identity. The warnings-as-errors Debug build,
+    alias lifecycle runtime regression, and six focused application tests
+    passed.
+11. **Complete.** Maintain switch-network connectivity incrementally instead
+    of rescanning all processes. Immutable endpoint/control adjacency and
+    conservative static components limit driver reset and recomputation to
+    affected components; the existing per-bit solver and sorted snapshot
+    publication preserve strength, X/Z, force/release, and fork behavior.
+    The warnings-as-errors Debug build, focused `fsim.runtime`, and six
+    application selectors passed, including independent switch components.
+12. **Complete.** Replace separate driver maps with ordered inline-single-entry
+    driver records and overflow storage. `DriverTable` keeps the first record
+    inline and visits later records in ProcessId order; the parallel strength
+    map is gone. Direct routes reacquire records by ProcessId after table
+    promotion or signal-vector growth. The CMake-rescanned warnings-as-errors
+    Debug runtime/application builds, focused `fsim.runtime`, and six
+    resolution, SDF, named-event, fork, expression, and scheduling application
+    selectors passed. Runtime regressions cover reverse four-driver insertion,
+    `sv_user_first`, direct-route growth, and live 64/65-bit force/release.
+13. **Complete.** Add allocation-free four-state resolution for widths up to
+    64 bits. A word accumulator resolves eligible simple Logic4 drivers
+    without temporary driver vectors; strength, charge, Logic9, and wide
+    cases retain their existing paths. Primitive and interpreter/LLVM O0/O2
+    width-boundary resolution tests passed in focused Debug runtime and
+    application tests.
+14. **Complete.** Implement word-based force/release transformations with
+    correct masks and copy-on-write handling. Narrow overlays and chunked mask
+    updates are in place; the wide fallback uses `PackedLogic4::insert_bits`
+    word-range copying. The unaligned 65-bit insertion/copy-on-write regression
+    and focused Debug force/release tests passed.
+15. **Complete.** Group hot signal fields and move optional metadata into cold
+    storage. Dense SignalId-aligned hot/cold records retain public `Signal`
+    construction, keep optional-presence flags hot, and route cold metadata
+    reads through validated non-materializing accessors. A CMake-rescanned
+    warnings-as-errors Debug build, `fsim.runtime`, and six focused application
+    selectors passed after the migration.
+16. **Complete.** Materialize narrow packed mirrors lazily while retaining
+    distinct driven and published values. Eligible native word and Logic9
+    publication updates direct planes and defers packed current, previous,
+    driven, and driver mirrors until a generic accessor needs them. The new
+    narrow native publication, partial update, force/release, and generic
+    read regression passed in focused Debug `fsim.runtime`.
+17. **Complete.** Update native, interpreter, tracing, foreign-interface,
+    reset, and timing-check access paths together. The raw mirror-read audit
+    found one reachable stale direct-driver fallback; a regression failed
+    before materializing its pending native value and passed afterward.
+    Eligibility/materialization checks covered the remaining readers;
+    focused Debug `fsim.runtime` and ten trace, VPI/VHPI, timing, and typed
+    boundary application selectors passed.
+18. **Complete.** Reuse cohort and batch scratch storage. Scheduler batch
+    entry/payload buffers, generation-checked cohort snapshot slots,
+    current-phase staging, native-region ready/offset vectors, and large-cohort
+    context/entry buffers retain capacity while clearing live references on
+    dispatch, discard, stop, and exception. A nested large-cohort execution
+    uses local scratch to avoid reentrant aliasing. The warnings-as-errors
+    Debug runtime/application builds, `fsim.runtime`, six focused application
+    selectors, and repeated 513-member cohort regression passed.
+19. **Complete.** Run scheduler/resolution differential tests, alias mutation,
+    force/release, and width-boundary stress. The four-driver reverse-order
+    resolution and 64/65-bit force/release regressions passed in Debug
+    `fsim.runtime`; six focused scheduler/resolution application selectors and
+    thirteen trace, VPI/VHPI, timing, and alias selectors passed after the
+    signal-storage migration.
+20. **Complete.** Run standard closure and hand off to 188H. After CMake
+    dependency rescans, the warnings-as-errors Clang/LLVM 22 Release build
+    passed 2,345/2,345 steps and the Debug build passed 1,895/1,895 remaining
+    steps. The first unfiltered Release run passed 418/421; two failures and
+    one dependent not-run gate came from omitting the three new private headers
+    from the source-package manifest. After fixing the manifest, the targeted
+    rerun passed 19/19 including all three affected gates and dependencies;
+    the user authorized proceeding without another full Release run. The
+    unfiltered Debug suite passed 421/421. The latest applicable hosted run,
+    36013514908 at the 188F head, passed both Linux lanes and failed both
+    Windows builds on `shared_ptr::unique()`; the two calls were replaced with
+    `use_count() != 1` and the local Debug build passed. The user-waived
+    seven-sample cumulative performance matrix was not run and is not claimed
+    as passing. Post-push hosted monitoring is waived for this batch; the new
+    head remains unverified. One cohesive commit and push close the batch;
+    no release tag is made.
 
 Retain the ordered future-time map. Do not replace full scheduler ordering with
 process-ID bitmap order.

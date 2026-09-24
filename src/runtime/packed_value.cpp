@@ -164,6 +164,67 @@ namespace {
 
 } // namespace
 
+Logic4ResolutionAccumulator::Logic4ResolutionAccumulator(
+    const std::size_t width)
+    : width_ { width }
+    , width_mask_ { final_word_mask(width) }
+{
+    if (width == 0U || width > bits_per_word) {
+        throw std::invalid_argument {
+            "Logic4 word resolution width must be between 1 and 64"
+        };
+    }
+}
+
+void Logic4ResolutionAccumulator::add(const Logic4Word driver)
+{
+    if (driver.width != width_) {
+        throw std::invalid_argument {
+            "Logic4 word resolution driver width mismatch"
+        };
+    }
+    const auto aval = driver.aval & width_mask_;
+    const auto bval = driver.bval & width_mask_;
+    const auto known = ~bval & width_mask_;
+    zero_seen_ |= ~aval & known;
+    one_seen_ |= aval & known;
+    unknown_seen_ |= aval & bval;
+}
+
+Logic4Word Logic4ResolutionAccumulator::result() const noexcept
+{
+    const auto driven = zero_seen_ | one_seen_ | unknown_seen_;
+    return {
+        width_,
+        (one_seen_ | unknown_seen_) & width_mask_,
+        (unknown_seen_ | (zero_seen_ & one_seen_)
+            | (~driven & width_mask_))
+            & width_mask_
+    };
+}
+
+Logic4Word apply_force_word(
+    Logic4Word driven,
+    const Logic4Word& forced,
+    const std::uint64_t mask)
+{
+    if (driven.width == 0U || driven.width > bits_per_word
+        || forced.width != driven.width) {
+        throw std::invalid_argument {
+            "Logic4 force words must have the same width between 1 and 64"
+        };
+    }
+    const auto width_mask = final_word_mask(driven.width);
+    const auto force_mask = mask & width_mask;
+    driven.aval = ((driven.aval & ~force_mask)
+        | (forced.aval & force_mask))
+        & width_mask;
+    driven.bval = ((driven.bval & ~force_mask)
+        | (forced.bval & force_mask))
+        & width_mask;
+    return driven;
+}
+
 PackedBit2::PackedBit2(std::size_t width, bool initial)
     : width_(width)
     , words_(word_count(width), initial ? ~std::uint64_t { 0 } : 0)

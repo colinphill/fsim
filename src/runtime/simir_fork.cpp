@@ -54,56 +54,56 @@ namespace {
         clear_wait_timeout(process);
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
+            process.cold().current_source);
         spawn_fork(process, instruction, *fork);
         return true;
     }
     if (fsim::runtime::simir::operation_holds<ForkEnd>(operation)) {
-        if (!process.fork_parent) {
+        if (!process.cold().fork_parent) {
             process.pc = instruction;
             fail(process, "ForkEnd requires a dynamically spawned fork child");
         }
         clear_wait_timeout(process);
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
+            process.cold().current_source);
         snapshot_callable_context(process);
         complete_fork_child(process);
         return true;
     }
     if (fsim::runtime::simir::operation_holds<WaitFork>(operation)) {
         clear_wait_timeout(process);
-        if (process.live_children.empty()) {
+        if (process.cold().live_children.empty()) {
             process.status = ProcessStatus::running;
-            queue_current(process.program.id);
+            queue_current(process.id);
         } else {
-            process.waiting_for_children = true;
+            process.cold().waiting_for_children = true;
             process.status = ProcessStatus::waiting;
         }
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
+            process.cold().current_source);
         return true;
     }
     if (const auto* disable_block = fsim::runtime::simir::operation_get_if<DisableBlock>(
             &operation)) {
         if (disable_block->begin >= disable_block->end
-            || disable_block->end > process.program.operations.size()) {
+            || disable_block->end > process.program().operations.size()) {
             process.pc = instruction;
             fail(process, "DisableBlock has an invalid lexical interval");
         }
         auto* owner = &process;
-        while (owner->fork_parent && owner->fork_site
-            && *owner->fork_site >= disable_block->begin
-            && *owner->fork_site < disable_block->end) {
-            owner = &get_process(*owner->fork_parent);
+        while (owner->cold().fork_parent && owner->cold().fork_site
+            && *owner->cold().fork_site >= disable_block->begin
+            && *owner->cold().fork_site < disable_block->end) {
+            owner = &get_process(*owner->cold().fork_parent);
         }
         std::vector<ProcessId> scoped_children;
-        for (const auto child_id : owner->live_children) {
+        for (const auto child_id : owner->cold().live_children) {
             const auto& child = get_process(child_id);
-            if (child.fork_site
-                && *child.fork_site >= disable_block->begin
-                && *child.fork_site < disable_block->end) {
+            if (child.cold().fork_site
+                && *child.cold().fork_site >= disable_block->begin
+                && *child.cold().fork_site < disable_block->end) {
                 scoped_children.push_back(child_id);
             }
         }
@@ -118,14 +118,14 @@ namespace {
             && owner->pc < disable_block->end;
         if (owner_inside) {
             clear_wait_timeout(*owner);
-            owner->waiting_for_children = false;
+            owner->cold().waiting_for_children = false;
             owner->pc = disable_block->end;
             if (owner->executor) {
                 owner->executor->redirect(disable_block->end);
             }
             owner->status = ProcessStatus::running;
             if (owner != &process) {
-                queue_active_current(owner->program.id);
+                queue_active_current(owner->id);
             }
         }
         return true;
@@ -139,12 +139,12 @@ namespace {
         cancel_fork_descendants(process);
     } else {
         ProcessState* owner = &process;
-        while (!owner->active_fork_sites.contains(*disable.site)
-            && owner->fork_parent) {
-            owner = &get_process(*owner->fork_parent);
+        while (!owner->cold().active_fork_sites.contains(*disable.site)
+            && owner->cold().fork_parent) {
+            owner = &get_process(*owner->cold().fork_parent);
         }
-        const auto found = owner->active_fork_sites.find(*disable.site);
-        if (found != owner->active_fork_sites.end()) {
+        const auto found = owner->cold().active_fork_sites.find(*disable.site);
+        if (found != owner->cold().active_fork_sites.end()) {
             const std::vector<ProcessId> children {
                 found->second.begin(), found->second.end()
             };
@@ -160,13 +160,13 @@ namespace {
     if (!process.halted) {
         process.status = ProcessStatus::running;
         if (!disable.site) {
-            queue_current(process.program.id);
+            queue_current(process.id);
         }
     }
     if (!disable.site) {
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
+            process.cold().current_source);
     }
     return true;
 }
@@ -174,7 +174,7 @@ namespace {
 std::uint64_t Interpreter::Impl::process_handle(
     const ProcessState& process) const
 {
-    const auto encoded_id = static_cast<std::uint64_t>(process.program.id) + 1U;
+    const auto encoded_id = static_cast<std::uint64_t>(process.id) + 1U;
     if (encoded_id > std::numeric_limits<std::uint32_t>::max()
         || process.generation == 0) {
         throw std::overflow_error { "SimIR process handle identity overflow" };
@@ -228,29 +228,29 @@ void Interpreter::Impl::complete_process(
     process.suspended_wake = false;
     process.waiting_on_static = false;
     process.waiting_on_signal = false;
-    process.waiting_for_children = false;
-    process.waiting_fork_group.reset();
-    if (process.waiting_process) {
-        get_process(*process.waiting_process)
-            .process_waiters.erase(process.program.id);
-        process.waiting_process.reset();
+    process.cold().waiting_for_children = false;
+    process.cold().waiting_fork_group.reset();
+    if (process.cold().waiting_process) {
+        get_process(*process.cold().waiting_process)
+            .cold().process_waiters.erase(process.id);
+        process.cold().waiting_process.reset();
     }
     remove_dynamic_wait(process);
     clear_wait_timeout(process);
 
-    const auto waiters = std::move(process.process_waiters);
-    process.process_waiters.clear();
+    const auto waiters = std::move(process.cold().process_waiters);
+    process.cold().process_waiters.clear();
     for (const auto waiter_id : waiters) {
         auto& waiter = get_process(waiter_id);
         if (waiter.halted
-            || waiter.waiting_process != process.program.id) {
+            || waiter.cold().waiting_process != process.id) {
             continue;
         }
-        waiter.waiting_process.reset();
+        waiter.cold().waiting_process.reset();
         waiter.status = ProcessStatus::running;
         queue_active_current(waiter_id);
     }
-    process.escaping_callable_contexts.clear();
+    process.cold().escaping_callable_contexts.clear();
 }
 
 [[nodiscard]] bool Interpreter::Impl::handle_process_boundary(
@@ -305,9 +305,11 @@ void Interpreter::Impl::complete_process(
             || (source != nullptr && !source->event_variable)) {
             fail(process, "EventAlias requires named-event variables");
         }
-        event_identities.at(alias->target) = alias->has_source
-            ? event_identities.at(alias->source)
-            : std::nullopt;
+        set_event_identity(
+            alias->target,
+            source != nullptr
+                ? event_identities.at(alias->source)
+                : std::nullopt);
         if (source != nullptr) {
             driven_values.at(alias->target) = driven_values.at(alias->source);
             signals.at(alias->target).initial_value = source->initial_value;
@@ -343,7 +345,7 @@ void Interpreter::Impl::complete_process(
     if (const auto* await = fsim::runtime::simir::operation_get_if<ProcessAwait>(
             &operation)) {
         auto& target = process_from_handle(process, await->source);
-        if (target.program.id == process.program.id) {
+        if (target.id == process.id) {
             process.pc = instruction;
             fail(process, "a process cannot await itself");
         }
@@ -351,21 +353,21 @@ void Interpreter::Impl::complete_process(
         if (target.status == ProcessStatus::finished
             || target.status == ProcessStatus::killed) {
             process.status = ProcessStatus::running;
-            queue_current(process.program.id);
+            queue_current(process.id);
         } else {
-            target.process_waiters.insert(process.program.id);
-            process.waiting_process = target.program.id;
+            target.cold().process_waiters.insert(process.id);
+            process.cold().waiting_process = target.id;
             process.status = ProcessStatus::waiting;
         }
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
-            process.current_source);
+            process.cold().current_source);
         return true;
     }
     if (const auto* get = fsim::runtime::simir::operation_get_if<ProcessGetRandState>(
             &operation)) {
         auto& target = process_from_handle(process, get->source);
-        const auto state = encode_random_state(target.random_state);
+        const auto state = encode_random_state(target.cold().random_state);
         if (process.executor) {
             process.executor->write_string_register(get->destination, state);
         } else {
@@ -385,7 +387,7 @@ void Interpreter::Impl::complete_process(
             process.pc = instruction;
             fail(process, "process random-state token is malformed");
         }
-        target.random_state = *state;
+        target.cold().random_state = *state;
         process.status = ProcessStatus::running;
         return true;
     }
@@ -400,7 +402,7 @@ void Interpreter::Impl::complete_process(
             process.pc = instruction;
             fail(process, "process srandom seed must be a known 32-bit value");
         }
-        target.random_state = static_cast<std::uint32_t>(word.aval);
+        target.cold().random_state = static_cast<std::uint32_t>(word.aval);
         process.status = ProcessStatus::running;
         return true;
     }
@@ -416,10 +418,10 @@ void Interpreter::Impl::complete_process(
     clear_wait_timeout(process);
     if (kill != nullptr && !target.halted) {
         cancel_fork_descendants(target);
-        if (target.program.id == process.program.id) {
+        if (target.id == process.id) {
             snapshot_callable_context(target);
         }
-        if (target.fork_parent) {
+        if (target.cold().fork_parent) {
             complete_fork_child(target, ProcessStatus::killed);
         } else {
             complete_process(target, ProcessStatus::killed);
@@ -437,16 +439,16 @@ void Interpreter::Impl::complete_process(
             ? ProcessStatus::running
             : target.suspended_status;
         if (make_runnable && !target.queued) {
-            queue_active_current(target.program.id);
+            queue_active_current(target.id);
         }
     }
     if (!process.halted && !process.suspended) {
         process.status = ProcessStatus::running;
-        queue_current(process.program.id);
+        queue_current(process.id);
     }
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
-        process.current_source);
+        process.cold().current_source);
     return true;
 }
 
@@ -455,15 +457,15 @@ void Interpreter::Impl::spawn_fork(
     const InstructionIndex instruction,
     const Fork& operation)
 {
-    const auto parent_id = parent.program.id;
+    const auto parent_id = parent.id;
     if (!parent.frame && !parent.executor) {
         fail(parent, "fork parent has no lexical frame");
     }
-    if (instruction + 1 >= parent.program.operations.size()) {
+    if (instruction + 1 >= parent.program().operations.size()) {
         fail(parent, "fork parent continuation is outside the operation stream");
     }
     for (const auto branch : operation.branches) {
-        if (branch >= parent.program.operations.size()) {
+        if (branch >= parent.program().operations.size()) {
             fail(parent, "fork branch entry is outside the operation stream");
         }
         if (branch <= instruction + 1) {
@@ -494,13 +496,13 @@ void Interpreter::Impl::spawn_fork(
     }
     const auto group_id = next_fork_group++;
     const auto shared_frame = parent.frame;
-    const auto program = parent.program;
+    const auto program = parent.program();
     const auto design_process = parent.design_process;
     auto* const executor = parent.executor.get();
-    auto inherited_contexts = parent.escaping_callable_contexts;
+    auto inherited_contexts = parent.cold().escaping_callable_contexts;
     if (operation.join == ForkJoinKind::none
-        && !parent.callable_frames.empty()) {
-        auto& callable = parent.callable_frames.back();
+        && !parent.cold().callable_frames.empty()) {
+        auto& callable = parent.cold().callable_frames.back();
         if (!callable.escaping_context) {
             auto context
                 = std::make_shared<ProcessState::CallableFrameState>();
@@ -529,16 +531,21 @@ void Interpreter::Impl::spawn_fork(
             throw std::overflow_error { "SimIR process generation overflow" };
         }
         child.generation = next_process_generation++;
-        child.program = program;
+        child.program() = program;
+        child.program().id = child_id;
         child.design_process = design_process;
-        child.program.id = child_id;
-        child.program.name += ".$fork[" + std::to_string(instruction) + "].child["
-            + std::to_string(children.size()) + "]";
-        child.program.initialize = false;
-        child.program.final = false;
+        child.id = child_id;
+        child.program().name += ".$fork[" + std::to_string(instruction)
+            + "].child[" + std::to_string(children.size()) + "]";
+        child.program().initialize = false;
+        child.program().final = false;
+        child.execution_phase = process_execution_phase(
+            child.program().observed,
+            child.program().reactive,
+            child.program().postponed);
         child.pc = branch;
         child.frame = shared_frame;
-        child.escaping_callable_contexts = inherited_contexts;
+        child.cold().escaping_callable_contexts = inherited_contexts;
         if (executor != nullptr) {
             child.executor = executor->fork_clone(branch);
             if (!child.executor) {
@@ -547,21 +554,26 @@ void Interpreter::Impl::spawn_fork(
                 };
             }
         }
-        child.random_state = initial_random_state(root_seed, child_id);
-        child.fork_parent = parent_id;
-        child.fork_site = instruction;
+        child.cold().random_state = initial_random_state(root_seed, child_id);
+        child.cold().fork_parent = parent_id;
+        child.cold().fork_site = instruction;
         if (operation.join != ForkJoinKind::none) {
-            child.fork_group = group_id;
+            child.cold().fork_group = group_id;
         }
         processes.push_back(std::move(child));
+        static_fanout_dirty = true;
         register_static_sensitivity_cohort(child_id);
         children.insert(child_id);
     }
 
-    auto& current_parent = get_process(parent_id);
-    current_parent.live_children.insert(children.begin(), children.end());
     if (!children.empty()) {
-        auto& site_children = current_parent.active_fork_sites[instruction];
+        rebuild_static_fanout();
+    }
+
+    auto& current_parent = get_process(parent_id);
+    current_parent.cold().live_children.insert(children.begin(), children.end());
+    if (!children.empty()) {
+        auto& site_children = current_parent.cold().active_fork_sites[instruction];
         site_children.insert(children.begin(), children.end());
     }
     if (operation.join != ForkJoinKind::none && !children.empty()) {
@@ -569,25 +581,11 @@ void Interpreter::Impl::spawn_fork(
             group_id,
             ForkGroup {
                 parent_id, instruction, operation.join, children, false });
-        current_parent.waiting_fork_group = group_id;
+        current_parent.cold().waiting_fork_group = group_id;
         current_parent.status = ProcessStatus::waiting;
     }
 
     for (const auto child : children) {
-        const auto& child_program = get_process(child).program;
-        for (std::size_t sensitivity_index = 0;
-             sensitivity_index < child_program.static_sensitivity.size();
-             ++sensitivity_index) {
-            const auto sensitivity
-                = child_program.static_sensitivity[sensitivity_index];
-            const auto trigger_mask
-                = sensitivity_index < 63U
-                    && !child_program.static_trigger_regions.empty()
-                ? UINT64_C(1) << sensitivity_index
-                : Process::full_static_trigger_mask;
-            static_fanout[sensitivity.signal].push_back(
-                { child, sensitivity.edge, trigger_mask });
-        }
         queue_active_current(child);
     }
     if (operation.join == ForkJoinKind::none || children.empty()) {
@@ -600,27 +598,27 @@ void Interpreter::Impl::complete_fork_child(
     ProcessState& child,
     const ProcessStatus status)
 {
-    const auto child_id = child.program.id;
-    const auto parent_id = child.fork_parent;
-    const auto group_id = child.fork_group;
+    const auto child_id = child.id;
+    const auto parent_id = child.cold().fork_parent;
+    const auto group_id = child.cold().fork_group;
     complete_process(child, status);
     if (!parent_id) {
         return;
     }
 
     auto& parent = get_process(*parent_id);
-    parent.live_children.erase(child_id);
-    for (auto site = parent.active_fork_sites.begin();
-        site != parent.active_fork_sites.end();) {
+    parent.cold().live_children.erase(child_id);
+    for (auto site = parent.cold().active_fork_sites.begin();
+        site != parent.cold().active_fork_sites.end();) {
         site->second.erase(child_id);
         if (site->second.empty()) {
-            site = parent.active_fork_sites.erase(site);
+            site = parent.cold().active_fork_sites.erase(site);
         } else {
             ++site;
         }
     }
-    if (parent.waiting_for_children && parent.live_children.empty()) {
-        parent.waiting_for_children = false;
+    if (parent.cold().waiting_for_children && parent.cold().live_children.empty()) {
+        parent.cold().waiting_for_children = false;
         parent.status = ProcessStatus::running;
         queue_active_current(*parent_id);
     }
@@ -640,12 +638,12 @@ void Interpreter::Impl::complete_fork_child(
         return;
     }
     group.parent_resumed = true;
-    parent.waiting_fork_group.reset();
+    parent.cold().waiting_fork_group.reset();
     parent.status = ProcessStatus::running;
     queue_active_current(group.parent);
     if (group.join == ForkJoinKind::any) {
         for (const auto remaining : group.children) {
-            get_process(remaining).fork_group.reset();
+            get_process(remaining).cold().fork_group.reset();
         }
     }
     fork_groups.erase(found);
@@ -656,8 +654,8 @@ void Interpreter::Impl::cancel_fork_descendants(ProcessState& parent)
     std::vector<ProcessId> children;
     children.reserve(processes.size());
     for (const auto& candidate : processes) {
-        if (candidate.fork_parent == parent.program.id) {
-            children.push_back(candidate.program.id);
+        if (candidate.cold().fork_parent == parent.id) {
+            children.push_back(candidate.id);
         }
     }
     for (const auto child_id : children) {
@@ -667,10 +665,10 @@ void Interpreter::Impl::cancel_fork_descendants(ProcessState& parent)
             complete_fork_child(child, ProcessStatus::killed);
         }
     }
-    parent.live_children.clear();
-    parent.active_fork_sites.clear();
-    parent.waiting_for_children = false;
-    parent.waiting_fork_group.reset();
+    parent.cold().live_children.clear();
+    parent.cold().active_fork_sites.clear();
+    parent.cold().waiting_for_children = false;
+    parent.cold().waiting_fork_group.reset();
 }
 
 void Interpreter::Impl::kill_dynamic_processes(
@@ -679,15 +677,15 @@ void Interpreter::Impl::kill_dynamic_processes(
     std::vector<ProcessId> roots;
     roots.reserve(processes.size());
     for (const auto& candidate : processes) {
-        if (candidate.halted || !candidate.fork_parent
+        if (candidate.halted || !candidate.cold().fork_parent
             || std::ranges::find(
                    design_processes, candidate.design_process)
                 == design_processes.end()) {
             continue;
         }
-        const auto& parent = get_process(*candidate.fork_parent);
-        if (!parent.fork_parent || parent.halted) {
-            roots.push_back(candidate.program.id);
+        const auto& parent = get_process(*candidate.cold().fork_parent);
+        if (!parent.cold().fork_parent || parent.halted) {
+            roots.push_back(candidate.id);
         }
     }
     for (const auto root : roots) {
@@ -702,20 +700,20 @@ void Interpreter::Impl::kill_dynamic_processes(
 
 void Interpreter::Impl::exit_program(ProcessState& process)
 {
-    if (!process.program.program_owner) {
+    if (!process.program().program_owner) {
         fail(process, "$exit requires a SystemVerilog program owner");
     }
-    const auto owner = *process.program.program_owner;
+    const auto owner = *process.program().program_owner;
     if (exited_programs.contains(owner)) {
         return;
     }
 
     std::vector<ProcessId> roots;
     for (const auto& candidate : processes) {
-        if (!candidate.halted && !candidate.fork_parent
-            && candidate.program.program_owner == owner
-            && !candidate.program.final) {
-            roots.push_back(candidate.program.id);
+        if (!candidate.halted && !candidate.cold().fork_parent
+            && candidate.program().program_owner == owner
+            && !candidate.program().final) {
+            roots.push_back(candidate.id);
         }
     }
     for (const auto root : roots) {
@@ -735,17 +733,17 @@ void Interpreter::Impl::exit_program(ProcessState& process)
 
 void Interpreter::Impl::complete_program_process(ProcessState& process)
 {
-    if (!process.program.program_owner || process.program.final
-        || process.fork_parent) {
+    if (!process.program().program_owner || process.program().final
+        || process.cold().fork_parent) {
         return;
     }
-    const auto owner = *process.program.program_owner;
+    const auto owner = *process.program().program_owner;
     const bool live_initial = std::ranges::any_of(
         processes,
         [&](const ProcessState& candidate) {
-            return !candidate.halted && !candidate.fork_parent
-                && !candidate.program.final
-                && candidate.program.program_owner == owner;
+            return !candidate.halted && !candidate.cold().fork_parent
+                && !candidate.program().final
+                && candidate.program().program_owner == owner;
         });
     if (!live_initial) {
         exit_program(process);

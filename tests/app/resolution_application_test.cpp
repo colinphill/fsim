@@ -65,6 +65,27 @@ struct StrengthCapture {
         const StrengthCapture&, const StrengthCapture&) = default;
 };
 
+struct ConditionalSwitchForceCapture {
+    std::vector<Change> control_changes;
+    std::vector<Change> target_changes;
+    std::string final_control;
+    std::string final_target;
+
+    friend bool operator==(
+        const ConditionalSwitchForceCapture&,
+        const ConditionalSwitchForceCapture&) = default;
+};
+
+struct SwitchComponentCapture {
+    std::vector<std::pair<std::string, Change>> controlled_changes;
+    std::vector<std::pair<std::string, Change>> independent_changes;
+    std::array<std::string, 4> final_values;
+
+    friend bool operator==(
+        const SwitchComponentCapture&,
+        const SwitchComponentCapture&) = default;
+};
+
 bool writes_signal(
     const fsim::runtime::simir::Process& process,
     const fsim::runtime::simir::SignalId signal)
@@ -615,6 +636,495 @@ endmodule
         }));
     assert(reference.vcd.find("#2000") != std::string::npos);
     assert(reference.debugger.find("decayed_charge") != std::string::npos);
+}
+
+void verify_resolved_net_boundaries(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization)
+{
+    const auto source = directory / "resolved_net_boundaries.v";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(`timescale 1ns/1ps
+module resolved_net_boundaries;
+  reg enable_strength;
+  reg enable_conflict;
+  tri strength_1;
+  tri [63:0] strength_64;
+  tri [64:0] strength_65;
+  tri conflict_1;
+  tri [63:0] conflict_64;
+  tri [64:0] conflict_65;
+  tri floating_1;
+  tri [63:0] floating_64;
+  tri [64:0] floating_65;
+
+  assign (strong0, strong1) strength_1 =
+      enable_strength ? 1'b1 : 1'bz;
+  assign (weak0, weak1) strength_1 =
+      enable_strength ? 1'b0 : 1'bz;
+  assign (strong0, strong1) strength_64 = enable_strength
+      ? {1'b0, 62'bz, 1'b1} : 64'bz;
+  assign (weak0, weak1) strength_64 = enable_strength
+      ? {1'b1, 62'bz, 1'b0} : 64'bz;
+  assign (strong0, strong1) strength_65 = enable_strength
+      ? {1'b1, 1'b0, 62'bz, 1'b1} : 65'bz;
+  assign (weak0, weak1) strength_65 = enable_strength
+      ? {1'b0, 1'b1, 62'bz, 1'b0} : 65'bz;
+
+  assign (strong0, strong1) conflict_1 =
+      enable_conflict ? 1'b1 : 1'bz;
+  assign (strong0, strong1) conflict_1 =
+      enable_conflict ? 1'b0 : 1'bz;
+  assign (strong0, strong1) conflict_64 = enable_conflict
+      ? {1'b1, 62'bz, 1'b0} : 64'bz;
+  assign (strong0, strong1) conflict_64 = enable_conflict
+      ? {1'b0, 62'bz, 1'b1} : 64'bz;
+  assign (strong0, strong1) conflict_65 = enable_conflict
+      ? {1'b1, 1'b1, 62'bz, 1'b1} : 65'bz;
+  assign (strong0, strong1) conflict_65 = enable_conflict
+      ? {1'b0, 1'b0, 62'bz, 1'b0} : 65'bz;
+
+  initial begin
+    enable_strength = 1'b0;
+    enable_conflict = 1'b0;
+    #1 begin
+      enable_strength = 1'b1;
+      enable_conflict = 1'b1;
+    end
+    #1 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "resolved-net-boundaries";
+    config.project.top = "verilog:work.resolved_net_boundaries";
+    config.project.time_resolution = "auto";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "resolved-boundary-cache-o0"
+                : "resolved-boundary-cache-o2");
+    config.run.max_deltas = 1000;
+
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::verilog;
+    sources.standard = "2005";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    struct BoundaryCapture {
+        fsim::runtime::RunResult result;
+        std::array<std::string, 9> values;
+        std::size_t compiled_processes { };
+    };
+    const auto execute = [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(project);
+
+        const std::array<std::string_view, 9> names {
+            "strength_1", "strength_64", "strength_65",
+            "conflict_1", "conflict_64", "conflict_65",
+            "floating_1", "floating_64", "floating_65"
+        };
+        const std::array<std::size_t, 9> widths {
+            1, 64, 65, 1, 64, 65, 1, 64, 65
+        };
+        std::array<fsim::runtime::simir::SignalId, names.size()> signals {};
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto signal = project->design.find_signal(
+                "resolved_net_boundaries." + std::string { names[index] });
+            assert(signal);
+            signals[index] = *signal;
+            assert(project->design.signals().at(*signal).width == widths[index]);
+        }
+
+        fsim::app::Simulation simulation {
+            std::move(*project), config.run.max_deltas, engine
+        };
+        BoundaryCapture capture;
+        capture.compiled_processes = simulation.compiled_process_count();
+        capture.result = simulation.run();
+        for (std::size_t index = 0; index < signals.size(); ++index) {
+            capture.values[index] =
+                simulation.read_signal(signals[index]).to_msb_string();
+        }
+        return capture;
+    };
+
+    const auto reference = execute(fsim::app::SimulationEngine::interpreter);
+    const auto compiled = execute(fsim::app::SimulationEngine::compiled);
+    const std::string z62(62, 'Z');
+    const std::array<std::string, 9> expected {
+        "1", "0" + z62 + "1", "10" + z62 + "1",
+        "X", "X" + z62 + "X", "XX" + z62 + "X",
+        "Z", std::string(64, 'Z'), std::string(65, 'Z')
+    };
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.time == 2000);
+    assert(reference.values == expected);
+    assert(compiled.result.status == reference.result.status);
+    assert(compiled.result.time == reference.result.time);
+    assert(compiled.values == reference.values);
+#if defined(FSIM_HAS_LLVM)
+    assert(reference.compiled_processes == 0);
+    assert(compiled.compiled_processes > 0);
+#else
+    assert(reference.compiled_processes == 0);
+    assert(compiled.compiled_processes == 0);
+#endif
+}
+
+ConditionalSwitchForceCapture verify_forced_conditional_switch(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization)
+{
+    const auto source = directory / "forced_switch_control.v";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(`timescale 1ns/1ps
+module forced_switch_control;
+  wire source;
+  wire target;
+  wire control;
+  assign source = 1'b1;
+  assign control = 1'b0;
+  tranif1 conditional_link(source, target, control);
+
+  initial begin
+    #1 force control = 1'b1;
+    #1 release control;
+    #1 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "forced-switch-control";
+    config.project.top = "verilog:work.forced_switch_control";
+    config.project.time_resolution = "auto";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory
+        / (optimization == fsim::project::Optimization::o0
+                ? "forced-switch-cache-o0"
+                : "forced-switch-cache-o2");
+    config.run.max_deltas = 1000;
+
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::verilog;
+    sources.standard = "2005";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    struct RunCapture {
+        ConditionalSwitchForceCapture values;
+        fsim::runtime::RunResult result;
+        std::size_t compiled_processes { };
+    };
+    const auto execute = [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(project);
+        const auto control = project->design.find_signal(
+            "forced_switch_control.control");
+        const auto target = project->design.find_signal(
+            "forced_switch_control.target");
+        assert(control && target);
+
+        fsim::app::Simulation simulation {
+            std::move(*project), config.run.max_deltas, engine
+        };
+        RunCapture capture;
+        capture.compiled_processes = simulation.compiled_process_count();
+        simulation.set_signal_change_hook(
+            [&](const fsim::runtime::simir::SignalId signal,
+                const fsim::runtime::PackedLogic4& value,
+                const fsim::runtime::SimulationTick time,
+                const std::uint64_t delta) {
+                const Change change { value.to_msb_string(), time, delta };
+                if (signal == *control)
+                    capture.values.control_changes.push_back(change);
+                if (signal == *target)
+                    capture.values.target_changes.push_back(change);
+            });
+        capture.result = simulation.run();
+        capture.values.final_control
+            = simulation.read_signal(*control).to_msb_string();
+        capture.values.final_target
+            = simulation.read_signal(*target).to_msb_string();
+        return capture;
+    };
+
+    const auto reference = execute(fsim::app::SimulationEngine::interpreter);
+    const auto compiled = execute(fsim::app::SimulationEngine::compiled);
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.time == 3000);
+    assert(reference.values.final_control == "0");
+    assert(reference.values.final_target == "Z");
+    assert(std::ranges::any_of(
+        reference.values.control_changes, [](const Change& change) {
+            return change.value == "1" && change.time == 1000;
+        }));
+    assert(std::ranges::any_of(
+        reference.values.control_changes, [](const Change& change) {
+            return change.value == "0" && change.time == 2000;
+        }));
+    assert(std::ranges::any_of(
+        reference.values.target_changes, [](const Change& change) {
+            return change.value == "1" && change.time == 1000;
+        }));
+    assert(std::ranges::any_of(
+        reference.values.target_changes, [](const Change& change) {
+            return change.value == "Z" && change.time == 2000;
+        }));
+    assert(compiled.result.status == reference.result.status);
+    assert(compiled.result.time == reference.result.time);
+    assert(compiled.values == reference.values);
+#if defined(FSIM_HAS_LLVM)
+    assert(reference.compiled_processes == 0);
+    assert(compiled.compiled_processes > 0);
+#else
+    assert(reference.compiled_processes == 0);
+    assert(compiled.compiled_processes == 0);
+#endif
+    return reference.values;
+}
+
+SwitchComponentCapture verify_independent_switch_components(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization)
+{
+    const auto write_source = [&](const bool exercise_controlled) {
+        const auto source = directory
+            / (exercise_controlled
+                    ? "switch_components_active.v"
+                    : "switch_components_baseline.v");
+        std::ofstream output(source, std::ios::binary);
+        output << R"(`timescale 1ns/1ps
+module switch_component_isolation;
+  reg control_a;
+  wire source_a;
+  wire target_a;
+  reg control_b;
+  wire source_b;
+  wire target_b;
+  assign source_a = 1'b1;
+  assign source_b = 1'b0;
+  tranif1 active_high_link(source_a, target_a, control_a);
+  tranif0 active_low_link(source_b, target_b, control_b);
+
+  initial begin
+    control_a = 1'b0;
+)";
+        if (exercise_controlled) {
+            output << R"(
+    #1 control_a = 1'b1;
+    #1 force control_a = 1'b0;
+    #1 control_a = 1'b1;
+    #1 release control_a;
+    #1 control_a = 1'bx;
+    #1 control_a = 1'bz;
+    #1 control_a = 1'b0;
+)";
+        } else {
+            output << R"(
+    #1;
+    #1;
+    #1;
+    #1;
+    #1;
+    #1;
+    #1;
+)";
+        }
+        output << R"(
+  end
+
+  initial begin
+    control_b = 1'b1;
+    #2 control_b = 1'b0;
+    #2 control_b = 1'b1;
+  end
+
+  initial #9 $finish;
+endmodule
+)";
+        assert(output.good());
+        return source;
+    };
+    const auto active_source = write_source(true);
+    const auto baseline_source = write_source(false);
+    const auto optimization_name
+        = optimization == fsim::project::Optimization::o0 ? "o0" : "o2";
+
+    struct RunCapture {
+        SwitchComponentCapture values;
+        fsim::runtime::RunResult result;
+        std::size_t compiled_processes { };
+    };
+    const auto execute = [&](const bool exercise_controlled,
+                             const fsim::app::SimulationEngine engine) {
+        fsim::project::Config config;
+        config.base_directory = directory;
+        config.project.name = exercise_controlled
+            ? "switch-components-active"
+            : "switch-components-baseline";
+        config.project.top = "verilog:work.switch_component_isolation";
+        config.project.time_resolution = "auto";
+        config.build.optimization = optimization;
+        config.build.cache_path = directory
+            / (std::string { "switch-components-" }
+                + (exercise_controlled ? "active-" : "baseline-")
+                + optimization_name);
+        config.run.max_deltas = 1000;
+
+        fsim::project::SourceSet sources;
+        sources.language = fsim::project::Language::verilog;
+        sources.standard = "2005";
+        sources.library = "work";
+        sources.files.push_back(
+            exercise_controlled ? active_source : baseline_source);
+        config.source_sets.push_back(std::move(sources));
+
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(project);
+        const auto control_a = project->design.find_signal(
+            "switch_component_isolation.control_a");
+        const auto target_a = project->design.find_signal(
+            "switch_component_isolation.target_a");
+        const auto control_b = project->design.find_signal(
+            "switch_component_isolation.control_b");
+        const auto target_b = project->design.find_signal(
+            "switch_component_isolation.target_b");
+        assert(control_a && target_a && control_b && target_b);
+
+        fsim::app::Simulation simulation {
+            std::move(*project), config.run.max_deltas, engine
+        };
+        RunCapture capture;
+        capture.compiled_processes = simulation.compiled_process_count();
+        simulation.set_signal_change_hook(
+            [&](const fsim::runtime::simir::SignalId signal,
+                const fsim::runtime::PackedLogic4& value,
+                const fsim::runtime::SimulationTick time,
+                const std::uint64_t delta) {
+                const Change change { value.to_msb_string(), time, delta };
+                const auto append = [&](
+                    const fsim::runtime::simir::SignalId selected,
+                    const std::string_view name,
+                    auto& changes) {
+                    if (signal == selected) {
+                        changes.emplace_back(std::string { name }, change);
+                    }
+                };
+                append(*control_a, "control_a",
+                    capture.values.controlled_changes);
+                append(*target_a, "target_a",
+                    capture.values.controlled_changes);
+                append(*control_b, "control_b",
+                    capture.values.independent_changes);
+                append(*target_b, "target_b",
+                    capture.values.independent_changes);
+            });
+        capture.result = simulation.run();
+        capture.values.final_values = {
+            simulation.read_signal(*control_a).to_msb_string(),
+            simulation.read_signal(*target_a).to_msb_string(),
+            simulation.read_signal(*control_b).to_msb_string(),
+            simulation.read_signal(*target_b).to_msb_string()
+        };
+        return capture;
+    };
+
+    const auto active_reference = execute(
+        true, fsim::app::SimulationEngine::interpreter);
+    const auto active_compiled = execute(
+        true, fsim::app::SimulationEngine::compiled);
+    const auto baseline_reference = execute(
+        false, fsim::app::SimulationEngine::interpreter);
+    const auto baseline_compiled = execute(
+        false, fsim::app::SimulationEngine::compiled);
+    for (const auto* run : { &active_reference, &active_compiled,
+             &baseline_reference, &baseline_compiled }) {
+        assert(run->result.status == fsim::runtime::RunStatus::stopped);
+        assert(run->result.time == 9000);
+    }
+    assert(active_reference.values == active_compiled.values);
+    assert(baseline_reference.values == baseline_compiled.values);
+    assert(active_reference.values.independent_changes
+        == baseline_reference.values.independent_changes);
+    assert(active_compiled.values.independent_changes
+        == baseline_compiled.values.independent_changes);
+#if defined(FSIM_HAS_LLVM)
+    assert(active_reference.compiled_processes == 0);
+    assert(baseline_reference.compiled_processes == 0);
+    assert(active_compiled.compiled_processes > 0);
+    assert(baseline_compiled.compiled_processes > 0);
+#else
+    assert(active_reference.compiled_processes == 0);
+    assert(baseline_reference.compiled_processes == 0);
+    assert(active_compiled.compiled_processes == 0);
+    assert(baseline_compiled.compiled_processes == 0);
+#endif
+
+    const auto has_change = [](
+                                const auto& changes,
+                                const std::string_view signal,
+                                const std::string_view value,
+                                const fsim::runtime::SimulationTick time) {
+        return std::ranges::any_of(
+            changes, [&](const auto& entry) {
+                return entry.first == signal
+                    && entry.second.value == value
+                    && entry.second.time == time;
+            });
+    };
+    const auto& active = active_reference.values;
+    assert((active.final_values
+        == std::array<std::string, 4> { "0", "Z", "1", "Z" }));
+    assert(has_change(active.controlled_changes, "target_a", "1", 1000)
+        && has_change(active.controlled_changes, "target_a", "Z", 2000)
+        && has_change(active.controlled_changes, "target_a", "1", 4000)
+        && has_change(active.controlled_changes, "target_a", "X", 5000)
+        && has_change(active.controlled_changes, "target_a", "Z", 7000));
+    assert(has_change(active.controlled_changes, "control_a", "X", 5000)
+        && has_change(active.controlled_changes, "control_a", "Z", 6000));
+    assert(!has_change(
+        active.controlled_changes, "target_a", "Z", 6000));
+    assert(has_change(active.independent_changes, "control_b", "0", 2000)
+        && has_change(active.independent_changes, "control_b", "1", 4000)
+        && has_change(active.independent_changes, "target_b", "0", 2000)
+        && has_change(active.independent_changes, "target_b", "Z", 4000));
+    return active;
 }
 
 void verify_strength_artifacts_and_mapping(
@@ -1488,6 +1998,20 @@ end architecture;
     verify_verilog_strengths(
         directory.path, fsim::project::Optimization::o0);
     verify_verilog_strengths(
+        directory.path, fsim::project::Optimization::o2);
+    const auto forced_switch_o0 = verify_forced_conditional_switch(
+        directory.path, fsim::project::Optimization::o0);
+    const auto forced_switch_o2 = verify_forced_conditional_switch(
+        directory.path, fsim::project::Optimization::o2);
+    assert(forced_switch_o0 == forced_switch_o2);
+    const auto isolated_switch_o0 = verify_independent_switch_components(
+        directory.path, fsim::project::Optimization::o0);
+    const auto isolated_switch_o2 = verify_independent_switch_components(
+        directory.path, fsim::project::Optimization::o2);
+    assert(isolated_switch_o0 == isolated_switch_o2);
+    verify_resolved_net_boundaries(
+        directory.path, fsim::project::Optimization::o0);
+    verify_resolved_net_boundaries(
         directory.path, fsim::project::Optimization::o2);
     verify_strength_artifacts_and_mapping(directory.path);
     verify_boundary_delays(

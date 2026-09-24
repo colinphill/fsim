@@ -4,6 +4,9 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
 #include "fsim/runtime/output_format.hpp"
+#include "simir_cohort_snapshot_pool.hpp"
+#include "simir_driver_table.hpp"
+#include "simir_signal_storage.hpp"
 #include <deque>
 
 #include <algorithm>
@@ -13,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <span>
 #include <sstream>
 #include <type_traits>
 #include <unordered_map>
@@ -190,7 +194,7 @@ void check_integer_range(
 
 void validate_module_path_expression(
     const ModulePathExpression& expression,
-    std::span<const Signal> signals);
+    std::span<const SignalHot> signals);
 
 [[nodiscard]] Logic9 evaluate_vital_timing_check(
     const VitalTimingCheck& operation,
@@ -218,67 +222,44 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::vector<VitalMemoryState> vital_memories;
     };
 
-    struct ProcessState {
-        struct DeferredExecutor {
-            std::function<bool()> ready;
-            std::function<std::unique_ptr<ProcessExecutor>()> take;
-        };
+    struct ProcessDeferredExecutor {
+        std::function<bool()> ready;
+        std::function<std::unique_ptr<ProcessExecutor>()> take;
+    };
 
-        struct CallableFrameState {
-            std::uint32_t identity { };
-            std::vector<RegisterId> packed_ids;
-            std::vector<StringRegisterId> string_ids;
-            std::vector<ContainerRegisterId> container_ids;
-            std::vector<PackedLogic4> packed;
-            std::vector<std::string> strings;
-            std::vector<SharedContainerValue> containers;
-            std::size_t storage_bytes { };
-            // Non-null only when a SystemVerilog-2023 function activation
-            // spawned background processes. The activation owns one context;
-            // every spawned process shares it until the final child exits.
-            std::shared_ptr<CallableFrameState> escaping_context;
-        };
+    struct ProcessCallableFrameState {
+        std::uint32_t identity { };
+        std::vector<RegisterId> packed_ids;
+        std::vector<StringRegisterId> string_ids;
+        std::vector<ContainerRegisterId> container_ids;
+        std::vector<PackedLogic4> packed;
+        std::vector<std::string> strings;
+        std::vector<SharedContainerValue> containers;
+        std::size_t storage_bytes { };
+        // Non-null only when a SystemVerilog-2023 function activation
+        // spawned background processes. The activation owns one context;
+        // every spawned process shares it until the final child exits.
+        std::shared_ptr<ProcessCallableFrameState> escaping_context;
+    };
 
+    // This sidecar owns program/debug data and feature-specific runtime state.
+    // Fork children receive a program copy and fresh per-process metadata;
+    // wait registrations are cleared on resume while dynamic call stacks live
+    // until their matching returns.
+    struct ProcessColdState {
         Process program;
-        ProcessId design_process { };
-        InstructionIndex pc { };
-        std::shared_ptr<ProcessFrame> frame;
-        std::unique_ptr<ProcessExecutor> executor;
-        std::optional<DeferredExecutor> deferred_executor;
-        std::vector<Sensitivity> dynamic_sensitivity;
-        std::vector<bool> dynamic_triggered;
-        std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
+        std::optional<ProcessDeferredExecutor> deferred_executor;
         SourceLocation current_source;
         std::string current_scope;
-        bool queued { };
-        bool waiting_on_static { };
-        bool waiting_on_signal { };
-        std::optional<ContainerObjectId> waiting_on_container;
-        bool dynamic_wait_all { };
-        std::vector<std::optional<SignalId>> wait_order_events;
-        std::size_t wait_order_index { };
-        std::optional<RegisterId> wait_order_result;
-        std::optional<InstructionIndex> wait_timeout_origin;
-        std::optional<SimulationTick> wait_timeout_deadline;
-        std::optional<RegisterId> wait_timeout_result;
-        std::uint64_t wait_timeout_generation { };
         std::uint64_t random_state { };
         std::map<InstructionIndex, VitalTimingState> vital_timing_states;
         std::map<InstructionIndex, VitalDelayState> vital_delay_states;
-        std::vector<InstructionIndex> dynamic_call_stack;
-        std::vector<CallableFrameState> callable_frames;
+        std::vector<ProcessCallableFrameState> callable_frames;
         std::size_t callable_frame_storage_bytes { };
-        std::vector<std::shared_ptr<CallableFrameState>>
+        std::vector<std::shared_ptr<ProcessCallableFrameState>>
             escaping_callable_contexts;
-        std::optional<CallableFrameState> suspended_callable_context;
+        std::optional<ProcessCallableFrameState> suspended_callable_context;
         std::size_t callable_context_storage_bytes { };
-        std::uint32_t generation { };
-        ProcessStatus status { ProcessStatus::running };
-        ProcessStatus suspended_status { ProcessStatus::running };
-        bool suspended { };
-        bool suspended_wake { };
-        bool halted { };
-        bool killed { };
         std::optional<ProcessId> fork_parent;
         std::optional<InstructionIndex> fork_site;
         std::optional<std::uint64_t> fork_group;
@@ -296,6 +277,81 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t profile_native_nanoseconds { };
         bool track_interpreter_operations { };
         std::uint64_t interpreter_operations { };
+        std::vector<Sensitivity> dynamic_sensitivity;
+        std::vector<bool> dynamic_triggered;
+        std::vector<std::size_t> dynamic_fanout_positions;
+        std::vector<InstructionIndex> dynamic_call_stack;
+        std::optional<ContainerObjectId> waiting_on_container;
+        bool dynamic_wait_all { };
+        std::vector<std::optional<SignalId>> wait_order_events;
+        std::size_t wait_order_index { };
+        std::optional<RegisterId> wait_order_result;
+        std::optional<InstructionIndex> wait_timeout_origin;
+        std::optional<SimulationTick> wait_timeout_deadline;
+        std::optional<RegisterId> wait_timeout_result;
+        std::uint64_t wait_timeout_generation { };
+        std::uint64_t dynamic_wait_generation { };
+    };
+
+    struct ProcessState {
+        using DeferredExecutor = ProcessDeferredExecutor;
+        using CallableFrameState = ProcessCallableFrameState;
+
+        // Keep scheduler and execution working data inline. Cohort entries
+        // retain pointers to queued, waiting_on_static, and status for the
+        // lifetime of this address-stable deque entry.
+        ProcessId id { };
+        ProcessId design_process { };
+        InstructionIndex pc { };
+        std::shared_ptr<ProcessFrame> frame;
+        std::unique_ptr<ProcessExecutor> executor;
+        std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
+        SchedulerPhase execution_phase { SchedulerPhase::active };
+        bool queued { };
+        bool waiting_on_static { };
+        bool waiting_on_signal { };
+        std::uint32_t generation { };
+        ProcessStatus status { ProcessStatus::running };
+        ProcessStatus suspended_status { ProcessStatus::running };
+        bool suspended { };
+        bool suspended_wake { };
+        bool halted { };
+        bool killed { };
+
+        // The sidecar is allocated with its program at process creation and
+        // remains heap-stable if this small deque record is moved.
+        std::unique_ptr<ProcessColdState> cold_state
+            = std::make_unique<ProcessColdState>();
+
+        [[nodiscard]] Process& program()
+        {
+            return cold().program;
+        }
+
+        [[nodiscard]] const Process& program() const
+        {
+            return cold().program;
+        }
+
+        [[nodiscard]] ProcessColdState& cold()
+        {
+            return *cold_state;
+        }
+
+        [[nodiscard]] const ProcessColdState& cold() const
+        {
+            return *cold_state;
+        }
+
+    };
+
+    struct DynamicWaitRegistration {
+        ProcessId process { };
+        std::uint32_t process_generation { };
+        std::uint64_t wait_generation { };
+        EdgeKind edge = EdgeKind::any;
+        std::size_t sensitivity_index { };
+        bool active { true };
     };
 
     struct MailboxReader {
@@ -374,9 +430,54 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
     };
 
+    struct FanoutSpan {
+        std::size_t begin { };
+        std::size_t count { };
+    };
+
+    struct SwitchConnection {
+        SignalId source { };
+        SignalId target { };
+        std::optional<SignalId> control;
+        std::size_t source_offset { };
+        std::size_t target_offset { };
+        std::size_t width { };
+        bool active_high { true };
+        bool resistive { };
+    };
+
+    struct SwitchComponent {
+        std::vector<SignalId> signals;
+        bool dirty { };
+        bool has_non_switch_update { };
+    };
+
+    static constexpr std::size_t no_switch_component
+        = std::numeric_limits<std::size_t>::max();
+
+    struct StaticTransitionMatches {
+        bool posedge { };
+        bool negedge { };
+
+        [[nodiscard]] bool matches(const EdgeKind edge) const noexcept
+        {
+            switch (edge) {
+            case EdgeKind::posedge:
+                return posedge;
+            case EdgeKind::negedge:
+                return negedge;
+            case EdgeKind::any:
+            case EdgeKind::transaction:
+                return false;
+            }
+            return false;
+        }
+    };
+
     struct StaticSensitivityCohort {
         std::vector<ProcessId> members;
         std::vector<ProcessId> ready;
+        CohortSnapshotPool::Token pending;
         std::uint64_t fanout_visit { };
     };
 
@@ -431,7 +532,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     struct DirectSingleDriverRoute {
         ProcessId process { };
-        PackedLogic4* value { };
+        bool active { };
     };
 
     struct DirectSingleDriverLogic9WordUpdate {
@@ -537,10 +638,28 @@ struct Interpreter::Impl : SchedulerBatchTask {
     explicit Impl(
         SchedulerOptions options,
         const std::uint64_t seed);
+    ~Impl();
 
     Scheduler scheduler;
+    Scheduler::DiscardHookToken scheduler_discard_hook { };
+    CohortSnapshotPool cohort_snapshots;
+    std::vector<ProcessId> active_cohort_ready;
+    std::vector<ProcessId> native_region_ready_scratch;
+    std::vector<ExecutionContext> cohort_overflow_contexts;
+    std::vector<ProcessCohortResumeEntry> cohort_overflow_entries;
+    bool cohort_overflow_scratch_in_use { };
     std::uint64_t root_seed { 1 };
-    std::vector<Signal> signals;
+    // SignalHot and SignalCold are dense, SignalId-indexed parallel records.
+    std::vector<SignalHot> signals;
+    std::vector<SignalCold> signal_cold;
+    std::vector<SwitchConnection> switch_connections;
+    std::vector<std::vector<std::size_t>> switch_endpoint_adjacency;
+    std::vector<std::vector<std::size_t>> switch_control_adjacency;
+    std::vector<SwitchComponent> switch_components;
+    std::vector<std::size_t> switch_component_by_signal;
+    std::vector<std::size_t> switch_component_by_connection;
+    std::vector<std::size_t> dirty_switch_components;
+    bool switch_components_built { };
     std::vector<StringObject> string_objects;
     std::vector<ContainerObject> container_objects;
     std::vector<SharedContainerValue> default_container_values;
@@ -586,8 +705,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint32_t> signal_writer_counts;
     std::uint64_t signal_writer_revision { };
     std::vector<PackedLogic4> driven_values;
-    std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
-    std::vector<std::map<ProcessId, DriveStrength>> driver_strengths;
+    std::vector<DriverTable> driver_values;
     using ForcedDriverMap = std::map<ProcessId, PackedLogic4>;
     std::vector<std::unique_ptr<ForcedDriverMap>> forced_driver_values;
     std::vector<std::unique_ptr<ForcedDriverMap>> forced_driver_masks;
@@ -605,6 +723,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Named-event variables carry synchronization-object identities rather
     // than copied packed values. Each event starts with its own stable object.
     std::vector<std::optional<SignalId>> event_identities;
+    // Event variables bound to each synchronization identity in SignalId
+    // order. This mirrors event_identities across alias rebinding.
+    std::vector<std::vector<SignalId>> event_identity_members;
     std::deque<ProcessState> processes;
     std::vector<MailboxState> mailboxes;
     std::vector<SemaphoreState> semaphores;
@@ -616,7 +737,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::map<std::uint64_t, ForkGroup> fork_groups;
     std::uint64_t next_fork_group { 1 };
     std::uint32_t next_process_generation { 1 };
-    std::vector<std::vector<Fanout>> static_fanout;
+    std::vector<Fanout> static_fanout_entries;
+    std::vector<std::size_t> static_fanout_offsets;
+    std::vector<std::size_t> static_fanout_category_entries;
+    std::vector<std::array<FanoutSpan, 4U>> static_fanout_category_spans;
+    bool static_fanout_dirty { true };
     // Exact static-sensitivity cohorts span the complete elaborated design,
     // including aliases which resolve to the same clock SignalId across
     // hierarchy. Cohorts batch scheduler dispatch while retaining each
@@ -637,7 +762,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::array<std::uint64_t, 5U> native_static_region_declines { };
     static constexpr std::uint64_t native_static_region_payload
         = UINT64_C(1) << 63U;
-    std::vector<std::vector<Fanout>> dynamic_fanout;
+    std::vector<std::vector<DynamicWaitRegistration>> dynamic_fanout;
+    // Counts exclude tombstones. Slot indices in each live process sidecar
+    // make removal proportional to that process's own sensitivity list.
+    std::vector<std::size_t> dynamic_fanout_active_counts;
+    std::vector<std::size_t> dynamic_fanout_tombstone_counts;
     std::vector<std::vector<ProcessId>> container_dynamic_fanout;
     std::vector<EventState> event_states;
     std::vector<std::optional<std::pair<
@@ -828,9 +957,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::set<std::uint32_t> program_owners;
     std::set<std::uint32_t> exited_programs;
 
-    [[nodiscard]] Signal& get_signal(SignalId id);
+    [[nodiscard]] SignalHot& get_signal(SignalId id);
 
-    [[nodiscard]] const Signal& get_signal(SignalId id) const;
+    [[nodiscard]] const SignalHot& get_signal(SignalId id) const;
+
+    [[nodiscard]] SignalCold& get_signal_cold(SignalId id);
+
+    [[nodiscard]] const SignalCold& get_signal_cold(SignalId id) const;
 
     void materialize_direct_signal(SignalId id);
 
@@ -1007,6 +1140,19 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void remove_dynamic_wait(ProcessState& process);
 
+    void register_dynamic_wait_fanout(ProcessState& process);
+
+    void ensure_dynamic_fanout_counts();
+
+    void compact_dynamic_fanout(SignalId signal);
+
+    [[nodiscard]] bool dynamic_wait_registration_is_current(
+        const ProcessState& process,
+        const DynamicWaitRegistration& registration,
+        SignalId signal) const noexcept;
+
+    [[nodiscard]] bool has_dynamic_waits(SignalId signal) const noexcept;
+
     void write_process_register(
         ProcessState& process,
         const RegisterId destination,
@@ -1078,7 +1224,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] bool dynamic_wait_satisfied(
         ProcessState& process,
         const SignalId signal,
-        const EdgeKind edge);
+        const DynamicWaitRegistration& registration);
 
     void handle_boundary(ProcessState& process,
         InstructionIndex instruction,
@@ -1103,6 +1249,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process, std::uint64_t channel);
     void execute(ProcessId id);
     void execute_static_cohort(std::span<const ProcessId> processes);
+    void execute_queued_static_cohort(std::size_t cohort);
+    void discard_scheduler_work() noexcept;
     [[nodiscard]] SchedulerBatchResult execute(
         Scheduler&, std::span<const std::uint64_t> cohort_ids) override;
     [[nodiscard]] bool handle_executor_resume(
@@ -1118,6 +1266,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void queue_static_next_delta(ProcessId id);
     void queue_static_cohort_next_delta(std::size_t cohort);
+    void rebuild_static_fanout();
+    [[nodiscard]] std::span<const Fanout> static_fanout_for(
+        SignalId signal) const noexcept;
+    [[nodiscard]] std::span<const std::size_t>
+    static_fanout_indices_for(SignalId signal, EdgeKind edge) const noexcept;
+    [[nodiscard]] static StaticTransitionMatches decode_static_transition(
+        Logic4 old_value, Logic4 new_value) noexcept;
+    void notify_static_value_change(
+        SignalId signal,
+        StaticTransitionMatches transition,
+        bool count_native_word_profile = false);
     void build_native_static_regions();
     [[nodiscard]] std::size_t execute_native_static_region(
         std::size_t region, std::span<const ProcessId> ready);
@@ -1165,6 +1324,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessStatus status);
 
     void trigger_event(const SignalId event);
+
+    void set_event_identity(
+        SignalId signal, std::optional<SignalId> identity);
 
     [[nodiscard]] std::uint64_t invalidate_event(
         const SignalId event);
@@ -1270,6 +1432,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void commit_direct_single_driver(
         SignalId signal_id, PackedLogic4 value);
 
+    void invalidate_switch_components();
+
+    void build_switch_components();
+
+    void mark_switch_network_dirty(
+        SignalId signal_id, bool non_switch_update = false);
+
     void refresh_switch_network();
 
     void commit_resolved(SignalId signal_id, PackedLogic4 value);
@@ -1280,6 +1449,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     PackedLogic4& driver_slot(
         const ProcessId process,
         const SignalId signal_id);
+
+    [[nodiscard]] DriverRecord* direct_single_driver_record(
+        SignalId signal_id) noexcept;
+
+    [[nodiscard]] const DriverRecord* direct_single_driver_record(
+        SignalId signal_id) const noexcept;
 
     void refresh_direct_single_driver_route(SignalId signal_id);
 
@@ -1294,7 +1469,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] bool switch_process(ProcessId process) const;
 
-    void reset_switch_drivers();
+    void reset_switch_drivers(std::size_t component);
 
     PackedLogic4& external_driver_slot(
         const SignalId signal_id);

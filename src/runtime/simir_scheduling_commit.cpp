@@ -4,8 +4,78 @@
 
 #include <algorithm>
 #include <bit>
+#include <optional>
 
 namespace fsim::runtime::simir {
+namespace {
+
+[[nodiscard]] std::uint64_t word_mask(const std::size_t width) noexcept
+{
+    return width == 64U
+        ? ~std::uint64_t { 0 }
+        : (std::uint64_t { 1 } << width) - 1U;
+}
+
+void update_force_mask(
+    PackedLogic4& mask,
+    const std::size_t offset,
+    const std::size_t width,
+    const bool forced)
+{
+    if (mask.is_logic9()) {
+        for (std::size_t bit = 0; bit < width; ++bit) {
+            mask.set(offset + bit, forced ? Logic4::one : Logic4::zero);
+        }
+        return;
+    }
+    auto updated = std::size_t { 0 };
+    while (updated < width) {
+        const auto chunk_width = std::min<std::size_t>(
+            64U, width - updated);
+        const auto source = runtime::Logic4Word {
+            chunk_width,
+            forced ? word_mask(chunk_width) : std::uint64_t { 0 },
+            0
+        };
+        mask.insert_word(source, offset + updated);
+        updated += chunk_width;
+    }
+}
+
+[[nodiscard]] bool has_forced_bits(const PackedLogic4& mask)
+{
+    if (!mask.is_logic9()) {
+        const auto aval = mask.aval_words();
+        const auto bval = mask.bval_words();
+        for (std::size_t index = 0; index < aval.size(); ++index) {
+            if ((aval[index] & ~bval[index]) != 0U) {
+                return true;
+            }
+        }
+        return false;
+    }
+    for (std::size_t bit = 0; bit < mask.width(); ++bit) {
+        if (mask.get(bit) == Logic4::one) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void insert_force_value(
+    PackedLogic4& target,
+    const PackedLogic4& value,
+    const std::size_t offset)
+{
+    if (!target.is_logic9() && !value.is_logic9()
+        && value.width() > 0U && value.width() <= 64U) {
+        target.insert_word(value.unchecked_low_word(), offset);
+        return;
+    }
+    target = insert_value(std::move(target), value, offset);
+}
+
+} // namespace
 
 void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
 {
@@ -21,13 +91,7 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
             return;
         }
         const auto old_value = signals[signal_id].initial_value;
-        std::vector<SignalId> members;
-        for (std::size_t index = 0; index < signals.size(); ++index) {
-            if (signals[index].event_variable
-                && event_identities[index] == identity) {
-                members.push_back(static_cast<SignalId>(index));
-            }
-        }
+        const auto& members = event_identity_members.at(*identity);
         for (const auto member : members) {
             const bool stored_changed = driven_values[member] != value;
             driven_values[member] = value;
@@ -35,9 +99,15 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
                 stored_signal_change_hook(member, scheduler.now());
             }
             publish_normalized(member, apply_force(member, value), false);
+            mark_switch_network_dirty(member);
+        }
+        auto transition = StaticTransitionMatches { };
+        if (old_value.width() == 1U && value.width() == 1U) {
+            transition = decode_static_transition(
+                old_value.get(0), value.get(0));
         }
         for (const auto member : members) {
-            for (const auto& sensitivity : static_fanout[member]) {
+            for (const auto& sensitivity : static_fanout_for(member)) {
                 auto& process = get_process(sensitivity.process);
                 process.static_trigger_mask
                     |= sensitivity.static_trigger_mask;
@@ -46,10 +116,8 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
                 }
                 if (sensitivity.edge != EdgeKind::any
                     && sensitivity.edge != EdgeKind::transaction
-                    && (old_value.width() != 1
-                        || !edge_matches(
-                            sensitivity.edge, old_value.get(0),
-                            value.get(0)))) {
+                    && (old_value.width() != 1U
+                        || !transition.matches(sensitivity.edge))) {
                     continue;
                 }
                 queue_static_next_delta(sensitivity.process);
@@ -59,7 +127,7 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
         for (const auto sensitivity : dynamic) {
             auto& process = get_process(sensitivity.process);
             if (dynamic_wait_satisfied(
-                    process, *identity, sensitivity.edge)) {
+                    process, *identity, sensitivity)) {
                 mark_dynamic_event_resume(process);
                 queue_next_delta(sensitivity.process);
             }
@@ -76,6 +144,7 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
     if (stored_changed) {
         publish_container_signal_aliases(signal_id);
     }
+    mark_switch_network_dirty(signal_id);
     refresh_switch_network();
 }
 void Interpreter::Impl::commit_direct_single_driver(
@@ -88,8 +157,7 @@ void Interpreter::Impl::commit_direct_single_driver(
     // apply an absent force, and probe an absent switch network before doing
     // the same publication. Recheck the route at commit time because a force
     // or external deposit may have invalidated it after the write was staged.
-    const auto& route = direct_single_driver_routes[signal_id];
-    if (route.value == nullptr) {
+    if (direct_single_driver_record(signal_id) == nullptr) {
         commit_resolved(signal_id, std::move(value));
         return;
     }
@@ -102,6 +170,8 @@ void Interpreter::Impl::commit_direct_single_driver(
     if (stored_changed) {
         publish_container_signal_aliases(signal_id);
     }
+    mark_switch_network_dirty(signal_id);
+    refresh_switch_network();
 }
 
 void Interpreter::Impl::publish_container_signal_aliases(
@@ -117,38 +187,179 @@ void Interpreter::Impl::publish_container_signal_aliases(
     }
 }
 
-void Interpreter::Impl::refresh_switch_network()
+void Interpreter::Impl::invalidate_switch_components()
 {
-    if (!has_bidirectional_switches || switch_refreshing)
+    switch_components_built = false;
+    switch_components.clear();
+    switch_component_by_signal.clear();
+    switch_component_by_connection.clear();
+    dirty_switch_components.clear();
+}
+
+void Interpreter::Impl::build_switch_components()
+{
+    if (switch_components_built) {
         return;
-    std::set<SignalId> endpoints;
-    for (const auto& state : processes) {
-        if (!state.program.switch_bidirectional
-            || !state.program.switch_source
-            || !state.program.switch_target) {
+    }
+    switch_components.clear();
+    switch_component_by_signal.assign(
+        signals.size(), no_switch_component);
+    switch_component_by_connection.assign(
+        switch_connections.size(), no_switch_component);
+    dirty_switch_components.clear();
+    if (switch_connections.empty()) {
+        switch_components_built = true;
+        return;
+    }
+
+    std::vector<std::size_t> parents(signals.size());
+    std::vector<std::uint8_t> ranks(signals.size(), 0U);
+    for (std::size_t index = 0U; index < parents.size(); ++index) {
+        parents[index] = index;
+    }
+    const auto find_root = [&parents](std::size_t signal) {
+        while (parents[signal] != signal) {
+            parents[signal] = parents[parents[signal]];
+            signal = parents[signal];
+        }
+        return signal;
+    };
+    for (const auto& connection : switch_connections) {
+        auto source = find_root(connection.source);
+        auto target = find_root(connection.target);
+        if (source == target) {
             continue;
         }
-        endpoints.insert(*state.program.switch_source);
-        endpoints.insert(*state.program.switch_target);
+        if (ranks[source] < ranks[target]) {
+            std::swap(source, target);
+        }
+        parents[target] = source;
+        if (ranks[source] == ranks[target]) {
+            ++ranks[source];
+        }
     }
-    if (endpoints.empty())
+
+    std::vector<std::size_t> component_by_root(
+        signals.size(), no_switch_component);
+    for (SignalId signal = 0U; signal < signals.size(); ++signal) {
+        if (signal >= switch_endpoint_adjacency.size()
+            || switch_endpoint_adjacency[signal].empty()) {
+            continue;
+        }
+        const auto root = find_root(signal);
+        auto& component = component_by_root[root];
+        if (component == no_switch_component) {
+            component = switch_components.size();
+            switch_components.emplace_back();
+        }
+        switch_component_by_signal[signal] = component;
+        switch_components[component].signals.push_back(signal);
+    }
+    for (std::size_t index = 0U;
+        index < switch_connections.size(); ++index) {
+        const auto signal = switch_connections[index].source;
+        const auto component = switch_component_by_signal[signal];
+        if (component == no_switch_component) {
+            continue;
+        }
+        switch_component_by_connection[index] = component;
+    }
+    for (std::size_t index = 0U;
+        index < switch_components.size(); ++index) {
+        switch_components[index].dirty = true;
+        dirty_switch_components.push_back(index);
+    }
+    switch_components_built = true;
+}
+
+void Interpreter::Impl::mark_switch_network_dirty(
+    const SignalId signal_id,
+    const bool non_switch_update)
+{
+    if (!has_bidirectional_switches
+        || signal_id >= switch_endpoint_adjacency.size()) {
         return;
+    }
+    build_switch_components();
+    const auto mark_component = [&](const std::size_t component) {
+        if (component == no_switch_component
+            || component >= switch_components.size()) {
+            return;
+        }
+        auto& state = switch_components[component];
+        if (!state.dirty) {
+            state.dirty = true;
+            dirty_switch_components.push_back(component);
+        }
+        state.has_non_switch_update
+            = state.has_non_switch_update || non_switch_update;
+    };
+    mark_component(switch_component_by_signal[signal_id]);
+    if (signal_id < switch_control_adjacency.size()) {
+        for (const auto connection : switch_control_adjacency[signal_id]) {
+            if (connection < switch_component_by_connection.size()) {
+                mark_component(
+                    switch_component_by_connection[connection]);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::refresh_switch_network()
+{
+    if (!has_bidirectional_switches || switch_refreshing) {
+        return;
+    }
+    build_switch_components();
+    if (dirty_switch_components.empty()) {
+        return;
+    }
+
+    std::vector<SignalId> endpoints;
+    for (const auto component : dirty_switch_components) {
+        for (const auto signal : switch_components[component].signals) {
+            endpoints.push_back(signal);
+        }
+    }
+    std::ranges::sort(endpoints);
+    endpoints.erase(
+        std::unique(endpoints.begin(), endpoints.end()), endpoints.end());
     std::vector<std::pair<SignalId, PackedLogic4>> values;
     values.reserve(endpoints.size());
     for (const auto signal : endpoints) {
         values.emplace_back(signal, resolved_driver_value(signal));
     }
+
+    const auto refreshing_components
+        = std::move(dirty_switch_components);
+    dirty_switch_components.clear();
+    for (const auto component : refreshing_components) {
+        switch_components[component].dirty = false;
+        switch_components[component].has_non_switch_update = false;
+    }
     switch_refreshing = true;
-    for (auto& [signal, value] : values) {
-        const bool stored_changed = driven_values[signal] != value;
-        driven_values[signal] = value;
-        if (stored_changed && stored_signal_change_hook) {
-            stored_signal_change_hook(signal, scheduler.now());
+    try {
+        for (auto& [signal, value] : values) {
+            const bool stored_changed = driven_values[signal] != value;
+            driven_values[signal] = value;
+            if (stored_changed && stored_signal_change_hook) {
+                stored_signal_change_hook(signal, scheduler.now());
+            }
+            publish(signal, apply_force(signal, std::move(value)));
+            if (stored_changed) {
+                publish_container_signal_aliases(signal);
+            }
         }
-        publish(signal, apply_force(signal, std::move(value)));
-        if (stored_changed) {
-            publish_container_signal_aliases(signal);
+    } catch (...) {
+        switch_refreshing = false;
+        for (const auto component : refreshing_components) {
+            auto& state = switch_components[component];
+            if (!state.dirty) {
+                state.dirty = true;
+                dirty_switch_components.push_back(component);
+            }
         }
+        throw;
     }
     switch_refreshing = false;
 }
@@ -162,6 +373,16 @@ PackedLogic4 Interpreter::Impl::apply_force(
     }
     const auto& forced = *forced_values[signal_id];
     const auto& mask = *forced_masks[signal_id];
+    if (!value.is_logic9() && !forced.is_logic9() && !mask.is_logic9()
+        && value.width() > 0U && value.width() <= 64U
+        && forced.width() == value.width()
+        && mask.width() == value.width()) {
+        const auto mask_word = mask.unchecked_low_word();
+        value.assign_word(runtime::apply_force_word(
+            value.unchecked_low_word(), forced.unchecked_low_word(),
+            mask_word.aval & ~mask_word.bval));
+        return value;
+    }
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
         if (mask.get(bit) != Logic4::one) {
             continue;
@@ -198,15 +419,14 @@ void Interpreter::Impl::force_slice(
         forced_masks[signal_id] = std::make_unique<PackedLogic4>(
             signal.initial_value.width(), Logic4::zero);
     }
-    *forced_values[signal_id] = insert_value(
-        std::move(*forced_values[signal_id]), value, offset);
-    for (std::size_t bit = 0; bit < value.width(); ++bit) {
-        forced_masks[signal_id]->set(offset + bit, Logic4::one);
-    }
+    insert_force_value(*forced_values[signal_id], value, offset);
+    update_force_mask(*forced_masks[signal_id], offset, value.width(), true);
     refresh_direct_single_driver_route(signal_id);
     publish(
         signal_id,
         apply_force(signal_id, driven_values[signal_id]));
+    mark_switch_network_dirty(signal_id);
+    refresh_switch_network();
 }
 
 void Interpreter::Impl::release_slice(
@@ -228,14 +448,8 @@ void Interpreter::Impl::release_slice(
     if (!forced_values[signal_id]) {
         return;
     }
-    for (std::size_t bit = 0; bit < width; ++bit) {
-        forced_masks[signal_id]->set(offset + bit, Logic4::zero);
-    }
-    bool any_forced = false;
-    for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
-        any_forced = any_forced
-            || forced_masks[signal_id]->get(bit) == Logic4::one;
-    }
+    update_force_mask(*forced_masks[signal_id], offset, width, false);
+    const bool any_forced = has_forced_bits(*forced_masks[signal_id]);
     if (!any_forced) {
         forced_values[signal_id].reset();
         forced_masks[signal_id].reset();
@@ -244,6 +458,8 @@ void Interpreter::Impl::release_slice(
     publish(
         signal_id,
         apply_force(signal_id, driven_values[signal_id]));
+    mark_switch_network_dirty(signal_id);
+    refresh_switch_network();
 }
 
 PackedLogic4 Interpreter::Impl::apply_driver_force(
@@ -263,6 +479,17 @@ PackedLogic4 Interpreter::Impl::apply_driver_force(
     const auto mask = masks->find(process);
     if (mask == masks->end()) {
         throw std::logic_error { "forced driver has no force mask" };
+    }
+    if (!value.is_logic9() && !forced->second.is_logic9()
+        && !mask->second.is_logic9()
+        && value.width() > 0U && value.width() <= 64U
+        && forced->second.width() == value.width()
+        && mask->second.width() == value.width()) {
+        const auto mask_word = mask->second.unchecked_low_word();
+        value.assign_word(runtime::apply_force_word(
+            value.unchecked_low_word(), forced->second.unchecked_low_word(),
+            mask_word.aval & ~mask_word.bval));
+        return value;
     }
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
         if (mask->second.get(bit) != Logic4::one) {
@@ -332,16 +559,15 @@ void Interpreter::Impl::force_driver_slice(
             process,
             PackedLogic4 { signal.initial_value.width(), Logic4::zero });
     }
-    forced_entry->second = insert_value(
-        std::move(forced_entry->second), value, offset);
+    insert_force_value(forced_entry->second, value, offset);
     auto& mask = masks->at(process);
-    for (std::size_t bit = 0; bit < value.width(); ++bit) {
-        mask.set(offset + bit, Logic4::one);
-    }
+    update_force_mask(mask, offset, value.width(), true);
     refresh_direct_single_driver_route(signal_id);
     auto resolved = resolved_driver_value(signal_id);
     driven_values[signal_id] = resolved;
     publish(signal_id, apply_force(signal_id, std::move(resolved)));
+    mark_switch_network_dirty(signal_id);
+    refresh_switch_network();
 }
 
 void Interpreter::Impl::release_driver_slice(
@@ -371,14 +597,8 @@ void Interpreter::Impl::release_driver_slice(
     if (forced_entry == forced->end() || mask_entry == masks->end()) {
         return;
     }
-    for (std::size_t bit = 0; bit < width; ++bit) {
-        mask_entry->second.set(offset + bit, Logic4::zero);
-    }
-    bool any_forced = false;
-    for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
-        any_forced = any_forced
-            || mask_entry->second.get(bit) == Logic4::one;
-    }
+    update_force_mask(mask_entry->second, offset, width, false);
+    const bool any_forced = has_forced_bits(mask_entry->second);
     if (!any_forced) {
         forced->erase(forced_entry);
         masks->erase(mask_entry);
@@ -391,6 +611,8 @@ void Interpreter::Impl::release_driver_slice(
     auto resolved = resolved_driver_value(signal_id);
     driven_values[signal_id] = resolved;
     publish(signal_id, apply_force(signal_id, std::move(resolved)));
+    mark_switch_network_dirty(signal_id);
+    refresh_switch_network();
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::initial_driver_value(
@@ -422,18 +644,24 @@ PackedLogic4& Interpreter::Impl::driver_slot(
     const SignalId signal_id)
 {
     auto& values = driver_values.at(signal_id);
-    const auto found = values.find(process);
-    if (found != values.end()) {
-        return found->second;
+    if (auto* record = values.find(process)) {
+        return record->value;
     }
-    const auto [entry, inserted] = values.try_emplace(
-        process, initial_driver_value(signal_id));
+    const bool inserted = values.insert_if_absent(DriverRecord {
+        process,
+        initial_driver_value(signal_id),
+        get_process(process).program().drive_strength
+    });
     if (inserted) {
-        driver_strengths.at(signal_id).insert_or_assign(
-            process, get_process(process).program.drive_strength);
         refresh_direct_single_driver_route(signal_id);
     }
-    return entry->second;
+    auto* record = values.find(process);
+    if (record == nullptr) {
+        throw std::logic_error {
+            "driver slot insertion did not retain its SimIR process"
+        };
+    }
+    return record->value;
 }
 
 void Interpreter::Impl::refresh_direct_single_driver_route(
@@ -452,20 +680,20 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     if (has_bidirectional_switches
         || !identity_single_driver_resolution
         || values.size() != 1U
-        || signal.implicit_driver
-        || signal.charge_strength
+        || signal.has_implicit_driver
+        || signal.has_charge_strength
         || external_driver_values.at(signal_id)
         || forced_values.at(signal_id)
         || forced_driver_values.at(signal_id)) {
         return;
     }
-    const auto process = values.begin()->first;
-    if (driver_strengths.at(signal_id).at(process) != DriveStrength { }) {
+    const auto* record = values.sole();
+    if (record == nullptr || record->strength != DriveStrength { }) {
         return;
     }
-    route.process = process;
-    route.value = &values.begin()->second;
-    direct_single_driver_processes[signal_id] = process;
+    route.process = record->process;
+    route.active = true;
+    direct_single_driver_processes[signal_id] = record->process;
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::resolved_local_driver_value(
@@ -480,15 +708,71 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     const bool identity_single_driver_resolution
         = signal.resolution == ResolutionKind::sv_wire
         || signal.resolution == ResolutionKind::std_logic;
+    const auto* sole_record = values.sole();
     if (identity_single_driver_resolution
-        && values.size() == 1U
+        && sole_record != nullptr
         && !external_driver_values.at(signal_id)
-        && !signal.implicit_driver
-        && !signal.charge_strength
-        && driver_strengths.at(signal_id).at(values.begin()->first)
-            == DriveStrength { }) {
+        && !signal.has_implicit_driver
+        && !signal.has_charge_strength
+        && sole_record->strength == DriveStrength { }) {
         return apply_driver_force(
-            signal_id, values.begin()->first, values.begin()->second);
+            signal_id, sole_record->process, sole_record->value);
+    }
+    const auto resolution = signal.resolution;
+    const auto try_resolve_narrow_logic4 =
+        [&](const bool require_default_strength)
+        -> std::optional<PackedLogic4> {
+        const auto width = signal.initial_value.width();
+        if (signal.value_kind != ValueKind::logic4
+            || width == 0U || width > 64U) {
+            return std::nullopt;
+        }
+        auto accumulator = runtime::Logic4ResolutionAccumulator { width };
+        bool incompatible_driver { };
+        values.for_each_in_process_order(
+            [&](const DriverRecord& record) {
+                if (incompatible_driver) {
+                    return;
+                }
+                if (record.value.is_logic9()
+                    || record.value.width() != width
+                    || (require_default_strength
+                        && record.strength != DriveStrength { })) {
+                    incompatible_driver = true;
+                    return;
+                }
+                const auto effective = apply_driver_force(
+                    signal_id, record.process, record.value);
+                if (effective.is_logic9() || effective.width() != width) {
+                    incompatible_driver = true;
+                    return;
+                }
+                accumulator.add(effective.unchecked_low_word());
+            });
+        if (incompatible_driver) {
+            return std::nullopt;
+        }
+        if (external_driver_values.at(signal_id)) {
+            const auto& external = *external_driver_values.at(signal_id);
+            if (external.is_logic9() || external.width() != width) {
+                return std::nullopt;
+            }
+            accumulator.add(external.unchecked_low_word());
+        }
+        const auto resolved = accumulator.result();
+        return PackedLogic4::from_aval_bval(
+            width, resolved.aval, resolved.bval);
+    };
+    if (resolution == ResolutionKind::sv_wire
+        && !signal.has_implicit_driver && !signal.has_charge_strength) {
+        if (auto resolved = try_resolve_narrow_logic4(true)) {
+            return std::move(*resolved);
+        }
+    } else if (resolution == ResolutionKind::none
+        || resolution == ResolutionKind::std_logic) {
+        if (auto resolved = try_resolve_narrow_logic4(false)) {
+            return std::move(*resolved);
+        }
     }
     struct DriverContribution {
         const PackedLogic4* value { };
@@ -501,23 +785,23 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         + (external_driver_values.at(signal_id) ? 1U : 0U));
     strength_drivers.reserve(
         values.size() + (external_driver_values.at(signal_id) ? 1U : 0U));
-    for (const auto& [process, value] : values) {
-        drivers.push_back(
-            apply_driver_force(signal_id, process, value));
-        strength_drivers.push_back({ &drivers.back(), driver_strengths.at(signal_id).at(process) });
-    }
+    values.for_each_in_process_order([&](const DriverRecord& record) {
+        drivers.push_back(apply_driver_force(
+            signal_id, record.process, record.value));
+        strength_drivers.push_back({ &drivers.back(), record.strength });
+    });
     if (external_driver_values.at(signal_id)) {
         drivers.push_back(
             *external_driver_values.at(signal_id));
-        strength_drivers.push_back({ &*external_driver_values.at(signal_id), { } });
+        strength_drivers.push_back(
+            { &*external_driver_values.at(signal_id), { } });
     }
-    const auto resolution = signal.resolution;
     if (resolution == ResolutionKind::sv_user_first) {
         return drivers.front();
     }
     if (resolution == ResolutionKind::sv_wire) {
-        const auto equal_strength_logic4 = !signal.implicit_driver
-            && !signal.charge_strength
+        const auto equal_strength_logic4 = !signal.has_implicit_driver
+            && !signal.has_charge_strength
             && std::ranges::all_of(
                 strength_drivers,
                 [](const DriverContribution& driver) {
@@ -528,6 +812,7 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
             return runtime::resolve(
                 std::span<const PackedLogic4> { drivers });
         }
+        const auto& cold = get_signal_cold(signal_id);
         auto result = PackedLogic4 {
             signal.initial_value.width(), Logic4::z
         };
@@ -537,22 +822,22 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         for (std::size_t bit = 0; bit < result.width(); ++bit) {
             auto zero = StrengthRank::highz;
             auto one = StrengthRank::highz;
-            if (signal.implicit_driver == Logic4::zero) {
-                zero = signal.implicit_drive_strength.zero;
-            } else if (signal.implicit_driver == Logic4::one) {
-                one = signal.implicit_drive_strength.one;
-            } else if (signal.implicit_driver == Logic4::x) {
-                zero = signal.implicit_drive_strength.zero;
-                one = signal.implicit_drive_strength.one;
+            if (cold.implicit_driver == Logic4::zero) {
+                zero = cold.implicit_drive_strength.zero;
+            } else if (cold.implicit_driver == Logic4::one) {
+                one = cold.implicit_drive_strength.one;
+            } else if (cold.implicit_driver == Logic4::x) {
+                zero = cold.implicit_drive_strength.zero;
+                one = cold.implicit_drive_strength.one;
             }
-            if (signal.charge_strength
+            if (cold.charge_strength
                 && charge_values.at(signal_id)) {
                 const auto charge = charge_values.at(signal_id)->get(bit);
                 if (charge == Logic4::zero || charge == Logic4::x) {
-                    zero = std::max(zero, *signal.charge_strength);
+                    zero = std::max(zero, *cold.charge_strength);
                 }
                 if (charge == Logic4::one || charge == Logic4::x) {
-                    one = std::max(one, *signal.charge_strength);
+                    one = std::max(one, *cold.charge_strength);
                 }
             }
             for (const auto& driver : strength_drivers) {
@@ -676,18 +961,9 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
     const SignalId signal_id) const
 {
     if (!has_bidirectional_switches
-        || get_signal(signal_id).resolution != ResolutionKind::sv_wire) {
-        return resolved_local_driver_value(signal_id);
-    }
-    const auto connected = std::ranges::any_of(
-        processes, [&](const ProcessState& process) {
-            return process.program.switch_bidirectional
-                && process.program.switch_source
-                && process.program.switch_target
-                && (*process.program.switch_source == signal_id
-                    || *process.program.switch_target == signal_id);
-        });
-    if (!connected) {
+        || get_signal(signal_id).resolution != ResolutionKind::sv_wire
+        || signal_id >= switch_endpoint_adjacency.size()
+        || switch_endpoint_adjacency[signal_id].empty()) {
         return resolved_local_driver_value(signal_id);
     }
     const auto reduce = [](StrengthRank rank, std::uint8_t count) {
@@ -756,64 +1032,62 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
             if (logic == Logic4::one || logic == Logic4::x) {
                 one = std::max(one, strength.one);
             }
-            for (const auto& state : processes) {
-                const auto& edge = state.program;
-                if (!edge.switch_bidirectional
-                    || !edge.switch_source || !edge.switch_target)
-                    continue;
+            for (const auto connection_index
+                : switch_endpoint_adjacency[node.signal]) {
+                const auto& edge = switch_connections[connection_index];
                 SignalId other { };
                 std::vector<std::pair<std::size_t, std::size_t>>
                     selected_bits;
-                if (edge.switch_width != 0) {
+                if (edge.width != 0) {
                     const auto width = static_cast<std::size_t>(
-                        edge.switch_width);
+                        edge.width);
                     const auto source_offset = static_cast<std::size_t>(
-                        edge.switch_source_offset);
+                        edge.source_offset);
                     const auto target_offset = static_cast<std::size_t>(
-                        edge.switch_target_offset);
-                    if (*edge.switch_source == node.signal
+                        edge.target_offset);
+                    if (edge.source == node.signal
                         && node.bit >= source_offset
                         && node.bit - source_offset < width) {
                         const auto lane = node.bit - source_offset;
-                        other = *edge.switch_target;
+                        other = edge.target;
                         selected_bits.emplace_back(
                             target_offset + lane, lane);
                     }
-                    if (*edge.switch_target == node.signal
+                    if (edge.target == node.signal
                         && node.bit >= target_offset
                         && node.bit - target_offset < width) {
                         const auto lane = node.bit - target_offset;
-                        other = *edge.switch_source;
+                        other = edge.source;
                         selected_bits.emplace_back(
                             source_offset + lane, lane);
                     }
                     if (selected_bits.empty())
                         continue;
-                } else if (*edge.switch_source == node.signal) {
-                    other = *edge.switch_target;
-                } else if (*edge.switch_target == node.signal) {
-                    other = *edge.switch_source;
+                } else if (edge.source == node.signal) {
+                    other = edge.target;
+                } else if (edge.target == node.signal) {
+                    other = edge.source;
                 } else {
                     continue;
                 }
                 const auto other_width = get_signal(other).initial_value.width();
                 const auto next_resistance = static_cast<std::uint8_t>(
                     std::min<unsigned>(
-                        8, node.resistance + (edge.switch_resistive ? 1 : 0)));
+                        8, node.resistance + (edge.resistive ? 1 : 0)));
                 const auto enqueue = [&](const std::size_t other_bit,
                                          const std::size_t selected_lane) {
                     auto uncertain = node.uncertain;
-                    if (edge.switch_control) {
-                        const auto& control_signal = get_signal(*edge.switch_control);
+                    if (edge.control) {
+                        const auto& control_signal = get_signal(*edge.control);
                         const auto control_width = control_signal.initial_value.width();
-                        const auto lane = edge.switch_width == 0
+                        const auto lane = edge.width == 0
                             ? std::max(node.bit, other_bit)
                             : selected_lane;
                         const auto control_bit = control_width == 1 ? 0 : lane;
                         if (control_bit >= control_width)
                             return;
                         const auto control = control_signal.initial_value.get(control_bit);
-                        const auto active = edge.switch_active_high
+                        const auto active = edge.active_high
                             ? Logic4::one
                             : Logic4::zero;
                         if (control == Logic4::zero || control == Logic4::one) {
@@ -883,25 +1157,27 @@ DriveStrength Interpreter::Impl::resolved_signal_strength(
         }
         return result;
     }
-    if (signal.implicit_driver) {
-        include(*signal.implicit_driver, signal.implicit_drive_strength);
+    const auto& cold = get_signal_cold(signal_id);
+    if (cold.implicit_driver) {
+        include(*cold.implicit_driver, cold.implicit_drive_strength);
     }
-    if (signal.charge_strength && charge_values.at(signal_id)) {
+    if (cold.charge_strength && charge_values.at(signal_id)) {
         const auto strength = DriveStrength {
-            *signal.charge_strength, *signal.charge_strength
+            *cold.charge_strength, *cold.charge_strength
         };
         const auto& value = *charge_values.at(signal_id);
         for (std::size_t bit = 0; bit < value.width(); ++bit) {
             include(value.get(bit), strength);
         }
     }
-    for (const auto& [process, value] : driver_values.at(signal_id)) {
-        const auto strength = driver_strengths.at(signal_id).at(process);
-        const auto effective = apply_driver_force(signal_id, process, value);
-        for (std::size_t bit = 0; bit < effective.width(); ++bit) {
-            include(effective.get(bit), strength);
-        }
-    }
+    driver_values.at(signal_id).for_each_in_process_order(
+        [&](const DriverRecord& record) {
+            const auto effective = apply_driver_force(
+                signal_id, record.process, record.value);
+            for (std::size_t bit = 0; bit < effective.width(); ++bit) {
+                include(effective.get(bit), record.strength);
+            }
+        });
     if (external_driver_values.at(signal_id)) {
         const auto& value = *external_driver_values.at(signal_id);
         for (std::size_t bit = 0; bit < value.width(); ++bit) {
@@ -919,17 +1195,22 @@ DriveStrength Interpreter::signal_strength(const SignalId signal) const
 bool Interpreter::Impl::switch_process(const ProcessId process) const
 {
     return process < processes.size()
-        && processes[process].program.switch_bidirectional;
+        && processes[process].program().switch_bidirectional;
 }
 
-void Interpreter::Impl::reset_switch_drivers()
+void Interpreter::Impl::reset_switch_drivers(
+    const std::size_t component)
 {
-    for (SignalId signal = 0; signal < driver_values.size(); ++signal) {
-        for (auto& [process, value] : driver_values[signal]) {
-            if (switch_process(process)) {
-                value = initial_driver_value(signal);
-            }
-        }
+    if (component >= switch_components.size()) {
+        return;
+    }
+    for (const auto signal : switch_components[component].signals) {
+        driver_values[signal].for_each_in_process_order(
+            [&](DriverRecord& record) {
+                if (switch_process(record.process)) {
+                    record.value = initial_driver_value(signal);
+                }
+            });
     }
 }
 
@@ -972,14 +1253,12 @@ void Interpreter::Impl::register_driver(
         initial = std::move(selected);
     }
     auto& values = driver_values.at(signal_id);
-    const auto [entry, inserted] = values.try_emplace(
-        process, std::move(initial));
-    (void)entry;
+    const bool inserted = values.insert_if_absent(DriverRecord {
+        process, std::move(initial), strength
+    });
     if (!inserted) {
         return;
     }
-    driver_strengths.at(signal_id).insert_or_assign(
-        process, strength);
     refresh_direct_single_driver_route(signal_id);
     auto resolved = resolved_driver_value(signal_id);
     driven_values[signal_id] = resolved;
@@ -1000,9 +1279,12 @@ void Interpreter::Impl::set_driver(
     }
     value = normalize_signal_value(
         signal_id, std::move(value));
-    if (const auto source = get_process(process).program.switch_source) {
+    const bool driver_already_registered
+        = driver_values.at(signal_id).find(process) != nullptr;
+    std::optional<DriveStrength> switch_strength;
+    if (const auto source = get_process(process).program().switch_source) {
         auto strength = resolved_signal_strength(*source);
-        if (get_process(process).program.switch_resistive) {
+        if (get_process(process).program().switch_resistive) {
             const auto reduce = [](const StrengthRank rank) {
                 switch (rank) {
                 case StrengthRank::supply:
@@ -1025,9 +1307,16 @@ void Interpreter::Impl::set_driver(
                 reduce(strength.zero), reduce(strength.one)
             };
         }
-        driver_strengths.at(signal_id).insert_or_assign(process, strength);
+        switch_strength = strength;
     }
     auto& slot = driver_slot(process, signal_id);
+    if (switch_strength && driver_already_registered) {
+        auto* record = driver_values.at(signal_id).find(process);
+        if (record != nullptr && record->strength != *switch_strength) {
+            record->strength = *switch_strength;
+            refresh_direct_single_driver_route(signal_id);
+        }
+    }
     if (slot == value) {
         return;
     }
@@ -1061,14 +1350,15 @@ void Interpreter::Impl::commit_resolved(
 {
     const auto& signal = get_signal(signal_id);
     auto& handle = charge_decay_handles.at(signal_id);
-    if (!signal.charge_strength) {
+    if (!signal.has_charge_strength) {
         commit(signal_id, std::move(value));
         return;
     }
+    const auto& cold = get_signal_cold(signal_id);
 
     const auto actively_driven = [&](const std::size_t bit) {
-        if (signal.implicit_driver
-            && *signal.implicit_driver != Logic4::z) {
+        if (cold.implicit_driver
+            && *cold.implicit_driver != Logic4::z) {
             return true;
         }
         const auto contributes = [&](const Logic4 logic,
@@ -1083,13 +1373,18 @@ void Interpreter::Impl::commit_resolved(
                 && (strength.zero != StrengthRank::highz
                     || strength.one != StrengthRank::highz);
         };
-        for (const auto& [process, driver] : driver_values.at(signal_id)) {
-            if (contributes(
-                    driver_force_logic4_at(
-                        signal_id, process, driver, bit),
-                    driver_strengths.at(signal_id).at(process))) {
-                return true;
-            }
+        bool active_driver { };
+        driver_values.at(signal_id).for_each_in_process_order(
+            [&](const DriverRecord& record) {
+                if (!active_driver && contributes(
+                        driver_force_logic4_at(
+                            signal_id, record.process, record.value, bit),
+                        record.strength)) {
+                    active_driver = true;
+                }
+            });
+        if (active_driver) {
+            return true;
         }
         return external_driver_values.at(signal_id)
             && contributes(
@@ -1108,8 +1403,8 @@ void Interpreter::Impl::commit_resolved(
         scheduler.cancel(*handle);
         handle.reset();
     }
-    if (!any_released || signal.charge_decay == 0) {
-        if (signal.charge_decay == 0) {
+    if (!any_released || cold.charge_decay == 0) {
+        if (cold.charge_decay == 0) {
             for (std::size_t bit = 0; bit < charge.width(); ++bit) {
                 if (!actively_driven(bit))
                     charge.set(bit, Logic4::z);
@@ -1121,31 +1416,39 @@ void Interpreter::Impl::commit_resolved(
     }
 
     commit(signal_id, std::move(value));
-    if (!signal.charge_decay) {
+    if (!cold.charge_decay) {
         return;
     }
     handle = scheduler.schedule_after_cancelable(
-        *signal.charge_decay,
+        *cold.charge_decay,
         SchedulerPhase::update,
         signal_id,
         [this, signal_id](Scheduler&) {
             charge_decay_handles.at(signal_id).reset();
             auto& decaying_charge = *charge_values.at(signal_id);
             const auto active = [&](const std::size_t bit) {
-                for (const auto& [process, driver] :
-                    driver_values.at(signal_id)) {
-                    const auto logic = driver_force_logic4_at(
-                        signal_id, process, driver, bit);
-                    const auto strength = driver_strengths.at(signal_id).at(process);
-                    if ((logic == Logic4::zero
-                            && strength.zero != StrengthRank::highz)
-                        || (logic == Logic4::one
-                            && strength.one != StrengthRank::highz)
-                        || (logic == Logic4::x
-                            && (strength.zero != StrengthRank::highz
-                                || strength.one != StrengthRank::highz))) {
-                        return true;
-                    }
+                bool active_driver { };
+                driver_values.at(signal_id).for_each_in_process_order(
+                    [&](const DriverRecord& record) {
+                        if (active_driver) {
+                            return;
+                        }
+                        const auto logic = driver_force_logic4_at(
+                            signal_id, record.process, record.value, bit);
+                        const auto strength = record.strength;
+                        active_driver
+                            = (logic == Logic4::zero
+                                  && strength.zero != StrengthRank::highz)
+                            || (logic == Logic4::one
+                                  && strength.one != StrengthRank::highz)
+                            || (logic == Logic4::x
+                                  && (strength.zero
+                                          != StrengthRank::highz
+                                      || strength.one
+                                          != StrengthRank::highz));
+                    });
+                if (active_driver) {
+                    return true;
                 }
                 return external_driver_values.at(signal_id)
                     && external_driver_values.at(signal_id)->get(bit)
@@ -1168,12 +1471,12 @@ void Interpreter::Impl::commit_resolved(
         return driven_values.at(signal_id);
     }
     const auto& values = driver_values.at(signal_id);
-    const auto found = values.find(process);
-    if (found == values.end()) {
+    const auto* record = values.find(process);
+    if (record == nullptr) {
         throw std::out_of_range(
             "process has no driver slot for SimIR signal");
     }
-    return found->second;
+    return record->value;
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::current_driver_value(

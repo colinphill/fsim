@@ -5,6 +5,7 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "../../src/runtime/simir_cohort_snapshot_pool.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -29,6 +31,68 @@ void require(bool condition, const char *message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+class ScopedEnvironment final {
+public:
+  ScopedEnvironment(
+      std::string name, std::optional<std::string> value)
+      : name_(std::move(name))
+      , previous_(read()) {
+    if (set(value) != 0) {
+      throw std::runtime_error("unable to update test environment");
+    }
+  }
+
+  ScopedEnvironment(const ScopedEnvironment &) = delete;
+  ScopedEnvironment &operator=(const ScopedEnvironment &) = delete;
+
+  ~ScopedEnvironment() { (void)set(previous_); }
+
+private:
+  [[nodiscard]] std::optional<std::string> read() const {
+    if (const char *value = std::getenv(name_.c_str())) {
+      return std::string{value};
+    }
+    return std::nullopt;
+  }
+
+  int set(const std::optional<std::string> &value) const {
+#if defined(_WIN32)
+    return ::_putenv_s(name_.c_str(), value ? value->c_str() : "");
+#else
+    return value ? ::setenv(name_.c_str(), value->c_str(), 1)
+                 : ::unsetenv(name_.c_str());
+#endif
+  }
+
+  std::string name_;
+  std::optional<std::string> previous_;
+};
+
+struct SchedulerTaskProbe {
+  std::vector<std::uint64_t> *values;
+  std::uint64_t value;
+};
+
+void record_scheduler_task_probe(
+    fsim::runtime::Scheduler &,
+    const SchedulerTaskProbe &probe) {
+  probe.values->push_back(probe.value);
+}
+
+struct SchedulerTaskTimingProbe {
+  std::vector<std::string> *events;
+  std::uint64_t value;
+};
+
+void record_scheduler_task_timing_probe(
+    fsim::runtime::Scheduler &scheduler,
+    const SchedulerTaskTimingProbe &probe) {
+  probe.events->push_back(
+      std::to_string(scheduler.now()) + ":"
+      + std::to_string(scheduler.delta()) + ":"
+      + std::to_string(probe.value));
 }
 
 } // namespace
@@ -82,6 +146,88 @@ void test_scheduler_phase_order() {
       "postponed", "next-delta", "time-4"
   };
   require(events == expected, "scheduler phase ordering");
+
+  Scheduler stable_order;
+  std::vector<std::string> ordered_events;
+  constexpr std::array phases = {
+      SchedulerPhase::active,
+      SchedulerPhase::inactive,
+      SchedulerPhase::update,
+      SchedulerPhase::observed,
+      SchedulerPhase::reactive,
+      SchedulerPhase::re_inactive,
+      SchedulerPhase::re_update,
+      SchedulerPhase::postponed,
+  };
+  const auto add_ordered_event = [&](const SchedulerPhase phase,
+                                     const StableOrder order,
+                                     const std::string &label) {
+    const auto event = std::to_string(static_cast<unsigned>(phase))
+        + ":" + label;
+    stable_order.schedule(phase, order, [&, event](Scheduler &) {
+      ordered_events.push_back(event);
+    });
+  };
+  for (const auto phase : phases) {
+    add_ordered_event(phase,
+        std::numeric_limits<StableOrder>::max(), "max-first");
+    add_ordered_event(phase, StableOrder { 1 } << 63U, "high-first");
+    add_ordered_event(phase, 0U, "zero");
+    add_ordered_event(phase, StableOrder { 1 } << 32U, "middle");
+    add_ordered_event(phase, StableOrder { 1 } << 63U, "high-second");
+    add_ordered_event(phase,
+        std::numeric_limits<StableOrder>::max(), "max-second");
+  }
+  const auto stable_result = stable_order.run();
+  std::vector<std::string> expected_ordered_events;
+  for (const auto phase : phases) {
+    const auto prefix = std::to_string(static_cast<unsigned>(phase)) + ":";
+    expected_ordered_events.push_back(prefix + "zero");
+    expected_ordered_events.push_back(prefix + "middle");
+    expected_ordered_events.push_back(prefix + "high-first");
+    expected_ordered_events.push_back(prefix + "high-second");
+    expected_ordered_events.push_back(prefix + "max-first");
+    expected_ordered_events.push_back(prefix + "max-second");
+  }
+  require(stable_result.status == RunStatus::completed
+              && stable_result.callbacks_executed == 48U
+              && ordered_events == expected_ordered_events,
+          "all regions order the full StableOrder range then insertion sequence");
+
+  Scheduler delta_queues;
+  std::vector<std::string> delta_events;
+  std::function<void(Scheduler &, std::uint64_t)> schedule_wave;
+  schedule_wave = [&](Scheduler &runtime, const std::uint64_t wave) {
+    for (const auto phase : phases) {
+      const auto phase_index = static_cast<unsigned>(phase);
+      runtime.schedule_next_delta(phase, phase_index,
+          [&, wave, phase, phase_index](Scheduler &scheduled) {
+            require(scheduled.delta() == wave
+                        && scheduled.current_phase() == phase,
+                    "rotated region queue retains its phase and delta");
+            delta_events.push_back(
+                std::to_string(wave) + ":"
+                + std::to_string(phase_index));
+            if (phase == SchedulerPhase::active && wave < 2U) {
+              schedule_wave(scheduled, wave + 1U);
+            }
+          });
+    }
+  };
+  schedule_wave(delta_queues, 0U);
+  const auto delta_result = delta_queues.run();
+  std::vector<std::string> expected_delta_events;
+  for (std::uint64_t wave = 0; wave <= 2U; ++wave) {
+    for (const auto phase : phases) {
+      expected_delta_events.push_back(
+          std::to_string(wave) + ":"
+          + std::to_string(static_cast<unsigned>(phase)));
+    }
+  }
+  require(delta_result.status == RunStatus::completed
+              && delta_result.callbacks_executed == 24U
+              && delta_events == expected_delta_events,
+          "all eight region queues retain canonical order across delta waves");
 }
 
 void test_scheduler_stop_resume() {
@@ -295,6 +441,26 @@ void test_scheduler_ownership_and_failure_containment() {
               && move_callback_count == 2,
           "move assignment during a callback preserves the running state");
 
+  Scheduler running_move_construct;
+  bool active_move_construct_rejected = false;
+  int active_move_construct_callbacks = 0;
+  running_move_construct.schedule_after(
+      1, SchedulerPhase::active, 0, [&](Scheduler& active) {
+        try {
+          Scheduler moved(std::move(active));
+          static_cast<void>(moved);
+        } catch (const std::logic_error&) {
+          active_move_construct_rejected = true;
+        }
+        active.schedule_after(
+            1, SchedulerPhase::active, 0,
+            [&](Scheduler&) { ++active_move_construct_callbacks; });
+      });
+  require(running_move_construct.run().status == RunStatus::completed
+              && active_move_construct_rejected
+              && active_move_construct_callbacks == 1,
+          "move construction during a callback is rejected without damaging the run");
+
   ScheduledTaskHandle rejected_during_destruction;
   {
     Scheduler dying;
@@ -349,6 +515,121 @@ void test_scheduler_ownership_and_failure_containment() {
               && reuse.run().status == RunStatus::completed
               && reused_count == 3,
           "reset invalidates old handles without cancelling reused slots");
+
+  struct DiscardProbe {
+    int calls { };
+
+    static void notify(void* context) noexcept {
+      ++static_cast<DiscardProbe*>(context)->calls;
+    }
+  };
+  struct ReentrantDiscardProbe {
+    Scheduler* scheduler { };
+    int calls { };
+    ScheduledTaskHandle rejected_schedule;
+
+    static void notify(void* context) noexcept {
+      auto& probe = *static_cast<ReentrantDiscardProbe*>(context);
+      ++probe.calls;
+      probe.scheduler->reset();
+      probe.rejected_schedule = probe.scheduler->schedule_after_cancelable(
+          1, SchedulerPhase::active, 0, [](Scheduler&) {});
+    }
+  };
+
+  DiscardProbe probe;
+  ReentrantDiscardProbe reentrant_discard_probe;
+  Scheduler hook_reentry;
+  reentrant_discard_probe.scheduler = &hook_reentry;
+  const auto reentrant_hook = hook_reentry.add_discard_hook(
+      &reentrant_discard_probe, &ReentrantDiscardProbe::notify);
+  hook_reentry.schedule_after(
+      1, SchedulerPhase::active, 0, [](Scheduler&) {});
+  hook_reentry.discard_pending();
+  require(reentrant_discard_probe.calls == 1
+              && !reentrant_discard_probe.rejected_schedule
+              && !hook_reentry.has_pending(),
+          "discard hooks cannot recursively reset or schedule during cleanup");
+  hook_reentry.reset();
+  require(reentrant_discard_probe.calls == 2
+              && !reentrant_discard_probe.rejected_schedule
+              && !hook_reentry.has_pending(),
+          "reset notifies once while nested hook reset remains guarded");
+  hook_reentry.remove_discard_hook(reentrant_hook);
+
+  Scheduler observed_discard;
+  const auto discard_token = observed_discard.add_discard_hook(
+      &probe, &DiscardProbe::notify);
+  observed_discard.schedule_after(
+      1, SchedulerPhase::active, 0, [](Scheduler&) {});
+  observed_discard.discard_pending();
+  observed_discard.reset();
+  require(probe.calls == 2,
+          "discard and reset notify registered owners after queue release");
+  observed_discard.remove_discard_hook(discard_token);
+  observed_discard.discard_pending();
+  require(probe.calls == 2,
+          "removed discard observers do not receive later notifications");
+
+  {
+    Scheduler moving_with_hook;
+    (void)moving_with_hook.add_discard_hook(
+        &probe, &DiscardProbe::notify);
+    moving_with_hook.schedule_after(
+        1, SchedulerPhase::active, 0, [](Scheduler&) {});
+    Scheduler moved_with_hook = std::move(moving_with_hook);
+    require(!moved_with_hook.has_pending() && probe.calls == 3,
+            "moving an observed scheduler releases its queued work");
+  }
+  require(probe.calls == 3,
+          "moved scheduler teardown does not retain a stale discard observer");
+
+  Scheduler moving_reentrant_hook;
+  reentrant_discard_probe.scheduler = &moving_reentrant_hook;
+  (void)moving_reentrant_hook.add_discard_hook(
+      &reentrant_discard_probe, &ReentrantDiscardProbe::notify);
+  moving_reentrant_hook.schedule_after(
+      1, SchedulerPhase::active, 0, [](Scheduler&) {});
+  Scheduler moved_reentrant_hook = std::move(moving_reentrant_hook);
+  require(reentrant_discard_probe.calls == 3
+              && !reentrant_discard_probe.rejected_schedule
+              && !moved_reentrant_hook.has_pending(),
+          "move cleanup keeps its reentrancy guard active through notification");
+
+  {
+    Scheduler dying_with_hook;
+    (void)dying_with_hook.add_discard_hook(
+        &probe, &DiscardProbe::notify);
+    dying_with_hook.schedule_after(
+        1, SchedulerPhase::active, 0, [](Scheduler&) {});
+  }
+  require(probe.calls == 4,
+          "scheduler teardown notifies owners after queue release");
+
+  {
+    Scheduler dying_with_reentrant_hook;
+    reentrant_discard_probe.scheduler = &dying_with_reentrant_hook;
+    (void)dying_with_reentrant_hook.add_discard_hook(
+        &reentrant_discard_probe, &ReentrantDiscardProbe::notify);
+    dying_with_reentrant_hook.schedule_after(
+        1, SchedulerPhase::active, 0, [](Scheduler&) {});
+  }
+  require(reentrant_discard_probe.calls == 4
+              && !reentrant_discard_probe.rejected_schedule,
+          "destruction keeps its reentrancy guard active through notification");
+
+  {
+    Scheduler assigned_with_hook;
+    (void)assigned_with_hook.add_discard_hook(
+        &probe, &DiscardProbe::notify);
+    Scheduler replacement;
+    assigned_with_hook = std::move(replacement);
+    assigned_with_hook.reset();
+    require(probe.calls == 6,
+            "move assignment keeps the destination discard observer");
+  }
+  require(probe.calls == 7,
+          "an assigned scheduler still notifies its owner at teardown");
 
   Scheduler ordered;
   std::vector<int> observed;
@@ -432,9 +713,12 @@ void test_scheduler_batch_contract() {
   schedule_batch(ordered, first_batch, 30U, 3U, fallbacks);
   schedule_batch(ordered, first_batch, 10U, 1U, fallbacks);
   schedule_batch(ordered, first_batch, 20U, 2U, fallbacks);
-  ordered.schedule_next_delta(
-      SchedulerPhase::active, 25U,
-      [&](Scheduler&) { fallbacks.push_back(99U); });
+  const SchedulerTaskProbe split_batch_payload { &fallbacks, 99U };
+  ordered.schedule_internal_at(
+      0U, SchedulerPhase::active, 25U,
+      detail::make_scheduler_task_descriptor<
+          SchedulerTaskProbe, record_scheduler_task_probe>(
+          split_batch_payload));
   schedule_batch(ordered, second_batch, 40U, 4U, fallbacks);
   schedule_batch(ordered, second_batch, 50U, 5U, fallbacks);
   const auto ordered_result = ordered.run();
@@ -512,6 +796,36 @@ void test_scheduler_batch_contract() {
           && failing_batch.executed
               == std::vector<std::uint64_t> {1U, 2U},
       "scheduler resumes after a contained batch failure");
+
+  Scheduler internal;
+  std::vector<std::string> internal_events;
+  internal.schedule_internal_at(
+      3U, SchedulerPhase::observed, 30U,
+      detail::make_scheduler_task_descriptor<
+          SchedulerTaskTimingProbe, record_scheduler_task_timing_probe>(
+          SchedulerTaskTimingProbe { &internal_events, 30U }));
+  internal.schedule(SchedulerPhase::active, 0U,
+      [&](Scheduler &runtime) {
+        runtime.schedule_internal(
+            SchedulerPhase::active, 10U,
+            detail::make_scheduler_task_descriptor<
+                SchedulerTaskTimingProbe,
+                record_scheduler_task_timing_probe>(
+                SchedulerTaskTimingProbe { &internal_events, 10U }));
+        runtime.schedule_internal_next_delta(
+            SchedulerPhase::active, 20U,
+            detail::make_scheduler_task_descriptor<
+                SchedulerTaskTimingProbe,
+                record_scheduler_task_timing_probe>(
+                SchedulerTaskTimingProbe { &internal_events, 20U }));
+      });
+  const auto internal_result = internal.run();
+  require(internal_result.status == RunStatus::completed
+              && internal_result.callbacks_executed == 4U
+              && internal_events
+                  == std::vector<std::string> {
+                      "0:0:10", "0:1:20", "3:0:30" },
+          "typed tasks retain callback ordering, deltas, and absolute time");
 }
 
 void test_scheduler_time_limit_before_future_event() {
@@ -559,6 +873,89 @@ void test_scheduler_safe_point_scheduling() {
           "safe-point scheduled work must complete");
   require(callbacks == 2,
           "work scheduled into a completed phase must run next delta");
+
+  Scheduler composed;
+  std::vector<std::string> hook_events;
+  Scheduler::SafePointHookToken removed_observer { };
+  Scheduler::SafePointHookToken added_observer { };
+  bool replaced_primary = false;
+  composed.set_safe_point_hook(
+      [&](Scheduler &runtime, const SchedulerPhase phase) {
+        hook_events.push_back(
+            "primary:" + std::to_string(static_cast<unsigned>(phase)));
+        require(runtime.at_safe_point(),
+                "composed hooks run at the existing safe point");
+        if (phase == SchedulerPhase::active && !replaced_primary) {
+          replaced_primary = true;
+          runtime.remove_safe_point_hook(removed_observer);
+          added_observer = runtime.add_safe_point_hook(
+              [&](Scheduler &added_runtime,
+                  const SchedulerPhase added_phase) {
+                require(added_runtime.at_safe_point(),
+                        "added observers run at the existing safe point");
+                hook_events.push_back(
+                    "added:" + std::to_string(
+                        static_cast<unsigned>(added_phase)));
+              });
+          runtime.set_safe_point_hook(
+              [&](Scheduler &replacement_runtime,
+                  const SchedulerPhase replacement_phase) {
+                require(replacement_runtime.at_safe_point(),
+                        "replacement hook runs at the existing safe point");
+                hook_events.push_back(
+                    "replacement:" + std::to_string(
+                        static_cast<unsigned>(replacement_phase)));
+              });
+        }
+      });
+  static_cast<void>(composed.add_safe_point_hook(
+      [&](Scheduler &runtime, const SchedulerPhase phase) {
+        require(runtime.at_safe_point(),
+                "registered observers run at the existing safe point");
+        hook_events.push_back(
+            "first:" + std::to_string(static_cast<unsigned>(phase)));
+      }));
+  removed_observer = composed.add_safe_point_hook(
+      [&](Scheduler &runtime, const SchedulerPhase phase) {
+        require(runtime.at_safe_point(),
+                "removed observer stays alive for its dispatch snapshot");
+        hook_events.push_back(
+            "removed:" + std::to_string(static_cast<unsigned>(phase)));
+      });
+  composed.schedule(
+      SchedulerPhase::active, 0U, [](Scheduler &) { });
+  const auto composed_result = composed.run();
+  std::vector<std::string> expected_hook_events {
+      "primary:0", "first:0", "removed:0" };
+  for (unsigned phase = 1U; phase < 8U; ++phase) {
+    expected_hook_events.push_back("replacement:" + std::to_string(phase));
+    expected_hook_events.push_back("first:" + std::to_string(phase));
+    expected_hook_events.push_back("added:" + std::to_string(phase));
+  }
+  require(composed_result.status == RunStatus::completed
+              && hook_events == expected_hook_events,
+          "safe-point hook mutation applies after the active dispatch snapshot");
+  composed.remove_safe_point_hook(added_observer);
+
+  Scheduler throwing_hook;
+  throwing_hook.schedule(
+      SchedulerPhase::active, 0U, [](Scheduler &) { });
+  const auto throwing_token = throwing_hook.add_safe_point_hook(
+      [](Scheduler &, SchedulerPhase) {
+        throw std::runtime_error("safe-point observer failure");
+      });
+  bool caught_hook_failure = false;
+  try {
+    static_cast<void>(throwing_hook.run());
+  } catch (const std::runtime_error &error) {
+    caught_hook_failure = std::string_view { error.what() }
+        == "safe-point observer failure";
+  }
+  throwing_hook.remove_safe_point_hook(throwing_token);
+  require(caught_hook_failure && !throwing_hook.running()
+              && !throwing_hook.at_safe_point()
+              && throwing_hook.run().status == RunStatus::completed,
+          "a throwing observer restores scheduler state and permits resume");
 }
 
 void test_scheduler_delta_limit() {
@@ -833,9 +1230,15 @@ void test_simir_update_coalescing() {
       "the equal-deadline winner commits at the requested future time");
 }
 
+void test_mixed_signal_id_alignment();
+void test_force_release_word_boundary();
+
 void test_resolved_driver_slots() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
+
+  ScopedEnvironment direct_word_commit_enabled{
+      "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::nullopt};
 
   Interpreter interpreter;
   const auto whole = interpreter.add_signal(
@@ -1152,6 +1555,600 @@ void test_resolved_driver_slots() {
       regional.signal_value(regional_self).to_msb_string()
           == "11001100",
       "disjoint selected regions of one net form a bidirectional physical alias");
+
+  Interpreter promoted;
+  const auto promoted_signal = promoted.add_signal(
+      { "top.promoted",
+          PackedLogic4::from_msb_string("Z"),
+          ResolutionKind::sv_wire });
+  const auto add_promoted_driver = [&](const ProcessId id,
+                                       const std::string_view name,
+                                       const std::string_view value) {
+    Process process;
+    process.id = id;
+    process.name = std::string { name };
+    process.register_count = 1U;
+    process.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string(value) },
+        WriteUpdate { promoted_signal, 0U },
+        Halt { },
+    };
+    (void)promoted.add_process(std::move(process));
+  };
+  add_promoted_driver(0U, "inline_driver", "0");
+  add_promoted_driver(1U, "overflow_driver", "1");
+  const auto promoted_result = promoted.run();
+  require(
+      promoted_result.status == RunStatus::completed,
+      "the inline-to-overflow promotion simulation completes");
+  require(
+      promoted.signal_value(promoted_signal).to_msb_string() == "X",
+      "two opposing drivers resolve after inline-to-overflow promotion");
+  require(
+      promoted.driver_value(0U, promoted_signal).to_msb_string() == "0",
+      "overflow promotion retains the inline process driver value");
+  require(
+      promoted.driver_value(1U, promoted_signal).to_msb_string() == "1",
+      "overflow promotion retains the second process driver value");
+
+  class DelayedDriverWriteExecutor final : public ProcessExecutor {
+  public:
+    DelayedDriverWriteExecutor(
+        const SignalId signal, const Logic4Word value)
+        : signal_ { signal }
+        , value_ { value }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex) override
+    {
+      context.write_update_word(signal_, value_);
+      ProcessResumeResult result { 0U, 1U };
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    SignalId signal_ { };
+    Logic4Word value_ { };
+  };
+
+  Interpreter user_first;
+  const auto user_first_signal = user_first.add_signal(
+      { "top.user_first",
+          PackedLogic4::from_msb_string("Z"),
+          ResolutionKind::sv_user_first });
+  std::array<SignalId, 4U> user_first_triggers { };
+  for (std::size_t index = 0; index < user_first_triggers.size(); ++index) {
+    user_first_triggers[index] = user_first.add_signal(
+        { "top.user_first_trigger" + std::to_string(index),
+            PackedLogic4::from_msb_string("0") });
+  }
+  constexpr std::array<Logic4Word, 4U> user_first_values {
+      Logic4Word { 1U, 0U, 0U },
+      Logic4Word { 1U, 1U, 0U },
+      Logic4Word { 1U, 1U, 1U },
+      Logic4Word { 1U, 0U, 1U },
+  };
+  std::array<ProcessId, 4U> user_first_processes { };
+  for (std::size_t index = 0; index < user_first_processes.size(); ++index) {
+    const auto id = static_cast<ProcessId>(index);
+    Process process;
+    process.id = id;
+    process.name = "user_first_process" + std::to_string(id);
+    process.static_sensitivity.push_back(
+        { user_first_triggers[index], EdgeKind::any });
+    process.operations = { WaitSensitivity { }, Halt { } };
+    process.initialize = false;
+    user_first_processes[index] =
+        user_first.add_process(std::move(process));
+    user_first.set_process_executor(
+        user_first_processes[index],
+        std::make_unique<DelayedDriverWriteExecutor>(
+            user_first_signal, user_first_values[index]));
+  }
+  for (std::size_t reverse_index = 0;
+      reverse_index < user_first_triggers.size(); ++reverse_index) {
+    const auto index = user_first_triggers.size() - 1U - reverse_index;
+    const auto time = static_cast<SimulationTick>(reverse_index + 1U);
+    user_first.schedule_signal_at(
+        user_first_triggers[index],
+        PackedLogic4::from_msb_string("1"), time, 0U);
+  }
+  const auto user_first_result = user_first.run();
+  require(
+      user_first_result.status == RunStatus::completed
+          && user_first_result.time == 4U,
+      "the four-driver reverse slot creation simulation completes");
+  require(
+      user_first.driver_value(3U, user_first_signal).to_msb_string() == "Z"
+          && user_first.driver_value(2U, user_first_signal).to_msb_string()
+              == "X"
+          && user_first.driver_value(1U, user_first_signal).to_msb_string()
+              == "1"
+          && user_first.driver_value(0U, user_first_signal).to_msb_string()
+              == "0",
+      "four lazy driver slots retain values after reverse ProcessId insertion");
+  require(
+      user_first.signal_value(user_first_signal).to_msb_string() == "0",
+      "sv_user_first merges multiple overflow entries by ProcessId");
+
+  Interpreter grown_route;
+  const auto direct_signal = grown_route.add_signal(
+      { "top.direct_after_growth",
+          PackedLogic4::from_msb_string("Z"),
+          ResolutionKind::sv_wire });
+  Process direct_writer;
+  direct_writer.id = 0U;
+  direct_writer.name = "direct_writer";
+  direct_writer.driver_regions.push_back(
+      { direct_signal, 0U, 0U, true });
+  direct_writer.operations = { Halt { } };
+  const auto direct_writer_id
+      = grown_route.add_process(std::move(direct_writer));
+  for (std::size_t index = 0U; index < 256U; ++index) {
+    (void)grown_route.add_signal(
+        { "top.growth" + std::to_string(index),
+            PackedLogic4::from_msb_string("0") });
+  }
+  grown_route.set_process_executor(
+      direct_writer_id,
+      std::make_unique<DelayedDriverWriteExecutor>(
+          direct_signal, Logic4Word { 1U, 1U, 0U }));
+  const auto grown_route_result = grown_route.run();
+  require(
+      grown_route_result.status == RunStatus::completed,
+      "the direct single-driver growth simulation completes");
+  require(
+      grown_route.driver_value(0U, direct_signal).to_msb_string() == "1",
+      "the direct single-driver route updates its process slot after growth");
+  require(
+      grown_route.signal_value(direct_signal).to_msb_string() == "1",
+      "the direct single-driver publication matches its slot after growth");
+
+  Interpreter lazy_mirror;
+  const auto lazy_signal = lazy_mirror.add_signal(
+      { "top.lazy_mirror",
+          PackedLogic4::from_msb_string("ZZZZ"),
+          ResolutionKind::sv_wire });
+  const auto update_trigger = lazy_mirror.add_signal(
+      { "top.lazy_mirror_trigger",
+          PackedLogic4::from_msb_string("0") });
+
+  Process mirror_reader;
+  mirror_reader.id = 0U;
+  mirror_reader.name = "lazy_mirror_reader";
+  mirror_reader.register_count = 2U;
+  mirror_reader.debug_locals.resize(2U);
+  mirror_reader.debug_locals[0U].name = "previous";
+  mirror_reader.debug_locals[0U].type_name = "logic";
+  mirror_reader.debug_locals[0U].register_id = 0U;
+  mirror_reader.debug_locals[0U].width = 4U;
+  mirror_reader.debug_locals[1U].name = "published";
+  mirror_reader.debug_locals[1U].type_name = "logic";
+  mirror_reader.debug_locals[1U].register_id = 1U;
+  mirror_reader.debug_locals[1U].width = 4U;
+  mirror_reader.static_sensitivity.push_back(
+      { lazy_signal, EdgeKind::any });
+  mirror_reader.operations = {
+      WaitSensitivity { },
+      SignalLastValue { 0U, lazy_signal },
+      ReadSignal { 1U, lazy_signal },
+      Halt { },
+  };
+  const auto mirror_reader_id
+      = lazy_mirror.add_process(std::move(mirror_reader));
+
+  class LazyMirrorNativeWriter final : public ProcessExecutor {
+  public:
+    LazyMirrorNativeWriter(
+        const SignalId signal, const ProcessId process)
+        : signal_ { signal }
+        , process_ { process }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override
+    {
+      if (resumes_++ == 0U) {
+        require(start == 0U,
+                "lazy-mirror native writer starts at its wait boundary");
+        const std::array slots {
+            ProcessUpdateSlotView {
+                signal_, 4U, 1U, &slot_active_, &slot_aval_,
+                &slot_bval_, &slot_mask_ }
+        };
+        std::array<std::uint64_t, 1U> active_words { 1U };
+        const std::array batches {
+            ProcessUpdateSlotBatch { process_, slots, active_words }
+        };
+        require(
+            context.write_validated_update_slot_batches(batches),
+            "lazy-mirror full slot batch is accepted");
+        ProcessResumeResult result { 0U, 1U };
+        result.external.kind = ExternalSuspendKind::wait_sensitivity;
+        return result;
+      }
+
+      require(start == 1U,
+              "lazy-mirror native writer resumes after its trigger wait");
+      ScopedEnvironment disable_direct_word_commit {
+          "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::string { "1" } };
+      const std::array updates {
+          ProcessUpdateWord {
+              signal_, Logic4Word { 2U, 0b11U, 0U }, 1U, true }
+      };
+      context.write_validated_update_words(updates);
+      ProcessResumeResult result { 1U, 2U };
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    SignalId signal_ { };
+    ProcessId process_ { };
+    std::uint32_t slot_active_ { 1U };
+    std::uint64_t slot_aval_ { 0b1010U };
+    std::uint64_t slot_bval_ { };
+    std::uint64_t slot_mask_ { 0b1111U };
+    std::uint32_t resumes_ { };
+  };
+
+  Process native_writer;
+  native_writer.id = 1U;
+  native_writer.name = "lazy_mirror_native_writer";
+  native_writer.static_sensitivity.push_back(
+      { update_trigger, EdgeKind::any });
+  native_writer.driver_regions.push_back(
+      { lazy_signal, 0U, 0U, true });
+  native_writer.operations = { WaitSensitivity { }, Halt { } };
+  const auto native_writer_id
+      = lazy_mirror.add_process(std::move(native_writer));
+  lazy_mirror.set_process_executor(
+      native_writer_id,
+      std::make_unique<LazyMirrorNativeWriter>(
+          lazy_signal, native_writer_id));
+
+  const auto native_result = lazy_mirror.run();
+  require(native_result.status == RunStatus::completed,
+          "eligible narrow native signal publication completes");
+  require(
+      lazy_mirror.read_debug_local(mirror_reader_id, 0U).to_msb_string()
+              == "ZZZZ"
+          && lazy_mirror.read_debug_local(mirror_reader_id, 1U)
+                  .to_msb_string()
+              == "1010",
+      "generic SignalLastValue and ReadSignal materialize previous and published values");
+  require(
+      lazy_mirror.signal_value(lazy_signal).to_msb_string() == "1010"
+          && lazy_mirror.stored_signal_value(lazy_signal).to_msb_string()
+              == "1010"
+          && lazy_mirror.driver_value(native_writer_id, lazy_signal)
+                  .to_msb_string()
+              == "1010",
+      "generic signal, stored, and driver queries see the materialized native word");
+
+  lazy_mirror.deposit_signal(
+      update_trigger, PackedLogic4::from_msb_string("1"));
+  const auto partial_result = lazy_mirror.run();
+  require(partial_result.status == RunStatus::completed,
+          "the native partial update after materialization completes");
+  require(
+      lazy_mirror.signal_value(lazy_signal).to_msb_string() == "1110"
+          && lazy_mirror.stored_signal_value(lazy_signal).to_msb_string()
+              == "1110"
+          && lazy_mirror.driver_value(native_writer_id, lazy_signal)
+                  .to_msb_string()
+              == "1110",
+      "a later partial native update remains coherent across all signal views");
+
+  lazy_mirror.force_signal(
+      lazy_signal, PackedLogic4::from_msb_string("0001"));
+  require(
+      lazy_mirror.signal_value(lazy_signal).to_msb_string() == "0001"
+          && lazy_mirror.stored_signal_value(lazy_signal).to_msb_string()
+              == "1110"
+          && lazy_mirror.driver_value(native_writer_id, lazy_signal)
+                  .to_msb_string()
+              == "1110",
+      "force changes the published value while retaining driven and driver values");
+  lazy_mirror.release_signal(lazy_signal);
+  require(
+      lazy_mirror.signal_value(lazy_signal).to_msb_string() == "1110",
+      "release republishes the latest materialized driver value");
+
+  Interpreter stale_route;
+  const auto stale_signal = stale_route.add_signal(
+      { "top.stale_route",
+          PackedLogic4::from_msb_string("ZZZZ"),
+          ResolutionKind::sv_wire });
+  const auto stale_trigger = stale_route.add_signal(
+      { "top.stale_route_trigger", PackedLogic4::from_msb_string("0") });
+
+  class NativeThenFallbackWriter final : public ProcessExecutor {
+  public:
+    NativeThenFallbackWriter(
+        const SignalId signal, const ProcessId process)
+        : signal_ { signal }
+        , process_ { process }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override
+    {
+      if (resumes_++ == 0U) {
+        require(start == 0U, "stale-route writer starts at its wait");
+        const std::array slots {
+            ProcessUpdateSlotView {
+                signal_, 4U, 1U, &slot_active_, &slot_aval_,
+                &slot_bval_, &slot_mask_ }
+        };
+        std::array<std::uint64_t, 1U> active_words { 1U };
+        const std::array batches {
+            ProcessUpdateSlotBatch { process_, slots, active_words }
+        };
+        require(
+            context.write_validated_update_slot_batches(batches),
+            "stale-route full slot batch is accepted");
+        ProcessResumeResult result { 0U, 1U };
+        result.external.kind = ExternalSuspendKind::wait_sensitivity;
+        return result;
+      }
+
+      require(start == 1U, "stale-route writer resumes after its trigger");
+      ScopedEnvironment disable_direct_word_commit {
+          "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::string { "1" } };
+      const std::array updates {
+          ProcessUpdateWord {
+              signal_, Logic4Word { 2U, 0b11U, 0U }, 1U, true }
+      };
+      context.write_validated_update_words(updates);
+      ProcessResumeResult result { 1U, 2U };
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    SignalId signal_ { };
+    ProcessId process_ { };
+    std::uint32_t slot_active_ { 1U };
+    std::uint64_t slot_aval_ { 0b1010U };
+    std::uint64_t slot_bval_ { };
+    std::uint64_t slot_mask_ { 0b1111U };
+    std::uint32_t resumes_ { };
+  };
+
+  Process stale_writer;
+  stale_writer.id = 0U;
+  stale_writer.name = "stale_route_writer";
+  stale_writer.driver_regions.push_back(
+      { stale_signal, 0U, 0U, true });
+  stale_writer.static_sensitivity.push_back(
+      { stale_trigger, EdgeKind::any });
+  stale_writer.operations = { WaitSensitivity { }, Halt { } };
+  const auto stale_writer_id = stale_route.add_process(std::move(stale_writer));
+  stale_route.set_process_executor(
+      stale_writer_id,
+      std::make_unique<NativeThenFallbackWriter>(
+          stale_signal, stale_writer_id));
+  stale_route.schedule_signal_at(
+      stale_trigger, PackedLogic4::from_msb_string("1"), 1U, 0U);
+  const auto stale_result = stale_route.run();
+  require(
+      stale_result.status == RunStatus::completed,
+      "native publication followed by forced fallback completes");
+  require(
+      stale_route.signal_value(stale_signal).to_msb_string() == "1110"
+          && stale_route.stored_signal_value(stale_signal).to_msb_string()
+              == "1110"
+          && stale_route.driver_value(stale_writer_id, stale_signal)
+                  .to_msb_string()
+              == "1110",
+      "FSIM_DISABLE_DIRECT_WORD_COMMIT=1 partial writes preserve the current, stored, and driver values after native publication");
+  test_mixed_signal_id_alignment();
+  test_force_release_word_boundary();
+}
+
+void test_mixed_signal_id_alignment() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto initial_time = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::time(7U));
+  const auto published_time = SystemVerilogScalarValue::time(19U);
+  const auto published_time_payload =
+      encode_systemverilog_scalar_payload(published_time);
+  require(
+      initial_time && published_time_payload,
+      "mixed signal scalar payloads encode");
+
+  Interpreter interpreter;
+  const auto narrow = interpreter.add_signal(
+      { "top.mixed.narrow", PackedLogic4::from_msb_string("0") });
+  const auto charged = interpreter.add_signal(Signal{
+      "top.mixed.charged", PackedLogic4::from_msb_string("Z"),
+      ResolutionKind::sv_wire, ValueKind::logic4, std::nullopt, {},
+      StrengthRank::weak });
+  const auto logic9 = interpreter.add_signal(Signal{
+      "top.mixed.logic9", PackedLogic4::from_logic9_msb_string("U"),
+      ResolutionKind::none, ValueKind::logic9 });
+  const auto scalar = interpreter.add_signal(Signal{
+      "top.mixed.scalar", initial_time.value, ResolutionKind::none,
+      ValueKind::logic4, std::nullopt, {}, std::nullopt, std::nullopt,
+      SystemVerilogScalarKind::Time });
+  Signal event_signal{
+      "top.mixed.event", PackedLogic4::from_msb_string("0") };
+  event_signal.event_variable = true;
+  const auto named_event =
+      interpreter.add_signal(std::move(event_signal));
+  const auto wide_value = PackedLogic4{ 129U, Logic4::one };
+  const auto wide = interpreter.add_signal(
+      { "top.mixed.wide", PackedLogic4{ 129U, Logic4::zero } });
+  const auto event_seen = interpreter.add_signal(
+      { "top.mixed.event_seen", PackedLogic4::from_msb_string("0") });
+  require(
+      narrow == 0U && charged == 1U && logic9 == 2U && scalar == 3U
+          && named_event == 4U && wide == 5U && event_seen == 6U,
+      "mixed signal IDs preserve their append order across metadata kinds");
+
+  Process waiter;
+  waiter.id = 0U;
+  waiter.name = "mixed_signal_event_waiter";
+  waiter.register_count = 1U;
+  waiter.operations = {
+      WaitOn{ { named_event } },
+      LoadConstant{ 0U, PackedLogic4::from_msb_string("1") },
+      WriteBlocking{ event_seen, 0U },
+      Halt{ }};
+  (void)interpreter.add_process(std::move(waiter));
+
+  Process publisher;
+  publisher.id = 1U;
+  publisher.name = "mixed_signal_publisher";
+  publisher.register_count = 5U;
+  publisher.register_value_kinds.assign(
+      publisher.register_count, ValueKind::logic4);
+  publisher.register_value_kinds[0] = ValueKind::logic9;
+  publisher.operations = {
+      LoadConstant{ 0U, PackedLogic4::from_logic9_msb_string("H") },
+      WriteBlocking{ logic9, 0U },
+      LoadConstant{ 1U, PackedLogic4::from_msb_string("1") },
+      WriteBlocking{ narrow, 1U },
+      LoadConstant{ 2U, published_time_payload.value },
+      WriteBlocking{ scalar, 2U },
+      LoadConstant{ 3U, wide_value },
+      WriteBlocking{ wide, 3U },
+      LoadConstant{ 4U, PackedLogic4::from_msb_string("1") },
+      WriteBlocking{ named_event, 4U },
+      Halt{ }};
+  (void)interpreter.add_process(std::move(publisher));
+
+  Process weak_driver;
+  weak_driver.id = 2U;
+  weak_driver.name = "mixed_signal_weak_driver";
+  weak_driver.register_count = 1U;
+  weak_driver.drive_strength = { StrengthRank::weak, StrengthRank::weak };
+  weak_driver.operations = {
+      LoadConstant{ 0U, PackedLogic4::from_msb_string("0") },
+      WriteUpdate{ charged, 0U },
+      Halt{ }};
+  const auto weak_driver_id =
+      interpreter.add_process(std::move(weak_driver));
+
+  Process strong_driver;
+  strong_driver.id = 3U;
+  strong_driver.name = "mixed_signal_strong_driver";
+  strong_driver.register_count = 1U;
+  strong_driver.drive_strength = {
+      StrengthRank::strong, StrengthRank::strong };
+  strong_driver.operations = {
+      LoadConstant{ 0U, PackedLogic4::from_msb_string("1") },
+      WriteUpdate{ charged, 0U },
+      Halt{ }};
+  const auto strong_driver_id =
+      interpreter.add_process(std::move(strong_driver));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "mixed signal publication and event wait complete");
+  require(
+      interpreter.signal_value(narrow).to_msb_string() == "1"
+          && interpreter.signal_value(logic9).is_logic9()
+          && interpreter.signal_value(logic9).get_logic9(0U) == Logic9::h
+          && interpreter.scalar_signal_value(scalar) == published_time
+          && interpreter.signal_value(wide) == wide_value
+          && interpreter.signal_value(named_event).to_msb_string() == "1"
+          && interpreter.signal_value(event_seen).to_msb_string() == "1",
+      "mixed signal values remain aligned through publication and named-event resumption");
+  require(
+      interpreter.signal_value(charged).to_msb_string() == "1"
+          && interpreter.driver_value(weak_driver_id, charged)
+                 .to_msb_string() == "0"
+          && interpreter.driver_value(strong_driver_id, charged)
+                 .to_msb_string() == "1",
+      "charged signal resolution keeps the weak and strong driver slots aligned");
+
+  interpreter.force_signal(charged, PackedLogic4::from_msb_string("0"));
+  require(
+      interpreter.signal_is_forced(charged)
+          && interpreter.signal_value(charged).to_msb_string() == "0"
+          && interpreter.stored_signal_value(charged).to_msb_string() == "1",
+      "force on a mixed charged signal preserves its resolved stored value");
+  interpreter.release_signal(charged);
+  require(
+      !interpreter.signal_is_forced(charged)
+          && interpreter.signal_value(charged).to_msb_string() == "1",
+      "release restores the resolved mixed charged signal value");
+}
+
+void test_force_release_word_boundary() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto signal_64 = interpreter.add_signal(
+      { "top.force_word_64", PackedLogic4{ 64U, Logic4::zero } });
+  const auto signal_65 = interpreter.add_signal(
+      { "top.force_word_65", PackedLogic4{ 65U, Logic4::zero } });
+
+  auto driven_64 = PackedLogic4{ 64U, Logic4::zero };
+  driven_64.set(0U, Logic4::one);
+  auto driven_65 = PackedLogic4{ 65U, Logic4::zero };
+  driven_65.set(0U, Logic4::one);
+  driven_65.set(63U, Logic4::one);
+  const auto forced_64 = PackedLogic4{ 64U, Logic4::one };
+
+  Process writer;
+  writer.id = 0U;
+  writer.name = "force_word_boundary_writer";
+  writer.register_count = 2U;
+  writer.operations = {
+      WaitFor{ 1U },
+      LoadConstant{ 0U, driven_64 },
+      WriteBlocking{ signal_64, 0U },
+      LoadConstant{ 1U, driven_65 },
+      WriteBlocking{ signal_65, 1U },
+      Halt{ }};
+  const auto writer_id = interpreter.add_process(std::move(writer));
+
+  interpreter.force_signal(signal_64, forced_64);
+  interpreter.force_signal_slice(
+      signal_65, PackedLogic4::from_msb_string("10"), 63U);
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 1U,
+      "64/65-bit forced signals accept an underlying write while running");
+  require(
+      interpreter.signal_is_forced(signal_64)
+          && interpreter.signal_value(signal_64) == forced_64
+          && interpreter.stored_signal_value(signal_64) == driven_64
+          && interpreter.driver_value(writer_id, signal_64) == driven_64,
+      "64-bit full force retains the updated stored and driver words");
+  require(
+      interpreter.signal_is_forced(signal_65)
+          && interpreter.signal_value(signal_65).get(0U) == Logic4::one
+          && interpreter.signal_value(signal_65).get(63U) == Logic4::zero
+          && interpreter.signal_value(signal_65).get(64U) == Logic4::one
+          && interpreter.stored_signal_value(signal_65) == driven_65
+          && interpreter.driver_value(writer_id, signal_65) == driven_65,
+      "65-bit force across bit 63/64 masks only the selected bits");
+
+  interpreter.release_signal(signal_64);
+  interpreter.release_signal_slice(signal_65, 63U, 2U);
+  require(
+      !interpreter.signal_is_forced(signal_64)
+          && interpreter.signal_value(signal_64) == driven_64
+          && !interpreter.signal_is_forced(signal_65)
+          && interpreter.signal_value(signal_65) == driven_65,
+      "64-bit and crossing 65-bit force release republish driven values");
 }
 
 void test_simir_expressions_and_edges() {
@@ -1304,9 +2301,345 @@ void test_simir_initial_static_wait_activation_order() {
   run(true);
 }
 
+void test_simir_cohort_discard_before_final_scheduling() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto clock = interpreter.add_signal(
+      { "top.discard_clock",
+          PackedLogic4::from_msb_string("0"),
+          ResolutionKind::sv_wire });
+  const auto final_marker = interpreter.add_signal(
+      { "top.final_marker", PackedLogic4::from_msb_string("0") });
+
+  struct CohortProbe {
+    std::vector<ProcessId> member_order;
+    std::vector<std::size_t> batch_sizes;
+    bool update_scheduled { };
+  } probe;
+
+  class SnapshotExecutor final : public ProcessExecutor {
+  public:
+    SnapshotExecutor(
+        const ProcessId id,
+        const SignalId clock,
+        CohortProbe& probe)
+        : id_ { id }
+        , clock_ { clock }
+        , probe_ { probe }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override
+    {
+      require(
+          start == 0U || start == 1U,
+          "discarded cohort member resumes at its static wait boundary");
+      probe_.member_order.push_back(id_);
+      if (id_ == 1U && !probe_.update_scheduled) {
+        probe_.update_scheduled = true;
+        context.write_update_word(clock_, Logic4Word { 1U, 0U, 0U });
+      }
+      ProcessResumeResult result { 0U, 1U };
+      result.external.kind = ExternalSuspendKind::wait_sensitivity;
+      return result;
+    }
+
+    [[nodiscard]] std::size_t resume_cohort(
+        const std::span<ProcessCohortResumeEntry> entries) override
+    {
+      probe_.batch_sizes.push_back(entries.size());
+      for (auto& entry : entries) {
+        auto& executor = *static_cast<SnapshotExecutor*>(entry.executor);
+        entry.result = executor.resume(
+            *entry.context, entry.start_instruction);
+      }
+      return entries.size();
+    }
+
+    [[nodiscard]] const void* cohort_domain() const noexcept override
+    {
+      return &probe_;
+    }
+
+  private:
+    ProcessId id_ { };
+    SignalId clock_ { };
+    CohortProbe& probe_;
+  };
+
+  Process stopper;
+  stopper.id = 0U;
+  stopper.name = "stop_after_pending_cohort_snapshot";
+  stopper.operations = { Yield { }, Yield { }, Stop { } };
+  (void)interpreter.add_process(std::move(stopper));
+
+  for (ProcessId id = 1U; id <= 3U; ++id) {
+    Process member;
+    member.id = id;
+    member.name = "top.discard_member" + std::to_string(id);
+    member.static_sensitivity.push_back({ clock, EdgeKind::any });
+    member.operations = { WaitSensitivity { }, Jump { 0U } };
+    member.initialize = false;
+    const auto added = interpreter.add_process(std::move(member));
+    interpreter.set_process_executor(
+        added, std::make_unique<SnapshotExecutor>(id, clock, probe));
+  }
+
+  Process trigger;
+  trigger.id = 4U;
+  trigger.name = "trigger_current_cohort_snapshot";
+  trigger.register_count = 1U;
+  trigger.operations = {
+      LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+      WriteBlocking { clock, 0U },
+      Halt { },
+  };
+  (void)interpreter.add_process(std::move(trigger));
+
+  Process final;
+  final.id = 5U;
+  final.name = "final_after_cohort_discard";
+  final.register_count = 1U;
+  final.initialize = false;
+  final.final = true;
+  final.operations = {
+      LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+      WriteBlocking { final_marker, 0U },
+      Halt { },
+  };
+  (void)interpreter.add_process(std::move(final));
+
+  std::vector<std::string> clock_changes;
+  interpreter.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick) {
+        if (signal == clock) {
+          clock_changes.push_back(value.to_msb_string());
+        }
+      });
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::stopped
+          && interpreter.stopped_by_design()
+          && result.time == 0U,
+      "design stop preserves identity after final scheduling");
+  // The member's zero drive conflicts with the trigger's one drive.
+  require(
+      clock_changes == std::vector<std::string> { "1", "X" }
+          && probe.update_scheduled,
+      "the first cohort wake commits a second edge for the pending delta snapshot");
+  require(
+      probe.batch_sizes == std::vector<std::size_t> { 3U }
+          && probe.member_order == std::vector<ProcessId> { 1U, 2U, 3U },
+      "discard removes the pending cohort snapshot without duplicate or "
+      "reordered member execution");
+  require(
+      interpreter.signal_value(final_marker).to_msb_string() == "1",
+      "final scheduling runs after pending cohort wakes are discarded");
+  require(
+      interpreter.run().status == RunStatus::stopped
+          && probe.member_order == std::vector<ProcessId> { 1U, 2U, 3U },
+      "a discarded cohort snapshot cannot execute on a later run");
+}
+
+void test_simir_cohort_snapshot_pool() {
+  using namespace fsim::runtime::simir;
+
+  CohortSnapshotPool snapshots;
+  const std::array<ProcessId, 2> members { 4U, 7U };
+  const auto stale = snapshots.acquire(members);
+  snapshots.release(stale);
+  const auto current = snapshots.acquire(members);
+  int calls = 0;
+  require(!snapshots.consume(stale, [&](auto) { ++calls; }),
+          "a recycled cohort slot rejects its stale generation");
+  require(snapshots.consume(current, [&](const auto ready) {
+    require(ready.size() == 2U && ready[0] == 4U && ready[1] == 7U,
+            "a cohort snapshot retains its ordered members");
+    ++calls;
+  }) && calls == 1,
+          "a cohort snapshot is consumed once");
+  require(!snapshots.consume(current, [&](auto) { ++calls; }),
+          "a consumed cohort token cannot run again");
+
+  const auto throwing = snapshots.acquire(members);
+  bool caught = false;
+  try {
+    (void)snapshots.consume(throwing, [](auto) {
+      throw std::runtime_error("cohort snapshot failure");
+    });
+  } catch (const std::runtime_error&) {
+    caught = true;
+  }
+  require(caught && !snapshots.consume(throwing, [&](auto) { ++calls; }),
+          "a failing consumer retires its cohort snapshot");
+
+  const auto active = snapshots.acquire(members);
+  const auto pending = snapshots.acquire(members);
+  require(snapshots.consume(active, [&](const auto ready) {
+    snapshots.discard();
+    require(ready.size() == 2U && ready[1] == 7U,
+            "discard preserves an in-flight cohort member span");
+  }), "an active cohort survives reentrant discard");
+  require(!snapshots.consume(pending, [&](auto) { ++calls; }),
+          "discard invalidates other pending cohort snapshots");
+}
+
+void test_simir_cohort_external_discard_and_reset() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  for (const bool reset : { false, true }) {
+    Interpreter interpreter;
+    const auto clock = interpreter.add_signal(
+        { "top.external_discard_clock",
+            PackedLogic4::from_msb_string("0") });
+    std::array<SignalId, 2> markers;
+    for (ProcessId id = 0U; id < markers.size(); ++id) {
+      markers[id] = interpreter.add_signal(
+          { "top.external_discard_marker" + std::to_string(id),
+              PackedLogic4::from_msb_string("0") });
+      Process member;
+      member.id = id;
+      member.name = "external_discard_member" + std::to_string(id);
+      member.register_count = 1U;
+      member.static_sensitivity.push_back({ clock, EdgeKind::any });
+      member.operations = {
+          WaitSensitivity { },
+          LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+          WriteBlocking { markers[id], 0U },
+          Halt { },
+      };
+      (void)interpreter.add_process(std::move(member));
+    }
+
+    bool stop_at_first_edge = true;
+    interpreter.set_signal_change_hook(
+        [&](const SignalId signal, const PackedLogic4&,
+            const SimulationTick) {
+          if (signal == clock && stop_at_first_edge) {
+            stop_at_first_edge = false;
+            interpreter.scheduler().request_stop();
+          }
+        });
+    interpreter.schedule_signal_at(
+        clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
+    const auto stopped = interpreter.run();
+    require(stopped.status == RunStatus::stopped
+                && interpreter.scheduler().has_pending(),
+            "external stop leaves a pending static cohort wake");
+    if (reset) {
+      interpreter.scheduler().reset();
+    } else {
+      interpreter.scheduler().discard_pending();
+      interpreter.scheduler().clear_stop();
+    }
+    interpreter.schedule_signal_at(
+        clock, PackedLogic4::from_msb_string("0"),
+        reset ? 1U : 2U, 0U);
+    const auto resumed = interpreter.run();
+    require(resumed.status == RunStatus::completed,
+            "a fresh edge runs after external scheduler cleanup");
+    for (const auto marker : markers) {
+      require(interpreter.signal_value(marker).to_msb_string() == "1",
+              "external cleanup leaves cohort members eligible to wake");
+    }
+  }
+}
+
+void test_simir_large_cohort_scratch_reuse() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  constexpr std::size_t member_count = 513U;
+  Interpreter interpreter;
+  const auto clock = interpreter.add_signal(
+      { "top.large_cohort_clock", PackedLogic4::from_msb_string("0") });
+  std::vector<std::size_t> resume_counts(member_count);
+  std::size_t cohort_calls { };
+
+  class LargeExecutor final : public ProcessExecutor {
+  public:
+    LargeExecutor(
+        ProcessId id, std::vector<std::size_t>& counts,
+        std::size_t& cohort_calls)
+        : id_ { id }
+        , counts_ { counts }
+        , cohort_calls_ { cohort_calls }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext&, InstructionIndex) override
+    {
+      ++counts_[id_];
+      ProcessResumeResult result { 0U, 1U };
+      result.external.kind = ExternalSuspendKind::wait_sensitivity;
+      return result;
+    }
+
+    [[nodiscard]] std::size_t resume_cohort(
+        const std::span<ProcessCohortResumeEntry> entries) override
+    {
+      require(entries.size() == 513U,
+              "the large static cohort uses one ordered overflow batch");
+      ++cohort_calls_;
+      for (auto& entry : entries) {
+        auto& executor = *static_cast<LargeExecutor*>(entry.executor);
+        entry.result = executor.resume(
+            *entry.context, entry.start_instruction);
+      }
+      return entries.size();
+    }
+
+    [[nodiscard]] const void* cohort_domain() const noexcept override
+    {
+      return &counts_;
+    }
+
+  private:
+    ProcessId id_ { };
+    std::vector<std::size_t>& counts_;
+    std::size_t& cohort_calls_;
+  };
+
+  for (std::size_t index = 0U; index < member_count; ++index) {
+    const auto id = static_cast<ProcessId>(index);
+    Process member;
+    member.id = id;
+    member.name = "large_cohort_member" + std::to_string(index);
+    member.static_sensitivity.push_back({ clock, EdgeKind::any });
+    member.operations = { WaitSensitivity { }, Jump { 0U } };
+    member.initialize = false;
+    const auto added = interpreter.add_process(std::move(member));
+    interpreter.set_process_executor(
+        added, std::make_unique<LargeExecutor>(
+            id, resume_counts, cohort_calls));
+  }
+  interpreter.schedule_signal_at(
+      clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
+  interpreter.schedule_signal_at(
+      clock, PackedLogic4::from_msb_string("0"), 2U, 0U);
+  require(interpreter.run().status == RunStatus::completed
+              && cohort_calls == 2U
+              && std::ranges::all_of(resume_counts,
+                  [](const auto count) { return count == 2U; }),
+          "large cohort scratch serves repeated wakes without lost members");
+}
+
 void test_simir_static_sensitivity_cohort() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
+
+  test_simir_cohort_snapshot_pool();
+  test_simir_cohort_external_discard_and_reset();
+  test_simir_large_cohort_scratch_reuse();
 
   Interpreter interpreter;
   const auto clock = interpreter.add_signal(
@@ -1546,6 +2879,115 @@ void test_simir_static_sensitivity_cohort() {
           && first_group_resumes == 1U && later_group_resumes == 1U,
       "a blocking wake coalesces while a later dispatch group remains queued");
 
+  struct ForkedFanoutProbe {
+    std::vector<std::pair<InstructionIndex, std::uint64_t>> activations;
+  } forked_fanout_probe;
+  class ForkedFanoutExecutor final : public ProcessExecutor {
+  public:
+    explicit ForkedFanoutExecutor(
+        ForkedFanoutProbe& probe,
+        const std::optional<InstructionIndex> branch = std::nullopt)
+        : probe_(probe)
+        , branch_(branch)
+    {
+    }
+
+    [[nodiscard]] std::unique_ptr<ProcessExecutor> fork_clone(
+        const InstructionIndex branch) override
+    {
+      return std::make_unique<ForkedFanoutExecutor>(probe_, branch);
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override
+    {
+      if (!branch_) {
+        if (start == 0U) {
+          return { 0U, 1U };
+        }
+        if (start == 1U) {
+          // LoadConstant at 1 has no effect on the fork probe; stop at Halt.
+          return { 2U, 3U };
+        }
+        throw std::logic_error {
+          "forked fanout parent resumed at an unexpected instruction"
+        };
+      }
+
+      if (start == *branch_) {
+        return { start, start + 1U };
+      }
+      if (start == *branch_ + 1U || start == *branch_ + 2U) {
+        probe_.activations.emplace_back(
+            *branch_, context.static_trigger_mask());
+        return { start, start + 1U };
+      }
+      throw std::logic_error {
+        "forked fanout child resumed at an unexpected instruction"
+      };
+    }
+
+  private:
+    ForkedFanoutProbe& probe_;
+    std::optional<InstructionIndex> branch_;
+  };
+
+  Interpreter forked_fanout;
+  const auto forked_clock = forked_fanout.add_signal(
+      { "top.forked_clock", PackedLogic4::from_msb_string("0") });
+  Process fork_parent;
+  fork_parent.id = 0U;
+  fork_parent.name = "forked_static_fanout";
+  fork_parent.register_count = 1U;
+  fork_parent.static_sensitivity = {
+      { forked_clock, EdgeKind::posedge },
+      { forked_clock, EdgeKind::posedge },
+      { forked_clock, EdgeKind::negedge },
+  };
+  // A nonempty trigger-region table enables per-sensitivity trigger bits.
+  fork_parent.static_trigger_regions.push_back(
+      { 1U, 2U, UINT64_C(0x7) });
+  fork_parent.operations = {
+      Fork { { 3U, 6U, 9U }, ForkJoinKind::none },
+      LoadConstant { 0U, PackedLogic4::from_msb_string("0") },
+      Halt { },
+      WaitSensitivity { },
+      WaitSensitivity { },
+      ForkEnd { },
+      WaitSensitivity { },
+      WaitSensitivity { },
+      ForkEnd { },
+      WaitSensitivity { },
+      WaitSensitivity { },
+      ForkEnd { },
+  };
+  const auto fork_parent_id = forked_fanout.add_process(
+      std::move(fork_parent));
+  forked_fanout.set_process_executor(
+      fork_parent_id,
+      std::make_unique<ForkedFanoutExecutor>(forked_fanout_probe));
+  forked_fanout.schedule_signal_at(
+      forked_clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
+  forked_fanout.schedule_signal_at(
+      forked_clock, PackedLogic4::from_msb_string("0"), 2U, 0U);
+  const auto forked_fanout_result = forked_fanout.run();
+  const std::vector<std::pair<InstructionIndex, std::uint64_t>>
+      expected_forked_activations {
+          { 3U, UINT64_C(0x3) },
+          { 6U, UINT64_C(0x3) },
+          { 9U, UINT64_C(0x3) },
+          { 3U, UINT64_C(0x4) },
+          { 6U, UINT64_C(0x4) },
+          { 9U, UINT64_C(0x4) },
+      };
+  require(
+      forked_fanout_result.status == RunStatus::completed
+          && forked_fanout_result.time == 2U
+          && forked_fanout_probe.activations == expected_forked_activations,
+      "forked static fanout rebuild preserves child order and duplicate mixed-edge masks");
+
+  test_simir_cohort_discard_before_final_scheduling();
 }
 
 void test_simir_wide_truth_and_comparison() {

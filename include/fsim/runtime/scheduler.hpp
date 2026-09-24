@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <functional>
+#include <cstring>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -73,6 +77,49 @@ struct SchedulerBatchResult {
 
 class Scheduler;
 class CancellationSlots;
+
+namespace detail {
+
+inline constexpr std::size_t scheduler_task_payload_size
+    = 4U * sizeof(std::uint64_t);
+
+/// Compact, trivially-copyable task payload for runtime-owned scheduler work.
+/// Public users should schedule callbacks with Scheduler::Task instead.
+struct SchedulerTaskDescriptor {
+  using Invoke = void (*)(Scheduler &, const std::byte *);
+
+  Invoke invoke { };
+  std::array<std::byte, scheduler_task_payload_size> payload { };
+
+  void operator()(Scheduler &scheduler) const
+  {
+    if (invoke == nullptr) {
+      throw std::logic_error("cannot invoke an empty scheduler task descriptor");
+    }
+    invoke(scheduler, payload.data());
+  }
+};
+
+template <typename Payload,
+          void (*Dispatch)(Scheduler &, const Payload &)>
+[[nodiscard]] SchedulerTaskDescriptor make_scheduler_task_descriptor(
+    const Payload &payload)
+{
+  static_assert(std::is_trivially_copyable_v<Payload>);
+  static_assert(std::is_default_constructible_v<Payload>);
+  static_assert(sizeof(Payload) <= scheduler_task_payload_size);
+
+  SchedulerTaskDescriptor descriptor;
+  descriptor.invoke = +[](Scheduler &scheduler, const std::byte *bytes) {
+    Payload decoded { };
+    std::memcpy(&decoded, bytes, sizeof(Payload));
+    Dispatch(scheduler, decoded);
+  };
+  std::memcpy(descriptor.payload.data(), &payload, sizeof(Payload));
+  return descriptor;
+}
+
+} // namespace detail
 
 /// Stable, caller-owned executor for adjacent opt-in scheduler tasks.
 /// Implementations consume only a leading payload prefix and contain any
@@ -139,11 +186,14 @@ public:
   using Task = std::function<void(Scheduler &)>;
   using SlotStartHook = std::function<void(Scheduler &)>;
   using SafePointHook = std::function<void(Scheduler &, SchedulerPhase)>;
+  using SafePointHookToken = std::uint64_t;
+  using DiscardHook = void (*)(void *) noexcept;
+  using DiscardHookToken = std::uint64_t;
 
   explicit Scheduler(SchedulerOptions options = {});
   ~Scheduler();
-  /// Do not move a scheduler while it is running or releasing queued tasks.
-  Scheduler(Scheduler &&) noexcept;
+  /// Moving from a running or releasing scheduler throws std::logic_error.
+  Scheduler(Scheduler &&);
   /// An assignment during either scheduler's run or cleanup has no effect.
   Scheduler &operator=(Scheduler &&) noexcept;
   Scheduler(const Scheduler &) = delete;
@@ -164,6 +214,18 @@ public:
       SchedulerPhase phase, StableOrder stable_order,
       SchedulerBatchTask& batch_task, std::uint64_t batch_payload,
       Task fallback_task);
+
+  /// Schedule compact runtime-owned work without a per-entry callback object.
+  /// The descriptor payload must not outlive its owning runtime context.
+  void schedule_internal_at(
+      SimulationTick time, SchedulerPhase phase, StableOrder stable_order,
+      detail::SchedulerTaskDescriptor task);
+  void schedule_internal(
+      SchedulerPhase phase, StableOrder stable_order,
+      detail::SchedulerTaskDescriptor task);
+  void schedule_internal_next_delta(
+      SchedulerPhase phase, StableOrder stable_order,
+      detail::SchedulerTaskDescriptor task);
 
   /// Record a changed signal for a possible delta-limit diagnostic.
   void note_signal_change(RuntimeSignalId signal);
@@ -199,7 +261,17 @@ public:
 
   /// Observe a newly loaded simulation time slot before any phase executes.
   void set_slot_start_hook(SlotStartHook hook);
+  /// Replace the legacy safe-point hook without changing its dispatch order.
   void set_safe_point_hook(SafePointHook hook);
+  /// Add an observer after the legacy hook. Registry changes during dispatch
+  /// take effect at the next safe point.
+  [[nodiscard]] SafePointHookToken add_safe_point_hook(SafePointHook hook);
+  void remove_safe_point_hook(SafePointHookToken token) noexcept;
+  /// Observe discarded work after its task objects have been released.
+  /// The callback must not change this hook registry while it is invoked.
+  [[nodiscard]] DiscardHookToken add_discard_hook(
+      void *context, DiscardHook hook);
+  void remove_discard_hook(DiscardHookToken token) noexcept;
 
 private:
   struct Impl;

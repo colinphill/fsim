@@ -4,6 +4,7 @@
 #include "fsim/runtime/vhpi_time.hpp"
 
 #include <array>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -208,6 +209,26 @@ void test_vhdl_vhpi_time() {
           && foreign.remove_callback(update.value.identity)
               == VhdlVhpiTimeError::CrossSimulation,
       "VHPI foreign callback identity was accepted");
+
+  Scheduler shared_scheduler;
+  std::unique_ptr<VhdlVhpiTimeSystem> transient_time;
+  std::size_t legacy_calls = 0;
+  std::size_t sibling_calls = 0;
+  shared_scheduler.set_safe_point_hook(
+      [&](Scheduler&, SchedulerPhase) {
+        ++legacy_calls;
+        transient_time.reset();
+      });
+  transient_time = std::make_unique<VhdlVhpiTimeSystem>(
+      1104, shared_scheduler, VhdlVhpiTimeProfile{0, -3});
+  const auto sibling_token = shared_scheduler.add_safe_point_hook(
+      [&](Scheduler&, SchedulerPhase) { ++sibling_calls; });
+  shared_scheduler.schedule(SchedulerPhase::active, 0, [](Scheduler&) {});
+  static_cast<void>(shared_scheduler.run());
+  require_vhpi_time(
+      !transient_time && legacy_calls > 0 && sibling_calls == legacy_calls,
+      "VHPI teardown disturbed another safe-point observer");
+  shared_scheduler.remove_safe_point_hook(sibling_token);
 }
 
 }  // namespace fsim::tests::runtime

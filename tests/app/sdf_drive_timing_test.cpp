@@ -194,14 +194,16 @@ struct TemporaryDirectory {
 };
 
 fsim::project::Config make_config(const std::filesystem::path& directory,
-    const std::filesystem::path& source)
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization
+    = fsim::project::Optimization::o2)
 {
     fsim::project::Config config;
     config.base_directory = directory;
     config.project.name = "sdf-drive-timing-differential";
     config.project.time_resolution = "1ns";
     config.project.tops = { { "sv:work.top", "top" } };
-    config.build.optimization = fsim::project::Optimization::o2;
+    config.build.optimization = optimization;
     config.build.cache_path = directory / "cache";
     config.run.max_deltas = 1000U;
     fsim::project::SourceSet sources;
@@ -221,29 +223,44 @@ struct EngineCapture {
 };
 
 EngineCapture run_engine(
-    fsim::app::BuiltProject project, const fsim::app::SimulationEngine engine)
+    fsim::app::BuiltProject project, const fsim::app::SimulationEngine engine,
+    const std::vector<std::string>& output_names = { "top.z", "top.peer" })
 {
     fsim::app::Simulation simulation { std::move(project), 1000U, engine };
-    const auto output = simulation.find_signal("top.z");
-    const auto peer = simulation.find_signal("top.peer");
-    require(output && peer, "drive differential outputs must resolve");
+    std::vector<std::pair<fsim::runtime::simir::SignalId, std::string>> outputs;
+    for (const auto& name : output_names) {
+        const auto signal = simulation.find_signal(name);
+        require(signal.has_value(), "drive differential outputs must resolve");
+        outputs.emplace_back(*signal, name);
+    }
     EngineCapture capture;
     capture.compiled_processes = simulation.compiled_process_count();
     simulation.set_signal_change_hook(
         [&](const fsim::runtime::simir::SignalId signal,
             const fsim::runtime::PackedLogic4& value,
             const fsim::runtime::SimulationTick time, const std::uint64_t) {
-            if (signal == *output)
-                capture.changes.emplace_back(
-                    time, "top.z", value.to_msb_string());
-            if (signal == *peer)
-                capture.changes.emplace_back(
-                    time, "top.peer", value.to_msb_string());
+            for (const auto& [output, name] : outputs) {
+                if (signal == output) {
+                    capture.changes.emplace_back(
+                        time, name, value.to_msb_string());
+                    break;
+                }
+            }
         });
     const auto result = simulation.run();
     require(result.status == fsim::runtime::RunStatus::stopped,
         "drive differential simulation must finish by design");
     return capture;
+}
+
+bool has_change(const EngineCapture& capture,
+    const fsim::runtime::SimulationTick time, const std::string_view name,
+    const std::string_view value)
+{
+    return std::ranges::any_of(capture.changes, [&](const auto& change) {
+        return std::get<0>(change) == time && std::get<1>(change) == name
+            && std::get<2>(change) == value;
+    });
 }
 
 RuntimeCapture run_forced_path(const std::string_view ones,
@@ -457,6 +474,142 @@ endmodule
         "LLVM and interpreter must share force/release, strength and tran timing");
 }
 
+void test_partial_force_release_width_differential()
+{
+    using namespace fsim;
+    const auto unique = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    TemporaryDirectory directory { std::filesystem::temp_directory_path()
+        / ("fsim-sdf-partial-force-" + unique) };
+    std::filesystem::create_directories(directory.path);
+    const auto source_path = directory.path / "top.sv";
+    {
+        std::ofstream source(source_path);
+        source << R"(module delay_buf_1(input logic [0:0] a, output wire [0:0] z);
+  assign (strong1, strong0) z = a;
+  specify
+    (a *> z) = 5;
+  endspecify
+endmodule
+
+module delay_buf_64(input logic [63:0] a, output wire [63:0] z);
+  assign (strong1, strong0) z = a;
+  specify
+    (a *> z) = 5;
+  endspecify
+endmodule
+
+module delay_buf_65(input logic [64:0] a, output wire [64:0] z);
+  assign (strong1, strong0) z = a;
+  specify
+    (a *> z) = 5;
+  endspecify
+endmodule
+
+module top;
+  logic [0:0] a1;
+  logic [63:0] a64;
+  logic [64:0] a65;
+  wire [0:0] z1;
+  wire [63:0] z64;
+  wire [64:0] z65;
+  assign (weak1, weak0) z1 = '1;
+  assign (weak1, weak0) z64 = '1;
+  assign (weak1, weak0) z65 = '1;
+  delay_buf_1 u1(.a(a1), .z(z1));
+  delay_buf_64 u64(.a(a64), .z(z64));
+  delay_buf_65 u65(.a(a65), .z(z65));
+  initial begin
+    a1 = '0;
+    a64 = '0;
+    a65 = '0;
+    #1 force z1[0:0] = 1'bx;
+    force z64[63] = 1'bx;
+    force z65[64:63] = 2'bxx;
+    #1 a1 = 'z;
+    a64 = 'z;
+    a65 = 'z;
+    #4 release z1[0:0];
+    release z64[63];
+    release z65[64:63];
+    #1 $finish;
+  end
+endmodule
+)";
+    }
+
+    const std::vector<std::string> outputs {
+        "top.z1", "top.z64", "top.z65" };
+    const std::vector<std::pair<project::Optimization, std::string>>
+        optimizations { { project::Optimization::o0, "o0" },
+            { project::Optimization::o2, "o2" } };
+    std::vector<std::tuple<runtime::SimulationTick, std::string, std::string>>
+        o0_changes;
+    for (const auto& [optimization, label] : optimizations) {
+        const auto optimization_directory = directory.path / label;
+        std::filesystem::create_directories(optimization_directory);
+        diagnostic::Engine diagnostics;
+        auto project = app::build_project(
+            make_config(optimization_directory, source_path, optimization),
+            diagnostics);
+        if (!project)
+            diagnostic::print_text(std::cerr, diagnostics);
+        require(project.has_value()
+                && !project->design.verilog_specify_paths().empty(),
+            "partial force project must elaborate specify timing");
+        auto state = project->design.state();
+        for (auto& path : state.verilog_specify_paths)
+            path.delays = { 3U };
+        auto scheduled_design
+            = elaboration::ElaboratedDesign::from_state(std::move(state));
+        require(scheduled_design.has_value(),
+            "partial force scheduled design must validate");
+        const auto drive = app::apply_sdf_drive_timing(
+            make_scheduling(std::move(*scheduled_design)));
+        require(drive.ok(), "partial force paths must receive SDF timing");
+        project->design = drive.application->scheduling()->design();
+        auto compiled_project = *project;
+        const auto reference = run_engine(std::move(*project),
+            app::SimulationEngine::interpreter, outputs);
+        const auto compiled = run_engine(std::move(compiled_project),
+            app::SimulationEngine::compiled, outputs);
+#if defined(FSIM_HAS_LLVM)
+        const bool compiled_process_count_ok
+            = compiled.compiled_processes > 0U;
+#else
+        const bool compiled_process_count_ok
+            = compiled.compiled_processes == 0U;
+#endif
+        require(compiled_process_count_ok
+                && compiled.changes == reference.changes,
+            "interpreter and LLVM must agree on partial force and release");
+
+        const auto forced_64 = "X" + std::string(63U, '0');
+        const auto weak_64 = "X" + std::string(63U, '1');
+        const auto forced_65 = "XX" + std::string(63U, '0');
+        const auto weak_65 = "XX" + std::string(63U, '1');
+        require(has_change(reference, 1U, "top.z1", "X")
+                && has_change(reference, 1U, "top.z64", forced_64)
+                && has_change(reference, 1U, "top.z65", forced_65),
+            "partial force must preserve strongly driven unforced bits");
+        require(has_change(reference, 0U, "top.z64", std::string(64U, '0'))
+                && has_change(reference, 0U, "top.z65", std::string(65U, '0'))
+                && has_change(reference, 5U, "top.z64", weak_64)
+                && has_change(reference, 5U, "top.z65", weak_65),
+            "underlying strong-to-Z updates must resolve beneath partial force");
+        require(has_change(reference, 6U, "top.z1", "1")
+                && has_change(reference, 6U, "top.z64", std::string(64U, '1'))
+                && has_change(reference, 6U, "top.z65", std::string(65U, '1')),
+            "release must expose current weak drive at each width");
+
+        if (optimization == fsim::project::Optimization::o0)
+            o0_changes = reference.changes;
+        else
+            require(reference.changes == o0_changes,
+                "O0 and O2 must produce the same partial force trace");
+    }
+}
+
 void test_atomic_rejection()
 {
     using namespace fsim;
@@ -477,6 +630,7 @@ int main()
         test_complete_drive_binding();
         test_pending_force_release_strength_and_vector_parity();
         test_interpreter_llvm_force_switch_differential();
+        test_partial_force_release_width_differential();
         test_atomic_rejection();
         return 0;
     } catch (const std::exception& error) {

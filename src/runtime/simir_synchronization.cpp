@@ -171,11 +171,11 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       write_bool(*put->result, false);
       process.status = ProcessStatus::running;
     } else {
-      mailbox.writers.push_back({process.program.id, std::move(value)});
+      mailbox.writers.push_back({process.id, std::move(value)});
       process.status = ProcessStatus::waiting;
       notify_execution_point(
           process, instruction, ExecutionPointKind::process_suspend,
-          process.current_source);
+          process.cold().current_source);
     }
     return true;
   }
@@ -205,11 +205,11 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       process.status = ProcessStatus::running;
     } else {
       mailbox.readers.push_back(
-          {process.program.id, get->destination, get->peek});
+          {process.id, get->destination, get->peek});
       process.status = ProcessStatus::waiting;
       notify_execution_point(
           process, instruction, ExecutionPointKind::process_suspend,
-          process.current_source);
+          process.cold().current_source);
     }
     return true;
   }
@@ -258,11 +258,11 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       write_bool(*get->result, false);
       process.status = ProcessStatus::running;
     } else {
-      semaphore.waiters.push_back({process.program.id, requested});
+      semaphore.waiters.push_back({process.id, requested});
       process.status = ProcessStatus::waiting;
       notify_execution_point(
           process, instruction, ExecutionPointKind::process_suspend,
-          process.current_source);
+          process.cold().current_source);
     }
     return true;
   }

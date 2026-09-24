@@ -4,10 +4,13 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 
+#include <array>
 #include <bit>
 #include <cfenv>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -23,6 +26,184 @@ void require(const bool condition, const char* message)
 }
 
 } // namespace
+
+void test_logic4_word_primitives()
+{
+  using namespace fsim::runtime;
+
+  constexpr std::array<Logic4, 4> states {
+      Logic4::zero, Logic4::one, Logic4::x, Logic4::z
+  };
+  const auto to_word = [](const Logic4 state) {
+    switch (state) {
+    case Logic4::zero:
+      return Logic4Word { 1U, 0U, 0U };
+    case Logic4::one:
+      return Logic4Word { 1U, 1U, 0U };
+    case Logic4::x:
+      return Logic4Word { 1U, 1U, 1U };
+    case Logic4::z:
+      return Logic4Word { 1U, 0U, 1U };
+    }
+    return Logic4Word { };
+  };
+
+  const Logic4ResolutionAccumulator no_drivers { 1U };
+  require(
+      no_drivers.result() == Logic4Word { 1U, 0U, 1U },
+      "an empty narrow resolution accumulator must produce Z");
+  for (const auto left : states) {
+    for (const auto right : states) {
+      const std::array<Logic4, 2> scalar_drivers { left, right };
+      Logic4ResolutionAccumulator accumulator { 1U };
+      accumulator.add(to_word(left));
+      accumulator.add(to_word(right));
+      const auto expected = PackedLogic4 {
+          1U, resolve(std::span<const Logic4> { scalar_drivers })
+      }.low_word();
+      require(
+          accumulator.result() == expected,
+          "narrow Logic4 word resolution must match scalar resolution");
+    }
+  }
+
+  Logic4ResolutionAccumulator one_bit { 1U };
+  one_bit.add(Logic4Word { 1U, ~UINT64_C(0), 0U });
+  require(
+      one_bit.result() == Logic4Word { 1U, 1U, 0U },
+      "narrow Logic4 word resolution must mask unused bits");
+
+  constexpr std::array<Logic4Word, 4> wide_word_drivers {
+      Logic4Word { 64U, 0U, 0U },
+      Logic4Word { 64U, ~UINT64_C(0), 0U },
+      Logic4Word { 64U, UINT64_C(0x00ff00ff00ff00ff),
+          UINT64_C(0x0f0f0f0f0f0f0f0f) },
+      Logic4Word { 64U, 0U, ~UINT64_C(0) }
+  };
+  Logic4ResolutionAccumulator sixty_four_bits { 64U };
+  std::array<PackedLogic4, wide_word_drivers.size()> packed_drivers;
+  for (std::size_t index = 0; index < wide_word_drivers.size(); ++index) {
+    const auto driver = wide_word_drivers[index];
+    sixty_four_bits.add(driver);
+    packed_drivers[index] = PackedLogic4::from_aval_bval(
+        driver.width, driver.aval, driver.bval);
+  }
+  require(
+      sixty_four_bits.result()
+          == resolve(std::span<const PackedLogic4> { packed_drivers })
+                 .low_word(),
+      "64-bit word resolution must match packed four-state resolution");
+
+  for (const auto invalid_width : { 0U, 65U }) {
+    try {
+      (void)Logic4ResolutionAccumulator { invalid_width };
+      throw std::runtime_error(
+          "narrow Logic4 resolution accepted an out-of-range width");
+    } catch (const std::invalid_argument&) {
+    }
+  }
+  try {
+    Logic4ResolutionAccumulator mismatched { 1U };
+    mismatched.add(Logic4Word { 64U, 0U, 0U });
+    throw std::runtime_error(
+        "narrow Logic4 resolution accepted a mismatched driver width");
+  } catch (const std::invalid_argument&) {
+  }
+
+  const auto one_bit_force = apply_force_word(
+      Logic4Word { 1U, ~UINT64_C(0), ~UINT64_C(0) },
+      Logic4Word { 1U, 0U, ~UINT64_C(0) },
+      ~UINT64_C(0));
+  require(
+      one_bit_force == Logic4Word { 1U, 0U, 1U },
+      "one-bit force overlay must preserve the selected Z state and mask");
+
+  const Logic4Word driven {
+      64U, UINT64_C(0x0123456789abcdef),
+      UINT64_C(0xfedcba9876543210)
+  };
+  const Logic4Word forced {
+      64U, UINT64_C(0xa5a5f0f00f0f5a5a),
+      UINT64_C(0x5a5a0f0ff0f0a5a5)
+  };
+  constexpr std::uint64_t force_mask = UINT64_C(0x00ff00ff55aa55aa);
+  const auto forced_result = apply_force_word(driven, forced, force_mask);
+  auto expected_force_result = PackedLogic4::from_aval_bval(
+      64U, driven.aval, driven.bval);
+  const auto packed_forced = PackedLogic4::from_aval_bval(
+      64U, forced.aval, forced.bval);
+  for (std::size_t bit = 0; bit < 64U; ++bit) {
+    if (((force_mask >> bit) & UINT64_C(1)) != 0U) {
+      expected_force_result.set(bit, packed_forced.get(bit));
+    }
+  }
+  require(
+      forced_result == expected_force_result.low_word(),
+      "64-bit force overlay must replace only masked aval and bval bits");
+  try {
+    (void)apply_force_word(
+        Logic4Word { 1U, 0U, 0U }, Logic4Word { 64U, 0U, 0U }, 0U);
+    throw std::runtime_error(
+        "force overlay accepted mismatched Logic4 word widths");
+  } catch (const std::invalid_argument&) {
+  }
+
+  const auto initial = PackedLogic4 { 65U, Logic4::zero };
+  const auto source_slice = PackedLogic4::from_msb_string("X10Z01XZ");
+  const auto slice = source_slice.low_word();
+  auto forced_value = initial;
+  forced_value.insert_word(slice, 57U);
+  const auto force_mask_word = Logic4Word { 8U, UINT64_C(0xff), 0U };
+  auto forced_mask = PackedLogic4 { 65U, Logic4::zero };
+  forced_mask.insert_masked_word(
+      force_mask_word, UINT64_C(0x55), 57U);
+  auto released_mask = forced_mask;
+  released_mask.insert_masked_word(
+      Logic4Word { 8U, 0U, 0U }, UINT64_C(0x04), 57U);
+  auto applied_value = initial;
+  applied_value.insert_masked_word(slice, UINT64_C(0x55), 57U);
+  auto expected_value = initial;
+  auto expected_mask = PackedLogic4 { 65U, Logic4::zero };
+  for (std::size_t bit = 0; bit < source_slice.width(); ++bit) {
+    if (((UINT64_C(0x55) >> bit) & UINT64_C(1)) == 0U) {
+      continue;
+    }
+    expected_value.set(57U + bit, source_slice.get(bit));
+    expected_mask.set(57U + bit, Logic4::one);
+  }
+  auto expected_released_mask = expected_mask;
+  expected_released_mask.set(59U, Logic4::zero);
+  require(
+      forced_value.matches_word(slice, 57U)
+          && applied_value == expected_value
+          && initial == PackedLogic4 { 65U, Logic4::zero }
+          && forced_mask == expected_mask
+          && released_mask == expected_released_mask,
+      "cross-word force and release mask edits must preserve COW copies");
+
+  auto wide_target = PackedLogic4 { 130U, Logic4::z };
+  wide_target.set(0U, Logic4::one);
+  wide_target.set(129U, Logic4::x);
+  const auto target_before = wide_target.to_msb_string();
+  const auto target_snapshot = wide_target;
+  const auto wide_source = PackedLogic4::from_msb_string(
+      "XZ10" + std::string(60U, '1') + "X");
+  const auto source_before = wide_source.to_msb_string();
+  auto expected_wide_target = wide_target;
+  for (std::size_t bit = 0; bit < wide_source.width(); ++bit) {
+    expected_wide_target.set(31U + bit, wide_source.get(bit));
+  }
+  wide_target.insert_bits(wide_source, 31U);
+  require(
+      wide_source.width() == 65U
+          && wide_target == expected_wide_target
+          && wide_target.extract_bits(31U, 65U) == wide_source
+          && wide_target.get(31U + 63U) == Logic4::z
+          && wide_target.get(31U + 64U) == Logic4::x
+          && target_snapshot.to_msb_string() == target_before
+          && wide_source.to_msb_string() == source_before,
+      "unaligned 65-bit Logic4 insertion must preserve boundary bits and COW snapshots");
+}
 
 void test_logic() {
   using namespace fsim::runtime;
@@ -126,6 +307,8 @@ void test_logic() {
 }
 void test_packed_values() {
   using namespace fsim::runtime;
+
+  test_logic4_word_primitives();
 
   auto bits = PackedBit2::from_msb_string("101001");
   require(bits.width() == 6, "two-state width");

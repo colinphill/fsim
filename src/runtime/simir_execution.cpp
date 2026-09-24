@@ -20,6 +20,43 @@
 
 namespace fsim::runtime::simir {
 
+Interpreter::Impl::Impl(
+    SchedulerOptions options,
+    const std::uint64_t seed)
+    : scheduler(options)
+    , root_seed(seed)
+    , process_profile_enabled(std::getenv("FSIM_PROFILE_PROCESSES") != nullptr)
+    , update_profile_enabled(std::getenv("FSIM_PROFILE_UPDATES") != nullptr)
+    , native_phase_profile_enabled(
+          std::getenv("FSIM_PROFILE_NATIVE_PHASE") != nullptr)
+    , native_process_count_profile_enabled(
+          std::getenv("FSIM_PROFILE_NATIVE_PROCESS_COUNTS") != nullptr)
+    , native_update_profile_enabled(
+          std::getenv("FSIM_PROFILE_NATIVE_UPDATES") != nullptr)
+    , jit_skip_callable_frames(
+          std::getenv("FSIM_JIT_SKIP_CALLABLE_FRAMES") != nullptr)
+{
+    scheduler_discard_hook = scheduler.add_discard_hook(
+        this, +[](void* context) noexcept {
+            static_cast<Impl*>(context)->discard_scheduler_work();
+        });
+    scheduler.set_slot_start_hook([this](Scheduler&) {
+        if (!requires_sampled_values) {
+            return;
+        }
+        sampled_values.clear();
+        sampled_values.reserve(signals.size());
+        for (const auto& signal : signals) {
+            sampled_values.push_back(signal.initial_value);
+        }
+    });
+}
+
+Interpreter::Impl::~Impl()
+{
+    scheduler.remove_discard_hook(scheduler_discard_hook);
+}
+
 namespace {
 
     struct VhdlAssertFormatField {
@@ -601,15 +638,16 @@ void Interpreter::Impl::execute_dynamic_call(
         || operation.stack.entries != 0) {
         fail(process, "dynamic call stack has fixed-register metadata");
     }
-    if (process.dynamic_call_stack.size()
+    auto& cold = process.cold();
+    if (cold.dynamic_call_stack.size()
         >= maximum_container_storage_bytes / sizeof(InstructionIndex)) {
         fail(process, "dynamic call stack exceeds its owning-storage budget");
     }
-    if (operation.target >= process.program.operations.size()
-        || operation.return_target >= process.program.operations.size()) {
+    if (operation.target >= process.program().operations.size()
+        || operation.return_target >= process.program().operations.size()) {
         fail(process, "call target is outside the operation stream");
     }
-    process.dynamic_call_stack.push_back(operation.return_target);
+    cold.dynamic_call_stack.push_back(operation.return_target);
     process.pc = operation.target;
 }
 
@@ -622,12 +660,13 @@ void Interpreter::Impl::execute_dynamic_return(
         || operation.stack.entries != 0) {
         fail(process, "dynamic call stack has fixed-register metadata");
     }
-    if (process.dynamic_call_stack.empty()) {
+    auto& cold = process.cold();
+    if (cold.dynamic_call_stack.empty()) {
         fail(process, "call-stack underflow");
     }
-    const auto target = process.dynamic_call_stack.back();
-    process.dynamic_call_stack.pop_back();
-    if (target >= process.program.operations.size()) {
+    const auto target = cold.dynamic_call_stack.back();
+    cold.dynamic_call_stack.pop_back();
+    if (target >= process.program().operations.size()) {
         fail(process, "call-stack return target is invalid");
     }
     process.pc = target;
@@ -677,12 +716,12 @@ void Interpreter::Impl::push_callable_frame(
     if (frame.storage_bytes
         > maximum_container_storage_bytes
             - std::min(
-                process.callable_frame_storage_bytes,
+                process.cold().callable_frame_storage_bytes,
                 maximum_container_storage_bytes)) {
         fail(process, "automatic callable frames exceed their owning-storage budget");
     }
-    process.callable_frame_storage_bytes += frame.storage_bytes;
-    process.callable_frames.push_back(std::move(frame));
+    process.cold().callable_frame_storage_bytes += frame.storage_bytes;
+    process.cold().callable_frames.push_back(std::move(frame));
     ++process.pc;
 }
 
@@ -690,13 +729,13 @@ void Interpreter::Impl::pop_callable_frame(
     ProcessState& process,
     const CallableFramePop& operation)
 {
-    if (process.callable_frames.empty()
-        || process.callable_frames.back().identity != operation.identity) {
+    if (process.cold().callable_frames.empty()
+        || process.cold().callable_frames.back().identity != operation.identity) {
         fail(process, "automatic callable frame stack mismatch");
     }
-    if (process.callable_frames.back().escaping_context) {
+    if (process.cold().callable_frames.back().escaping_context) {
         capture_callable_values(
-            process, *process.callable_frames.back().escaping_context);
+            process, *process.cold().callable_frames.back().escaping_context);
     }
     std::vector<PackedLogic4> preserved_packed;
     std::vector<std::string> preserved_strings;
@@ -707,7 +746,7 @@ void Interpreter::Impl::pop_callable_frame(
     std::size_t preserved_storage_bytes { };
     const auto account_preserved_storage = [&](const std::size_t bytes) {
         const auto unavailable = std::min(
-            process.callable_frame_storage_bytes,
+            process.cold().callable_frame_storage_bytes,
             maximum_container_storage_bytes);
         if (bytes > maximum_container_storage_bytes - unavailable
             || preserved_storage_bytes
@@ -744,8 +783,8 @@ void Interpreter::Impl::pop_callable_frame(
             sizeof(ContainerValue) + container_value_storage_bytes(*value));
         preserved_containers.push_back(std::move(value));
     }
-    auto frame = std::move(process.callable_frames.back());
-    process.callable_frames.pop_back();
+    auto frame = std::move(process.cold().callable_frames.back());
+    process.cold().callable_frames.pop_back();
     for (std::size_t index = 0; index < frame.packed.size(); ++index) {
         if (process.executor) {
             process.executor->write_register(
@@ -774,7 +813,7 @@ void Interpreter::Impl::pop_callable_frame(
                 std::move(frame.containers[index]));
         }
     }
-    process.callable_frame_storage_bytes -= frame.storage_bytes;
+    process.cold().callable_frame_storage_bytes -= frame.storage_bytes;
     for (std::size_t index = 0;
         index < preserved_packed.size(); ++index) {
         if (process.executor) {
@@ -815,7 +854,7 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     std::set<RegisterId> shadowed_packed;
     std::set<StringRegisterId> shadowed_strings;
     std::set<ContainerRegisterId> shadowed_containers;
-    for (const auto& frame : process.callable_frames) {
+    for (const auto& frame : process.cold().callable_frames) {
         shadowed_packed.insert(
             frame.packed_ids.begin(), frame.packed_ids.end());
         shadowed_strings.insert(
@@ -823,8 +862,8 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
         shadowed_containers.insert(
             frame.container_ids.begin(), frame.container_ids.end());
     }
-    for (auto context = process.escaping_callable_contexts.rbegin();
-        context != process.escaping_callable_contexts.rend(); ++context) {
+    for (auto context = process.cold().escaping_callable_contexts.rbegin();
+        context != process.cold().escaping_callable_contexts.rend(); ++context) {
         if (!*context) {
             fail(process, "escaping automatic callable context is null");
         }
@@ -840,16 +879,16 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
             (*context)->container_ids.end());
     }
 
-    process.suspended_callable_context.reset();
-    process.callable_context_storage_bytes = 0;
-    if (process.halted || process.callable_frames.empty()) {
+    process.cold().suspended_callable_context.reset();
+    process.cold().callable_context_storage_bytes = 0;
+    if (process.halted || process.cold().callable_frames.empty()) {
         return;
     }
 
     std::set<RegisterId> packed_ids;
     std::set<StringRegisterId> string_ids;
     std::set<ContainerRegisterId> container_ids;
-    for (const auto& frame : process.callable_frames) {
+    for (const auto& frame : process.cold().callable_frames) {
         packed_ids.insert(frame.packed_ids.begin(), frame.packed_ids.end());
         string_ids.insert(frame.string_ids.begin(), frame.string_ids.end());
         container_ids.insert(
@@ -865,7 +904,7 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     context.containers.reserve(context.container_ids.size());
     const auto account_context_storage = [&](const std::size_t bytes) {
         const auto unavailable = std::min(
-            process.callable_frame_storage_bytes,
+            process.cold().callable_frame_storage_bytes,
             maximum_container_storage_bytes);
         if (bytes > maximum_container_storage_bytes - unavailable
             || context.storage_bytes
@@ -902,24 +941,24 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
             sizeof(ContainerValue) + container_value_storage_bytes(*value));
         context.containers.push_back(std::move(value));
     }
-    process.callable_context_storage_bytes = context.storage_bytes;
-    process.suspended_callable_context = std::move(context);
+    process.cold().callable_context_storage_bytes = context.storage_bytes;
+    process.cold().suspended_callable_context = std::move(context);
 }
 
 void Interpreter::Impl::restore_callable_context(ProcessState& process)
 {
-    for (const auto& context : process.escaping_callable_contexts) {
+    for (const auto& context : process.cold().escaping_callable_contexts) {
         if (!context) {
             fail(process, "escaping automatic callable context is null");
         }
         restore_callable_values(process, *context);
     }
-    if (!process.suspended_callable_context) {
+    if (!process.cold().suspended_callable_context) {
         return;
     }
-    auto context = std::move(*process.suspended_callable_context);
-    process.suspended_callable_context.reset();
-    process.callable_context_storage_bytes = 0;
+    auto context = std::move(*process.cold().suspended_callable_context);
+    process.cold().suspended_callable_context.reset();
+    process.cold().callable_context_storage_bytes = 0;
     for (std::size_t index = 0; index < context.packed.size(); ++index) {
         if (process.executor) {
             process.executor->write_register(
@@ -957,13 +996,13 @@ bool Interpreter::clear_process_executor(const ProcessId process)
     }
     auto& state = impl_->get_process(process);
     state.executor.reset();
-    state.deferred_executor.reset();
+    state.cold().deferred_executor.reset();
     return true;
 }
 
 void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 {
-    auto executor = process.deferred_executor->take();
+    auto executor = process.cold().deferred_executor->take();
     if (!executor) {
         throw std::logic_error {
             "deferred SimIR process executor produced a null executor"
@@ -995,17 +1034,17 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
         }
     } else {
         for (std::size_t register_index = 0;
-             register_index < process.program.container_register_types.size();
+             register_index < process.program().container_register_types.size();
              ++register_index) {
             executor->write_container_register_storage(
                 static_cast<ContainerRegisterId>(register_index),
                 default_container_register(
-                    process.program.container_register_types[register_index]));
+                    process.program().container_register_types[register_index]));
         }
     }
     executor->redirect(process.pc);
     process.executor = std::move(executor);
-    process.deferred_executor.reset();
+    process.cold().deferred_executor.reset();
     process.frame.reset();
 }
 
@@ -1013,8 +1052,8 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
     ProcessState& process, const ProcessResumeResult& boundary)
 {
     const auto* operation
-        = boundary.instruction < process.program.operations.size()
-        ? &std::as_const(process.program.operations)[boundary.instruction]
+        = boundary.instruction < process.program().operations.size()
+        ? &std::as_const(process.program().operations)[boundary.instruction]
         : nullptr;
     if (boundary.external.kind != ExternalSuspendKind::simir_boundary) {
         handle_external_boundary(
@@ -1062,13 +1101,31 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 void Interpreter::Impl::execute_static_cohort(
     const std::span<const ProcessId> process_ids)
 {
+    struct PendingSuffix {
+        Impl& owner;
+        std::span<const ProcessId> members;
+        std::size_t next { };
+
+        ~PendingSuffix()
+        {
+            for (std::size_t index = next; index < members.size(); ++index) {
+                const auto id = members[index];
+                if (id < owner.processes.size()) {
+                    owner.processes[id].queued = false;
+                }
+            }
+        }
+    } pending { *this, process_ids };
+
     if (process_ids.size() < 2U || process_profile_enabled) {
-        for (const auto id : process_ids) {
+        for (std::size_t index = 0; index < process_ids.size(); ++index) {
             if (scheduler.stop_requested()) {
                 break;
             }
+            const auto id = process_ids[index];
             auto& state = get_process(id);
             state.queued = false;
+            pending.next = index + 1U;
             state.waiting_on_static = false;
             remove_dynamic_wait(state);
             execute(id);
@@ -1082,9 +1139,9 @@ void Interpreter::Impl::execute_static_cohort(
     for (const auto id : process_ids) {
         auto& state = get_process(id);
         restore_callable_context(state);
-        if (!state.executor && state.deferred_executor
+        if (!state.executor && state.cold().deferred_executor
             && can_install_deferred_executor(state)
-            && state.deferred_executor->ready()) {
+            && state.cold().deferred_executor->ready()) {
             install_deferred_executor(state);
         }
     }
@@ -1094,8 +1151,35 @@ void Interpreter::Impl::execute_static_cohort(
         inline_contexts;
     std::array<ProcessCohortResumeEntry, inline_cohort_capacity>
         inline_entries;
-    std::vector<ExecutionContext> overflow_contexts;
-    std::vector<ProcessCohortResumeEntry> overflow_entries;
+    std::vector<ExecutionContext> nested_overflow_contexts;
+    std::vector<ProcessCohortResumeEntry> nested_overflow_entries;
+    const bool use_shared_overflow_scratch
+        = !cohort_overflow_scratch_in_use;
+    if (use_shared_overflow_scratch) {
+        cohort_overflow_scratch_in_use = true;
+    }
+    auto& overflow_contexts = use_shared_overflow_scratch
+        ? cohort_overflow_contexts : nested_overflow_contexts;
+    auto& overflow_entries = use_shared_overflow_scratch
+        ? cohort_overflow_entries : nested_overflow_entries;
+    struct ClearOverflow {
+        std::vector<ExecutionContext>& contexts;
+        std::vector<ProcessCohortResumeEntry>& entries;
+        bool& in_use;
+        bool borrowed;
+
+        ~ClearOverflow()
+        {
+            entries.clear();
+            contexts.clear();
+            if (borrowed) {
+                in_use = false;
+            }
+        }
+    } clear_overflow {
+        overflow_contexts, overflow_entries,
+        cohort_overflow_scratch_in_use, use_shared_overflow_scratch
+    };
     static const bool inline_cohort_buffers_enabled
         = std::getenv("FSIM_DISABLE_INLINE_COHORT_BUFFERS") == nullptr;
     std::size_t begin = 0U;
@@ -1103,9 +1187,10 @@ void Interpreter::Impl::execute_static_cohort(
         auto* const state = &get_process(process_ids[begin]);
         if (state->suspended || state->halted || !state->executor) {
             state->queued = false;
+            pending.next = begin + 1U;
             state->waiting_on_static = false;
             remove_dynamic_wait(*state);
-            execute(state->program.id);
+            execute(state->id);
             ++begin;
             continue;
         }
@@ -1116,9 +1201,10 @@ void Interpreter::Impl::execute_static_cohort(
             = state->executor->cohort_manages_process_state();
         if (cohort_domain == nullptr) {
             state->queued = false;
+            pending.next = begin + 1U;
             state->waiting_on_static = false;
             remove_dynamic_wait(*state);
-            execute(state->program.id);
+            execute(state->id);
             ++begin;
             continue;
         }
@@ -1136,9 +1222,10 @@ void Interpreter::Impl::execute_static_cohort(
         }
         if (end - begin < 2U) {
             state->queued = false;
+            pending.next = end;
             state->waiting_on_static = false;
             remove_dynamic_wait(*state);
-            execute(state->program.id);
+            execute(state->id);
             begin = end;
             continue;
         }
@@ -1151,6 +1238,7 @@ void Interpreter::Impl::execute_static_cohort(
                 member.waiting_on_static = false;
                 remove_dynamic_wait(member);
             }
+            pending.next = end;
         }
         std::span<ProcessCohortResumeEntry> entries;
         if (inline_cohort_buffers_enabled
@@ -1160,7 +1248,7 @@ void Interpreter::Impl::execute_static_cohort(
                 if (!state_aware_cohort) {
                     member.status = ProcessStatus::running;
                 }
-                inline_contexts[offset].emplace(*this, member.program.id);
+                inline_contexts[offset].emplace(*this, member.id);
                 inline_entries[offset] = {
                     member.executor.get(),
                     &*inline_contexts[offset],
@@ -1185,7 +1273,7 @@ void Interpreter::Impl::execute_static_cohort(
                 if (!state_aware_cohort) {
                     member.status = ProcessStatus::running;
                 }
-                overflow_contexts.emplace_back(*this, member.program.id);
+                overflow_contexts.emplace_back(*this, member.id);
                 overflow_entries.push_back({
                     member.executor.get(),
                     &overflow_contexts.back(),
@@ -1210,6 +1298,9 @@ void Interpreter::Impl::execute_static_cohort(
             throw std::logic_error {
                 "process cohort executor returned an invalid activation count"
             };
+        }
+        if (state_aware_cohort) {
+            pending.next = begin + executed;
         }
         if (native_process_count_profile_enabled) {
             for (std::size_t offset = 0; offset < executed; ++offset) {
@@ -1236,9 +1327,10 @@ void Interpreter::Impl::execute_static_cohort(
         }
         if (executed == 0U) {
             state->queued = false;
+            pending.next = begin + 1U;
             state->waiting_on_static = false;
             remove_dynamic_wait(*state);
-            execute(state->program.id);
+            execute(state->id);
             ++begin;
             continue;
         }
@@ -1251,13 +1343,14 @@ void Interpreter::Impl::execute_static_cohort(
                 std::rethrow_exception(entries[local].failure);
             }
             if (handle_executor_resume(*member, entries[local].result)) {
-                execute(member->program.id);
+                execute(member->id);
             }
             if (scheduler.stop_requested()) {
                 return;
             }
         }
         begin += local;
+        pending.next = begin;
     }
 }
 
