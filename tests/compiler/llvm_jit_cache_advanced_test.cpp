@@ -14,6 +14,9 @@ void expect_cache_statistics(
 void test_process_module_grouping_at_level(
     JitOptimizationLevel optimization,
     const std::filesystem::path& cache_directory);
+void test_canonical_operation_cache_identity(
+    const std::filesystem::path& cache_directory);
+void test_cohort_binding_retention();
 void test_object_cache_at_level(
     JitOptimizationLevel optimization,
     const std::filesystem::path& cache_directory);
@@ -667,6 +670,8 @@ void test_persistent_object_cache()
         JitOptimizationLevel::o0, root / "group-o0");
     test_process_module_grouping_at_level(
         JitOptimizationLevel::o2, root / "group-o2");
+    test_canonical_operation_cache_identity(root / "canonical-operations");
+    test_cohort_binding_retention();
     test_cache_pruning_integration(root / "pruning");
     test_inertial_cache_identity(root / "inertial");
     test_projected_cache_identity(root / "projected");

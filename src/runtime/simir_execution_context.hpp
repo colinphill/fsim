@@ -24,6 +24,30 @@ struct Interpreter::Impl::ExecutionContext final
     direct_code_coverage_counters() noexcept override;
     [[nodiscard]] CodeCoverageCounterRuntimeStatus record_code_coverage_counter(
         const ::fsim::runtime::CodeCoverageCounterId counter) override;
+    void sample_coverage(
+        const CoverageSample& sample,
+        std::span<const PackedLogic4> actuals,
+        InstructionIndex instruction) override;
+    [[nodiscard]] PackedLogic4 read_class_property(
+        std::uint64_t handle,
+        std::string_view property_identity,
+        std::size_t width,
+        InstructionIndex instruction) override;
+    void write_class_property(
+        std::uint64_t handle,
+        std::string_view property_identity,
+        const PackedLogic4& value,
+        InstructionIndex instruction) override;
+    [[nodiscard]] PackedLogic4 read_class_static_property(
+        std::string_view property_identity,
+        std::size_t width,
+        InstructionIndex instruction) override;
+    void write_class_static_property(
+        std::string_view property_identity,
+        const PackedLogic4& value,
+        InstructionIndex instruction) override;
+    [[nodiscard]] bool event_triggered(
+        SignalId event, InstructionIndex instruction) const override;
     [[nodiscard]] std::span<const std::uint64_t>
     direct_signal_logic9_plane0() const noexcept override;
     [[nodiscard]] std::span<const std::uint64_t>

@@ -89,7 +89,7 @@ namespace llvm_detail {
         std::byte { 'M' }, std::byte { 'J' }, std::byte { 'O' },
         std::byte { '3' }, std::byte { 0 }
     };
-    constexpr std::uint32_t kJitMetadataSchema = 1U;
+    constexpr std::uint32_t kJitMetadataSchema = 2U;
     constexpr std::uint32_t kJitCacheRecordSchema = 1U;
     constexpr std::size_t kMaximumJitMetadataBytes = 64U * 1024U * 1024U;
 
@@ -548,11 +548,19 @@ namespace llvm_detail {
                 &stored);
             if (read == nullptr || read->kind != SignalReadKind::current
                 || read->signal >= signal_widths.size()
-                || signal_widths[read->signal] == 0U
-                || (!signal_value_kinds.empty()
-                    && signal_value_kinds[read->signal]
-                        != ValueKind::logic4)) {
+                || signal_widths[read->signal] == 0U) {
                 continue;
+            }
+            if (!signal_value_kinds.empty()) {
+                if (read->signal >= signal_value_kinds.size()) {
+                    continue;
+                }
+                const auto kind = signal_value_kinds[read->signal];
+                if (kind != ValueKind::logic4
+                    && (kind != ValueKind::logic9
+                        || signal_widths[read->signal] > 64U)) {
+                    continue;
+                }
             }
             if (std::ranges::find(result, read->signal) == result.end()) {
                 result.push_back(read->signal);
@@ -766,7 +774,14 @@ namespace llvm_detail {
         offsetof(fsim_jit_runtime_v1, code_coverage_counter_count) == 836);
     static_assert(
         offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840);
-    static_assert(sizeof(fsim_jit_runtime_v1) == 848);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, sample_coverage) == 848);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, execute_class_property_operation)
+        == 856);
+    static_assert(
+        offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864);
+    static_assert(sizeof(fsim_jit_runtime_v1) == 872);
     static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
     static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
     static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -1366,6 +1381,15 @@ bool LlvmJit::supports_process(
         }
         return false;
     }
+}
+
+bool LlvmJit::discard_prevalidated_process(const Process& process) const
+{
+    if (!impl_) {
+        throw LlvmJitError("cannot use a moved-from LlvmJit");
+    }
+    const std::scoped_lock lock { impl_->validation_mutex };
+    return impl_->immutable_validated_processes.erase(&process) != 0U;
 }
 
 LlvmJitCacheStatistics LlvmJit::cache_statistics() const noexcept

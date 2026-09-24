@@ -11,24 +11,31 @@ void HierarchyBuilder::canonicalize_process_operations(Process& process)
         return;
     }
 
-    std::uint64_t bucket = UINT64_C(1469598103934665603);
-    const auto mix = [&](const std::uint64_t value) {
-        bucket ^= value;
-        bucket *= UINT64_C(1099511628211);
-    };
-    mix(process.operations.size());
-    mix(process.register_count);
-    mix(process.string_register_count);
-    mix(process.container_register_count);
-    for (const auto kind : process.register_value_kinds) {
-        mix(static_cast<std::uint64_t>(kind));
-    }
+    ProcessOperationGroupingKey key;
+    key.operation_count = process.operations.size();
+    key.register_count = process.register_count;
+    key.string_register_count = process.string_register_count;
+    key.container_register_count = process.container_register_count;
+    key.register_value_kinds = process.register_value_kinds;
+    key.operation_kinds.reserve(process.operations.size());
     for (const auto& operation : process.operations) {
-        mix(operation_group_index(operation));
-        mix(operation_alternative_index(operation));
+        key.operation_kinds.emplace_back(
+            operation_group_index(operation),
+            operation_alternative_index(operation));
     }
+    key.sensitivity_edges.reserve(process.static_sensitivity.size());
+    for (const auto& sensitivity : process.static_sensitivity) {
+        key.sensitivity_edges.push_back(sensitivity.edge);
+    }
+    key.trigger_regions.reserve(process.static_trigger_regions.size());
+    for (const auto& region : process.static_trigger_regions) {
+        key.trigger_regions.emplace_back(
+            region.begin, region.end, region.mask);
+    }
+    key.language_standard = process.language_standard;
+    key.compatibility_profile = process.compatibility_profile;
 
-    auto& representatives = process_operation_representatives_[bucket];
+    auto& representatives = process_operation_representatives_[key];
     std::erase_if(
         representatives,
         [&](const ProcessId representative) {

@@ -46,6 +46,30 @@ void build_dense_signal_remap(
     }
 }
 
+[[nodiscard]] std::uint32_t remap_signal(
+    const std::shared_ptr<const LlvmProcessExecutor::SignalRemap>& remap,
+    const std::uint32_t dense_base,
+    const std::vector<std::uint32_t>& dense,
+    const std::uint32_t signal)
+{
+    if (!dense.empty()) {
+        if (signal < dense_base) {
+            return signal;
+        }
+        const auto offset = signal - dense_base;
+        return offset < dense.size() ? dense[offset] : signal;
+    }
+    if (!remap) {
+        return signal;
+    }
+    const auto found = std::ranges::lower_bound(
+        *remap, signal, { },
+        &LlvmProcessExecutor::SignalRemap::value_type::first);
+    return found != remap->end() && found->first == signal
+        ? found->second
+        : signal;
+}
+
 } // namespace
 
 LlvmProcessExecutor::LlvmProcessExecutor(
@@ -186,21 +210,9 @@ void LlvmProcessExecutor::initialize_direct_read_signals()
     direct_read_signals_.clear();
     direct_read_signals_.reserve(layout_.direct_read_signals.size());
     for (const auto signal : layout_.direct_read_signals) {
-        auto actual = signal;
-        if (!dense_signal_remap_.empty()
-            && signal >= dense_signal_remap_base_) {
-            const auto offset = signal - dense_signal_remap_base_;
-            if (offset < dense_signal_remap_.size()) {
-                actual = dense_signal_remap_[offset];
-            }
-        } else if (dense_signal_remap_.empty() && signal_remap_) {
-            const auto found = std::ranges::lower_bound(
-                *signal_remap_, signal, { }, &SignalRemap::value_type::first);
-            if (found != signal_remap_->end() && found->first == signal) {
-                actual = found->second;
-            }
-        }
-        direct_read_signals_.push_back(actual);
+        direct_read_signals_.push_back(remap_signal(
+            signal_remap_, dense_signal_remap_base_, dense_signal_remap_,
+            signal));
     }
 }
 
@@ -213,20 +225,9 @@ void LlvmProcessExecutor::initialize_direct_update_slots()
     std::vector<std::uint32_t> widths;
     widths.reserve(layout_.direct_update_signals.size());
     for (const auto signal : layout_.direct_update_signals) {
-        auto actual = signal;
-        if (!dense_signal_remap_.empty()
-            && signal >= dense_signal_remap_base_) {
-            const auto offset = signal - dense_signal_remap_base_;
-            if (offset < dense_signal_remap_.size()) {
-                actual = dense_signal_remap_[offset];
-            }
-        } else if (dense_signal_remap_.empty() && signal_remap_) {
-            const auto found = std::ranges::lower_bound(
-                *signal_remap_, signal, { }, &SignalRemap::value_type::first);
-            if (found != signal_remap_->end() && found->first == signal) {
-                actual = found->second;
-            }
-        }
+        const auto actual = remap_signal(
+            signal_remap_, dense_signal_remap_base_, dense_signal_remap_,
+            signal);
         direct_update_signals_.push_back(actual);
         widths.push_back(signal_widths_[signal]);
     }
@@ -336,20 +337,9 @@ void LlvmProcessExecutor::initialize_buffered_logic9_updates()
     });
     std::ranges::sort(projected_candidates);
     const auto add = [&](const runtime::simir::SignalId signal) {
-        auto actual = signal;
-        if (!dense_signal_remap_.empty()
-            && signal >= dense_signal_remap_base_) {
-            const auto offset = signal - dense_signal_remap_base_;
-            if (offset < dense_signal_remap_.size()) {
-                actual = dense_signal_remap_[offset];
-            }
-        } else if (dense_signal_remap_.empty() && signal_remap_) {
-            const auto found = std::ranges::lower_bound(
-                *signal_remap_, signal, { }, &SignalRemap::value_type::first);
-            if (found != signal_remap_->end() && found->first == signal) {
-                actual = found->second;
-            }
-        }
+        const auto actual = remap_signal(
+            signal_remap_, dense_signal_remap_base_, dense_signal_remap_,
+            signal);
         if (actual >= signal_widths_.size()
             || actual >= signal_value_kinds_.size()
             || signal_value_kinds_[actual]

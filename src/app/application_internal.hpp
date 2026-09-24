@@ -473,6 +473,8 @@ public:
         std::shared_ptr<const SignalRemap> signal_remap = { },
         std::optional<runtime::simir::ProcessId> generated_process = { });
 
+    ~LlvmProcessExecutor() override;
+
     [[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
     fork_clone(
         runtime::simir::InstructionIndex start_instruction) override;
@@ -524,6 +526,7 @@ public:
 private:
     static constexpr runtime::simir::ContainerObjectId invalid_container_object
         = std::numeric_limits<runtime::simir::ContainerObjectId>::max();
+    [[nodiscard]] static std::uint64_t next_instance_generation();
 
     struct FrameStorage {
         std::vector<std::uint64_t> register_aval;
@@ -607,6 +610,11 @@ private:
         std::uint32_t offset,
         std::uint32_t width,
         const fsim_jit_logic9_word_v1& value);
+    [[nodiscard]] bool has_buffered_update_words() const noexcept;
+    [[nodiscard]] bool has_buffered_logic9_updates() const noexcept;
+    void flush_buffered_updates(
+        runtime::simir::ProcessExecutionContext& context,
+        bool allow_slot_batch);
     void flush_buffered_logic9_updates(
         runtime::simir::ProcessExecutionContext& context);
     void flush_update_words(
@@ -987,6 +995,21 @@ private:
         std::uint32_t process,
         std::uint32_t instruction,
         fsim_jit_frame_v1* frame) noexcept;
+    static std::uint32_t sample_coverage(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
+    static std::uint32_t execute_class_property_operation(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
+    static std::uint32_t query_event_triggered(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
 
     [[nodiscard]] static runtime::simir::ProjectedDelayMode
     projected_delay_mode(const std::uint32_t mode);
@@ -1144,6 +1167,7 @@ private:
         std::uint64_t* result_bval) noexcept;
 
     compiler::LlvmJit& jit_;
+    const std::uint64_t instance_generation_ { next_instance_generation() };
     compiler::JitProcessBinding binding_;
     const runtime::simir::Process& process_;
     std::span<const std::uint32_t> signal_widths_;
@@ -1203,8 +1227,11 @@ private:
     std::uint32_t cohort_resume_status_ { };
     std::exception_ptr cohort_resume_failure_;
     std::vector<LlvmProcessExecutor*> cohort_members_;
+    std::vector<std::uint64_t> cohort_member_generations_;
     std::vector<runtime::simir::InstructionIndex>
         cohort_start_instructions_;
+    std::uint64_t cohort_generation_ { };
+    std::uint64_t cohort_binding_generation_ { };
     std::vector<compiler::JitProcessCohortResumeEntry>
         cohort_native_entries_;
     std::vector<runtime::simir::ProcessUpdateSlotBatch>
@@ -1213,8 +1240,10 @@ private:
         cohort_logic9_update_batches_;
     compiler::JitProcessCohortBinding cohort_binding_;
     std::vector<LlvmProcessExecutor*> region_members_;
+    std::vector<std::uint64_t> region_member_generations_;
     std::vector<runtime::simir::ProcessExecutionContext*> region_contexts_;
     std::vector<runtime::simir::InstructionIndex> region_start_instructions_;
+    std::uint64_t region_generation_ { };
     std::vector<compiler::JitProcessCohortResumeEntry>
         region_native_entries_;
     std::vector<runtime::simir::ProcessUpdateSlotBatch>
@@ -1223,8 +1252,6 @@ private:
         region_logic9_update_batches_;
     std::vector<runtime::simir::ProcessUpdateSlotBatch>
         region_active_update_batches_;
-    const runtime::simir::ProcessCohortResumeEntry*
-        region_entries_identity_ { };
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(

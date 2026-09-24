@@ -12,6 +12,46 @@ using namespace llvm_detail;
 using runtime::simir::Process;
 using runtime::simir::ValueKind;
 
+namespace {
+
+template <typename ProcessInfo>
+void validate_native_service_callbacks(
+    const ProcessInfo& info, const fsim_jit_runtime_v1& runtime)
+{
+    if (!info.uses_coverage_sample && !info.uses_class_property_operation
+        && !info.uses_event_triggered) {
+        return;
+    }
+    if (runtime.abi_version != FSIM_JIT_RUNTIME_ABI_VERSION_V1) {
+        throw LlvmJitError("JIT runtime ABI version mismatch");
+    }
+    if (runtime.struct_size < kJitRuntimeV1PrefixSize) {
+        throw LlvmJitError("JIT runtime ABI structure is too small");
+    }
+    if (info.uses_coverage_sample
+        && (runtime.struct_size < kJitRuntimeCoverageSampleSize
+            || runtime.sample_coverage == nullptr)) {
+        throw LlvmJitError(
+            "JIT runtime ABI requires sample_coverage for this process");
+    }
+    if (info.uses_class_property_operation
+        && (runtime.struct_size < kJitRuntimeClassPropertySize
+            || runtime.execute_class_property_operation == nullptr)) {
+        throw LlvmJitError(
+            "JIT runtime ABI requires class-property service callbacks "
+            "for this process");
+    }
+    if (info.uses_event_triggered
+        && (runtime.struct_size < kJitRuntimeEventTriggeredSize
+            || runtime.query_event_triggered == nullptr)) {
+        throw LlvmJitError(
+            "JIT runtime ABI requires query_event_triggered for this "
+            "process");
+    }
+}
+
+} // namespace
+
 JitResumeStatus
 LlvmJit::resume(const JitProcessHandle process,
     const fsim_jit_runtime_v1& runtime,
@@ -32,6 +72,7 @@ JitResumeStatus LlvmJit::resume_prevalidated(
     }
     const auto& entry
         = *static_cast<const Impl::NativeEntry*>(process.entry_);
+    validate_native_service_callbacks(entry.info, runtime);
     const auto raw_status = entry.function(&runtime, &frame, &result);
     if (raw_status == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR) {
         if (const auto reason = decode_generated_runtime_error(result.delay)) {
@@ -119,6 +160,9 @@ std::size_t LlvmJit::resume_cohort_prevalidated(
         }
         const auto* const native
             = static_cast<const Impl::NativeEntry*>(entry.process.entry_);
+        if (!region_mode || *entry.active != 0U) {
+            validate_native_service_callbacks(native->info, *entry.runtime);
+        }
         native_entries[prepared_index++] = native;
         const auto member_hash = std::hash<const void*> { }(native);
         key ^= member_hash + static_cast<std::size_t>(0x9e3779b9U)
@@ -543,8 +587,12 @@ JitProcessCohortBinding LlvmJit::bind_cohort_prevalidated(
             "LLVM process cohort must be materialized before binding");
     }
 
-    auto bound = std::make_unique<Impl::NativeBoundCohortEntry>();
+    if (impl_->next_bound_cohort_generation == 0U) {
+        throw LlvmJitError("LLVM process cohort binding generation exhausted");
+    }
+    auto bound = std::make_shared<Impl::NativeBoundCohortEntry>();
     bound->function = native_cohort->function;
+    bound->generation = impl_->next_bound_cohort_generation++;
     bound->members = std::move(members);
     bound->manages_process_state = manages_process_state;
     bound->region_mode = false;
@@ -567,7 +615,36 @@ JitProcessCohortBinding LlvmJit::bind_cohort_prevalidated(
     }
     auto* const result = bound.get();
     impl_->bound_cohorts.push_back(std::move(bound));
-    return JitProcessCohortBinding { impl_.get(), result };
+    return JitProcessCohortBinding {
+        impl_.get(), result, result->generation };
+}
+
+bool LlvmJit::release_cohort_binding(
+    const JitProcessCohortBinding cohort) const
+{
+    if (!impl_ || cohort.owner_ != impl_.get()) {
+        throw LlvmJitError("invalid prevalidated LLVM cohort binding");
+    }
+    const std::scoped_lock lock { impl_->cohort_mutex };
+    const auto found = std::ranges::find_if(
+        impl_->bound_cohorts, [&](const auto& candidate) {
+            return candidate.get() == cohort.entry_
+                && candidate->generation == cohort.generation_;
+        });
+    if (found == impl_->bound_cohorts.end()) {
+        return false;
+    }
+    impl_->bound_cohorts.erase(found);
+    return true;
+}
+
+std::size_t LlvmJit::active_cohort_binding_count() const
+{
+    if (!impl_) {
+        throw LlvmJitError("cannot use a moved-from LlvmJit");
+    }
+    const std::scoped_lock lock { impl_->cohort_mutex };
+    return impl_->bound_cohorts.size();
 }
 
 std::size_t LlvmJit::resume_cohort_prevalidated(
@@ -577,31 +654,51 @@ std::size_t LlvmJit::resume_cohort_prevalidated(
     if (!impl_ || cohort.owner_ != impl_.get() || cohort.entry_ == nullptr) {
         throw LlvmJitError("invalid prevalidated LLVM cohort binding");
     }
-    auto& bound = *static_cast<Impl::NativeBoundCohortEntry*>(
-        const_cast<void*>(cohort.entry_));
-    if (entries.size() != bound.members.size()) {
+    std::shared_ptr<Impl::NativeBoundCohortEntry> bound;
+    {
+        const std::scoped_lock lock { impl_->cohort_mutex };
+        const auto found = std::ranges::find_if(
+            impl_->bound_cohorts, [&](const auto& candidate) {
+                return candidate.get() == cohort.entry_
+                    && candidate->generation == cohort.generation_;
+            });
+        if (found == impl_->bound_cohorts.end()) {
+            throw LlvmJitError("stale prevalidated LLVM cohort binding");
+        }
+        bound = *found;
+    }
+    if (entries.size() != bound->members.size()) {
         throw LlvmJitError("prevalidated LLVM cohort binding size changed");
     }
 
-    const auto executed = bound.function(
-        bound.runtimes.data(), bound.frames.data(), bound.results.data(),
-        bound.statuses.data(), bound.queued.data(), bound.waiting.data(),
-        bound.process_statuses.data(), bound.active.data(),
-        static_cast<std::uint32_t>(bound.members.size()));
+    for (std::size_t index = 0; index < bound->members.size(); ++index) {
+        if (bound->runtimes[index] == nullptr) {
+            throw LlvmJitError(
+                "prevalidated LLVM cohort has a null runtime descriptor");
+        }
+        validate_native_service_callbacks(
+            bound->members[index]->info, *bound->runtimes[index]);
+    }
+
+    const auto executed = bound->function(
+        bound->runtimes.data(), bound->frames.data(), bound->results.data(),
+        bound->statuses.data(), bound->queued.data(), bound->waiting.data(),
+        bound->process_statuses.data(), bound->active.data(),
+        static_cast<std::uint32_t>(bound->members.size()));
     if (executed == 0U || executed > entries.size()) {
         throw LlvmJitError(
             "bound LLVM process cohort returned an invalid count");
     }
     for (std::size_t index = 0; index < executed; ++index) {
         entries[index].failure = { };
-        entries[index].status = bound.statuses[index];
-        if (bound.statuses[index]
+        entries[index].status = bound->statuses[index];
+        if (bound->statuses[index]
             == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR) {
             try {
                 if (const auto reason = decode_generated_runtime_error(
-                        bound.results[index]->delay)) {
+                        bound->results[index]->delay)) {
                     throw LlvmJitGeneratedRuntimeError(
-                        bound.results[index]->instruction, *reason);
+                        bound->results[index]->instruction, *reason);
                 }
                 throw LlvmJitError(
                     "generated process returned an invalid runtime error "
@@ -639,6 +736,12 @@ std::size_t LlvmJit::resume_region_prevalidated(
                     && entry.result != nullptr;
             })) {
         throw LlvmJitError("invalid LLVM process region");
+    }
+    for (const auto index : active_indices) {
+        const auto& entry = entries[index];
+        const auto& native
+            = *static_cast<const Impl::NativeEntry*>(entry.process.entry_);
+        validate_native_service_callbacks(native.info, *entry.runtime);
     }
     for (const auto index : active_indices) {
         auto& entry = entries[index];
@@ -742,6 +845,7 @@ LlvmJit::resume(const JitProcessBinding process,
                 "JIT runtime ABI requires the code coverage checked service");
         }
     }
+    validate_native_service_callbacks(entry.info, runtime);
     if (entry.info.uses_write_after) {
         if (runtime.struct_size < offsetof(fsim_jit_runtime_v1, flags)) {
             throw LlvmJitError(

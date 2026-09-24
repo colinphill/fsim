@@ -68,6 +68,8 @@ void test_scheduler_delta_limit();
 void test_simir();
 void test_simir_permanent_wait();
 void test_simir_update_coalescing();
+void test_simir_diagnostic_environment_snapshot();
+void test_simir_native_signal_dependency_masks();
 void test_resolved_driver_slots();
 void test_simir_expressions_and_edges();
 void test_simir_noninitializing_static_process();

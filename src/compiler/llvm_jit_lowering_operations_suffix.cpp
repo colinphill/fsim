@@ -51,6 +51,10 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& code_coverage_counter_count = state.code_coverage_counter_count;
     [[maybe_unused]] auto&& record_code_coverage_counter = state.record_code_coverage_counter;
     [[maybe_unused]] auto&& record_code_coverage_counter_type = state.record_code_coverage_counter_type;
+    [[maybe_unused]] auto&& sample_coverage_callback = state.sample_coverage_callback;
+    [[maybe_unused]] auto&& class_property_operation_callback = state.class_property_operation_callback;
+    [[maybe_unused]] auto&& event_triggered_callback = state.event_triggered_callback;
+    [[maybe_unused]] auto&& native_service_callback_type = state.native_service_callback_type;
     [[maybe_unused]] auto&& direct_update_slots = state.direct_update_slots;
     [[maybe_unused]] auto&& direct_update_active_words = state.direct_update_active_words;
     [[maybe_unused]] auto&& static_trigger_mask = state.static_trigger_mask;
@@ -204,6 +208,7 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& runtime_error_if = operation_context.runtime_error_if;
     [[maybe_unused]] auto&& synchronize_uses_to_frame = operation_context.synchronize_uses_to_frame;
     [[maybe_unused]] auto&& execute_exact_signal = operation_context.execute_exact_signal;
+    [[maybe_unused]] auto&& execute_native_service_callback = operation_context.execute_native_service_callback;
     [[maybe_unused]] auto&& read_wide_signal = operation_context.read_wide_signal;
     [[maybe_unused]] auto&& write_wide_signal = operation_context.write_wide_signal;
     [[maybe_unused]] auto&& dynamic_offset = operation_context.dynamic_offset;
@@ -1025,12 +1030,8 @@ void lower_suffix_operation(
                         FSIM_JIT_FRAME_STATE_READY,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, CoverageSample>) {
-                    return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
-                        instruction,
-                        0,
-                        FSIM_JIT_FRAME_STATE_READY,
-                        next_instruction);
+                    execute_native_service_callback(
+                        sample_coverage_callback, "coverage.sample");
                 } else if constexpr (std::is_same_v<OperationType, CoverageQuery>) {
                     return_result(
                         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
@@ -1192,12 +1193,8 @@ void lower_suffix_operation(
                         FSIM_JIT_FRAME_STATE_READY,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, EventTriggered>) {
-                    return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
-                        instruction,
-                        0,
-                        FSIM_JIT_FRAME_STATE_READY,
-                        next_instruction);
+                    execute_native_service_callback(
+                        event_triggered_callback, "event.triggered");
                 } else if constexpr (std::is_same_v<OperationType, EventAlias>) {
                     return_result(
                         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
@@ -1207,12 +1204,22 @@ void lower_suffix_operation(
                         next_instruction);
                 } else if constexpr (
                     operation_group_contains_v<OperationType, ClassOperationGroup>) {
-                    return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
-                        instruction,
-                        0,
-                        FSIM_JIT_FRAME_STATE_READY,
-                        next_instruction);
+                    if constexpr (
+                        std::is_same_v<OperationType, ClassPropertyRead>
+                        || std::is_same_v<OperationType, ClassPropertyWrite>
+                        || std::is_same_v<OperationType, ClassStaticPropertyRead>
+                        || std::is_same_v<OperationType, ClassStaticPropertyWrite>) {
+                        execute_native_service_callback(
+                            class_property_operation_callback,
+                            "class.property");
+                    } else {
+                        return_result(
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            instruction,
+                            0,
+                            FSIM_JIT_FRAME_STATE_READY,
+                            next_instruction);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
                     return_result(
                         FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,

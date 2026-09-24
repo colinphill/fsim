@@ -26,7 +26,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult run;
-  std::array<std::string, 6> values;
+  std::array<std::string, 8> values;
   std::size_t process_count{};
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -38,11 +38,23 @@ void print_diagnostics(const fsim::diagnostic::Engine& diagnostics) {
   }
 }
 
+std::string repeated_logic9_pattern(
+    const std::string_view pattern, const std::size_t width) {
+  assert(!pattern.empty());
+  std::string result;
+  result.reserve(width);
+  for (std::size_t index = 0; index < width; ++index) {
+    result.push_back(pattern[index % pattern.size()]);
+  }
+  return result;
+}
+
 Capture execute(
     fsim::app::BuiltProject project,
     const fsim::app::SimulationEngine engine,
     const std::string_view root = "structural_signal_remap_app",
-    const std::optional<fsim::runtime::SimulationTick> until = std::nullopt) {
+    const std::optional<fsim::runtime::SimulationTick> until = std::nullopt,
+    const bool capture_logic9 = false) {
   fsim::app::Simulation simulation{std::move(project), 1000, engine};
   const std::array suffixes{
       std::string_view{"source_a"},
@@ -68,6 +80,20 @@ Capture execute(
   for (std::size_t index = 0; index < signals.size(); ++index) {
     capture.values[index]
         = simulation.read_signal(signals[index]).to_msb_string();
+  }
+  if (capture_logic9) {
+    constexpr std::array logic9_suffixes{
+        std::string_view{"state_result_a"},
+        std::string_view{"state_result_b"},
+    };
+    for (std::size_t index = 0; index < logic9_suffixes.size(); ++index) {
+      const auto path
+          = std::string{root} + "." + std::string{logic9_suffixes[index]};
+      const auto signal = simulation.find_signal(path);
+      assert(signal);
+      capture.values[signals.size() + index]
+          = simulation.read_signal(*signal).to_msb_string();
+    }
   }
   return capture;
 }
@@ -109,12 +135,14 @@ void test_vhdl_projected_slice_level(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
       root,
-      4U);
+      4U,
+      true);
   const auto compiled = execute(
       std::move(*compiled_project),
       fsim::app::SimulationEngine::compiled,
       root,
-      4U);
+      4U,
+      true);
   assert(compiled.run.status == reference.run.status);
   assert(compiled.run.time == reference.run.time);
   assert(compiled.run.delta == reference.run.delta);
@@ -124,13 +152,15 @@ void test_vhdl_projected_slice_level(
           - compiled.run.callbacks_executed
       <= compiled.compiled_processes);
   assert(compiled.values == reference.values);
-  assert((reference.values == std::array<std::string, 6>{
+  assert((reference.values == std::array<std::string, 8>{
                                   "10100101",
                                   "00111100",
                                   "11111111",
                                   "01100110",
                                   "11111111",
-                                  "01100110"}));
+                                  "01100110",
+                                  repeated_logic9_pattern("UX01ZWLH-", 65U),
+                                  repeated_logic9_pattern("HLWZ10XU-", 65U)}));
 #if defined(FSIM_HAS_LLVM)
   assert(reference.process_count == 131);
   assert(compiled.compiled_processes == 4);
@@ -185,13 +215,15 @@ void test_level(
   assert(compiled.run.delta == reference.run.delta);
   assert(compiled.run.callbacks_executed == reference.run.callbacks_executed);
   assert(compiled.values == reference.values);
-  assert((reference.values == std::array<std::string, 6>{
+  assert((reference.values == std::array<std::string, 8>{
                                   "10100101",
                                   "00111100",
                                   "00000010",
                                   "01101001",
                                   "00000010",
-                                  "01101001"}));
+                                  "01101001",
+                                  "",
+                                  ""}));
 #if defined(FSIM_HAS_LLVM)
   assert(reference.process_count == 3);
   assert(compiled.compiled_processes == 3);
@@ -255,6 +287,8 @@ endmodule
   }
   const auto vhdl_source
       = directory.path / "structural_signal_remap.vhd";
+  const auto state_source_a = repeated_logic9_pattern("UX01ZWLH-", 65U);
+  const auto state_source_b = repeated_logic9_pattern("HLWZ10XU-", 65U);
   {
     std::ofstream output(vhdl_source);
     output << R"(
@@ -263,9 +297,11 @@ use ieee.std_logic_1164.all;
 
 entity projected_slice_leaf is
   port (
-    clock  : in  std_logic;
-    source : in  std_logic_vector(7 downto 0);
-    result : out std_logic_vector(7 downto 0)
+    clock        : in  std_logic;
+    source       : in  std_logic_vector(7 downto 0);
+    result       : out std_logic_vector(7 downto 0);
+    state_source : in  std_logic_vector(64 downto 0);
+    state_result : out std_logic_vector(64 downto 0)
   );
 end entity;
 
@@ -279,6 +315,7 @@ begin
         severity warning;
       result(3 downto 0) <= source(3 downto 0) xor "1010";
       result(7 downto 4) <= source(7 downto 4) xor "0101";
+      state_result <= state_source;
     end if;
   end process;
 end architecture;
@@ -297,15 +334,27 @@ architecture test of structural_signal_remap_vhdl_app is
   signal result_b : std_logic_vector(7 downto 0);
   signal result_c : std_logic_vector(7 downto 0);
   signal result_d : std_logic_vector(7 downto 0);
+  signal state_source_a : std_logic_vector(64 downto 0) := ")";
+    output << state_source_a << "\";\n"
+           << "  signal state_source_b : std_logic_vector(64 downto 0) := \""
+           << state_source_b << "\";\n"
+           << R"(  signal state_result_a : std_logic_vector(64 downto 0);
+  signal state_result_b : std_logic_vector(64 downto 0);
+  signal state_result_c : std_logic_vector(64 downto 0);
+  signal state_result_d : std_logic_vector(64 downto 0);
 begin
   a : entity work.projected_slice_leaf
-    port map (clock => clock, source => source_a, result => result_a);
+    port map (clock => clock, source => source_a, result => result_a,
+      state_source => state_source_a, state_result => state_result_a);
   b : entity work.projected_slice_leaf
-    port map (clock => clock, source => source_b, result => result_b);
+    port map (clock => clock, source => source_b, result => result_b,
+      state_source => state_source_b, state_result => state_result_b);
   c : entity work.projected_slice_leaf
-    port map (clock => clock, source => source_a, result => result_c);
+    port map (clock => clock, source => source_a, result => result_c,
+      state_source => state_source_a, state_result => state_result_c);
   d : entity work.projected_slice_leaf
-    port map (clock => clock, source => source_b, result => result_d);
+    port map (clock => clock, source => source_b, result => result_d,
+      state_source => state_source_b, state_result => state_result_d);
 
   dummy_processes : for index in 0 to 125 generate
     dormant : process

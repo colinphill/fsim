@@ -716,7 +716,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint64_t> signal_value_revisions;
     std::vector<PackedLogic4> sampled_values;
     std::vector<PackedLogic4> sampled_defaults;
+    // SignalId-indexed dependency mask for historical ReadSignal operations.
+    // When dependency discovery is uncertain, all signals are sampled.
+    std::vector<std::uint8_t> sampled_value_dependency_mask;
+    bool sampled_value_dependencies_unknown { };
     bool requires_sampled_values { };
+    // Dependency maps are built once after all topology is registered. The
+    // module-path destination map lets update staging avoid scanning every
+    // path for unrelated signals.
+    std::vector<std::uint8_t> native_signal_dependency_mask;
+    std::vector<std::uint8_t> module_path_destination_mask;
+    bool native_signal_dependencies_unknown { };
     std::map<SampledHistoryKey, SampledHistoryState> sampled_histories;
     std::vector<std::unique_ptr<PackedLogic4>> forced_values;
     std::vector<std::unique_ptr<PackedLogic4>> forced_masks;
@@ -867,6 +877,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ClassStaticMethodCallHook class_static_method_call_hook;
     DpiFunctionCallHook dpi_function_call_hook;
     std::optional<MonitorInstall> monitor;
+    std::vector<std::uint8_t> monitor_signal_watch_mask;
+    bool monitor_signal_watches_unknown { };
     ProcessId monitor_process { };
     std::optional<FileHandle> monitor_file_handle;
     bool monitor_enabled { true };
@@ -954,6 +966,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::uint64_t native_update_profile_word_unresolved { };
     std::uint64_t native_update_profile_word_resolved { };
     bool jit_skip_callable_frames { };
+    bool profile_static_cohorts_enabled { };
+    bool native_static_regions_enabled { };
+    bool profile_processes_all_enabled { };
+    bool fanout_cohort_grouping_enabled { true };
+    bool static_phase_batches_enabled { true };
+    bool inline_cohort_buffers_enabled { true };
+    bool direct_word_commit_disabled { };
+    bool logic9_batch_profile_enabled { };
     std::set<std::uint32_t> program_owners;
     std::set<std::uint32_t> exited_programs;
 
@@ -1391,6 +1411,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] bool can_publish_native_word(
         SignalId signal_id, ProcessId process) noexcept;
     [[nodiscard]] bool native_word_publication_phase_eligible() noexcept;
+    [[nodiscard]] bool native_signal_has_runtime_dependency(
+        SignalId signal_id) const noexcept;
+    void build_native_signal_dependency_masks() noexcept;
     [[nodiscard]] bool can_publish_native_word_prevalidated(
         SignalId signal_id, ProcessId process) noexcept;
     [[nodiscard]] bool can_publish_native_logic9_word(

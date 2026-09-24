@@ -159,6 +159,10 @@ int main() {
       JitOptimizationLevel::o0, "scheduled_o0");
   test_scheduled_callbacks_at_level(
       JitOptimizationLevel::o2, "scheduled_o2");
+  test_direct_word_write_order_at_level(
+      JitOptimizationLevel::o0, "direct_word_write_order_o0");
+  test_direct_word_write_order_at_level(
+      JitOptimizationLevel::o2, "direct_word_write_order_o2");
   test_inertial_callbacks_at_level(
       JitOptimizationLevel::o0, "inertial_o0");
   test_inertial_callbacks_at_level(
@@ -181,6 +185,10 @@ int main() {
       JitOptimizationLevel::o0, "class_boundary_o0");
   test_class_service_boundaries_at_level(
       JitOptimizationLevel::o2, "class_boundary_o2");
+  test_native_service_callbacks_at_level(
+      JitOptimizationLevel::o0, "native_services_o0");
+  test_native_service_callbacks_at_level(
+      JitOptimizationLevel::o2, "native_services_o2");
   test_signal_waits_at_level(
       JitOptimizationLevel::o0, "signal_wait_o0");
   test_signal_waits_at_level(

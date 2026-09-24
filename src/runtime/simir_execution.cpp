@@ -35,6 +35,22 @@ Interpreter::Impl::Impl(
           std::getenv("FSIM_PROFILE_NATIVE_UPDATES") != nullptr)
     , jit_skip_callable_frames(
           std::getenv("FSIM_JIT_SKIP_CALLABLE_FRAMES") != nullptr)
+    , profile_static_cohorts_enabled(
+          std::getenv("FSIM_PROFILE_STATIC_COHORTS") != nullptr)
+    , native_static_regions_enabled(
+          std::getenv("FSIM_ENABLE_NATIVE_STATIC_REGIONS") != nullptr)
+    , profile_processes_all_enabled(
+          std::getenv("FSIM_PROFILE_PROCESSES_ALL") != nullptr)
+    , fanout_cohort_grouping_enabled(
+          std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr)
+    , static_phase_batches_enabled(
+          std::getenv("FSIM_DISABLE_STATIC_PHASE_BATCH") == nullptr)
+    , inline_cohort_buffers_enabled(
+          std::getenv("FSIM_DISABLE_INLINE_COHORT_BUFFERS") == nullptr)
+    , direct_word_commit_disabled(
+          std::getenv("FSIM_DISABLE_DIRECT_WORD_COMMIT") != nullptr)
+    , logic9_batch_profile_enabled(
+          std::getenv("FSIM_PROFILE_LOGIC9_BATCH") != nullptr)
 {
     scheduler_discard_hook = scheduler.add_discard_hook(
         this, +[](void* context) noexcept {
@@ -44,10 +60,17 @@ Interpreter::Impl::Impl(
         if (!requires_sampled_values) {
             return;
         }
-        sampled_values.clear();
-        sampled_values.reserve(signals.size());
-        for (const auto& signal : signals) {
-            sampled_values.push_back(signal.initial_value);
+        if (sampled_value_dependency_mask.size() != signals.size()) {
+            sampled_value_dependencies_unknown = true;
+        }
+        for (std::size_t signal = 0U;
+             signal < signals.size();
+             ++signal) {
+            if (!sampled_value_dependencies_unknown
+                && sampled_value_dependency_mask[signal] == 0U) {
+                continue;
+            }
+            sampled_values[signal] = signals[signal].initial_value;
         }
     });
 }
@@ -1180,8 +1203,6 @@ void Interpreter::Impl::execute_static_cohort(
         overflow_contexts, overflow_entries,
         cohort_overflow_scratch_in_use, use_shared_overflow_scratch
     };
-    static const bool inline_cohort_buffers_enabled
-        = std::getenv("FSIM_DISABLE_INLINE_COHORT_BUFFERS") == nullptr;
     std::size_t begin = 0U;
     while (begin < process_ids.size() && !scheduler.stop_requested()) {
         auto* const state = &get_process(process_ids[begin]);

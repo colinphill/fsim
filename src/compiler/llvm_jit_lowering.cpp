@@ -43,6 +43,7 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     const std::span<const runtime::simir::SignalId> direct_read_signals,
     const std::span<const runtime::simir::SignalId> direct_update_signals,
     const ValidatedProcess& validated,
+    const ProcessLoweringPlan& lowering_plan,
     const JitOptimizationLevel optimization,
     const bool debug_instrumentation,
     const bool require_direct_update_slots)
@@ -88,6 +89,13 @@ void lower_process(llvm::Module& module, const std::string& symbol,
         108U, offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters));
     require_runtime_member(
         112U, offsetof(fsim_jit_runtime_v1, record_code_coverage_counter));
+    require_runtime_member(
+        113U, offsetof(fsim_jit_runtime_v1, sample_coverage));
+    require_runtime_member(
+        114U,
+        offsetof(fsim_jit_runtime_v1, execute_class_property_operation));
+    require_runtime_member(
+        115U, offsetof(fsim_jit_runtime_v1, query_event_triggered));
     auto* direct_update_slot_type = llvm::StructType::create(
         context,
         { i64, i64, i64, i64, i64, i32, i32,
@@ -156,6 +164,34 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             "record_code_coverage_counter");
         record_code_coverage_counter_type = llvm::FunctionType::get(
             i32, { pointer, i32, i32, i32 }, false);
+    }
+    llvm::Value* sample_coverage_callback = nullptr;
+    llvm::Value* class_property_operation_callback = nullptr;
+    llvm::Value* event_triggered_callback = nullptr;
+    llvm::FunctionType* native_service_callback_type = nullptr;
+    if (validated.uses_coverage_sample
+        || validated.uses_class_property_operation
+        || validated.uses_event_triggered) {
+        native_service_callback_type = llvm::FunctionType::get(
+            i32, { pointer, i32, i32, pointer }, false);
+        if (validated.uses_coverage_sample) {
+            sample_coverage_callback = builder.CreateLoad(
+                pointer,
+                builder.CreateStructGEP(runtime_type, runtime_argument, 113),
+                "sample_coverage");
+        }
+        if (validated.uses_class_property_operation) {
+            class_property_operation_callback = builder.CreateLoad(
+                pointer,
+                builder.CreateStructGEP(runtime_type, runtime_argument, 114),
+                "execute_class_property_operation");
+        }
+        if (validated.uses_event_triggered) {
+            event_triggered_callback = builder.CreateLoad(
+                pointer,
+                builder.CreateStructGEP(runtime_type, runtime_argument, 115),
+                "query_event_triggered");
+        }
     }
     llvm::Value* direct_update_slots = nullptr;
     llvm::Value* direct_update_active_words = nullptr;
@@ -764,8 +800,6 @@ void lower_process(llvm::Module& module, const std::string& symbol,
         { pointer, i32, i32, i32, pointer },
         false);
     const auto native_callables = analyze_native_callables(process);
-    const auto lowering_plan = make_process_lowering_plan(
-        process, debug_instrumentation);
     const auto& resume_entries = lowering_plan.entry_points;
     const bool transient_boundaries_safe = std::ranges::all_of(
         process.operations,
@@ -1586,6 +1620,10 @@ ProcessLoweringContext lowering_context {
         code_coverage_counter_count,
         record_code_coverage_counter,
         record_code_coverage_counter_type,
+        sample_coverage_callback,
+        class_property_operation_callback,
+        event_triggered_callback,
+        native_service_callback_type,
         direct_update_slots,
         direct_update_active_words,
         static_trigger_mask,

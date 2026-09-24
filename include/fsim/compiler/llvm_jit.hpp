@@ -128,11 +128,13 @@ private:
   friend class LlvmJit;
 
   constexpr JitProcessCohortBinding(
-      const void* owner, const void* entry) noexcept
-      : owner_(owner), entry_(entry) {}
+      const void* owner, const void* entry,
+      std::uint64_t generation) noexcept
+      : owner_(owner), entry_(entry), generation_(generation) {}
 
   const void* owner_{};
   const void* entry_{};
+  std::uint64_t generation_{};
 };
 
 /// Caller-owned activation records for one ordered native process cohort.
@@ -248,6 +250,7 @@ enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
     container_callback_failure,
     signal_callback_failure,
     coverage_callback_failure,
+    native_service_callback_failure,
 };
 
 /// A failure deliberately reported by generated SimIR code.
@@ -314,6 +317,12 @@ public:
       std::span<const std::uint32_t> signal_widths,
       std::span<const runtime::simir::ValueKind>
           signal_value_kinds = {}) const;
+
+  /// Release a cached preflight summary when a process reuses another
+  /// process's native body through an external signal remap. Returns whether
+  /// a summary was present; the process remains eligible for later validation.
+  [[nodiscard]] bool discard_prevalidated_process(
+      const runtime::simir::Process& process) const;
 
   /// Validate, lower, optimize, and add several process functions as one
   /// native compilation/cache unit.
@@ -412,6 +421,12 @@ public:
   /// state object at the same address for the lifetime of the binding.
   [[nodiscard]] JitProcessCohortBinding bind_cohort_prevalidated(
       std::span<JitProcessCohortResumeEntry> entries) const;
+
+  /// Release one bound cohort after its caller invalidates the saved member
+  /// and scheduler-state addresses. A stale binding cannot release a newer one.
+  [[nodiscard]] bool release_cohort_binding(
+      JitProcessCohortBinding cohort) const;
+  [[nodiscard]] std::size_t active_cohort_binding_count() const;
 
   /// Resume a previously bound exact cohort without rebuilding member hashes
   /// and pointer arrays. Entries provide only per-activation status/failure

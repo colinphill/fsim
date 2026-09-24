@@ -13,6 +13,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -2350,6 +2351,215 @@ void test_simir_alternate_executor_cpp_exception_containment()
         !interpreter.scheduler().running()
             && interpreter.signal_value(signal).to_msb_string() == "0",
         "executor exception must leave the scheduler and signal state valid");
+}
+
+void test_simir_native_signal_dependency_masks()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    class ScopedEnvironment final {
+    public:
+        ScopedEnvironment(const char* name, const char* value)
+            : name_ { name }
+        {
+            if (const auto* previous = std::getenv(name_.c_str())) {
+                had_previous_ = true;
+                previous_ = previous;
+            }
+#if defined(_WIN32)
+            if (::_putenv_s(name_.c_str(), value) != 0) {
+                throw std::runtime_error("failed to set profile environment");
+            }
+#else
+            if (::setenv(name_.c_str(), value, 1) != 0) {
+                throw std::runtime_error("failed to set profile environment");
+            }
+#endif
+        }
+
+        ScopedEnvironment(const ScopedEnvironment&) = delete;
+        ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
+
+        ~ScopedEnvironment()
+        {
+#if defined(_WIN32)
+            (void)::_putenv_s(
+                name_.c_str(), had_previous_ ? previous_.c_str() : "");
+#else
+            if (had_previous_) {
+                (void)::setenv(name_.c_str(), previous_.c_str(), 1);
+            } else {
+                (void)::unsetenv(name_.c_str());
+            }
+#endif
+        }
+
+    private:
+        std::string name_;
+        std::string previous_;
+        bool had_previous_ { };
+    } profile_environment { "FSIM_PROFILE_NATIVE_PHASE", "1" };
+
+    std::ostringstream profile_output;
+    auto* const previous_cerr = std::cerr.rdbuf(profile_output.rdbuf());
+    struct RestoreCerr {
+        std::streambuf* previous;
+        ~RestoreCerr() { std::cerr.rdbuf(previous); }
+    } restore_cerr { previous_cerr };
+
+    {
+        Interpreter interpreter;
+        const auto add_output = [&](const char* name) {
+            return interpreter.add_signal(
+                { name,
+                    PackedLogic4::from_msb_string("0"),
+                    ResolutionKind::sv_wire });
+        };
+        const auto native_signal = add_output("top.native");
+        const auto sampled_signal = add_output("top.sampled");
+        const auto path_source = add_output("top.path_source");
+        const auto path_destination = interpreter.add_signal(
+            { "top.path_destination", PackedLogic4::from_msb_string("0") });
+        const auto timing_signal = add_output("top.timing");
+        const auto monitor_signal = add_output("top.monitored");
+        const auto switch_source = add_output("top.switch_source");
+        const auto switch_target = interpreter.add_signal(
+            { "top.switch_target",
+                PackedLogic4::from_msb_string("Z"),
+                ResolutionKind::sv_wire });
+
+        Process monitor;
+        monitor.id = 0U;
+        monitor.name = "dependency_monitor";
+        monitor.operations = {
+            MonitorInstall {
+                { MonitorValue {
+                    MonitorValueKind::signal,
+                    monitor_signal,
+                    OutputFormat::binary,
+                    "monitored=" } },
+                "",
+                true,
+                false,
+                std::nullopt },
+            Halt { }
+        };
+        (void)interpreter.add_process(std::move(monitor));
+
+        Process sampled_reader;
+        sampled_reader.id = 1U;
+        sampled_reader.name = "sampled_dependency_reader";
+        sampled_reader.register_count = 1U;
+        sampled_reader.operations = {
+            ReadSignal { 0U, sampled_signal, SignalReadKind::past },
+            Halt { }
+        };
+        (void)interpreter.add_process(std::move(sampled_reader));
+
+        Process switch_connection;
+        switch_connection.id = 2U;
+        switch_connection.name = "dependency_switch";
+        switch_connection.switch_source = switch_source;
+        switch_connection.switch_target = switch_target;
+        switch_connection.switch_bidirectional = true;
+        switch_connection.initialize = false;
+        switch_connection.operations = { Halt { } };
+        (void)interpreter.add_process(std::move(switch_connection));
+
+        const std::array outputs {
+            native_signal,
+            sampled_signal,
+            path_source,
+            timing_signal,
+            monitor_signal,
+            switch_source,
+        };
+        class DependencyWriter final : public ProcessExecutor {
+        public:
+            explicit DependencyWriter(const std::array<SignalId, 6>& signals)
+            {
+                for (const auto signal : signals) {
+                    updates_.push_back(
+                        { signal, Logic4Word { 1U, 1U, 0U }, 0U, false });
+                }
+            }
+
+            [[nodiscard]] ProcessResumeResult resume(
+                ProcessExecutionContext& context,
+                const InstructionIndex start) override
+            {
+                require(start == 0U, "dependency writer initial PC");
+                for (const auto& update : updates_) {
+                    context.write_validated_update_words(
+                        std::span { &update, 1U });
+                }
+                ProcessResumeResult result { 0U, 1U };
+                result.external.kind = ExternalSuspendKind::halt;
+                return result;
+            }
+
+        private:
+            std::vector<ProcessUpdateWord> updates_;
+        };
+
+        Process writer;
+        writer.id = 3U;
+        writer.name = "dependency_writer";
+        writer.operations = { Halt { } };
+        for (const auto signal : outputs) {
+            writer.driver_regions.push_back(
+                { signal, 0U, 0U, true });
+        }
+        const auto writer_id = interpreter.add_process(std::move(writer));
+        interpreter.set_process_executor(
+            writer_id, std::make_unique<DependencyWriter>(outputs));
+
+        ModulePath path;
+        path.id = 0U;
+        path.identity = "dependency.path";
+        path.sources = { { path_source, 0U, 1U } };
+        path.destinations = { { path_destination, 0U, 1U } };
+        path.drivers = { writer_id };
+        path.delays = { 0U };
+        (void)interpreter.add_module_path(std::move(path));
+
+        ModuleTimingCheck timing_check;
+        timing_check.id = 0U;
+        timing_check.identity = "dependency.timing";
+        timing_check.kind = ModuleTimingCheckKind::period;
+        timing_check.reference.terminal = { timing_signal, 0U, 1U };
+        timing_check.reference.edge = ModulePathEdge::posedge;
+        timing_check.limits = { 1 };
+        (void)interpreter.add_module_timing_check(std::move(timing_check));
+        interpreter.set_output_hook(
+            [](const ProcessId,
+                const std::string_view,
+                const bool,
+                const SimulationTick,
+                const std::uint64_t) { });
+
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed,
+            "native dependency fixture completes");
+        require(
+            interpreter.signal_value(native_signal).to_msb_string() == "1",
+            "an unrelated signal keeps the native word publication path");
+        require(
+            interpreter.signal_value(sampled_signal).to_msb_string() == "1"
+                && interpreter.signal_value(path_source).to_msb_string() == "1"
+                && interpreter.signal_value(timing_signal).to_msb_string()
+                    == "1"
+                && interpreter.signal_value(monitor_signal).to_msb_string()
+                    == "1",
+            "sampled, path, timing, and monitor dependencies retain checked updates");
+    }
+    const auto summary = profile_output.str();
+    require(
+        summary.find("published=1") != std::string::npos
+            && summary.find("rejected_structure=4") != std::string::npos,
+        "only the unrelated signal publishes while dependent signals fall back");
 }
 
 

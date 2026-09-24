@@ -184,6 +184,56 @@ void test_logic9_at_level(
     assert(direct_slot.logic9_plane2 == expected_direct_word.planes[2]);
     assert(direct_slot.logic9_plane3 == expected_direct_word.planes[3]);
 
+    Process direct_read;
+    direct_read.id = 108;
+    direct_read.name = "logic9_direct_read";
+    direct_read.register_count = 1;
+    direct_read.register_value_kinds = { ValueKind::logic9 };
+    direct_read.operations = {
+        ReadSignal { 0, 1 },
+        WriteBlocking { 0, 0 },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 2> direct_read_widths { 9U, 9U };
+    const std::array<ValueKind, 2> direct_read_kinds {
+        ValueKind::logic9, ValueKind::logic9
+    };
+    const auto direct_read_symbol
+        = std::string { symbol } + "_direct_read";
+    jit.add_process(
+        direct_read_symbol, direct_read,
+        direct_read_widths, direct_read_kinds);
+    const auto direct_read_handle = jit.lookup(direct_read_symbol);
+    assert((jit.frame_layout(direct_read_handle).direct_read_signals
+        == std::vector<SignalId> { 1 }));
+
+    const auto nine_states
+        = PackedLogic4::from_logic9_msb_string("UX01ZWLH-");
+    const auto direct_read_word = nine_states.logic9_low_word();
+    TestRuntime direct_read_runtime;
+    direct_read_runtime.logic9_signals[1]
+        = planes(PackedLogic4::from_logic9_msb_string("XXXXXXXXX"));
+    auto direct_read_descriptor = abi(direct_read_runtime);
+    const std::array<std::uint32_t, 1> direct_read_map { 3U };
+    std::array<std::array<std::uint64_t, 4>, 4> direct_read_planes { };
+    for (std::size_t plane = 0; plane < 4U; ++plane) {
+        direct_read_planes[plane][3] = direct_read_word.planes[plane];
+    }
+    direct_read_descriptor.direct_signal_logic9_plane0
+        = direct_read_planes[0].data();
+    direct_read_descriptor.direct_signal_logic9_plane1
+        = direct_read_planes[1].data();
+    direct_read_descriptor.direct_signal_logic9_plane2
+        = direct_read_planes[2].data();
+    direct_read_descriptor.direct_signal_logic9_plane3
+        = direct_read_planes[3].data();
+    direct_read_descriptor.direct_read_signals = direct_read_map.data();
+    direct_read_descriptor.direct_read_signal_count = 1U;
+    direct_read_descriptor.direct_signal_count = 4U;
+    assert(jit.execute(direct_read_handle, direct_read_descriptor)
+        == JitExecutionStatus::completed);
+    assert(direct_read_runtime.logic9_signals[0] == planes(nine_states));
+
     const auto rhs_states = PackedLogic4::from_logic9_msb_string(
         "UX01ZWLH-");
     constexpr std::array<Logic9, 9> states {

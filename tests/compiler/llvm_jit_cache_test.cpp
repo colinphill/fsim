@@ -343,7 +343,7 @@ void expect_native_record_header(const std::filesystem::path& cache_directory,
         }
         return result;
     };
-    assert(u32_le(8U) == 1U && u32_le(32U) == 1U);
+    assert(u32_le(8U) == 1U && u32_le(32U) == 2U);
     const auto metadata_size = static_cast<std::size_t>(u32_le(12U));
     assert(metadata_size >= 20U && metadata_size <= record->size() - 24U);
     assert(u32_le(36U) == metadata_size && u32_le(40U) == 1U);
@@ -651,6 +651,137 @@ void test_process_module_grouping_at_level(
         expect_error(
             [&] { (void)rejected.lookup("new_symbol"); },
             "was not added");
+    }
+}
+
+void test_canonical_operation_cache_identity(
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::string_view symbol = "canonical_operation_cache";
+    const auto options = LlvmJitOptions {
+        JitOptimizationLevel::o0, cache_directory
+    };
+    const auto make_process = [] {
+        Process process;
+        process.id = 190;
+        process.name = "canonical_operation_cache";
+        process.static_sensitivity = { { 0, EdgeKind::any } };
+        process.operations = { WaitSensitivity { }, Halt { } };
+        return process;
+    };
+    const auto materialize = [&](const Process& process,
+                                 const std::array<std::uint32_t, 2>& widths,
+                                 const std::uint64_t hits,
+                                 const std::uint64_t misses) {
+        LlvmJit jit { options };
+        jit.add_process(symbol, process, widths);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(jit, hits, misses, misses);
+    };
+    const std::array<std::uint32_t, 2> widths { 1, 1 };
+    const auto process = make_process();
+    materialize(process, widths, 0, 1);
+    materialize(process, widths, 1, 0);
+
+    // The static wait has no fields, but its sensitivity still depends on
+    // the referenced signal profile. Unrelated signals remain out of the key.
+    materialize(process, { 1, 2 }, 1, 0);
+    materialize(process, { 2, 1 }, 0, 1);
+
+    auto changed_field = make_process();
+    fsim::runtime::simir::operation_get<Halt>(
+        changed_field.operations.back()).program_exit = true;
+    materialize(changed_field, widths, 0, 1);
+
+    // Different empty operation alternatives require distinct stable tags.
+    auto changed_tag = make_process();
+    changed_tag.operations.front() = WaitForever { };
+    materialize(changed_tag, widths, 0, 1);
+
+    // A remapped executor has no native body of its own. Releasing its
+    // preflight summary must leave future standalone compilation valid.
+    LlvmJit remapped { options };
+    remapped.set_immutable_design_identity("prevalidated-remap-test");
+    assert(remapped.supports_process(process, widths));
+    assert(remapped.discard_prevalidated_process(process));
+    assert(!remapped.discard_prevalidated_process(process));
+    remapped.add_process(symbol, process, widths);
+    assert(remapped.lookup(symbol));
+}
+
+void test_cohort_binding_retention()
+{
+    LlvmJit jit { LlvmJitOptions {
+        JitOptimizationLevel::o0, { } } };
+    Process process;
+    process.id = 191U;
+    process.name = "cohort_binding_retention";
+    process.register_count = 1U;
+    process.static_sensitivity = { { 0U, EdgeKind::posedge } };
+    process.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+        WriteBlocking { 0U, 0U },
+        WaitSensitivity { },
+        Jump { 0U }
+    };
+    const std::array<std::uint32_t, 1> widths { 1U };
+    jit.add_process("cohort_retention_a", process, widths);
+    jit.add_process("cohort_retention_b", process, widths);
+    const std::array handles {
+        jit.lookup("cohort_retention_a"),
+        jit.lookup("cohort_retention_b")
+    };
+    std::array<fsim_jit_frame_v1, 2> frames { };
+    std::array<std::array<std::uint64_t, 1>, 2> register_aval { };
+    std::array<std::array<std::uint64_t, 1>, 2> register_bval { };
+    std::array<std::array<std::uint8_t, 1>, 2> register_initialized { };
+    std::array<fsim_jit_resume_result_v1, 2> results {
+        new_resume_result(), new_resume_result()
+    };
+    std::array<TestRuntime, 2> runtimes;
+    std::array<fsim_jit_runtime_v1, 2> descriptors {
+        abi(runtimes[0]), abi(runtimes[1])
+    };
+    std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> entries {
+        fsim::compiler::JitProcessCohortResumeEntry {
+            jit.bind(handles[0]), descriptors[0], frames[0], results[0] },
+        fsim::compiler::JitProcessCohortResumeEntry {
+            jit.bind(handles[1]), descriptors[1], frames[1], results[1] }
+    };
+    const auto reset_frames = [&] {
+        for (std::size_t index = 0; index < handles.size(); ++index) {
+            jit.initialize_frame(handles[index], frames[index],
+                register_aval[index], register_bval[index],
+                register_initialized[index]);
+            results[index] = new_resume_result();
+        }
+    };
+    reset_frames();
+    assert(jit.resume_cohort_prevalidated(entries) == entries.size());
+    assert(std::ranges::all_of(entries, [](const auto& entry) {
+        return entry.status
+            == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY;
+    }));
+    fsim::compiler::JitProcessCohortBinding previous;
+    for (std::size_t attempt = 0; attempt < 32U; ++attempt) {
+        const auto binding = jit.bind_cohort_prevalidated(entries);
+        assert(jit.active_cohort_binding_count() == 1U);
+        if (previous) {
+            assert(!jit.release_cohort_binding(previous));
+        }
+        reset_frames();
+        assert(jit.resume_cohort_prevalidated(binding, entries)
+            == entries.size());
+        assert(std::ranges::all_of(entries, [](const auto& entry) {
+            return entry.status
+                == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY;
+        }));
+        assert(jit.release_cohort_binding(binding));
+        assert(jit.active_cohort_binding_count() == 0U);
+        expect_error([&] {
+            (void)jit.resume_cohort_prevalidated(binding, entries);
+        }, "stale prevalidated LLVM cohort binding");
+        previous = binding;
     }
 }
 

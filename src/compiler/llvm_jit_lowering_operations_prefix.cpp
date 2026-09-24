@@ -321,6 +321,38 @@ void lower_process_operations(ProcessLoweringContext& state)
             }
             branch_to_next();
         };
+        const auto execute_native_service_callback =
+            [&](llvm::Value* callback, const std::string_view label) {
+                synchronize_uses_to_frame();
+                auto* status = builder.CreateCall(
+                    state.native_service_callback_type,
+                    callback,
+                    { context_pointer,
+                        llvm::ConstantInt::get(i32, process.id),
+                        llvm::ConstantInt::get(i32, instruction),
+                        frame_argument });
+                runtime_error_if(
+                    builder.CreateICmpNE(
+                        status, llvm::ConstantInt::get(i32, 0)),
+                    JitGeneratedRuntimeErrorReason::
+                        native_service_callback_failure,
+                    label);
+                for (const auto register_id :
+                    validated.instruction_definitions[index]) {
+                    const auto& source = frame_registers[register_id];
+                    const auto& destination = registers[register_id];
+                    if (source.aval_base == destination.aval_base
+                        && source.word_offset == destination.word_offset) {
+                        continue;
+                    }
+                    store_register(
+                        builder,
+                        registers,
+                        register_id,
+                        load_register(builder, frame_registers, register_id));
+                }
+                branch_to_next();
+            };
         const auto read_wide_signal = [&](const ReadSignal& operation) {
             const auto& slot = registers[operation.destination];
             auto* aval = builder.CreateGEP(
@@ -1390,6 +1422,7 @@ void lower_process_operations(ProcessLoweringContext& state)
         OperationLoweringContext operation_context {
             state, index, instruction, next_instruction, branch_to_next,
             runtime_error_if, synchronize_uses_to_frame, execute_exact_signal,
+            execute_native_service_callback,
             read_wide_signal, write_wide_signal, dynamic_offset,
             dynamic_offset_i32, emit_dynamic_slice, emit_dynamic_part_slice,
             emit_dynamic_after_slice, emit_dynamic_inertial_slice,

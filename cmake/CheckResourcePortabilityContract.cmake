@@ -278,7 +278,7 @@ set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_BOUNDARIES
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_LLVM
   "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_lowering_operations_suffix.cpp")
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_CACHE
-  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key_operations_secondary.cpp")
+  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key_operations.cpp")
 set(FSIM_SYSTEMVERILOG_COVERAGE_CONTROL_APPLICATION
   "${FSIM_SOURCE_DIR}/src/app/application_simulation_impl_setup.cpp")
 set(FSIM_SYSTEMVERILOG_COVERAGE_ACCESS_APPLICATION
@@ -536,7 +536,7 @@ set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_EXECUTION
 set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_BOUNDARY
   "${FSIM_SOURCE_DIR}/src/runtime/simir_execution_shared.cpp")
 set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_CACHE
-  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key_operations_secondary.cpp")
+  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key_operations.cpp")
 set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_CACHE_TEST
   "${FSIM_SOURCE_DIR}/tests/compiler/llvm_jit_cache_test.cpp")
 set(FSIM_SYSTEMVERILOG_2023_DISTRIBUTION_ARTIFACT
@@ -3574,7 +3574,8 @@ endforeach()
 foreach(FSIM_SYSTEMVERILOG_COVERAGE_SELECTION_POLICY IN ITEMS
     "selector_is_instance"
     "instance_context"
-    "builder.add(\"instance-context\""
+    "X(CoverageAccess, \"CoverageAccess\")"
+    "add_semantic_value(builder, value)"
     "select_standard_coverage("
     "standard_module_name_matches("
     "selector == \"$root\""

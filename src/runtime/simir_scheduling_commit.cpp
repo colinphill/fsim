@@ -677,7 +677,14 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     const bool identity_single_driver_resolution
         = signal.resolution == ResolutionKind::sv_wire
         || signal.resolution == ResolutionKind::std_logic;
-    if (has_bidirectional_switches
+    const bool switch_adjacency_unknown = has_bidirectional_switches
+        && (signal_id >= switch_endpoint_adjacency.size()
+            || signal_id >= switch_control_adjacency.size());
+    const bool switch_connected = has_bidirectional_switches
+        && !switch_adjacency_unknown
+        && (!switch_endpoint_adjacency[signal_id].empty()
+            || !switch_control_adjacency[signal_id].empty());
+    if (switch_adjacency_unknown || switch_connected
         || !identity_single_driver_resolution
         || values.size() != 1U
         || signal.has_implicit_driver

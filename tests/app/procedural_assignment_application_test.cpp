@@ -127,7 +127,7 @@ Capture run_once(
       == fsim::runtime::SystemVerilogVpiIteratorError::None);
   assert(saw_procedural_driver && saw_disambiguated_driver);
 
-  constexpr std::array<std::string_view, 69> names {
+  constexpr std::array<std::string_view, 73> names {
       "procedural_assignments.delayed_nba",
       "procedural_assignments.delayed_blocking",
       "procedural_assignments.event_blocking",
@@ -138,6 +138,10 @@ Capture run_once(
       "procedural_assignments.reverse_overlap",
       "procedural_assignments.zero_slot",
       "procedural_assignments.equal_deadline",
+      "procedural_assignments.blocking_slice_target",
+      "procedural_assignments.blocking_slice_readback",
+      "procedural_assignments.delayed_word_target",
+      "procedural_assignments.delayed_slice_target",
       "procedural_assignments.local_result",
       "procedural_assignments.dynamic_compound",
       "procedural_assignments.dynamic_partial",
@@ -199,7 +203,7 @@ Capture run_once(
       "procedural_assignments.wide_selected_deassigned"
   };
   constexpr std::array<std::uint32_t, names.size()> widths {
-      1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 8, 8, 8, 8, 1,
       16, 16, 16, 16, 16, 32,
       8, 8, 8, 1, 32,
       4, 4, 4, 4, 4, 4, 4, 4, 8, 4, 4, 4,
@@ -331,6 +335,13 @@ void verify_reference(const Capture& capture) {
           capture, "procedural_assignments.equal_deadline")
       == std::vector<TimedValue>{{"1", 6}}));
   assert((
+      changes_for(capture, "procedural_assignments.delayed_word_target")
+      == std::vector<TimedValue>{{"00100010", 2}}));
+  assert((
+      changes_for(capture, "procedural_assignments.delayed_slice_target")
+      == std::vector<TimedValue>{
+          {"00000000", 0}, {"10100101", 2}}));
+  assert((
       changes_for(capture, "procedural_assignments.local_result")
       == std::vector<TimedValue>{{"1", 2}}));
   const auto final_value = [&](const std::string_view name) {
@@ -343,6 +354,10 @@ void verify_reference(const Capture& capture) {
          == "0001001000001000");
   assert(final_value("procedural_assignments.dynamic_partial")
          == "1001001000110100");
+  assert(final_value("procedural_assignments.blocking_slice_target")
+         == "10100101");
+  assert(final_value("procedural_assignments.blocking_slice_readback")
+         == "10100101");
   assert(final_value("procedural_assignments.dynamic_unknown")
          == "0101011001111000");
   assert(final_value("procedural_assignments.dynamic_oob")
@@ -509,6 +524,10 @@ module procedural_assignments;
   logic [3:0] reverse_overlap;
   logic zero_slot;
   logic equal_deadline;
+  logic [7:0] blocking_slice_target;
+  logic [7:0] blocking_slice_readback;
+  logic [7:0] delayed_word_target;
+  logic [7:0] delayed_slice_target;
   logic local_result;
   logic [15:0] dynamic_compound;
   logic [15:0] dynamic_partial;
@@ -602,6 +621,15 @@ module procedural_assignments;
   initial begin
     clock = 1'b0;
     source = 1'b0;
+    blocking_slice_target = 8'h00;
+    blocking_slice_target[3:0] = 4'h5;
+    blocking_slice_target[7:4] = 4'ha;
+    blocking_slice_readback = blocking_slice_target;
+    delayed_word_target <= #2ps 8'h11;
+    delayed_word_target <= #2ps 8'h22;
+    delayed_slice_target = 8'h00;
+    delayed_slice_target[3:0] <= #2ps 4'h5;
+    delayed_slice_target[7:4] <= #2ps 4'ha;
     exact_callback_target = '0;
     compound_rhs = 4'd1;
     event_index = 0;

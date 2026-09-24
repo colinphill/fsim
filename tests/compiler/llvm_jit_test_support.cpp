@@ -1029,6 +1029,163 @@ extern "C" std::uint32_t record_code_coverage_counter(
         return runtime.code_coverage_callback_status;
     }
 
+extern "C" std::uint32_t sample_coverage(
+    void* opaque,
+    std::uint32_t,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& runtime = *static_cast<TestRuntime*>(opaque);
+    try {
+        ++runtime.coverage_sample_calls;
+        runtime.native_service_calls.emplace_back(1U, instruction);
+        if (runtime.coverage_sample_status != 0U || frame == nullptr
+            || runtime.coverage_sample_width == 0U
+            || frame->register_aval == nullptr
+            || frame->register_bval == nullptr) {
+            return runtime.coverage_sample_status != 0U
+                ? runtime.coverage_sample_status
+                : 1U;
+        }
+        const auto words = (runtime.coverage_sample_width + 63U) / 64U;
+        if (runtime.coverage_sample_word_offset + words
+            > runtime.native_service_word_count) {
+            return 1U;
+        }
+        runtime.coverage_sample_values.push_back(
+            PackedLogic4::from_word_planes(
+                runtime.coverage_sample_width,
+                std::span<const std::uint64_t> {
+                    frame->register_aval + runtime.coverage_sample_word_offset,
+                    words },
+                std::span<const std::uint64_t> {
+                    frame->register_bval + runtime.coverage_sample_word_offset,
+                    words }));
+        return 0U;
+    } catch (...) {
+        return 1U;
+    }
+}
+
+extern "C" std::uint32_t execute_class_property_operation(
+    void* opaque,
+    std::uint32_t,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& runtime = *static_cast<TestRuntime*>(opaque);
+    try {
+        ++runtime.class_property_operation_calls;
+        runtime.native_service_calls.emplace_back(2U, instruction);
+        if (runtime.class_property_operation_status != 0U) {
+            return runtime.class_property_operation_status;
+        }
+        if (frame == nullptr || frame->register_aval == nullptr
+            || frame->register_bval == nullptr
+            || frame->register_initialized == nullptr) {
+            return 1U;
+        }
+        const auto read_mapping = std::ranges::find_if(
+            runtime.class_property_reads,
+            [&](const NativeServiceRegister& mapping) {
+                return mapping.instruction == instruction;
+            });
+        if (read_mapping != runtime.class_property_reads.end()) {
+            const auto& value = read_mapping->value;
+            const auto words = (read_mapping->width + 63U) / 64U;
+            if (read_mapping->register_id >= frame->register_count
+                || read_mapping->width == 0U
+                || value.width() != read_mapping->width
+                || read_mapping->word_offset + words
+                    > runtime.native_service_word_count) {
+                return 1U;
+            }
+            std::ranges::copy(
+                value.aval_words(),
+                frame->register_aval + read_mapping->word_offset);
+            std::ranges::copy(
+                value.bval_words(),
+                frame->register_bval + read_mapping->word_offset);
+            if (value.is_logic9()) {
+                if (frame->register_logic9_plane2 == nullptr
+                    || frame->register_logic9_plane3 == nullptr) {
+                    return 1U;
+                }
+                std::ranges::copy(
+                    value.logic9_plane_words(2),
+                    frame->register_logic9_plane2
+                        + read_mapping->word_offset);
+                std::ranges::copy(
+                    value.logic9_plane_words(3),
+                    frame->register_logic9_plane3
+                        + read_mapping->word_offset);
+            }
+            frame->register_initialized[read_mapping->register_id] = 1U;
+            return 0U;
+        }
+        const auto write_mapping = std::ranges::find_if(
+            runtime.class_property_writes,
+            [&](const NativeServiceRegister& mapping) {
+                return mapping.instruction == instruction;
+            });
+        if (write_mapping == runtime.class_property_writes.end()) {
+            return 1U;
+        }
+        const auto words = (write_mapping->width + 63U) / 64U;
+        if (write_mapping->register_id >= frame->register_count
+            || write_mapping->width == 0U
+            || write_mapping->word_offset + words
+                > runtime.native_service_word_count) {
+            return 1U;
+        }
+        runtime.class_property_write_values.push_back(
+            PackedLogic4::from_word_planes(
+                write_mapping->width,
+                std::span<const std::uint64_t> {
+                    frame->register_aval + write_mapping->word_offset, words },
+                std::span<const std::uint64_t> {
+                    frame->register_bval + write_mapping->word_offset, words }));
+        return 0U;
+    } catch (...) {
+        return 1U;
+    }
+}
+
+extern "C" std::uint32_t query_event_triggered(
+    void* opaque,
+    std::uint32_t,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& runtime = *static_cast<TestRuntime*>(opaque);
+    try {
+        ++runtime.event_triggered_calls;
+        runtime.native_service_calls.emplace_back(3U, instruction);
+        if (runtime.event_triggered_status != 0U) {
+            return runtime.event_triggered_status;
+        }
+        if (frame == nullptr || frame->register_aval == nullptr
+            || frame->register_bval == nullptr
+            || frame->register_initialized == nullptr
+            || runtime.event_triggered_destination >= frame->register_count
+            || runtime.event_triggered_word_offset
+                >= runtime.native_service_word_count) {
+            return 1U;
+        }
+        const auto mask = std::uint64_t { 1 };
+        auto* aval = frame->register_aval
+            + runtime.event_triggered_word_offset;
+        auto* bval = frame->register_bval
+            + runtime.event_triggered_word_offset;
+        *aval = runtime.event_triggered_value ? (*aval | mask) : (*aval & ~mask);
+        *bval &= ~mask;
+        frame->register_initialized[runtime.event_triggered_destination] = 1U;
+        return 0U;
+    } catch (...) {
+        return 1U;
+    }
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime& runtime)
     {
         fsim_jit_runtime_v1 result { };
@@ -1109,6 +1266,10 @@ extern "C" std::uint32_t record_code_coverage_counter(
         result.read_signal_dynamic_part = &read_signal_dynamic_part;
         result.record_code_coverage_counter
             = &record_code_coverage_counter;
+        result.sample_coverage = &sample_coverage;
+        result.execute_class_property_operation
+            = &execute_class_property_operation;
+        result.query_event_triggered = &query_event_triggered;
         return result;
     }
 

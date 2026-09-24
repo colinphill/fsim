@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_impl.hpp"
 
+#include <optional>
+
 namespace fsim::compiler {
 using namespace llvm_detail;
 using runtime::simir::Process;
@@ -48,12 +50,13 @@ void LlvmJit::add_process_module(
     };
     std::unique_ptr<llvm::MemoryBuffer> preflight_object;
     bool object_preflight_attempted { };
+    std::vector<std::string> process_keys;
+    process_keys.reserve(entries.size());
+    std::optional<std::string> preflight_module_key;
     if (impl_->object_cache) {
         std::vector<std::string> cached_symbols;
-        std::vector<std::string> cached_process_keys;
         std::unordered_set<std::string> unique_symbols;
         cached_symbols.reserve(entries.size());
-        cached_process_keys.reserve(entries.size());
         for (const auto& entry : entries) {
             if (entry.process == nullptr) {
                 throw LlvmJitError(
@@ -69,15 +72,15 @@ void LlvmJit::add_process_module(
                     "duplicate LLVM process symbol '"
                     + cached_symbols.back() + "'");
             }
-            cached_process_keys.push_back(
+            process_keys.push_back(
                 make_process_key(cached_symbols.back(), *entry.process));
         }
-        const auto cached_module_key = make_native_module_cache_key(
-            owned_module_identity, cached_process_keys);
+        preflight_module_key = make_native_module_cache_key(
+            owned_module_identity, process_keys);
         object_preflight_attempted = true;
         std::vector<std::byte> metadata;
         preflight_object = impl_->object_cache->preflight(
-            cached_module_key, &metadata);
+            *preflight_module_key, &metadata);
         auto cached_info = preflight_object && !metadata.empty()
             ? Impl::decode_module_metadata(
                   metadata, entries, signal_widths)
@@ -139,13 +142,12 @@ void LlvmJit::add_process_module(
         const Process* process { };
         ValidatedProcess validated;
         std::string cache_key;
+        ProcessLoweringPlan lowering_plan;
         Impl::ProcessInfo info;
     };
     std::vector<PreparedProcess> prepared;
     prepared.reserve(entries.size());
     std::unordered_set<std::string> module_symbols;
-    std::vector<std::string> process_keys;
-    process_keys.reserve(entries.size());
 
     for (const auto& entry : entries) {
         if (entry.process == nullptr) {
@@ -177,7 +179,9 @@ void LlvmJit::add_process_module(
             validated = validate_process(
                 *entry.process, signal_widths, signal_value_kinds);
         }
-        auto cache_key = make_process_key(owned_symbol, *entry.process);
+        auto cache_key = impl_->object_cache
+            ? process_keys[prepared.size()]
+            : make_process_key(owned_symbol, *entry.process);
         const bool uses_native_call_stack = std::ranges::any_of(
             entry.process->operations,
             [](const runtime::simir::Operation& operation) {
@@ -188,6 +192,8 @@ void LlvmJit::add_process_module(
             *entry.process, signal_widths, signal_value_kinds);
         const auto callback_free_read_signals = direct_read_signals(
             *entry.process, signal_widths, signal_value_kinds);
+        auto lowering_plan = make_process_lowering_plan(
+            *entry.process, impl_->options.debug_instrumentation);
         auto process_info = Impl::ProcessInfo {
             make_frame_layout(
                 cache_key,
@@ -244,16 +250,19 @@ void LlvmJit::add_process_module(
             validated.uses_wide_signal_read,
             validated.uses_wide_signal_write,
             validated.uses_code_coverage,
+            validated.uses_coverage_sample,
+            validated.uses_class_property_operation,
+            validated.uses_event_triggered,
             { },
         };
-        process_info.entry_points = make_process_lowering_plan(
-            *entry.process,
-            impl_->options.debug_instrumentation)
-                                        .entry_points;
-        process_keys.push_back(cache_key);
+        process_info.entry_points = lowering_plan.entry_points;
+        if (!impl_->object_cache) {
+            process_keys.push_back(cache_key);
+        }
         prepared.push_back(
             { std::move(owned_symbol), entry.process, std::move(validated),
-                std::move(cache_key), process_info });
+                std::move(cache_key), std::move(lowering_plan),
+                std::move(process_info) });
     }
     {
         const std::scoped_lock lock { impl_->lookup_mutex };
@@ -278,8 +287,10 @@ void LlvmJit::add_process_module(
     }
 
     try {
-        const auto module_cache_key = make_native_module_cache_key(
-            owned_module_identity, process_keys);
+        const auto module_cache_key = preflight_module_key
+            ? *preflight_module_key
+            : make_native_module_cache_key(
+                  owned_module_identity, process_keys);
         if (impl_->object_cache) {
             auto object = std::move(preflight_object);
             if (!object_preflight_attempted) {
@@ -317,6 +328,7 @@ void LlvmJit::add_process_module(
                 item.info.frame_layout.direct_read_signals,
                 item.info.frame_layout.direct_update_signals,
                 item.validated,
+                item.lowering_plan,
                 impl_->options.optimization,
                 impl_->options.debug_instrumentation,
                 impl_->options.require_direct_update_slots);

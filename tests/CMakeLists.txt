@@ -3961,6 +3961,34 @@ if(TARGET fsim_application)
 
   if(TARGET fsim_llvm)
     add_executable(
+      fsim_application_unsupported_pack_tests
+      app/application_simulation_unsupported_pack_test.cpp
+    )
+    fsim_configure_test(fsim_application_unsupported_pack_tests)
+    target_link_libraries(
+      fsim_application_unsupported_pack_tests
+      PRIVATE fsim_application fsim_llvm)
+    fsim_register_simple_test(
+      fsim.application.unsupported-pack
+      fsim_application_unsupported_pack_tests
+      "fast;application;compiler;llvm;cache;fallback"
+    )
+
+    add_executable(
+      fsim_coverage_observer_native_application_tests
+      app/coverage_observer_native_application_test.cpp
+    )
+    fsim_configure_test(fsim_coverage_observer_native_application_tests)
+    target_link_libraries(
+      fsim_coverage_observer_native_application_tests
+      PRIVATE fsim_application fsim_llvm)
+    fsim_register_simple_test(
+      fsim.application.coverage-observer-native
+      fsim_coverage_observer_native_application_tests
+      "fast;application;coverage;observer;trace;native;cache;equivalence;llvm"
+    )
+
+    add_executable(
       fsim_code_coverage_application_tests
       app/code_coverage_application_test.cpp
     )

@@ -1017,8 +1017,7 @@ void Interpreter::Impl::notify_static_value_change(
     const StaticTransitionMatches transition,
     const bool count_native_word_profile)
 {
-    static const bool group_static_fanout
-        = std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr;
+    const bool group_static_fanout = fanout_cohort_grouping_enabled;
     const auto visit = next_static_fanout_visit();
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
     const auto visit_category = [&](const EdgeKind edge) {
@@ -1207,8 +1206,6 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     const auto execute_one = [this, cohort_id](Scheduler&) {
         execute_queued_static_cohort(cohort_id);
     };
-    static const bool static_phase_batches_enabled
-        = std::getenv("FSIM_DISABLE_STATIC_PHASE_BATCH") == nullptr;
     try {
         if (static_phase_batches_enabled) {
             static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
@@ -1631,13 +1628,15 @@ void Interpreter::Impl::notify_execution_point(
 [[nodiscard]] bool Interpreter::Impl::monitor_watches(
     const SignalId signal) const
 {
-    return monitor
-        && std::ranges::any_of(
-            monitor->values,
-            [signal](const MonitorValue& value) {
-                return value.kind == MonitorValueKind::signal
-                    && value.signal == signal;
-            });
+    if (!monitor) {
+        return false;
+    }
+    if (monitor_signal_watches_unknown
+        || monitor_signal_watch_mask.size() != signals.size()
+        || signal >= monitor_signal_watch_mask.size()) {
+        return true;
+    }
+    return monitor_signal_watch_mask[signal] != 0U;
 }
 
 [[nodiscard]] std::string Interpreter::Impl::render_monitor(
@@ -1747,6 +1746,19 @@ void Interpreter::Impl::install_monitor(
     }
     ++monitor_generation;
     monitor = registration;
+    monitor_signal_watches_unknown
+        = monitor_signal_watch_mask.size() != signals.size();
+    std::ranges::fill(monitor_signal_watch_mask, 0U);
+    for (const auto& value : registration.values) {
+        if (value.kind != MonitorValueKind::signal) {
+            continue;
+        }
+        if (value.signal >= monitor_signal_watch_mask.size()) {
+            monitor_signal_watches_unknown = true;
+            continue;
+        }
+        monitor_signal_watch_mask[value.signal] = 1U;
+    }
     monitor_process = process;
     monitor_file_handle = file_handle;
     monitor_enabled = true;
@@ -1949,14 +1961,6 @@ bool Interpreter::Impl::can_publish_native_word(
     const SignalId signal_id,
     const ProcessId process) noexcept
 {
-    if (has_bidirectional_switches || requires_sampled_values
-        || !module_paths.empty() || !module_timing_checks.empty()
-        || monitor) {
-        if (native_phase_profile_enabled) {
-            ++native_phase_profile_rejected_structure;
-        }
-        return false;
-    }
     if (native_signal_observation_required_hook) {
         if (native_signal_observation_required_hook(signal_id)) {
             if (native_phase_profile_enabled) {
@@ -1977,11 +1981,6 @@ bool Interpreter::Impl::can_publish_native_word(
 
 bool Interpreter::Impl::native_word_publication_phase_eligible() noexcept
 {
-    if (has_bidirectional_switches || requires_sampled_values
-        || !module_paths.empty() || !module_timing_checks.empty()
-        || monitor) {
-        return false;
-    }
     if (native_signal_observation_any_hook) {
         return !native_signal_observation_any_hook();
     }
@@ -1993,6 +1992,136 @@ bool Interpreter::Impl::native_word_publication_phase_eligible() noexcept
         && !container_object_change_hook;
 }
 
+bool Interpreter::Impl::native_signal_has_runtime_dependency(
+    const SignalId signal_id) const noexcept
+{
+    if (signal_id >= signals.size()
+        || native_signal_dependencies_unknown
+        || native_signal_dependency_mask.size() != signals.size()) {
+        return true;
+    }
+    if (requires_sampled_values) {
+        if (sampled_value_dependencies_unknown
+            || sampled_value_dependency_mask.size() != signals.size()) {
+            return true;
+        }
+        if (sampled_value_dependency_mask[signal_id] != 0U) {
+            return true;
+        }
+    }
+    if (has_bidirectional_switches) {
+        if (signal_id >= switch_endpoint_adjacency.size()
+            || signal_id >= switch_control_adjacency.size()) {
+            return true;
+        }
+        if (!switch_endpoint_adjacency[signal_id].empty()
+            || !switch_control_adjacency[signal_id].empty()) {
+            return true;
+        }
+    }
+    if (monitor_watches(signal_id)) {
+        return true;
+    }
+    return native_signal_dependency_mask[signal_id] != 0U;
+}
+
+void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
+{
+    native_signal_dependencies_unknown = false;
+    native_signal_dependency_mask.clear();
+    module_path_destination_mask.clear();
+    try {
+        native_signal_dependency_mask.assign(signals.size(), 0U);
+        module_path_destination_mask.assign(signals.size(), 0U);
+    } catch (...) {
+        native_signal_dependency_mask.clear();
+        module_path_destination_mask.clear();
+        native_signal_dependencies_unknown = true;
+        return;
+    }
+
+    const auto mark_signal = [&](const SignalId signal) {
+        if (signal >= native_signal_dependency_mask.size()) {
+            native_signal_dependencies_unknown = true;
+            return;
+        }
+        native_signal_dependency_mask[signal] = 1U;
+    };
+    const auto mark_terminal = [&](const ModulePathTerminal& terminal) {
+        mark_signal(terminal.signal);
+    };
+    const auto mark_expression = [&](const ModulePathExpression& expression) {
+        if (expression.empty()) {
+            return;
+        }
+        if (expression.root >= expression.nodes.size()) {
+            native_signal_dependencies_unknown = true;
+            return;
+        }
+        for (const auto& node : expression.nodes) {
+            switch (node.operation) {
+            case ModulePathExpressionOperator::constant:
+            case ModulePathExpressionOperator::bit_not:
+            case ModulePathExpressionOperator::logical_not:
+            case ModulePathExpressionOperator::reduction:
+            case ModulePathExpressionOperator::binary:
+            case ModulePathExpressionOperator::logical_binary:
+            case ModulePathExpressionOperator::shift:
+            case ModulePathExpressionOperator::conditional:
+            case ModulePathExpressionOperator::concatenate:
+                break;
+            case ModulePathExpressionOperator::terminal:
+                mark_terminal(node.terminal);
+                break;
+            default:
+                native_signal_dependencies_unknown = true;
+                break;
+            }
+        }
+    };
+    const auto mark_event = [&](const ModuleTimingEvent& event) {
+        mark_terminal(event.terminal);
+        mark_expression(event.condition);
+    };
+
+    for (const auto& path : module_paths) {
+        for (const auto& source : path.sources) {
+            mark_terminal(source);
+        }
+        for (const auto& destination : path.destinations) {
+            mark_terminal(destination);
+            if (destination.signal >= module_path_destination_mask.size()) {
+                native_signal_dependencies_unknown = true;
+            } else {
+                module_path_destination_mask[destination.signal] = 1U;
+            }
+        }
+        mark_expression(path.condition);
+        mark_expression(path.data_source);
+    }
+
+    if (module_timing_check_states.size() != module_timing_checks.size()) {
+        native_signal_dependencies_unknown = true;
+    }
+    for (const auto& check : module_timing_checks) {
+        mark_event(check.reference);
+        if (check.data) {
+            mark_event(*check.data);
+        }
+        if (check.notifier) {
+            mark_signal(*check.notifier);
+        }
+        if (check.delayed_reference) {
+            mark_terminal(*check.delayed_reference);
+        }
+        if (check.delayed_data) {
+            mark_terminal(*check.delayed_data);
+        }
+        mark_expression(check.timestamp_condition);
+        mark_expression(check.timecheck_condition);
+    }
+}
+
 bool Interpreter::Impl::can_publish_native_word_prevalidated(
     const SignalId signal_id,
     const ProcessId process) noexcept
@@ -2001,6 +2130,7 @@ bool Interpreter::Impl::can_publish_native_word_prevalidated(
         || signal_id >= direct_single_driver_routes.size()
         || signal_id >= dynamic_fanout.size()
         || signal_id >= signal_container_aliases.size()
+        || native_signal_has_runtime_dependency(signal_id)
         || has_dynamic_waits(signal_id)
         || !signal_container_aliases[signal_id].empty()) {
         if (native_phase_profile_enabled) {
@@ -2046,12 +2176,11 @@ bool Interpreter::Impl::can_publish_native_logic9_word(
     const SignalId signal_id,
     const ProcessId process) noexcept
 {
-    if (has_bidirectional_switches || requires_sampled_values
-        || !module_paths.empty() || !module_timing_checks.empty()
-        || monitor || signal_id >= signals.size()
+    if (signal_id >= signals.size()
         || signal_id >= direct_single_driver_routes.size()
         || signal_id >= dynamic_fanout.size()
         || signal_id >= signal_container_aliases.size()
+        || native_signal_has_runtime_dependency(signal_id)
         || has_dynamic_waits(signal_id)
         || !signal_container_aliases[signal_id].empty()) {
         return false;
@@ -2087,9 +2216,7 @@ bool Interpreter::Impl::can_publish_blocking_word(
     if (signal_id >= signals.size()
         || signal_id >= dynamic_fanout.size()
         || signal_id >= signal_container_aliases.size()
-        || has_bidirectional_switches || requires_sampled_values
-        || !module_paths.empty() || !module_timing_checks.empty()
-        || monitor
+        || native_signal_has_runtime_dependency(signal_id)
         || has_dynamic_waits(signal_id)
         || !signal_container_aliases[signal_id].empty()) {
         return false;
@@ -2259,8 +2386,7 @@ void Interpreter::Impl::note_signal_transaction(
     const SignalId signal_id,
     const bool notify_fanout)
 {
-    static const bool group_static_fanout
-        = std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr;
+    const bool group_static_fanout = fanout_cohort_grouping_enabled;
     signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
     const auto transaction_fanout
         = static_fanout_indices_for(signal_id, EdgeKind::transaction);

@@ -74,6 +74,9 @@ struct LlvmJit::Impl {
         bool uses_wide_signal_read { };
         bool uses_wide_signal_write { };
         bool uses_code_coverage { };
+        bool uses_coverage_sample { };
+        bool uses_class_property_operation { };
+        bool uses_event_triggered { };
         std::vector<runtime::simir::InstructionIndex> entry_points;
 
         static constexpr std::array flags {
@@ -121,6 +124,9 @@ struct LlvmJit::Impl {
             &ProcessInfo::uses_wide_signal_read,
             &ProcessInfo::uses_wide_signal_write,
             &ProcessInfo::uses_code_coverage,
+            &ProcessInfo::uses_coverage_sample,
+            &ProcessInfo::uses_class_property_operation,
+            &ProcessInfo::uses_event_triggered,
         };
     };
 
@@ -147,6 +153,7 @@ struct LlvmJit::Impl {
 
     struct NativeBoundCohortEntry {
         NativeCohort* function { };
+        std::uint64_t generation { };
         std::vector<const NativeEntry*> members;
         std::vector<const fsim_jit_runtime_v1*> runtimes;
         std::vector<fsim_jit_frame_v1*> frames;
@@ -176,7 +183,7 @@ struct LlvmJit::Impl {
     std::unordered_map<std::size_t,
         std::vector<std::unique_ptr<NativeCohortEntry>>>
         cohort_functions;
-    std::vector<std::unique_ptr<NativeBoundCohortEntry>> bound_cohorts;
+    std::vector<std::shared_ptr<NativeBoundCohortEntry>> bound_cohorts;
     std::unordered_map<const runtime::simir::Process*,
         llvm_detail::ValidatedProcess>
         immutable_validated_processes;
@@ -185,6 +192,7 @@ struct LlvmJit::Impl {
     std::mutex cohort_mutex;
     std::uint64_t next_handle = 1;
     std::uint64_t next_cohort = 1;
+    std::uint64_t next_bound_cohort_generation = 1;
 };
 
 } // namespace fsim::compiler

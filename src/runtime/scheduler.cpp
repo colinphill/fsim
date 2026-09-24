@@ -45,7 +45,8 @@ public:
         if (!active(identity))
             return;
         auto& slot = slots_[identity.slot];
-        auto released_task = std::move(slot.task);
+        Scheduler::Task released_task;
+        released_task.swap(slot.task);
         slot.active = false;
         if (slot.generation != std::numeric_limits<std::uint64_t>::max()) {
             slot.next_free = free_head_;
@@ -58,7 +59,8 @@ public:
 
     [[nodiscard]] Scheduler::Task take(Identity identity) noexcept
     {
-        auto task = std::move(slots_[identity.slot].task);
+        Scheduler::Task task;
+        slots_[identity.slot].task.swap(task);
         release(identity);
         return task;
     }

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
 
+#include <map>
+#include <string_view>
+#include <tuple>
+
 namespace fsim::app {
 void Simulation::Impl::setup_execution(
     const SimulationEngine engine)
@@ -328,6 +332,9 @@ void Simulation::Impl::setup_execution(
                                 return false;
                             }
                             const auto& handles = compilation.get();
+                            if (!handles.at(process_index)) {
+                                return false;
+                            }
                             return jit_pointer->supports_entry(
                                 handles.at(process_index),
                                 interpreter_pointer->process_instruction(
@@ -419,18 +426,56 @@ void Simulation::Impl::setup_execution(
                                     { job.symbols[process],
                                         job.processes[process] });
                             }
-                            jit_pointer->add_process_module(
-                                job.identity,
-                                entries,
-                                this->signal_widths,
-                                this->signal_value_kinds);
-                            CompilationResult handles;
-                            handles.reserve(job.symbols.size());
-                            for (const auto& symbol : job.symbols) {
-                                handles.push_back(jit_pointer->lookup(symbol));
+                            CompilationResult handles(job.symbols.size());
+                            try {
+                                jit_pointer->add_process_module(
+                                    job.identity, entries,
+                                    this->signal_widths,
+                                    this->signal_value_kinds);
+                                for (std::size_t process = 0;
+                                    process < job.symbols.size(); ++process) {
+                                    handles[process] = jit_pointer->lookup(
+                                        job.symbols[process]);
+                                }
+                            } catch (const compiler::LlvmJitUnsupportedError&) {
+                                if (job.processes.size() == 1U) {
+                                    throw;
+                                }
+                                // Preflight covers current immutable SimIR
+                                // validation. Retain this retry for a future
+                                // lowering rejection after preflight; failed
+                                // packed registration releases every symbol.
+                                // A late unsupported member must not discard
+                                // every otherwise valid process in the pack.
+                                // Keep each member's original symbol and a
+                                // stable child identity for its native cache.
+                                for (std::size_t process = 0;
+                                    process < job.processes.size(); ++process) {
+                                    const std::array member {
+                                        compiler::JitProcessModuleEntry {
+                                            job.symbols[process],
+                                            job.processes[process] }
+                                    };
+                                    try {
+                                        jit_pointer->add_process_module(
+                                            job.identity + "#member="
+                                                + std::to_string(process),
+                                            member, this->signal_widths,
+                                            this->signal_value_kinds);
+                                        handles[process] = jit_pointer->lookup(
+                                            job.symbols[process]);
+                                    } catch (const compiler::LlvmJitUnsupportedError&) {
+                                        // The zero handle retains this one
+                                        // process on its interpreter executor.
+                                    }
+                                }
                             }
-                            job.availability->store(
-                                1U, std::memory_order_release);
+                            const auto has_native_member = std::ranges::any_of(
+                                handles, [](const auto handle) {
+                                    return static_cast<bool>(handle);
+                                });
+                            job.availability->store(has_native_member ? 1U : 2U,
+                                std::memory_order_release);
                             // Future readiness is the final publication event.
                             // A caller that completes the startup barrier can
                             // therefore materialize every successful executor
@@ -626,7 +671,10 @@ void Simulation::Impl::setup_execution(
                 += std::chrono::steady_clock::now()
                 - materialization_launch_begin;
         };
-        const auto shareable_process = [](const runtime::simir::Process& process) {
+        const auto shareable_process = [&](const runtime::simir::Process& process) {
+            if (options.debug_instrumentation) {
+                return false;
+            }
             return std::ranges::all_of(
                 process.operations,
                 [](const runtime::simir::Operation& operation) {
@@ -687,6 +735,122 @@ void Simulation::Impl::setup_execution(
                     return shareable;
                 });
         };
+        struct ProcessSharingKey {
+            std::string_view design_identity;
+            std::string_view coverage_identity;
+            semantic::Language specialization_language {
+                semantic::Language::system_verilog
+            };
+            std::string_view specialization_library;
+            std::string_view specialization_name;
+            std::vector<std::string_view> source_dependencies;
+            std::string_view language_standard;
+            std::string_view compatibility_profile;
+            compiler::JitOptimizationLevel optimization { };
+            bool debug_instrumentation { };
+            bool require_direct_update_slots { };
+            std::size_t register_count { };
+            std::size_t string_register_count { };
+            std::size_t container_register_count { };
+            std::vector<runtime::simir::ValueKind> register_value_kinds;
+            std::vector<std::pair<std::size_t, std::size_t>> operation_kinds;
+            std::vector<runtime::simir::EdgeKind> sensitivity_edges;
+            std::vector<std::tuple<
+                runtime::simir::InstructionIndex,
+                runtime::simir::InstructionIndex,
+                std::uint64_t>> trigger_regions;
+
+            [[nodiscard]] bool operator<(
+                const ProcessSharingKey& other) const
+            {
+                return std::tie(
+                           design_identity,
+                           coverage_identity,
+                           specialization_language,
+                           specialization_library,
+                           specialization_name,
+                           source_dependencies,
+                           language_standard,
+                           compatibility_profile,
+                           optimization,
+                           debug_instrumentation,
+                           require_direct_update_slots,
+                           register_count,
+                           string_register_count,
+                           container_register_count,
+                           register_value_kinds,
+                           operation_kinds,
+                           sensitivity_edges,
+                           trigger_regions)
+                    < std::tie(
+                        other.design_identity,
+                        other.coverage_identity,
+                        other.specialization_language,
+                        other.specialization_library,
+                        other.specialization_name,
+                        other.source_dependencies,
+                        other.language_standard,
+                        other.compatibility_profile,
+                        other.optimization,
+                        other.debug_instrumentation,
+                        other.require_direct_update_slots,
+                        other.register_count,
+                        other.string_register_count,
+                        other.container_register_count,
+                        other.register_value_kinds,
+                        other.operation_kinds,
+                        other.sensitivity_edges,
+                        other.trigger_regions);
+            }
+        };
+        const auto process_sharing_key = [&](const auto& specialization,
+                                             const runtime::simir::Process& process) {
+            ProcessSharingKey key;
+            key.design_identity = built.artifact_identity.empty()
+                ? std::string_view { built.cache_key }
+                : std::string_view { built.artifact_identity };
+            key.coverage_identity = coverage_identity.identity.digest;
+            key.specialization_language = specialization.language;
+            key.specialization_library = specialization.library;
+            key.specialization_name = specialization.name;
+            key.source_dependencies.reserve(
+                specialization.source_dependencies.size());
+            for (const auto& dependency
+                : specialization.source_dependencies) {
+                key.source_dependencies.push_back(dependency);
+            }
+            key.language_standard = process.language_standard;
+            key.compatibility_profile = process.compatibility_profile;
+            key.optimization = options.optimization;
+            key.debug_instrumentation = options.debug_instrumentation;
+            key.require_direct_update_slots
+                = options.require_direct_update_slots;
+            key.register_count = process.register_count;
+            key.string_register_count = process.string_register_count;
+            key.container_register_count = process.container_register_count;
+            key.register_value_kinds = process.register_value_kinds;
+            key.operation_kinds.reserve(process.operations.size());
+            for (std::size_t index = 0;
+                index < process.operations.size(); ++index) {
+                key.operation_kinds.emplace_back(
+                    runtime::simir::operation_group_index(
+                        process.operations[index]),
+                    runtime::simir::operation_alternative_index(
+                        process.operations[index]));
+            }
+            key.sensitivity_edges.reserve(
+                process.static_sensitivity.size());
+            for (const auto& sensitivity : process.static_sensitivity) {
+                key.sensitivity_edges.push_back(sensitivity.edge);
+            }
+            key.trigger_regions.reserve(
+                process.static_trigger_regions.size());
+            for (const auto& region : process.static_trigger_regions) {
+                key.trigger_regions.emplace_back(
+                    region.begin, region.end, region.mask);
+            }
+            return key;
+        };
         const auto signal_remap = [&](const runtime::simir::Process& representative,
                                       const runtime::simir::Process& candidate)
             -> std::shared_ptr<const LlvmProcessExecutor::SignalRemap> {
@@ -699,7 +863,15 @@ void Simulation::Impl::setup_execution(
                 || representative.container_register_count
                     != candidate.container_register_count
                 || representative.container_register_types
-                    != candidate.container_register_types) {
+                    != candidate.container_register_types
+                || representative.language_standard
+                    != candidate.language_standard
+                || representative.compatibility_profile
+                    != candidate.compatibility_profile
+                || representative.static_trigger_regions
+                    != candidate.static_trigger_regions
+                || representative.static_sensitivity.size()
+                    != candidate.static_sensitivity.size()) {
                 return { };
             }
             std::map<std::uint32_t, std::uint32_t> assigned;
@@ -709,7 +881,9 @@ void Simulation::Impl::setup_execution(
                     || target >= signal_widths.size()
                     || signal_widths[source] != signal_widths[target]
                     || signal_value_kinds[source]
-                        != signal_value_kinds[target]) {
+                        != signal_value_kinds[target]
+                    || signal_resolutions[source]
+                        != signal_resolutions[target]) {
                     return false;
                 }
                 const auto [found, inserted]
@@ -717,14 +891,28 @@ void Simulation::Impl::setup_execution(
                 return inserted || found->second == target;
             };
             for (std::size_t index = 0;
+                index < representative.static_sensitivity.size(); ++index) {
+                const auto& left
+                    = representative.static_sensitivity[index];
+                const auto& right = candidate.static_sensitivity[index];
+                if (left.edge != right.edge
+                    || !map_signal(left.signal, right.signal)) {
+                    return { };
+                }
+            }
+            for (std::size_t index = 0;
                 index < representative.operations.size(); ++index) {
                 bool compatible = true;
+                const auto left_operation
+                    = representative.operations.expanded(index);
+                const auto right_operation
+                    = candidate.operations.expanded(index);
                 runtime::simir::visit_operation(
                     [&](const auto& left) {
                         using Type = std::decay_t<decltype(left)>;
                         const auto* const right
                             = runtime::simir::operation_get_if<Type>(
-                                &candidate.operations[index]);
+                                &right_operation);
                         if (right == nullptr) {
                             compatible = false;
                             return;
@@ -909,6 +1097,11 @@ void Simulation::Impl::setup_execution(
                             compatible = left.severity == right->severity;
                         } else if constexpr (std::is_same_v<
                                                  Type,
+                                                 runtime::simir::UnaryNot>) {
+                            compatible = left.destination == right->destination
+                                && left.source == right->source;
+                        } else if constexpr (std::is_same_v<
+                                                 Type,
                                                  runtime::simir::LogicalNot>) {
                             compatible = left.destination == right->destination
                                 && left.source == right->source;
@@ -970,7 +1163,7 @@ void Simulation::Impl::setup_execution(
                                 && left.width == right->width;
                         }
                     },
-                    representative.operations[index]);
+                    left_operation);
                 if (!compatible) {
                     return { };
                 }
@@ -985,7 +1178,7 @@ void Simulation::Impl::setup_execution(
             }
             return result;
         };
-        std::multimap<std::string, PendingCompiledModule, std::less<>>
+        std::map<ProcessSharingKey, std::vector<PendingCompiledModule>>
             shared_process_modules;
         for (const auto& specialization : built.design_ir.specializations()) {
             if (specialization.language == semantic::Language::systemc) {
@@ -1215,30 +1408,23 @@ void Simulation::Impl::setup_execution(
                     retained_operation_count += process.operations.size();
                     continue;
                 }
+                if (!jit->supports_process(process, signal_widths,
+                        signal_value_kinds)) {
+                    ++retained_process_count;
+                    retained_operation_count += process.operations.size();
+                    continue;
+                }
                 if (shareable && selective_large_design_compilation) {
-                    std::string structural_bucket
-                        = std::to_string(process.operations.size()) + ":"
-                        + std::to_string(process.register_count) + ":"
-                        + std::to_string(process.string_register_count) + ":"
-                        + std::to_string(process.static_sensitivity.size())
-                        + ":";
-                    for (const auto kind : process.register_value_kinds) {
-                        structural_bucket += std::to_string(
-                            static_cast<unsigned>(kind));
-                        structural_bucket += ',';
-                    }
-                    const auto [first, last]
-                        = shared_process_modules.equal_range(
-                            structural_bucket);
+                    auto key = process_sharing_key(specialization, process);
+                    auto& candidates = shared_process_modules[key];
                     bool reused = false;
-                    for (auto candidate = first;
-                        candidate != last; ++candidate) {
-                        auto& shared = candidate->second;
+                    for (auto& shared : candidates) {
                         if (auto remap = signal_remap(
                                 *shared.processes.front(), process)) {
                             shared.executors.push_back(
                                 { &process, 0U, std::move(remap),
                                     shared.processes.front()->id });
+                            (void)jit->discard_prevalidated_process(process);
                             reused = true;
                             break;
                         }
@@ -1246,9 +1432,9 @@ void Simulation::Impl::setup_execution(
                     if (!reused) {
                         PendingCompiledModule shared;
                         shared.identity = "fsim-process-template:"
-                            + structural_bucket + ":"
-                            + std::to_string(
-                                shared_process_modules.size());
+                            + std::string { key.design_identity }
+                            + ":representative="
+                            + std::to_string(process.id);
                         shared.processes.push_back(&process);
                         shared.symbols.push_back(
                             "fsim_process_" + std::to_string(process.id));
@@ -1258,8 +1444,7 @@ void Simulation::Impl::setup_execution(
                             = !selective_large_design_compilation
                             || process.operations.size()
                                 <= maximum_startup_jit_process_operations;
-                        shared_process_modules.emplace(
-                            structural_bucket, std::move(shared));
+                        candidates.push_back(std::move(shared));
                     }
                     ++compiled_processes;
                     compiled_operation_count += process.operations.size();
@@ -1294,41 +1479,45 @@ void Simulation::Impl::setup_execution(
                         std::move(executors[tier]), { }, startup });
             }
         }
-        for (auto& [identity, module] : shared_process_modules) {
-            (void)identity;
-            const auto amortized_operations = module.processes.front()
-                                                  ->operations.size()
-                * module.executors.size();
-            if (selective_large_design_compilation
-                && amortized_operations
-                    < minimum_large_design_jit_operations) {
-                for (const auto& executor : module.executors) {
-                    --compiled_processes;
-                    compiled_operation_count
-                        -= executor.process->operations.size();
-                    ++retained_process_count;
-                    retained_operation_count
-                        += executor.process->operations.size();
+        for (auto& [key, modules] : shared_process_modules) {
+            (void)key;
+            for (auto& module : modules) {
+                const auto amortized_operations = module.processes.front()
+                                                      ->operations.size()
+                    * module.executors.size();
+                if (selective_large_design_compilation
+                    && amortized_operations
+                        < minimum_large_design_jit_operations) {
+                    for (const auto& executor : module.executors) {
+                        --compiled_processes;
+                        compiled_operation_count
+                            -= executor.process->operations.size();
+                        ++retained_process_count;
+                        retained_operation_count
+                            += executor.process->operations.size();
+                    }
+                    continue;
                 }
-                continue;
+                if (selective_large_design_compilation
+                    && module.processes.front()->operations.size()
+                        > maximum_packed_module_operations
+                    && module.executors.size()
+                        < minimum_reused_template_executors
+                    && amortized_operations
+                        < minimum_large_template_amortized_operations) {
+                    module.adaptive_gate
+                        = std::make_shared<AdaptiveCompilationGate>();
+                    module.adaptive_gate
+                        ->minimum_operations_per_activation
+                        = std::max<std::uint64_t>(
+                            1U,
+                            (module.processes.front()->operations.size()
+                                + 9U)
+                                / 10U);
+                    module.startup = false;
+                }
+                pending_modules.push_back(std::move(module));
             }
-            if (selective_large_design_compilation
-                && module.processes.front()->operations.size()
-                    > maximum_packed_module_operations
-                && module.executors.size()
-                    < minimum_reused_template_executors
-                && amortized_operations
-                    < minimum_large_template_amortized_operations) {
-                module.adaptive_gate
-                    = std::make_shared<AdaptiveCompilationGate>();
-                module.adaptive_gate->minimum_operations_per_activation
-                    = std::max<std::uint64_t>(
-                        1U,
-                        (module.processes.front()->operations.size() + 9U)
-                            / 10U);
-                module.startup = false;
-            }
-            pending_modules.push_back(std::move(module));
         }
         const auto unpacked_module_count = pending_modules.size();
         std::ranges::stable_sort(

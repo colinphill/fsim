@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <ranges>
 #include <string>
@@ -158,6 +160,29 @@ private:
 
 } // namespace
 
+std::uint64_t LlvmProcessExecutor::next_instance_generation()
+{
+    static std::atomic_uint64_t next { 1U };
+    const auto generation = next.fetch_add(1U, std::memory_order_relaxed);
+    if (generation == 0U
+        || generation == std::numeric_limits<std::uint64_t>::max()) {
+        throw compiler::LlvmJitError(
+            "compiled process executor generation exhausted");
+    }
+    return generation;
+}
+
+LlvmProcessExecutor::~LlvmProcessExecutor()
+{
+    if (cohort_binding_) {
+        try {
+            (void)jit_.release_cohort_binding(cohort_binding_);
+        } catch (...) {
+            // Destructors must not replace an in-flight simulation failure.
+        }
+    }
+}
+
 [[nodiscard]] runtime::simir::ProcessResumeResult LlvmProcessExecutor::resume(
     runtime::simir::ProcessExecutionContext& context,
     const runtime::simir::InstructionIndex start_instruction)
@@ -305,6 +330,10 @@ private:
             runtime.read_signal_dynamic_part = read_signal_dynamic_part;
             runtime.record_code_coverage_counter
                 = record_code_coverage_counter;
+            runtime.sample_coverage = sample_coverage;
+            runtime.execute_class_property_operation
+                = execute_class_property_operation;
+            runtime.query_event_triggered = query_event_triggered;
             const auto direct_aval = context.direct_signal_aval();
             const auto direct_bval = context.direct_signal_bval();
             const bool supports_direct_planes
@@ -490,27 +519,7 @@ private:
     }
 
     const auto flush_updates = [&] {
-        // The slot-batch path must remain opt-in until it preserves the
-        // ordinary update queue's last-assignment-wins semantics for every
-        // combination of whole and sliced writes from one process.
-        static const bool single_update_batches_enabled
-            = std::getenv("FSIM_ENABLE_SINGLE_UPDATE_BATCH") != nullptr;
-        flush_buffered_logic9_updates(context);
-        if (single_update_batches_enabled && !consuming_cohort
-            && callback_state.supports_direct_word_updates
-            && !jit_process_profile().enabled
-            && context.direct_update_domain() != nullptr) {
-            auto batch = runtime::simir::ProcessUpdateSlotBatch {
-                process_.id,
-                direct_update_slot_views_,
-                direct_update_active_words_
-            };
-            if (context.write_validated_update_slot_batches(
-                    std::span { &batch, 1U })) {
-                return;
-            }
-        }
-        flush_update_words(context);
+        flush_buffered_updates(context, !consuming_cohort);
     };
 
     auto result = consuming_cohort
@@ -644,6 +653,12 @@ private:
                     process_.id,
                     error.instruction(),
                     "code coverage counter runtime callback failed");
+            case compiler::JitGeneratedRuntimeErrorReason::
+                native_service_callback_failure:
+                throw runtime::simir::InterpreterError(
+                    process_.id,
+                    error.instruction(),
+                    "native SimIR service callback failed");
             }
             throw;
         } catch (...) {
@@ -972,7 +987,7 @@ private:
         }
     }
 
-    const bool cache_matches = cohort_members_.size() == entries.size()
+    bool cache_matches = cohort_members_.size() == entries.size()
         && std::ranges::equal(
             entries,
             cohort_members_,
@@ -987,14 +1002,46 @@ private:
             { },
             &runtime::simir::ProcessCohortResumeEntry::start_instruction,
             std::identity { });
+    if (cache_matches) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& source = entries[index];
+            const auto& executor = *static_cast<LlvmProcessExecutor*>(
+                source.executor);
+            const auto& cached = cohort_native_entries_[index];
+            if (executor.instance_generation_
+                    != cohort_member_generations_[index]
+                || cached.queued
+                    != reinterpret_cast<std::uint8_t*>(source.queued)
+                || cached.waiting_on_static
+                    != reinterpret_cast<std::uint8_t*>(
+                        source.waiting_on_static)
+                || cached.process_status
+                    != reinterpret_cast<std::uint8_t*>(source.status)) {
+                cache_matches = false;
+                break;
+            }
+        }
+    }
     if (!cache_matches) {
+        if (cohort_generation_
+            == std::numeric_limits<std::uint64_t>::max()) {
+            throw compiler::LlvmJitError(
+                "compiled cohort generation exhausted");
+        }
+        ++cohort_generation_;
+        if (cohort_binding_) {
+            (void)jit_.release_cohort_binding(cohort_binding_);
+        }
         cohort_members_.clear();
+        cohort_member_generations_.clear();
         cohort_start_instructions_.clear();
         cohort_native_entries_.clear();
         cohort_update_batches_.clear();
         cohort_logic9_update_batches_.clear();
         cohort_binding_ = { };
+        cohort_binding_generation_ = 0U;
         cohort_members_.reserve(entries.size());
+        cohort_member_generations_.reserve(entries.size());
         cohort_start_instructions_.reserve(entries.size());
         cohort_native_entries_.reserve(entries.size());
         cohort_update_batches_.reserve(entries.size());
@@ -1021,6 +1068,8 @@ private:
             = sizeof(executor.cohort_resume_result_);
         if (!cache_matches) {
             cohort_members_.push_back(&executor);
+            cohort_member_generations_.push_back(
+                executor.instance_generation_);
             cohort_start_instructions_.push_back(entry.start_instruction);
             cohort_native_entries_.push_back(
                 compiler::JitProcessCohortResumeEntry {
@@ -1031,32 +1080,29 @@ private:
                         entry.waiting_on_static),
                     reinterpret_cast<std::uint8_t*>(entry.status)
                 });
-            cohort_update_batches_.push_back({
-                executor.process_.id,
-                executor.direct_update_slot_views_,
-                executor.direct_update_active_words_
-            });
-            cohort_logic9_update_batches_.push_back({
-                executor.process_.id,
-                executor.buffered_logic9_update_views_
-            });
         }
+    }
+
+    for (auto& native : cohort_native_entries_) {
+        native.failure = { };
+        native.status = std::numeric_limits<std::uint32_t>::max();
     }
 
     auto native_entries
         = std::span { cohort_native_entries_.data(), entries.size() };
-    auto update_batches
-        = std::span { cohort_update_batches_.data(), entries.size() };
-    auto logic9_update_batches
-        = std::span {
-            cohort_logic9_update_batches_.data(), entries.size() };
     static const bool bound_cohort_enabled
         = std::getenv("FSIM_DISABLE_BOUND_COHORT") == nullptr;
+    if (cohort_binding_
+        && cohort_binding_generation_ != cohort_generation_) {
+        throw compiler::LlvmJitError(
+            "compiled cohort binding generation is stale");
+    }
     const auto executed = bound_cohort_enabled && cohort_binding_
         ? jit_.resume_cohort_prevalidated(cohort_binding_, native_entries)
         : jit_.resume_cohort_prevalidated(native_entries);
     if (bound_cohort_enabled && !cohort_binding_) {
         cohort_binding_ = jit_.bind_cohort_prevalidated(native_entries);
+        cohort_binding_generation_ = cohort_generation_;
     }
     bool cohort_updates_flushed { };
     static const bool cohort_update_batches_enabled
@@ -1088,23 +1134,51 @@ private:
                 });
         if (compatible) {
             try {
-                const bool logic9_flushed
-                    = entries.front().context
-                          ->write_validated_logic9_update_batches(
-                              logic9_update_batches);
+                cohort_update_batches_.clear();
+                cohort_logic9_update_batches_.clear();
+                for (std::size_t index = 0; index < executed; ++index) {
+                    auto& executor = *static_cast<LlvmProcessExecutor*>(
+                        entries[index].executor);
+                    if (executor.has_buffered_logic9_updates()) {
+                        cohort_logic9_update_batches_.push_back({
+                            executor.process_.id,
+                            executor.buffered_logic9_update_views_
+                        });
+                    }
+                    if (executor.has_buffered_update_words()) {
+                        cohort_update_batches_.push_back({
+                            executor.process_.id,
+                            executor.direct_update_slot_views_,
+                            executor.direct_update_active_words_
+                        });
+                    }
+                }
+                bool logic9_flushed = cohort_logic9_update_batches_.empty()
+                    || entries.front().context
+                           ->write_validated_logic9_update_batches(
+                               std::span {
+                                   cohort_logic9_update_batches_.data(),
+                                   cohort_logic9_update_batches_.size() });
                 if (!logic9_flushed) {
                     for (std::size_t index = 0; index < executed; ++index) {
                         auto& executor = *static_cast<LlvmProcessExecutor*>(
                             entries[index].executor);
-                        executor.flush_buffered_logic9_updates(
-                            *entries[index].context);
+                        if (executor.has_buffered_logic9_updates()) {
+                            executor.flush_buffered_logic9_updates(
+                                *entries[index].context);
+                        }
                     }
+                    logic9_flushed = true;
                 }
+                const bool update_words_flushed
+                    = cohort_update_batches_.empty()
+                    || entries.front().context
+                           ->write_validated_update_slot_batches(
+                               std::span {
+                                   cohort_update_batches_.data(),
+                                   cohort_update_batches_.size() });
                 cohort_updates_flushed
-                    = logic9_flushed
-                    && entries.front().context
-                          ->write_validated_update_slot_batches(
-                              update_batches);
+                    = logic9_flushed && update_words_flushed;
             } catch (...) {
                 entries.front().failure = std::current_exception();
                 return 1U;
@@ -1123,7 +1197,7 @@ private:
             && !jit_process_profile().enabled) {
             try {
                 if (!cohort_updates_flushed) {
-                    executor.flush_update_words(*entry.context);
+                    executor.flush_buffered_updates(*entry.context, false);
                 }
                 if (!executor.active_container_object_aliases_.empty()) {
                     executor.discard_container_object_aliases();
@@ -1180,22 +1254,54 @@ private:
         || active_indices.back() >= entries.size()) {
         return 0U;
     }
-    const bool cache_matches = region_entries_identity_ == entries.data()
-        && region_members_.size() == entries.size();
-    if (!cache_matches) {
-        for (const auto& entry : entries) {
-            if (entry.executor == nullptr || entry.context == nullptr
-                || entry.active == nullptr
-                || entry.executor->cohort_domain() != &jit_) {
-                return 0U;
+    for (const auto& entry : entries) {
+        if (entry.executor == nullptr || entry.context == nullptr
+            || entry.active == nullptr
+            || entry.executor->cohort_domain() != &jit_) {
+            return 0U;
+        }
+    }
+    bool cache_matches = region_members_.size() == entries.size();
+    if (cache_matches) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& entry = entries[index];
+            const auto& executor = *static_cast<LlvmProcessExecutor*>(
+                entry.executor);
+            const auto& native = region_native_entries_[index];
+            if (entry.executor != region_members_[index]
+                || executor.instance_generation_
+                    != region_member_generations_[index]
+                || entry.context != region_contexts_[index]
+                || entry.start_instruction
+                    != region_start_instructions_[index]
+                || native.queued
+                    != reinterpret_cast<std::uint8_t*>(entry.queued)
+                || native.waiting_on_static
+                    != reinterpret_cast<std::uint8_t*>(
+                        entry.waiting_on_static)
+                || native.process_status
+                    != reinterpret_cast<std::uint8_t*>(entry.status)
+                || native.active != entry.active) {
+                cache_matches = false;
+                break;
             }
         }
+    }
+    if (!cache_matches) {
+        if (region_generation_
+            == std::numeric_limits<std::uint64_t>::max()) {
+            throw compiler::LlvmJitError(
+                "compiled region generation exhausted");
+        }
+        ++region_generation_;
         region_members_.clear();
+        region_member_generations_.clear();
         region_contexts_.clear();
         region_start_instructions_.clear();
         region_native_entries_.clear();
         region_update_batches_.clear();
         region_members_.reserve(entries.size());
+        region_member_generations_.reserve(entries.size());
         region_contexts_.reserve(entries.size());
         region_start_instructions_.reserve(entries.size());
         region_native_entries_.reserve(entries.size());
@@ -1213,6 +1319,8 @@ private:
                 executor.cohort_resume_result_.struct_size
                     = sizeof(executor.cohort_resume_result_);
                 region_members_.push_back(&executor);
+                region_member_generations_.push_back(
+                    executor.instance_generation_);
                 region_contexts_.push_back(entry.context);
                 region_start_instructions_.push_back(
                     entry.start_instruction);
@@ -1237,14 +1345,13 @@ private:
                     ->cohort_resume_mode_ = CohortResumeMode::normal;
             }
             region_members_.clear();
+            region_member_generations_.clear();
             region_contexts_.clear();
             region_start_instructions_.clear();
             region_native_entries_.clear();
             region_update_batches_.clear();
-            region_entries_identity_ = nullptr;
             return 0U;
         }
-        region_entries_identity_ = entries.data();
     }
 
     region_active_update_batches_.clear();
@@ -1274,8 +1381,6 @@ private:
         executor.cohort_resume_result_.struct_size
             = sizeof(executor.cohort_resume_result_);
         region_native_entries_[index].failure = { };
-        region_active_update_batches_.push_back(
-            region_update_batches_[index]);
     }
 
     const auto scanned = jit_.resume_region_prevalidated(
@@ -1296,18 +1401,25 @@ private:
     bool updates_flushed { };
     if (all_wait && !jit_process_profile().enabled) {
         try {
+            region_active_update_batches_.clear();
             for (const auto index
                 : active_indices.first(executed_active)) {
-                region_members_[index]->flush_buffered_logic9_updates(
-                    *entries[index].context);
+                auto& executor = *region_members_[index];
+                if (executor.has_buffered_logic9_updates()) {
+                    executor.flush_buffered_logic9_updates(
+                        *entries[index].context);
+                }
+                if (executor.has_buffered_update_words()) {
+                    region_active_update_batches_.push_back(
+                        region_update_batches_[index]);
+                }
             }
-            updates_flushed
-                = entries[active_indices.front()].context
-                      ->write_validated_update_slot_batches(
-                          std::span {
-                              region_active_update_batches_.data(),
-                              executed_active
-                          });
+            updates_flushed = region_active_update_batches_.empty()
+                || entries[active_indices.front()].context
+                       ->write_validated_update_slot_batches(
+                           std::span {
+                               region_active_update_batches_.data(),
+                               region_active_update_batches_.size() });
         } catch (...) {
             entries[active_indices.front()].failure
                 = std::current_exception();
@@ -1325,7 +1437,7 @@ private:
         if (all_wait && !jit_process_profile().enabled) {
             try {
                 if (!updates_flushed) {
-                    executor.flush_update_words(*entry.context);
+                    executor.flush_buffered_updates(*entry.context, false);
                 }
                 if (!executor.active_container_object_aliases_.empty()) {
                     executor.discard_container_object_aliases();
@@ -1423,22 +1535,16 @@ LlvmProcessExecutor::cohort_manages_process_state() const noexcept
     const auto offset = layout.register_word_offsets[id];
     const auto words = (resolved_width + 63U) / 64U;
     if (kind == runtime::simir::ValueKind::logic9) {
-        PackedLogic4 result { resolved_width, runtime::Logic4::x };
-        for (std::size_t bit = 0; bit < resolved_width; ++bit) {
-            const auto word = bit / 64U;
-            const auto mask = std::uint64_t { 1 } << (bit % 64U);
-            const auto encoded = static_cast<std::uint8_t>(
-                ((register_aval_[offset + word] & mask) != 0U ? 1U : 0U)
-                | ((register_bval_[offset + word] & mask) != 0U ? 2U : 0U)
-                | ((register_logic9_plane2_[offset + word] & mask) != 0U
-                        ? 4U
-                        : 0U)
-                | ((register_logic9_plane3_[offset + word] & mask) != 0U
-                        ? 8U
-                        : 0U));
-            result.set_logic9(bit, static_cast<runtime::Logic9>(encoded));
-        }
-        return result;
+        return PackedLogic4::from_logic9_word_planes(
+            resolved_width,
+            std::span<const std::uint64_t> { register_aval_ }
+                .subspan(offset, words),
+            std::span<const std::uint64_t> { register_bval_ }
+                .subspan(offset, words),
+            std::span<const std::uint64_t> { register_logic9_plane2_ }
+                .subspan(offset, words),
+            std::span<const std::uint64_t> { register_logic9_plane3_ }
+                .subspan(offset, words));
     }
     return PackedLogic4::from_word_planes(
         resolved_width,
@@ -1499,30 +1605,25 @@ void LlvmProcessExecutor::write_register(
             register_initialized_[id] = 1;
             return;
         }
-        const auto word_offset = static_cast<std::ptrdiff_t>(offset);
-        const auto word_count = static_cast<std::ptrdiff_t>(words);
-        std::ranges::fill_n(register_aval_.begin() + word_offset, word_count, 0U);
-        std::ranges::fill_n(register_bval_.begin() + word_offset, word_count, 0U);
-        std::ranges::fill_n(
-            register_logic9_plane2_.begin() + word_offset, word_count, 0U);
-        std::ranges::fill_n(
-            register_logic9_plane3_.begin() + word_offset, word_count, 0U);
-        for (std::size_t bit = 0; bit < value.width(); ++bit) {
-            const auto encoded = static_cast<std::uint8_t>(value.get_logic9(bit));
-            const auto word = bit / 64U;
-            const auto mask = std::uint64_t { 1 } << (bit % 64U);
-            if ((encoded & 1U) != 0U) {
-                register_aval_[offset + word] |= mask;
+        for (std::size_t word = 0; word < words; ++word) {
+            std::array<std::uint64_t, 4> planes { };
+            const auto first_bit = word * 64U;
+            const auto bits_in_word
+                = std::min<std::size_t>(64U, value.width() - first_bit);
+            for (std::size_t bit = 0; bit < bits_in_word; ++bit) {
+                const auto encoded = static_cast<std::uint8_t>(
+                    value.get_logic9(first_bit + bit));
+                const auto mask = std::uint64_t { 1 } << bit;
+                for (std::size_t plane = 0; plane < planes.size(); ++plane) {
+                    if ((encoded & (1U << plane)) != 0U) {
+                        planes[plane] |= mask;
+                    }
+                }
             }
-            if ((encoded & 2U) != 0U) {
-                register_bval_[offset + word] |= mask;
-            }
-            if ((encoded & 4U) != 0U) {
-                register_logic9_plane2_[offset + word] |= mask;
-            }
-            if ((encoded & 8U) != 0U) {
-                register_logic9_plane3_[offset + word] |= mask;
-            }
+            register_aval_[offset + word] = planes[0];
+            register_bval_[offset + word] = planes[1];
+            register_logic9_plane2_[offset + word] = planes[2];
+            register_logic9_plane3_[offset + word] = planes[3];
         }
     } else {
         std::ranges::copy(
@@ -1587,11 +1688,216 @@ std::uint32_t LlvmProcessExecutor::record_code_coverage_counter(
     }
 }
 
+std::uint32_t LlvmProcessExecutor::sample_coverage(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1U;
+    }
+    try {
+        if (state.executor == nullptr || state.context == nullptr
+            || state.process == nullptr || state.generated_process != process
+            || instruction >= state.process->operations.size()
+            || frame != &state.executor->frame_) {
+            throw std::logic_error("invalid native coverage sample callback");
+        }
+        const auto expanded
+            = state.process->operations.expanded(instruction);
+        const auto* sample = runtime::simir::operation_get_if<
+            runtime::simir::CoverageSample>(&expanded);
+        if (sample == nullptr) {
+            throw std::logic_error(
+                "native coverage sample callback targets another operation");
+        }
+        std::vector<PackedLogic4> actuals;
+        actuals.reserve(sample->actuals.size());
+        for (std::size_t index = 0; index < sample->actuals.size(); ++index) {
+            actuals.push_back(state.executor->read_register(
+                sample->actuals[index], sample->actual_widths[index]));
+        }
+        state.context->sample_coverage(*sample, actuals, instruction);
+        return 0U;
+    } catch (...) {
+        capture_failure(state);
+        return 1U;
+    }
+}
+
+std::uint32_t LlvmProcessExecutor::execute_class_property_operation(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1U;
+    }
+    try {
+        if (state.executor == nullptr || state.context == nullptr
+            || state.process == nullptr || state.generated_process != process
+            || instruction >= state.process->operations.size()
+            || frame != &state.executor->frame_) {
+            throw std::logic_error(
+                "invalid native class-property callback");
+        }
+        const auto expanded
+            = state.process->operations.expanded(instruction);
+        const auto& stored = expanded;
+        const auto read_handle = [&](const runtime::simir::RegisterId id) {
+            return state.executor->read_register(
+                id,
+                runtime::simir::ProcessExecutor::native_register_width)
+                .low_word().aval;
+        };
+        if (const auto* read = runtime::simir::operation_get_if<
+                runtime::simir::ClassPropertyRead>(&stored)) {
+            state.executor->write_register(
+                read->destination,
+                state.context->read_class_property(
+                    read_handle(read->receiver), read->property_identity,
+                    read->width, instruction));
+        } else if (const auto* write = runtime::simir::operation_get_if<
+                       runtime::simir::ClassPropertyWrite>(&stored)) {
+            state.context->write_class_property(
+                read_handle(write->receiver), write->property_identity,
+                state.executor->read_register(
+                    write->source,
+                    state.executor->layout_.register_widths.at(
+                        write->source)),
+                instruction);
+        } else if (const auto* static_read = runtime::simir::operation_get_if<
+                       runtime::simir::ClassStaticPropertyRead>(&stored)) {
+            state.executor->write_register(
+                static_read->destination,
+                state.context->read_class_static_property(
+                    static_read->property_identity,
+                    static_read->width,
+                    instruction));
+        } else if (const auto* static_write = runtime::simir::operation_get_if<
+                       runtime::simir::ClassStaticPropertyWrite>(&stored)) {
+            state.context->write_class_static_property(
+                static_write->property_identity,
+                state.executor->read_register(
+                    static_write->source,
+                    state.executor->layout_.register_widths.at(
+                        static_write->source)),
+                instruction);
+        } else {
+            throw std::logic_error(
+                "native class-property callback targets another operation");
+        }
+        return 0U;
+    } catch (...) {
+        capture_failure(state);
+        return 1U;
+    }
+}
+
+std::uint32_t LlvmProcessExecutor::query_event_triggered(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    fsim_jit_frame_v1* frame) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1U;
+    }
+    try {
+        if (state.executor == nullptr || state.context == nullptr
+            || state.process == nullptr || state.generated_process != process
+            || instruction >= state.process->operations.size()
+            || frame != &state.executor->frame_) {
+            throw std::logic_error(
+                "invalid native event-trigger callback");
+        }
+        const auto expanded
+            = state.process->operations.expanded(instruction);
+        const auto* query = runtime::simir::operation_get_if<
+            runtime::simir::EventTriggered>(&expanded);
+        if (query == nullptr) {
+            throw std::logic_error(
+                "native event-trigger callback targets another operation");
+        }
+        const auto triggered
+            = state.context->event_triggered(query->event, instruction);
+        state.executor->write_register(
+            query->destination,
+            PackedLogic4::from_aval_bval(1U, triggered ? 1U : 0U, 0U));
+        return 0U;
+    } catch (...) {
+        capture_failure(state);
+        return 1U;
+    }
+}
+
 void LlvmProcessExecutor::invalidate_signal_read_cache(
     CallbackState& state) noexcept
 {
     state.signal_read_cache_ids.fill(
         std::numeric_limits<std::uint32_t>::max());
+}
+
+bool LlvmProcessExecutor::has_buffered_update_words() const noexcept
+{
+    if (!pending_update_words_.empty()) {
+        return true;
+    }
+    if (!direct_update_active_words_.empty()) {
+        if (std::ranges::any_of(
+            direct_update_active_words_,
+            [](const std::uint64_t active) { return active != 0U; })) {
+            return true;
+        }
+    }
+    return std::ranges::any_of(
+        direct_update_slots_,
+        [](const fsim_jit_update_slot_v1& slot) {
+            return slot.active != 0U;
+        });
+}
+
+bool LlvmProcessExecutor::has_buffered_logic9_updates() const noexcept
+{
+    return std::ranges::any_of(
+        buffered_logic9_update_views_,
+        [](const runtime::simir::ProcessLogic9UpdateSlotView& slot) {
+            return slot.mask != nullptr && *slot.mask != 0U;
+        });
+}
+
+void LlvmProcessExecutor::flush_buffered_updates(
+    runtime::simir::ProcessExecutionContext& context,
+    const bool allow_slot_batch)
+{
+    flush_buffered_logic9_updates(context);
+
+    // Keep this opt-in until it preserves last-assignment-wins behavior for
+    // every combination of whole and sliced writes from one process.
+    static const bool single_update_batches_enabled
+        = std::getenv("FSIM_ENABLE_SINGLE_UPDATE_BATCH") != nullptr;
+    if (allow_slot_batch && single_update_batches_enabled
+        && has_buffered_update_words()
+        && !direct_update_slot_views_.empty()
+        && callback_state_.supports_direct_word_updates
+        && !jit_process_profile().enabled
+        && context.direct_update_domain() != nullptr) {
+        auto batch = runtime::simir::ProcessUpdateSlotBatch {
+            process_.id,
+            direct_update_slot_views_,
+            direct_update_active_words_
+        };
+        if (context.write_validated_update_slot_batches(
+                std::span { &batch, 1U })) {
+            return;
+        }
+    }
+    flush_update_words(context);
 }
 
 bool LlvmProcessExecutor::buffer_logic9_update(
@@ -1632,8 +1938,10 @@ bool LlvmProcessExecutor::buffer_logic9_update(
 void LlvmProcessExecutor::flush_buffered_logic9_updates(
     runtime::simir::ProcessExecutionContext& context)
 {
-    if (!buffered_logic9_update_views_.empty()
-        && context.write_validated_logic9_update_batch({
+    if (!has_buffered_logic9_updates()) {
+        return;
+    }
+    if (context.write_validated_logic9_update_batch({
             process_.id, buffered_logic9_update_views_ })) {
         return;
     }
@@ -1717,6 +2025,9 @@ void LlvmProcessExecutor::flush_buffered_logic9_updates(
 void LlvmProcessExecutor::flush_update_words(
     runtime::simir::ProcessExecutionContext& context)
 {
+    if (!has_buffered_update_words()) {
+        return;
+    }
     const auto direct_owners = context.direct_single_driver_processes();
     const auto stable_owners = context.stable_single_writer_processes();
     const auto direct_aval = context.direct_signal_aval();
@@ -1885,7 +2196,6 @@ void LlvmProcessExecutor::flush_update_words(
         }
         pending_update_words_.clear();
     }
-    flush_buffered_logic9_updates(context);
 }
 
 std::uint32_t LlvmProcessExecutor::mapped_signal_sparse(

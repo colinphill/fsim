@@ -4,15 +4,20 @@
 ## Authority and live state
 
 Read [implementation_plan_v3.md](implementation_plan_v3.md), especially
-Batches 188G-188I and Standard Change 20 closure, before acting. Verify the
+Batch 188I and Standard Change 20 closure, before acting. Verify the
 branch, HEAD, tracking ref, worktree, active agents, and any running build or
 test handle; this checkpoint is a locator, not a substitute for live evidence.
 
-The parent of the Batch 188G closure commit is Batch 188F head
-`6bdf4d52af2cb998188280e329192a3a87b11500`. Verify the new local and
-tracking HEAD live. The user-owned untracked `phase.fst` and
-`scripts/__pycache__/` must be preserved. Do not clean, reset, commit, or
-package them.
+Batch 188H is closed by the current `codex/v3` head and pushed to its
+tracking ref; verify the exact SHA live. Its full warnings-as-errors Release
+and Debug builds passed after CMake dependency rescans, and both full suites
+passed 423/423 tests. Logs are `/tmp/fsim-h20-release-{build-final,ctest-green}.log`
+and `/tmp/fsim-h20-debug-{build-final,ctest-final}.log`. The previous G-head
+hosted run 36046188745 had both Linux LLVM lanes green and both Windows LLVM
+lanes failing `fsim.runtime` cancellation payload lifetime. H includes the
+swap-based repair, but its new hosted head is unverified under the H monitoring
+waiver. Preserve user-owned untracked `phase.fst` and `scripts/__pycache__/`;
+do not clean, reset, commit, or package them.
 
 ## Fixed baseline and qualification contract
 
@@ -56,39 +61,20 @@ scheduler order, observer mutation semantics, format/ABI compatibility
 boundaries, and the fixed baseline. Keep private standards read-only and out
 of repository artifacts; use LLDB on Linux and Windows.
 
-## Batch 188G closure and next action
+## Active Batch 188I checkpoint
 
-The commit containing this checkpoint closes Batch 188G; all twenty changes
-are marked complete in the plan. It includes typed scheduler tasks, compact
-hot/cold process and signal records, flat fanout, stable dynamic waits,
-incremental switch components, inline-first driver records, narrow resolution,
-word force/release, lazy packed mirrors, and reusable cohort scratch. Scheduler
-discard/reset/move hooks were repaired after review. The two observer snapshot
-`shared_ptr::unique()` calls were changed to `use_count() != 1` for Windows.
-No release tag is made.
+Batch 188H Changes 1-20 are marked complete in the plan. Its seven-sample
+cumulative performance matrix was explicitly waived, so no performance pass
+is claimed. The next bounded action is Batch 188I Change 1: introduce a
+project-owned hierarchy path table with stable handles and explicit lifetime
+ownership. `ElaboratedDesign` and independently copied or loaded `DesignIr`
+must retain their table owner. IDs are local to a table; canonical artifact IDs
+must be assigned by sorted path content. Follow with Change 2's heterogeneous
+`SourceName` lookup before constructing a string. Preserve the SystemC plugin
+C ABI and public string lifetimes through the later migrations. Do not use
+`shared_ptr::unique()` on Windows.
 
-After CMake dependency rescans, the warnings-as-errors Clang/LLVM 22 Release
-build passed 2,345/2,345 steps and Debug passed 1,895/1,895 remaining steps.
-The first full Release CTest run had 418 passes, two failures, and one
-dependent not-run gate because three new private headers were absent from the
-source-package manifest. The manifest was fixed; a targeted rerun passed
-19/19 including all three gates and their dependencies. The user authorized
-proceeding to Debug without a full Release rerun. The unfiltered Debug suite
-passed 421/421, and `git diff --check` passed. Logs are under
-`/tmp/fsim-g20-{release,debug}-{build,ctest}.log` and
-`/tmp/fsim-g20-release-repair.log`.
-
-The latest applicable hosted run inspected before the G push was CI
-36013514908 at the 188F head: Linux Debug/Release passed, Windows
-Debug/Release failed on `shared_ptr::unique()`. The new G head is unverified
-under the user's post-push monitoring waiver. The seven-sample cumulative
-performance matrix was also waived and is not a claimed pass.
-
-Next: begin Batch 188H Change 1. Worker read-only mapping located the
-operation alternatives in `simir_operation_storage.hpp`, duplicated cache-key
-encoders in `llvm_jit_cache_key_operations_{primary,secondary}.cpp`, and
-contextual signal-width dependencies that the canonical encoder must retain.
-Use explicit stable operation tags, typed semantic leaves, compile-time
-exhaustiveness, and the native-cache schema bump without changing unrelated
-metadata format. Avoid `shared_ptr::unique()` on Windows. Continue through
-Batch 188I under the plan.
+Batch 188I requires the full fixed-baseline seven-sample matrix, local
+LLVM-enabled ASan/UBSan, full applicable suite and lifetime stress, and four
+exact-head hosted LLVM-only Linux/Windows Debug/Release lanes. Mark each plan
+item complete as its evidence closes. Do not tag a release.

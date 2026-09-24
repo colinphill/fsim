@@ -321,6 +321,8 @@ SignalId Interpreter::add_signal(Signal signal)
     impl_->signal_events.emplace_back();
     impl_->signal_transactions.emplace_back();
     impl_->signal_container_aliases.emplace_back();
+    impl_->sampled_value_dependency_mask.push_back(0U);
+    impl_->monitor_signal_watch_mask.push_back(0U);
     impl_->signal_value_revisions.push_back(1U);
     impl_->static_fanout_dirty = true;
     return id;
@@ -743,14 +745,37 @@ ProcessId Interpreter::add_process_impl(
     if (process.program_owner) {
         impl_->program_owners.insert(*process.program_owner);
     }
-    impl_->requires_sampled_values = impl_->requires_sampled_values
-        || std::ranges::any_of(
-            process.operations, [](const Operation& operation) {
-                const auto* read
-                    = fsim::runtime::simir::operation_get_if<ReadSignal>(
-                        &operation);
-                return read && read->kind != SignalReadKind::current;
-            });
+    const auto record_sampled_dependency = [&](const SignalId signal) {
+        if (signal >= impl_->signals.size()
+            || signal >= impl_->sampled_value_dependency_mask.size()) {
+            impl_->sampled_value_dependencies_unknown = true;
+            return;
+        }
+        impl_->sampled_value_dependency_mask[signal] = 1U;
+    };
+    for (std::size_t instruction = 0U;
+         instruction < process.operations.size();
+         ++instruction) {
+        const auto* read = operation_get_if<ReadSignal>(
+            &process.operations[instruction]);
+        if (read == nullptr || read->kind == SignalReadKind::current) {
+            continue;
+        }
+        impl_->requires_sampled_values = true;
+        const auto expanded = process.operations.expanded(instruction);
+        const auto* expanded_read = operation_get_if<ReadSignal>(&expanded);
+        if (expanded_read == nullptr) {
+            impl_->sampled_value_dependencies_unknown = true;
+            continue;
+        }
+        record_sampled_dependency(expanded_read->signal);
+        if (expanded_read->clock) {
+            record_sampled_dependency(*expanded_read->clock);
+        }
+        if (expanded_read->gate) {
+            record_sampled_dependency(*expanded_read->gate);
+        }
+    }
     if (switch_connection) {
         impl_->switch_endpoint_adjacency.resize(impl_->signals.size());
         impl_->switch_control_adjacency.resize(impl_->signals.size());
@@ -1361,13 +1386,26 @@ void Interpreter::start()
         return;
     }
     impl_->rebuild_static_fanout();
+    impl_->build_native_signal_dependency_masks();
     impl_->started = true;
     if (impl_->requires_sampled_values) {
-        impl_->sampled_defaults.reserve(impl_->signals.size());
-        impl_->sampled_values.reserve(impl_->signals.size());
-        for (const auto& signal : impl_->signals) {
-            impl_->sampled_defaults.push_back(signal.initial_value);
-            impl_->sampled_values.push_back(signal.initial_value);
+        if (impl_->sampled_value_dependency_mask.size()
+            != impl_->signals.size()) {
+            impl_->sampled_value_dependencies_unknown = true;
+        }
+        impl_->sampled_defaults.resize(impl_->signals.size());
+        impl_->sampled_values.resize(impl_->signals.size());
+        for (std::size_t signal = 0U;
+             signal < impl_->signals.size();
+             ++signal) {
+            if (!impl_->sampled_value_dependencies_unknown
+                && impl_->sampled_value_dependency_mask[signal] == 0U) {
+                continue;
+            }
+            impl_->sampled_defaults[signal]
+                = impl_->signals[signal].initial_value;
+            impl_->sampled_values[signal]
+                = impl_->signals[signal].initial_value;
         }
     }
     if (impl_->native_process_count_profile_enabled) {
@@ -1389,7 +1427,7 @@ void Interpreter::start()
         impl_->native_process_single_wave_offsets.clear();
         impl_->native_process_single_wave_identity.reset();
     }
-    if (std::getenv("FSIM_PROFILE_STATIC_COHORTS") != nullptr) {
+    if (impl_->profile_static_cohorts_enabled) {
         std::vector<std::size_t> cohorts;
         for (std::size_t index = 0;
             index < impl_->static_sensitivity_cohorts.size(); ++index) {

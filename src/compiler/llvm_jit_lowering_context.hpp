@@ -72,6 +72,10 @@ struct ProcessLoweringContext {
     llvm::Value * code_coverage_counter_count;
     llvm::Value * record_code_coverage_counter;
     llvm::FunctionType * record_code_coverage_counter_type;
+    llvm::Value* sample_coverage_callback;
+    llvm::Value* class_property_operation_callback;
+    llvm::Value* event_triggered_callback;
+    llvm::FunctionType* native_service_callback_type;
     llvm::Value * direct_update_slots;
     llvm::Value * direct_update_active_words;
     llvm::Value * static_trigger_mask;
@@ -230,6 +234,8 @@ struct OperationLoweringContext {
         std::string_view)> runtime_error_if;
     llvm::function_ref<void()> synchronize_uses_to_frame;
     llvm::function_ref<void()> execute_exact_signal;
+    llvm::function_ref<void(llvm::Value*, std::string_view)>
+        execute_native_service_callback;
     llvm::function_ref<void(const runtime::simir::ReadSignal&)> read_wide_signal;
     llvm::function_ref<void(std::uint32_t, runtime::simir::RegisterId,
         std::uint32_t, std::uint32_t, runtime::SimulationTick)> write_wide_signal;

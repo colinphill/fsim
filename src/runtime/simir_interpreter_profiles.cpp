@@ -529,7 +529,7 @@ Interpreter::~Interpreter()
                   << impl_->native_update_profile_word_resolved
                   << '\n';
     }
-    if (std::getenv("FSIM_ENABLE_NATIVE_STATIC_REGIONS") != nullptr) {
+    if (impl_->native_static_regions_enabled) {
         const auto members = std::accumulate(
             impl_->native_static_regions.begin(),
             impl_->native_static_regions.end(), std::size_t { },
@@ -596,7 +596,7 @@ void Interpreter::Impl::report_process_profile()
               << static_cast<double>(native_nanoseconds) / 1'000'000.0
               << '\n';
     const auto count =
-        std::getenv("FSIM_PROFILE_PROCESSES_ALL") != nullptr
+        profile_processes_all_enabled
         ? order.size()
         : std::min<std::size_t>(30U, order.size());
     for (std::size_t rank = 0; rank < count; ++rank) {

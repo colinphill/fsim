@@ -279,7 +279,16 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840,
     "runtime code coverage checked service was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 848,
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, sample_coverage) == 848,
+    "runtime coverage sample callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, execute_class_property_operation) == 856,
+    "runtime class property callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864,
+    "runtime event-trigger callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 872,
     "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_update_slot_v1) == 80,
     "unexpected direct-update slot size");
@@ -749,6 +758,42 @@ static void write_projected_waveform_slice(
       mode);
 }
 
+static uint32_t sample_coverage(
+    void* context,
+    uint32_t process,
+    uint32_t instruction,
+    fsim_jit_frame_v1* frame) {
+  (void)context;
+  (void)process;
+  (void)instruction;
+  (void)frame;
+  return 0;
+}
+
+static uint32_t execute_class_property_operation(
+    void* context,
+    uint32_t process,
+    uint32_t instruction,
+    fsim_jit_frame_v1* frame) {
+  (void)context;
+  (void)process;
+  (void)instruction;
+  (void)frame;
+  return 0;
+}
+
+static uint32_t query_event_triggered(
+    void* context,
+    uint32_t process,
+    uint32_t instruction,
+    fsim_jit_frame_v1* frame) {
+  (void)context;
+  (void)process;
+  (void)instruction;
+  (void)frame;
+  return 0;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -864,7 +909,10 @@ int main(void) {
       0,
       0,
       0,
-      NULL
+      NULL,
+      sample_coverage,
+      execute_class_property_operation,
+      query_event_triggered
   };
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
@@ -995,6 +1043,17 @@ int main(void) {
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
     return 1;
+  }
+  if (runtime.sample_coverage == NULL ||
+      runtime.execute_class_property_operation == NULL ||
+      runtime.query_event_triggered == NULL) {
+    return 28;
+  }
+  if (runtime.sample_coverage(runtime.context, 0, 0, NULL) != 0 ||
+      runtime.execute_class_property_operation(
+          runtime.context, 0, 0, NULL) != 0 ||
+      runtime.query_event_triggered(runtime.context, 0, 0, NULL) != 0) {
+    return 29;
   }
   if (aval != UINT64_C(1) || bval != UINT64_C(0)) {
     return 2;

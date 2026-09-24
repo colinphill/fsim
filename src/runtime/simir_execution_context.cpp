@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_execution_context.hpp"
+#include "simir_execution_shared.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 
 namespace fsim::runtime::simir {
@@ -91,6 +92,105 @@ Interpreter::Impl::ExecutionContext::direct_code_coverage_counters() noexcept{
         owner.code_coverage_overflow_hook(counter);
     }
     return CodeCoverageCounterRuntimeStatus::Recorded;
+}
+
+void Interpreter::Impl::ExecutionContext::sample_coverage(
+    const CoverageSample& sample,
+    const std::span<const PackedLogic4> actuals,
+    const InstructionIndex instruction)
+{
+    if (!owner.coverage_sample_hook) {
+        throw InterpreterError(
+            process, instruction,
+            "coverage sampling service is unavailable");
+    }
+    if (actuals.size() != sample.actuals.size()
+        || sample.actual_widths.size() != actuals.size()
+        || sample.signed_actuals.size() != actuals.size()
+        || sample.scalar_kinds.size() != actuals.size()) {
+        throw InterpreterError(
+            process, instruction,
+            "coverage sample actual values do not match SimIR metadata");
+    }
+    owner.coverage_sample_hook(
+        sample.instance_identity,
+        actuals,
+        sample.signed_actuals,
+        sample.scalar_kinds,
+        sample.trigger);
+}
+
+[[nodiscard]] PackedLogic4
+Interpreter::Impl::ExecutionContext::read_class_property(
+    const std::uint64_t handle,
+    const std::string_view property_identity,
+    const std::size_t width,
+    const InstructionIndex instruction)
+{
+    if (!owner.class_property_read_hook) {
+        throw InterpreterError(
+            process, instruction, "class property service is unavailable");
+    }
+    return resize_class_value(
+        owner.class_property_read_hook(handle, property_identity), width);
+}
+
+void Interpreter::Impl::ExecutionContext::write_class_property(
+    const std::uint64_t handle,
+    const std::string_view property_identity,
+    const PackedLogic4& value,
+    const InstructionIndex instruction)
+{
+    if (!owner.class_property_write_hook) {
+        throw InterpreterError(
+            process, instruction, "class property service is unavailable");
+    }
+    owner.class_property_write_hook(handle, property_identity, value);
+}
+
+[[nodiscard]] PackedLogic4
+Interpreter::Impl::ExecutionContext::read_class_static_property(
+    const std::string_view property_identity,
+    const std::size_t width,
+    const InstructionIndex instruction)
+{
+    if (!owner.class_static_property_read_hook) {
+        throw InterpreterError(
+            process, instruction,
+            "class static property service is unavailable");
+    }
+    return resize_class_value(
+        owner.class_static_property_read_hook(property_identity), width);
+}
+
+void Interpreter::Impl::ExecutionContext::write_class_static_property(
+    const std::string_view property_identity,
+    const PackedLogic4& value,
+    const InstructionIndex instruction)
+{
+    if (!owner.class_static_property_write_hook) {
+        throw InterpreterError(
+            process, instruction,
+            "class static property service is unavailable");
+    }
+    owner.class_static_property_write_hook(property_identity, value);
+}
+
+[[nodiscard]] bool
+Interpreter::Impl::ExecutionContext::event_triggered(
+    const SignalId event_signal,
+    const InstructionIndex instruction) const
+{
+    (void)instruction;
+    const auto& signal = owner.get_signal(event_signal);
+    const auto identity = signal.event_variable
+        ? owner.event_identities.at(event_signal)
+        : std::optional<SignalId> { event_signal };
+    if (!identity) {
+        return false;
+    }
+    const auto& event = owner.signal_events.at(*identity);
+    return event && event->first == owner.scheduler.now();
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
@@ -445,6 +545,25 @@ void Interpreter::Impl::ExecutionContext::write_blocking_slice_word(
     const SignalId signal,
     const Logic4Word value,
     const std::uint32_t offset){
+    if (owner.can_publish_blocking_word(signal)) {
+        const auto width = owner.signals[signal].initial_value.width();
+        if (value.width != 0U && offset <= width
+            && value.width <= width - offset) {
+            const auto source_mask = value.width == 64U
+                ? std::numeric_limits<std::uint64_t>::max()
+                : (UINT64_C(1) << value.width) - UINT64_C(1);
+            const auto mask = source_mask << offset;
+            owner.publish_native_word(
+                signal,
+                Logic4Word {
+                    width,
+                    (owner.direct_signal_aval[signal] & ~mask)
+                        | ((value.aval << offset) & mask),
+                    (owner.direct_signal_bval[signal] & ~mask)
+                        | ((value.bval << offset) & mask) });
+            return;
+        }
+    }
     owner.commit_driver_slice(
         process,
         signal,
@@ -547,7 +666,9 @@ bool Interpreter::Impl::ExecutionContext::write_validated_logic9_update_batches(
 }
 
 [[nodiscard]] bool Interpreter::Impl::ExecutionContext::supports_direct_word_updates() const noexcept{
-    return owner.module_paths.empty();
+    return owner.module_paths.empty()
+        || (!owner.native_signal_dependencies_unknown
+            && owner.module_path_destination_mask.size() == owner.signals.size());
 }
 
 void Interpreter::Impl::ExecutionContext::write_after(
@@ -574,6 +695,20 @@ void Interpreter::Impl::ExecutionContext::write_after_word(
     const SignalId signal,
     const Logic4Word value,
     const SimulationTick delay){
+    if (owner.can_publish_blocking_word(signal)
+        && value.width == owner.signals[signal].initial_value.width()) {
+        owner.scheduler.schedule_after(
+            delay,
+            SchedulerPhase::update,
+            process,
+            [&owner = owner, driver = process, signal, value](Scheduler&) {
+                const auto update = ProcessUpdateWord {
+                    signal, value, 0U, false };
+                owner.stage_validated_update_words(
+                    driver, std::span { &update, 1U });
+            });
+        return;
+    }
     auto packed = PackedLogic4::from_aval_bval(
         value.width, value.aval, value.bval);
     if (owner.route_module_path_update(
@@ -620,6 +755,24 @@ void Interpreter::Impl::ExecutionContext::write_after_slice_word(
     const Logic4Word value,
     const std::uint32_t offset,
     const SimulationTick delay){
+    if (owner.can_publish_blocking_word(signal)) {
+        const auto width = owner.signals[signal].initial_value.width();
+        if (value.width != 0U && offset <= width
+            && value.width <= width - offset) {
+            owner.scheduler.schedule_after(
+                delay,
+                SchedulerPhase::update,
+                process,
+                [&owner = owner, driver = process, signal, value, offset](
+                    Scheduler&) {
+                    const auto update = ProcessUpdateWord {
+                        signal, value, offset, true };
+                    owner.stage_validated_update_words(
+                        driver, std::span { &update, 1U });
+                });
+            return;
+        }
+    }
     write_after_slice(
         signal,
         PackedLogic4::from_aval_bval(

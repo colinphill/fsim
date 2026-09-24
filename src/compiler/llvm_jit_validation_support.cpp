@@ -111,6 +111,10 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, FileWriteFormatted>
                 || std::is_same_v<OperationType, CallableFramePush>
                 || std::is_same_v<OperationType, CallableFramePop>
+                || std::is_same_v<OperationType, ClassPropertyRead>
+                || std::is_same_v<OperationType, ClassPropertyWrite>
+                || std::is_same_v<OperationType, ClassStaticPropertyRead>
+                || std::is_same_v<OperationType, ClassStaticPropertyWrite>
                 || std::is_same_v<OperationType, CoverageSample>
                 || std::is_same_v<OperationType, CoverageQuery>
                 || std::is_same_v<OperationType, VhdlPslApi>
@@ -221,7 +225,6 @@ void validate_fork_operation(
     return fsim::runtime::simir::operation_holds<WaitFor>(operation)
         || (report != nullptr
             && report->severity == AssertionSeverity::failure)
-        || fsim::runtime::simir::operation_holds<CoverageSample>(operation)
         || fsim::runtime::simir::operation_holds<CoverageQuery>(operation)
         || fsim::runtime::simir::operation_holds<VhdlPslApi>(operation)
         || fsim::runtime::simir::operation_holds<VhdlAssertApi>(operation)
@@ -237,7 +240,6 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<WaitOn>(operation)
         || fsim::runtime::simir::operation_holds<WaitPla>(operation)
         || fsim::runtime::simir::operation_holds<WaitOrder>(operation)
-        || fsim::runtime::simir::operation_holds<EventTriggered>(operation)
         || fsim::runtime::simir::operation_holds<EventAlias>(operation)
         || fsim::runtime::simir::operation_holds<WaitSensitivity>(operation)
         || fsim::runtime::simir::operation_holds<WaitForever>(operation)
@@ -281,13 +283,7 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<VhdlReflectionApi>(operation)
         || fsim::runtime::simir::operation_holds<Pause>(operation)
         || fsim::runtime::simir::operation_holds<ClassAllocate>(operation)
-        || fsim::runtime::simir::operation_holds<ClassPropertyRead>(operation)
-        || fsim::runtime::simir::operation_holds<ClassPropertyWrite>(operation)
         || fsim::runtime::simir::operation_holds<ClassMethodCall>(operation)
-        || fsim::runtime::simir::operation_holds<ClassStaticPropertyRead>(
-            operation)
-        || fsim::runtime::simir::operation_holds<ClassStaticPropertyWrite>(
-            operation)
         || fsim::runtime::simir::operation_holds<ClassStaticMethodCall>(
             operation);
 }
@@ -765,6 +761,8 @@ std::optional<std::string> validate_file_position_metadata(
         return "exact-width signal runtime callback failed";
     case JitGeneratedRuntimeErrorReason::coverage_callback_failure:
         return "code coverage counter runtime callback failed";
+    case JitGeneratedRuntimeErrorReason::native_service_callback_failure:
+        return "native SimIR service callback failed";
     }
     return "unknown generated runtime error";
 }
@@ -800,6 +798,7 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept
     case JitGeneratedRuntimeErrorReason::container_callback_failure:
     case JitGeneratedRuntimeErrorReason::signal_callback_failure:
     case JitGeneratedRuntimeErrorReason::coverage_callback_failure:
+    case JitGeneratedRuntimeErrorReason::native_service_callback_failure:
         return reason;
     }
     return std::nullopt;

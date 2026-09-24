@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <streambuf>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -68,6 +69,20 @@ private:
 
   std::string name_;
   std::optional<std::string> previous_;
+};
+
+class ScopedCerrCapture final {
+public:
+  explicit ScopedCerrCapture(std::ostringstream& output)
+      : previous_{std::cerr.rdbuf(output.rdbuf())} {}
+
+  ScopedCerrCapture(const ScopedCerrCapture&) = delete;
+  ScopedCerrCapture& operator=(const ScopedCerrCapture&) = delete;
+
+  ~ScopedCerrCapture() { std::cerr.rdbuf(previous_); }
+
+private:
+  std::streambuf* previous_;
 };
 
 struct SchedulerTaskProbe {
@@ -1233,12 +1248,81 @@ void test_simir_update_coalescing() {
 void test_mixed_signal_id_alignment();
 void test_force_release_word_boundary();
 
+void test_simir_diagnostic_environment_snapshot() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  ScopedEnvironment process_profile_disabled{
+      "FSIM_PROFILE_PROCESSES", std::nullopt};
+  const auto add_cohort = [](Interpreter& interpreter) {
+    const auto clock = interpreter.add_signal(
+        { "top.clock", PackedLogic4::from_msb_string("0") });
+    for (ProcessId id = 0U; id < 2U; ++id) {
+      Process process;
+      process.id = id;
+      process.name = "top.profile_cohort" + std::to_string(id);
+      process.static_sensitivity.push_back({ clock, EdgeKind::posedge });
+      process.operations = { WaitSensitivity{ }, Halt{ } };
+      process.initialize = false;
+      (void)interpreter.add_process(std::move(process));
+    }
+  };
+  const auto start_with_diagnostics = [](Interpreter& interpreter) {
+    std::ostringstream output;
+    {
+      ScopedCerrCapture capture{output};
+      interpreter.start();
+    }
+    return output.str();
+  };
+
+  std::string enabled_diagnostics;
+  {
+    ScopedEnvironment profile_enabled{
+        "FSIM_PROFILE_STATIC_COHORTS", std::string{ "1" }};
+    Interpreter interpreter;
+    add_cohort(interpreter);
+    {
+      ScopedEnvironment profile_disabled{
+          "FSIM_PROFILE_STATIC_COHORTS", std::nullopt};
+      enabled_diagnostics = start_with_diagnostics(interpreter);
+    }
+  }
+  require(
+      enabled_diagnostics.find(
+          "fsim-profile: static-cohorts cohorts=1 processes=2")
+          != std::string::npos,
+      "static-cohort profiling remains enabled after the environment changes");
+
+  std::string disabled_diagnostics;
+  {
+    ScopedEnvironment profile_disabled{
+        "FSIM_PROFILE_STATIC_COHORTS", std::nullopt};
+    Interpreter interpreter;
+    add_cohort(interpreter);
+    {
+      ScopedEnvironment profile_enabled{
+          "FSIM_PROFILE_STATIC_COHORTS", std::string{ "1" }};
+      disabled_diagnostics = start_with_diagnostics(interpreter);
+    }
+  }
+  require(
+      disabled_diagnostics.find("fsim-profile: static-cohorts")
+          == std::string::npos,
+      "static-cohort profiling stays disabled for the constructed simulation");
+}
+
 void test_resolved_driver_slots() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
 
   ScopedEnvironment direct_word_commit_enabled{
       "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::nullopt};
+  const auto make_interpreter_with_direct_word_commit_disabled = [] {
+    ScopedEnvironment direct_word_commit_disabled{
+        "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::string{ "1" }};
+    return Interpreter{ };
+  };
 
   Interpreter interpreter;
   const auto whole = interpreter.add_signal(
@@ -1708,7 +1792,8 @@ void test_resolved_driver_slots() {
       grown_route.signal_value(direct_signal).to_msb_string() == "1",
       "the direct single-driver publication matches its slot after growth");
 
-  Interpreter lazy_mirror;
+  Interpreter lazy_mirror
+      = make_interpreter_with_direct_word_commit_disabled();
   const auto lazy_signal = lazy_mirror.add_signal(
       { "top.lazy_mirror",
           PackedLogic4::from_msb_string("ZZZZ"),
@@ -1776,8 +1861,6 @@ void test_resolved_driver_slots() {
 
       require(start == 1U,
               "lazy-mirror native writer resumes after its trigger wait");
-      ScopedEnvironment disable_direct_word_commit {
-          "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::string { "1" } };
       const std::array updates {
           ProcessUpdateWord {
               signal_, Logic4Word { 2U, 0b11U, 0U }, 1U, true }
@@ -1861,7 +1944,8 @@ void test_resolved_driver_slots() {
       lazy_mirror.signal_value(lazy_signal).to_msb_string() == "1110",
       "release republishes the latest materialized driver value");
 
-  Interpreter stale_route;
+  Interpreter stale_route
+      = make_interpreter_with_direct_word_commit_disabled();
   const auto stale_signal = stale_route.add_signal(
       { "top.stale_route",
           PackedLogic4::from_msb_string("ZZZZ"),
@@ -1902,8 +1986,6 @@ void test_resolved_driver_slots() {
       }
 
       require(start == 1U, "stale-route writer resumes after its trigger");
-      ScopedEnvironment disable_direct_word_commit {
-          "FSIM_DISABLE_DIRECT_WORD_COMMIT", std::string { "1" } };
       const std::array updates {
           ProcessUpdateWord {
               signal_, Logic4Word { 2U, 0b11U, 0U }, 1U, true }
@@ -2201,6 +2283,79 @@ void test_simir_expressions_and_edges() {
           "posedge must activate a waiting process");
   require(interpreter.signal_value(expression).to_msb_string() == "1011",
       "SimIR add and unary-not operations");
+
+  Interpreter sampled;
+  std::array<SignalId, 12U> sampled_signals { };
+  for (std::size_t index = 0U; index < sampled_signals.size(); ++index) {
+    sampled_signals[index] = sampled.add_signal({
+        "top.sampled_dependency_" + std::to_string(index),
+        PackedLogic4::from_msb_string(index == 8U ? "1" : "0")
+    });
+  }
+  const auto sampled_data = sampled_signals[2U];
+  const auto sampled_clock = sampled_signals[5U];
+  const auto sampled_gate = sampled_signals[8U];
+  const auto first_past = sampled_signals[9U];
+  const auto second_past = sampled_signals[10U];
+  const auto gated_past = sampled_signals[11U];
+
+  Process sampled_reader;
+  sampled_reader.id = 0U;
+  sampled_reader.name = "sparse_sampled_dependency_reader";
+  sampled_reader.register_count = 1U;
+  sampled_reader.static_sensitivity.push_back(
+      { sampled_clock, EdgeKind::posedge });
+  const ReadSignal past_sample {
+      .destination = 0U,
+      .signal = sampled_data,
+      .kind = SignalReadKind::past,
+      .ticks = 1U,
+      .clock = sampled_clock,
+      .clock_edge = SampledClockEdge::positive,
+      .gate = sampled_gate,
+  };
+  sampled_reader.operations = {
+      WaitSensitivity { },
+      past_sample,
+      WriteBlocking { first_past, 0U },
+      WaitSensitivity { },
+      past_sample,
+      WriteBlocking { second_past, 0U },
+      WaitSensitivity { },
+      past_sample,
+      WriteBlocking { gated_past, 0U },
+      Halt { },
+  };
+  (void)sampled.add_process(std::move(sampled_reader));
+
+  sampled.schedule_signal_at(
+      sampled_data, PackedLogic4::from_msb_string("1"), 0U, 0U);
+  sampled.schedule_signal_at(
+      sampled_clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
+  sampled.schedule_signal_at(
+      sampled_clock, PackedLogic4::from_msb_string("0"), 2U, 0U);
+  sampled.schedule_signal_at(
+      sampled_data, PackedLogic4::from_msb_string("0"), 2U, 0U);
+  sampled.schedule_signal_at(
+      sampled_clock, PackedLogic4::from_msb_string("1"), 3U, 0U);
+  sampled.schedule_signal_at(
+      sampled_clock, PackedLogic4::from_msb_string("0"), 4U, 0U);
+  sampled.schedule_signal_at(
+      sampled_gate, PackedLogic4::from_msb_string("0"), 4U, 0U);
+  sampled.schedule_signal_at(
+      sampled_data, PackedLogic4::from_msb_string("1"), 4U, 0U);
+  sampled.schedule_signal_at(
+      sampled_clock, PackedLogic4::from_msb_string("1"), 5U, 0U);
+  const auto sampled_result = sampled.run();
+  require(sampled_result.status == RunStatus::completed,
+          "sparse sampled dependencies complete with distinct signal IDs");
+  require(
+      sampled.signal_value(first_past).to_msb_string() == "0"
+          && sampled.signal_value(second_past).to_msb_string() == "1",
+      "historical reads retain their target and positive-clock dependencies");
+  require(
+      sampled.signal_value(gated_past).to_msb_string() == "1",
+      "a low sampled gate suppresses history updates for sparse signal IDs");
 }
 
 void test_simir_noninitializing_static_process() {

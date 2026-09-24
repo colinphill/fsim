@@ -97,6 +97,14 @@ namespace llvm_jit_test_detail {
         friend bool operator==(ProjectedWrite, ProjectedWrite) = default;
     };
 
+    struct NativeServiceRegister {
+        std::uint32_t instruction { };
+        std::uint32_t register_id { };
+        std::uint32_t word_offset { };
+        std::uint32_t width { };
+        PackedLogic4 value;
+    };
+
     struct TestRuntime {
         std::array<EncodedSignal, 16> signals { };
         std::array<std::vector<std::uint64_t>, 16> wide_signal_aval;
@@ -151,6 +159,24 @@ namespace llvm_jit_test_detail {
         std::uint32_t code_coverage_checked_calls { };
         std::uint32_t code_coverage_callback_status { };
         std::vector<std::uint32_t> code_coverage_checked_counters;
+        std::uint32_t native_service_word_count { };
+        std::vector<std::pair<std::uint32_t, std::uint32_t>>
+            native_service_calls;
+        std::uint32_t coverage_sample_calls { };
+        std::uint32_t coverage_sample_status { };
+        std::uint32_t coverage_sample_word_offset { };
+        std::uint32_t coverage_sample_width { };
+        std::vector<PackedLogic4> coverage_sample_values;
+        std::uint32_t class_property_operation_calls { };
+        std::uint32_t class_property_operation_status { };
+        std::vector<NativeServiceRegister> class_property_reads;
+        std::vector<NativeServiceRegister> class_property_writes;
+        std::vector<PackedLogic4> class_property_write_values;
+        std::uint32_t event_triggered_calls { };
+        std::uint32_t event_triggered_status { };
+        std::uint32_t event_triggered_destination { };
+        std::uint32_t event_triggered_word_offset { };
+        bool event_triggered_value { };
     };
 
 extern "C" std::uint32_t container_operation_stub(
@@ -633,6 +659,24 @@ extern "C" std::uint32_t record_code_coverage_counter(
         std::uint32_t,
         const std::uint32_t counter);
 
+extern "C" std::uint32_t sample_coverage(
+        void* opaque,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
+
+extern "C" std::uint32_t execute_class_property_operation(
+        void* opaque,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
+
+extern "C" std::uint32_t query_event_triggered(
+        void* opaque,
+        std::uint32_t process,
+        std::uint32_t instruction,
+        fsim_jit_frame_v1* frame) noexcept;
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime& runtime);
 
 [[nodiscard]] fsim_jit_resume_result_v1 new_resume_result();
@@ -728,6 +772,9 @@ void run_at_level(
 void test_scheduled_callbacks_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_direct_word_write_order_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_inertial_callbacks_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
@@ -751,6 +798,9 @@ void test_process_cohort_resume_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_class_service_boundaries_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_native_service_callbacks_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_signal_waits_at_level(

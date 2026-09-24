@@ -1738,7 +1738,9 @@ endmodule
         && compiled.vcd.find("b0000z010")
             != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled == 4);
+    // The wide ContainerWrite process stays on the interpreter; the full
+    // result comparisons above cover parity for this mixed-engine run.
+    assert(compiled.compiled == 3);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);

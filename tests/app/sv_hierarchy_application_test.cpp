@@ -5,6 +5,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,6 +32,14 @@ struct Capture {
     std::vector<std::string> values;
     std::vector<std::pair<std::string, std::string>> libraries;
     std::size_t compiled_processes { };
+};
+
+struct TriggerSharingCapture {
+    fsim::runtime::RunResult result;
+    std::vector<std::string> values;
+    std::size_t process_count { };
+    std::size_t compiled_processes { };
+    std::size_t compiled_modules { };
 };
 
 void print_diagnostics(const fsim::diagnostic::Engine& diagnostics)
@@ -341,6 +350,238 @@ endmodule
         }));
 }
 
+void add_static_trigger_region_variants(
+    fsim::app::BuiltProject& project)
+{
+    auto state = std::move(project.design).state();
+    std::size_t region_index = 0;
+    for (auto& process : state.processes) {
+        if (process.static_sensitivity.size() != 1U
+            || process.operations.size() < 3U) {
+            continue;
+        }
+        const auto begin = region_index++ % 2U == 0U
+            ? fsim::runtime::simir::InstructionIndex { 1U }
+            : fsim::runtime::simir::InstructionIndex { 2U };
+        const auto end = static_cast<fsim::runtime::simir::InstructionIndex>(
+            begin + 1U);
+        if (end <= process.operations.size()) {
+            process.static_trigger_regions.push_back(
+                { begin, end, UINT64_C(1) });
+        }
+    }
+    assert(region_index >= 2U);
+    auto restored = fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(state));
+    assert(restored);
+    project.design = std::move(*restored);
+}
+
+void add_unary_source_variants(fsim::app::BuiltProject& project)
+{
+    auto state = std::move(project.design).state();
+    std::size_t unary_process_count { };
+    for (auto& process : state.processes) {
+        std::vector<fsim::runtime::simir::RegisterId> read_destinations;
+        for (auto& operation : process.operations) {
+            if (auto* unary = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::UnaryNot>(&operation)) {
+                if ((unary_process_count % 2U) != 0U) {
+                    assert(read_destinations.size() >= 2U);
+                    assert(read_destinations.back() != unary->source);
+                    unary->source = read_destinations.back();
+                }
+                ++unary_process_count;
+                break;
+            }
+            if (const auto* read = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::ReadSignal>(&operation)) {
+                read_destinations.push_back(read->destination);
+            }
+        }
+    }
+    assert(unary_process_count >= 2U);
+    auto restored = fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(state));
+    assert(restored);
+    project.design = std::move(*restored);
+}
+
+TriggerSharingCapture run_trigger_sharing(
+    fsim::project::Config config,
+    const fsim::app::SimulationEngine engine,
+    const bool add_trigger_regions,
+    const bool mutate_unary_sources = false)
+{
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+        print_diagnostics(diagnostics);
+    }
+    assert(project);
+    if (add_trigger_regions) {
+        add_static_trigger_region_variants(*project);
+    }
+    if (mutate_unary_sources) {
+        add_unary_source_variants(*project);
+    }
+
+    constexpr std::size_t lane_count = 64U;
+    const auto top_separator = config.project.top.find_last_of('.');
+    assert(top_separator != std::string::npos);
+    const auto top_name = config.project.top.substr(top_separator + 1U);
+    std::vector<fsim::runtime::simir::SignalId> signals;
+    signals.reserve(lane_count * 2U);
+    for (std::size_t lane = 0; lane < lane_count; ++lane) {
+        const auto lane_prefix
+            = top_name + ".lanes[" + std::to_string(lane) + "]";
+        for (const auto* const side : { "positive", "negative" }) {
+            const auto path = lane_prefix + "." + side + ".value";
+            const auto signal = project->design.find_signal(path);
+            if (!signal) {
+                std::cerr << "missing sharing regression signal " << path
+                          << '\n';
+            }
+            assert(signal);
+            signals.push_back(*signal);
+        }
+    }
+
+    TriggerSharingCapture capture;
+    capture.process_count = project->design.processes().size();
+    assert(capture.process_count >= 128U);
+    fsim::app::Simulation simulation(std::move(*project), 1000U, engine);
+    capture.compiled_processes = simulation.compiled_process_count();
+    capture.compiled_modules = simulation.compiled_module_count();
+    capture.result = simulation.run();
+    for (const auto signal : signals) {
+        capture.values.push_back(
+            simulation.read_signal(signal).to_msb_string());
+    }
+    return capture;
+}
+
+void test_effective_process_template_identity(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "effective-process-template.sv";
+    write_source(
+        source,
+        R"(
+module trigger_leaf #(parameter bit NEGATIVE = 1'b0)(
+  input logic clock,
+  input logic mode
+);
+  logic value;
+  initial value = 1'b0;
+  generate
+    if (NEGATIVE) begin : negative_edge
+      always @(negedge clock) value <= ~(clock ^ mode);
+    end else begin : positive_edge
+      always @(posedge clock) value <= ~(clock ^ mode);
+    end
+  endgenerate
+endmodule
+
+module same_edge_top;
+  logic clock = 1'b0;
+  logic mode = 1'b0;
+  for (genvar lane = 0; lane < 64; ++lane) begin : lanes
+    trigger_leaf #(.NEGATIVE(1'b0)) positive(.clock(clock), .mode(mode));
+    trigger_leaf #(.NEGATIVE(1'b0)) negative(.clock(clock), .mode(mode));
+  end
+  initial begin
+    #1 clock = 1'b1;
+    #1 clock = 1'b0;
+    #1 $finish;
+  end
+endmodule
+
+module mixed_edge_top;
+  logic clock = 1'b0;
+  logic mode = 1'b0;
+  for (genvar lane = 0; lane < 64; ++lane) begin : lanes
+    trigger_leaf #(.NEGATIVE(1'b0)) positive(.clock(clock), .mode(mode));
+    trigger_leaf #(.NEGATIVE(1'b1)) negative(.clock(clock), .mode(mode));
+  end
+  initial begin
+    #1 clock = 1'b1;
+    #1 clock = 1'b0;
+    #1 $finish;
+  end
+endmodule
+)");
+
+    const auto make_config = [&](const bool mixed_edges) {
+        fsim::project::Config config;
+        config.base_directory = directory;
+        config.project.name = mixed_edges
+            ? "sv-mixed-edge-process-sharing"
+            : "sv-same-edge-process-sharing";
+        config.project.top = mixed_edges
+            ? "sv:work.mixed_edge_top"
+            : "sv:work.same_edge_top";
+        config.project.time_resolution = "1ns";
+        config.build.optimization = fsim::project::Optimization::o2;
+        config.build.cache_path = directory
+            / (mixed_edges ? "mixed-edge-sharing-cache"
+                           : "same-edge-sharing-cache");
+        config.run.max_deltas = 1000U;
+        add_source(config, "work", source);
+        return config;
+    };
+
+    const auto same_edge = make_config(false);
+    const auto baseline = run_trigger_sharing(
+        same_edge, fsim::app::SimulationEngine::compiled, false);
+    const auto region_reference = run_trigger_sharing(
+        same_edge, fsim::app::SimulationEngine::interpreter, true);
+    const auto regions_compiled = run_trigger_sharing(
+        same_edge, fsim::app::SimulationEngine::compiled, true);
+    const auto unary_reference = run_trigger_sharing(
+        same_edge, fsim::app::SimulationEngine::interpreter, false, true);
+    const auto unary_compiled = run_trigger_sharing(
+        same_edge, fsim::app::SimulationEngine::compiled, false, true);
+    const auto mixed_edge = make_config(true);
+    const auto mixed_reference = run_trigger_sharing(
+        mixed_edge, fsim::app::SimulationEngine::interpreter, false);
+    const auto mixed_compiled = run_trigger_sharing(
+        mixed_edge, fsim::app::SimulationEngine::compiled, false);
+
+    assert(baseline.result.status == fsim::runtime::RunStatus::stopped);
+    assert(region_reference.result.status == baseline.result.status);
+    assert(regions_compiled.result.status == baseline.result.status);
+    assert(unary_reference.result.status == baseline.result.status);
+    assert(unary_compiled.result.status == baseline.result.status);
+    assert(mixed_reference.result.status == baseline.result.status);
+    assert(mixed_compiled.result.status == baseline.result.status);
+    assert(region_reference.values == baseline.values);
+    assert(regions_compiled.values == region_reference.values);
+    assert(unary_compiled.values == unary_reference.values);
+    assert(mixed_reference.values == mixed_compiled.values);
+    assert(std::ranges::all_of(
+        baseline.values, [](const auto& value) { return value == "0"; }));
+    assert(std::ranges::any_of(
+        unary_reference.values,
+        [](const auto& value) { return value == "0"; }));
+    assert(std::ranges::any_of(
+        unary_reference.values,
+        [](const auto& value) { return value == "1"; }));
+    for (std::size_t lane = 0; lane < 64U; ++lane) {
+        assert(mixed_reference.values[lane * 2U] == "0");
+        assert(mixed_reference.values[lane * 2U + 1U] == "1");
+    }
+#if defined(FSIM_HAS_LLVM)
+    assert(baseline.compiled_processes >= 128U);
+    assert(regions_compiled.compiled_processes >= 128U);
+    assert(unary_compiled.compiled_processes >= 128U);
+    assert(mixed_compiled.compiled_processes >= 128U);
+    assert(regions_compiled.compiled_modules > baseline.compiled_modules);
+    assert(unary_compiled.compiled_modules > baseline.compiled_modules);
+    assert(mixed_compiled.compiled_modules > baseline.compiled_modules);
+#endif
+}
+
 void test_systemverilog_2023_bind_mapping(
     const std::filesystem::path& directory,
     const fsim::project::Optimization optimization)
@@ -631,6 +872,7 @@ int main()
     test_revision_modes(directory.path);
     test_hierarchy(directory.path, fsim::project::Optimization::o0);
     test_hierarchy(directory.path, fsim::project::Optimization::o2);
+    test_effective_process_template_identity(directory.path);
     test_systemverilog_2023_bind_mapping(
         directory.path, fsim::project::Optimization::o0);
     test_systemverilog_2023_bind_mapping(

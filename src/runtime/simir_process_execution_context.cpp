@@ -220,9 +220,71 @@ ProcessExecutionContext::direct_code_coverage_counters() noexcept
 }
 
 [[nodiscard]] CodeCoverageCounterRuntimeStatus
-    ProcessExecutionContext::record_code_coverage_counter(::fsim::runtime::CodeCoverageCounterId)
+ProcessExecutionContext::record_code_coverage_counter(::fsim::runtime::CodeCoverageCounterId)
 {
     return CodeCoverageCounterRuntimeStatus::Unavailable;
+}
+
+void ProcessExecutionContext::sample_coverage(
+    const CoverageSample&,
+    std::span<const PackedLogic4>,
+    InstructionIndex)
+{
+    throw std::logic_error {
+        "alternate process executor cannot sample functional coverage"
+    };
+}
+
+[[nodiscard]] PackedLogic4 ProcessExecutionContext::read_class_property(
+    std::uint64_t,
+    std::string_view,
+    std::size_t,
+    InstructionIndex)
+{
+    throw std::logic_error {
+        "alternate process executor cannot read class properties"
+    };
+}
+
+void ProcessExecutionContext::write_class_property(
+    std::uint64_t,
+    std::string_view,
+    const PackedLogic4&,
+    InstructionIndex)
+{
+    throw std::logic_error {
+        "alternate process executor cannot write class properties"
+    };
+}
+
+[[nodiscard]] PackedLogic4
+ProcessExecutionContext::read_class_static_property(
+    std::string_view,
+    std::size_t,
+    InstructionIndex)
+{
+    throw std::logic_error {
+        "alternate process executor cannot read class static properties"
+    };
+}
+
+void ProcessExecutionContext::write_class_static_property(
+    std::string_view,
+    const PackedLogic4&,
+    InstructionIndex)
+{
+    throw std::logic_error {
+        "alternate process executor cannot write class static properties"
+    };
+}
+
+[[nodiscard]] bool ProcessExecutionContext::event_triggered(
+    SignalId,
+    InstructionIndex) const
+{
+    throw std::logic_error {
+        "alternate process executor cannot query named events"
+    };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>

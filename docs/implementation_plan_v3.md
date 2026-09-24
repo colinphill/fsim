@@ -7400,31 +7400,110 @@ process-ID bitmap order.
 
 #### Batch 188H - JIT metadata, cache keys, and execution boundary
 
-1. Define exhaustive operation traits with explicit stable operation tags.
-2. Implement one canonical semantic-field encoder using existing reflection
-   support and typed leaf encoders.
-3. Replace duplicated per-operation cache-key serializers.
-4. Version the affected native cache and test semantic-field and dependency mutations.
-5. Compute reusable process summaries for cache, signal-access, and admission metadata.
-6. Reuse preflight keys during compilation.
-7. Define effective-body identity including overrides, remapping, and external compilation context.
-8. Reuse elaboration body sharing with typed grouping keys and exact equality checks.
-9. Enable eligible narrow Logic9 direct reads and test all nine states.
-10. Sample diagnostic/profiling environment settings once per simulation construction.
-11. Consolidate buffered-update flushing and avoid empty virtual-access sequences.
-12. Track native-update eligibility per signal instead of applying avoidable design-wide exclusions.
-13. Scope historical-value sampling to proven dependencies; retain conservative
-    handling for unknown dependencies.
-14. Extend existing direct-update machinery to eligible blocking and delayed writes.
-15. Add direct native callbacks for coverage sampling, class-property access,
-    and event-trigger queries.
-16. Pre-partition unsupported processes; retry unsupported packs individually
-    rather than discarding every member.
-17. Simplify signal remapping and Logic9 register marshalling without weakening coherence.
-18. Reuse executor/cohort state with explicit generation invalidation.
-19. Validate cold-cache identity, native coverage, observer interactions, and
-    interpreter/LLVM equivalence.
-20. Run standard closure and hand off to 188I.
+1. **Complete.** Define exhaustive operation traits with explicit stable
+   operation tags for the grouped SimIR alternatives.
+2. **Complete.** Implement one canonical semantic-field encoder using existing
+   reflection support and typed leaf encoders, including contextual signal
+   dependencies and rare optional IDs.
+3. **Complete.** Replace duplicated per-operation cache-key serializers with
+   the canonical encoder. The Debug `fsim.llvm` suite passed.
+4. **Complete.** Version the affected native cache to v169 and test
+   semantic-field and dependency mutations. Debug `fsim.llvm`,
+   `fsim.schema-identity`, `fsim.source-package-manifest`, and
+   `fsim.portable-object-schema-freeze` passed.
+5. **Complete.** Compute reusable process summaries for cache, signal-access,
+   and admission metadata. Prepared processes carry validated admission,
+   direct signal lists, frame metadata, and one lowering plan through native
+   compilation; Debug `fsim.llvm` passed.
+6. **Complete.** Reuse preflight keys during compilation. The Debug
+   `fsim.llvm` cache and module tests passed with per-process and module keys
+   carried from preflight into the miss path.
+7. **Complete.** Define effective-body identity including overrides,
+   remapping, and external compilation context. Typed JIT template grouping
+   includes design/cache, coverage, specialization, language/profile,
+   source-dependency, setting, operation, sensitivity, and trigger context;
+   exact candidate checks retain semantic equality, including both `UnaryNot`
+   register operands. The Debug `fsim.application.sv_hierarchy` differential
+   and mutated-register regressions passed.
+8. **Complete.** Reuse elaboration body sharing with typed grouping keys and
+   exact equality checks. Ordered typed hierarchy grouping preserves the
+   existing exact `share_process_operations` check; the Debug
+   `fsim.application.sv_hierarchy` regression passed with recurring and
+   deliberately distinct process bodies.
+9. **Complete.** Enable eligible narrow Logic9 direct reads and test all nine
+   states. The Debug `fsim.llvm` regression passed with direct planes
+   supplying `UX01ZWLH-` over an all-X callback source.
+10. **Complete.** Sample diagnostic/profiling environment settings once per
+    simulation construction. The SIMIR runtime snapshots flags in `Impl`;
+    the focused Debug `fsim.runtime` test passed, including a post-construction
+    environment mutation regression.
+11. **Complete.** Consolidate buffered-update flushing and avoid empty
+    virtual-access sequences. The Debug app tests for procedural assignments
+    and VHDL Logic9 passed with compact pending-only cohort/region batches.
+12. **Complete.** Track native-update eligibility per signal instead of
+    applying avoidable design-wide exclusions. Cached SignalId dependency and
+    path-destination masks preserve conservative unknown handling; unrelated
+    signals can use direct publication with sampled values, module paths,
+    timing checks, monitors, and switches elsewhere in the design. The Debug
+    `fsim.runtime` regression passed, as did focused app scheduling and
+    Logic9 selectors.
+13. **Complete.** Scope historical-value sampling to proven dependencies;
+    retain conservative handling for unknown dependencies. Sparse SignalId,
+    clock-edge, and gate cases passed in the Debug `fsim.runtime` suite.
+14. **Complete.** Extend existing direct-update machinery to eligible
+    blocking and delayed writes. Narrow blocking slices publish through the
+    guarded direct word path before the next instruction; delayed whole and
+    slice words retain source order in their scheduled events and use
+    per-signal validated staging at the deadline. Existing ABI callbacks
+    remain. Debug O0/O2 `fsim.llvm`,
+    `fsim.application.procedural_assignments`, and `fsim.runtime` passed.
+15. **Complete.** Add direct native callbacks for coverage sampling,
+    class-property access, and event-trigger queries. Append-only ABI members
+    have size/pointer guards on every native entry route; 130-bit coverage and
+    class-property values, callback failures, and missing descriptors passed
+    the Debug `fsim.llvm` and `fsim.jit-runtime-c` tests. Debug application
+    coverage, classes, and named-event selectors passed.
+16. **Complete.** Pre-partition unsupported processes; retry unsupported
+    packs individually rather than discarding every member. The Debug
+    `fsim.application.unsupported-pack` regression passed with 128 admitted
+    native leaf processes, one interpreter-owned unsupported monitor,
+    packed-module reduction, interpreter/native value parity, and matching
+    cold-store/warm-hit accounting. The Debug `fsim.llvm` cache tests passed.
+17. **Complete.** Simplify signal remapping and Logic9 register marshalling
+    without weakening coherence. Direct-read, direct-update, and buffered
+    Logic9 remaps share checked mapping logic; register reads use checked
+    four-plane spans and writes assemble word planes while retaining the
+    existing direct copy path. The Debug
+    `fsim.application.structural_signal_remap` 65-bit all-nine-state
+    regression and `fsim.application.vhdl_logic9` passed.
+18. **Complete.** Reuse executor/cohort state with explicit generation
+    invalidation. App bindings and region snapshots now validate full member,
+    context, scheduler-address, and start-PC identities; JIT bound entries
+    carry monotonic generations, reject stale tokens, and release retained
+    state on invalidation/destruction. The 32-cycle retention and stale-token
+    regression passed in Debug `fsim.llvm`; focused app ordering and
+    hierarchy selectors passed.
+19. **Complete.** Validate cold-cache identity, native coverage, observer
+    interactions, and interpreter/LLVM equivalence. The Debug
+    `fsim.application.coverage-observer-native` fixture compares a discovered
+    statement point and native hit, live observer sequence, VCD bytes,
+    design/native cache identities, and interpreter/cold/warm results. Debug
+    `fsim.llvm`, `fsim.runtime`, cache, coverage, ordering, unsupported-pack,
+    hierarchy, and Logic9 focused selectors passed.
+20. **Complete.** Reviewed the full diff and latest applicable hosted run
+    36046188745 at the exact Batch 188G head: both Linux LLVM lanes passed;
+    both Windows lanes failed the runtime cancellation payload-lifetime
+    assertion. Batch 188H includes the swap-based scheduler repair and its
+    local Debug `fsim.runtime` regression passed. Closure review also fixed
+    `UnaryNot` body equality, v169 schema and ABI governance pins, and checked
+    switch-network staging; focused hierarchy, resolution, native-admission,
+    and governance tests passed. CMake rescanned dependencies before the final
+    warnings-as-errors Release and Debug builds. The full Release and Debug
+    suites each passed 423/423 tests on the corrected source. The user waived
+    the seven-sample cumulative performance matrix and post-push hosted
+    monitoring for this batch; no measured performance pass or hosted result
+    for the new head is claimed. One cohesive commit and push closes H without
+    a release tag; Batch 188I is next.
 
 Keep semantic validation and lowering as distinct passes. Pointer identity alone
 must never establish semantic equality or persistent cache identity.

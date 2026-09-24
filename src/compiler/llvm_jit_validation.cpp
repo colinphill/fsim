@@ -736,6 +736,7 @@ using namespace runtime::simir;
                         }
                     }
                 } else if constexpr (std::is_same_v<OperationType, EventTriggered>) {
+                    result.uses_event_triggered = true;
                     if (referenced_signal_width(operation.event, index) != 1U) {
                         reject(
                             process, index,

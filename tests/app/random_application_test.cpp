@@ -278,7 +278,9 @@ void test_random(
     }
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 3);
+    // ScopeRandomize uses the interpreter solver; the value, output, and
+    // report comparisons above verify parity for the mixed-engine run.
+    assert(compiled.compiled_processes == 2);
 #else
     assert(compiled.compiled_processes == 0);
 #endif

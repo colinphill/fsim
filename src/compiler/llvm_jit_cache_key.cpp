@@ -52,9 +52,7 @@ using runtime::simir::DisableBlock;
 using runtime::simir::DisableFork;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
-using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
-using runtime::simir::DynamicPartIndex;
 using runtime::simir::DynamicPartInsert;
 using runtime::simir::DynamicPartSelect;
 using runtime::simir::EdgeKind;
@@ -225,82 +223,6 @@ void add_packed_value_key(
     if (value.is_logic9()) {
         builder.add("packed-logic9-state", value.to_msb_string());
     }
-}
-
-void add_constraint_template_key(
-    CacheKeyBuilder& builder,
-    const runtime::SystemVerilogConstraintTemplate& expression,
-    const std::string& prefix)
-{
-    add_key_u64(
-        builder,
-        prefix + "kind",
-        static_cast<std::underlying_type_t<
-            runtime::SystemVerilogConstraintTemplateKind>>(
-            expression.kind));
-    builder.add(prefix + "text", expression.text);
-    add_key_u64(builder, prefix + "profile-kind",
-        static_cast<std::underlying_type_t<
-            runtime::SystemVerilogConstraintDomainKind>>(
-            expression.profile.kind));
-    add_key_u64(builder, prefix + "profile-width", expression.profile.width);
-    add_key_u64(
-        builder, prefix + "profile-signed",
-        expression.profile.signed_value ? 1U : 0U);
-    add_key_u64(
-        builder, prefix + "profile-four-state",
-        expression.profile.four_state ? 1U : 0U);
-    builder.add(prefix + "profile-nominal", expression.profile.nominal_type);
-    add_packed_value_key(builder, expression.constant);
-    add_key_u64(builder, prefix + "operand-count", expression.operands.size());
-    for (std::size_t index = 0; index < expression.operands.size(); ++index) {
-        add_constraint_template_key(
-            builder,
-            expression.operands[index],
-            prefix + "operand-" + std::to_string(index) + "-");
-    }
-}
-
-void add_dynamic_index_key(
-    CacheKeyBuilder& builder,
-    const DynamicIndex& selection)
-{
-    add_key_u64(builder, "index", selection.index);
-    add_key_u64(
-        builder,
-        "index-left",
-        static_cast<std::uint64_t>(selection.left));
-    add_key_u64(
-        builder,
-        "index-right",
-        static_cast<std::uint64_t>(selection.right));
-    add_key_u64(
-        builder, "index-base-offset", selection.base_offset);
-    add_key_u64(
-        builder, "index-strict", selection.strict ? 1U : 0U);
-}
-
-void add_dynamic_part_index_key(
-    CacheKeyBuilder& builder,
-    const DynamicPartIndex& selection)
-{
-    add_key_u64(builder, "part-base", selection.base);
-    add_key_u64(
-        builder,
-        "part-left",
-        static_cast<std::uint64_t>(selection.left));
-    add_key_u64(
-        builder,
-        "part-right",
-        static_cast<std::uint64_t>(selection.right));
-    add_key_u64(builder, "part-base-offset", selection.base_offset);
-    add_key_u64(builder, "part-width", selection.width);
-    add_key_u64(
-        builder, "part-increasing", selection.increasing ? 1U : 0U);
-    add_key_u64(
-        builder,
-        "part-source-descending",
-        selection.source_descending ? 1U : 0U);
 }
 
 void add_container_type_key(
@@ -528,6 +450,12 @@ void add_container_type_key(
                         value.signals.begin(),
                         value.signals.end());
                 } else if constexpr (
+                    std::is_same_v<OperationType, WaitPla>) {
+                    referenced_signals.insert(
+                        referenced_signals.end(),
+                        value.signals.begin(),
+                        value.signals.end());
+                } else if constexpr (
                     std::is_same_v<OperationType, WaitOrder>) {
                     referenced_signals.insert(
                         referenced_signals.end(),
@@ -545,6 +473,9 @@ void add_container_type_key(
                 }
             },
             operation);
+    }
+    for (const auto& sensitivity : process.static_sensitivity) {
+        referenced_signals.push_back(sensitivity.signal);
     }
     std::ranges::sort(referenced_signals);
     const auto unique_end = std::ranges::unique(referenced_signals).begin();

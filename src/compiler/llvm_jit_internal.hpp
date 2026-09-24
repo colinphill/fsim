@@ -56,6 +56,14 @@ inline constexpr auto kJitRuntimeExactSignalSize
 inline constexpr auto kJitRuntimeWideSignalReadSize
     = static_cast<std::uint32_t>(
         offsetof(fsim_jit_runtime_v1, write_signal_packed));
+inline constexpr auto kJitRuntimeCoverageSampleSize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, execute_class_property_operation));
+inline constexpr auto kJitRuntimeClassPropertySize
+    = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, query_event_triggered));
+inline constexpr auto kJitRuntimeEventTriggeredSize
+    = static_cast<std::uint32_t>(sizeof(fsim_jit_runtime_v1));
 
 class LlvmObjectCache : public llvm::ObjectCache {
 public:
@@ -163,6 +171,9 @@ struct ValidatedProcess {
     bool uses_wide_signal_read { };
     bool uses_wide_signal_write { };
     bool uses_code_coverage { };
+    bool uses_coverage_sample { };
+    bool uses_class_property_operation { };
+    bool uses_event_triggered { };
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;
@@ -356,6 +367,7 @@ void lower_process(
     std::span<const runtime::simir::SignalId> direct_read_signals,
     std::span<const runtime::simir::SignalId> direct_update_signals,
     const ValidatedProcess& validated,
+    const ProcessLoweringPlan& lowering_plan,
     JitOptimizationLevel optimization,
     bool debug_instrumentation,
     bool require_direct_update_slots);

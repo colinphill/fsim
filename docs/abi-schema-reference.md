@@ -149,7 +149,7 @@ whole bind succeeds. Shutdown precedes unload.
 | `.fsimlib` | canonical TOML format 6, portable schema 15, compiled-HIR bundle 1 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
-| Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v168`; ordinary payload compiled-HIR bundle 1 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
+| Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 1 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
 
 All numeric binary fields are canonical little-endian. Artifact payload paths
 are relative, normalized, contained, and unique within their artifact. Trees

@@ -617,13 +617,35 @@ void Interpreter::Impl::stage_validated_update_words(
     const ProcessId process,
     const std::span<const ProcessUpdateWord> updates)
 {
-    static const bool disable_direct_word_commit
-        = std::getenv("FSIM_DISABLE_DIRECT_WORD_COMMIT") != nullptr;
     if (native_update_profile_enabled) {
         ++native_update_profile_word_calls;
         native_update_profile_words += updates.size();
     }
-    if (!module_paths.empty() || has_bidirectional_switches) {
+    bool module_path_requires_checked_staging {
+        !module_paths.empty()
+        && (native_signal_dependencies_unknown
+            || module_path_destination_mask.size() != signals.size())
+    };
+    if (!module_path_requires_checked_staging && !module_paths.empty()) {
+        module_path_requires_checked_staging = std::ranges::any_of(
+            updates,
+            [&](const ProcessUpdateWord& update) {
+                return update.signal >= module_path_destination_mask.size()
+                    || module_path_destination_mask[update.signal] != 0U;
+            });
+    }
+    const bool switch_connected_update = has_bidirectional_switches
+        && std::ranges::any_of(updates, [&](const auto& update) {
+            return update.signal >= switch_endpoint_adjacency.size()
+                || update.signal >= switch_control_adjacency.size()
+                || !switch_endpoint_adjacency[update.signal].empty()
+                || !switch_control_adjacency[update.signal].empty();
+        });
+    // A bidirectional switch process represents network topology, not a
+    // process-owned driver. The checked queue handles it before driver slots
+    // are staged.
+    if (module_path_requires_checked_staging || switch_connected_update
+        || (has_bidirectional_switches && switch_process(process))) {
         if (native_update_profile_enabled) {
             ++native_update_profile_word_fallbacks;
         }
@@ -698,7 +720,7 @@ void Interpreter::Impl::stage_validated_update_words(
             && direct_record->process == process
             && !external_driver_values[update.signal]
             && !forced_driver_values[update.signal];
-        if (!disable_direct_word_commit && direct_single_driver
+        if (!direct_word_commit_disabled && direct_single_driver
             && direct_record->value.width() <= 64U) {
             auto& staged = direct_single_driver_word_scratch[update.signal];
             const auto direct_width = static_cast<std::uint32_t>(
@@ -935,16 +957,56 @@ void Interpreter::Impl::stage_validated_update_words(
 bool Interpreter::Impl::stage_validated_update_slot_batches(
     const std::span<const ProcessUpdateSlotBatch> batches)
 {
-    static const bool disable_direct_word_commit
-        = std::getenv("FSIM_DISABLE_DIRECT_WORD_COMMIT") != nullptr;
     if (native_update_profile_enabled) {
         ++native_update_profile_calls;
     }
-    // Module paths and switch networks may redirect or synthesize writes, and
-    // profiling owns per-update counts. Leave those configurations on the
-    // ordinary checked path without consuming any slot state.
-    if (!module_paths.empty() || has_bidirectional_switches
-        || process_profile_enabled || update_profile_enabled) {
+    // Module-path destinations may redirect or synthesize writes, and
+    // profiling owns per-update counts. Leave those slots on the ordinary
+    // checked path without consuming any slot state.
+    bool module_path_requires_checked_staging {
+        !module_paths.empty()
+        && (native_signal_dependencies_unknown
+            || module_path_destination_mask.size() != signals.size())
+    };
+    if (!module_path_requires_checked_staging && !module_paths.empty()) {
+        for (const auto& batch : batches) {
+            for_each_active_update_slot(batch, [&](const auto& slot) {
+                if (*slot.active != 0U
+                    && (slot.signal >= module_path_destination_mask.size()
+                        || module_path_destination_mask[slot.signal] != 0U)) {
+                    module_path_requires_checked_staging = true;
+                }
+            });
+            if (module_path_requires_checked_staging) {
+                break;
+            }
+        }
+    }
+    bool switch_connected_batch { };
+    if (has_bidirectional_switches) {
+        for (const auto& batch : batches) {
+            for_each_active_update_slot(batch, [&](const auto& slot) {
+                if (*slot.active != 0U
+                    && (slot.signal >= switch_endpoint_adjacency.size()
+                        || slot.signal >= switch_control_adjacency.size()
+                        || !switch_endpoint_adjacency[slot.signal].empty()
+                        || !switch_control_adjacency[slot.signal].empty())) {
+                    switch_connected_batch = true;
+                }
+            });
+            if (switch_connected_batch) {
+                break;
+            }
+        }
+    }
+    const bool switch_process_batch = has_bidirectional_switches
+        && std::ranges::any_of(batches, [&](const auto& batch) {
+            return switch_process(batch.process);
+        });
+    if (module_path_requires_checked_staging || switch_connected_batch
+        || switch_process_batch
+        || process_profile_enabled
+        || update_profile_enabled) {
         if (native_update_profile_enabled) {
             ++native_update_profile_fallbacks;
         }
@@ -1077,7 +1139,7 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
                 && direct_record->process == batch.process
                 && !external_driver_values[signal]
                 && !forced_driver_values[signal];
-            if (!disable_direct_word_commit && direct_single_driver
+            if (!direct_word_commit_disabled && direct_single_driver
                 && slot.width <= 64U
                 && slot.word_count == 1U) {
                 auto& staged = direct_single_driver_word_scratch[signal];
@@ -1291,9 +1353,7 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
     const std::span<const ProcessLogic9UpdateBatch> batches)
 {
     struct Logic9BatchProfile {
-        bool enabled {
-            std::getenv("FSIM_PROFILE_LOGIC9_BATCH") != nullptr
-        };
+        bool enabled { };
         std::uint64_t calls { };
         std::uint64_t active_slots { };
         std::uint64_t rejected_runtime { };
@@ -1324,12 +1384,57 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         }
     };
     static Logic9BatchProfile profile;
-    if (profile.enabled) {
+    profile.enabled = profile.enabled || logic9_batch_profile_enabled;
+    if (logic9_batch_profile_enabled) {
         profile.calls += batches.size();
     }
-    if (module_paths.size() != 0U || has_bidirectional_switches
-        || process_profile_enabled || update_profile_enabled) {
-        if (profile.enabled) {
+    bool module_path_requires_checked_staging {
+        !module_paths.empty()
+        && (native_signal_dependencies_unknown
+            || module_path_destination_mask.size() != signals.size())
+    };
+    if (!module_path_requires_checked_staging && !module_paths.empty()) {
+        for (const auto& batch : batches) {
+            for (const auto& slot : batch.slots) {
+                if (slot.mask != nullptr && *slot.mask != 0U
+                    && (slot.signal >= module_path_destination_mask.size()
+                        || module_path_destination_mask[slot.signal] != 0U)) {
+                    module_path_requires_checked_staging = true;
+                    break;
+                }
+            }
+            if (module_path_requires_checked_staging) {
+                break;
+            }
+        }
+    }
+    bool switch_connected_batch { };
+    if (has_bidirectional_switches) {
+        for (const auto& batch : batches) {
+            for (const auto& slot : batch.slots) {
+                if (slot.mask != nullptr && *slot.mask != 0U
+                    && (slot.signal >= switch_endpoint_adjacency.size()
+                        || slot.signal >= switch_control_adjacency.size()
+                        || !switch_endpoint_adjacency[slot.signal].empty()
+                        || !switch_control_adjacency[slot.signal].empty())) {
+                    switch_connected_batch = true;
+                    break;
+                }
+            }
+            if (switch_connected_batch) {
+                break;
+            }
+        }
+    }
+    const bool switch_process_batch = has_bidirectional_switches
+        && std::ranges::any_of(batches, [&](const auto& batch) {
+            return switch_process(batch.process);
+        });
+    if (module_path_requires_checked_staging || switch_connected_batch
+        || switch_process_batch
+        || process_profile_enabled
+        || update_profile_enabled) {
+        if (logic9_batch_profile_enabled) {
             profile.rejected_runtime += batches.size();
         }
         return false;
@@ -1342,7 +1447,7 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         if (slot.mask == nullptr || *slot.mask == 0U) {
             continue;
         }
-        if (profile.enabled) {
+        if (logic9_batch_profile_enabled) {
             ++profile.active_slots;
         }
         const auto* direct_record
@@ -1359,7 +1464,7 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
             || direct_record == nullptr
             || direct_record->process != batch.process) {
             consumed_all = false;
-            if (profile.enabled) {
+            if (logic9_batch_profile_enabled) {
                 ++profile.rejected_slot;
             }
             continue;
@@ -1396,7 +1501,7 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         }
         if (!signal_transaction_observed[slot.signal]
             && (changed & mask) == 0U && staged.active == 0U) {
-            if (profile.enabled) {
+            if (logic9_batch_profile_enabled) {
                 ++profile.unchanged_current;
             }
             *slot.mask = 0U;
@@ -1404,7 +1509,7 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         }
         if (!signal_transaction_observed[slot.signal]
             && (changed & mask) == 0U) {
-            if (profile.enabled) {
+            if (logic9_batch_profile_enabled) {
                 ++profile.unchanged_staged;
             }
             *slot.mask = 0U;
@@ -1431,12 +1536,12 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         }
         staged.mask |= mask;
         staged_any = true;
-        if (profile.enabled) {
+        if (logic9_batch_profile_enabled) {
             ++profile.changed_slots;
         }
         *slot.mask = 0U;
       }
-      if (profile.enabled) {
+      if (logic9_batch_profile_enabled) {
           ++profile.accepted;
       }
     }

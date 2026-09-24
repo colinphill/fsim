@@ -11,8 +11,14 @@ void Interpreter::Impl::execute_sampled_read(
     if (operation.kind == SignalReadKind::current) {
         fail(process, "current signal read reached the sampled-read service");
     }
-    if (operation.signal >= sampled_values.size()
-        || operation.signal >= sampled_defaults.size()) {
+    const auto has_sampled_value = [this](const SignalId signal) {
+        return signal < sampled_values.size()
+            && signal < sampled_defaults.size()
+            && (sampled_value_dependencies_unknown
+                || (signal < sampled_value_dependency_mask.size()
+                    && sampled_value_dependency_mask[signal] != 0U));
+    };
+    if (!has_sampled_value(operation.signal)) {
         fail(process, "sampled signal state is unavailable");
     }
     const auto& slot_value = sampled_values[operation.signal];
@@ -61,7 +67,7 @@ void Interpreter::Impl::execute_sampled_read(
         : std::pair { scheduler.now(), std::uint64_t { 0 } };
     bool sample = !operation.clock;
     if (operation.clock) {
-        if (*operation.clock >= sampled_values.size()
+        if (!has_sampled_value(*operation.clock)
             || *operation.clock >= signal_events.size()) {
             fail(process, "sampled clock state is unavailable");
         }
@@ -79,7 +85,7 @@ void Interpreter::Impl::execute_sampled_read(
         }
     }
     if (sample && operation.gate) {
-        if (*operation.gate >= sampled_values.size()) {
+        if (!has_sampled_value(*operation.gate)) {
             fail(process, "sampled gating state is unavailable");
         }
         sample = sampled_values[*operation.gate].get(0U) == Logic4::one;

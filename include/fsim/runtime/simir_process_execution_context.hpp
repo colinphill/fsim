@@ -170,6 +170,30 @@ public:
     /// Checked fallback for saturation and unavailable/range diagnostics.
     [[nodiscard]] virtual CodeCoverageCounterRuntimeStatus
         record_code_coverage_counter(::fsim::runtime::CodeCoverageCounterId);
+    virtual void sample_coverage(
+        const CoverageSample& sample,
+        std::span<const PackedLogic4> actuals,
+        InstructionIndex instruction);
+    [[nodiscard]] virtual PackedLogic4 read_class_property(
+        std::uint64_t handle,
+        std::string_view property_identity,
+        std::size_t width,
+        InstructionIndex instruction);
+    virtual void write_class_property(
+        std::uint64_t handle,
+        std::string_view property_identity,
+        const PackedLogic4& value,
+        InstructionIndex instruction);
+    [[nodiscard]] virtual PackedLogic4 read_class_static_property(
+        std::string_view property_identity,
+        std::size_t width,
+        InstructionIndex instruction);
+    virtual void write_class_static_property(
+        std::string_view property_identity,
+        const PackedLogic4& value,
+        InstructionIndex instruction);
+    [[nodiscard]] virtual bool event_triggered(
+        SignalId event, InstructionIndex instruction) const;
     /// Dense exact Logic9 planes for callback-free native reads of signals no
     /// wider than one word. Entries for non-Logic9 signals are zero.
     [[nodiscard]] virtual std::span<const std::uint64_t>

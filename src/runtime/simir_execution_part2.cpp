@@ -263,7 +263,7 @@ void Interpreter::Impl::build_native_static_regions()
     const auto no_region = std::numeric_limits<std::size_t>::max();
     native_static_region_by_process.assign(processes.size(), no_region);
     native_static_region_offset_by_process.assign(processes.size(), no_region);
-    if (std::getenv("FSIM_ENABLE_NATIVE_STATIC_REGIONS") == nullptr
+    if (!native_static_regions_enabled
         || process_profile_enabled || execution_point_hook) {
         return;
     }

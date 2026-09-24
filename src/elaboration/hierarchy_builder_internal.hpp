@@ -8,9 +8,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
@@ -932,6 +934,48 @@ private:
     void validate_process_drivers();
     void canonicalize_process_operations(Process& process);
 
+    struct ProcessOperationGroupingKey {
+        std::size_t operation_count { };
+        std::size_t register_count { };
+        std::size_t string_register_count { };
+        std::size_t container_register_count { };
+        std::vector<ValueKind> register_value_kinds;
+        std::vector<std::pair<std::size_t, std::size_t>> operation_kinds;
+        std::vector<EdgeKind> sensitivity_edges;
+        std::vector<std::tuple<
+            InstructionIndex, InstructionIndex, std::uint64_t>>
+            trigger_regions;
+        std::string language_standard;
+        std::string compatibility_profile;
+
+        [[nodiscard]] bool operator<(
+            const ProcessOperationGroupingKey& other) const
+        {
+            return std::tie(
+                       operation_count,
+                       register_count,
+                       string_register_count,
+                       container_register_count,
+                       register_value_kinds,
+                       operation_kinds,
+                       sensitivity_edges,
+                       trigger_regions,
+                       language_standard,
+                       compatibility_profile)
+                < std::tie(
+                    other.operation_count,
+                    other.register_count,
+                    other.string_register_count,
+                    other.container_register_count,
+                    other.register_value_kinds,
+                    other.operation_kinds,
+                    other.sensitivity_edges,
+                    other.trigger_regions,
+                    other.language_standard,
+                    other.compatibility_profile);
+        }
+    };
+
     struct SystemVerilogAliasConnection {
         std::string left;
         std::uint64_t left_offset { };
@@ -1233,7 +1277,7 @@ private:
     std::unordered_map<StringObjectId, std::vector<std::string>>
         string_boundary_driver_paths_;
 
-    std::unordered_map<std::uint64_t, std::vector<ProcessId>>
+    std::map<ProcessOperationGroupingKey, std::vector<ProcessId>>
         process_operation_representatives_;
     OperationList::Storage operation_scratch_;
 };

@@ -756,8 +756,6 @@ src/compiler/llvm_jit.cpp
 src/compiler/llvm_jit_cache_key.cpp
 src/compiler/llvm_jit_cache_key_internal.hpp
 src/compiler/llvm_jit_cache_key_operations.cpp
-src/compiler/llvm_jit_cache_key_operations_primary.cpp
-src/compiler/llvm_jit_cache_key_operations_secondary.cpp
 src/compiler/llvm_jit_coverage.cpp
 src/compiler/llvm_jit_coverage.hpp
 src/compiler/llvm_jit_dynamic_part.cpp
@@ -1237,6 +1235,7 @@ tests/app/acc_scheduler_application_test.cpp
 tests/app/application_artifact_case.cpp
 tests/app/application_case_dispatch.cpp
 tests/app/application_classes_case.cpp
+tests/app/application_simulation_unsupported_pack_test.cpp
 tests/app/application_specialization_case.cpp
 tests/app/application_systemc_matrix_test.cpp
 tests/app/application_test.cpp
@@ -1276,6 +1275,7 @@ tests/app/compiled_hir_cache_application_test.cpp
 tests/app/coverage_application_test.cpp
 tests/app/coverage_command_test.cpp
 tests/app/coverage_database_psl_test.cpp
+tests/app/coverage_observer_native_application_test.cpp
 tests/app/delay_mode_application_test.cpp
 tests/app/display_application_test.cpp
 tests/app/expression_application_advanced_test.cpp

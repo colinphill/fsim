@@ -833,6 +833,27 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t instruction,
       uint32_t counter);
 
+  /*
+   * Append-only direct SimIR service callbacks. The immutable process and
+   * instruction identify the operation; frame carries arbitrary-width packed
+   * registers to and from the synchronous callback.
+   */
+  uint32_t (*sample_coverage)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      fsim_jit_frame_v1* frame);
+  uint32_t (*execute_class_property_operation)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      fsim_jit_frame_v1* frame);
+  uint32_t (*query_event_triggered)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      fsim_jit_frame_v1* frame);
+
 } fsim_jit_runtime_v1;
 
 /*

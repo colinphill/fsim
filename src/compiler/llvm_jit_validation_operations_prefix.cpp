@@ -185,6 +185,13 @@ void validate_prefix_operation(
                 } else if constexpr (
                     operation_group_contains_v<OperationType, ClassOperationGroup>) {
                     if constexpr (
+                        std::is_same_v<OperationType, ClassPropertyRead>
+                        || std::is_same_v<OperationType, ClassPropertyWrite>
+                        || std::is_same_v<OperationType, ClassStaticPropertyRead>
+                        || std::is_same_v<OperationType, ClassStaticPropertyWrite>) {
+                        result.uses_class_property_operation = true;
+                    }
+                    if constexpr (
                         std::is_same_v<OperationType, ClassMethodCall>
                         || std::is_same_v<OperationType, ClassStaticMethodCall>) {
                         result.uses_strings = result.uses_strings
@@ -196,6 +203,7 @@ void validate_prefix_operation(
                         constrain_width, validate_string_register);
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageSample>) {
+                    result.uses_coverage_sample = true;
                     if (operation.instance_identity.empty()
                         || operation.actual_widths.size()
                             != operation.actuals.size()

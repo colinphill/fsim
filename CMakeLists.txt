@@ -1062,9 +1062,7 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_execution.cpp
       src/compiler/llvm_jit_process_modules.cpp
       src/compiler/llvm_jit_cache_key.cpp
-    src/compiler/llvm_jit_cache_key_operations.cpp
-    src/compiler/llvm_jit_cache_key_operations_primary.cpp
-    src/compiler/llvm_jit_cache_key_operations_secondary.cpp
+      src/compiler/llvm_jit_cache_key_operations.cpp
       src/compiler/llvm_jit_coverage.cpp
     src/compiler/llvm_jit_lowering.cpp
     src/compiler/llvm_jit_lowering_planning.cpp
@@ -1089,7 +1087,8 @@ if(FSIM_WITH_LLVM)
   )
   add_library(fsim::llvm ALIAS fsim_llvm)
   fsim_configure_library(fsim_llvm)
-  target_link_libraries(fsim_llvm PUBLIC fsim_runtime PRIVATE fsim_object_cache)
+  target_link_libraries(fsim_llvm PUBLIC fsim_runtime
+    PRIVATE fsim_object_cache fsim_boost_pfr_headers)
   target_include_directories(fsim_llvm SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_definitions(
     fsim_llvm

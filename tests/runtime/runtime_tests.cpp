@@ -91,6 +91,8 @@ int main(const int argc, const char* const* argv)
         test_simir();
         test_simir_permanent_wait();
         test_simir_update_coalescing();
+        test_simir_diagnostic_environment_snapshot();
+        test_simir_native_signal_dependency_masks();
         test_resolved_driver_slots();
         test_simir_expressions_and_edges();
         test_simir_noninitializing_static_process();
