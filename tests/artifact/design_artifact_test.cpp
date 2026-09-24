@@ -357,7 +357,7 @@ int main() {
        *tlm_target,
        *tlm_transaction,
        std::nullopt,
-       *tlm_encoded,
+       crossing_transaction,
        "artifact correlated native TLM1 completion"},
       {fsim::systemc::SystemCKernelObservationKind::tlm2_dmi,
        {tlm2_transaction.time_fs, tlm2_transaction.delta,
@@ -367,7 +367,7 @@ int main() {
        *tlm_target,
        *tlm_transaction,
        std::nullopt,
-       *tlm2_encoded,
+       tlm2_transaction,
        "artifact correlated native TLM2 DMI completion"}};
   const auto systemc_observation_encoded =
       fsim::systemc::serialize_systemc_kernel_observation_batch(

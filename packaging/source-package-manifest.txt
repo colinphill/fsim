@@ -542,10 +542,10 @@ include/fsim/systemc/hierarchy.hpp
 include/fsim/systemc/incremental.hpp
 include/fsim/systemc/kernel_backend_binding_inventory.hpp
 include/fsim/systemc/kernel_backend_binding_inventory_accellera.hpp
+include/fsim/systemc/kernel_backend_direct.hpp
 include/fsim/systemc/kernel_backend_execution.hpp
 include/fsim/systemc/kernel_backend_inventory.hpp
 include/fsim/systemc/kernel_backend_inventory_accellera.hpp
-include/fsim/systemc/kernel_backend_loopback.hpp
 include/fsim/systemc/kernel_backend_observation.hpp
 include/fsim/systemc/kernel_backend_protocol.hpp
 include/fsim/systemc/kernel_backend_session.hpp
@@ -559,7 +559,6 @@ include/fsim/systemc/plugin_loader.hpp
 include/fsim/systemc/scv.hpp
 include/fsim/systemc/scv_artifact.hpp
 include/fsim/systemc/scv_backend_protocol.hpp
-include/fsim/systemc/scv_backend_transport.hpp
 include/fsim/systemc/scv_constraints.hpp
 include/fsim/systemc/scv_extensions.hpp
 include/fsim/systemc/scv_random.hpp
@@ -1196,7 +1195,6 @@ src/systemc/kernel_backend_binding_inventory.cpp
 src/systemc/kernel_backend_execution.cpp
 src/systemc/kernel_backend_execution_internal.hpp
 src/systemc/kernel_backend_inventory.cpp
-src/systemc/kernel_backend_loopback.cpp
 src/systemc/kernel_backend_observation.cpp
 src/systemc/kernel_backend_protocol.cpp
 src/systemc/kernel_backend_session.cpp
@@ -1211,7 +1209,6 @@ src/systemc/plugin_loader.cpp
 src/systemc/producer_fingerprint.hpp
 src/systemc/scv_artifact.cpp
 src/systemc/scv_backend_protocol.cpp
-src/systemc/scv_backend_transport.cpp
 src/systemc/scv_compatibility.cpp
 src/systemc/scv_constraints.cpp
 src/systemc/scv_extensions.cpp
@@ -1856,7 +1853,6 @@ tests/runtime/vpi_standard_startup_plugin.c
 tests/runtime/vpi_test_plugin.cpp
 tests/scv/scv_artifact_test.cpp
 tests/scv/scv_backend_protocol_test.cpp
-tests/scv/scv_backend_transport_test.cpp
 tests/scv/scv_closure_test.cmake
 tests/scv/scv_compatibility_test.cpp
 tests/scv/scv_constraints_test.cpp
@@ -1885,10 +1881,10 @@ tests/systemc/incremental_compiler_test.cpp
 tests/systemc/installed_consumer/CMakeLists.txt
 tests/systemc/installed_consumer/main.cpp
 tests/systemc/kernel_backend_binding_inventory_test.cpp
+tests/systemc/kernel_backend_direct_types_test.cpp
 tests/systemc/kernel_backend_execution_plugin.cpp
 tests/systemc/kernel_backend_execution_test.cpp
 tests/systemc/kernel_backend_inventory_test.cpp
-tests/systemc/kernel_backend_loopback_test.cpp
 tests/systemc/kernel_backend_observation_test.cpp
 tests/systemc/kernel_backend_protocol_test.cpp
 tests/systemc/kernel_backend_session_plugin.cpp
@@ -1896,6 +1892,7 @@ tests/systemc/kernel_backend_session_test.cpp
 tests/systemc/kernel_backend_synchronization_test.cpp
 tests/systemc/kernel_backend_value_codec_plugin.cpp
 tests/systemc/kernel_backend_value_codec_test.cpp
+tests/systemc/kernel_lifecycle_contract.hpp
 tests/systemc/macro_plugin.cpp
 tests/systemc/macro_plugin_extra.cpp
 tests/systemc/no_factory_plugin.cpp

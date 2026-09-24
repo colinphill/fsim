@@ -89,9 +89,9 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/accellera.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_protocol.hpp"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_direct.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_session.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_execution.hpp"
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_loopback.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_synchronization.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_value_codec.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_value_endpoint.hpp"
@@ -187,6 +187,17 @@ if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
 endif()
 
 file(SHA256
+  "${FSIM_SOURCE_DIR}/include/fsim/systemc/kernel_backend_direct.hpp"
+  FSIM_SOURCE_DIGEST)
+file(SHA256
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_direct.hpp"
+  FSIM_INSTALLED_DIGEST)
+if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
+  message(FATAL_ERROR
+    "installed public header changed: systemc/kernel_backend_direct.hpp")
+endif()
+
+file(SHA256
   "${FSIM_SOURCE_DIR}/include/fsim/systemc/kernel_backend_session.hpp"
   FSIM_SOURCE_DIGEST)
 file(SHA256
@@ -206,17 +217,6 @@ file(SHA256
 if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
   message(FATAL_ERROR
     "installed public header changed: systemc/kernel_backend_execution.hpp")
-endif()
-
-file(SHA256
-  "${FSIM_SOURCE_DIR}/include/fsim/systemc/kernel_backend_loopback.hpp"
-  FSIM_SOURCE_DIGEST)
-file(SHA256
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_loopback.hpp"
-  FSIM_INSTALLED_DIGEST)
-if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
-  message(FATAL_ERROR
-    "installed public header changed: systemc/kernel_backend_loopback.hpp")
 endif()
 
 file(SHA256

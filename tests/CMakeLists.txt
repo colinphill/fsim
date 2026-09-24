@@ -3258,23 +3258,6 @@ set_tests_properties(
 )
 
 add_executable(
-  fsim_scv_backend_transport_tests
-  scv/scv_backend_transport_test.cpp
-)
-fsim_configure_test(fsim_scv_backend_transport_tests)
-target_link_libraries(fsim_scv_backend_transport_tests PRIVATE fsim_systemc)
-add_test(
-  NAME fsim.scv.backend_transport
-  COMMAND fsim_scv_backend_transport_tests
-)
-set_tests_properties(
-  fsim.scv.backend_transport
-  PROPERTIES
-    TIMEOUT 1200
-    LABELS "scv;systemc;backend;transport;loopback;serialization;merge;replay;backpressure;disconnect;crash;resources;positive;negative;fast"
-)
-
-add_executable(
   fsim_scv_resource_tests
   scv/scv_resource_test.cpp
 )
@@ -3385,6 +3368,19 @@ fsim_register_simple_test(
   fsim_systemc_kernel_backend_protocol_tests
   "fast;systemc;accellera;backend;protocol;identity;positive;negative;resources"
 )
+add_executable(
+  fsim_systemc_kernel_backend_direct_types_tests
+  systemc/kernel_backend_direct_types_test.cpp
+)
+fsim_configure_test(fsim_systemc_kernel_backend_direct_types_tests)
+target_link_libraries(
+  fsim_systemc_kernel_backend_direct_types_tests PRIVATE fsim_systemc_headers
+)
+fsim_register_simple_test(
+  fsim.systemc.kernel_backend_direct_types
+  fsim_systemc_kernel_backend_direct_types_tests
+  "fast;systemc;accellera;backend;direct;types;compile;positive"
+)
 add_library(
   fsim_test_accellera_session_plugin
   MODULE
@@ -3492,29 +3488,6 @@ set_tests_properties(
   fsim.systemc.kernel_backend_execution
   PROPERTIES
     LABELS "fast;systemc;accellera;backend;execution;ordering;rollback;positive;negative;resources"
-)
-add_executable(
-  fsim_systemc_kernel_backend_loopback_tests
-  systemc/kernel_backend_loopback_test.cpp
-)
-fsim_configure_test(fsim_systemc_kernel_backend_loopback_tests)
-target_link_libraries(
-  fsim_systemc_kernel_backend_loopback_tests PRIVATE fsim_systemc
-)
-add_dependencies(
-  fsim_systemc_kernel_backend_loopback_tests
-  fsim_test_accellera_execution_plugin
-)
-add_test(
-  NAME fsim.systemc.kernel_backend_loopback
-  COMMAND
-    fsim_systemc_kernel_backend_loopback_tests
-    "$<TARGET_FILE:fsim_test_accellera_execution_plugin>"
-)
-set_tests_properties(
-  fsim.systemc.kernel_backend_loopback
-  PROPERTIES
-    LABELS "fast;systemc;accellera;backend;loopback;protocol;replay;ordering;containment;positive;negative;resources"
 )
 add_executable(
   fsim_systemc_kernel_backend_synchronization_tests

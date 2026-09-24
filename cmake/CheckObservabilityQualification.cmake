@@ -60,8 +60,8 @@ fsim_require_tokens(
 fsim_require_tokens(
   tests/app/scv_recording_application_test.cpp
   "std::ranges::sort(records, transaction_record_precedes);"
-  "direct_receipt.bytes == loopback_receipt.bytes"
-  "direct.drain() == loopback.drain()"
+  "resource_metrics->recorded_transactions == 4U"
+  "resource_metrics->transported_transactions == 4U"
   "resource_metrics->backpressure_events > 0U")
 
 fsim_require_tokens(

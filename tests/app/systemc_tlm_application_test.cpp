@@ -168,6 +168,20 @@ void verify_observation()
     assert(observer.batch().records[4].kind
         == systemc::SystemCKernelObservationKind::tlm2_debug);
     assert(!observer.batch().records[4].value);
+    const auto& records = observer.batch().records;
+    const auto* observed_analysis = std::get_if<
+        systemc::SystemCKernelTlm1Transaction>(&records[2].transaction_data);
+    assert(observed_analysis != nullptr && observed_analysis->explicit_bridge);
+    assert(observed_analysis->request == analysis_value);
+    const auto* observed_dmi = std::get_if<
+        systemc::SystemCKernelTlm2Transaction>(&records[3].transaction_data);
+    assert(observed_dmi != nullptr && observed_dmi->explicit_bridge);
+    assert(observed_dmi->dmi == dmi.dmi);
+    const auto* observed_debug = std::get_if<
+        systemc::SystemCKernelTlm2Transaction>(&records[4].transaction_data);
+    assert(observed_debug != nullptr
+        && observed_debug->operation
+            == systemc::SystemCKernelTlm2Operation::debug_transport);
 }
 
 } // namespace

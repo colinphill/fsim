@@ -73,21 +73,19 @@ fsim_scv_require_tokens(
   "ScvStreamId"
   "ScvGeneratorId"
   "ScvTransactionId"
-  "scv_backend_message_header_bytes = 160")
+  "ScvSequenceId"
+  "max_identity_bytes")
 fsim_scv_require_tokens(
   "src/systemc/scv_backend_protocol.cpp"
   "fsim-scv-backend-identity-v1"
   "FSIM-SCV-B001"
-  "FSIM-SCV-B002"
-  "FSIM-SCV-B003"
-  "scv_backend_message_precedes")
+  "FSIM-SCV-B003")
 foreach(path IN ITEMS
     "include/fsim/systemc/scv_backend_protocol.hpp"
     "src/systemc/scv_backend_protocol.cpp"
     "include/fsim/systemc/scv_random.hpp"
     "src/systemc/scv_random.cpp"
     "include/fsim/systemc/scv_recording.hpp"
-    "include/fsim/systemc/scv_backend_transport.hpp"
     "include/fsim/systemc/scv_resources.hpp")
   file(READ "${FSIM_SOURCE_DIR}/${path}" protocol_text)
   foreach(forbidden IN ITEMS
@@ -177,20 +175,6 @@ fsim_scv_require_tokens(
   "FSIM-SCV-L003"
   "bounded backpressure")
 fsim_scv_require_tokens(
-  "include/fsim/systemc/scv_backend_transport.hpp"
-  "scv_transport_schema_version = 1U"
-  "ScvBackendRecordTransport"
-  "merge_scv_transport_envelopes")
-fsim_scv_require_tokens(
-  "src/systemc/scv_backend_transport.cpp"
-  "serialize_transaction_record"
-  "deserialize_transaction_record"
-  "ScvBackendTransportKind::direct"
-  "ScvBackendTransportKind::worker_loopback"
-  "FSIM-SCV-W001"
-  "FSIM-SCV-W002"
-  "FSIM-SCV-W003")
-fsim_scv_require_tokens(
   "include/fsim/systemc/scv_resources.hpp"
   "ScvResourceLimits"
   "ScvResourceWorkload"
@@ -199,7 +183,8 @@ fsim_scv_require_tokens(
 fsim_scv_require_tokens(
   "src/systemc/scv_resources.cpp"
   "recording_enabled"
-  "ScvBackendTransportStatus::backpressure"
+  "ResourceQueueSendStatus::backpressure"
+  "typed_record_digest_domain"
   "ScvConstraintStatus::resource_exhausted"
   "FSIM-SCV-E001"
   "FSIM-SCV-E002"
@@ -248,7 +233,8 @@ fsim_scv_require_tokens(
   "solve_scv_constraints"
   "capture_scv_extensions"
   "ScvNativeRecordingRegistry"
-  "ScvBackendRecordTransport"
+  "serialize_transaction_record"
+  "deserialize_transaction_record"
   "live_native_payloads")
 
 fsim_scv_require_tokens(

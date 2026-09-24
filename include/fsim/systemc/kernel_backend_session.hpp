@@ -6,15 +6,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <span>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace fsim::systemc {
 
-inline constexpr std::uint32_t kSystemCKernelSessionPayloadVersion = 1U;
+class SystemCKernelBackend;
 
 struct SystemCKernelSessionLimits {
     std::size_t max_plugin_path_bytes { 4096U };
@@ -92,50 +89,6 @@ struct SystemCKernelLifecycleReceipt {
     friend bool operator==(const SystemCKernelLifecycleReceipt&,
         const SystemCKernelLifecycleReceipt&) = default;
 };
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_create_session_payload(
-    const SystemCKernelCreateSessionPayload& payload,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelCreateSessionPayload>
-deserialize_systemc_create_session_payload(
-    std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_create_object_payload(
-    const SystemCKernelCreateObjectPayload& payload,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelCreateObjectPayload>
-deserialize_systemc_create_object_payload(
-    std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_bind_endpoint_payload(
-    const SystemCKernelBindEndpointPayload& payload,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelBindEndpointPayload>
-deserialize_systemc_bind_endpoint_payload(
-    std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_lifecycle_receipt(
-    const SystemCKernelLifecycleReceipt& receipt,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelLifecycleReceipt>
-deserialize_systemc_lifecycle_receipt(
-    std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics);
 
 [[nodiscard]] const char* systemc_kernel_lifecycle_diagnostic_code(
     SystemCKernelLifecycleCode code) noexcept;

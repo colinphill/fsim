@@ -42,7 +42,7 @@ starts on branch codex/v3 from clean v2 checkpoint
   and identify existing errors before triggering the new run. Resolve known
   actionable failures in the worktree instead of starting a run merely to
   rediscover them.
-- Local builds use at least eight workers. Local and hosted qualification
+- Local builds use at least twelve workers. Local and hosted qualification
   commands retain 120-minute timeouts.
 - Avoid formatting-only header changes. Make semantic header edits only when
   required and keep formatting work confined to changed implementation sources
@@ -6413,13 +6413,14 @@ Keep Reed-Solomon HDL and source-derived test fixtures out of the tracked
 repository; use external source roots and the ignored, package-excluded
 `.local-artifacts/` directory for local overlays and evidence.
 
-Delegate implementation to as many as three `gpt-6-luna` workers at xhigh
-reasoning effort. The primary agent owns orchestration, interface decisions,
+Delegate implementation to as many as six `gpt-6-luna` workers at max
+reasoning effort, subject to the session's available concurrency slots. The
+primary agent owns orchestration, interface decisions,
 integration review, qualification, commits, pushes, and hosted-CI monitoring.
 Give every worker a bounded task, exclusive file ownership, required tests,
 and explicit invariants; land shared interfaces before distributing consumer
 migrations. Workers do not commit, push, launch full builds, or edit another
-worker's files. Run builds and tests centrally with at least eight local build
+worker's files. Run builds and tests centrally with at least twelve local build
 workers, without overlapping builds, qualification suites, or profiling runs.
 After each frozen batch of code changes, reindex the `fsim-v3-simplification`
 codebase-memory MCP project before graph-based structural review of the new
@@ -7145,26 +7146,45 @@ Change 1 without a release tag.
 
 #### Batch 188E - direct SystemC kernel interface
 
-1. Capture existing lifecycle and failure behavior as transport-independent tests.
-2. Define direct request/result types using existing semantic identities and payloads.
-3. Replace byte exchange with typed kernel operations; remove handshake negotiation.
-4. Implement session creation, ownership, and idempotent shutdown.
-5. Migrate object construction and parameter validation.
-6. Migrate endpoint binding with existing rollback guarantees.
-7. Migrate elaboration and publication.
-8. Migrate start and advance operations.
-9. Migrate input application.
-10. Migrate next-activity queries and output draining.
-11. Migrate reporting, inspection, and snapshots.
-12. Migrate transaction observation while preserving SCV/TLM behavior.
-13. Adapt synchronization with unchanged time, delta, region, and session ordering.
-14. Adapt application and plugin integration.
-15. Adapt channel inventories and trace routing.
-16. Delete unused framing, protocol codecs, loopback transport, and message-accounting machinery.
-17. Update installed headers, examples, contract checks, and C++ migration documentation.
-18. Exercise invalid transitions, plugin failures, partial construction, rollback, and shutdown.
-19. Qualify mixed-language execution and unchanged native plugin C ABI behavior.
-20. Run standard closure and hand off to 188F.
+1. [x] Capture existing lifecycle and failure behavior as transport-independent tests.
+2. [x] Define direct request/result types using existing semantic identities and payloads.
+3. [x] Replace byte exchange with typed kernel operations; remove handshake negotiation.
+4. [x] Implement session creation, ownership, and idempotent shutdown.
+5. [x] Migrate object construction and parameter validation.
+6. [x] Migrate endpoint binding with existing rollback guarantees.
+7. [x] Migrate elaboration and publication.
+8. [x] Migrate start and advance operations.
+9. [x] Migrate input application.
+10. [x] Migrate next-activity queries and output draining.
+11. [x] Migrate reporting, inspection, and snapshots.
+12. [x] Migrate transaction observation while preserving SCV/TLM behavior.
+13. [x] Adapt synchronization with unchanged time, delta, region, and session ordering.
+14. [x] Adapt application and plugin integration.
+15. [x] Adapt channel inventories and trace routing.
+16. [x] Delete unused framing, protocol codecs, loopback transport, and message-accounting machinery.
+17. [x] Update installed headers, examples, contract checks, and C++ migration documentation.
+18. [x] Exercise invalid transitions, plugin failures, partial construction, rollback, and shutdown.
+19. [x] Qualify mixed-language execution and unchanged native plugin C ABI behavior.
+20. [x] Run standard closure and hand off to 188F.
+
+Batch 188E Change 20 local qualification is green on the final source.
+Clean Clang/LLVM 22 warnings-as-errors Release and Debug builds pass with
+twelve workers, followed by unfiltered 421/421 CTest suites in 227.88 and
+216.00 seconds respectively. Before these final matrices, the latest prior
+hosted run `35981508815` was inspected: both Linux lanes passed, while both
+Windows lanes failed the trace-archive frozen-byte test because its golden
+included the host's absolute temporary path. A test-only historical-path
+fixture fixes the platform dependency without changing production v1 archive
+bytes; focused Debug/Release tests and an alternate-temp-root Release test
+pass. The first local Release matrix exposed stale diagnostic and closure
+anchors after removing the transient SCV transport; focused repairs and
+reruns passed before the final clean matrices. Source-package, installed
+public contract, ABI, inventory, and closure tests pass; `git diff --check`
+is clean and the MCP index was refreshed. The user-waived seven-sample
+performance matrix is not claimed as a pass. The cohesive implementation
+commit and push close Change 20; the newly pushed hosted run is unverified
+under the explicit post-push monitoring waiver. Resume at Batch 188F Change
+1 without a release tag.
 
 #### Batch 188F - bounded lifetimes, tracing, and observers
 

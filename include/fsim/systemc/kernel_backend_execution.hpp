@@ -7,13 +7,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <vector>
 
 namespace fsim::systemc {
 
-inline constexpr std::uint32_t kSystemCKernelExecutionPayloadVersion = 2U;
+class SystemCKernelBackend;
 
 struct SystemCKernelExecutionLimits {
     std::size_t max_samples_per_message { 4096U };
@@ -127,39 +126,6 @@ struct SystemCKernelExecutionReceipt {
     friend bool operator==(const SystemCKernelExecutionReceipt&,
         const SystemCKernelExecutionReceipt&) = default;
 };
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_apply_inputs_payload(
-    const SystemCKernelApplyInputsPayload& payload,
-    const SystemCKernelExecutionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelApplyInputsPayload>
-deserialize_systemc_apply_inputs_payload(
-    std::span<const std::byte> bytes,
-    const SystemCKernelExecutionLimits& limits,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_advance_payload(
-    const SystemCKernelAdvancePayload& payload,
-    const SystemCKernelExecutionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelAdvancePayload>
-deserialize_systemc_advance_payload(
-    std::span<const std::byte> bytes,
-    const SystemCKernelExecutionLimits& limits,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] std::optional<std::vector<std::byte>>
-serialize_systemc_execution_receipt(
-    const SystemCKernelExecutionReceipt& receipt,
-    const SystemCKernelExecutionLimits& limits,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] std::optional<SystemCKernelExecutionReceipt>
-deserialize_systemc_execution_receipt(
-    std::span<const std::byte> bytes,
-    const SystemCKernelExecutionLimits& limits,
-    diagnostic::Engine& diagnostics);
 
 [[nodiscard]] const char* systemc_kernel_execution_diagnostic_code(
     SystemCKernelExecutionCode code) noexcept;

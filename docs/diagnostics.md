@@ -2827,9 +2827,8 @@ one stable diagnostic from the five-code FST reader family.
 |---|---|---|
 | `FSIM-SCV-C001` | error | An SCV producer identity is missing, malformed, trailing, or differs in SCV release/header/source/patch/tree, SystemC runtime/source/bridge, TLM, compiler, standard library, adapter ABI, plug-in ABI, artifact schema, or cache schema. |
 | `FSIM-SCV-A001` | error | A mapped, incremental, or embedded design artifact carries a missing, oversized, malformed, stale, or incompatible SCV producer identity; the native payload is rejected before it is opened or published. |
-| `FSIM-SCV-B001` | error | An SCV backend island, hierarchy, object, stream, generator, sequence, or transaction identity is empty, unbounded, non-canonical, or lacks its required parent. |
-| `FSIM-SCV-B002` | error | An SCV backend operation or receipt has an unsupported schema/enum/flag, invalid direction/status/correlation, missing or extraneous stable identities, invalid simulation coordinates, bad magic, or malformed framing. |
-| `FSIM-SCV-B003` | error | SCV backend limits, fixed header, reserved bytes, message size, or bounded opaque payload are inconsistent or exceed the configured resource budget. |
+| `FSIM-SCV-B001` | error | An SCV island, hierarchy, object, stream, generator, sequence, or transaction identity is empty, non-canonical, or lacks its required parent. |
+| `FSIM-SCV-B003` | error | The SCV canonical identity size limit is zero or exceeds the supported 32-bit identity-length bound. |
 | `FSIM-SCV-R001` | error | An SCV random seed path has a missing or malformed stable island, object, or canonical thread identity. |
 | `FSIM-SCV-R002` | error | An SCV random distribution, bag, bound, exclusion, weight, or replay membership is invalid. |
 | `FSIM-SCV-R003` | error | An SCV random identity, domain, draw, cycle, or replay resource limit is inconsistent or exhausted. |
@@ -2851,9 +2850,6 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-SCV-L001` | error | SCV trace selection, observer, submission, close, or callback-reentry state carries an invalid identity, coordinate, limit, token, or lifecycle transition. |
 | `FSIM-SCV-L002` | error | SCV trace correlation has duplicate or regressing transactions, invalid SystemC signal/port or TLM identity/time, invalid VCD/FST association, or a malformed resulting common record. |
 | `FSIM-SCV-L003` | error | SCV trace selection, observer, correlation, waveform, sequence, or pending-record limits are exhausted; bounded backpressure rejects the submission without changing the queue. |
-| `FSIM-SCV-W001` | error | An SCV transport envelope has bad magic/schema/framing, invalid island/sequence identity, an invalid common-record payload, or exceeds its message budget. |
-| `FSIM-SCV-W002` | error | An SCV direct/worker-loopback transport has invalid kind/ownership, receives a foreign island, duplicate or regressing island sequence, or invalid/duplicate merge input. |
-| `FSIM-SCV-W003` | error | SCV transport message, queue, byte, record, or merge limits are inconsistent/exhausted, or a disconnected/crashed transport cannot accept work; no queue state changes. |
 | `FSIM-SCV-E001` | error | An SCV resource probe has an invalid island, empty workload, or out-of-range failure injection point. |
 | `FSIM-SCV-E002` | error | An SCV resource probe could not contain or recover from an injected producer, consumer, recording, transport, solver, or ownership failure. |
 | `FSIM-SCV-E003` | error | An SCV resource-probe transaction, attribute, solver, queue, message, byte, or memory-accounting limit is inconsistent, exhausted, or overflowed. |
@@ -2884,24 +2880,18 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-SC-I005` | error | Ordered SystemC object linking or native plug-in loading found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, a stale producer identity, ABI failure, or no published factories; producer diagnostics name found/required compiler, target, fingerprint, and version before native image open. |
 | `FSIM-SC-I006` | error | Explicit SystemC plug-in inputs contain the same logical library more than once. |
 | `FSIM-SC-B001` | error | A SystemC backend island, hierarchy, object, endpoint, transaction, or sequence identity has invalid canonical text, an absent parent, or a zero ordinal. |
-| `FSIM-SC-B002` | error | A SystemC backend message has an unsupported schema/operation/direction/status/flag, invalid request-response correlation, incomplete identity chain, or malformed encoding. |
-| `FSIM-SC-B003` | error | SystemC backend identity, payload, message, reserved-header, or protocol-limit resources are inconsistent or exceed their governed bounds. |
 | `FSIM-SC-S001` | error | A SystemC kernel session request has the wrong owner, lifecycle phase, typed hierarchy identity, repeated construction, or terminal-state transition. |
-| `FSIM-SC-S002` | error | A SystemC kernel session construction, object, binding, or lifecycle-receipt payload is malformed, truncated, trailing, inconsistent, duplicated, or noncanonical. |
-| `FSIM-SC-S003` | error | SystemC kernel session plug-in path, identity, name, object, binding, parameter, detail, or enclosing protocol resources exceed their governed limits. |
+| `FSIM-SC-S002` | error | A typed SystemC kernel session construction, object, binding, or lifecycle payload is inconsistent, duplicated, or noncanonical. |
+| `FSIM-SC-S003` | error | SystemC kernel session plug-in path, identity, name, object, binding, parameter, or detail resources exceed their governed limits. |
 | `FSIM-SC-S004` | error | Upstream SystemC context allocation, plug-in loading, native factory construction, typed port binding, elaboration, start, or zero-time quiescence failed and forced transactional rollback. |
 | `FSIM-SC-E001` | error | A SystemC execution request targets the wrong session state, island, object, endpoint direction, order, or terminal transition. |
-| `FSIM-SC-E002` | error | A SystemC scalar or typed input, advance, result, inspection, report, or snapshot payload is malformed, truncated, trailing, inconsistent, duplicated, noncanonical, or unordered. |
-| `FSIM-SC-E003` | error | SystemC execution sample, typed value, detail, delta-cycle, duration, receipt, or enclosing protocol resources exceed their governed limits. |
+| `FSIM-SC-E002` | error | A typed SystemC scalar input, advance, result, inspection, report, or snapshot payload is inconsistent, duplicated, noncanonical, or unordered. |
+| `FSIM-SC-E003` | error | SystemC execution sample, typed value, detail, delta-cycle, duration, or receipt resources exceed their governed limits. |
 | `FSIM-SC-E004` | error | Upstream SystemC value application, exact advancement, activity query, value sampling, pause/stop observation, or execution failed at a kernel safe point. |
-| `FSIM-SC-L001` | error | A SystemC loopback request is malformed, uses the wrong direction, mutates a replay, or has a duplicate, stale, skipped, or exhausted island sequence. |
-| `FSIM-SC-L002` | error | A loopback peer returned a rejected, malformed, excessive, misdirected, uncorrelated, wrong-operation, or wrong-identity response and was disconnected. |
-| `FSIM-SC-L003` | error | SystemC loopback replay, buffer, or forwarded-exchange limits are invalid or exhausted. |
-| `FSIM-SC-L004` | error | A SystemC loopback has no live serialized peer, or its peer disconnected or failed and was contained. |
 | `FSIM-SC-N001` | error | A SystemC multi-island synchronization request targets an empty or terminal coordinator, or repeats, reverses, or skips the required exact time/delta safe-point order. |
-| `FSIM-SC-N002` | error | A synchronized island, host language, endpoint, scalar input, serialized backend, or batch identity is invalid, unknown, or duplicated. |
+| `FSIM-SC-N002` | error | A synchronized island, host language, endpoint, scalar input, direct backend, or batch identity is invalid, unknown, or duplicated. |
 | `FSIM-SC-N003` | error | SystemC synchronization island, input, output, batch, or request-sequence resources are invalid, exhausted, or exceed their governed limits. |
-| `FSIM-SC-N004` | error | A serialized island failed to apply its input batch, reach exact time, drain evaluate/update/notification to quiescence, or return its ordered dirty-output batch; all coordinated islands were closed without partial publication. |
+| `FSIM-SC-N004` | error | A direct island failed to apply its input batch, reach exact time, drain evaluate/update/notification to quiescence, or return its ordered dirty-output batch; all coordinated islands were closed without partial publication. |
 | `FSIM-SC-V001` | error | A type-erased SystemC value has unsupported or inconsistent kind, signedness, range, plane, padding, enumeration, or time metadata. |
 | `FSIM-SC-V002` | error | A serialized SystemC value has a malformed magic, version, header, dimension, text, limb plane, truncation, reserved field, or trailing byte. |
 | `FSIM-SC-V003` | error | A SystemC value-codec limit, width, encoded byte count, type name, enumeration table, literal, or aggregate enumeration text exceeds its governed bound. |

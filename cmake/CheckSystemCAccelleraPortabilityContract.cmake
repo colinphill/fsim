@@ -238,19 +238,25 @@ fsim_require_tokens(tests/app/application_test_non_project_cli.cpp
   "stale-incremental.fsimdesign"
   "stale_producer_rejected")
 fsim_require_tokens(include/fsim/systemc/kernel_backend_protocol.hpp
-  "kSystemCKernelProtocolVersion = 1U"
-  "kSystemCKernelMessageHeaderBytes = 128U"
   "SystemCIslandId"
   "SystemCHierarchyId"
   "SystemCObjectId"
   "SystemCEndpointId"
   "SystemCTransactionId"
   "SystemCSequenceId"
+  "SystemCKernelIdentityLimits"
+  "SystemCKernelProtocolLimits")
+fsim_require_tokens(include/fsim/systemc/kernel_backend_direct.hpp
+  "SystemCKernelDirectRequest"
+  "SystemCKernelCreateSessionRequest"
+  "SystemCKernelCreateObjectRequest"
+  "SystemCKernelBindEndpointRequest"
+  "SystemCKernelApplyInputsRequest"
+  "SystemCKernelAdvanceRequest"
+  "SystemCKernelDirectResult"
   "class SystemCKernelBackend"
-  "SystemCKernelTransportResult exchange"
-  "SystemCKernelProtocolLimits"
-  "serialize_systemc_kernel_message"
-  "deserialize_systemc_kernel_message")
+  "virtual SystemCKernelDirectResult request"
+  "virtual void close() noexcept")
 file(READ
   "${FSIM_SOURCE_DIR}/include/fsim/systemc/kernel_backend_protocol.hpp"
   FSIM_BACKEND_PROTOCOL_HEADER)
@@ -267,18 +273,13 @@ endforeach()
 fsim_require_tokens(src/systemc/kernel_backend_protocol.cpp
   "fsim-systemc-kernel-identity-v1"
   "FSIM-SC-B001"
-  "FSIM-SC-B002"
-  "FSIM-SC-B003"
   "append_u64"
-  "reserved0 != 0U"
-  "payload_size > limits.max_payload_bytes")
+  "valid_identity_text")
 fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
   "0xcb1bf7d185be2025ULL"
-  "3e36d03af2c6b98c86ce50e64b82e0831ed7e485e6375c51c009e572a61a72b9"
-  "SystemCKernelOperation::observe_transaction"
-  "oversized_diagnostics")
+  "short_limit.max_identity_bytes = 4U"
+  "make_systemc_sequence_id(*island, 0U")
 fsim_require_tokens(include/fsim/systemc/kernel_backend_session.hpp
-  "kSystemCKernelSessionPayloadVersion = 1U"
   "SystemCKernelSessionLimits"
   "SystemCKernelSessionState"
   "SystemCKernelLifecycleCode"
@@ -333,7 +334,6 @@ fsim_require_tokens(tests/CMakeLists.txt
   "fsim_test_accellera_session_plugin"
   "fsim.systemc.kernel_backend_session")
 fsim_require_tokens(include/fsim/systemc/kernel_backend_execution.hpp
-  "kSystemCKernelExecutionPayloadVersion = 2U"
   "SystemCKernelExecutionLimits"
   "SystemCAccelleraRegion"
   "SystemCKernelAdvanceKind"
@@ -341,8 +341,7 @@ fsim_require_tokens(include/fsim/systemc/kernel_backend_execution.hpp
   "SystemCKernelExecutionOrder"
   "SystemCKernelScalarValue"
   "SystemCKernelExecutionReceipt"
-  "serialize_systemc_execution_receipt"
-  "deserialize_systemc_execution_receipt")
+  "make_systemc_kernel_session_backend")
 file(READ
   "${FSIM_SOURCE_DIR}/include/fsim/systemc/kernel_backend_execution.hpp"
   FSIM_BACKEND_EXECUTION_HEADER)
@@ -367,13 +366,13 @@ fsim_require_tokens(src/systemc/kernel_backend_execution.cpp
   "FSIM-SC-E003"
   "FSIM-SC-E004")
 fsim_require_tokens(src/systemc/kernel_backend_session.cpp
-  "SystemCKernelOperation::apply_inputs"
-  "SystemCKernelOperation::advance"
-  "SystemCKernelOperation::next_activity"
-  "SystemCKernelOperation::drain_outputs"
-  "SystemCKernelOperation::report"
-  "SystemCKernelOperation::inspect"
-  "SystemCKernelOperation::snapshot"
+  "SystemCKernelApplyInputsRequest"
+  "SystemCKernelAdvanceRequest"
+  "SystemCKernelNextActivityRequest"
+  "SystemCKernelDrainOutputsRequest"
+  "SystemCKernelReportRequest"
+  "SystemCKernelInspectRequest"
+  "SystemCKernelSnapshotRequest"
   "dirty_outputs_")
 fsim_require_tokens(tests/systemc/kernel_backend_execution_test.cpp
   "SystemCKernelExecutionStatus::paused"
@@ -391,51 +390,6 @@ fsim_require_tokens(tests/systemc/kernel_backend_execution_plugin.cpp
 fsim_require_tokens(tests/CMakeLists.txt
   "fsim_test_accellera_execution_plugin"
   "fsim.systemc.kernel_backend_execution")
-fsim_require_tokens(include/fsim/systemc/kernel_backend_loopback.hpp
-  "kSystemCKernelLoopbackRevision = 1U"
-  "SystemCKernelLoopbackLimits"
-  "SystemCKernelLoopbackStats"
-  "SystemCKernelLoopbackBackend"
-  "make_systemc_kernel_loopback_backend"
-  "make_systemc_kernel_loopback_session_backend"
-  "systemc_kernel_loopback_live_transports")
-file(READ
-  "${FSIM_SOURCE_DIR}/include/fsim/systemc/kernel_backend_loopback.hpp"
-  FSIM_BACKEND_LOOPBACK_HEADER)
-foreach(FSIM_FORBIDDEN_TOKEN IN ITEMS
-    "sc_core::" "sc_simcontext" "tlm::" "void*" "uintptr_t"
-    "coroutine_handle" "std::thread")
-  string(FIND "${FSIM_BACKEND_LOOPBACK_HEADER}"
-    "${FSIM_FORBIDDEN_TOKEN}" FSIM_FORBIDDEN_INDEX)
-  if(NOT FSIM_FORBIDDEN_INDEX EQUAL -1)
-    message(FATAL_ERROR
-      "SystemC backend loopback exposes forbidden runtime token: ${FSIM_FORBIDDEN_TOKEN}")
-  endif()
-endforeach()
-fsim_require_tokens(src/systemc/kernel_backend_loopback.cpp
-  "deserialize_systemc_kernel_message"
-  "response.header.correlation == request.header.sequence"
-  "SystemCKernelMessageFlag::replayable"
-  "max_forwarded_exchanges"
-  "contain_peer_failure"
-  "FSIM-SC-L001"
-  "FSIM-SC-L002"
-  "FSIM-SC-L003"
-  "FSIM-SC-L004")
-fsim_require_tokens(tests/systemc/kernel_backend_loopback_test.cpp
-  "alternate_response_sequence"
-  "wrong_correlation"
-  "stats().replayed == 1U"
-  "stats().evicted == 1U"
-  "stats().disconnected == 1U"
-  "systemc_kernel_backend_live_contexts() == 2U"
-  "systemc_kernel_backend_live_contexts() == 0U"
-  "audit_real_session_equivalence")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "response.header.correlation = request.header.sequence")
-fsim_require_tokens(tests/CMakeLists.txt
-  "fsim_systemc_kernel_backend_loopback_tests"
-  "fsim.systemc.kernel_backend_loopback")
 fsim_require_tokens(include/fsim/systemc/kernel_backend_synchronization.hpp
   "kSystemCKernelSynchronizationRevision = 1U"
   "SystemCKernelHostLanguage"
@@ -531,8 +485,6 @@ fsim_require_tokens(src/systemc/kernel_backend_value_codec.cpp
   "FSIM-SC-V003"
   "FSIM-SC-V004")
 fsim_require_tokens(src/systemc/kernel_backend_execution.cpp
-  "serialize_systemc_kernel_value"
-  "deserialize_systemc_kernel_value"
   "systemc_kernel_apply_value"
   "systemc_kernel_sample_value")
 fsim_require_tokens(tests/systemc/kernel_backend_value_codec_test.cpp
@@ -543,7 +495,7 @@ fsim_require_tokens(tests/systemc/kernel_backend_value_codec_test.cpp
   "make_time"
   "audit_payload_rejections")
 fsim_require_tokens(tests/systemc/kernel_backend_execution_test.cpp
-  "run_typed_loopback_execution"
+  "run_typed_execution"
   "wide_logic4_value"
   "wide_bit2_value"
   "value.typed")
@@ -552,10 +504,6 @@ fsim_require_tokens(tests/systemc/kernel_backend_value_codec_plugin.cpp
   "backend_value_output<sc_dt::sc_lv<257>>"
   "backend_value_input<sc_dt::sc_bv<129>>"
   "backend_value_output<sc_dt::sc_bv<129>>")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "SystemCKernelValueKind::logic9"
-  "serialize_systemc_apply_inputs_payload"
-  "decoded_crossing")
 fsim_require_tokens(tests/app/typed_boundary_application_test.cpp
   "verify_crossing_codec"
   "serialize_systemc_kernel_value"
@@ -608,9 +556,6 @@ fsim_require_tokens(tests/systemc/tlm1_backend_test.cpp
   "SystemCKernelTlm1State::blocked"
   "mismatched_bridge"
   "one_way")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "serialize_systemc_kernel_tlm1_transaction"
-  "deserialize_systemc_kernel_tlm1_transaction")
 fsim_require_tokens(tests/app/systemc_tlm_application_test.cpp
   "fsim/systemc/accellera.hpp"
   "tlm::tlm_fifo<std::uint32_t>"
@@ -664,9 +609,6 @@ fsim_require_tokens(tests/systemc/tlm2_backend_test.cpp
   "tlm_quantumkeeper"
   "NativeExtension"
   "serialize_systemc_kernel_tlm2_transaction")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "serialize_systemc_kernel_tlm2_transaction"
-  "deserialize_systemc_kernel_tlm2_transaction")
 fsim_require_tokens(tests/app/systemc_tlm_application_test.cpp
   "tlm_utils::simple_initiator_socket"
   "tlm_utils::simple_target_socket"
@@ -728,9 +670,6 @@ fsim_require_tokens(tests/systemc/kernel_backend_inventory_test.cpp
   "sc_core::sc_signal_rv<8>"
   "CustomChannel"
   "validate_live_snapshot")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "serialize_systemc_kernel_channel_inventory"
-  "deserialize_systemc_kernel_channel_inventory")
 fsim_require_tokens(tests/app/trace_hierarchy_application_test.cpp
   "test_systemc_channel_inventory_path"
   "SystemCKernelChannelInventory")
@@ -783,9 +722,6 @@ fsim_require_tokens(tests/systemc/kernel_backend_binding_inventory_test.cpp
   "SC_ZERO_OR_MORE_BOUND"
   "SystemCKernelHostLanguage::vhdl"
   "child.input(input)")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "serialize_systemc_kernel_binding_inventory"
-  "deserialize_systemc_kernel_binding_inventory")
 fsim_require_tokens(tests/app/trace_hierarchy_application_test.cpp
   "SystemCKernelBindingInventory"
   "mixed_signal_alias")
@@ -815,9 +751,6 @@ fsim_require_tokens(tests/app/systemc_trace_application_test.cpp
   "capture_attempts() == 2U"
   "backpressure_events == 1U"
   "wide_values[1] == wide_values[2]")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "lossless repeated SystemC trace dirty batch"
-  "repeated_trace == trace_payload")
 fsim_require_tokens(tests/app/trace_observation_application_test.cpp
   "test_systemc_repeated_dirty_phase"
   "systemc:post-update-dirty")
@@ -865,9 +798,6 @@ fsim_require_tokens(tests/systemc/kernel_backend_observation_test.cpp
   "SystemCKernelObservationKind::tlm2_dmi"
   "SystemCKernelObservationKind::tlm2_debug"
   "deserialize_systemc_kernel_observation_batch")
-fsim_require_tokens(tests/systemc/kernel_backend_protocol_test.cpp
-  "serialize_systemc_kernel_observation_batch"
-  "decoded_observations->records.front().transaction")
 fsim_require_tokens(tests/app/systemc_tlm_application_test.cpp
   "verify_observation"
   "SystemCKernelObservationKind::tlm1_end"
@@ -884,8 +814,6 @@ fsim_require_tokens(docs/diagnostics.md
   "producer fingerprint over the exact"
   "bridge revision"
   "FSIM-SC-B001"
-  "FSIM-SC-B002"
-  "FSIM-SC-B003"
   "FSIM-SC-S001"
   "FSIM-SC-S002"
   "FSIM-SC-S003"
@@ -894,10 +822,6 @@ fsim_require_tokens(docs/diagnostics.md
   "FSIM-SC-E002"
   "FSIM-SC-E003"
   "FSIM-SC-E004"
-  "FSIM-SC-L001"
-  "FSIM-SC-L002"
-  "FSIM-SC-L003"
-  "FSIM-SC-L004"
   "FSIM-SC-U001"
   "FSIM-SC-U002"
   "FSIM-SC-U003"
@@ -938,7 +862,7 @@ message(STATUS
   "SystemC Accellera portability contract passed: official public adapter, "
   "ABI 2, upstream/compiler/stdlib/bridge identities, stale object/plugin/"
   "mapped-library/design rejection, one-context session lifecycle/rollback, "
-  "bounded ordered execution protocol, serialized loopback replay/containment, "
+  "bounded ordered direct execution and failure containment, "
   "multi-island safe-point synchronization without a second scheduler, "
   "arbitrary-width typed value codecs and native vector adapters, native "
   "co-located TLM1/TLM2, bounded safe-point observation and lossless post-update trace dirty hooks, install "

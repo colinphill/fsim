@@ -25,7 +25,7 @@ foreach(FSIM_INPUT IN ITEMS "${FSIM_INVENTORY}" "${FSIM_PLAN}" "${FSIM_TEST_CMAK
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "f0a4261bc193480d573128edef7c0b3aa890e43f472bdf3cdac358eb00927d4e")
+  "cc6a15a6762e1e3bc69728115c194986ea0e741e751c64054c65ddee7f43964a")
 set(FSIM_COMPLETED_CHANGE 19)
 fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
@@ -92,8 +92,8 @@ set(FSIM_EXPECTED_PROFILES
   "VHDL87,VHDL93,VHDL2000,VHDL2002,VHDL2008,V1995,V2001,V2001NoConfig,V2005,SV2005,SV2009,SV2012,SV2017,SystemC23,SystemC302")
 set(FSIM_EXPECTED_DOMAINS
   official-provenance shared-runtime-build compatibility-abi-cache
-  backend-message-identities backend-session-lifecycle
-  backend-execution-protocol loopback-failure-containment safe-point-crossing
+  backend-direct-identities backend-session-lifecycle
+  backend-direct-execution direct-failure-containment safe-point-crossing
   arbitrary-width-codec native-tlm1 native-tlm2 signal-channel-inventory
   binding-alias-inventory trace-dirty-hooks debug-transaction-observation
   compatibility-artifact-phases corpus-platform-resources

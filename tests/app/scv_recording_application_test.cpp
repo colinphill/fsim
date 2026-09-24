@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/transaction_record.hpp"
-#include "fsim/systemc/scv_backend_transport.hpp"
 #include "fsim/systemc/scv_recording.hpp"
 #include "fsim/systemc/scv_resources.hpp"
 
@@ -60,21 +59,6 @@ int main()
     assert(native_bytes);
     assert(deserialize_transaction_record(*native_bytes, { }, diagnostics)
         == native.records().front());
-
-    ScvTransportEnvelope envelope;
-    envelope.island = { 0x173U, 1U };
-    envelope.sequence = { 1U };
-    envelope.record = native.records().front();
-    ScvBackendRecordTransport direct(
-        ScvBackendTransportKind::direct, std::nullopt);
-    ScvBackendRecordTransport loopback(
-        ScvBackendTransportKind::worker_loopback, envelope.island);
-    const auto direct_receipt = direct.send(envelope, diagnostics);
-    const auto loopback_receipt = loopback.send(envelope, diagnostics);
-    assert(direct_receipt.status == ScvBackendTransportStatus::accepted);
-    assert(loopback_receipt.status == ScvBackendTransportStatus::accepted);
-    assert(direct_receipt.bytes == loopback_receipt.bytes);
-    assert(direct.drain() == loopback.drain());
 
     ScvResourceLimits resource_limits;
     resource_limits.max_transactions = 8U;

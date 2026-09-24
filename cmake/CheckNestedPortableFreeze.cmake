@@ -20,7 +20,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "32fc7870f8e57917eb99af841ae5d96e30eb7cab2837c9425fc445229fa798c5")
+  "63b6834e10cf936cc0684bb2c8cbcf78e564c6e9d6f31e3482ee09ef35a39bf4")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "nested portable contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -28,8 +28,8 @@ endif()
 
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 67)
-  message(FATAL_ERROR "nested portable contract requires SPDX, header and 65 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 65)
+  message(FATAL_ERROR "nested portable contract requires SPDX, header and 63 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -39,7 +39,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 
 set(FSIM_SDF_CONTRACT_OWNERS)
-foreach(FSIM_INDEX RANGE 2 66)
+foreach(FSIM_INDEX RANGE 2 64)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -233,19 +233,6 @@ fsim_require_nested_portable_tokens(
   "${FSIM_SOURCE_DIR}/include/fsim/systemc/scv.hpp"
   "FSIM_SCV_ARTIFACT_SCHEMA_VERSION 1u"
   "FSIM_SCV_CACHE_SCHEMA_VERSION 1u")
-fsim_require_nested_portable_tokens(
-  "${FSIM_SOURCE_DIR}/include/fsim/systemc/scv_backend_protocol.hpp"
-  "scv_backend_protocol_version = 1U"
-  "scv_backend_message_header_bytes = 160U"
-  "max_identity_bytes"
-  "max_payload_bytes"
-  "max_message_bytes")
-fsim_require_nested_portable_tokens(
-  "${FSIM_SOURCE_DIR}/include/fsim/systemc/scv_backend_transport.hpp"
-  "scv_transport_schema_version = 1U"
-  "scv_transport_header_bytes = 64U"
-  "max_queued_bytes"
-  "runtime::TransactionRecordLimits record_limits")
 foreach(FSIM_SCV_HEADER IN ITEMS
     scv_recording.hpp
     scv_resources.hpp
@@ -258,16 +245,6 @@ foreach(FSIM_SCV_HEADER IN ITEMS
     "Limits"
     "max_")
 endforeach()
-fsim_require_nested_portable_tokens(
-  "${FSIM_SOURCE_DIR}/tests/scv/scv_backend_protocol_test.cpp"
-  "invalid.header.schema = 2U"
-  "oversized.payload.resize"
-  "corrupt.pop_back()"
-  "corrupt.push_back(std::byte { 0U })")
-fsim_require_nested_portable_tokens(
-  "${FSIM_SOURCE_DIR}/tests/scv/scv_backend_transport_test.cpp"
-  "narrow.max_queued_records = 1U"
-  "corrupt[8] = std::byte { 2U }")
 fsim_require_nested_portable_tokens(
   "${FSIM_SOURCE_DIR}/tests/scv/scv_recording_test.cpp"
   "narrow.max_streams = 1U"

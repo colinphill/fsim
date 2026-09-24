@@ -15790,3 +15790,159 @@ remain available for local development but are not hosted jobs.
      pass is claimed. Preserve user-owned untracked `phase.fst` and
      `scripts/__pycache__/`. The cohesive commit and push close Batch 188D;
      resume at Batch 188E Change 1, without a release tag.
+265. Batch 188E Change 1 adds a reusable transport-independent SystemC
+     lifecycle contract in `tests/systemc/kernel_lifecycle_contract.hpp`.
+     The existing session test drives it through a legacy byte-protocol
+     adapter, keeping the shared assertions free of framing and codec
+     details. It covers construction, binding, elaboration, publication,
+     repeated-start rejection, native construction rollback, plug-in load
+     failure, and idempotent shutdown with plug-in-visible counters and
+     live-context checks. The focused session-test target builds and its
+     CTest passes in both existing Clang/LLVM 22 Release and Debug trees;
+     `git diff --check` passes. No production API or C ABI changed yet.
+     Continue with Change 2 typed request/result definitions; preserve
+     user-owned untracked `phase.fst` and `scripts/__pycache__/`.
+266. Batch 188E Change 2 defines thirteen owning, operation-specific direct
+     SystemC request alternatives and an owned lifecycle/execution result
+     variant in `kernel_backend_direct.hpp`. Every request retains typed
+     island and sequence identity; handshake and the unused kernel
+     transaction-observation opcode have no direct alternative. A registered
+     compile-contract test passes in the existing Clang/LLVM 22 Debug and
+     Release trees. The new types are additive: the backend and native
+     plug-in C ABI are not yet migrated. Continue at Change 3 with the
+     session, synchronizer, and loopback callers in separate file sets.
+267. Batch 188E Change 3 replaces the SystemC backend byte-exchange
+     interface with direct typed `request()` dispatch. The session backend
+     no longer encodes or decodes messages at runtime, and its lifecycle
+     and execution tests send typed requests without handshake negotiation.
+     The synchronizer uses typed execution receipts while retaining
+     safe-point, ordering, identity, and close-all validation. The temporary
+     loopback wrapper forwards typed requests and retains close/failure
+     containment; wire replay and frame accounting were removed as
+     transport-only behavior. All six focused backend targets build and
+     their CTests pass 6/6 in both Clang/LLVM 22 Release and Debug. The
+     Accellera portability contract and inventory checks pass after their
+     anchors were updated for the new API; MCP was reindexed. An
+     independent session/rollback review is pending before checking off
+     the operation-specific migration items 4-11. No full matrix or
+     performance qualification is claimed yet.
+268. Batch 188E Change 13 is also complete: synchronization now issues
+     typed apply/advance/drain requests and validates typed receipts
+     without frame correlation. It preserves island/endpoint identity,
+     safe-point, time/delta/region, dirty-output, and session sequencing.
+     Focused tests include valid mixed-language crossings and malformed
+     receipt alternatives/activity flags that close all attached backends.
+     The synchronization target and CTest pass in both Release and Debug;
+     read-only peer review found no blocking ordering regression.
+269. Batch 188E Changes 4-11 are complete in the same direct session
+     migration: typed handlers cover session creation/ownership/teardown,
+     construction, binding, elaboration/publication, start/advance, input,
+     next-activity/drain, and report/inspect/snapshot. The existing
+     lifecycle and execution fixtures now drive typed payloads and pass in
+     both Release and Debug. Independent read-only review found no blocking
+     rollback, receipt, or dirty-output regression. It identified two
+     low-severity direct-validation test gaps (invalid island/zero sequence
+     and malformed typed value) to cover under Change 18. The new direct
+     header and test files were added to the source-package manifest; its
+     focused test passes. Continue at Change 12 observation/SCV/TLM work.
+270. User plan update: local builds now use at least twelve workers
+     (`-j12`), increased from eight. Historical eight-worker validation
+     records remain accurate; all subsequent local builds and qualification
+     use the new minimum. Hosted job parallelism and the 120-minute timeout
+     contract are unchanged.
+271. Batch 188E Change 12 is complete: TLM observation retains typed
+     transaction records in memory and serializes only at the persisted
+     artifact boundary. SCV resource accounting uses a typed queue and
+     versioned deterministic record digest instead of transport envelopes.
+     The design-artifact fixture was adapted to typed observation records;
+     the persisted artifact codec remains unchanged. Five focused tests
+     pass in both Release and Debug with twelve-worker builds, and the
+     SCV and SystemC portability checks pass. MCP was reindexed after
+     this source wave. No full matrix or performance qualification is
+     claimed yet. Continue with Changes 14-15 integration verification.
+272. Batch 188E Changes 14-15 are complete by integration audit: the
+     application loads SystemC plug-ins through the existing native
+     `HierarchyRegistry` path, which did not call the removed backend
+     byte exchange. Channel/binding inventories and trace routing use
+     semantic identities and typed native hooks, so no production source
+     migration was needed. The plug-in, two inventory, trace, and SystemC
+     application matrix tests pass 5/5 in both Clang/LLVM 22 Release and
+     Debug with twelve-worker builds. The matrix test took about 136-139
+     seconds per configuration; this is functional coverage, not a
+     performance baseline. Continue with Change 16 transient-code cleanup.
+273. Batch 188E Change 16 is complete: SystemC and SCV transient message
+     frames, payload codecs, loopback transports, message accounting, and
+     their transport-only tests were removed. Semantic ID generation,
+     direct typed payload validation, native plug-in ABI, and the value,
+     TLM, observation, and TransactionRecord codecs still used by persisted
+     artifacts remain. Source-package and ABI/nested/portability governance
+     now pin those surviving boundaries. Change 18 is complete: direct
+     lifecycle tests cover invalid/foreign islands, zero sequences,
+     malformed typed values, invalid transitions, plug-in failure, partial
+     construction, binding/elaboration rollback, and idempotent shutdown.
+     Eighteen focused tests pass in both Clang/LLVM 22 Release and Debug
+     using twelve-worker builds; no full matrix or performance baseline
+     is claimed. MCP was reindexed without repository persistence after
+     this source wave. Continue with Change 17 installed/public migration
+     checks and Change 19 mixed-language/ABI qualification.
+274. Batch 188E Change 17 is complete: installed-header checks require the
+     new direct C++ header and no longer require loopback; source-package,
+     SystemC/SCV portability, and ABI/nested-format contracts reflect the
+     retained semantic and persisted interfaces. The SystemC C++ migration
+     section documents typed requests/results and the unchanged native
+     plug-in C ABI; model-source examples remain valid without changes.
+     Installed-public-contract and SystemC/SCV inventory tests pass 3/3 in
+     both Release and Debug after governed digest/domain updates. Next,
+     inspect the previous hosted CI result before Change 19/20 matrices.
+275. Batch 188E Change 19 is complete at the focused qualification scope:
+     mixed VHDL/SystemC and resolution cases, the SystemC plug-in loader,
+     C ABI layout probe/freeze, native compatibility, direct session and
+     execution, and the SystemC matrix pass 9/9 in both Clang/LLVM 22
+     Release and Debug with twelve-worker builds. The native plug-in C ABI
+     remains version 4 with its governed host/registrar layout unchanged;
+     no pure-C shared plug-in fixture was added. Prior hosted CI run
+     35981508815 at HEAD 85fd1e4a passed both Ubuntu lanes but failed
+     both Windows lanes in `fsim.application.trace_archive` on a frozen
+     wire-byte fixture; `fsim.fst-closure` did not run because of that
+     dependency. Retained Windows logs were downloaded into ignored
+     `.local-artifacts/` and a focused correction is underway before
+     Change 20 full matrices.
+276. Batch 188E Change 20 prior-CI correction is complete before final
+     matrices: the frozen trace-archive test now pins only its historical
+     Output report path and v1 identity for the wire-byte golden, retaining
+     the real host snapshot for round-trip/relocation checks. Focused Debug
+     and Release cases pass, including Release with an alternate `TMPDIR`;
+     production v1 archive bytes are unchanged. The first clean Release
+     matrix exposed stale closure/catalog anchors after the removed SCV
+     transport and a diagnostic-looking typed digest domain. The domain is
+     now lowercase, removed transport diagnostic rows are gone, SCV
+     resource/observability contracts use the typed-record metrics and
+     current digest, and three language closure audits expect the current
+     2,755-code catalog. All originally failing cases passed focused reruns,
+     including SCV and SDF dependencies. The final-source clean Clang/LLVM
+     22 Release build and unfiltered 421/421 CTest suite pass in 227.88
+     seconds with twelve build workers. Clean Debug qualification is now
+     underway; seven-sample performance and post-push CI monitoring remain
+     waived for this batch, not claimed as passes.
+277. The user expanded the parallel implementation plan to up to six
+     `gpt-6-luna` workers at max reasoning effort. Respect the session's
+     actual concurrency-slot cap, keep bounded exclusive file ownership,
+     and continue primary-agent orchestration. Local builds remain at
+     twelve workers. This policy change does not alter Batch 188E's
+     qualification gates or authorize overlapping full builds.
+278. Batch 188E Change 20 local qualification is green on the final source:
+     clean Clang/LLVM 22 warnings-as-errors Release and Debug builds passed
+     with twelve workers, then unfiltered 421/421 CTest suites passed in
+     227.88 and 216.00 seconds respectively. The source-package manifest,
+     installed public contract, SystemC C ABI, SCV/SystemC inventories,
+     diagnostic catalog, and language/SCV/SDF closure gates are included.
+     `git diff --check` passes and the MCP index was refreshed without
+     repository persistence. The latest applicable hosted run was rechecked
+     before commit/push and remains `35981508815` at `85fd1e4a`: both Linux
+     lanes passed and both Windows lanes failed the now-corrected trace
+     golden fixture. Seven-sample performance qualification and post-push
+     CI monitoring are explicitly waived through 188H, so neither a
+     measured performance pass nor a new hosted pass is claimed. Preserve
+     user-owned untracked `phase.fst` and `scripts/__pycache__/`. Commit and
+     push the cohesive Batch 188E implementation, then stop for the user's
+     new session; resume there at Batch 188F Change 1 without a release tag.

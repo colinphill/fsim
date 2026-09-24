@@ -67,10 +67,10 @@ file(READ "${FSIM_OUTPUT_DIR}/logs/behavior.log" FSIM_BEHAVIOR_TEXT)
 foreach(FSIM_MARKER IN ITEMS
     "SCV_RESOURCE_BASELINE"
     "enabled_transactions=64"
-    "serialized_bytes=32448"
+    "record_payload_bytes=28352"
     "peak_queue_records=4"
     "backpressure_events=15"
-    "digest=08de48315d224e3a9340adecaec8c3bb747dc84b43b1a08e6c23a99d264f42a2")
+    "typed_record_digest_v1=1fe08e16090a0c2fc5a0f3cd2ef4451fc8709317086498c766efe6b182901627")
   string(FIND "${FSIM_BEHAVIOR_TEXT}" "${FSIM_MARKER}" FSIM_MARKER_OFFSET)
   if(FSIM_MARKER_OFFSET EQUAL -1)
     message(FATAL_ERROR
@@ -88,6 +88,6 @@ endforeach()
 
 file(APPEND "${FSIM_CONSOLE}"
   "FSIM-SCV-CLOSURE-PASS release=2.0.1 rows=18 active=0 "
-  "resource-digest=08de48315d224e3a9340adecaec8c3bb747dc84b43b1a08e6c23a99d264f42a2 "
+  "typed-resource-digest-v1=1fe08e16090a0c2fc5a0f3cd2ef4451fc8709317086498c766efe6b182901627 "
   "release-sanitizer-ci=deferred-batch-177\n")
 message(STATUS "SCV closure passed; retained evidence: ${FSIM_OUTPUT_DIR}")

@@ -15,6 +15,7 @@ struct ScvResourceLimits {
     std::size_t max_transactions { 1024U * 1024U };
     std::size_t max_attributes_per_transaction { 4096U };
     std::size_t max_queue_records { 65536U };
+    // Queue bytes are record-payload bytes plus a fixed 64-byte entry reservation.
     std::size_t max_queue_bytes { 64U * 1024U * 1024U };
     std::uint64_t max_solver_search_steps { 1024U * 1024U };
 };
@@ -32,15 +33,19 @@ struct ScvResourceMetrics {
     std::uint64_t recorded_transactions { };
     std::uint64_t transported_transactions { };
     std::uint64_t native_callbacks { };
-    std::uint64_t serialized_bytes { };
+    // Bytes in the standalone persisted TransactionRecord encoding.
+    std::uint64_t record_payload_bytes { };
     std::uint64_t backpressure_events { };
     std::uint64_t producer_failures { };
     std::uint64_t consumer_failures { };
     std::uint64_t solver_resource_exhaustions { };
     std::size_t peak_queue_records { };
+    // Per-entry 64-byte reservation plus record payload bytes; never wire bytes.
     std::size_t peak_queue_bytes { };
     std::size_t approximate_peak_memory_bytes { };
     std::uint64_t elapsed_nanoseconds { };
+    // SHA-256 typed-record-v1: domain tag, then ordered LE island/sequence/size
+    // values and standalone TransactionRecord payload bytes.
     std::array<std::uint8_t, 32> output_digest { };
 };
 

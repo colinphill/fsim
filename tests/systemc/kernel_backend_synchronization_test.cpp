@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/systemc/kernel_backend_loopback.hpp"
 #include "fsim/systemc/kernel_backend_synchronization.hpp"
 
 #include <algorithm>
@@ -7,9 +6,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <memory>
-#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -57,118 +56,43 @@ SessionIds make_ids(const std::string& identity, const std::string& root,
     return { *island, *hierarchy, *object, *input, *output };
 }
 
-std::vector<std::byte> create_session_payload(const std::string& identity,
-    const std::filesystem::path& plugin,
-    const SystemCKernelSessionLimits& limits)
+void lifecycle_request(SystemCKernelBackend& backend,
+    const SystemCKernelDirectRequest& request)
 {
-    fsim::diagnostic::Engine diagnostics;
-    const auto result = serialize_systemc_create_session_payload(
-        { identity, plugin.string(), 1U }, limits, diagnostics);
-    assert(result);
-    return *result;
-}
-
-std::vector<std::byte> create_object_payload(const std::string& root,
-    const SystemCKernelSessionLimits& limits)
-{
-    SystemCKernelCreateObjectPayload payload;
-    payload.hierarchy_path = "synchronized-roots";
-    payload.object_path = root;
-    payload.factory = "execution_root";
-    payload.instance = root;
-    fsim::diagnostic::Engine diagnostics;
-    const auto result = serialize_systemc_create_object_payload(
-        payload, limits, diagnostics);
-    assert(result);
-    return *result;
-}
-
-std::vector<std::byte> binding_payload(const std::string& endpoint,
-    const std::string& channel, const SystemCKernelSessionLimits& limits)
-{
-    fsim::diagnostic::Engine diagnostics;
-    const auto result = serialize_systemc_bind_endpoint_payload(
-        { endpoint, channel }, limits, diagnostics);
-    assert(result);
-    return *result;
-}
-
-void lifecycle_exchange(SystemCKernelBackend& backend,
-    const SystemCKernelOperation operation, const std::uint64_t sequence,
-    const SessionIds& ids, const SystemCKernelProtocolLimits& protocol_limits,
-    const SystemCKernelSessionLimits& session_limits,
-    std::vector<std::byte> payload = { },
-    const SystemCEndpointId endpoint = { })
-{
-    SystemCKernelMessage request;
-    request.header.operation = operation;
-    request.header.direction = SystemCKernelMessageDirection::request;
-    request.header.sequence = { sequence };
-    request.header.island = ids.island;
-    if (operation == SystemCKernelOperation::create_object
-        || endpoint.valid()) {
-        request.header.hierarchy = ids.hierarchy;
-        request.header.object = ids.object;
-    }
-    request.header.endpoint = endpoint;
-    request.payload = std::move(payload);
-    fsim::diagnostic::Engine diagnostics;
-    const auto encoded = serialize_systemc_kernel_message(
-        request, protocol_limits, diagnostics);
-    assert(encoded);
-    const auto transport = backend.exchange(*encoded);
-    assert(transport.status == SystemCKernelTransportStatus::ok);
-    const auto response = deserialize_systemc_kernel_message(
-        transport.bytes, protocol_limits, diagnostics);
-    assert(response);
-    assert(response->header.direction
-        == SystemCKernelMessageDirection::response);
-    assert(response->header.status == SystemCKernelMessageStatus::ok);
-    assert(response->header.operation == operation);
-    assert(response->header.correlation == request.header.sequence);
-    const auto receipt = deserialize_systemc_lifecycle_receipt(
-        response->payload, session_limits, diagnostics);
+    const auto result = backend.request(request);
+    assert(result.status == SystemCKernelDirectResultStatus::ok);
+    const auto* receipt
+        = std::get_if<SystemCKernelLifecycleReceipt>(&result.receipt);
     assert(receipt && receipt->code == SystemCKernelLifecycleCode::none);
 }
 
 LiveSession make_live_session(const std::filesystem::path& plugin,
     const std::string& identity, const std::string& root,
-    const SystemCKernelHostLanguage host_language, const bool loopback,
+    const SystemCKernelHostLanguage host_language,
     const SystemCKernelProtocolLimits& protocol_limits,
     const SystemCKernelSessionLimits& session_limits,
     const SystemCKernelExecutionLimits& execution_limits)
 {
     fsim::diagnostic::Engine diagnostics;
-    std::unique_ptr<SystemCKernelBackend> backend;
-    if (loopback) {
-        backend = make_systemc_kernel_loopback_session_backend(protocol_limits,
-            session_limits, execution_limits, { }, diagnostics);
-    } else {
-        backend = make_systemc_kernel_session_backend(protocol_limits,
-            session_limits, execution_limits, diagnostics);
-    }
+    auto backend = make_systemc_kernel_session_backend(protocol_limits,
+        session_limits, execution_limits, diagnostics);
     assert(backend && diagnostics.diagnostics().empty());
     const auto ids = make_ids(identity, root, protocol_limits);
-    lifecycle_exchange(*backend, SystemCKernelOperation::create_session, 1U,
-        ids, protocol_limits, session_limits,
-        create_session_payload(identity, plugin, session_limits));
-    lifecycle_exchange(*backend, SystemCKernelOperation::create_object, 2U,
-        ids, protocol_limits, session_limits,
-        create_object_payload(root, session_limits));
-    lifecycle_exchange(*backend, SystemCKernelOperation::bind_endpoint, 3U,
-        ids, protocol_limits, session_limits,
-        binding_payload(
-            root + ".input", root + ".input_channel", session_limits),
-        ids.input);
-    lifecycle_exchange(*backend, SystemCKernelOperation::bind_endpoint, 4U,
-        ids, protocol_limits, session_limits,
-        binding_payload(
-            root + ".output", root + ".output_channel", session_limits),
-        ids.output);
-    lifecycle_exchange(*backend, SystemCKernelOperation::elaborate, 5U, ids,
-        protocol_limits, session_limits);
-    lifecycle_exchange(*backend, SystemCKernelOperation::start, 6U, ids,
-        protocol_limits, session_limits);
+    lifecycle_request(*backend, SystemCKernelCreateSessionRequest { ids.island,
+        { 1U }, { identity, plugin.string(), 1U } });
+    lifecycle_request(*backend, SystemCKernelCreateObjectRequest { ids.island,
+        { 2U }, ids.hierarchy, ids.object,
+        { "synchronized-roots", root, "execution_root", root, { } } });
+    lifecycle_request(*backend, SystemCKernelBindEndpointRequest { ids.island,
+        { 3U }, ids.hierarchy, ids.object, ids.input,
+        { root + ".input", root + ".input_channel" } });
+    lifecycle_request(*backend, SystemCKernelBindEndpointRequest { ids.island,
+        { 4U }, ids.hierarchy, ids.object, ids.output,
+        { root + ".output", root + ".output_channel" } });
+    lifecycle_request(
+        *backend, SystemCKernelElaborateRequest { ids.island, { 5U } });
+    lifecycle_request(
+        *backend, SystemCKernelStartRequest { ids.island, { 6U } });
     return { std::move(backend), ids, host_language };
 }
 
@@ -195,7 +119,7 @@ bool has_code(const fsim::diagnostic::Engine& diagnostics,
 }
 
 struct DisconnectState {
-    std::size_t exchanges { };
+    std::size_t requests { };
     std::size_t closes { };
 };
 
@@ -206,11 +130,11 @@ public:
     {
     }
 
-    [[nodiscard]] SystemCKernelTransportResult exchange(
-        std::span<const std::byte>) noexcept override
+    [[nodiscard]] SystemCKernelDirectResult request(
+        const SystemCKernelDirectRequest&) noexcept override
     {
-        ++state_->exchanges;
-        return { SystemCKernelTransportStatus::disconnected, { } };
+        ++state_->requests;
+        return { SystemCKernelDirectResultStatus::disconnected, { } };
     }
 
     void close() noexcept override { ++state_->closes; }
@@ -218,6 +142,88 @@ public:
 private:
     std::shared_ptr<DisconnectState> state_;
 };
+
+enum class InvalidReceiptMode {
+    lifecycle_alternative,
+    inconsistent_activity,
+};
+
+struct InvalidReceiptState {
+    std::size_t requests { };
+    std::size_t closes { };
+};
+
+class InvalidReceiptBackend final : public SystemCKernelBackend {
+public:
+    InvalidReceiptBackend(const InvalidReceiptMode mode,
+        std::shared_ptr<InvalidReceiptState> state)
+        : mode_ { mode }
+        , state_ { std::move(state) }
+    {
+    }
+
+    [[nodiscard]] SystemCKernelDirectResult request(
+        const SystemCKernelDirectRequest& request) noexcept override
+    {
+        ++state_->requests;
+        if (mode_ == InvalidReceiptMode::lifecycle_alternative) {
+            return { SystemCKernelDirectResultStatus::ok,
+                SystemCKernelLifecycleReceipt { } };
+        }
+
+        const auto island = std::visit(
+            [](const auto& operation) { return operation.island; }, request);
+        SystemCKernelExecutionReceipt receipt;
+        receipt.session_state = SystemCKernelSessionState::quiescent;
+        receipt.status = SystemCKernelExecutionStatus::quiescent;
+        receipt.published = true;
+        receipt.future_activity = true;
+        receipt.order = { 0U, 0U, SystemCAccelleraRegion::quiescent,
+            island, { 1U } };
+        return { SystemCKernelDirectResultStatus::ok, std::move(receipt) };
+    }
+
+    void close() noexcept override { ++state_->closes; }
+
+private:
+    InvalidReceiptMode mode_ { };
+    std::shared_ptr<InvalidReceiptState> state_;
+};
+
+void audit_invalid_receipt_containment(
+    const SystemCKernelProtocolLimits& protocol_limits,
+    const SystemCKernelExecutionLimits& execution_limits)
+{
+    for (const auto mode : { InvalidReceiptMode::lifecycle_alternative,
+             InvalidReceiptMode::inconsistent_activity }) {
+        fsim::diagnostic::Engine diagnostics;
+        auto synchronizer = make_systemc_kernel_synchronizer(protocol_limits,
+            execution_limits, { }, diagnostics);
+        assert(synchronizer);
+        const auto island = make_ids(
+            "invalid-receipt-island", "invalid_receipt_root", protocol_limits);
+        const auto second_island = make_ids("second-invalid-receipt-island",
+            "second_invalid_receipt_root", protocol_limits);
+        auto state = std::make_shared<InvalidReceiptState>();
+        auto second_state = std::make_shared<InvalidReceiptState>();
+        assert(synchronizer->attach_island(
+            { island.island, SystemCKernelHostLanguage::verilog, { 1U }, 0U,
+                { } },
+            std::make_unique<InvalidReceiptBackend>(mode, state), diagnostics));
+        assert(synchronizer->attach_island(
+            { second_island.island, SystemCKernelHostLanguage::system_verilog,
+                { 1U }, 0U, { } },
+            std::make_unique<InvalidReceiptBackend>(mode, second_state),
+            diagnostics));
+
+        assert(!synchronizer->synchronize({ 0U, 0U }, { }, diagnostics));
+        assert(has_code(diagnostics, "FSIM-SC-N004"));
+        assert(synchronizer->failed());
+        assert(synchronizer->island_count() == 0U);
+        assert(state->requests + second_state->requests == 1U);
+        assert(state->closes == 1U && second_state->closes == 1U);
+    }
+}
 
 void audit_containment_and_factory_recovery(
     const SystemCKernelProtocolLimits& protocol_limits,
@@ -236,22 +242,32 @@ void audit_containment_and_factory_recovery(
     assert(synchronizer);
     const auto island = make_ids(
         "disconnect-island", "disconnect_root", protocol_limits);
+    const auto second_island = make_ids(
+        "second-disconnect-island", "second_disconnect_root", protocol_limits);
     auto state = std::make_shared<DisconnectState>();
+    auto second_state = std::make_shared<DisconnectState>();
     assert(synchronizer->attach_island(
         { island.island, SystemCKernelHostLanguage::verilog, { 1U }, 0U,
             { } },
         std::make_unique<DisconnectBackend>(state), diagnostics));
+    assert(synchronizer->attach_island(
+        { second_island.island, SystemCKernelHostLanguage::system_verilog,
+            { 1U }, 0U, { } },
+        std::make_unique<DisconnectBackend>(second_state), diagnostics));
     assert(!synchronizer->synchronize({ 0U, 0U }, { }, diagnostics));
     assert(has_code(diagnostics, "FSIM-SC-N004"));
     assert(synchronizer->failed());
     assert(synchronizer->island_count() == 0U);
-    assert(state->exchanges == 1U && state->closes == 1U);
+    assert(state->requests + second_state->requests == 1U);
+    assert(state->closes == 1U && second_state->closes == 1U);
 
     diagnostics = { };
     auto recovered = make_systemc_kernel_synchronizer(protocol_limits,
         execution_limits, { }, diagnostics);
     assert(recovered && !recovered->failed());
     assert(recovered->island_count() == 0U);
+
+    audit_invalid_receipt_containment(protocol_limits, execution_limits);
 }
 
 void require_stage_order(const SystemCKernelSynchronizationReceipt& receipt,
@@ -282,10 +298,10 @@ void audit_mixed_root_synchronization(const std::filesystem::path& plugin,
     const SystemCKernelExecutionLimits& execution_limits)
 {
     auto sv = make_live_session(plugin, "sv-systemc-island", "sv_root",
-        SystemCKernelHostLanguage::system_verilog, false, protocol_limits,
+        SystemCKernelHostLanguage::system_verilog, protocol_limits,
         session_limits, execution_limits);
     auto vhdl = make_live_session(plugin, "vhdl-systemc-island", "vhdl_root",
-        SystemCKernelHostLanguage::vhdl, true, protocol_limits, session_limits,
+        SystemCKernelHostLanguage::vhdl, protocol_limits, session_limits,
         execution_limits);
     assert(systemc_kernel_backend_live_contexts() == 2U);
 

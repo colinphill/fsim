@@ -63,7 +63,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "b53d64df3861afd5a977bed48119121faa6ff1b0a1208dc303caad191f0a59e9")
+  "228837fe0af085aa4e5f7cef513454a9ba829a125e7eebab5cd6520d5013789c")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "SystemC ABI contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -128,8 +128,8 @@ fsim_require_systemc_tokens("${FSIM_CPP_PROBE}"
   "TLM_VERSION_MAJOR == 2"
   "TLM_VERSION_PATCH == 6"
   "sizeof(fsim_sc_host_v1) == 152U"
-  "kSystemCKernelMessageHeaderBytes == 128U"
-  "scv_backend_message_header_bytes == 160U"
+  "sizeof(fsim::systemc::SystemCSequenceId) == 8U"
+  "sizeof(fsim::systemc::ScvSequenceId) == 8U"
   "transaction_record_schema_version == 1U"
   "!std::is_pointer_v<fsim::systemc::SystemCIslandId>"
   "!std::is_pointer_v<fsim::systemc::ScvIslandId>")
@@ -156,12 +156,12 @@ fsim_require_systemc_tokens("${FSIM_SCV_COMPATIBILITY}"
   "|compiler="
   "|stdlib=")
 fsim_require_systemc_tokens("${FSIM_KERNEL_PROTOCOL}"
-  "kSystemCKernelProtocolVersion = 1U"
-  "kSystemCKernelMessageHeaderBytes = 128U"
+  "struct SystemCKernelIdentityLimits"
+  "using SystemCKernelProtocolLimits = SystemCKernelIdentityLimits"
   "std::is_trivially_copyable_v<SystemCTransactionId>")
 fsim_require_systemc_tokens("${FSIM_SCV_PROTOCOL}"
-  "scv_backend_protocol_version = 1U"
-  "scv_backend_message_header_bytes = 160U"
+  "struct ScvBackendProtocolLimits"
+  "max_identity_bytes"
   "std::is_trivially_copyable_v<ScvTransactionId>")
 fsim_require_systemc_tokens("${FSIM_TRANSACTION_PROTOCOL}"
   "transaction_record_schema_version = 1U"

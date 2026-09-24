@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fsim/systemc/scv_backend_transport.hpp"
+#include "fsim/runtime/transaction_record.hpp"
 #include "fsim/systemc/scv_constraints.hpp"
 #include "fsim/systemc/scv_extensions.hpp"
 #include "fsim/systemc/scv_random.hpp"
@@ -64,20 +64,12 @@ int main()
         { 0U, fsim::runtime::TransactionRegion::update }, diagnostics));
     assert(recording.records().size() == 1U);
 
-    ScvTransportEnvelope envelope;
-    envelope.island = island;
-    envelope.sequence = { 1U };
-    envelope.record = recording.records().front();
-    ScvBackendRecordTransport direct(
-        ScvBackendTransportKind::direct, std::nullopt);
-    const auto receipt = direct.send(envelope, diagnostics);
-    assert(receipt.status == ScvBackendTransportStatus::accepted);
-    ScvBackendRecordTransport loopback(
-        ScvBackendTransportKind::worker_loopback, island);
-    const auto replayed = loopback.replay(receipt.bytes, diagnostics);
-    assert(replayed.status == ScvBackendTransportStatus::accepted);
-    assert(replayed.bytes == receipt.bytes);
-    assert(direct.drain() == loopback.drain());
+    const auto persisted_record = fsim::runtime::serialize_transaction_record(
+        recording.records().front(), { }, diagnostics);
+    assert(persisted_record);
+    const auto restored_record = fsim::runtime::deserialize_transaction_record(
+        *persisted_record, { }, diagnostics);
+    assert(restored_record && *restored_record == recording.records().front());
     assert(recording.release_transaction(transaction, diagnostics));
     assert(recording.live_handles() == 0U);
     assert(!diagnostics.has_error());

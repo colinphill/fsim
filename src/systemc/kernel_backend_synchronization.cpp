@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -67,6 +68,91 @@ namespace {
             && (value.width == 64U || (value.bits >> value.width) == 0U);
     }
 
+    bool known_region(const SystemCAccelleraRegion region) noexcept
+    {
+        using enum SystemCAccelleraRegion;
+        return region == evaluate || region == update || region == notification
+            || region == quiescent || region == terminal;
+    }
+
+    bool valid_execution_scalar(const SystemCKernelScalarValue& value,
+        const SystemCKernelExecutionLimits& limits)
+    {
+        if (!valid_scalar(value)) {
+            return false;
+        }
+        if (!value.typed) {
+            return true;
+        }
+        diagnostic::Engine value_diagnostics;
+        return validate_systemc_kernel_value(
+            *value.typed, limits.value_limits, value_diagnostics);
+    }
+
+    bool valid_execution_order(const SystemCKernelExecutionOrder& order)
+    {
+        return known_region(order.region) && order.island.valid()
+            && order.sequence.valid();
+    }
+
+    bool valid_execution_limits(const SystemCKernelExecutionLimits& limits)
+    {
+        constexpr auto maximum = static_cast<std::size_t>(
+            std::numeric_limits<std::uint32_t>::max());
+        const auto& values = limits.value_limits;
+        return limits.max_samples_per_message > 0U
+            && limits.max_samples_per_message <= maximum
+            && limits.max_detail_bytes > 0U
+            && limits.max_detail_bytes <= maximum
+            && limits.max_delta_cycles_per_advance > 0U
+            && limits.max_advance_fs > 0U && values.max_width_bits > 0U
+            && values.max_encoded_bytes >= 56U
+            && values.max_encoded_bytes <= maximum
+            && values.max_type_name_bytes > 0U
+            && values.max_type_name_bytes <= maximum
+            && values.max_enum_literals > 0U
+            && values.max_enum_literals <= maximum
+            && values.max_enum_literal_bytes > 0U
+            && values.max_enum_literal_bytes <= maximum
+            && values.max_enum_text_bytes > 0U
+            && values.max_enum_text_bytes <= maximum;
+    }
+
+    bool valid_execution_receipt(
+        const SystemCKernelExecutionReceipt& receipt,
+        const SystemCKernelExecutionLimits& limits,
+        const SystemCIslandId expected_island)
+    {
+        if (receipt.session_state != SystemCKernelSessionState::quiescent
+            || receipt.code != SystemCKernelExecutionCode::none
+            || !receipt.published || !valid_execution_order(receipt.order)
+            || receipt.order.island != expected_island
+            || receipt.detail.size() > limits.max_detail_bytes
+            || receipt.detail.find('\0') != std::string::npos
+            || ((receipt.current_activity || receipt.future_activity)
+                != receipt.next_activity_time_fs.has_value())
+            || (receipt.next_activity_time_fs
+                && *receipt.next_activity_time_fs < receipt.order.time_fs)
+            || receipt.samples.size() > limits.max_samples_per_message) {
+            return false;
+        }
+
+        std::set<SystemCEndpointId> endpoints;
+        std::optional<SystemCKernelExecutionOrder> previous_order;
+        for (const auto& sample : receipt.samples) {
+            if (!sample.endpoint.valid()
+                || !valid_execution_order(sample.order)
+                || sample.order.island != expected_island
+                || !valid_execution_scalar(sample.value, limits)
+                || (previous_order && !(*previous_order < sample.order))
+                || !endpoints.insert(sample.endpoint).second) {
+                return false;
+            }
+            previous_order = sample.order;
+        }
+        return true;
+    }
+
     struct IslandState {
         SystemCKernelSynchronizedIsland registration;
         std::unique_ptr<SystemCKernelBackend> backend;
@@ -79,11 +165,9 @@ namespace {
 
     class Synchronizer final : public SystemCKernelSynchronizer {
     public:
-        Synchronizer(SystemCKernelProtocolLimits protocol_limits,
-            SystemCKernelExecutionLimits execution_limits,
+        Synchronizer(SystemCKernelExecutionLimits execution_limits,
             SystemCKernelSynchronizationLimits synchronization_limits)
-            : protocol_limits_ { protocol_limits }
-            , execution_limits_ { execution_limits }
+            : execution_limits_ { execution_limits }
             , synchronization_limits_ { synchronization_limits }
         {
         }
@@ -269,81 +353,50 @@ namespace {
         }
 
         std::optional<ExchangeReceipt> exchange(IslandState& island,
-            const SystemCKernelOperation operation,
-            const SystemCKernelEndpointIdentity& endpoint,
-            std::vector<std::byte> payload, std::string& error)
+            const SystemCKernelDirectRequest& request,
+            const bool allow_paused, std::string& error)
         {
+            if (!valid_execution_limits(execution_limits_)) {
+                error = "execution limits are invalid";
+                return std::nullopt;
+            }
             if (!island.registration.next_request_sequence.valid()) {
                 error = "request sequence space is exhausted";
                 return std::nullopt;
             }
-            SystemCKernelMessage request;
-            request.header.operation = operation;
-            request.header.direction = SystemCKernelMessageDirection::request;
-            request.header.sequence
-                = island.registration.next_request_sequence;
-            request.header.island = island.registration.island;
-            request.header.hierarchy = endpoint.hierarchy;
-            request.header.object = endpoint.object;
-            request.header.endpoint = endpoint.endpoint;
-            request.payload = std::move(payload);
-            diagnostic::Engine local_diagnostics;
-            const auto encoded = serialize_systemc_kernel_message(
-                request, protocol_limits_, local_diagnostics);
-            if (!encoded) {
-                error = "request serialization failed";
+            const auto sequence = island.registration.next_request_sequence;
+            const auto request_matches = std::visit(
+                [&](const auto& operation) {
+                    return operation.island == island.registration.island
+                        && operation.sequence == sequence;
+                },
+                request);
+            if (!request_matches) {
+                error = "direct request has the wrong island or sequence";
                 return std::nullopt;
             }
-            const auto transport = island.backend->exchange(*encoded);
-            if (transport.status != SystemCKernelTransportStatus::ok) {
-                error = "serialized backend rejected or disconnected";
+            const auto response = island.backend->request(request);
+            if (response.status != SystemCKernelDirectResultStatus::ok) {
+                error = "direct backend rejected or disconnected";
                 return std::nullopt;
             }
-            const auto response = deserialize_systemc_kernel_message(
-                transport.bytes, protocol_limits_, local_diagnostics);
-            if (!response || response->header.direction != SystemCKernelMessageDirection::response
-                || response->header.status != SystemCKernelMessageStatus::ok
-                || response->header.operation != operation
-                || response->header.correlation != request.header.sequence
-                || response->header.island != request.header.island
-                || response->header.hierarchy != request.header.hierarchy
-                || response->header.object != request.header.object
-                || response->header.endpoint != request.header.endpoint
-                || response->header.transaction != request.header.transaction) {
-                error = "backend response identity or correlation is invalid";
-                return std::nullopt;
-            }
-            const auto receipt = deserialize_systemc_execution_receipt(
-                response->payload, execution_limits_, local_diagnostics);
-            if (!receipt) {
-                error = "backend execution receipt is malformed";
+            const auto* receipt
+                = std::get_if<SystemCKernelExecutionReceipt>(&response.receipt);
+            if (receipt == nullptr
+                || !valid_execution_receipt(
+                    *receipt, execution_limits_, island.registration.island)) {
+                error = "direct backend returned an invalid execution receipt";
                 return std::nullopt;
             }
             const auto status_is_safe
                 = receipt->status == SystemCKernelExecutionStatus::quiescent
-                || ((operation == SystemCKernelOperation::apply_inputs
-                        || operation == SystemCKernelOperation::advance)
-                    && receipt->status
-                        == SystemCKernelExecutionStatus::paused
+                || (allow_paused
+                    && receipt->status == SystemCKernelExecutionStatus::paused
                     && receipt->current_activity);
-            if (receipt->session_state != SystemCKernelSessionState::quiescent
-                || !status_is_safe
-                || receipt->code != SystemCKernelExecutionCode::none
-                || !receipt->published) {
-                error = "backend execution receipt has session/status/code/published values "
-                    + std::to_string(static_cast<unsigned>(receipt->session_state))
-                    + "/"
-                    + std::to_string(static_cast<unsigned>(receipt->status))
-                    + "/"
-                    + std::to_string(static_cast<unsigned>(receipt->code))
-                    + "/" + (receipt->published ? "true" : "false");
+            if (!status_is_safe) {
+                error = "direct backend execution receipt is not at a safe point";
                 return std::nullopt;
             }
-            if (receipt->order.island != island.registration.island) {
-                error = "backend execution receipt has the wrong island order";
-                return std::nullopt;
-            }
-            const auto sequence = request.header.sequence;
             if (sequence.value == std::numeric_limits<std::uint64_t>::max()) {
                 island.registration.next_request_sequence = { };
             } else {
@@ -371,14 +424,18 @@ namespace {
         {
             for (const auto& input : inputs) {
                 auto& island = islands_.at(input.island);
-                diagnostic::Engine local_diagnostics;
+                if (!valid_execution_scalar(input.value, execution_limits_)) {
+                    return fail_locked(diagnostics,
+                        "SystemC input batch contains a malformed typed value");
+                }
                 std::string error;
-                const auto payload = serialize_systemc_apply_inputs_payload(
-                    { input.value }, execution_limits_, local_diagnostics);
-                const auto receipt = payload
-                    ? exchange(island, SystemCKernelOperation::apply_inputs,
-                          input.target, *payload, error)
-                    : std::nullopt;
+                const SystemCKernelDirectRequest request {
+                    SystemCKernelApplyInputsRequest { input.island,
+                        island.registration.next_request_sequence,
+                        input.target.object, input.target.endpoint,
+                        { input.value } }
+                };
+                const auto receipt = exchange(island, request, true, error);
                 if (!receipt) {
                     return fail_locked(diagnostics,
                         "SystemC input batch failed before its kernel safe point: "
@@ -403,14 +460,21 @@ namespace {
                                    : SystemCKernelAdvanceKind::time,
                     duration
                 };
-                diagnostic::Engine local_diagnostics;
+                if ((advance.kind == SystemCKernelAdvanceKind::delta
+                        && advance.duration_fs != 0U)
+                    || (advance.kind == SystemCKernelAdvanceKind::time
+                        && (advance.duration_fs == 0U
+                            || advance.duration_fs
+                                > execution_limits_.max_advance_fs))) {
+                    return fail_locked(diagnostics,
+                        "SystemC synchronization advance exceeds its governed limits");
+                }
                 std::string error;
-                const auto payload = serialize_systemc_advance_payload(
-                    advance, execution_limits_, local_diagnostics);
-                const auto receipt = payload
-                    ? exchange(island, SystemCKernelOperation::advance, { },
-                          *payload, error)
-                    : std::nullopt;
+                const SystemCKernelDirectRequest request {
+                    SystemCKernelAdvanceRequest { identity,
+                        island.registration.next_request_sequence, advance }
+                };
+                const auto receipt = exchange(island, request, true, error);
                 if (!receipt
                     || receipt->receipt.order.time_fs != point.time_fs) {
                     return fail_locked(diagnostics,
@@ -439,15 +503,13 @@ namespace {
             }
             for (const auto identity : arrivals) {
                 auto& island = islands_.at(identity);
-                diagnostic::Engine local_diagnostics;
                 std::string error;
-                const auto payload = serialize_systemc_advance_payload(
-                    { SystemCKernelAdvanceKind::delta, 0U }, execution_limits_,
-                    local_diagnostics);
-                const auto receipt = payload
-                    ? exchange(island, SystemCKernelOperation::advance, { },
-                          *payload, error)
-                    : std::nullopt;
+                const SystemCKernelDirectRequest request {
+                    SystemCKernelAdvanceRequest { identity,
+                        island.registration.next_request_sequence,
+                        { SystemCKernelAdvanceKind::delta, 0U } }
+                };
+                const auto receipt = exchange(island, request, true, error);
                 if (!receipt
                     || receipt->receipt.status
                         != SystemCKernelExecutionStatus::quiescent
@@ -488,8 +550,12 @@ namespace {
             for (const auto& [identity, endpoint] : outputs_) {
                 auto& island = islands_.at(identity);
                 std::string error;
-                const auto receipt = exchange(island,
-                    SystemCKernelOperation::drain_outputs, endpoint, { }, error);
+                const SystemCKernelDirectRequest request {
+                    SystemCKernelDrainOutputsRequest { identity,
+                        island.registration.next_request_sequence,
+                        endpoint.object, endpoint.endpoint }
+                };
+                const auto receipt = exchange(island, request, false, error);
                 if (!receipt || receipt->receipt.samples.size() > 1U) {
                     return fail_locked(diagnostics,
                         "SystemC dirty-output batch failed after its kernel safe point: "
@@ -537,7 +603,6 @@ namespace {
             island_count_.store(0U, std::memory_order_relaxed);
         }
 
-        SystemCKernelProtocolLimits protocol_limits_;
         SystemCKernelExecutionLimits execution_limits_;
         SystemCKernelSynchronizationLimits synchronization_limits_;
         mutable std::mutex mutex_;
@@ -555,7 +620,7 @@ namespace {
 } // namespace
 
 std::unique_ptr<SystemCKernelSynchronizer> make_systemc_kernel_synchronizer(
-    const SystemCKernelProtocolLimits& protocol_limits,
+    const SystemCKernelProtocolLimits&,
     const SystemCKernelExecutionLimits& execution_limits,
     const SystemCKernelSynchronizationLimits& synchronization_limits,
     diagnostic::Engine& diagnostics)
@@ -563,8 +628,8 @@ std::unique_ptr<SystemCKernelSynchronizer> make_systemc_kernel_synchronizer(
     if (!valid_limits(synchronization_limits, diagnostics)) {
         return nullptr;
     }
-    return std::make_unique<Synchronizer>(protocol_limits, execution_limits,
-        synchronization_limits);
+    return std::make_unique<Synchronizer>(
+        execution_limits, synchronization_limits);
 }
 
 const char* systemc_kernel_synchronization_diagnostic_code(

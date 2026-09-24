@@ -921,7 +921,6 @@ add_library(
     src/systemc/incremental_artifact.cpp
     src/systemc/incremental_compiler.cpp
     src/systemc/kernel_backend_execution.cpp
-    src/systemc/kernel_backend_loopback.cpp
     src/systemc/kernel_backend_protocol.cpp
     src/systemc/kernel_backend_session.cpp
     src/systemc/kernel_backend_synchronization.cpp
@@ -938,7 +937,6 @@ add_library(
     src/systemc/plugin_loader.cpp
     src/systemc/scv_artifact.cpp
     src/systemc/scv_backend_protocol.cpp
-    src/systemc/scv_backend_transport.cpp
     src/systemc/scv_constraints.cpp
     src/systemc/scv_extensions.cpp
     src/systemc/scv_random.cpp

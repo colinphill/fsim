@@ -57,8 +57,6 @@ checkpoint	include/fsim/runtime/vhpi_checkpoint.hpp	1	object-registry-bounds,ide
 debugger	include/fsim/app/application.hpp	nonpersistent-view	bounded-UVM-register-coverage-and-VHDL-debug-snapshots
 uvm-register	include/fsim/runtime/uvm_register_model.hpp	owned-by-uvm=2	models,samples,bins,bin-bytes,value-bits,names,operations
 scv	include/fsim/systemc/scv.hpp	artifact=1,cache=1	exact-SCV-and-standard-library-identity
-scv	include/fsim/systemc/scv_backend_protocol.hpp	1	header=160,identity-bytes,payload-bytes,message-bytes,stable-typed-ids
-scv	include/fsim/systemc/scv_backend_transport.hpp	1	header=64,message-bytes,queued-bytes,queued-records,nested-transaction-limits
 scv	include/fsim/systemc/scv_recording.hpp	protocol=1	streams,generators,handles,completed,attributes,relations,name-bytes,nested-record-limits
 scv	include/fsim/systemc/scv_resources.hpp	protocol=1	transactions,attributes,queue-records,queue-bytes,solver-steps
 scv	include/fsim/systemc/scv_extensions.hpp	protocol=1	nodes,depth,value-bits,total-words,string-bytes,total-string-bytes

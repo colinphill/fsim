@@ -69,7 +69,7 @@ fsim_scv_require_tokens("docs/feature-matrix.md"
   "v2-scv-release-audit.md")
 fsim_scv_require_tokens("docs/diagnostics.md"
   "FSIM-SCV-C001"
-  "FSIM-SCV-W003"
+  "FSIM-SCV-B003"
   "FSIM-SCV-E003")
 fsim_scv_require_tokens("docs/v2-scv-release-audit.md"
   "78fda3ccb3264ad3833ddb7334f1b49cdd3c63970fb7aaacd32b8c8b6ad997b0"
@@ -102,10 +102,10 @@ foreach(FSIM_PRODUCTION_SOURCE IN LISTS FSIM_PRODUCTION_SOURCES)
 endforeach()
 list(REMOVE_DUPLICATES FSIM_SCV_CODES)
 list(LENGTH FSIM_SCV_CODES FSIM_SCV_CODE_COUNT)
-if(NOT FSIM_SCV_CODE_COUNT EQUAL 32)
+if(NOT FSIM_SCV_CODE_COUNT EQUAL 28)
   message(FATAL_ERROR
-    "SCV closure requires exactly 32 production diagnostics, got ${FSIM_SCV_CODE_COUNT}")
+    "SCV closure requires exactly 28 production diagnostics, got ${FSIM_SCV_CODE_COUNT}")
 endif()
 
 message(STATUS
-  "SCV closure contract passed: rows=18 active=0 diagnostics=32 release=2.0.1")
+  "SCV closure contract passed: rows=18 active=0 diagnostics=28 release=2.0.1")

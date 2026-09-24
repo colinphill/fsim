@@ -98,6 +98,28 @@ CLI, Tcl, object, design, mapped-library, and checkpoint surfaces observe
 stable boundary identities while transient Accellera object addresses and
 callbacks are rebound for each fresh session.
 
+### C++ kernel-backend migration
+
+Internal C++ backend callers now submit a `SystemCKernelDirectRequest` to
+`SystemCKernelBackend::request()` and inspect a `SystemCKernelDirectResult`.
+The request is a variant of operation-specific, owning payloads; it carries
+the semantic island and sequence identities directly. A caller selects the
+corresponding receipt alternative for lifecycle or execution results and
+closes the backend explicitly. The former serialized message exchange,
+handshake, framing, and loopback replay are not part of this interface.
+
+`kernel_backend_direct.hpp` declares this C++ interface. The native plug-in
+C ABI and its version are unchanged: model authors continue using the
+`SC_FSIM_EXPORT` helpers and do not need to adopt the internal request types.
+Value, TLM, observation, and transaction-record serializers remain available
+where persisted artifact formats require them; they are not used to marshal
+an in-process kernel call.
+
+For installed C++ SCV probe callers, `ScvResourceMetrics::serialized_bytes`
+is now `record_payload_bytes`. The metric counts standalone persisted
+`TransactionRecord` payload bytes, not a removed transport envelope; update
+source references to the new member name.
+
 ## Plug-in compilation and cache
 
 Each schema-1 manifest may select a C++ compiler and pass include directories,

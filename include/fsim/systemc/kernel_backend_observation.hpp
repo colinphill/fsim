@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace fsim::systemc {
@@ -52,6 +53,9 @@ struct SystemCKernelObservationLimits {
     SystemCKernelTlm2Limits tlm2_limits;
 };
 
+using SystemCKernelObservedTransaction = std::variant<std::monostate,
+    SystemCKernelTlm1Transaction, SystemCKernelTlm2Transaction>;
+
 struct SystemCKernelObservationRecord {
     SystemCKernelObservationKind kind {
         SystemCKernelObservationKind::inventory_query
@@ -61,7 +65,7 @@ struct SystemCKernelObservationRecord {
     SystemCEndpointId peer;
     SystemCTransactionId transaction;
     std::optional<SystemCKernelValue> value;
-    std::vector<std::byte> transaction_bytes;
+    SystemCKernelObservedTransaction transaction_data;
     std::string detail;
 
     friend bool operator==(const SystemCKernelObservationRecord&,

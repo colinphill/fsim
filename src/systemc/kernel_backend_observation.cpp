@@ -52,18 +52,165 @@ namespace {
         return kind <= SystemCKernelObservationKind::report;
     }
 
+    bool checked_add(std::size_t& total, const std::size_t amount) noexcept
+    {
+        if (amount > std::numeric_limits<std::size_t>::max() - total) {
+            return false;
+        }
+        total += amount;
+        return true;
+    }
+
+    std::optional<std::size_t> encoded_value_size(
+        const SystemCKernelValue& value)
+    {
+        std::size_t total = 56U;
+        if (!checked_add(total, value.type_name.size())) {
+            return std::nullopt;
+        }
+        for (const auto& literal : value.enum_literals) {
+            if (!checked_add(total, sizeof(std::uint32_t))
+                || !checked_add(total, literal.size())) {
+                return std::nullopt;
+            }
+        }
+        const auto words = (static_cast<std::size_t>(value.width) + 63U) / 64U;
+        const auto planes = systemc_kernel_value_plane_count(value.kind);
+        if (planes == 0U
+            || words > std::numeric_limits<std::size_t>::max()
+                    / sizeof(std::uint64_t)
+            || words * sizeof(std::uint64_t)
+                    > std::numeric_limits<std::size_t>::max() / planes
+            || !checked_add(total,
+                words * sizeof(std::uint64_t) * planes)) {
+            return std::nullopt;
+        }
+        return total;
+    }
+
+    std::optional<std::size_t> encoded_transaction_size(
+        const SystemCKernelObservedTransaction& transaction)
+    {
+        if (const auto* value
+            = std::get_if<SystemCKernelTlm1Transaction>(&transaction)) {
+            std::size_t size = 96U;
+            const auto add_value_size = [&size](const auto& member) {
+                if (!*member) {
+                    return true;
+                }
+                const auto member_size = encoded_value_size(**member);
+                if (!member_size
+                    || *member_size > std::numeric_limits<std::uint32_t>::max()
+                    || !checked_add(size, *member_size)) {
+                    return false;
+                }
+                return true;
+            };
+            if (!add_value_size(&value->request)
+                || !add_value_size(&value->response)) {
+                return std::nullopt;
+            }
+            return size;
+        }
+        if (const auto* value
+            = std::get_if<SystemCKernelTlm2Transaction>(&transaction)) {
+            const auto& payload = value->payload;
+            if (payload.data.size()
+                    > std::numeric_limits<std::uint32_t>::max()
+                || payload.byte_enables.size()
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                return std::nullopt;
+            }
+            std::size_t variable_size = payload.data.size();
+            if (!checked_add(variable_size, payload.byte_enables.size())) {
+                return std::nullopt;
+            }
+            for (const auto& extension : payload.extensions) {
+                if (extension.type_name.size()
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || extension.bytes.size()
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || !checked_add(variable_size, 8U)
+                    || !checked_add(variable_size, extension.type_name.size())
+                    || !checked_add(variable_size, extension.bytes.size())) {
+                    return std::nullopt;
+                }
+            }
+            std::size_t size = 160U;
+            if (!checked_add(size, variable_size)) {
+                return std::nullopt;
+            }
+            return size;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::vector<std::byte>> encode_transaction_data(
+        const SystemCKernelObservedTransaction& transaction,
+        const SystemCKernelObservationLimits& limits,
+        diagnostic::Engine& diagnostics)
+    {
+        if (const auto* value
+            = std::get_if<SystemCKernelTlm1Transaction>(&transaction)) {
+            return serialize_systemc_kernel_tlm1_transaction(
+                *value, limits.tlm1_limits, diagnostics);
+        }
+        if (const auto* value
+            = std::get_if<SystemCKernelTlm2Transaction>(&transaction)) {
+            return serialize_systemc_kernel_tlm2_transaction(
+                *value, limits.tlm2_limits, diagnostics);
+        }
+        if (std::holds_alternative<std::monostate>(transaction)) {
+            return std::vector<std::byte> { };
+        }
+        return std::nullopt;
+    }
+
+    bool validate_transaction_encoding_size(
+        const SystemCKernelObservedTransaction& transaction,
+        const SystemCKernelObservationLimits& limits,
+        diagnostic::Engine& diagnostics)
+    {
+        const auto size = encoded_transaction_size(transaction);
+        if (std::holds_alternative<SystemCKernelTlm1Transaction>(transaction)) {
+            if (!size || *size > limits.tlm1_limits.max_encoded_bytes) {
+                diagnostics.error(systemc_kernel_tlm1_diagnostic_code(
+                                      SystemCKernelTlm1Code::resource),
+                    "SystemC TLM1 transaction encoding exceeds its governed limit");
+                return false;
+            }
+            return true;
+        }
+        if (std::holds_alternative<SystemCKernelTlm2Transaction>(transaction)) {
+            if (!size || *size > limits.tlm2_limits.max_encoded_bytes) {
+                diagnostics.error(systemc_kernel_tlm2_diagnostic_code(
+                                      SystemCKernelTlm2Code::resource),
+                    "SystemC TLM2 transaction encoding exceeds its governed limit");
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
     bool valid_transaction_record(
         const SystemCKernelObservationRecord& record,
         const SystemCKernelObservationLimits& limits)
     {
         diagnostic::Engine nested_diagnostics;
         if (record.kind <= SystemCKernelObservationKind::tlm1_end) {
-            const auto value = deserialize_systemc_kernel_tlm1_transaction(
-                record.transaction_bytes, limits.tlm1_limits,
-                nested_diagnostics);
-            if (!value || value->transaction != record.transaction
-                || value->endpoint != record.endpoint
-                || value->peer != record.peer
+            const auto* value = std::get_if<SystemCKernelTlm1Transaction>(
+                &record.transaction_data);
+            if (value == nullptr || !value->explicit_bridge
+                || !validate_systemc_kernel_tlm1_transaction(
+                    *value, limits.tlm1_limits, nested_diagnostics)) {
+                return false;
+            }
+            const auto size = encoded_transaction_size(record.transaction_data);
+            if (!size || *size > limits.tlm1_limits.max_encoded_bytes
+                || *size > limits.max_transaction_bytes
+                || value->transaction != record.transaction
+                || value->endpoint != record.endpoint || value->peer != record.peer
                 || value->sequence != record.order.sequence
                 || value->time_fs != record.order.time_fs
                 || value->delta != record.order.delta) {
@@ -79,9 +226,17 @@ namespace {
                     && (value->state == SystemCKernelTlm1State::completed
                         || value->state == SystemCKernelTlm1State::canceled));
         }
-        const auto value = deserialize_systemc_kernel_tlm2_transaction(
-            record.transaction_bytes, limits.tlm2_limits, nested_diagnostics);
-        if (!value || value->transaction != record.transaction
+        const auto* value = std::get_if<SystemCKernelTlm2Transaction>(
+            &record.transaction_data);
+        if (value == nullptr || !value->explicit_bridge
+            || !validate_systemc_kernel_tlm2_transaction(
+                *value, limits.tlm2_limits, nested_diagnostics)) {
+            return false;
+        }
+        const auto size = encoded_transaction_size(record.transaction_data);
+        if (!size || *size > limits.tlm2_limits.max_encoded_bytes
+            || *size > limits.max_transaction_bytes
+            || value->transaction != record.transaction
             || value->endpoint != record.endpoint || value->peer != record.peer
             || value->sequence != record.order.sequence
             || value->time_fs != record.order.time_fs
@@ -244,15 +399,6 @@ namespace {
         std::size_t offset_ { };
     };
 
-    bool checked_add(std::size_t& total, const std::size_t amount) noexcept
-    {
-        if (amount > std::numeric_limits<std::size_t>::max() - total) {
-            return false;
-        }
-        total += amount;
-        return true;
-    }
-
     bool valid_record(const SystemCKernelObservationRecord& record,
         const SystemCIslandId island, const SystemCKernelObservationLimits& limits,
         diagnostic::Engine& diagnostics)
@@ -260,8 +406,7 @@ namespace {
         if (!known_kind(record.kind) || !known_region(record.order.region)
             || record.order.island != island
             || !record.order.sequence.valid()
-            || record.detail.size() > limits.max_detail_bytes
-            || record.transaction_bytes.size() > limits.max_transaction_bytes) {
+            || record.detail.size() > limits.max_detail_bytes) {
             return report_error(diagnostics,
                 SystemCKernelObservationCode::metadata,
                 "SystemC observation record metadata is invalid");
@@ -274,7 +419,8 @@ namespace {
         }
         if (transaction_kind(record.kind)) {
             if (!record.endpoint.valid() || !record.peer.valid()
-                || !record.transaction.valid() || record.transaction_bytes.empty()
+                || !record.transaction.valid()
+                || std::holds_alternative<std::monostate>(record.transaction_data)
                 || record.value) {
                 return report_error(diagnostics,
                     SystemCKernelObservationCode::metadata,
@@ -285,7 +431,8 @@ namespace {
                     SystemCKernelObservationCode::metadata,
                     "SystemC TLM observation payload and correlation disagree");
             }
-        } else if (!record.transaction_bytes.empty()
+        } else if (!std::holds_alternative<std::monostate>(
+                       record.transaction_data)
             || record.transaction.valid() || record.peer.valid()) {
             return report_error(diagnostics,
                 SystemCKernelObservationCode::metadata,
@@ -490,9 +637,13 @@ bool SystemCKernelSafePointObserver::observe_tlm1(
     }
     auto portable = value;
     portable.explicit_bridge = true;
-    auto bytes = serialize_systemc_kernel_tlm1_transaction(
-        portable, limits_.tlm1_limits, diagnostics);
-    if (!bytes) {
+    if (!validate_systemc_kernel_tlm1_transaction(
+            portable, limits_.tlm1_limits, diagnostics)) {
+        return false;
+    }
+    SystemCKernelObservedTransaction transaction_data { std::move(portable) };
+    if (!validate_transaction_encoding_size(
+            transaction_data, limits_, diagnostics)) {
         return false;
     }
     return append({ kind,
@@ -500,7 +651,7 @@ bool SystemCKernelSafePointObserver::observe_tlm1(
                           SystemCAccelleraRegion::quiescent, inventory_.island,
                           value.sequence },
                       value.endpoint, value.peer, value.transaction,
-                      std::nullopt, std::move(*bytes),
+                      std::nullopt, std::move(transaction_data),
                       "native in-island TLM1 transaction" },
         diagnostics);
 }
@@ -539,9 +690,13 @@ bool SystemCKernelSafePointObserver::observe_tlm2(
     }
     auto portable = value;
     portable.explicit_bridge = true;
-    auto bytes = serialize_systemc_kernel_tlm2_transaction(
-        portable, limits_.tlm2_limits, diagnostics);
-    if (!bytes) {
+    if (!validate_systemc_kernel_tlm2_transaction(
+            portable, limits_.tlm2_limits, diagnostics)) {
+        return false;
+    }
+    SystemCKernelObservedTransaction transaction_data { std::move(portable) };
+    if (!validate_transaction_encoding_size(
+            transaction_data, limits_, diagnostics)) {
         return false;
     }
     return append({ kind,
@@ -549,7 +704,7 @@ bool SystemCKernelSafePointObserver::observe_tlm2(
                           SystemCAccelleraRegion::quiescent, inventory_.island,
                           value.sequence },
                       value.endpoint, value.peer, value.transaction,
-                      std::nullopt, std::move(*bytes),
+                      std::nullopt, std::move(transaction_data),
                       "native in-island TLM2 transaction" },
         diagnostics);
 }
@@ -623,6 +778,8 @@ serialize_systemc_kernel_observation_batch(
     }
     std::vector<std::vector<std::byte>> values;
     values.reserve(batch.records.size());
+    std::vector<std::vector<std::byte>> transactions;
+    transactions.reserve(batch.records.size());
     std::size_t size = kHeaderBytes;
     for (const auto& record : batch.records) {
         std::vector<std::byte> value_bytes;
@@ -634,19 +791,26 @@ serialize_systemc_kernel_observation_batch(
             }
             value_bytes = std::move(*encoded);
         }
+        auto transaction_bytes = encode_transaction_data(
+            record.transaction_data, limits, diagnostics);
+        if (!transaction_bytes) {
+            return std::nullopt;
+        }
         if (value_bytes.size() > std::numeric_limits<std::uint32_t>::max()
-            || record.transaction_bytes.size()
+            || transaction_bytes->size() > limits.max_transaction_bytes
+            || transaction_bytes->size()
                 > std::numeric_limits<std::uint32_t>::max()
             || record.detail.size() > std::numeric_limits<std::uint32_t>::max()
             || !checked_add(size, kRecordBytes)
             || !checked_add(size, value_bytes.size())
-            || !checked_add(size, record.transaction_bytes.size())
+            || !checked_add(size, transaction_bytes->size())
             || !checked_add(size, record.detail.size())) {
             report_error(diagnostics, SystemCKernelObservationCode::resource,
                 "SystemC observation encoding size overflows");
             return std::nullopt;
         }
         values.push_back(std::move(value_bytes));
+        transactions.push_back(std::move(*transaction_bytes));
     }
     if (size > limits.max_encoded_bytes
         || batch.records.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -663,10 +827,11 @@ serialize_systemc_kernel_observation_batch(
     for (std::size_t index = 0U; index < batch.records.size(); ++index) {
         const auto& record = batch.records[index];
         const auto& value_bytes = values[index];
+        const auto& transaction_bytes = transactions[index];
         writer.u8(static_cast<std::uint8_t>(record.kind));
         writer.u8(static_cast<std::uint8_t>(record.order.region));
         writer.u8(static_cast<std::uint8_t>((record.value ? 1U : 0U)
-            | (!record.transaction_bytes.empty() ? 2U : 0U)));
+            | (!transaction_bytes.empty() ? 2U : 0U)));
         writer.u8(0U);
         writer.u64(record.order.time_fs);
         writer.u64(record.order.delta);
@@ -676,12 +841,11 @@ serialize_systemc_kernel_observation_batch(
         writer.id(record.peer);
         writer.id(record.transaction);
         writer.u32(static_cast<std::uint32_t>(value_bytes.size()));
-        writer.u32(
-            static_cast<std::uint32_t>(record.transaction_bytes.size()));
+        writer.u32(static_cast<std::uint32_t>(transaction_bytes.size()));
         writer.u32(static_cast<std::uint32_t>(record.detail.size()));
         writer.u32(0U);
         writer.raw(value_bytes);
-        writer.raw(record.transaction_bytes);
+        writer.raw(transaction_bytes);
         writer.text(record.detail);
     }
     return std::move(writer).take();
@@ -755,8 +919,39 @@ deserialize_systemc_kernel_observation_batch(
                 return std::nullopt;
             }
         }
-        record.transaction_bytes.assign(
-            transaction_bytes.begin(), transaction_bytes.end());
+        if (!transaction_bytes.empty()) {
+            diagnostic::Engine transaction_diagnostics;
+            if (record.kind >= SystemCKernelObservationKind::tlm1_begin
+                && record.kind <= SystemCKernelObservationKind::tlm1_end) {
+                auto value = deserialize_systemc_kernel_tlm1_transaction(
+                    transaction_bytes, limits.tlm1_limits,
+                    transaction_diagnostics);
+                if (!value) {
+                    report_error(diagnostics,
+                        SystemCKernelObservationCode::metadata,
+                        "SystemC TLM observation payload and correlation disagree");
+                    return std::nullopt;
+                }
+                record.transaction_data = std::move(*value);
+            } else if (record.kind >= SystemCKernelObservationKind::tlm2_begin
+                && record.kind <= SystemCKernelObservationKind::tlm2_end) {
+                auto value = deserialize_systemc_kernel_tlm2_transaction(
+                    transaction_bytes, limits.tlm2_limits,
+                    transaction_diagnostics);
+                if (!value) {
+                    report_error(diagnostics,
+                        SystemCKernelObservationCode::metadata,
+                        "SystemC TLM observation payload and correlation disagree");
+                    return std::nullopt;
+                }
+                record.transaction_data = std::move(*value);
+            } else {
+                report_error(diagnostics,
+                    SystemCKernelObservationCode::metadata,
+                    "SystemC debugger observation contains transaction state");
+                return std::nullopt;
+            }
+        }
         batch.records.push_back(std::move(record));
     }
     if (reader.remaining() != 0U

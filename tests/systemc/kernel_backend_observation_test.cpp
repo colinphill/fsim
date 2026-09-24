@@ -250,7 +250,11 @@ void test_tlm_observation(const Identities& ids,
     assert(records[6].kind
         == systemc::SystemCKernelObservationKind::tlm2_begin);
     assert(records[7].kind == systemc::SystemCKernelObservationKind::tlm2_dmi);
-    assert(!records[7].value && !records[7].transaction_bytes.empty());
+    assert(!records[7].value);
+    const auto* observed_tlm2 = std::get_if<
+        systemc::SystemCKernelTlm2Transaction>(&records[7].transaction_data);
+    assert(observed_tlm2 != nullptr && observed_tlm2->explicit_bridge);
+    assert(observed_tlm2->dmi == dmi);
     assert(records[9].kind
         == systemc::SystemCKernelObservationKind::tlm2_phase);
     assert(records[10].kind
@@ -258,13 +262,99 @@ void test_tlm_observation(const Identities& ids,
     assert(records[11].kind
         == systemc::SystemCKernelObservationKind::tlm2_debug);
 
-    auto tlm1_bytes = records[5].transaction_bytes;
+    const auto* observed_tlm1 = std::get_if<
+        systemc::SystemCKernelTlm1Transaction>(&records[5].transaction_data);
+    assert(observed_tlm1 != nullptr && observed_tlm1->explicit_bridge);
+    assert(observed_tlm1->response == scalar(111U));
+    const auto encoded1 = systemc::serialize_systemc_kernel_tlm1_transaction(
+        *observed_tlm1, { }, diagnostics);
+    assert(encoded1);
     const auto decoded1 = systemc::deserialize_systemc_kernel_tlm1_transaction(
-        tlm1_bytes, { }, diagnostics);
-    assert(decoded1 && decoded1->response == scalar(111U));
+        *encoded1, { }, diagnostics);
+    assert(decoded1 && *decoded1 == *observed_tlm1);
+    const auto encoded2 = systemc::serialize_systemc_kernel_tlm2_transaction(
+        *observed_tlm2, { }, diagnostics);
+    assert(encoded2);
     const auto decoded2 = systemc::deserialize_systemc_kernel_tlm2_transaction(
-        records[7].transaction_bytes, { }, diagnostics);
-    assert(decoded2 && decoded2->dmi == dmi);
+        *encoded2, { }, diagnostics);
+    assert(decoded2 && *decoded2 == *observed_tlm2);
+
+    systemc::SystemCKernelObservationLimits exact_tlm1_limit;
+    exact_tlm1_limit.max_transaction_bytes = encoded1->size();
+    exact_tlm1_limit.tlm1_limits.max_encoded_bytes = encoded1->size();
+    systemc::SystemCKernelSafePointObserver exact_tlm1 {
+        make_inventory(ids), exact_tlm1_limit
+    };
+    diagnostic::Engine exact_tlm1_diagnostics;
+    auto native_tlm1 = *observed_tlm1;
+    native_tlm1.explicit_bridge = false;
+    assert(exact_tlm1.observe_tlm1(native_tlm1,
+        systemc::SystemCKernelObservationKind::tlm1_end,
+        exact_tlm1_diagnostics));
+    --exact_tlm1_limit.max_transaction_bytes;
+    systemc::SystemCKernelSafePointObserver short_tlm1 {
+        make_inventory(ids), exact_tlm1_limit
+    };
+    diagnostic::Engine short_tlm1_diagnostics;
+    assert(!short_tlm1.observe_tlm1(native_tlm1,
+        systemc::SystemCKernelObservationKind::tlm1_end,
+        short_tlm1_diagnostics));
+
+    auto extended_tlm2 = *observed_tlm2;
+    extended_tlm2.payload.extensions.push_back(
+        { "audit.extension", { std::byte { 0x5aU } } });
+    const auto extended_bytes
+        = systemc::serialize_systemc_kernel_tlm2_transaction(
+            extended_tlm2, { }, diagnostics);
+    assert(extended_bytes);
+    systemc::SystemCKernelObservationLimits exact_tlm2_limit;
+    exact_tlm2_limit.max_transaction_bytes = extended_bytes->size();
+    exact_tlm2_limit.tlm2_limits.max_encoded_bytes = extended_bytes->size();
+    systemc::SystemCKernelSafePointObserver exact_tlm2 {
+        make_inventory(ids), exact_tlm2_limit
+    };
+    diagnostic::Engine exact_tlm2_diagnostics;
+    extended_tlm2.explicit_bridge = false;
+    assert(exact_tlm2.observe_tlm2(extended_tlm2,
+        systemc::SystemCKernelObservationKind::tlm2_dmi,
+        exact_tlm2_diagnostics));
+    --exact_tlm2_limit.max_transaction_bytes;
+    systemc::SystemCKernelSafePointObserver short_tlm2 {
+        make_inventory(ids), exact_tlm2_limit
+    };
+    diagnostic::Engine short_tlm2_diagnostics;
+    assert(!short_tlm2.observe_tlm2(extended_tlm2,
+        systemc::SystemCKernelObservationKind::tlm2_dmi,
+        short_tlm2_diagnostics));
+
+    auto wrong_transaction_alternative = observer.batch();
+    wrong_transaction_alternative.records[4].transaction_data = *observed_tlm2;
+    diagnostic::Engine wrong_alternative_diagnostics;
+    assert(!systemc::validate_systemc_kernel_observation_batch(
+        wrong_transaction_alternative, { }, wrong_alternative_diagnostics));
+
+    systemc::SystemCKernelObservationLimits small_transaction_limit;
+    small_transaction_limit.max_transaction_bytes = 159U;
+    systemc::SystemCKernelSafePointObserver bounded {
+        make_inventory(ids), small_transaction_limit
+    };
+    diagnostic::Engine bounded_diagnostics;
+    assert(!bounded.observe_tlm2(tlm2.transactions().front(),
+        systemc::SystemCKernelObservationKind::tlm2_dmi,
+        bounded_diagnostics));
+    assert(bounded.batch().records.empty());
+
+    systemc::SystemCKernelObservationLimits short_tlm2_header;
+    short_tlm2_header.tlm2_limits.max_encoded_bytes = 159U;
+    systemc::SystemCKernelSafePointObserver invalid_tlm2_limits {
+        make_inventory(ids), short_tlm2_header
+    };
+    diagnostic::Engine invalid_tlm2_diagnostics;
+    assert(!invalid_tlm2_limits.observe_tlm2(tlm2.transactions().front(),
+        systemc::SystemCKernelObservationKind::tlm2_dmi,
+        invalid_tlm2_diagnostics));
+    assert(invalid_tlm2_diagnostics.diagnostics().front().code
+        == "FSIM-SC-U004");
 }
 
 void test_codec_and_limits(const Identities& ids,

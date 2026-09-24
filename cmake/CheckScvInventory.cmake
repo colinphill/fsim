@@ -25,7 +25,7 @@ foreach(FSIM_INPUT IN ITEMS "${FSIM_INVENTORY}" "${FSIM_PLAN}" "${FSIM_TEST_CMAK
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "78fda3ccb3264ad3833ddb7334f1b49cdd3c63970fb7aaacd32b8c8b6ad997b0")
+  "a1e610470d4a5610bbe45db83c75b704720794f4671c3f6b2db94be2b271c616")
 set(FSIM_COMPLETED_CHANGE 19)
 fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
@@ -93,9 +93,9 @@ set(FSIM_EXPECTED_PROFILES
 set(FSIM_EXPECTED_DOMAINS
   official-provenance patch-governance shared-runtime-install
   compatibility-abi-cache source-plugin-incremental mapped-artifact-relocation
-  protocol-identities deterministic-randomization smart-pointer-lifetime
+  typed-identities deterministic-randomization smart-pointer-lifetime
   constraints-distributions extensions-introspection transaction-record-model
-  native-recording-api trace-debug-correlation loopback-serialization-merge
+  native-recording-api trace-debug-correlation transient-transport-removal
   corpus-platform-teardown performance-resource-containment
   closure-documentation-handoff)
 

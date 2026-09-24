@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -34,10 +35,11 @@ void require(const bool condition, const std::string_view message)
 fsim::app::TraceArchiveSnapshot snapshot()
 {
     using namespace fsim;
+    const auto root = producer_root();
     app::TraceControlRequest request;
     request.surface = app::TraceControlSurface::NonProjectCompile;
     request.phase = app::TraceControlPhase::Compile;
-    request.output = producer_root() / "traces" / "waves.fst";
+    request.output = root / "traces" / "waves.fst";
     request.format = project::TraceFormat::fst;
     request.compression = project::TraceCompression::none;
     request.selection = { "top.clock", "top.payload" };
@@ -45,7 +47,32 @@ fsim::app::TraceArchiveSnapshot snapshot()
     request.generation = 7U;
     const auto applied = app::apply_trace_control(std::move(request));
     require(applied.ok(), "trace control fixture must be valid");
-    return app::make_trace_archive_snapshot(*applied.application, producer_root());
+    return app::make_trace_archive_snapshot(*applied.application, root);
+}
+
+void pin_wire_fixture_output_report(fsim::app::TraceArchiveSnapshot& snapshot)
+{
+    for (auto& entry : snapshot.report) {
+        if (entry.kind != fsim::app::TraceControlEntryKind::Output) {
+            continue;
+        }
+        // The frozen v1 digest captured this Linux temp path in the report.
+        entry.value = "/tmp/fsim-trace-archive-origin/traces/waves.fst";
+        std::string identity { "trace-control-report-v1" };
+        const auto append_field = [&identity](const std::string_view value) {
+            identity += std::to_string(value.size());
+            identity.push_back(':');
+            identity.append(value);
+        };
+        append_field(std::to_string(static_cast<unsigned>(entry.kind)));
+        append_field(entry.name);
+        append_field(entry.value);
+        entry.canonical_identity
+            = fsim::support::Sha256::hex(
+                fsim::support::Sha256::digest(identity));
+        return;
+    }
+    require(false, "wire fixture must contain an output report entry");
 }
 
 void test_round_trip_all_boundaries()
@@ -63,12 +90,15 @@ void test_round_trip_all_boundaries()
         "0add33956b36eebfd19d8ba43ae53b629f6c4b70549919c85582036f5bc406f5",
     };
     const auto expected = snapshot();
+    auto wire_fixture = expected;
+    pin_wire_fixture_output_report(wire_fixture);
     for (const auto kind : kinds) {
-        const auto encoded = app::encode_trace_archive(expected, kind);
-        require(support::Sha256::hex(
-                    support::Sha256::digest(std::span { encoded.archive }))
-                == expected_hashes[static_cast<std::size_t>(kind)],
+        const auto fixture_encoded = app::encode_trace_archive(wire_fixture, kind);
+        const auto fixture_hash = support::Sha256::hex(
+            support::Sha256::digest(std::span { fixture_encoded.archive }));
+        require(fixture_hash == expected_hashes[static_cast<std::size_t>(kind)],
             "archive wire bytes must match the frozen pre-migration fixture");
+        const auto encoded = app::encode_trace_archive(expected, kind);
         for (std::size_t length = 0U; length < 20U; ++length) {
             require(!app::decode_trace_archive(
                         std::span { encoded.archive }.first(length), kind).ok(),

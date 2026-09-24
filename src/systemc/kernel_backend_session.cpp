@@ -3,6 +3,7 @@
 
 #include "fsim/systemc/accellera.hpp"
 #include "fsim/systemc/hierarchy.hpp"
+#include "fsim/systemc/kernel_backend_direct.hpp"
 #include "fsim/systemc/kernel_backend_execution.hpp"
 #include "context_activation.hpp"
 #include "kernel_backend_execution_internal.hpp"
@@ -13,6 +14,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -86,149 +88,6 @@ namespace {
         return true;
     }
 
-    class ByteWriter final {
-    public:
-        void append_u8(const std::uint8_t value)
-        {
-            bytes_.push_back(static_cast<std::byte>(value));
-        }
-
-        void append_u16(const std::uint16_t value)
-        {
-            append_integral(value);
-        }
-
-        void append_u32(const std::uint32_t value)
-        {
-            append_integral(value);
-        }
-
-        void append_u64(const std::uint64_t value)
-        {
-            append_integral(value);
-        }
-
-        void append_i64(const std::int64_t value)
-        {
-            append_u64(static_cast<std::uint64_t>(value));
-        }
-
-        void append_text(const std::string_view value)
-        {
-            if (value.empty()) {
-                return;
-            }
-            const auto* begin = reinterpret_cast<const std::byte*>(value.data());
-            bytes_.insert(bytes_.end(), begin, begin + value.size());
-        }
-
-        [[nodiscard]] std::vector<std::byte> take() &&
-        {
-            return std::move(bytes_);
-        }
-
-    private:
-        template <typename T>
-            requires(std::is_unsigned_v<T>)
-        void append_integral(const T value)
-        {
-            for (std::size_t index = 0U; index < sizeof(T); ++index) {
-                const auto shifted = value >> (index * 8U);
-                bytes_.push_back(
-                    static_cast<std::byte>(shifted & static_cast<T>(0xffU)));
-            }
-        }
-
-        std::vector<std::byte> bytes_;
-    };
-
-    class ByteReader final {
-    public:
-        explicit ByteReader(const std::span<const std::byte> bytes)
-            : bytes_ { bytes }
-        {
-        }
-
-        [[nodiscard]] std::optional<std::uint8_t> read_u8()
-        {
-            return read_integral<std::uint8_t>();
-        }
-
-        [[nodiscard]] std::optional<std::uint16_t> read_u16()
-        {
-            return read_integral<std::uint16_t>();
-        }
-
-        [[nodiscard]] std::optional<std::uint32_t> read_u32()
-        {
-            return read_integral<std::uint32_t>();
-        }
-
-        [[nodiscard]] std::optional<std::uint64_t> read_u64()
-        {
-            return read_integral<std::uint64_t>();
-        }
-
-        [[nodiscard]] std::optional<std::int64_t> read_i64()
-        {
-            const auto value = read_u64();
-            if (!value) {
-                return std::nullopt;
-            }
-            return static_cast<std::int64_t>(*value);
-        }
-
-        [[nodiscard]] std::optional<std::string> read_text(
-            const std::size_t size)
-        {
-            if (size > bytes_.size() - offset_) {
-                return std::nullopt;
-            }
-            const auto* begin = reinterpret_cast<const char*>(
-                bytes_.data() + offset_);
-            offset_ += size;
-            return std::string { begin, size };
-        }
-
-        [[nodiscard]] bool done() const noexcept
-        {
-            return offset_ == bytes_.size();
-        }
-
-    private:
-        template <typename T>
-            requires(std::is_unsigned_v<T>)
-        [[nodiscard]] std::optional<T> read_integral()
-        {
-            if (sizeof(T) > bytes_.size() - offset_) {
-                return std::nullopt;
-            }
-            std::uint64_t value { };
-            for (std::size_t index = 0U; index < sizeof(T); ++index) {
-                value |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(
-                             bytes_[offset_ + index]))
-                    << (index * 8U);
-            }
-            offset_ += sizeof(T);
-            return static_cast<T>(value);
-        }
-
-        std::span<const std::byte> bytes_;
-        std::size_t offset_ { };
-    };
-
-    std::optional<std::uint32_t> checked_size(const std::size_t size,
-        diagnostic::Engine& diagnostics, const std::string_view role)
-    {
-        if (size > std::numeric_limits<std::uint32_t>::max()) {
-            report_resource_error(diagnostics,
-                std::string { "SystemC session " } + std::string { role }
-                    + " exceeds the 32-bit payload boundary");
-            return std::nullopt;
-        }
-        return static_cast<std::uint32_t>(size);
-    }
-
     bool valid_create_session_payload(
         const SystemCKernelCreateSessionPayload& payload,
         const SystemCKernelSessionLimits& limits,
@@ -296,31 +155,42 @@ namespace {
                 diagnostics, "interface path");
     }
 
-    bool known_state(const SystemCKernelSessionState state) noexcept
+    bool valid_scalar(const SystemCKernelScalarValue& value,
+        const SystemCKernelExecutionLimits& limits,
+        diagnostic::Engine& diagnostics)
     {
-        switch (state) {
-        case SystemCKernelSessionState::vacant:
-        case SystemCKernelSessionState::constructing:
-        case SystemCKernelSessionState::elaborated:
-        case SystemCKernelSessionState::quiescent:
-        case SystemCKernelSessionState::terminal:
-        case SystemCKernelSessionState::failed:
+        if (value.typed) {
+            if (value.bits != 0U || value.width != 0U || value.is_signed) {
+                return report_payload_error(diagnostics,
+                    "SystemC typed value has a noncanonical legacy projection");
+            }
+            diagnostic::Engine value_diagnostics;
+            if (!validate_systemc_kernel_value(
+                    *value.typed, limits.value_limits, value_diagnostics)) {
+                const auto resource = std::ranges::any_of(
+                    value_diagnostics.diagnostics(), [](const auto& item) {
+                        return item.code == "FSIM-SC-V003";
+                    });
+                return resource
+                    ? report_resource_error(diagnostics,
+                          "SystemC typed value exceeds its governed limits")
+                    : report_payload_error(diagnostics,
+                          "SystemC typed value metadata or planes are invalid");
+            }
             return true;
         }
-        return false;
+        if (value.width == 0U || value.width > 64U
+            || (value.width < 64U && (value.bits >> value.width) != 0U)) {
+            return report_payload_error(diagnostics,
+                "SystemC scalar value has a noncanonical width or bit pattern");
+        }
+        return true;
     }
 
-    bool known_lifecycle_code(const SystemCKernelLifecycleCode code) noexcept
+    bool known_advance_kind(const SystemCKernelAdvanceKind kind) noexcept
     {
-        switch (code) {
-        case SystemCKernelLifecycleCode::none:
-        case SystemCKernelLifecycleCode::session_state:
-        case SystemCKernelLifecycleCode::payload:
-        case SystemCKernelLifecycleCode::resource:
-        case SystemCKernelLifecycleCode::upstream:
-            return true;
-        }
-        return false;
+        return kind == SystemCKernelAdvanceKind::delta
+            || kind == SystemCKernelAdvanceKind::time;
     }
 
     using ContextActivation = detail::ContextActivation;
@@ -358,103 +228,136 @@ namespace {
             close();
         }
 
-        [[nodiscard]] SystemCKernelTransportResult exchange(
-            const std::span<const std::byte> request_bytes) noexcept override
+        [[nodiscard]] SystemCKernelDirectResult request(
+            const SystemCKernelDirectRequest& direct_request) noexcept override
         {
-            std::lock_guard lock { mutex_ };
             try {
-                diagnostic::Engine diagnostics;
-                const auto request = deserialize_systemc_kernel_message(
-                    request_bytes, protocol_limits_, diagnostics);
-                if (!request
-                    || request->header.direction
-                        != SystemCKernelMessageDirection::request) {
-                    return { SystemCKernelTransportStatus::rejected, { } };
+                std::lock_guard lock { mutex_ };
+                try {
+                    return std::visit(
+                        [this](const auto& operation) {
+                            return dispatch(operation);
+                        }, direct_request);
+                } catch (...) {
+                    fail_and_rollback();
+                    return { SystemCKernelDirectResultStatus::disconnected, { } };
                 }
-                return dispatch(*request);
             } catch (...) {
-                fail_and_rollback();
-                return { SystemCKernelTransportStatus::disconnected, { } };
+                return { SystemCKernelDirectResultStatus::disconnected, { } };
             }
         }
 
         void close() noexcept override
         {
-            std::lock_guard lock { mutex_ };
-            teardown(false);
+            try {
+                std::lock_guard lock { mutex_ };
+                teardown(false);
+            } catch (...) {
+            }
         }
 
     private:
-        [[nodiscard]] SystemCKernelTransportResult dispatch(
-            const SystemCKernelMessage& request)
+        template <typename Request>
+        [[nodiscard]] SystemCKernelDirectResult dispatch(
+            const Request& request)
         {
-            if (request.header.operation == SystemCKernelOperation::handshake) {
-                return respond(request, SystemCKernelMessageStatus::ok,
-                    "Accellera SystemC 3.0.2 kernel session backend");
+            using RequestType = std::remove_cvref_t<Request>;
+            constexpr bool execution_request =
+                std::is_same_v<RequestType, SystemCKernelApplyInputsRequest>
+                || std::is_same_v<RequestType, SystemCKernelAdvanceRequest>
+                || std::is_same_v<RequestType, SystemCKernelNextActivityRequest>
+                || std::is_same_v<RequestType, SystemCKernelDrainOutputsRequest>
+                || std::is_same_v<RequestType, SystemCKernelReportRequest>
+                || std::is_same_v<RequestType, SystemCKernelInspectRequest>
+                || std::is_same_v<RequestType, SystemCKernelSnapshotRequest>;
+            if (!request.island.valid() || !request.sequence.valid()) {
+                if constexpr (execution_request) {
+                    return reject_execution(
+                        "SystemC request has an invalid island or sequence identity",
+                        SystemCKernelExecutionCode::payload);
+                } else {
+                    return respond(SystemCKernelDirectResultStatus::rejected,
+                        "SystemC request has an invalid island or sequence identity",
+                        SystemCKernelLifecycleCode::payload);
+                }
             }
             if (session_state_ != SystemCKernelSessionState::vacant
-                && request.header.island != island_) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
-                    "request island does not own this backend session",
-                    SystemCKernelLifecycleCode::session_state);
+                && request.island != island_) {
+                if constexpr (execution_request) {
+                    return reject_execution(
+                        "request island does not own this backend session");
+                } else {
+                    return respond(SystemCKernelDirectResultStatus::rejected,
+                        "request island does not own this backend session",
+                        SystemCKernelLifecycleCode::session_state);
+                }
             }
-            switch (request.header.operation) {
-            case SystemCKernelOperation::create_session:
+            if constexpr (std::is_same_v<RequestType,
+                              SystemCKernelCreateSessionRequest>) {
                 return create_session(request);
-            case SystemCKernelOperation::create_object:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelCreateObjectRequest>) {
                 return create_object(request);
-            case SystemCKernelOperation::bind_endpoint:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelBindEndpointRequest>) {
                 return bind_endpoint(request);
-            case SystemCKernelOperation::elaborate:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelElaborateRequest>) {
                 return elaborate(request);
-            case SystemCKernelOperation::start:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelStartRequest>) {
                 return start(request);
-            case SystemCKernelOperation::apply_inputs:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelApplyInputsRequest>) {
                 return apply_inputs(request);
-            case SystemCKernelOperation::advance:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelAdvanceRequest>) {
                 return advance(request);
-            case SystemCKernelOperation::next_activity:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelNextActivityRequest>) {
                 return next_activity(request);
-            case SystemCKernelOperation::drain_outputs:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelDrainOutputsRequest>) {
                 return drain_outputs(request);
-            case SystemCKernelOperation::report:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelReportRequest>) {
                 return report(request);
-            case SystemCKernelOperation::inspect:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelInspectRequest>) {
                 return inspect(request);
-            case SystemCKernelOperation::snapshot:
+            } else if constexpr (std::is_same_v<RequestType,
+                                     SystemCKernelSnapshotRequest>) {
                 return snapshot(request);
-            case SystemCKernelOperation::teardown:
+            } else {
+                static_assert(std::is_same_v<RequestType,
+                    SystemCKernelTeardownRequest>);
                 teardown(true);
-                return respond(request, SystemCKernelMessageStatus::ok,
+                return respond(SystemCKernelDirectResultStatus::ok,
                     "SystemC session reached terminal teardown");
-            default:
-                return respond(request, SystemCKernelMessageStatus::rejected,
-                    "operation is outside the session-lifecycle protocol slice",
-                    SystemCKernelLifecycleCode::session_state);
             }
         }
 
-        [[nodiscard]] SystemCKernelTransportResult create_session(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult create_session(
+            const SystemCKernelCreateSessionRequest& request)
         {
             if (session_state_ != SystemCKernelSessionState::vacant) {
                 fail_and_rollback();
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC session construction cannot be repeated",
                     SystemCKernelLifecycleCode::session_state);
             }
             diagnostic::Engine diagnostics;
-            const auto payload = deserialize_systemc_create_session_payload(
-                request.payload, session_limits_, diagnostics);
-            if (!payload) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+            const auto& payload = request.payload;
+            if (!valid_create_session_payload(
+                    payload, session_limits_, diagnostics)) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "invalid SystemC session-construction payload",
                     SystemCKernelLifecycleCode::payload);
             }
             auto expected_island = make_systemc_island_id(
-                payload->canonical_identity, protocol_limits_, diagnostics);
-            if (!expected_island || *expected_island != request.header.island) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                payload.canonical_identity, protocol_limits_, diagnostics);
+            if (!expected_island || *expected_island != request.island) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC session identity does not match its island ID",
                     SystemCKernelLifecycleCode::session_state);
             }
@@ -463,7 +366,7 @@ namespace {
             try {
                 candidate = std::make_unique<sc_core::sc_simcontext>();
             } catch (...) {
-                return respond(request, SystemCKernelMessageStatus::failed,
+                return respond(SystemCKernelDirectResultStatus::failed,
                     "cannot allocate the upstream SystemC context",
                     SystemCKernelLifecycleCode::upstream);
             }
@@ -472,10 +375,10 @@ namespace {
             try {
                 ContextActivation active { candidate.get() };
                 sc_core::sc_set_time_resolution(
-                    static_cast<double>(payload->time_resolution_fs),
+                    static_cast<double>(payload.time_resolution_fs),
                     sc_core::SC_FS);
                 candidate_registry = HierarchyRegistry::load(
-                    std::filesystem::path { payload->plugin_path }, error);
+                    std::filesystem::path { payload.plugin_path }, error);
             } catch (const std::exception& exception) {
                 error = exception.what();
             } catch (...) {
@@ -483,80 +386,80 @@ namespace {
             }
             if (!candidate_registry) {
                 candidate.reset();
-                return respond(request, SystemCKernelMessageStatus::failed,
+                return respond(SystemCKernelDirectResultStatus::failed,
                     error.empty() ? "cannot load the SystemC session plug-in"
                                   : error,
                     SystemCKernelLifecycleCode::upstream);
             }
 
-            island_ = request.header.island;
-            canonical_identity_ = payload->canonical_identity;
-            time_resolution_fs_ = payload->time_resolution_fs;
+            island_ = request.island;
+            canonical_identity_ = payload.canonical_identity;
+            time_resolution_fs_ = payload.time_resolution_fs;
             context_generation_ = gNextContextGeneration.fetch_add(1U, std::memory_order_relaxed);
             context_ = std::move(candidate);
             registry_ = std::move(candidate_registry);
             session_state_ = SystemCKernelSessionState::constructing;
             gLiveSystemCContexts.fetch_add(1U, std::memory_order_relaxed);
-            return respond(request, SystemCKernelMessageStatus::ok,
+            return respond(SystemCKernelDirectResultStatus::ok,
                 "SystemC session owns one fresh upstream context");
         }
 
-        [[nodiscard]] SystemCKernelTransportResult create_object(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult create_object(
+            const SystemCKernelCreateObjectRequest& request)
         {
             if (session_state_ != SystemCKernelSessionState::constructing
                 || context_ == nullptr || registry_ == nullptr) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC objects can be created only during construction",
                     SystemCKernelLifecycleCode::session_state);
             }
             diagnostic::Engine diagnostics;
-            const auto payload = deserialize_systemc_create_object_payload(
-                request.payload, session_limits_, diagnostics);
-            if (!payload) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+            const auto& payload = request.payload;
+            if (!valid_create_object_payload(
+                    payload, session_limits_, diagnostics)) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "invalid SystemC object-construction payload",
                     SystemCKernelLifecycleCode::payload);
             }
             if (roots_.size() >= session_limits_.max_objects) {
-                return fail_mutation(request,
+                return fail_mutation(
                     "SystemC session object limit is exhausted",
                     SystemCKernelLifecycleCode::resource);
             }
             const auto hierarchy = make_systemc_hierarchy_id(island_,
-                payload->hierarchy_path, protocol_limits_, diagnostics);
+                payload.hierarchy_path, protocol_limits_, diagnostics);
             const auto object = hierarchy
-                ? make_systemc_object_id(*hierarchy, payload->object_path,
+                ? make_systemc_object_id(*hierarchy, payload.object_path,
                       protocol_limits_, diagnostics)
                 : std::nullopt;
-            if (!hierarchy || !object || *hierarchy != request.header.hierarchy
-                || *object != request.header.object) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+            if (!hierarchy || !object || *hierarchy != request.hierarchy
+                || *object != request.object) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC object paths do not match their typed identities",
                     SystemCKernelLifecycleCode::session_state);
             }
             if (roots_.contains(*object)
                 || std::ranges::any_of(roots_, [&](const auto& entry) {
-                       return entry.second.object_path == payload->object_path;
+                       return entry.second.object_path == payload.object_path;
                    })) {
-                return fail_mutation(request,
+                return fail_mutation(
                     "SystemC object construction cannot be repeated",
                     SystemCKernelLifecycleCode::session_state);
             }
 
             std::vector<std::pair<std::string, std::int64_t>> parameters;
-            parameters.reserve(payload->parameters.size());
-            for (const auto& parameter : payload->parameters) {
+            parameters.reserve(payload.parameters.size());
+            for (const auto& parameter : payload.parameters) {
                 parameters.emplace_back(parameter.name, parameter.value);
             }
             std::string error;
             std::optional<ModuleDescription> description;
             try {
                 ContextActivation active { context_.get() };
-                description = registry_->instantiate(payload->factory,
-                    payload->instance, 0U, parameters, error);
+                description = registry_->instantiate(payload.factory,
+                    payload.instance, 0U, parameters, error);
                 const auto* native = sc_core::sc_find_object(
-                    payload->object_path.c_str());
+                    payload.object_path.c_str());
                 if (description && native == nullptr) {
                     error = "factory did not publish its root into the owned context";
                     description.reset();
@@ -571,59 +474,58 @@ namespace {
                 error = "unknown native SystemC factory failure";
             }
             if (!description) {
-                return fail_mutation(request,
+                return fail_mutation(
                     error.empty() ? "native SystemC factory rejected construction"
                                   : error);
             }
             roots_.emplace(*object,
-                RootRecord { *hierarchy, *object, payload->object_path,
+                RootRecord { *hierarchy, *object, payload.object_path,
                     description->handle });
-            return respond(request, SystemCKernelMessageStatus::ok,
+            return respond(SystemCKernelDirectResultStatus::ok,
                 "SystemC object is staged in the owned upstream context");
         }
 
-        [[nodiscard]] SystemCKernelTransportResult bind_endpoint(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult bind_endpoint(
+            const SystemCKernelBindEndpointRequest& request)
         {
             if (session_state_ != SystemCKernelSessionState::constructing
                 || context_ == nullptr) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC endpoints can be bound only during construction",
                     SystemCKernelLifecycleCode::session_state);
             }
             diagnostic::Engine diagnostics;
-            const auto payload = deserialize_systemc_bind_endpoint_payload(
-                request.payload, session_limits_, diagnostics);
-            if (!payload) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+            const auto& payload = request.payload;
+            if (!valid_bind_payload(payload, session_limits_, diagnostics)) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "invalid SystemC endpoint-binding payload",
                     SystemCKernelLifecycleCode::payload);
             }
-            const auto root = roots_.find(request.header.object);
+            const auto root = roots_.find(request.object);
             if (root == roots_.end()
-                || root->second.hierarchy != request.header.hierarchy) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                || root->second.hierarchy != request.hierarchy) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC endpoint references an unknown staged object",
                     SystemCKernelLifecycleCode::session_state);
             }
             const auto endpoint = make_systemc_endpoint_id(root->second.object,
-                payload->endpoint_path, protocol_limits_, diagnostics);
-            if (!endpoint || *endpoint != request.header.endpoint) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                payload.endpoint_path, protocol_limits_, diagnostics);
+            if (!endpoint || *endpoint != request.endpoint) {
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC endpoint path does not match its typed identity",
                     SystemCKernelLifecycleCode::session_state);
             }
             if (endpoints_.contains(*endpoint)
                 || endpoints_.size() >= session_limits_.max_bindings) {
-                return fail_mutation(request,
+                return fail_mutation(
                     "SystemC endpoint binding is repeated or exceeds its limit",
                     endpoints_.contains(*endpoint)
                         ? SystemCKernelLifecycleCode::session_state
                         : SystemCKernelLifecycleCode::resource);
             }
-            if (!payload->endpoint_path.starts_with(
+            if (!payload.endpoint_path.starts_with(
                     root->second.object_path + ".")) {
-                return fail_mutation(request,
+                return fail_mutation(
                     "SystemC endpoint is outside its owning root hierarchy",
                     SystemCKernelLifecycleCode::session_state);
             }
@@ -634,9 +536,9 @@ namespace {
             try {
                 ContextActivation active { context_.get() };
                 auto* endpoint_object = sc_core::sc_find_object(
-                    payload->endpoint_path.c_str());
+                    payload.endpoint_path.c_str());
                 auto* interface_object = sc_core::sc_find_object(
-                    payload->interface_path.c_str());
+                    payload.interface_path.c_str());
                 auto* port = dynamic_cast<sc_core::sc_port_base*>(endpoint_object);
                 auto* bindable = dynamic_cast<backend_bindable_endpoint*>(endpoint_object);
                 scalar = dynamic_cast<backend_scalar_endpoint*>(endpoint_object);
@@ -659,22 +561,22 @@ namespace {
                 error = "unknown native SystemC binding failure";
             }
             if (!error.empty()) {
-                return fail_mutation(request, error);
+                return fail_mutation(error);
             }
             endpoints_.emplace(*endpoint,
                 EndpointRecord { *endpoint, root->second.object,
-                    payload->endpoint_path, payload->interface_path, scalar,
+                    payload.endpoint_path, payload.interface_path, scalar,
                     typed, { } });
-            return respond(request, SystemCKernelMessageStatus::ok,
+            return respond(SystemCKernelDirectResultStatus::ok,
                 "SystemC endpoint binding is staged and identity-checked");
         }
 
-        [[nodiscard]] SystemCKernelTransportResult elaborate(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult elaborate(
+            const SystemCKernelElaborateRequest&)
         {
             if (session_state_ != SystemCKernelSessionState::constructing
                 || context_ == nullptr || roots_.empty()) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC elaboration requires a nonempty constructing session",
                     SystemCKernelLifecycleCode::session_state);
             }
@@ -692,19 +594,19 @@ namespace {
                 error = "unknown upstream SystemC elaboration failure";
             }
             if (!error.empty()) {
-                return fail_mutation(request, error);
+                return fail_mutation(error);
             }
             session_state_ = SystemCKernelSessionState::elaborated;
-            return respond(request, SystemCKernelMessageStatus::ok,
+            return respond(SystemCKernelDirectResultStatus::ok,
                 "upstream SystemC elaboration completed without publication");
         }
 
-        [[nodiscard]] SystemCKernelTransportResult start(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult start(
+            const SystemCKernelStartRequest&)
         {
             if (session_state_ != SystemCKernelSessionState::elaborated
                 || context_ == nullptr) {
-                return respond(request, SystemCKernelMessageStatus::rejected,
+                return respond(SystemCKernelDirectResultStatus::rejected,
                     "SystemC start requires a completed elaboration",
                     SystemCKernelLifecycleCode::session_state);
             }
@@ -725,7 +627,7 @@ namespace {
                 error = "unknown upstream SystemC start failure";
             }
             if (!error.empty()) {
-                return fail_mutation(request, error);
+                return fail_mutation(error);
             }
             session_state_ = SystemCKernelSessionState::quiescent;
             published_ = true;
@@ -739,11 +641,11 @@ namespace {
                 }
             }
             if (!last_observation_) {
-                return fail_mutation(request,
+                return fail_mutation(
                     error.empty() ? "cannot establish initial execution state"
                                   : error);
             }
-            return respond(request, SystemCKernelMessageStatus::ok,
+            return respond(SystemCKernelDirectResultStatus::ok,
                 "SystemC session started and reached zero-time quiescence");
         }
 
@@ -860,9 +762,8 @@ namespace {
             return receipt;
         }
 
-        [[nodiscard]] SystemCKernelTransportResult respond_execution(
-            const SystemCKernelMessage& request,
-            const SystemCKernelMessageStatus message_status,
+        [[nodiscard]] SystemCKernelDirectResult respond_execution(
+            const SystemCKernelDirectResultStatus status,
             const SystemCKernelExecutionCode code,
             const std::string_view detail_text,
             std::vector<SystemCKernelExecutionSample> samples = { },
@@ -871,74 +772,56 @@ namespace {
         {
             auto receipt = make_execution_receipt(code, detail_text,
                 std::move(samples), forced_status, observation);
-            diagnostic::Engine diagnostics;
-            auto payload = serialize_systemc_execution_receipt(
-                receipt, execution_limits_, diagnostics);
-            if (!payload) {
-                return { SystemCKernelTransportStatus::disconnected, { } };
-            }
-            SystemCKernelMessage response;
-            response.header = request.header;
-            response.header.direction = SystemCKernelMessageDirection::response;
-            response.header.status = message_status;
-            response.header.correlation = request.header.sequence;
-            response.payload = std::move(*payload);
-            auto bytes = serialize_systemc_kernel_message(
-                response, protocol_limits_, diagnostics);
-            if (!bytes) {
-                return { SystemCKernelTransportStatus::disconnected, { } };
-            }
-            return { SystemCKernelTransportStatus::ok, std::move(*bytes) };
+            return { status, std::move(receipt) };
         }
 
-        [[nodiscard]] SystemCKernelTransportResult reject_execution(
-            const SystemCKernelMessage& request, const std::string_view detail_text,
+        [[nodiscard]] SystemCKernelDirectResult reject_execution(
+            const std::string_view detail_text,
             const SystemCKernelExecutionCode code = SystemCKernelExecutionCode::state)
         {
-            return respond_execution(request, SystemCKernelMessageStatus::rejected,
+            return respond_execution(SystemCKernelDirectResultStatus::rejected,
                 code, detail_text);
         }
 
-        [[nodiscard]] SystemCKernelTransportResult apply_inputs(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult apply_inputs(
+            const SystemCKernelApplyInputsRequest& request)
         {
             if (!execution_available() || execution_stopped_) {
-                return reject_execution(request,
+                return reject_execution(
                     "SystemC input application requires a live quiescent session");
             }
             diagnostic::Engine diagnostics;
-            const auto payload = deserialize_systemc_apply_inputs_payload(
-                request.payload, execution_limits_, diagnostics);
-            if (!payload) {
-                return reject_execution(request,
+            const auto& payload = request.payload;
+            if (!valid_scalar(payload.value, execution_limits_, diagnostics)) {
+                return reject_execution(
                     "invalid SystemC input-application payload",
                     SystemCKernelExecutionCode::payload);
             }
-            const auto endpoint = endpoints_.find(request.header.endpoint);
+            const auto endpoint = endpoints_.find(request.endpoint);
             if (endpoint == endpoints_.end()
-                || endpoint->second.object != request.header.object
+                || endpoint->second.object != request.object
                 || (endpoint->second.scalar == nullptr
                     && endpoint->second.typed == nullptr)) {
-                return reject_execution(request,
+                return reject_execution(
                     "SystemC input application targets an unknown or non-input endpoint");
             }
             std::string error;
             std::optional<detail::SystemCKernelNativeObservation> observation;
             {
                 ContextActivation active { context_.get() };
-                const auto applied = payload->value.typed
+                const auto applied = payload.value.typed
                     ? endpoint->second.typed != nullptr
                         && detail::systemc_kernel_apply_value(
                             *endpoint->second.typed,
-                            *payload->value.typed, error)
+                            *payload.value.typed, error)
                     : endpoint->second.scalar != nullptr
                         && detail::systemc_kernel_apply_scalar(
-                            *endpoint->second.scalar, payload->value, error);
+                            *endpoint->second.scalar, payload.value, error);
                 if (!applied) {
                     if (error.empty()) {
                         error = "SystemC input representation does not match the bound endpoint adapter";
                     }
-                    return reject_execution(request, error,
+                    return reject_execution(error,
                         SystemCKernelExecutionCode::payload);
                 }
                 observation = detail::systemc_kernel_observe_native(
@@ -947,31 +830,35 @@ namespace {
             if (!observation) {
                 auto previous = last_observation_;
                 fail_and_rollback();
-                return respond_execution(request,
-                    SystemCKernelMessageStatus::failed,
+                return respond_execution(
+                    SystemCKernelDirectResultStatus::failed,
                     SystemCKernelExecutionCode::upstream,
                     error.empty() ? "cannot observe applied SystemC input" : error,
                     { }, SystemCKernelExecutionStatus::error, previous);
             }
             last_observation_ = observation;
-            return respond_execution(request, SystemCKernelMessageStatus::ok,
+            return respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none,
                 "SystemC scalar input is applied and awaits delta advancement",
                 { }, std::nullopt, observation);
         }
 
-        [[nodiscard]] SystemCKernelTransportResult advance(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult advance(
+            const SystemCKernelAdvanceRequest& request)
         {
             if (!execution_available() || execution_stopped_) {
-                return reject_execution(request,
+                return reject_execution(
                     "SystemC advancement requires a live nonterminal session");
             }
             diagnostic::Engine diagnostics;
-            const auto payload = deserialize_systemc_advance_payload(
-                request.payload, execution_limits_, diagnostics);
-            if (!payload) {
-                return reject_execution(request,
+            const auto& payload = request.payload;
+            if (!known_advance_kind(payload.kind)
+                || (payload.kind == SystemCKernelAdvanceKind::delta
+                        ? payload.duration_fs != 0U
+                        : payload.duration_fs == 0U
+                            || payload.duration_fs > execution_limits_.max_advance_fs
+                            || payload.duration_fs % time_resolution_fs_ != 0U)) {
+                return reject_execution(
                     "invalid SystemC advancement payload",
                     SystemCKernelExecutionCode::payload);
             }
@@ -980,7 +867,7 @@ namespace {
             {
                 ContextActivation active { context_.get() };
                 observation = detail::systemc_kernel_advance_native(*context_,
-                    *payload, execution_limits_, time_resolution_fs_, error);
+                    payload, execution_limits_, time_resolution_fs_, error);
                 if (observation
                     && !refresh_outputs(*observation, true, error)) {
                     observation.reset();
@@ -989,8 +876,8 @@ namespace {
             if (!observation) {
                 auto previous = last_observation_;
                 fail_and_rollback();
-                return respond_execution(request,
-                    SystemCKernelMessageStatus::failed,
+                return respond_execution(
+                    SystemCKernelDirectResultStatus::failed,
                     SystemCKernelExecutionCode::upstream,
                     error.empty() ? "upstream SystemC advancement failed" : error,
                     { }, SystemCKernelExecutionStatus::error, previous);
@@ -998,7 +885,7 @@ namespace {
             last_observation_ = observation;
             execution_stopped_ = observation->status
                 == SystemCKernelExecutionStatus::stopped;
-            return respond_execution(request, SystemCKernelMessageStatus::ok,
+            return respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none,
                 execution_stopped_
                     ? "upstream SystemC execution stopped at a terminal safe point"
@@ -1006,12 +893,12 @@ namespace {
                 { }, std::nullopt, observation);
         }
 
-        [[nodiscard]] SystemCKernelTransportResult next_activity(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult next_activity(
+            const SystemCKernelNextActivityRequest&)
         {
-            if (!execution_available() || !request.payload.empty()) {
-                return reject_execution(request,
-                    "SystemC next-activity query requires a live session and empty payload");
+            if (!execution_available()) {
+                return reject_execution(
+                    "SystemC next-activity query requires a live session");
             }
             std::string error;
             std::optional<detail::SystemCKernelNativeObservation> observation;
@@ -1021,25 +908,25 @@ namespace {
                     *context_, time_resolution_fs_, error);
             }
             if (!observation) {
-                return reject_execution(request,
+                return reject_execution(
                     error.empty() ? "cannot observe next SystemC activity" : error,
                     SystemCKernelExecutionCode::upstream);
             }
             last_observation_ = observation;
-            return respond_execution(request, SystemCKernelMessageStatus::ok,
+            return respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none,
                 "SystemC next activity is reported at an exact safe point",
                 { }, std::nullopt, observation);
         }
 
-        [[nodiscard]] SystemCKernelTransportResult drain_outputs(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult drain_outputs(
+            const SystemCKernelDrainOutputsRequest& request)
         {
-            if (!execution_available() || !request.payload.empty()) {
-                return reject_execution(request,
-                    "SystemC dirty-output drain requires a live session and empty payload");
+            if (!execution_available()) {
+                return reject_execution(
+                    "SystemC dirty-output drain requires a live session");
             }
-            const auto endpoint = endpoints_.find(request.header.endpoint);
+            const auto endpoint = endpoints_.find(request.endpoint);
             const auto is_output = endpoint != endpoints_.end()
                 && (endpoint->second.typed != nullptr
                         ? endpoint->second.typed->backend_direction()
@@ -1048,34 +935,34 @@ namespace {
                             && endpoint->second.scalar->backend_direction()
                                 == backend_endpoint_direction::output);
             if (endpoint == endpoints_.end()
-                || endpoint->second.object != request.header.object
+                || endpoint->second.object != request.object
                 || !is_output) {
-                return reject_execution(request,
+                return reject_execution(
                     "SystemC dirty-output drain targets an unknown or non-output endpoint");
             }
             std::vector<SystemCKernelExecutionSample> samples;
-            const auto dirty = dirty_outputs_.find(request.header.endpoint);
+            const auto dirty = dirty_outputs_.find(request.endpoint);
             if (dirty != dirty_outputs_.end()) {
                 samples.push_back(dirty->second);
             }
-            auto result = respond_execution(request, SystemCKernelMessageStatus::ok,
+            auto result = respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none,
                 samples.empty() ? "SystemC output has no undrained change"
                                 : "SystemC dirty output is drained exactly once",
                 samples);
-            if (result.status == SystemCKernelTransportStatus::ok
+            if (result.status == SystemCKernelDirectResultStatus::ok
                 && !samples.empty()) {
-                dirty_outputs_.erase(request.header.endpoint);
+                dirty_outputs_.erase(request.endpoint);
             }
             return result;
         }
 
-        [[nodiscard]] SystemCKernelTransportResult report(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult report(
+            const SystemCKernelReportRequest&)
         {
-            if (!execution_available() || !request.payload.empty()) {
-                return reject_execution(request,
-                    "SystemC execution report requires a live session and empty payload");
+            if (!execution_available()) {
+                return reject_execution(
+                    "SystemC execution report requires a live session");
             }
             const auto text = std::string { "identity=" } + canonical_identity_
                 + "; objects=" + std::to_string(roots_.size())
@@ -1089,23 +976,23 @@ namespace {
                 + std::to_string(last_observation_
                         ? last_observation_->delta
                         : 0U);
-            return respond_execution(request, SystemCKernelMessageStatus::ok,
+            return respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none, text);
         }
 
-        [[nodiscard]] SystemCKernelTransportResult inspect(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult inspect(
+            const SystemCKernelInspectRequest& request)
         {
-            if (!execution_available() || !request.payload.empty()) {
-                return reject_execution(request,
-                    "SystemC inspection requires a live session and empty payload");
+            if (!execution_available()) {
+                return reject_execution(
+                    "SystemC inspection requires a live session");
             }
-            const auto endpoint = endpoints_.find(request.header.endpoint);
+            const auto endpoint = endpoints_.find(request.endpoint);
             if (endpoint == endpoints_.end()
-                || endpoint->second.object != request.header.object
+                || endpoint->second.object != request.object
                 || (endpoint->second.scalar == nullptr
                     && endpoint->second.typed == nullptr)) {
-                return reject_execution(request,
+                return reject_execution(
                     "SystemC inspection targets an unknown value endpoint");
             }
             std::string error;
@@ -1114,27 +1001,27 @@ namespace {
                 ContextActivation active { context_.get() };
                 sample = sample_endpoint(endpoint->second, *last_observation_,
                     SystemCAccelleraRegion::quiescent,
-                    dirty_outputs_.contains(request.header.endpoint), error);
+                    dirty_outputs_.contains(request.endpoint), error);
             }
             if (!sample) {
-                return reject_execution(request, error,
+                return reject_execution(error,
                     SystemCKernelExecutionCode::upstream);
             }
-            return respond_execution(request, SystemCKernelMessageStatus::ok,
+            return respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none,
                 "SystemC value endpoint is inspected at a safe point",
                 { *sample });
         }
 
-        [[nodiscard]] SystemCKernelTransportResult snapshot(
-            const SystemCKernelMessage& request)
+        [[nodiscard]] SystemCKernelDirectResult snapshot(
+            const SystemCKernelSnapshotRequest&)
         {
-            if (!execution_available() || !request.payload.empty()) {
-                return reject_execution(request,
-                    "SystemC snapshot requires a live session and empty payload");
+            if (!execution_available()) {
+                return reject_execution(
+                    "SystemC snapshot requires a live session");
             }
             if (endpoints_.size() > execution_limits_.max_samples_per_message) {
-                return reject_execution(request,
+                return reject_execution(
                     "SystemC snapshot exceeds its governed sample limit",
                     SystemCKernelExecutionCode::resource);
             }
@@ -1151,25 +1038,24 @@ namespace {
                         SystemCAccelleraRegion::quiescent,
                         dirty_outputs_.contains(identity), error);
                     if (!sample) {
-                        return reject_execution(request, error,
+                        return reject_execution(error,
                             SystemCKernelExecutionCode::upstream);
                     }
                     samples.push_back(*sample);
                 }
             }
-            return respond_execution(request, SystemCKernelMessageStatus::ok,
+            return respond_execution(SystemCKernelDirectResultStatus::ok,
                 SystemCKernelExecutionCode::none,
                 "SystemC value snapshot is complete and deterministically ordered",
                 std::move(samples));
         }
 
-        [[nodiscard]] SystemCKernelTransportResult fail_mutation(
-            const SystemCKernelMessage& request, const std::string_view detail,
+        [[nodiscard]] SystemCKernelDirectResult fail_mutation(
+            const std::string_view detail,
             const SystemCKernelLifecycleCode code = SystemCKernelLifecycleCode::upstream)
         {
             fail_and_rollback();
-            return respond(
-                request, SystemCKernelMessageStatus::failed, detail, code);
+            return respond(SystemCKernelDirectResultStatus::failed, detail, code);
         }
 
         void fail_and_rollback() noexcept
@@ -1219,9 +1105,8 @@ namespace {
             execution_stopped_ = false;
         }
 
-        [[nodiscard]] SystemCKernelTransportResult respond(
-            const SystemCKernelMessage& request,
-            const SystemCKernelMessageStatus status,
+        [[nodiscard]] SystemCKernelDirectResult respond(
+            const SystemCKernelDirectResultStatus status,
             const std::string_view detail,
             const SystemCKernelLifecycleCode code = SystemCKernelLifecycleCode::none)
         {
@@ -1236,25 +1121,7 @@ namespace {
                 : 0U;
             receipt.context_generation = context_generation_;
             receipt.detail.assign(detail.substr(0U, session_limits_.max_detail_bytes));
-
-            diagnostic::Engine diagnostics;
-            auto payload = serialize_systemc_lifecycle_receipt(
-                receipt, session_limits_, diagnostics);
-            if (!payload) {
-                return { SystemCKernelTransportStatus::disconnected, { } };
-            }
-            SystemCKernelMessage response;
-            response.header = request.header;
-            response.header.direction = SystemCKernelMessageDirection::response;
-            response.header.status = status;
-            response.header.correlation = request.header.sequence;
-            response.payload = std::move(*payload);
-            auto bytes = serialize_systemc_kernel_message(
-                response, protocol_limits_, diagnostics);
-            if (!bytes) {
-                return { SystemCKernelTransportStatus::disconnected, { } };
-            }
-            return { SystemCKernelTransportStatus::ok, std::move(*bytes) };
+            return { status, std::move(receipt) };
         }
 
         SystemCKernelProtocolLimits protocol_limits_;
@@ -1280,330 +1147,6 @@ namespace {
     };
 
 } // namespace
-
-std::optional<std::vector<std::byte>>
-serialize_systemc_create_session_payload(
-    const SystemCKernelCreateSessionPayload& payload,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    if (!valid_create_session_payload(payload, limits, diagnostics)) {
-        return std::nullopt;
-    }
-    const auto identity_size = checked_size(
-        payload.canonical_identity.size(), diagnostics, "identity");
-    const auto path_size = checked_size(
-        payload.plugin_path.size(), diagnostics, "plug-in path");
-    if (!identity_size || !path_size) {
-        return std::nullopt;
-    }
-    ByteWriter writer;
-    writer.append_u32(kSystemCKernelSessionPayloadVersion);
-    writer.append_u32(*identity_size);
-    writer.append_u32(*path_size);
-    writer.append_u32(0U);
-    writer.append_u64(payload.time_resolution_fs);
-    writer.append_text(payload.canonical_identity);
-    writer.append_text(payload.plugin_path);
-    return std::move(writer).take();
-}
-
-std::optional<SystemCKernelCreateSessionPayload>
-deserialize_systemc_create_session_payload(
-    const std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    ByteReader reader { bytes };
-    const auto schema = reader.read_u32();
-    const auto identity_size = reader.read_u32();
-    const auto path_size = reader.read_u32();
-    const auto reserved = reader.read_u32();
-    const auto resolution = reader.read_u64();
-    if (!schema || !identity_size || !path_size || !reserved || !resolution
-        || *schema != kSystemCKernelSessionPayloadVersion || *reserved != 0U
-        || *identity_size > limits.max_identity_bytes
-        || *path_size > limits.max_plugin_path_bytes) {
-        report_payload_error(diagnostics,
-            "invalid SystemC session payload header or resource length");
-        return std::nullopt;
-    }
-    auto identity = reader.read_text(*identity_size);
-    auto path = reader.read_text(*path_size);
-    if (!identity || !path || !reader.done()) {
-        report_payload_error(diagnostics,
-            "truncated or trailing SystemC session payload bytes");
-        return std::nullopt;
-    }
-    SystemCKernelCreateSessionPayload result {
-        std::move(*identity), std::move(*path), *resolution
-    };
-    if (!valid_create_session_payload(result, limits, diagnostics)) {
-        return std::nullopt;
-    }
-    return result;
-}
-
-std::optional<std::vector<std::byte>>
-serialize_systemc_create_object_payload(
-    const SystemCKernelCreateObjectPayload& payload,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    if (!valid_create_object_payload(payload, limits, diagnostics)) {
-        return std::nullopt;
-    }
-    const auto hierarchy_size = checked_size(
-        payload.hierarchy_path.size(), diagnostics, "hierarchy path");
-    const auto object_size = checked_size(
-        payload.object_path.size(), diagnostics, "object path");
-    const auto factory_size = checked_size(
-        payload.factory.size(), diagnostics, "factory name");
-    const auto instance_size = checked_size(
-        payload.instance.size(), diagnostics, "instance name");
-    const auto parameter_count = checked_size(
-        payload.parameters.size(), diagnostics, "parameter count");
-    if (!hierarchy_size || !object_size || !factory_size || !instance_size
-        || !parameter_count) {
-        return std::nullopt;
-    }
-    ByteWriter writer;
-    writer.append_u32(kSystemCKernelSessionPayloadVersion);
-    writer.append_u32(*parameter_count);
-    writer.append_u32(*hierarchy_size);
-    writer.append_u32(*object_size);
-    writer.append_u32(*factory_size);
-    writer.append_u32(*instance_size);
-    writer.append_text(payload.hierarchy_path);
-    writer.append_text(payload.object_path);
-    writer.append_text(payload.factory);
-    writer.append_text(payload.instance);
-    for (const auto& parameter : payload.parameters) {
-        const auto name_size = checked_size(
-            parameter.name.size(), diagnostics, "parameter name");
-        if (!name_size) {
-            return std::nullopt;
-        }
-        writer.append_u32(*name_size);
-        writer.append_u32(0U);
-        writer.append_i64(parameter.value);
-        writer.append_text(parameter.name);
-    }
-    return std::move(writer).take();
-}
-
-std::optional<SystemCKernelCreateObjectPayload>
-deserialize_systemc_create_object_payload(
-    const std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    ByteReader reader { bytes };
-    const auto schema = reader.read_u32();
-    const auto parameter_count = reader.read_u32();
-    const auto hierarchy_size = reader.read_u32();
-    const auto object_size = reader.read_u32();
-    const auto factory_size = reader.read_u32();
-    const auto instance_size = reader.read_u32();
-    if (!schema || !parameter_count || !hierarchy_size || !object_size
-        || !factory_size || !instance_size
-        || *schema != kSystemCKernelSessionPayloadVersion
-        || *parameter_count > limits.max_parameters_per_object
-        || *hierarchy_size > limits.max_name_bytes
-        || *object_size > limits.max_name_bytes
-        || *factory_size > limits.max_name_bytes
-        || *instance_size > limits.max_name_bytes) {
-        report_payload_error(diagnostics,
-            "invalid SystemC object payload header or resource length");
-        return std::nullopt;
-    }
-    SystemCKernelCreateObjectPayload result;
-    auto hierarchy = reader.read_text(*hierarchy_size);
-    auto object = reader.read_text(*object_size);
-    auto factory = reader.read_text(*factory_size);
-    auto instance = reader.read_text(*instance_size);
-    if (!hierarchy || !object || !factory || !instance) {
-        report_payload_error(
-            diagnostics, "truncated SystemC object identity payload");
-        return std::nullopt;
-    }
-    result.hierarchy_path = std::move(*hierarchy);
-    result.object_path = std::move(*object);
-    result.factory = std::move(*factory);
-    result.instance = std::move(*instance);
-    result.parameters.reserve(*parameter_count);
-    for (std::uint32_t index = 0U; index < *parameter_count; ++index) {
-        const auto name_size = reader.read_u32();
-        const auto reserved = reader.read_u32();
-        const auto value = reader.read_i64();
-        if (!name_size || !reserved || !value || *reserved != 0U
-            || *name_size > limits.max_name_bytes) {
-            report_payload_error(diagnostics,
-                "invalid SystemC construction-parameter payload");
-            return std::nullopt;
-        }
-        auto name = reader.read_text(*name_size);
-        if (!name) {
-            report_payload_error(diagnostics,
-                "truncated SystemC construction-parameter name");
-            return std::nullopt;
-        }
-        result.parameters.push_back({ std::move(*name), *value });
-    }
-    if (!reader.done()
-        || !valid_create_object_payload(result, limits, diagnostics)) {
-        if (!reader.done()) {
-            report_payload_error(
-                diagnostics, "trailing SystemC object payload bytes");
-        }
-        return std::nullopt;
-    }
-    return result;
-}
-
-std::optional<std::vector<std::byte>>
-serialize_systemc_bind_endpoint_payload(
-    const SystemCKernelBindEndpointPayload& payload,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    if (!valid_bind_payload(payload, limits, diagnostics)) {
-        return std::nullopt;
-    }
-    const auto endpoint_size = checked_size(
-        payload.endpoint_path.size(), diagnostics, "endpoint path");
-    const auto interface_size = checked_size(
-        payload.interface_path.size(), diagnostics, "interface path");
-    if (!endpoint_size || !interface_size) {
-        return std::nullopt;
-    }
-    ByteWriter writer;
-    writer.append_u32(kSystemCKernelSessionPayloadVersion);
-    writer.append_u32(*endpoint_size);
-    writer.append_u32(*interface_size);
-    writer.append_u32(0U);
-    writer.append_text(payload.endpoint_path);
-    writer.append_text(payload.interface_path);
-    return std::move(writer).take();
-}
-
-std::optional<SystemCKernelBindEndpointPayload>
-deserialize_systemc_bind_endpoint_payload(
-    const std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    ByteReader reader { bytes };
-    const auto schema = reader.read_u32();
-    const auto endpoint_size = reader.read_u32();
-    const auto interface_size = reader.read_u32();
-    const auto reserved = reader.read_u32();
-    if (!schema || !endpoint_size || !interface_size || !reserved
-        || *schema != kSystemCKernelSessionPayloadVersion || *reserved != 0U
-        || *endpoint_size > limits.max_name_bytes
-        || *interface_size > limits.max_name_bytes) {
-        report_payload_error(diagnostics,
-            "invalid SystemC binding payload header or resource length");
-        return std::nullopt;
-    }
-    auto endpoint = reader.read_text(*endpoint_size);
-    auto interface = reader.read_text(*interface_size);
-    if (!endpoint || !interface || !reader.done()) {
-        report_payload_error(diagnostics,
-            "truncated or trailing SystemC binding payload bytes");
-        return std::nullopt;
-    }
-    SystemCKernelBindEndpointPayload result {
-        std::move(*endpoint), std::move(*interface)
-    };
-    if (!valid_bind_payload(result, limits, diagnostics)) {
-        return std::nullopt;
-    }
-    return result;
-}
-
-std::optional<std::vector<std::byte>>
-serialize_systemc_lifecycle_receipt(
-    const SystemCKernelLifecycleReceipt& receipt,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    if (!valid_limits(limits, diagnostics) || !known_state(receipt.state)
-        || !known_lifecycle_code(receipt.code)
-        || receipt.detail.size() > limits.max_detail_bytes
-        || receipt.detail.find('\0') != std::string::npos
-        || (receipt.published
-            && receipt.published_objects != receipt.staged_objects)
-        || (!receipt.published && receipt.published_objects != 0U)) {
-        report_payload_error(
-            diagnostics, "invalid SystemC lifecycle receipt state or counts");
-        return std::nullopt;
-    }
-    const auto detail_size = checked_size(
-        receipt.detail.size(), diagnostics, "receipt detail");
-    if (!detail_size) {
-        return std::nullopt;
-    }
-    ByteWriter writer;
-    writer.append_u32(kSystemCKernelSessionPayloadVersion);
-    writer.append_u8(static_cast<std::uint8_t>(receipt.state));
-    writer.append_u8(receipt.published ? 1U : 0U);
-    writer.append_u16(static_cast<std::uint16_t>(receipt.code));
-    writer.append_u32(receipt.staged_objects);
-    writer.append_u32(receipt.staged_bindings);
-    writer.append_u32(receipt.published_objects);
-    writer.append_u32(*detail_size);
-    writer.append_u64(receipt.context_generation);
-    writer.append_text(receipt.detail);
-    return std::move(writer).take();
-}
-
-std::optional<SystemCKernelLifecycleReceipt>
-deserialize_systemc_lifecycle_receipt(
-    const std::span<const std::byte> bytes,
-    const SystemCKernelSessionLimits& limits,
-    diagnostic::Engine& diagnostics)
-{
-    ByteReader reader { bytes };
-    const auto schema = reader.read_u32();
-    const auto state = reader.read_u8();
-    const auto published = reader.read_u8();
-    const auto code = reader.read_u16();
-    const auto objects = reader.read_u32();
-    const auto bindings = reader.read_u32();
-    const auto published_objects = reader.read_u32();
-    const auto detail_size = reader.read_u32();
-    const auto generation = reader.read_u64();
-    if (!schema || !state || !published || !code || !objects || !bindings
-        || !published_objects || !detail_size || !generation
-        || *schema != kSystemCKernelSessionPayloadVersion
-        || *published > 1U || *detail_size > limits.max_detail_bytes) {
-        report_payload_error(diagnostics,
-            "invalid SystemC lifecycle receipt header or resource length");
-        return std::nullopt;
-    }
-    auto detail = reader.read_text(*detail_size);
-    if (!detail || !reader.done()) {
-        report_payload_error(diagnostics,
-            "truncated or trailing SystemC lifecycle receipt bytes");
-        return std::nullopt;
-    }
-    SystemCKernelLifecycleReceipt result {
-        static_cast<SystemCKernelSessionState>(*state), *published != 0U,
-        static_cast<SystemCKernelLifecycleCode>(*code), *objects, *bindings,
-        *published_objects, *generation,
-        std::move(*detail)
-    };
-    if (!known_state(result.state) || !known_lifecycle_code(result.code)
-        || (result.published
-            && result.published_objects != result.staged_objects)
-        || (!result.published && result.published_objects != 0U)) {
-        report_payload_error(
-            diagnostics, "inconsistent SystemC lifecycle receipt state");
-        return std::nullopt;
-    }
-    return result;
-}
 
 const char* systemc_kernel_lifecycle_diagnostic_code(
     const SystemCKernelLifecycleCode code) noexcept
@@ -1633,13 +1176,9 @@ make_systemc_kernel_session_backend(
         return nullptr;
     }
     if (protocol_limits.max_identity_bytes
-            < session_limits.max_identity_bytes
-        || protocol_limits.max_payload_bytes < session_limits.max_detail_bytes
-        || protocol_limits.max_message_bytes
-            < kSystemCKernelMessageHeaderBytes
-                + session_limits.max_detail_bytes) {
+        < session_limits.max_identity_bytes) {
         report_resource_error(diagnostics,
-            "SystemC session limits exceed the enclosing protocol limits");
+            "SystemC session identity limits exceed the identity limit");
         return nullptr;
     }
     return std::make_unique<SystemCKernelSessionBackend>(
@@ -1658,26 +1197,10 @@ make_systemc_kernel_session_backend(
             execution_limits, diagnostics)) {
         return nullptr;
     }
-    constexpr std::size_t receipt_header_bytes = 76U;
-    constexpr std::size_t sample_bytes = 80U;
-    if (execution_limits.max_samples_per_message
-        > (std::numeric_limits<std::size_t>::max()
-              - receipt_header_bytes - execution_limits.max_detail_bytes)
-            / sample_bytes) {
-        report_resource_error(diagnostics,
-            "SystemC execution receipt limits overflow their encoded size");
-        return nullptr;
-    }
-    const auto maximum_payload = receipt_header_bytes
-        + sample_bytes * execution_limits.max_samples_per_message
-        + execution_limits.max_detail_bytes;
     if (protocol_limits.max_identity_bytes
-            < session_limits.max_identity_bytes
-        || protocol_limits.max_payload_bytes < maximum_payload
-        || protocol_limits.max_message_bytes
-            < kSystemCKernelMessageHeaderBytes + maximum_payload) {
+        < session_limits.max_identity_bytes) {
         report_resource_error(diagnostics,
-            "SystemC execution limits exceed the enclosing protocol limits");
+            "SystemC execution session identity limits exceed the identity limit");
         return nullptr;
     }
     return std::make_unique<SystemCKernelSessionBackend>(

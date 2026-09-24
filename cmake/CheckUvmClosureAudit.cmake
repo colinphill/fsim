@@ -134,7 +134,7 @@ foreach(FSIM_GATE IN ITEMS
     "${FSIM_GATE_OUTPUT}${FSIM_GATE_ERROR}\n")
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
-    "diagnostic catalog covers 2765 production codes"
+    "diagnostic catalog covers 2755 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:"
     "source-package manifest:")
@@ -186,6 +186,6 @@ if(FSIM_RUNNER_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "UVM closure audit: 21 release/behavior rows, 82 UVM diagnostics, 2746 "
+  "UVM closure audit: 21 release/behavior rows, 82 UVM diagnostics, 2755 "
   "catalog codes, 1510 bounded sources, 1813 SPDX files, retained memory/trace/"
   "artifact/cache provenance, and zero unresolved supported gaps")

@@ -75,13 +75,11 @@ static_assert(std::is_same_v<
     decltype(&fsim_systemc_accellera_accepts_compatibility_identity),
     bool (*)(const char*) noexcept>);
 
-static_assert(fsim::systemc::kSystemCKernelProtocolVersion == 1U);
-static_assert(fsim::systemc::kSystemCKernelMessageHeaderBytes == 128U);
-static_assert(fsim::systemc::scv_backend_protocol_version == 1U);
-static_assert(fsim::systemc::scv_backend_message_header_bytes == 160U);
 static_assert(fsim::runtime::transaction_record_schema_version == 1U);
 static_assert(sizeof(fsim::systemc::SystemCIslandId) == 16U);
 static_assert(sizeof(fsim::systemc::ScvIslandId) == 16U);
+static_assert(sizeof(fsim::systemc::SystemCSequenceId) == 8U);
+static_assert(sizeof(fsim::systemc::ScvSequenceId) == 8U);
 static_assert(sizeof(fsim::runtime::TransactionStableId) == 16U);
 static_assert(!std::is_pointer_v<fsim::systemc::SystemCIslandId>);
 static_assert(!std::is_pointer_v<fsim::systemc::ScvIslandId>);

@@ -47,7 +47,7 @@ int main()
     assert(first->recorded_transactions == 64U);
     assert(first->transported_transactions == 64U);
     assert(first->native_callbacks == 64U * 6U);
-    assert(first->serialized_bytes > 0U);
+    assert(first->record_payload_bytes > 0U);
     assert(first->backpressure_events > 0U);
     assert(first->producer_failures == 1U);
     assert(first->consumer_failures == 1U);
@@ -64,7 +64,7 @@ int main()
     assert(replay->attempted_transactions == first->attempted_transactions);
     assert(replay->recorded_transactions == first->recorded_transactions);
     assert(replay->transported_transactions == first->transported_transactions);
-    assert(replay->serialized_bytes == first->serialized_bytes);
+    assert(replay->record_payload_bytes == first->record_payload_bytes);
     assert(replay->backpressure_events == first->backpressure_events);
     assert(replay->peak_queue_records == first->peak_queue_records);
     assert(replay->peak_queue_bytes == first->peak_queue_bytes);
@@ -94,20 +94,20 @@ int main()
     assert(suppressed->recorded_transactions == 0U);
     assert(suppressed->transported_transactions == 0U);
     assert(suppressed->native_callbacks == 64U * 6U);
-    assert(suppressed->serialized_bytes == 0U);
+    assert(suppressed->record_payload_bytes == 0U);
     assert(suppressed->backpressure_events == 0U);
     assert(suppressed->peak_queue_records == 0U);
     assert(suppressed->peak_queue_bytes == 0U);
     assert(suppressed->elapsed_nanoseconds > 0U);
     std::cout << "SCV_RESOURCE_BASELINE enabled_transactions="
               << first->transported_transactions
-              << " serialized_bytes=" << first->serialized_bytes
+              << " record_payload_bytes=" << first->record_payload_bytes
               << " peak_queue_records=" << first->peak_queue_records
               << " peak_queue_bytes=" << first->peak_queue_bytes
               << " backpressure_events=" << first->backpressure_events
               << " enabled_elapsed_ns=" << first->elapsed_nanoseconds
               << " disabled_elapsed_ns=" << suppressed->elapsed_nanoseconds
-              << " digest="
+              << " typed_record_digest_v1="
               << fsim::support::Sha256::hex(first->output_digest) << '\n';
 
     auto excessive = enabled;

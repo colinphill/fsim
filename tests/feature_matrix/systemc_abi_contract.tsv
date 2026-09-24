@@ -21,8 +21,8 @@ scv	compatibility-fields	16-exact-ordered-fields
 layout	fsim_sc_value_view_v1	size=32,align=8
 layout	fsim_sc_host_v1	size=152,align=8,scv-identity-offset=144
 layout	fsim_sc_registrar_v1	size=32,align=8,factory-offset=16,parameter-offset=24
-protocol	SystemC-kernel	schema=1,header=128,pointer-free-stable-ids
-protocol	SCV-backend	schema=1,header=160,pointer-free-stable-ids
+identity	SystemC-kernel	pointer-free-stable-ids,direct-typed-requests
+identity	SCV-backend	pointer-free-stable-ids,typed-record-queue
 protocol	transaction-record	schema=1,pointer-free-stable-ids,bounded-explicit-serialization
 runtime	shared-island	exactly-one-SystemC-3.0.2-shared-runtime
 installed	discovery	SystemCLanguage-exact,SystemCTLM-exact,SCV-exact,pkg-config-relocatable
