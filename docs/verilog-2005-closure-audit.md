@@ -26,7 +26,7 @@ or suppression path.
 
 The exact SHA-256 identities are:
 
-- clause inventory: `025f7942c974cb8b69c337b7caa69a3a0ec2725f74fe677d35c85231f7f6e5e8`;
+- clause inventory: `926cebee4db252d18b5ddf1bdcb53ff5dd7c47e1d94055dbc3959322dced4abb`;
 - literal-width inventory: `f51b5acbb049cb07f805a12c173ac0ada29a971023f7cc6d4ad05383b3d5f09c`;
 - release closure: `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
 

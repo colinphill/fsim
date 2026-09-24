@@ -336,6 +336,7 @@ endmodule
     const auto duplicate_result =
         elaborate_roots(parsed.design, duplicate_alias);
     assert(!duplicate_result.ok());
+    assert(!duplicate_result.design);
     assert(has_diagnostic(duplicate_result, "FSIM-ELAB-ROOT-003"));
 
     const std::array missing_alias{

@@ -343,9 +343,7 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
         }
         const auto [entry, inserted] = systemverilog_resolution_kinds_.emplace(
             resolver, ResolutionKind::sv_user_first);
-        if (inserted) {
-            systemverilog_resolution_kind_insertions_.push_back(resolver);
-        } else if (entry->second != ResolutionKind::sv_user_first) {
+        if (!inserted && entry->second != ResolutionKind::sv_user_first) {
             report(
                 "FSIM-ELAB-SVNETTYPE-002",
                 "SystemVerilog nettype resolution function '" + resolver
@@ -355,10 +353,8 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
         const auto [nettype, nettype_inserted]
             = systemverilog_resolution_kinds_.emplace(
                 declaration->name, ResolutionKind::sv_user_first);
-        if (nettype_inserted) {
-            systemverilog_resolution_kind_insertions_.push_back(
-                declaration->name);
-        } else if (nettype->second != ResolutionKind::sv_user_first) {
+        if (!nettype_inserted
+            && nettype->second != ResolutionKind::sv_user_first) {
             report(
                 "FSIM-ELAB-SVNETTYPE-002",
                 "SystemVerilog nettype '" + declaration->name

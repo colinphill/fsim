@@ -687,14 +687,11 @@ void VhdlHirBuilder::add_disconnection_specifications(
     const std::string_view name_value,
     const semantic::SourceSpanId exact_source) const noexcept
 {
-    const auto canonical = canonical_vhdl_name(std::string { name_value });
-    for (const auto& value : model_.values()) {
-        if (value.scope == scope && value.source == exact_source
-            && canonical_vhdl_name(value.name) == canonical) {
-            return value.id;
-        }
-    }
-    return { };
+    const auto key = ValueLookupKey { scope, exact_source,
+        canonical_vhdl_name(std::string { name_value }) };
+    const auto found = values_by_lookup_key_.find(key);
+    return found == values_by_lookup_key_.end() ? semantic::ValueId { }
+                                                 : found->second;
 }
 
 [[nodiscard]] semantic::TypeReference VhdlHirBuilder::type_reference(
@@ -1009,6 +1006,10 @@ void VhdlHirBuilder::add_disconnection_specifications(
             value_type.type_mark,
             span,
             declaration_origin);
+        values_by_lookup_key_.try_emplace(
+            ValueLookupKey { scope, span,
+                canonical_vhdl_name(std::string { value_name }) },
+            id);
     }
     return id;
 }

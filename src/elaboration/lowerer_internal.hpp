@@ -2,6 +2,7 @@
 #pragma once
 
 #include "elaborator_internal.hpp"
+#include "scoped_bindings.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -57,16 +58,12 @@ class Lowerer final {
 public:
     Lowerer(
         ElaboratedDesign& design,
-        const std::unordered_map<std::string, SignalId>& signals,
-        const std::unordered_set<SignalId>& read_only_signals,
-        const std::unordered_map<std::string, StringObjectId>&
-            string_objects,
-        const std::unordered_set<StringObjectId>&
-            read_only_string_objects,
-        const std::unordered_map<std::string, ContainerObjectId>&
-            container_objects,
-        const std::unordered_set<std::string>&
-            read_only_container_objects,
+        const SignalBindings& signals,
+        const ReadOnlySignalBindings& read_only_signals,
+        const StringObjectBindings& string_objects,
+        const ReadOnlyStringBindings& read_only_string_objects,
+        const ContainerObjectBindings& container_objects,
+        const ReadOnlyContainerBindings& read_only_container_objects,
         std::vector<Diagnostic>& diagnostics);
 
     /// Select the parser-independent working HIR for subsequent ID-based
@@ -1318,13 +1315,12 @@ private:
         frontend::SourceSpan span);
 
     ElaboratedDesign& design_;
-    const std::unordered_map<std::string, SignalId>& signals_;
-    const std::unordered_set<SignalId>& read_only_signals_;
-    const std::unordered_map<std::string, StringObjectId>& string_objects_;
-    const std::unordered_set<StringObjectId>& read_only_string_objects_;
-    const std::unordered_map<std::string, ContainerObjectId>&
-        container_objects_;
-    const std::unordered_set<std::string>& read_only_container_objects_;
+    const SignalBindings& signals_;
+    const ReadOnlySignalBindings& read_only_signals_;
+    const StringObjectBindings& string_objects_;
+    const ReadOnlyStringBindings& read_only_string_objects_;
+    const ContainerObjectBindings& container_objects_;
+    const ReadOnlyContainerBindings& read_only_container_objects_;
     std::vector<Diagnostic>& diagnostics_;
     const semantic::SpecializedHirUnit* specialized_hir_unit_ { };
     const std::unordered_map<std::string, std::uint64_t>*

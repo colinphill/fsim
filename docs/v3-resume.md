@@ -15029,3 +15029,764 @@ remain available for local development but are not hosted jobs.
      run; its relevant failures have the local corrections in item 220.
      One cohesive implementation commit/push closes Change 20 and hands
      off to 188D. Do not monitor the new post-push run or claim it passed.
+224. Batch 188C Change 20 closed with commit `eb1b2111` on `codex/v3`,
+     pushed to `origin/codex/v3`. Its newly pushed hosted CI was not
+     monitored under the explicit Batch 188C-188H waiver; no hosted pass
+     is claimed. Batch 188D Change 1 is the next bounded implementation.
+225. Batch 188D Change 1 is complete on the uncommitted worktree. The
+     private hierarchy checkpoint and rollback methods had no callers;
+     their three rollback-only insertion journals and writes are gone.
+     The live SystemVerilog resolution-unit deduplication vector, resolver
+     maps, hierarchy stack/container guards, and process-operation
+     canonicalization remain. The latter moved unchanged into
+     `hierarchy_builder.cpp`, so the obsolete `hierarchy_instantiate.cpp`
+     translation unit and its CMake/source-package entries were removed.
+     Existing recursive VHDL, duplicate-root, and mixed-language failure
+     tests now assert that no design is published; a successful resolved
+     root followed by a recursively failing root also asserts no design.
+     The updated `fsim.elaboration` test passes 1/1 in each incremental
+     Release and Debug tree after eight-worker builds. The translation-
+     unit structure, source-package manifest, and build-resource contract
+     tests pass 3/3 in each tree; `git diff --check` is clean. The MCP
+     project was reindexed after the code/test wave. Changes 2-20 remain.
+226. Batch 188D Change 2 is complete on the uncommitted worktree. The
+     recursive SystemVerilog and VHDL compiled-HIR entrypoints take
+     explicit per-call contexts owning paths, actual identities, child-
+     local port alias maps, and prepared specializations. Their unit and
+     instance handles borrow from the builder-owned compiled design;
+     builder-held configuration selection and its existing save/restore
+     behavior remain documented and unchanged. Eight-worker warnings-
+     as-errors Release and Debug builds pass for both elaboration and
+     application test targets. `fsim.elaboration` passes 1/1, and the
+     focused mixed, specialization, SV hierarchy, VHDL configuration,
+     and VHDL component application cases pass 5/5 in each tree.
+     `git diff --check` is clean. MCP was reindexed after this source
+     wave. Change 3 parent views and all later changes remain.
+227. Batch 188D Change 13 is complete ahead of the shared hierarchy
+     extractions, on the uncommitted worktree. `DesignIrBuilder` now
+     indexes exact instance paths after all occurrences are appended.
+     Parent links retain the first matching occurrence, while object
+     specialization ownership probes deepest valid ancestors and retains
+     the last equal-path occurrence and the existing fallback. The index
+     is builder-local and read-only during projection. A specialization
+     test pins nested parent links and child ownership. Eight-worker
+     Release and Debug application-target builds pass; both the
+     `core_multiple_roots` and `specialization` cases pass 2/2 in each
+     configuration. `git diff --check` is clean and MCP was reindexed.
+     Changes 3-12 and 14-20 remain; Change 3 behavior fixtures and
+     implementation are in progress separately.
+228. Batch 188D Change 3 behavior fixtures are in place before the
+     parent-view migration. Dedicated SystemVerilog and VHDL generated-
+     scope cases pin nested parent-signal visibility, inner constant
+     shadowing, and distinct same-named sibling signals with independent
+     values. Only `elaborator_generate_test.cpp` changed for these tests;
+     the focused elaboration CTest passes 1/1 after eight-worker Release
+     and Debug builds. The scoped parent-view implementation is still in
+     progress, so Change 3 remains unchecked.
+229. A bounded part of Batch 188D Change 14 is complete on the
+     uncommitted worktree, but the checklist item remains open. The
+     short-lived `VhdlHirBuilder` now seeds a composite-key value index
+     in semantic value order, retains the first equal-key match, and
+     updates the index only after a value is added. Keying retains scope,
+     exact source-span ID, and canonical VHDL name. Eight-worker Release
+     and Debug application-target builds and the `vhdl_projected` case
+     pass 1/1 in each tree; `git diff --check` passes. Declaration,
+     direction, and SystemC projection lookups remain to be indexed.
+230. Batch 188D Change 3 is complete on the uncommitted worktree.
+     Generated SystemVerilog and VHDL lexical frames now borrow stable
+     parent binding views with owned local map/set overlays instead of
+     copying the full parent maps and read-only sets. The lowerer accepts
+     those views directly, so the copy is not shifted to each lowerer
+     call. Child-unit roots still receive only their explicit port
+     aliases. The new `scoped_bindings.hpp` is private and listed in the
+     source-package manifest; generated-frame vectors reserve capacity
+     before any parent pointers are taken. A rare VHDL case-folded
+     collision snapshots the former flat-map iteration order only when
+     distinct signal IDs make the selected winner observable. The
+     dedicated SV/VHDL generated-scope fixtures in item 228 pass.
+     Final-layout eight-worker Release and Debug elaboration and
+     application targets build cleanly. `fsim.elaboration` passes 1/1
+     in each tree; focused mixed, SV hierarchy, VHDL configuration/
+     component, and SystemC application cases pass 5/5 in each tree.
+     The Release source-package, translation-unit, build-resource, and
+     current-obligations checks pass 4/4. `git diff --check` is clean;
+     MCP was reindexed after this code wave. Changes 4-12 and 14-20
+     remain, with several bounded Change 14/16 slices in progress.
+231. Additional bounded Change 14 and 16 slices are implemented and
+     locally qualified, but both checklist items remain open. DesignIR
+     now indexes exact `(native_handle, name)` SystemC object matches
+     once per builder while retaining the first duplicate and borrowed
+     source/type metadata. Its declaration-direction lookup uses
+     builder-local VHDL-first and SystemVerilog indexes with first-match
+     behavior, the prior invalid-VHDL-enum fallthrough, and the SV
+     unknown-interface-port rule. The existing `systemc_matrix` case
+     passed in Release and Debug as part of item 230. The common path
+     support header now shares the duplicated absolute/weak-canonical
+     operation between compiled-design base containment and Verilog
+     preprocessing, preserving lexical fallbacks, Windows case-aware
+     containment comparison, emitted spelling, and outside-base
+     behavior. Eight-worker Release/Debug frontend and application
+     targets build; `fsim.frontend` and
+     `fsim.application.compiled_hir_cache` pass 2/2 in each tree.
+     Change 14 still needs the remaining declaration lookup audit;
+     Change 16 still needs once-per-source identity reuse rather than
+     only a shared canonicalization operation. Do not mark either done.
+232. Change 15 remains open. A read-only audit found no safe
+     `HierarchyBuilder`-local sorted-path cache before Changes 4-12
+     establish narrower mutation/invalidation boundaries: the design's
+     signal/container path views currently sort on demand, while the
+     backing maps mutate across hierarchy, SystemC, UDP, and lowering.
+     The debugger's existing sorted snapshots are a separate
+     optimization, not a substitute for the planned builder-local work.
+233. Change 18 remains open after a read-only ownership audit. The
+     existing cache canonicalization copies `CompiledDesign` because the
+     current relocator moves semantic records, rewrites generated text,
+     validates, and rebuilds indexes in place, while the caller continues
+     using the original checked design. Removing that copy without a
+     non-mutating path would be unsafe. A bounded path should first
+     preserve existing relocation/provenance/collision checks in pure
+     source-name projectors, then offer a cache-only serialization-time
+     projection over borrowed semantic/HIR views, with byte-for-byte
+     comparison against copy-then-relocate serialization and unchanged
+     source design. Other flows needing a relocated design retain the
+     mutator. Separately, whole-bundle validation currently subsumes a
+     second semantic-state validation; skip only the redundant inner
+     check through a private bundle path, retaining standalone semantic
+     validation and all boundary checks. Do not claim Change 18 complete
+     until those code and differential tests are done.
+234. Batch 188D Change 14 is complete on the uncommitted worktree.
+     DesignIR now indexes exact scope/name declaration lookups alongside
+     the earlier value, direction, and SystemC projection indexes. The
+     exact-name index retains the latest declaration for duplicate keys,
+     matching the former scan. Eight-worker Release and Debug application
+     builds pass, and `fsim.application.compiled_hir_cache` plus
+     `fsim.application.vhdl_projected` pass 2/2 in each tree. The earlier
+     `systemc_matrix` and VHDL projected cases also passed in both trees
+     after their respective indexes. `git diff --check` is clean.
+235. Bounded Change 4, 17, and 18 slices are in progress, not yet complete.
+     Change 4 moved SystemVerilog parameter association, defparam merging,
+     and actual identity preparation into a private translation unit with
+     explicit ready/fatal results. Eight-worker Release/Debug elaboration
+     and application builds pass; focused SV parameter, type, string,
+     hierarchy, artifact, and compiled-HIR cache tests pass in both trees.
+     Release source-package, translation-unit, build-resource, and current-
+     obligations checks pass. Port binding still needs extraction.
+     Change 17 buckets compiled-HIR package references by owner while
+     preserving order/deduplication and passes `fsim.semantic` in both
+     trees; unnecessary index rebuilding remains. Change 18 removes only
+     redundant semantic validation in bundle serialization, retaining
+     standalone validation and portable-path rejection. Artifact phases
+     and compiled-HIR cache pass in both trees; non-mutating relocation
+     serialization and byte-equivalence tests remain.
+236. A bounded Batch 188D Change 8 extraction is implemented and locally
+     qualified, but Change 8 remains open. VHDL component-surface generic
+     and port association composition, entity-formal remapping, and
+     component generic-default preparation moved to a private translation
+     unit; the caller retains the same diagnostic code/span, skip decision,
+     and later binding side effects. Eight-worker Release and Debug
+     elaboration/application builds pass. `fsim.elaboration` plus six
+     focused VHDL configuration, component, type-generic, function-generic,
+     package-generic, and generic-subprogram application cases pass 7/7
+     in each tree. Existing component tests cover the missing-default
+     diagnostic. `git diff --check` and new-source clang-format checks
+     pass. MCP was reindexed after this source wave. Later VHDL
+     association resolution and binding effects remain to extract.
+237. A consolidated Batch 188D source wave is implemented and focused-
+     qualified on the uncommitted worktree; Changes 4, 16, and 18 remain
+     open. Change 4 extracted only SystemVerilog port-actual normalization
+     into a private translation unit with typed ready, unconnected,
+     recoverable-interface-error, and fatal results; the caller retains
+     diagnostic reporting, mutation, and control flow. Change 16 removed
+     one redundant Verilog-preprocessor `process_file` canonicalization
+     after proving both root and include callers already normalize paths;
+     a duplicate-include fixture pins exact normalized identity and
+     once-only dependency order. Change 18 added a pure source-name
+     projector reused by the existing mutator, with differential checks
+     against copy-and-relocate for semantic/HIR name families, unchanged
+     input, bijective mappings, and path/collision diagnostics. The cache
+     still copies the compiled design pending full serialization-time
+     projection. The first combined Release build found a port-result
+     local name collision; the root agent made the focused rename and
+     reran qualification. Eight-worker Release and Debug frontend,
+     elaboration, and application targets build. The same 12 focused
+     frontend, elaboration, SV hierarchy, VHDL generic/component/
+     configuration, artifact-phase, and compiled-HIR-cache cases pass
+     12/12 in each tree. Release translation-unit, build-resource, and
+     current-obligations checks pass. The source-package check first
+     caught an out-of-order new manifest entry; after moving it to its
+     sorted position, the check passes. `git diff --check` is clean.
+     MCP was reindexed after this source batch. No full matrices, CI
+     inspection, commit, or push are claimed for Batch 188D yet.
+238. Batch 188D Change 17 is complete on the uncommitted worktree. The
+     compiled-HIR package-reference owner buckets from item 235 preserve
+     reference order and import deduplication. A scoped VHDL expression-
+     annotation operation now verifies a current index plus exact ordered
+     expression identities before updating only builtin-operator and
+     referenced-name resolution metadata; it retains record addresses and
+     advances only the VHDL revision stamp. Stale or malformed inputs keep
+     the full-refresh fallback. A production refresh-site audit found the
+     remaining rebuilds necessary for constructor pointer ownership,
+     reference inventory changes, HIR mutation, delay normalization, or
+     source relocation. Direct semantic fixtures check indexed expression
+     and operator provenance, import order, and stale behavior. The
+     consolidated eight-worker Release and Debug semantic, elaboration,
+     and application targets build; all nine focused semantic, elaboration,
+     SV interface/hierarchy, VHDL configuration/component/projected, cache,
+     and artifact cases pass in each tree. Release source-package,
+     translation-unit, build-resource, and current-obligations checks pass
+     4/4. `git diff --check` is clean; MCP was reindexed after the source
+     wave. No clean full matrices or CI inspection are claimed yet.
+239. Additional bounded Changes 4 and 18 slices are implemented and
+     locally qualified but remain open. Change 4 extracted SystemVerilog
+     interface-member signal/alias connection into a private translation
+     unit, preserving the caller's diagnostic and mutation order; wider
+     interface handle/modport/callable forwarding and other port binding
+     remain. Change 18 added a cache-only semantic-record source projection
+     and serializer with byte-for-byte differential checks against copied,
+     relocated standalone semantic serialization, unchanged input, and
+     collision/unmapped-path diagnostic parity. HIR generated text and
+     dependencies still require field-aware projection, and
+     `canonical_cache_payload` still copies the whole compiled design.
+     The same Release/Debug builds and focused cases in item 238 qualify
+     these slices; Change 18 is not complete or performance-qualified.
+240. A third bounded Batch 188D source wave is locally qualified on the
+     uncommitted worktree; Changes 4, 16, and 18 remain open. The SV
+     interface helper now owns modport signal/clocking-member traversal,
+     preserving member order and returning exact diagnostic payloads to
+     the original caller. `make_cache_key` now memoizes stable source names
+     per invocation by exact native path spelling, retaining every key
+     addition and preserving Windows suffix case; the memo expires with
+     the fixed base-directory context. Cache-only artifact projection now
+     prepares a source mapping once and projects semantic, dependency,
+     and SV/VHDL unit source-name fields into owned records while borrowing
+     all other HIR collections. Differential tests on plain lifetime
+     fixtures prove byte-for-byte bundle equivalence with copy/relocate/
+     serialize and unchanged source design; tagged generated SV text and
+     pending markers remain for the next projection slice, and the cache
+     still uses the whole-design copy. The first Release build exposed a
+     misplaced schema constant qualifier, and focused review caught a
+     test-oracle mismatch after the fixture added dependencies; the root
+     agent corrected both before qualification. Eight-worker Release and
+     Debug elaboration/application builds pass, and the same six focused
+     elaboration, cache, artifact, SV hierarchy/interface, and VHDL
+     component cases pass 6/6 in each tree. `git diff --check` is clean;
+     MCP was reindexed after the source wave. No full matrices or CI
+     inspection are claimed.
+241. A fourth bounded Batch 188D source wave is locally qualified on the
+     uncommitted worktree. Change 5 moved the side-effect-free SystemVerilog
+     declaration-width resolver into a private translation unit; Change 4
+     moved string-declaration materialization, including aliasing and static
+     initializer handling, while retaining the caller's ordering and exact
+     diagnostics. Change 8 moved component-port default materialization into
+     the private VHDL association helper, retaining target-port order and
+     required-input checks in the caller. Change 19 gained an in-memory
+     16-level/12-sibling SV generate-scope overlay regression, and the SV
+     string test now pins the 4096-byte initializer limit diagnostic. The
+     initial Release build encountered the artifact worker's still-in-progress
+     overlay template; after the worker completed the coherent patch, the
+     root ran consolidated eight-worker Release and Debug builds. Both trees
+     passed all nine focused elaboration, SV container, cache, artifact,
+     hierarchy, interface, mutable-string, and VHDL component selectors.
+     Release source-package, translation-unit, build-resource, and current-
+     obligations governance passed 4/4. Change 18 is now complete: the
+     cache-only bundle serializer projects semantic, dependency, SV/VHDL unit,
+     pending-assertion, and tagged generated-SV source fields with sparse
+     ordered record overlays; differential tests cover byte equivalence,
+     direct and derived file-macro text, unchanged input, and malformed-marker
+     and generated-literal diagnostic parity. After those tests passed in
+     Release and Debug, `canonical_cache_payload` switched from a full design
+     copy plus relocation to projection during serialization. The seven
+     targeted application selectors passed 7/7 again in each tree after the
+     switch. `git diff --check` and new-file clang-format checks pass; MCP was
+     reindexed after the fourth source wave. Changes 4, 5, 8, and 19 remain
+     open; no full matrices or CI inspection are claimed for Batch 188D.
+242. A fifth bounded Batch 188D wave is locally qualified on the uncommitted
+     worktree. Change 6 moved the ordered SystemVerilog generate-occurrence
+     validation/traversal to a private result-returning helper; the caller
+     retains first-diagnostic reporting and activates generated defparams
+     only after collection succeeds. The first Release build found two later
+     caller uses of the removed local path-join helper; the root restored
+     that caller-local helper, then the eight-worker Release and Debug
+     elaboration/application builds passed. Change 16 is complete: one
+     normalized-path utility, removal of a redundant preprocessor
+     normalization, and invocation-local cache source-name memoization by
+     exact native path spelling now have duplicate-include and repeated-
+     shared-header fixtures covering source order, digest, repeat-call
+     determinism, relocation-stable keys, and content-change invalidation.
+     Change 19 is complete with focused direct/cache/object/library runtime
+     equivalence, the bounded 16-level/12-sibling hierarchy-shadowing
+     fixture, and explicit SV-to-VHDL/VHDL-to-SV binding coverage. The five
+     focused elaboration, cache, artifact, SV hierarchy, and core-mixed
+     selectors pass 5/5 in each tree. Release source-package, translation-
+     unit, build-resource, and current-obligations governance passes 4/4;
+     `git diff --check` is clean. Change 6 remains open for instance and
+     generated materialization handling. No full matrices or CI inspection
+     are claimed for Batch 188D.
+243. A sixth bounded Batch 188D wave is locally qualified on the uncommitted
+     worktree. Change 15 is complete: `RuntimePathViews` owns the existing
+     sorted signal/container path snapshots once per immutable elaborated
+     design, and both `DesignIrBuilder` and runtime-projection validation
+     borrow that per-build snapshot. The artifact-phase validator retains a
+     two-argument wrapper that constructs its own local snapshot; no mutable
+     hierarchy-wide cache or invalidation rule was introduced. Change 11
+     moved only nonfatal VHDL resolution-function registration into a private
+     helper, preserving resolver/kind map writes, source fallback, diagnostic
+     order, and signal append after reporting. Eight-worker Release and Debug
+     elaboration/application builds pass. The eight focused elaboration,
+     multiple-root, artifact, SystemC, SV hierarchy/container, VHDL component,
+     and VHDL logic9 selectors pass 8/8 in Release and Debug. Release
+     source-package, translation-unit, build-resource, and current-obligations
+     governance passes 4/4; `git diff --check` is clean. The SystemC matrix
+     took 134.39 seconds in Release, 144.12 seconds in Debug, and 124.97
+     seconds in an isolated Release repeat. This is within the proper clean
+     Batch 188C qualification times of 141.82/143.561 seconds; the older
+     active-tree CTest cost average was stale and is not regression evidence.
+     Change 11 remains open for process/subprogram handling. No seven-sample
+     performance pass, full matrices, or CI inspection is claimed.
+244. A seventh bounded Batch 188D hierarchy wave is locally qualified on
+     the uncommitted worktree. Change 6 moved generated-constant validation
+     into the private SV generate helper, returning ordered diagnostics while
+     the caller retains declaration iteration, reporting, and the validity
+     gate. Change 7 moved pure callable-profile compatibility matching into
+     the private SV interface helper, leaving member lookup and effects in
+     the caller. Change 10 moved ordered VHDL architecture/generated
+     instance-worklist collection into a private translation unit; the
+     borrowed entries are consumed synchronously by the unchanged recursive
+     binding loop. Eight-worker Release and Debug elaboration/application
+     builds pass. The five focused elaboration, SV hierarchy/interface, and
+     VHDL configuration/component selectors pass 5/5 in each tree. Release
+     source-package, translation-unit, build-resource, and current-obligations
+     governance passes 4/4 after adding the new private interface header to
+     the package manifest; new/edited private helper files pass clang-format,
+     and MCP was reindexed. The latest prior hosted run is now `35935064682`
+     at `eb1b2111`: Linux Debug/Release passed, but Windows Debug/Release
+     failed compilation because five SystemC test `sc_main` definitions add
+     `dllexport` after SystemC's plain declaration under Clang warnings-as-
+     errors. The narrow correction scopes Clang's specific redeclaration
+     diagnostic around those five exported test definitions. All five
+     SystemC target builds and focused tests pass in both Release and Debug;
+     all ten Linux binaries export `sc_main`, and a Windows-target COFF object
+     retains its `-export:sc_main` directive under warnings-as-errors. This
+     prior-run correction precedes any full Debug/Release matrices, as
+     required by the revised Change 20 ordering. No seven-sample performance
+     pass or full matrix is claimed.
+245. An eighth bounded Batch 188D VHDL wave is locally qualified on the
+     uncommitted worktree. Change 9 moved ordered visible-component candidate
+     collection into the private VHDL association helper, preserving scope,
+     library, package, entity, and declaration-order rules while leaving
+     profile selection and diagnostics in the caller. Change 11 moved
+     generated VHDL block adapters, concurrent statements, and processes
+     into a private synchronous lowering method, retaining early-failure,
+     metadata, generated-process drain, and process-order behavior. The first
+     Release build found an unused caller-local semantic-unit lookup after
+     candidate extraction; the root removed it and rebuilt successfully.
+     The initially selected application tests were not valid fresh evidence:
+     CTest dispatches cases across `fsim_application_tests` and the `_1`,
+     `_2`, and `_3` executables, but only the first had been rebuilt in prior
+     focused waves. A stale Debug `_3` binary failed `vhdl_arrays` with an
+     obsolete line number; rebuilding all three missing partitions resolved
+     it without a source-semantic change. Against freshly rebuilt partitioned
+     executables, twelve focused elaboration, SV interface/container/hierarchy,
+     VHDL array/component/configuration/procedure/logic9, mixed, artifact,
+     and cache cases pass 12/12 in each of Release and Debug. Release
+     source-package, translation-unit, build-resource, and current-obligations
+     governance passes 4/4; new private VHDL TUs pass clang-format,
+     `git diff --check` is clean, and MCP was reindexed after the source wave.
+     Future focused application qualification must build the executable
+     partitions actually named by `ctest -N -V`, not only the base target.
+     No full clean matrices or seven-sample benchmark pass is claimed.
+246. A ninth bounded Batch 188D extraction wave is locally qualified on the
+     uncommitted worktree. Change 4 moved synchronous SystemVerilog interface
+     forwarding, modport validation, and alias/metadata propagation into the
+     private interface helper; the caller still invokes it at the original
+     point and reports ordered diagnostics. Change 5 moved the pure 395-line
+     container-type profile builder to the private type-layout helper and
+     kept its two evaluation sites unchanged. Change 8 moved VHDL generic
+     and port association resolution and ordered diagnostic construction to
+     the private association helper, with one shared generic diagnostic-code
+     mapper also used by the SV caller. The first Release build found one
+     unused new helper parameter and one caller-local validity value; the
+     root removed both and rebuilt successfully. Eight-worker Release and
+     Debug builds now include `fsim_elaboration_tests`, the separate SV
+     container elaboration target, and all four partitioned application
+     executables. Fourteen focused elaboration, SV interface/hierarchy/
+     container, VHDL generic/component/configuration/array/procedure cases
+     pass 14/14 in each tree; two additional VHDL overload/procedure-generic
+     selectors pass 2/2 in each tree. Release source-package, translation-unit,
+     build-resource, and current-obligations governance passes 4/4;
+     affected private TUs pass clang-format and `git diff --check` is clean.
+     MCP was reindexed after the source wave. Changes 4, 5, and 8 remain
+     open for their remaining declaration/port handling; no full clean
+     matrices or seven-sample performance pass is claimed.
+247. A tenth bounded Batch 188D extraction wave is locally qualified on the
+     uncommitted worktree. Change 6 moved SystemVerilog bind-target selection
+     and expansion to a private instance-worklist helper, preserving ordinary
+     and generated worklist order and caller-side diagnostics. Change 7 moved
+     SystemVerilog process materialization to a private process helper, keeping
+     generated static-slice fusion, append/drain order, metadata, and
+     `concurrent_order` updates at the original invocation point. Change 11
+     moved VHDL generic-subprogram validation to a private helper, retaining
+     its early gate and ordered source-span diagnostics before generate
+     specialization. The first Release build exposed a missing resolver include
+     in the new VHDL TU; the root added it and rebuilt successfully. Eight-
+     worker Release and Debug builds include the elaboration, SV container,
+     and all four partitioned application targets. Thirteen focused cases
+     pass 13/13 in each tree. Release source-package, translation-unit,
+     build-resource, and current-obligations governance passes 4/4; the three
+     new TUs pass clang-format and `git diff --check` is clean. MCP was
+     reindexed after this source wave. Changes 6, 7, and 11 remain open for
+     their remaining instance, callable, and resolution phases. The latest
+     prior hosted CI correction was completed before these builds; no full
+     clean matrices or seven-sample performance pass is claimed.
+248. An eleventh bounded Batch 188D extraction wave is locally qualified on
+     the uncommitted worktree. Change 4 moved the ordered SystemVerilog child-
+     port binding phase to the private port helper, while keeping recursive
+     instantiation, configuration restoration, and deferred boundary-process
+     ownership in the caller. Change 5 moved SystemVerilog declaration
+     materialization to a private TU; root and generated declaration loops
+     remain in place, and the deferred virtual-interface initializer queue
+     still resolves later. Change 8 moved VHDL per-binding actual validation
+     and materialization to a same-TU private builder method, avoiding a
+     dozen wrapper-only cross-TU APIs; later compatibility, inferred subtype,
+     mode-view, alias, and recursive phases remain in the caller. The root
+     corrected four mechanical extraction compile issues: a VHDL reference
+     dereference, an unused caller value, an SV type-layout namespace
+     qualifier, and an unused SV direction helper. Eight-worker Release and
+     Debug builds include elaboration, SV container, and all four partitioned
+     application targets. Fourteen focused SV and VHDL cases pass 14/14 in
+     each tree. Release source-package, translation-unit, build-resource, and
+     current-obligations governance passes 4/4; `git diff --check` is clean,
+     and MCP was reindexed after this source wave. No full clean matrices or
+     seven-sample performance pass is claimed.
+249. A twelfth bounded Batch 188D wave is locally qualified on the uncommitted
+     worktree. Change 5 moved paired SystemVerilog packed-aggregate type and
+     default computation to same-TU private helpers, retaining their lazy
+     invocation sites. Change 6 moved per-instance UDP/configuration/target
+     selection and terminal SystemC dispatch to a private same-TU method;
+     the caller retains mixed-language binding and recursive child ownership.
+     Change 9 moved VHDL declaration materialization to a private same-TU
+     method while keeping entity, architecture, and generated declaration
+     iteration order in the caller. A worker's stale-offset bulk edit damaged
+     the shared source during extraction. The root stopped concurrent edits,
+     reconstructed the boundary adapter and SV entrypoint prologue from the
+     committed source plus the already-extracted generate/type-layout phases,
+     and corrected the new helper and dispatch integrations directly. The
+     repaired Release and Debug builds succeed. Fourteen focused cases pass
+     in Release and Debug (the Debug SystemC matrix ran separately from the
+     other thirteen); Release source-package, translation-unit,
+     build-resource, and current-obligations governance passes 4/4.
+     `git diff --check` and targeted helper formatting pass, and MCP was
+     reindexed after the source wave. The SystemC matrix took 125.49 seconds
+     in Release and 128.59 seconds in Debug, materially above their existing
+     CTest cost estimates of about 33 and 21 seconds; those estimates are
+     not a controlled baseline and this remains a timing signal, not a
+     performance-gate result. No full clean matrices or seven-sample
+     performance pass is claimed.
+250. A thirteenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 4/6 moved the SystemVerilog-to-VHDL
+     child-instance generic, port, boundary, and recursive-instantiation
+     phase to a private same-TU method. Change 5/12 moved SystemVerilog
+     alias planning and whole-alias publication to private methods while
+     retaining root and generated-occurrence order. Change 9/12 moved the
+     VHDL package/context visibility validator to a private same-TU method,
+     retaining entity-then-architecture traversal and the combined validity
+     gate. Eight-worker Release and Debug builds include elaboration, SV
+     container, and all four partitioned application test targets; eight
+     focused elaboration, alias, mixed-language, package, component, and
+     logic9 cases pass 8/8 in each tree. Release source-package,
+     translation-unit, build-resource, and current-obligations governance
+     passes 4/4. Targeted source and header formatting checks and
+     `git diff --check` pass, and MCP was reindexed after the source wave.
+     The latest prior hosted CI remains run 35935064682 at `eb1b2111`;
+     its known Windows SystemC `sc_main` failure was corrected locally
+     before any full matrices. No full clean matrices or seven-sample
+     performance pass is claimed.
+251. A fourteenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 10 moved generated VHDL block-generic and
+     port materialization into a private same-TU helper. The occurrence
+     loop retains its placement and advances past invalid non-value generic
+     actuals; fatal declaration/driver failures still abort, and diagnostic,
+     association, declaration, and mutation order is retained. Eight-worker
+     Release and Debug builds include elaboration, SV container, and all
+     four partitioned application targets. Five focused elaboration,
+     component, generic-subprogram, logic9, and package-generic cases pass
+     5/5 in each tree. Release source-package, translation-unit,
+     build-resource, and current-obligations governance passes 4/4;
+     formatting and `git diff --check` pass, and MCP was reindexed.
+     A read-only completion audit established that Change 5's
+     SystemVerilog declaration materialization and type/default work is
+     fully outside its entrypoint, so plan item 5 is now marked complete.
+     Changes 4 and 6-12 still have substantial inline algorithms and
+     remain open. No full clean matrices or seven-sample performance pass
+     is claimed.
+252. A fifteenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 4 moved per-declaration SystemVerilog
+     parameter metadata construction into a private same-TU helper while
+     preserving caller scan order and deduplication. Change 7 moved
+     clocking-block signal, skew, sampling, event, and process construction
+     out of the SystemVerilog entrypoint, keeping its call between root
+     alias publication and generated-scope materialization. Change 9 moved
+     VHDL access-type declaration validation to a private same-TU helper
+     at its original validation point. The root corrected a mechanical
+     helper-signature mismatch found by the first Release build: the
+     metadata caller passes `semantic::sv::Unit`, not `CompiledUnitView`.
+     Eight-worker Release and Debug builds then passed for elaboration,
+     SV container, and all four partitioned application targets. Seven
+     focused SV/VHDL hierarchy, mixed-language, generic, component, and
+     logic9 cases pass 7/7 in each tree. Release governance passes 4/4;
+     formatting and `git diff --check` pass, and MCP was reindexed after
+     the source wave. A post-wave read-only audit found no remaining
+     SystemVerilog process-construction/lowering or callable-interface
+     binding algorithm in the entrypoint, so plan item 7 is now marked
+     complete; its retained concurrent-assertion check validates HIR
+     metadata rather than materializing processes. No full clean matrices
+     or seven-sample performance pass is claimed.
+253. A sixteenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 6 moved ordered root/generated/bound
+     SystemVerilog instance-descriptor assembly, including array expansion,
+     into the existing instance-worklist TU; the caller retains synchronous
+     dispatch and the malformed-bound diagnostic gate. Change 8 moved VHDL
+     generic-actual materialization to a private same-TU helper with typed
+     ready, accumulated-invalid, and fatal outcomes; association diagnostics
+     still precede it and port compatibility remains separate. Change 9
+     moved object/composite-type validation to a same-TU helper at its
+     original call point, preserving entity-then-architecture traversal and
+     the combined validity gate. The root corrected a new nested-type
+     declaration-order compile error with a forward declaration and
+     reconciled shared-file formatting. Eight-worker Release and Debug
+     builds include elaboration, SV container, and all four partitioned
+     application targets. Eight focused elaboration, instance-worklist,
+     generic, subtype, and package cases pass 8/8 in each tree; Release
+     governance passes 4/4. Formatting and `git diff --check` pass, and MCP
+     was reindexed after the source wave. Changes 6, 8, and 9 remain open;
+     no full clean matrices or seven-sample performance pass is claimed.
+254. A seventeenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 6 moved the SystemVerilog per-descriptor
+     child-recursion/port-binding/configuration-restoration loop to a
+     private same-TU helper while its worklist and borrowed owners remain
+     live in the caller. Change 8 moved the guarded VHDL port actual
+     compatibility checks (width, domain, signedness, ranges, and array
+     shape) to a private same-TU helper; open/default handling, inference,
+     mode-view writes, and alias publication remain in the caller. Change 9
+     moved physical-unit and selected-package-name validators out of the
+     VHDL entrypoint while retaining their original validation order and
+     combined gate. The root corrected an omitted borrowed
+     `actual_hir_declaration` input to the port helper after the first
+     Release compile; the affected object and then all six eight-worker
+     Release/Debug test targets built. Nine focused SV/VHDL hierarchy,
+     interface, component, configuration, subtype, package, mixed-language,
+     and logic9 cases pass 9/9 in each tree; Release governance passes 4/4.
+     Targeted formatting and `git diff --check` pass, and MCP was reindexed
+     after the source wave. Changes 6, 8, and 9 remain partial; no full
+     clean matrices or seven-sample performance pass is claimed.
+255. An eighteenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 6 moved deferred SystemVerilog
+     virtual-interface specialization/initializer resolution after child
+     recursion and moved ordered root/generated interface-handle
+     reservation before process lowering; generated-scope materialization
+     remains. Change 9 moved VHDL package callable-body validation to a
+     private same-TU method, retaining diagnostic accumulation without
+     short-circuiting the independent instance validation. Change 10 moved
+     the VHDL target/configuration/component selection phase to a private
+     same-TU method with typed borrowed provenance, preserving explicit
+     binding precedence, nested rule order, candidate sorting, diagnostics,
+     and the SystemC target outcome. The root corrected a reference
+     dereference and an unqualified nested result return type found by the
+     first Release compile. Eight-worker Release and Debug builds include
+     elaboration, SV container, and all four partitioned application
+     targets. Nine focused hierarchy, interface, component, configuration,
+     package, callable, mixed-language, and logic9 cases pass 9/9 in each
+     tree. The SystemC matrix passes in Release (136.07 seconds) and Debug
+     (127.31 seconds); its timing remains diagnostic, not a performance
+     comparison. Release governance passes 4/4, formatting and
+     `git diff --check` pass, and MCP was reindexed after the source wave.
+     A read-only post-wave audit found no substantial parameter/port
+     binding algorithm in the SystemVerilog entrypoint; plan item 4 is now
+     marked complete. Changes 6 and 8-12 remain open. No full clean
+     matrices or seven-sample performance pass is claimed.
+256. A nineteenth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 6 moved generated SystemVerilog scope
+     materialization to a private same-TU helper, retaining vector reserve
+     before creating parent-linked map views, nearest-parent selection,
+     declaration/alias order, and deferred virtual-interface queue
+     ownership. Change 8 moved the ordered VHDL port-association phase,
+     including open/default handling, subtype inference, mode-view/driver
+     writes, and alias publication, to a private same-TU helper while the
+     caller retains required-formal prevalidation and recursive child
+     activation. Change 9 moved the complete VHDL subtype declaration
+     validator, including its local profile types and recursive helpers,
+     to a private same-TU method at the original call point. The root
+     reconciled formatting after the exact-text move. Eight-worker
+     Release and Debug builds include elaboration, SV container, and all
+     four partitioned application targets. Twelve focused SV/VHDL
+     elaboration, hierarchy, container, interface, subtype, package,
+     configuration, component, and logic9 cases pass 12/12 in each tree;
+     Release governance passes 4/4. Targeted formatting and
+     `git diff --check` pass, and MCP was reindexed after the source wave.
+     A read-only completion audit found no substantial generate/instance
+     algorithm in the SystemVerilog entrypoint, so plan item 6 is now
+     marked complete. Changes 8-12 remain under audit; no full clean
+     matrices or seven-sample performance pass is claimed.
+257. A twentieth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 12 moved the SystemVerilog concurrent-
+     assertion/HIR consistency validator, ordered package/import source-
+     dependency traversal, and generated-class selection/deduplication to
+     private same-TU helpers. A read-only re-audit finds the remaining
+     SystemVerilog entrypoint to be ordered orchestration; the VHDL half of
+     Change 12 remains open. Change 8 moved the 272-line VHDL component-
+     binding identity projection into a file-local helper, retaining the
+     original component/target guard and call position. Change 11 moved
+     ordinary VHDL entity/architecture concurrent-statement and process
+     lowering to a private same-TU helper, retaining append and generated-
+     process-drain order. Eight-worker Release and Debug builds include
+     elaboration, SV container, and all four partitioned application
+     targets. Fifteen focused SV/VHDL cases pass 15/15 in each tree;
+     Release governance passes 4/4, `git diff --check` passes, and MCP was
+     reindexed after the source wave. A read-only completion audit found
+     generic/port binding and component-identity algorithms extracted;
+     remaining mode-view and required-input checks are validation gates,
+     so plan item 8 is now marked complete. Changes 9-12 remain open.
+     No full clean matrices
+     or seven-sample performance pass is claimed.
+258. A twenty-first bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 10 moved VHDL recursive child activation
+     and its six-field configuration/component save-install-restore scope to
+     a private same-TU helper, with restoration before failure propagation.
+     Change 11 moved generated-region callable duplicate/profile,
+     expression-visibility, and generic-template checks to a same-TU
+     validator, preserving per-occurrence skip behavior. Change 9 moved
+     local package-instance validation to a same-TU method and promoted
+     the shared package-template resolver, leaving cycle detection in place.
+     The VHDL component subtype-compatibility and candidate-profile
+     predicates now live in private same-TU methods with explicit borrowed
+     inputs; candidate order and diagnostics remain at the call sites.
+     Eight-worker Release and Debug builds include elaboration, SV container,
+     and all four partitioned application targets. Fifteen focused SV/VHDL
+     cases pass 15/15 in each tree; Release governance passes 4/4,
+     `git diff --check` passes, and MCP was reindexed after the source wave.
+     Changes 9-12 remain open; no full clean matrices or seven-sample
+     performance pass is claimed.
+259. A twenty-second bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 10 moved generated VHDL declaration
+     type-visibility and constant/subtype validation into separate private
+     same-TU gates. Each accumulates diagnostics in declaration order and
+     returns false only to skip the current generated occurrence; the
+     subsequent materializer remains the unit-fatal path. Change 9 moved
+     package-instance cycle DFS to a private same-TU report-only helper,
+     preserving root order and `FSIM-ELAB-PKG-007` attribution. Change 12
+     moved the VHDL LIFO package/import/context source-dependency walker to
+     a private same-TU helper while retaining append policy, deduplication,
+     source order, and identity publication in the caller. Eight-worker
+     Release and Debug builds include elaboration, SV container, and all
+     four partitioned application targets. Sixteen focused SV/VHDL and
+     compiled-HIR-cache cases pass 16/16 in each tree; Release governance
+     passes 4/4, `git diff --check` passes, and MCP was reindexed after the
+     source wave. Changes 9-12 remain open; no full clean matrices or
+     seven-sample performance pass is claimed.
+260. A twenty-third bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 9 moved predefined VHDL subtype profile
+     and attribute validation into a same-TU helper, preserving entity-
+     then-architecture diagnostics even when the entity pass fails.
+     Change 12 moved configuration-rule validation into a file-local helper
+     with the three original call positions and unchanged diagnostic order;
+     recursive configuration-scope walking remains in the caller. Change 10
+     moved the complete generated-occurrence parent selection, association
+     and actual preflight, ordered validators, and materialization dispatch
+     to a private same-TU helper with explicit skipped/materialized/failed
+     outcomes. Only materializer failure remains unit-fatal; parent-linked
+     map views are consumed before output-vector growth. Eight-worker
+     Release and Debug builds include elaboration, SV container, and all
+     four partitioned application targets. Sixteen focused SV/VHDL and
+     compiled-HIR-cache cases pass 16/16 in each tree; Release governance
+     passes 4/4, `git diff --check` passes, and MCP was reindexed after the
+     source wave. Changes 9-12 remain under completion audit; no full clean
+     matrices or seven-sample performance pass is claimed.
+261. A twenty-fourth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 12 moved recursive VHDL configuration-
+     scope validation to a file-local helper, preserving sibling dedupe,
+     root/child rule order, diagnostic attribution, and caller early return.
+     Change 9 moved VHDL component-candidate collection/profile selection
+     and VHCOMP diagnostics into a private same-TU helper with explicit
+     selected/skip outcome. Change 10 moved the terminal VHDL-to-SystemC
+     child descriptor, association, boundary-connection, and instantiation
+     route into a private same-TU helper, preserving the diagnostic-count
+     fatal gate and success continuation. The first compile exposed a stale
+     `effective_instance` name in a separate selector's SystemC diagnostic;
+     the root corrected it to that selector's `record.source` before
+     qualification. Eight-worker Release and Debug builds include
+     elaboration, SV container, and all four partitioned application
+     targets. Sixteen focused cases pass 16/16 in each tree; the SystemC
+     matrix passes in Release (138.76 seconds) and Debug (141.12 seconds),
+     with times diagnostic rather than a benchmark. Release governance
+     passes 4/4, `git diff --check` passes, and MCP was reindexed after the
+     source fix. Read-only completion audits found Change 11 complete and
+     Change 9 complete under the same validation-gate criterion used for
+     Change 8; both checklist bullets are marked complete. Changes 10 and
+     12 remain open; no full clean matrices or seven-sample performance
+     pass is claimed.
+262. A twenty-fifth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 10 moved VHDL-to-SystemVerilog child
+     parameter specialization into a private same-TU helper with typed
+     fatal/ready outcome and owned actuals/specialization; it preserves
+     nonfatal association issues, per-actual skip behavior, diagnostic
+     order, and the absence of DesignIR mutation before port binding.
+     Change 12 moved generated VHDL materialization identity projection
+     into a file-local helper, preserving declaration order, identity
+     bytes, and synchronous source-dependency appends. Eight-worker
+     Release and Debug builds include elaboration, SV container, and all
+     four partitioned application targets. Nineteen focused SV/VHDL,
+     mixed-language, typed-boundary, and compiled-HIR-cache cases pass
+     19/19 in each tree; Release governance passes 4/4, `git diff --check`
+     passes, and MCP was reindexed after the source wave. Changes 10 and
+     12 remain open; no full clean matrices or seven-sample performance
+     pass is claimed.
+263. A twenty-sixth bounded Batch 188D wave is locally qualified on the
+     uncommitted worktree. Change 10 moved VHDL-to-SystemVerilog port
+     mapping into a private same-TU helper with a typed fatal/validity
+     result and owned signal, string, and container alias maps. The caller
+     moves those maps into recursive SystemVerilog activation; binding
+     order, immediate versus accumulated diagnostics, and partial DesignIR
+     mutation remain unchanged. Change 12 moved VHDL specialization
+     identity projection into a file-local helper, preserving actual and
+     source-dependency order and the existing missing-declaration gate.
+     The root corrected two unused locals and made a string-view-to-string
+     context conversion explicit after the first warnings-as-errors compile.
+     Eight-worker Release and Debug builds include elaboration, SV
+     container, and all four partitioned application targets. Nineteen
+     focused SV/VHDL, mixed-language, typed-boundary, and compiled-HIR-
+     cache cases pass 19/19 in each tree; Release governance passes 4/4,
+     `git diff --check` passes, and MCP was reindexed after the source fix.
+     Independent read-only audits found no substantive language lowering
+     left in either entrypoint and no semantic or lifetime issue in the
+     newest helpers; Changes 10 and 12 are marked complete. The latest
+     hosted run remains `35935064682` at `eb1b2111`, with Linux Debug and
+     Release passing and Windows Debug and Release build failures on the
+     SystemC `sc_main` redeclaration warning already corrected locally.
+     Change 20 clean qualification is still pending; no seven-sample
+     performance pass is claimed.
+264. Batch 188D Change 20 is locally qualified on the final source. The
+     first clean Release build exposed an extra parenthesis in a newly
+     added compiled-HIR-cache test. Its first full matrix then exposed a
+     pending-assertion fixture that could not be serialized before source
+     projection and stale hierarchy-owner, codec-token, and frozen-digest
+     governance anchors. The root corrected those focused failures: the
+     cache fixture now exercises a real pending action with repeatable
+     projection and relocation parity; three feature inventories name the
+     current hierarchy owner; the portable-object check names the current
+     validated serializer; and VHDL, Verilog, SystemVerilog, integration,
+     and historical-corpus digests match their reviewed current content.
+     Subsequent clean Clang/LLVM 22 warnings-as-errors Release and Debug
+     builds pass, each followed by an unfiltered 422/422 CTest suite. Final
+     suite times are 155.56 seconds in Release and 165.28 seconds in Debug;
+     these are qualification timings, not performance benchmarks. The full
+     diff and migration-obligation audit found all new translation units
+     and changed tests registered and packaged, with no Reed-Solomon code.
+     `git diff --check` passes and MCP was reindexed after the source/test
+     changes. The latest prior hosted run remains `35935064682` at
+     `eb1b2111`: Linux Debug/Release passed, while Windows Debug/Release
+     failed on the SystemC `sc_main` warning that was corrected locally
+     before these full matrices. The seven-sample matrix and post-push CI
+     monitoring are waived through 188H; no performance pass or new hosted
+     pass is claimed. Preserve user-owned untracked `phase.fst` and
+     `scripts/__pycache__/`. The cohesive commit and push close Batch 188D;
+     resume at Batch 188E Change 1, without a release tag.

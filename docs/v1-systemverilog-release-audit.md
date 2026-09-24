@@ -85,7 +85,7 @@ allowlist, or suppression route.
 
 The exact SHA-256 identities are:
 
-- clause/integration inventory: `74a1481e60e5046e294c8ce64fe4be9a4582450a55aaf9c3b783cfa1f5098570`;
+- clause/integration inventory: `512ebefdd1d14307949485d9d1282c58c8d1c342552aa86eb451acfbf39fc388`;
 - literal-width inventory: `59028a3ee889a7bbcfe0cc60a87ab1e285598f6fcebcf29be9f649337697d453`;
 - release closure: `f4e8dcdfb60362544e6958449fa2a1e852cedcbba2ef6e929d5fb0a3aee1d124`.
 

@@ -547,7 +547,7 @@ const semantic::vhdl::TypeDefinition* find_protected_type(
 }
 
 std::optional<ContainerObjectId> find_protected_storage(
-    const std::unordered_map<std::string, ContainerObjectId>& objects,
+    const ContainerObjectBindings& objects,
     const std::string_view object,
     const std::string_view member)
 {

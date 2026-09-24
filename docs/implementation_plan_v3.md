@@ -7104,29 +7104,44 @@ under the explicit post-push monitoring waiver; no hosted pass is claimed.
 
 #### Batch 188D - hierarchy decomposition and build-time algorithmics
 
-1. Remove unused hierarchy checkpoints, rollback code, and their write-only journals.
-2. Introduce explicit instantiation contexts with documented ownership and lifetimes.
-3. Replace copied parent binding maps with scoped parent views and local overlays.
-4. Extract SystemVerilog parameter and port handling.
-5. Extract SystemVerilog declaration handling.
-6. Extract SystemVerilog generate and instance handling.
-7. Extract SystemVerilog process and callable binding.
-8. Extract VHDL generic and port handling.
-9. Extract VHDL declaration and component handling.
-10. Extract VHDL generate and instance handling.
-11. Extract VHDL process, subprogram, and resolution handling.
-12. Reduce both language entrypoints to readable orchestration without
+1. [x] Remove unused hierarchy checkpoints, rollback code, and their write-only journals.
+2. [x] Introduce explicit instantiation contexts with documented ownership and lifetimes.
+3. [x] Replace copied parent binding maps with scoped parent views and local overlays.
+4. [x] Extract SystemVerilog parameter and port handling.
+5. [x] Extract SystemVerilog declaration handling.
+6. [x] Extract SystemVerilog generate and instance handling.
+7. [x] Extract SystemVerilog process and callable binding.
+8. [x] Extract VHDL generic and port handling.
+9. [x] Extract VHDL declaration and component handling.
+10. [x] Extract VHDL generate and instance handling.
+11. [x] Extract VHDL process, subprogram, and resolution handling.
+12. [x] Reduce both language entrypoints to readable orchestration without
     introducing another elaboration engine.
-13. Index DesignIR parent and specialization ownership, preserving deepest-ancestor selection.
-14. Index declaration, value, direction, and SystemC projection lookups.
-15. Reuse builder-local sorted path views with explicit invalidation and lifetime rules.
-16. Canonicalize source identities once, preserving Windows case and relocation behavior.
-17. Index compiled-HIR references by owner and avoid unnecessary index rebuilding.
-18. Relocate source names during serialization; remove whole-design relocation
+13. [x] Index DesignIR parent and specialization ownership, preserving deepest-ancestor selection.
+14. [x] Index declaration, value, direction, and SystemC projection lookups.
+15. [x] Reuse builder-local sorted path views with explicit invalidation and lifetime rules.
+16. [x] Canonicalize source identities once, preserving Windows case and relocation behavior.
+17. [x] Index compiled-HIR references by owner and avoid unnecessary index rebuilding.
+18. [x] Relocate source names during serialization; remove whole-design relocation
     copies and duplicate validation.
-19. Validate direct/object/cache/library paths, hierarchy shadowing, mixed-
+19. [x] Validate direct/object/cache/library paths, hierarchy shadowing, mixed-
     language binding, and scaling.
-20. Run standard closure and hand off to 188E.
+20. [x] Run standard closure and hand off to 188E.
+
+Batch 188D Change 20 local qualification is green on the final code. Clean
+Clang/LLVM 22 warnings-as-errors Release and Debug builds pass, followed by
+unfiltered 422/422 CTest suites in 155.56 and 165.28 seconds respectively.
+The first Release matrix exposed a cache-test fixture error and stale owner/
+digest governance anchors; these were corrected before the final clean
+matrices. The latest prior pushed run, `35935064682` at `eb1b2111`, passed
+Linux Debug/Release and failed Windows Debug/Release on the SystemC `sc_main`
+redeclaration warning, which was corrected and locally checked before full
+qualification. Diff, source-package, and migration-obligation review passes;
+`git diff --check` is clean and the MCP index was refreshed. The user-waived
+seven-sample performance matrix is not claimed as a pass. The cohesive
+implementation commit and push close Change 20; the new hosted run is
+unverified under the post-push monitoring waiver. Resume at Batch 188E
+Change 1 without a release tag.
 
 #### Batch 188E - direct SystemC kernel interface
 

@@ -353,10 +353,9 @@ namespace {
         }
 
         void process_file(
-            const std::filesystem::path& path,
+            const std::filesystem::path& normalized,
             const std::size_t depth)
         {
-            const auto normalized = normalized_path(path);
             const auto name = fsim::support::path_to_utf8(normalized);
             if (depth > options_.maximum_include_depth) {
                 diagnose(

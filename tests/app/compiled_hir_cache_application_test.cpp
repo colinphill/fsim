@@ -708,6 +708,141 @@ fsim::project::Config systemverilog_config(
     return config;
 }
 
+void write_repeated_shared_header_sources(
+    const std::filesystem::path& directory,
+    const std::string_view shared_header)
+{
+    write_file(directory / "include" / "shared.svh", shared_header);
+    write_file(directory / "first.sv", R"(
+`include "shared.svh"
+module repeated_first;
+endmodule
+)");
+    write_file(directory / "second.sv", R"(
+`include "shared.svh"
+module repeated_second;
+endmodule
+)");
+}
+
+fsim::project::Config repeated_shared_header_config(
+    const std::filesystem::path& directory)
+{
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "repeated-shared-header-cache-key";
+    config.project.tops = {
+        { "sv:work.repeated_first", "first_root" },
+        { "sv:work.repeated_second", "second_root" },
+    };
+    config.project.time_resolution = "1ns";
+
+    fsim::project::SourceSet source_set;
+    source_set.language = fsim::project::Language::system_verilog;
+    source_set.standard = "2017";
+    source_set.library = "work";
+    source_set.compilation_unit = "file";
+    source_set.include_directories = { directory / "include" };
+    source_set.files = {
+        directory / "first.sv",
+        directory / "second.sv",
+    };
+    config.source_sets.push_back(std::move(source_set));
+    return config;
+}
+
+std::string checked_project_cache_key(
+    const fsim::project::Config& config,
+    const fsim::app::CheckedProject& checked)
+{
+    fsim::diagnostic::Engine diagnostics;
+    const auto key = fsim::app::application_detail::make_cache_key(
+        config,
+        checked,
+        std::span<const fsim::project::ProjectSection::TopLevel> {
+            config.project.tops },
+        config.project.time_resolution,
+        { },
+        diagnostics);
+    assert(!diagnostics.has_error() && !key.empty());
+    return key;
+}
+
+void test_repeated_shared_header_cache_key_relocation(
+    const std::filesystem::path& directory)
+{
+    constexpr std::string_view shared_header_v1 {
+        "// shared preprocessing input v1\n"
+    };
+    constexpr std::string_view shared_header_v2 {
+        "// shared preprocessing input v2\n"
+    };
+    const auto source_directory = directory / "source";
+    write_repeated_shared_header_sources(
+        source_directory, shared_header_v1);
+
+    auto source_config = repeated_shared_header_config(source_directory);
+    fsim::diagnostic::Engine source_diagnostics;
+    const auto source_checked
+        = fsim::app::check_project(source_config, source_diagnostics);
+    assert(source_checked && !source_diagnostics.has_error());
+    assert(source_checked->hdl_sources.size() == 2U);
+    const auto source_shared_header
+        = source_directory / "include" / "shared.svh";
+    std::array<std::string, 2U> source_dependency_digests;
+    for (std::size_t index { };
+        index < source_checked->hdl_sources.size(); ++index) {
+        const auto& checked_source = source_checked->hdl_sources[index];
+        assert(fsim::app::application_detail::same_source_path(
+            checked_source.path, source_config.source_sets.front().files[index]));
+        const auto shared_dependency = std::ranges::find_if(
+            checked_source.dependencies,
+            [&](const auto& dependency) {
+                return fsim::app::application_detail::same_source_path(
+                    dependency.path, source_shared_header);
+            });
+        assert(shared_dependency != checked_source.dependencies.end());
+        assert(std::ranges::count_if(
+                   checked_source.dependencies, [&](const auto& dependency) {
+                       return fsim::app::application_detail::same_source_path(
+                           dependency.path, source_shared_header);
+                   })
+            == 1);
+        assert(!shared_dependency->content_digest.empty());
+        source_dependency_digests[index]
+            = shared_dependency->content_digest;
+    }
+    assert(source_dependency_digests[0] == source_dependency_digests[1]);
+    const auto source_key
+        = checked_project_cache_key(source_config, *source_checked);
+    assert(checked_project_cache_key(source_config, *source_checked)
+        == source_key);
+
+    const auto relocated_directory = directory / "relocated";
+    write_repeated_shared_header_sources(
+        relocated_directory, shared_header_v1);
+    auto relocated_config
+        = repeated_shared_header_config(relocated_directory);
+    fsim::diagnostic::Engine relocated_diagnostics;
+    const auto relocated_checked
+        = fsim::app::check_project(relocated_config, relocated_diagnostics);
+    assert(relocated_checked && !relocated_diagnostics.has_error());
+    assert(relocated_checked->hdl_sources.size() == 2U);
+    assert(checked_project_cache_key(relocated_config, *relocated_checked)
+        == source_key);
+
+    write_file(
+        relocated_directory / "include" / "shared.svh",
+        shared_header_v2);
+    fsim::diagnostic::Engine changed_diagnostics;
+    const auto changed_checked
+        = fsim::app::check_project(relocated_config, changed_diagnostics);
+    assert(changed_checked && !changed_diagnostics.has_error());
+    assert(changed_checked->hdl_sources.size() == 2U);
+    assert(checked_project_cache_key(relocated_config, *changed_checked)
+        != source_key);
+}
+
 std::vector<std::byte> raw_cache_payload(
     const fsim::project::Config& config,
     const std::string_view key)
@@ -769,6 +904,160 @@ bool has_diagnostic_message(
             return diagnostic.code == code
                 && diagnostic.message.find(message) != std::string::npos;
         });
+}
+
+std::vector<std::string_view> compiled_source_name_views(
+    const fsim::semantic::CompiledDesign& design)
+{
+    std::vector<std::string_view> names;
+    for (const auto& file : design.semantics.source_files()) {
+        names.push_back(file.physical_name);
+    }
+    for (const auto& expansion : design.semantics.expansions()) {
+        names.push_back(expansion.description);
+    }
+    for (const auto& span : design.semantics.source_spans()) {
+        names.push_back(span.logical_name);
+    }
+    for (const auto& dependency : design.dependencies()) {
+        names.push_back(dependency.logical_name);
+    }
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        for (const auto& dependency : unit.source_dependencies) {
+            names.push_back(dependency);
+        }
+    }
+    for (const auto& unit : design.vhdl_hir.units()) {
+        for (const auto& dependency : unit.source_dependencies) {
+            names.push_back(dependency);
+        }
+    }
+    return names;
+}
+
+std::vector<std::string_view> semantic_source_name_views(
+    const fsim::semantic::Model& semantics)
+{
+    std::vector<std::string_view> names;
+    for (const auto& file : semantics.source_files()) {
+        names.push_back(file.physical_name);
+    }
+    for (const auto& expansion : semantics.expansions()) {
+        names.push_back(expansion.description);
+    }
+    for (const auto& span : semantics.source_spans()) {
+        names.push_back(span.logical_name);
+    }
+    return names;
+}
+
+std::vector<std::string> copy_source_names(
+    const std::span<const std::string_view> names)
+{
+    std::vector<std::string> result;
+    result.reserve(names.size());
+    for (const auto name : names) {
+        result.emplace_back(name);
+    }
+    return result;
+}
+
+void assert_source_name_projection_matches_copy_relocation(
+    const fsim::semantic::CompiledDesign& design,
+    const std::span<const fsim::library::SourceNameMapping> mappings)
+{
+    const auto input_names = compiled_source_name_views(design);
+    const auto original_names = copy_source_names(input_names);
+    const auto semantic_names = semantic_source_name_views(design.semantics);
+    const auto original_semantic_names = copy_source_names(semantic_names);
+    fsim::diagnostic::Engine projection_diagnostics;
+    const auto projected
+        = fsim::app::application_detail::
+            project_compiled_design_source_names(
+                input_names, mappings, projection_diagnostics);
+    assert(projected && !projection_diagnostics.has_error());
+    assert(copy_source_names(compiled_source_name_views(design))
+        == original_names);
+    assert(design.valid());
+    fsim::diagnostic::Engine semantic_projection_diagnostics;
+    const auto projected_semantic
+        = fsim::app::application_detail::
+            serialize_cache_semantic_state_with_source_projection(
+                design.semantics, mappings,
+                semantic_projection_diagnostics);
+    assert(projected_semantic && !semantic_projection_diagnostics.has_error());
+    assert(copy_source_names(
+        semantic_source_name_views(design.semantics))
+        == original_semantic_names);
+
+    auto source_name_reference = design;
+    fsim::diagnostic::Engine source_name_reference_diagnostics;
+    assert(fsim::app::application_detail::relocate_compiled_design_sources(
+        source_name_reference, mappings,
+        source_name_reference_diagnostics));
+    assert(!source_name_reference_diagnostics.has_error());
+    assert(*projected == copy_source_names(
+        compiled_source_name_views(source_name_reference)));
+
+    assert(!design.dependencies().empty());
+    auto dependency_fixture = design;
+    const auto dependency_source_name
+        = design.dependencies().front().logical_name;
+    for (auto& unit :
+        dependency_fixture.systemverilog_hir.mutable_units()) {
+        if (std::ranges::find(
+                unit.source_dependencies, dependency_source_name)
+            == unit.source_dependencies.end()) {
+            unit.source_dependencies.push_back(dependency_source_name);
+        }
+    }
+    for (auto& unit : dependency_fixture.vhdl_hir.mutable_units()) {
+        if (std::ranges::find(
+                unit.source_dependencies, dependency_source_name)
+            == unit.source_dependencies.end()) {
+            unit.source_dependencies.push_back(dependency_source_name);
+        }
+    }
+    const auto dependency_fixture_names
+        = copy_source_names(compiled_source_name_views(dependency_fixture));
+    auto relocated = dependency_fixture;
+    fsim::diagnostic::Engine relocation_diagnostics;
+    assert(fsim::app::application_detail::relocate_compiled_design_sources(
+        relocated, mappings, relocation_diagnostics));
+    assert(!relocation_diagnostics.has_error());
+    fsim::diagnostic::Engine reference_diagnostics;
+    const auto reference = fsim::app::serialize_semantic_state(
+        relocated.semantics, reference_diagnostics);
+    assert(reference && !reference_diagnostics.has_error());
+    assert(*projected_semantic == *reference);
+
+    // This bounded cache projection covers semantic, direct dependency, and
+    // generated-source fields without modifying the source bundle.
+    fsim::diagnostic::Engine bundle_reference_diagnostics;
+    const auto bundle_reference
+        = fsim::app::serialize_compiled_hir_bundle(
+            relocated, bundle_reference_diagnostics);
+    assert(bundle_reference && !bundle_reference_diagnostics.has_error());
+    fsim::diagnostic::Engine bundle_projection_diagnostics;
+    const auto projected_bundle
+        = fsim::app::application_detail::
+            serialize_cache_compiled_hir_bundle_with_source_projection(
+                dependency_fixture, mappings, bundle_projection_diagnostics);
+    assert(projected_bundle && !bundle_projection_diagnostics.has_error());
+    assert(*projected_bundle == *bundle_reference);
+    assert(copy_source_names(compiled_source_name_views(dependency_fixture))
+        == dependency_fixture_names);
+    assert(dependency_fixture.valid());
+
+    auto unchanged_relocated = dependency_fixture;
+    fsim::diagnostic::Engine unchanged_relocation_diagnostics;
+    assert(fsim::app::application_detail::relocate_compiled_design_sources(
+        unchanged_relocated, mappings, unchanged_relocation_diagnostics));
+    fsim::diagnostic::Engine unchanged_bundle_diagnostics;
+    const auto unchanged_bundle = fsim::app::serialize_compiled_hir_bundle(
+        unchanged_relocated, unchanged_bundle_diagnostics);
+    assert(unchanged_bundle && !unchanged_bundle_diagnostics.has_error());
+    assert(*unchanged_bundle == *bundle_reference);
 }
 
 struct CompiledHirIdentity {
@@ -860,6 +1149,8 @@ CompiledHirHandoff compile_lifetime_bundle(
         = fsim::app::application_detail::compiled_cache_source_mappings(
             *checked, config.base_directory, diagnostics);
     assert(source_mappings);
+    assert_source_name_projection_matches_copy_relocation(
+        *checked, *source_mappings);
     assert(fsim::app::application_detail::relocate_compiled_design_sources(
         *checked, *source_mappings, diagnostics));
     auto bytes = fsim::app::serialize_compiled_hir_bundle(
@@ -1060,8 +1351,12 @@ endpackage
 
 module included_header_owner;
   included_header_package::included_group included_coverage = new(3);
+  logic clock;
+  property included_file_eventual;
+    @(posedge clock) s_eventually 1'b1;
+  endproperty
   initial $display(`__FILE__);
-  included_file_assertion: assert property (1'b1)
+  included_file_assertion: assert property (included_file_eventual)
     else $error(`__FILE__);
 endmodule
 )");
@@ -1340,6 +1635,179 @@ void run_systemverilog_child_hierarchy_handoff_test(
             = fsim::app::application_detail::compiled_cache_source_mappings(
                 *checked, config.base_directory, diagnostics);
         assert(source_mappings);
+
+        const auto pending_marker = std::string_view {
+            "\x1f"
+            "fsim.concurrent-assertion-pending|"
+        };
+        assert(std::ranges::any_of(
+            checked->systemverilog_hir.expressions(), [](const auto& value) {
+                return value.generated_text
+                    == fsim::semantic::sv::GeneratedTextKind::
+                        systemverilog_file_macro;
+            }));
+        assert(std::ranges::any_of(
+            checked->systemverilog_hir.statements(), [&](const auto& value) {
+                return value.output_text.starts_with(pending_marker);
+            }));
+
+        fsim::diagnostic::Engine projected_bundle_diagnostics;
+        const auto projected_bundle
+            = fsim::app::application_detail::
+                serialize_cache_compiled_hir_bundle_with_source_projection(
+                    *checked, *source_mappings,
+                    projected_bundle_diagnostics);
+        assert(projected_bundle && !projected_bundle_diagnostics.has_error());
+        fsim::diagnostic::Engine repeated_projection_diagnostics;
+        const auto repeated_projection
+            = fsim::app::application_detail::
+                serialize_cache_compiled_hir_bundle_with_source_projection(
+                    *checked, *source_mappings,
+                    repeated_projection_diagnostics);
+        assert(repeated_projection
+            && !repeated_projection_diagnostics.has_error());
+        assert(*repeated_projection == *projected_bundle);
+
+        auto relocated_reference = *checked;
+        fsim::diagnostic::Engine reference_relocation_diagnostics;
+        assert(fsim::app::application_detail::relocate_compiled_design_sources(
+            relocated_reference, *source_mappings,
+            reference_relocation_diagnostics));
+        assert(!reference_relocation_diagnostics.has_error());
+        fsim::diagnostic::Engine reference_bundle_diagnostics;
+        const auto reference_bundle
+            = fsim::app::serialize_compiled_hir_bundle(
+                relocated_reference, reference_bundle_diagnostics);
+        assert(reference_bundle && !reference_bundle_diagnostics.has_error());
+        assert(*projected_bundle == *reference_bundle);
+
+        const auto assert_projection_error_parity = [&](
+            const fsim::semantic::CompiledDesign& invalid_design,
+            const std::string_view expected_message) {
+            auto relocation_reference = invalid_design;
+            fsim::diagnostic::Engine projection_diagnostics;
+            assert(!fsim::app::application_detail::
+                serialize_cache_compiled_hir_bundle_with_source_projection(
+                    invalid_design, *source_mappings,
+                    projection_diagnostics));
+            fsim::diagnostic::Engine relocation_diagnostics;
+            assert(!fsim::app::application_detail::
+                relocate_compiled_design_sources(
+                    relocation_reference, *source_mappings,
+                    relocation_diagnostics));
+            assert(projection_diagnostics.diagnostics().size()
+                == relocation_diagnostics.diagnostics().size());
+            assert(has_diagnostic_message(projection_diagnostics,
+                "FSIM-ART-HIR-001", expected_message));
+            for (std::size_t index = 0;
+                 index < projection_diagnostics.diagnostics().size();
+                 ++index) {
+                const auto& projected
+                    = projection_diagnostics.diagnostics()[index];
+                const auto& relocated
+                    = relocation_diagnostics.diagnostics()[index];
+                assert(projected.code == relocated.code);
+                assert(projected.message == relocated.message);
+            }
+        };
+
+        auto derived_fixture = *checked;
+        auto derived_expression = std::ranges::find_if(
+            derived_fixture.systemverilog_hir.mutable_expressions(),
+            [](const auto& value) {
+                return value.generated_text
+                    == fsim::semantic::sv::GeneratedTextKind::
+                        systemverilog_file_macro;
+            });
+        assert(derived_expression
+            != derived_fixture.systemverilog_hir.mutable_expressions().end());
+        assert(derived_expression->decoded_string);
+        const auto derived_source = derived_expression->source;
+        assert(derived_source.valid());
+        const auto producer_source_name
+            = derived_fixture.semantics.source_spans()[derived_source.value()]
+                  .logical_name;
+        derived_expression->generated_text
+            = fsim::semantic::sv::GeneratedTextKind::
+                systemverilog_file_macro_derived;
+        derived_expression->decoded_string
+            = producer_source_name + "::derived";
+        auto derived_reference = derived_fixture;
+        fsim::diagnostic::Engine derived_projection_diagnostics;
+        const auto derived_projection
+            = fsim::app::application_detail::
+                serialize_cache_compiled_hir_bundle_with_source_projection(
+                    derived_fixture, *source_mappings,
+                    derived_projection_diagnostics);
+        assert(derived_projection && !derived_projection_diagnostics.has_error());
+        fsim::diagnostic::Engine derived_repeat_diagnostics;
+        const auto derived_repeat
+            = fsim::app::application_detail::
+                serialize_cache_compiled_hir_bundle_with_source_projection(
+                    derived_fixture, *source_mappings,
+                    derived_repeat_diagnostics);
+        assert(derived_repeat && !derived_repeat_diagnostics.has_error());
+        assert(*derived_repeat == *derived_projection);
+        fsim::diagnostic::Engine derived_relocation_diagnostics;
+        assert(fsim::app::application_detail::relocate_compiled_design_sources(
+            derived_reference, *source_mappings,
+            derived_relocation_diagnostics));
+        fsim::diagnostic::Engine derived_reference_diagnostics;
+        const auto derived_reference_bundle
+            = fsim::app::serialize_compiled_hir_bundle(
+                derived_reference, derived_reference_diagnostics);
+        assert(derived_reference_bundle
+            && !derived_reference_diagnostics.has_error());
+        assert(*derived_projection == *derived_reference_bundle);
+
+        auto malformed_generated = *checked;
+        auto malformed_expression = std::ranges::find_if(
+            malformed_generated.systemverilog_hir.mutable_expressions(),
+            [](const auto& value) {
+                return value.generated_text
+                    == fsim::semantic::sv::GeneratedTextKind::
+                        systemverilog_file_macro;
+            });
+        assert(malformed_expression
+            != malformed_generated.systemverilog_hir.mutable_expressions()
+                .end());
+        malformed_expression->generated_text
+            = fsim::semantic::sv::GeneratedTextKind::
+                systemverilog_file_macro_derived;
+        malformed_expression->decoded_string.reset();
+        malformed_expression->text = "\"unterminated";
+        const auto malformed_generated_expression_id
+            = malformed_expression->id;
+        assert_projection_error_parity(malformed_generated,
+            "compiled-HIR generated source-name text has invalid provenance");
+        const auto still_malformed = std::ranges::find(
+            malformed_generated.systemverilog_hir.expressions(),
+            malformed_generated_expression_id,
+            &fsim::semantic::sv::Expression::id);
+        assert(still_malformed
+            != malformed_generated.systemverilog_hir.expressions().end());
+        assert(still_malformed->text == "\"unterminated");
+        assert(!still_malformed->decoded_string);
+
+        auto malformed_marker = *checked;
+        auto pending_statement = std::ranges::find_if(
+            malformed_marker.systemverilog_hir.mutable_statements(),
+            [&](const auto& value) {
+                return value.output_text.starts_with(pending_marker);
+            });
+        assert(pending_statement
+            != malformed_marker.systemverilog_hir.mutable_statements().end());
+        pending_statement->output_text
+            = std::string { pending_marker } + "malformed";
+        assert_projection_error_parity(malformed_marker,
+            "compiled HIR contains a malformed pending assertion action");
+        assert(std::ranges::any_of(
+            malformed_marker.systemverilog_hir.statements(),
+            [&](const auto& value) {
+                return value.output_text
+                    == std::string { pending_marker } + "malformed";
+            }));
+
         assert(fsim::app::application_detail::relocate_compiled_design_sources(
             *checked, *source_mappings, diagnostics));
         auto encoded = fsim::app::serialize_compiled_hir_bundle(
@@ -2566,6 +3034,8 @@ int main()
     };
     const auto first_directory = temporary.path / "first";
     write_sources(first_directory);
+    test_repeated_shared_header_cache_key_relocation(
+        temporary.path / "repeated-shared-header-key");
     run_systemverilog_child_hierarchy_handoff_test(first_directory);
     run_vhdl_child_hierarchy_handoff_test(first_directory);
     run_decoded_feature_object_library_test(
@@ -2637,10 +3107,72 @@ int main()
             collision_sources[0].physical_name,
             collision_sources[1].physical_name }
     };
+    fsim::diagnostic::Engine semantic_collision_diagnostics;
+    assert(!fsim::app::application_detail::
+        serialize_cache_semantic_state_with_source_projection(
+            collision_design->semantics, collision_mapping,
+            semantic_collision_diagnostics));
+    assert(has_diagnostic_message(
+        semantic_collision_diagnostics, "FSIM-ART-HIR-001",
+        "compiled-HIR source relocation produced colliding source identities"));
+    fsim::diagnostic::Engine bundle_collision_diagnostics;
+    assert(!fsim::app::application_detail::
+        serialize_cache_compiled_hir_bundle_with_source_projection(
+            *collision_design, collision_mapping,
+            bundle_collision_diagnostics));
+    assert(has_diagnostic_message(
+        bundle_collision_diagnostics, "FSIM-ART-HIR-001",
+        "compiled-HIR source relocation produced colliding source identities"));
+
+    assert(!collision_design->dependencies().empty());
+    auto unmapped_dependency_design = *collision_design;
+    unmapped_dependency_design.mutable_dependencies().front().logical_name
+        = "/unmapped/direct-dependency.sv";
+    fsim::diagnostic::Engine dependency_projection_diagnostics;
+    assert(!fsim::app::application_detail::
+        serialize_cache_compiled_hir_bundle_with_source_projection(
+            unmapped_dependency_design,
+            std::span<const fsim::library::SourceNameMapping> { },
+            dependency_projection_diagnostics));
+    auto unmapped_dependency_relocation = unmapped_dependency_design;
+    fsim::diagnostic::Engine dependency_relocation_diagnostics;
+    assert(!fsim::app::application_detail::relocate_compiled_design_sources(
+        unmapped_dependency_relocation,
+        std::span<const fsim::library::SourceNameMapping> { },
+        dependency_relocation_diagnostics));
+    assert(dependency_projection_diagnostics.diagnostics().size()
+        == dependency_relocation_diagnostics.diagnostics().size());
+    assert(dependency_projection_diagnostics.diagnostics().front().code
+        == dependency_relocation_diagnostics.diagnostics().front().code);
+    assert(dependency_projection_diagnostics.diagnostics().front().message
+        == dependency_relocation_diagnostics.diagnostics().front().message);
+    assert(unmapped_dependency_design.dependencies().front().logical_name
+        == "/unmapped/direct-dependency.sv");
+
     fsim::diagnostic::Engine collision_diagnostics;
     assert(!fsim::app::application_detail::relocate_compiled_design_sources(
         *collision_design, collision_mapping, collision_diagnostics));
     assert(has_diagnostic(collision_diagnostics, "FSIM-ART-HIR-001"));
+    assert(has_diagnostic_message(
+        collision_diagnostics, "FSIM-ART-HIR-001",
+        "compiled-HIR source relocation produced colliding source identities"));
+
+    const std::array nonbijective_mapping {
+        fsim::library::SourceNameMapping {
+            "producer/one.sv", "logical/shared.sv" },
+        fsim::library::SourceNameMapping {
+            "producer/two.sv", "logical/./shared.sv" }
+    };
+    const std::array nonbijective_name { std::string_view {
+        "producer/one.sv" } };
+    fsim::diagnostic::Engine nonbijective_diagnostics;
+    assert(!fsim::app::application_detail::
+        project_compiled_design_source_names(
+            nonbijective_name, nonbijective_mapping,
+            nonbijective_diagnostics));
+    assert(has_diagnostic_message(
+        nonbijective_diagnostics, "FSIM-ART-HIR-001",
+        "compiled-HIR source relocation mapping is not bijective"));
 
     fsim::diagnostic::Engine embedded_path_decode_diagnostics;
     auto embedded_path_design = fsim::app::deserialize_compiled_hir_bundle(
@@ -2658,6 +3190,26 @@ int main()
         std::move(embedded_path_records));
     assert(embedded_path_semantics);
     embedded_path_design->semantics = std::move(*embedded_path_semantics);
+    const auto embedded_source_names
+        = compiled_source_name_views(*embedded_path_design);
+    const auto embedded_source_names_before
+        = copy_source_names(embedded_source_names);
+    fsim::diagnostic::Engine embedded_projection_diagnostics;
+    assert(!fsim::app::application_detail::
+        project_compiled_design_source_names(
+            embedded_source_names,
+            std::span<const fsim::library::SourceNameMapping> { },
+            embedded_projection_diagnostics));
+    fsim::diagnostic::Engine semantic_projection_path_diagnostics;
+    assert(!fsim::app::application_detail::
+        serialize_cache_semantic_state_with_source_projection(
+            embedded_path_design->semantics,
+            std::span<const fsim::library::SourceNameMapping> { },
+            semantic_projection_path_diagnostics));
+    assert(copy_source_names(
+        compiled_source_name_views(*embedded_path_design))
+        == embedded_source_names_before);
+    assert(embedded_projection_diagnostics.diagnostics().size() == 1U);
     fsim::diagnostic::Engine embedded_path_diagnostics;
     assert(!fsim::app::application_detail::relocate_compiled_design_sources(
         *embedded_path_design,
@@ -2665,6 +3217,18 @@ int main()
         embedded_path_diagnostics));
     assert(has_diagnostic(
         embedded_path_diagnostics, "FSIM-ART-HIR-001"));
+    assert(embedded_path_diagnostics.diagnostics().size()
+        == embedded_projection_diagnostics.diagnostics().size());
+    assert(embedded_path_diagnostics.diagnostics().front().code
+        == embedded_projection_diagnostics.diagnostics().front().code);
+    assert(embedded_path_diagnostics.diagnostics().front().message
+        == embedded_projection_diagnostics.diagnostics().front().message);
+    assert(semantic_projection_path_diagnostics.diagnostics().size()
+        == embedded_path_diagnostics.diagnostics().size());
+    assert(semantic_projection_path_diagnostics.diagnostics().front().code
+        == embedded_path_diagnostics.diagnostics().front().code);
+    assert(semantic_projection_path_diagnostics.diagnostics().front().message
+        == embedded_path_diagnostics.diagnostics().front().message);
 
     const auto equivalent_directory = temporary.path / "equivalent-sources";
     const auto equivalent_producer = equivalent_directory / "producer.sv";

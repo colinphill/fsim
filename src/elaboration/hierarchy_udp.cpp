@@ -686,11 +686,11 @@ bool HierarchyBuilder::instantiate_compiled_udp(
     const std::string& path,
     const std::optional<std::int64_t> array_index,
     const SignalMap& parent_signals,
-    const std::unordered_set<SignalId>& read_only_signals,
+    const ReadOnlySignalSet& read_only_signals,
     const StringMap& parent_strings,
-    const std::unordered_set<StringObjectId>& read_only_strings,
+    const ReadOnlyStringSet& read_only_strings,
     const ContainerMap& parent_containers,
-    const std::unordered_set<std::string>& read_only_containers,
+    const ReadOnlyContainerSet& read_only_containers,
     const Binding*)
 {
     const auto source = compiled_source_span(*compiled_, instance.source);

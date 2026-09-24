@@ -719,6 +719,13 @@ endmodule
     require(preprocessed.ok(),
         "UVM-style guarded, nested, forwarded, conditional, pasted, and "
         "stringified macros must preprocess");
+    require(
+        preprocessed.dependencies.size() == 2U
+            && preprocessed.dependencies[0].path
+                == fsim::support::detail::normalized_absolute_path(root)
+            && preprocessed.dependencies[1].path
+                == fsim::support::detail::normalized_absolute_path(include),
+        "duplicate includes retain one exact normalized source identity");
     const auto has_token = [&](const TokenKind kind,
                                const std::string_view text) {
         return std::ranges::any_of(

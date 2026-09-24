@@ -8179,6 +8179,35 @@ void test_compiled_design_indexed_lookup_contract()
     assert_systemverilog_records(hierarchy_specialization, design);
     assert_vhdl_records(local_specialization, design);
 
+    auto annotated = design;
+    std::vector<CompiledVhdlExpressionAnnotation> annotations;
+    annotations.reserve(annotated.vhdl_hir.expressions().size());
+    for (const auto& expression : annotated.vhdl_hir.expressions()) {
+        CompiledVhdlExpressionAnnotation annotation;
+        annotation.expression = expression.id;
+        if (expression.id == vhdl_expression.id) {
+            annotation.builtin_operator
+                = vhdl::BuiltinOperatorIdentity::
+                    ieee_std_logic_1164_not;
+        }
+        if (expression.referenced_name) {
+            annotation.name_resolution.emplace(
+                CompiledVhdlExpressionNameResolution {
+                    expression.referenced_name->selected,
+                    expression.referenced_name->overloads });
+        }
+        annotations.push_back(std::move(annotation));
+    }
+    assert(annotated.apply_linked_vhdl_expression_annotations(annotations));
+    const auto annotated_expression
+        = annotated.find_expression(vhdl_expression.id);
+    assert(annotated_expression
+        && annotated_expression->vhdl
+            == &annotated.vhdl_hir.expressions().front());
+    assert(annotated_expression->vhdl->builtin_operator
+        == vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not);
+    assert(annotated.vhdl_linked_imports(vhdl_unit));
+
     auto stale = design;
     stale.mutable_vhdl().mutable_units().front().standard = "2019";
     assert(!validate_compiled_design(stale));
@@ -8643,6 +8672,27 @@ void test_vhdl_builtin_std_logic_1164_provenance()
         assert(expression != design.vhdl_hir.expressions().end());
         return *expression;
     };
+    const auto assert_indexed_operator = [&](const CompiledDesign& design,
+                                             const vhdl::ExpressionKind kind,
+                                             const std::string_view spelling,
+                                             const vhdl::BuiltinOperatorIdentity
+                                                 expected_operator,
+                                             const std::optional<DeclarationId>
+                                                 expected_declaration) {
+        const auto& expression = find_operator(design, kind, spelling);
+        const auto indexed = design.find_expression(expression.id);
+        assert(indexed && indexed->vhdl == &expression);
+        assert(indexed->vhdl->builtin_operator == expected_operator);
+        if (!expected_declaration) {
+            return;
+        }
+        assert(indexed->vhdl->referenced_name);
+        const auto& name = *indexed->vhdl->referenced_name;
+        assert(name.selected == expected_declaration
+            || std::ranges::find(
+                   name.overloads, *expected_declaration)
+                != name.overloads.end());
+    };
     const auto imported = make_fixture(
         "builtin-vector-import.vhd", false, true, false);
     assert(find_operator(imported.design,
@@ -8651,6 +8701,14 @@ void test_vhdl_builtin_std_logic_1164_provenance()
     assert(find_operator(imported.design,
                vhdl::ExpressionKind::binary, "and").builtin_operator
         == vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_and);
+    assert_indexed_operator(imported.design,
+        vhdl::ExpressionKind::unary, "not",
+        vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not,
+        std::nullopt);
+    assert_indexed_operator(imported.design,
+        vhdl::ExpressionKind::binary, "and",
+        vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_and,
+        std::nullopt);
     vhdl::SubtypeIndication imported_vector;
     imported_vector.type_mark.spelling = "std_logic_vector";
     imported_vector.domain = vhdl::ValueDomain::logic9;
@@ -8695,6 +8753,9 @@ void test_vhdl_builtin_std_logic_1164_provenance()
     assert(find_operator(missing_import.design,
                vhdl::ExpressionKind::binary, "and").builtin_operator
         == vhdl::BuiltinOperatorIdentity::none);
+    assert_indexed_operator(missing_import.design,
+        vhdl::ExpressionKind::binary, "and",
+        vhdl::BuiltinOperatorIdentity::none, std::nullopt);
 
     const auto user_vector_shadow = make_fixture(
         "builtin-vector-user-shadow.vhd", false, true, true);
@@ -8740,6 +8801,50 @@ void test_vhdl_builtin_std_logic_1164_provenance()
         return item.library == "work" && item.package == "user_ops"
             && item.member == "all";
     }));
+
+    auto reordered_imports = overloaded.design;
+    auto& reordered_units =
+        reordered_imports.mutable_vhdl().mutable_units();
+    const auto reordered_owner = std::ranges::find(
+        reordered_units, overloaded.architecture, &vhdl::Unit::id);
+    assert(reordered_owner != reordered_units.end());
+    assert(!reordered_owner->context.empty());
+    auto& duplicate_use = reordered_owner->context.front();
+    assert(duplicate_use.kind == vhdl::ContextKind::use_clause);
+    assert(!duplicate_use.selected_names.empty());
+    duplicate_use.selected_names.push_back(
+        duplicate_use.selected_names.front());
+
+    auto& reordered_references = reordered_imports.mutable_references();
+    const auto user_ops_reference = std::ranges::find_if(
+        reordered_references, [&](const CompiledReference& reference) {
+            return reference.kind == CompiledReferenceKind::package
+                && reference.owner == overloaded.architecture
+                && reference.library == "work"
+                && reference.name == "user_ops";
+        });
+    const auto std_logic_reference = std::ranges::find_if(
+        reordered_references, [&](const CompiledReference& reference) {
+            return reference.kind == CompiledReferenceKind::package
+                && reference.owner == overloaded.architecture
+                && reference.library == "ieee"
+                && reference.name == "std_logic_1164";
+        });
+    assert(user_ops_reference != reordered_references.end());
+    assert(std_logic_reference != reordered_references.end());
+    std::iter_swap(user_ops_reference, std_logic_reference);
+    reordered_imports.refresh_lookup_indexes();
+
+    const auto ordered_imports
+        = reordered_imports.vhdl_linked_imports(overloaded.architecture);
+    assert(ordered_imports && ordered_imports->size() == 2U);
+    assert((*ordered_imports)[0].library == "work");
+    assert((*ordered_imports)[0].package == "user_ops");
+    assert((*ordered_imports)[0].member == "all");
+    assert((*ordered_imports)[1].library == "ieee");
+    assert((*ordered_imports)[1].package == "std_logic_1164");
+    assert((*ordered_imports)[1].member == "all");
+
     const auto package_members
         = overloaded.design.vhdl_package_members("and");
     assert(package_members);
@@ -8758,6 +8863,9 @@ void test_vhdl_builtin_std_logic_1164_provenance()
             != overloaded_and.referenced_name->overloads.end());
     assert(overloaded_and.builtin_operator
         == vhdl::BuiltinOperatorIdentity::none);
+    assert_indexed_operator(overloaded.design,
+        vhdl::ExpressionKind::binary, "and",
+        vhdl::BuiltinOperatorIdentity::none, user_and->member);
     assert(find_operator(overloaded.design,
                vhdl::ExpressionKind::unary, "not").builtin_operator
         == vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not);

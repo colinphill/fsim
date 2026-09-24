@@ -227,6 +227,7 @@ void test_negative_registration(const NativeRoot& root)
 
 } // namespace
 
+FSIM_TEST_SC_MAIN_DIAGNOSTIC_PUSH
 extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
 {
     NativeRoot root { "native" };
@@ -235,3 +236,4 @@ extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
     test_negative_registration(root);
     return 0;
 }
+FSIM_TEST_SC_MAIN_DIAGNOSTIC_POP

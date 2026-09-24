@@ -11,3 +11,17 @@
 #else
 #define FSIM_TEST_SC_MAIN_EXPORT
 #endif
+
+// SystemC 3.0.2 declares sc_main without dllexport. On Windows Clang the
+// required exported definition therefore triggers this one redeclaration
+// warning even though the export is intentional.
+#if (defined(_WIN32) || defined(WIN32)) && defined(__clang__)
+#define FSIM_TEST_SC_MAIN_DIAGNOSTIC_PUSH \
+    _Pragma("clang diagnostic push")      \
+        _Pragma("clang diagnostic ignored \"-Wdll-attribute-on-redeclaration\"")
+#define FSIM_TEST_SC_MAIN_DIAGNOSTIC_POP \
+    _Pragma("clang diagnostic pop")
+#else
+#define FSIM_TEST_SC_MAIN_DIAGNOSTIC_PUSH
+#define FSIM_TEST_SC_MAIN_DIAGNOSTIC_POP
+#endif

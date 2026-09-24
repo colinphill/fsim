@@ -167,12 +167,8 @@ namespace {
         const std::span<const library::SourceNameMapping> mappings,
         diagnostic::Engine& diagnostics)
     {
-        auto relocated = design;
-        if (!relocate_compiled_design_sources(
-                relocated, mappings, diagnostics)) {
-            return std::nullopt;
-        }
-        return serialize_compiled_hir_bundle(relocated, diagnostics);
+        return serialize_cache_compiled_hir_bundle_with_source_projection(
+            design, mappings, diagnostics);
     }
 
 } // namespace
@@ -698,11 +694,17 @@ std::optional<BuiltProject> build_checked_project(
         }
     }
 
-    auto design_ir = build_design_ir(*checked, *elaborated.design);
+    // Keep the sorted runtime path snapshots alive across both DesignIR
+    // projection passes. The elaborated design is immutable at this boundary.
+    const auto runtime_paths
+        = make_runtime_path_views(*elaborated.design);
+    auto design_ir = build_design_ir(
+        *checked, *elaborated.design, runtime_paths);
     if (!design_ir.valid(checked->semantics)) {
         throw std::logic_error { "constructed an internally invalid DesignIR" };
     }
-    if (!valid_runtime_projection(design_ir, *elaborated.design)) {
+    if (!valid_runtime_projection(
+            design_ir, *elaborated.design, runtime_paths)) {
         throw std::logic_error { "constructed an incomplete DesignIR projection" };
     }
     auto specialization_cache_keys = make_specialization_cache_keys(

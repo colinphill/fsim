@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <cstddef>
+#include <string>
+
 namespace fsim::tests::elaboration {
 
 void test_systemverilog_string_constants() {
@@ -311,6 +314,27 @@ endmodule
             invalid, "FSIM-ELAB-SVSTRING-019")
         && has_diagnostic(
             invalid, "FSIM-ELAB-SVSTRING-020"));
+
+    std::string oversized_source
+        = "module oversized_string_top;\n  string value = \"";
+    oversized_source.append(std::size_t { 4097U }, 'x');
+    oversized_source += "\";\nendmodule\n";
+    const auto oversized_parsed = fsim::frontend::parse_text(
+        "sv-string-oversized.sv", oversized_source,
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(oversized_parsed.ok());
+    const auto oversized = compile_and_elaborate(
+        oversized_parsed.design,
+        "sv:work.oversized_string_top");
+    const auto size_diagnostic = std::ranges::find_if(
+        oversized.diagnostics, [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVSTRING-007";
+        });
+    assert(
+        !oversized.ok()
+        && size_diagnostic != oversized.diagnostics.end()
+        && size_diagnostic->message
+            == "module string initializer exceeds the 4096-byte limit");
 
     auto boundary_vhdl = fsim::frontend::parse_text(
         "sv-string-boundary.vhd",

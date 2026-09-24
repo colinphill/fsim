@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_design_artifact_codec_internal.hpp"
 
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
@@ -21,6 +22,11 @@ struct SourceMappingIndex {
     std::vector<library::SourceNameMapping> ordered;
     std::map<std::string, std::string, std::less<>> producers;
     std::set<std::string, std::less<>> logical_names;
+};
+
+constexpr std::string_view kPendingAssertionMarker {
+    "\x1f"
+    "fsim.concurrent-assertion-pending|"
 };
 
 std::string normalized_source_name(const std::string_view name)
@@ -208,6 +214,51 @@ void replace_all(
     while ((offset = value.find(producer, offset)) != std::string::npos) {
         value.replace(offset, producer.size(), relocated);
         offset += relocated.size();
+    }
+}
+
+template <typename Value>
+bool contains_relocatable_generated_text(const Value& value)
+{
+    using Type = std::remove_cvref_t<Value>;
+    if constexpr (std::same_as<Type, semantic::sv::SourceToken>) {
+        return value.generated_text
+            != semantic::sv::GeneratedTextKind::none;
+    } else if constexpr (std::same_as<Type, semantic::sv::Expression>) {
+        return value.generated_text
+            != semantic::sv::GeneratedTextKind::none;
+    } else if constexpr (std::same_as<Type, semantic::sv::Statement>) {
+        return value.output_generated_text
+                != semantic::sv::GeneratedTextKind::none
+            || value.output_text.starts_with(kPendingAssertionMarker);
+    } else if constexpr (IsVector<Type>::value) {
+        return std::ranges::any_of(value, [](const auto& item) {
+            return contains_relocatable_generated_text(item);
+        });
+    } else if constexpr (IsOptional<Type>::value) {
+        return value && contains_relocatable_generated_text(*value);
+    } else if constexpr (IsPair<Type>::value) {
+        return contains_relocatable_generated_text(value.first)
+            || contains_relocatable_generated_text(value.second);
+    } else if constexpr (std::is_aggregate_v<Type>) {
+        bool found = false;
+        boost::pfr::for_each_field(value, [&](const auto& field) {
+            found = found || contains_relocatable_generated_text(field);
+        });
+        return found;
+    } else {
+        return false;
+    }
+}
+
+template <typename T, typename Visitor>
+void visit_projected_generated_records(
+    codec_detail::ProjectedHirRecords<T>& records, Visitor&& visitor)
+{
+    for (std::size_t index = 0; index < records.size(); ++index) {
+        if (contains_relocatable_generated_text(records.at(index))) {
+            std::invoke(visitor, records.project(index));
+        }
     }
 }
 
@@ -399,19 +450,58 @@ bool relocate_equivalent_embedded_source_names(
     return relocated;
 }
 
-bool relocate_name(
-    std::string& name,
-    const SourceMappingIndex& mappings,
+struct SourceNameProjection {
+    std::string value;
+    bool valid { true };
+};
+
+struct ProjectedSourceNames {
+    std::vector<std::string> values;
+    bool valid { true };
+};
+
+struct ProjectedSemanticSourceRecords {
+    semantic::ModelRecords records;
+    std::vector<SourceIdentity> source_identities;
+    bool valid { true };
+};
+
+bool validate_relocated_source_identities(
+    const std::span<const SourceIdentity> source_identities,
+    const std::span<const semantic::SourceFile> relocated_sources,
     diagnostic::Engine& diagnostics)
 {
+    if (source_identities.size() != relocated_sources.size()) {
+        return false;
+    }
+    std::map<std::string, SourceIdentity, std::less<>> unique_sources;
+    for (std::size_t index = 0; index < relocated_sources.size(); ++index) {
+        const auto& file = relocated_sources[index];
+        const auto [position, inserted] = unique_sources.try_emplace(
+            normalized_source_name(file.physical_name), source_identities[index]);
+        if (!inserted && position->second != source_identities[index]) {
+            diagnostics.error(
+                "FSIM-ART-HIR-001",
+                "compiled-HIR source relocation produced colliding source "
+                "identities for '"
+                    + file.physical_name + "'");
+            return false;
+        }
+    }
+    return true;
+}
+
+SourceNameProjection project_source_name(
+    const std::string_view name,
+    const SourceMappingIndex& mappings)
+{
     if (name.empty()) {
-        return true;
+        return { std::string { name }, true };
     }
     const auto path = normalized_source_name(name);
     if (const auto mapping = mappings.producers.find(path);
         mapping != mappings.producers.end()) {
-        name = mapping->second;
-        return true;
+        return { mapping->second, true };
     }
     const auto native_name = support::path_from_utf8(name);
     const auto equivalent = std::ranges::find_if(
@@ -420,24 +510,37 @@ bool relocate_name(
                 support::path_from_utf8(mapping.producer_name));
         });
     if (equivalent != mappings.ordered.end()) {
-        name = equivalent->logical_name;
-        return true;
+        return { equivalent->logical_name, true };
     }
-    (void)relocate_embedded_source_names(name, mappings);
-    (void)relocate_equivalent_embedded_source_names(name, mappings);
-    const auto relocated_path = std::filesystem::path { name };
+    std::string projected { name };
+    (void)relocate_embedded_source_names(projected, mappings);
+    (void)relocate_equivalent_embedded_source_names(projected, mappings);
+    const auto relocated_path = std::filesystem::path { projected };
     const auto mapped_destination = [&](const auto& candidate) {
         return mappings.logical_names.contains(
             source_path_key(candidate));
     };
     const auto embedded_absolute = std::ranges::any_of(
-        expansion_source_paths(name), [&](const auto& embedded) {
+        expansion_source_paths(projected), [&](const auto& embedded) {
             return support::path_is_portably_absolute(embedded)
                 && !mapped_destination(embedded);
         });
     if ((!support::path_is_portably_absolute(relocated_path)
             || mapped_destination(relocated_path))
         && !embedded_absolute) {
+        return { std::move(projected), true };
+    }
+    return { std::move(projected), false };
+}
+
+bool relocate_name(
+    std::string& name,
+    const SourceMappingIndex& mappings,
+    diagnostic::Engine& diagnostics)
+{
+    auto projection = project_source_name(name, mappings);
+    name = std::move(projection.value);
+    if (projection.valid) {
         return true;
     }
     diagnostics.error(
@@ -523,11 +626,7 @@ bool relocate_pending_assertion_marker(
     const SourceMappingIndex& mappings,
     diagnostic::Engine& diagnostics)
 {
-    constexpr std::string_view marker {
-        "\x1f"
-        "fsim.concurrent-assertion-pending|"
-    };
-    if (!statement.output_text.starts_with(marker)) {
+    if (!statement.output_text.starts_with(kPendingAssertionMarker)) {
         return true;
     }
     const auto malformed = [&] {
@@ -537,7 +636,8 @@ bool relocate_pending_assertion_marker(
         return false;
     };
     auto fields = split_fields(
-        std::string_view { statement.output_text }.substr(marker.size()), '|');
+        std::string_view { statement.output_text }
+            .substr(kPendingAssertionMarker.size()), '|');
     if (fields.size() < 4U) {
         return malformed();
     }
@@ -575,7 +675,7 @@ bool relocate_pending_assertion_marker(
         fields[index] = join_fields(action, ',');
     }
     statement.output_text
-        = std::string { marker } + join_fields(fields, '|');
+        = std::string { kPendingAssertionMarker } + join_fields(fields, '|');
     return true;
 }
 
@@ -586,17 +686,10 @@ std::optional<std::filesystem::path> relative_within_base(
     if (path.empty() || base_directory.empty()) {
         return std::nullopt;
     }
-    const auto canonical = [](const std::filesystem::path& value) {
-        std::error_code error;
-        auto absolute = std::filesystem::absolute(value, error);
-        if (error) {
-            return value.lexically_normal();
-        }
-        auto result = std::filesystem::weakly_canonical(absolute, error);
-        return error ? absolute.lexically_normal() : result;
-    };
-    const auto normalized = canonical(path);
-    const auto normalized_base = canonical(base_directory);
+    const auto normalized
+        = support::detail::normalized_absolute_path(path);
+    const auto normalized_base
+        = support::detail::normalized_absolute_path(base_directory);
     auto path_component = normalized.begin();
     auto base_component = normalized_base.begin();
     while (path_component != normalized.end()
@@ -633,6 +726,71 @@ std::string fallback_logical_name(
     return support::path_to_utf8(result);
 }
 
+ProjectedSourceNames project_source_names(
+    const std::span<const std::string_view> names,
+    const SourceMappingIndex& mappings,
+    diagnostic::Engine& diagnostics)
+{
+    ProjectedSourceNames projected_names;
+    projected_names.values.reserve(names.size());
+    for (const auto name : names) {
+        auto projection = project_source_name(name, mappings);
+        if (!projection.valid) {
+            diagnostics.error(
+                "FSIM-ART-HIR-001",
+                "compiled HIR retains an unmapped producer source path: "
+                    + projection.value);
+            projected_names.valid = false;
+        }
+        projected_names.values.push_back(std::move(projection.value));
+    }
+    return projected_names;
+}
+
+ProjectedSemanticSourceRecords project_semantic_source_names(
+    const semantic::Model& semantics,
+    const SourceMappingIndex& mappings,
+    diagnostic::Engine& diagnostics)
+{
+    ProjectedSemanticSourceRecords projected_semantics;
+    projected_semantics.records = semantics.records();
+    auto& records = projected_semantics.records;
+    auto& source_identities = projected_semantics.source_identities;
+    source_identities.reserve(records.source_files.size());
+    for (const auto& file : records.source_files) {
+        source_identities.push_back({
+            normalized_source_name(file.physical_name), file.content_digest });
+    }
+
+    std::vector<std::string_view> source_names;
+    source_names.reserve(records.source_files.size()
+        + records.expansions.size() + records.source_spans.size());
+    for (const auto& file : records.source_files) {
+        source_names.push_back(file.physical_name);
+    }
+    for (const auto& expansion : records.expansions) {
+        source_names.push_back(expansion.description);
+    }
+    for (const auto& span : records.source_spans) {
+        source_names.push_back(span.logical_name);
+    }
+    auto projected_names = project_source_names(
+        source_names, mappings, diagnostics);
+    projected_semantics.valid = projected_names.valid;
+
+    auto projected_name = projected_names.values.begin();
+    for (auto& file : records.source_files) {
+        file.physical_name = std::move(*projected_name++);
+    }
+    for (auto& expansion : records.expansions) {
+        expansion.description = std::move(*projected_name++);
+    }
+    for (auto& span : records.source_spans) {
+        span.logical_name = std::move(*projected_name++);
+    }
+    return projected_semantics;
+}
+
 } // namespace
 
 std::string stable_cache_source_name(
@@ -646,6 +804,188 @@ std::string stable_cache_source_name(
             std::filesystem::path { "project" } / *relative);
     }
     return support::path_to_utf8(normalized);
+}
+
+std::optional<std::vector<std::string>>
+project_compiled_design_source_names(
+    const std::span<const std::string_view> names,
+    const std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics)
+{
+    const auto mapping_index = prepare_source_mappings(mappings, diagnostics);
+    if (!mapping_index) {
+        return std::nullopt;
+    }
+    auto projected_names = project_source_names(
+        names, *mapping_index, diagnostics);
+    if (!projected_names.valid) {
+        return std::nullopt;
+    }
+    return std::move(projected_names.values);
+}
+
+std::optional<semantic::ModelRecords> project_compiled_semantic_source_names(
+    const semantic::Model& semantics,
+    const std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics)
+{
+    const auto mapping_index = prepare_source_mappings(mappings, diagnostics);
+    if (!mapping_index) {
+        return std::nullopt;
+    }
+    auto projected_semantics = project_semantic_source_names(
+        semantics, *mapping_index, diagnostics);
+    if (!projected_semantics.valid
+        || !validate_relocated_source_identities(
+            projected_semantics.source_identities,
+            projected_semantics.records.source_files, diagnostics)) {
+        return std::nullopt;
+    }
+    auto validated_semantics = semantic::Model::from_records(
+        std::move(projected_semantics.records));
+    if (!validated_semantics) {
+        diagnostics.error(
+            "FSIM-ART-HIR-001",
+            "compiled-HIR source relocation invalidated semantic identities");
+        return std::nullopt;
+    }
+    return std::move(*validated_semantics).take_records();
+}
+
+std::optional<std::string>
+serialize_cache_compiled_hir_bundle_with_source_projection(
+    const semantic::CompiledDesign& design,
+    const std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics)
+{
+    const auto mapping_index = prepare_source_mappings(mappings, diagnostics);
+    if (!mapping_index) {
+        return std::nullopt;
+    }
+    std::vector<std::string> producer_source_names;
+    producer_source_names.reserve(design.semantics.source_spans().size());
+    for (const auto& span : design.semantics.source_spans()) {
+        producer_source_names.push_back(span.logical_name);
+    }
+    auto projected_semantics = project_semantic_source_names(
+        design.semantics, *mapping_index, diagnostics);
+
+    std::vector<semantic::CompiledDependency> projected_dependencies {
+        design.dependencies().begin(), design.dependencies().end() };
+    std::vector<semantic::sv::Unit> projected_systemverilog_units {
+        design.systemverilog_hir.units().begin(),
+        design.systemverilog_hir.units().end() };
+    std::vector<semantic::vhdl::Unit> projected_vhdl_units {
+        design.vhdl_hir.units().begin(), design.vhdl_hir.units().end() };
+
+    codec_detail::SystemVerilogConstraintHirView projected_systemverilog {
+        std::span<const semantic::sv::Unit> { projected_systemverilog_units },
+        design.systemverilog_hir.declarations(),
+        design.systemverilog_hir.types(),
+        design.systemverilog_hir.expressions(),
+        design.systemverilog_hir.statements(),
+        design.systemverilog_hir.processes(),
+        design.systemverilog_hir.classes(),
+        design.systemverilog_hir.instances(),
+        design.systemverilog_hir.udps(),
+        design.systemverilog_hir.dpi_declarations(),
+        design.systemverilog_hir.covergroup_instances()
+    };
+
+    std::vector<std::string_view> dependency_names;
+    dependency_names.reserve(design.dependencies().size());
+    for (const auto& dependency : design.dependencies()) {
+        dependency_names.push_back(dependency.logical_name);
+    }
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        for (const auto& dependency : unit.source_dependencies) {
+            dependency_names.push_back(dependency);
+        }
+    }
+    for (const auto& unit : design.vhdl_hir.units()) {
+        for (const auto& dependency : unit.source_dependencies) {
+            dependency_names.push_back(dependency);
+        }
+    }
+    auto projected_names = project_source_names(
+        dependency_names, *mapping_index, diagnostics);
+
+    auto projected_name = projected_names.values.begin();
+    for (auto& dependency : projected_dependencies) {
+        dependency.logical_name = std::move(*projected_name++);
+    }
+    for (auto& unit : projected_systemverilog_units) {
+        for (auto& dependency : unit.source_dependencies) {
+            dependency = std::move(*projected_name++);
+        }
+    }
+    for (auto& unit : projected_vhdl_units) {
+        for (auto& dependency : unit.source_dependencies) {
+            dependency = std::move(*projected_name++);
+        }
+    }
+
+    if (!projected_semantics.valid || !projected_names.valid) {
+        return std::nullopt;
+    }
+
+    bool valid = true;
+    for (std::size_t index = 0;
+         index < projected_systemverilog.statements.size(); ++index) {
+        if (projected_systemverilog.statements[index].output_text
+            .starts_with(kPendingAssertionMarker)) {
+            valid = relocate_pending_assertion_marker(
+                        projected_systemverilog.statements.project(index),
+                        *mapping_index, diagnostics)
+                && valid;
+        }
+    }
+    if (!valid) {
+        return std::nullopt;
+    }
+
+    const auto relocate_projected_records = [&](auto& records) {
+        visit_projected_generated_records(records, [&](auto& record) {
+            relocate_generated_text(record, producer_source_names,
+                projected_semantics.records.source_spans, valid);
+        });
+    };
+    relocate_projected_records(projected_systemverilog.units);
+    relocate_projected_records(projected_systemverilog.declarations);
+    relocate_projected_records(projected_systemverilog.types);
+    relocate_projected_records(projected_systemverilog.expressions);
+    relocate_projected_records(projected_systemverilog.statements);
+    relocate_projected_records(projected_systemverilog.processes);
+    relocate_projected_records(projected_systemverilog.classes);
+    relocate_projected_records(projected_systemverilog.instances);
+    relocate_projected_records(projected_systemverilog.udps);
+    relocate_projected_records(projected_systemverilog.dpi_declarations);
+    relocate_projected_records(
+        projected_systemverilog.covergroup_instances);
+    if (!valid) {
+        diagnostics.error(
+            "FSIM-ART-HIR-001",
+            "compiled-HIR generated source-name text has invalid provenance");
+        return std::nullopt;
+    }
+
+    if (!validate_relocated_source_identities(
+            projected_semantics.source_identities,
+            projected_semantics.records.source_files, diagnostics)) {
+        return std::nullopt;
+    }
+    auto validated_semantics = semantic::Model::from_records(
+        std::move(projected_semantics.records));
+    if (!validated_semantics) {
+        diagnostics.error(
+            "FSIM-ART-HIR-001",
+            "compiled-HIR source relocation invalidated semantic identities");
+        return std::nullopt;
+    }
+
+    return serialize_cache_compiled_hir_bundle_with_projected_sources(
+        design, std::move(*validated_semantics), projected_dependencies,
+        projected_systemverilog, projected_vhdl_units, diagnostics);
 }
 
 std::optional<std::vector<library::SourceNameMapping>>
@@ -932,20 +1272,9 @@ bool relocate_compiled_design_sources(
             "compiled-HIR generated source-name text has invalid provenance");
         return false;
     }
-    std::map<std::string, SourceIdentity, std::less<>> relocated_sources;
-    for (std::size_t index = 0; index < records.source_files.size(); ++index) {
-        const auto& file = records.source_files[index];
-        const auto [position, inserted] = relocated_sources.try_emplace(
-            normalized_source_name(file.physical_name),
-            source_identities[index]);
-        if (!inserted && position->second != source_identities[index]) {
-            diagnostics.error(
-                "FSIM-ART-HIR-001",
-                "compiled-HIR source relocation produced colliding source "
-                "identities for '"
-                    + file.physical_name + "'");
-            return false;
-        }
+    if (!validate_relocated_source_identities(
+            source_identities, records.source_files, diagnostics)) {
+        return false;
     }
     auto semantics = semantic::Model::from_records(std::move(records));
     if (!semantics) {

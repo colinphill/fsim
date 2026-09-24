@@ -188,6 +188,44 @@ module generated_sv_direct_behavior (
   endgenerate
 endmodule
 
+module generated_sv_scope_visibility (
+  output logic [3:0] nested_parent_visible,
+  output logic [3:0] shadowed_value,
+  output logic [3:0] left_value,
+  output logic [3:0] right_value
+);
+  localparam logic [3:0] scope_value = 4'd1;
+  generate
+    if (1) begin : outer_scope
+      localparam logic [3:0] scope_value = 4'd2;
+      logic [3:0] parent_value;
+      assign parent_value = 4'd10;
+
+      if (1) begin : nested_scope
+        localparam logic [3:0] scope_value = 4'd3;
+        logic [3:0] nested_value;
+        assign nested_value = parent_value;
+        assign nested_parent_visible = nested_value;
+        assign shadowed_value = scope_value;
+      end
+
+      if (1) begin : left_scope
+        localparam logic [3:0] sibling_value = 4'd4;
+        logic [3:0] sibling_local;
+        assign sibling_local = sibling_value;
+        assign left_value = sibling_local;
+      end
+
+      if (1) begin : right_scope
+        localparam logic [3:0] sibling_value = 4'd8;
+        logic [3:0] sibling_local;
+        assign sibling_local = sibling_value;
+        assign right_value = sibling_local;
+      end
+    end
+  endgenerate
+endmodule
+
 module generated_sv_bad_constant;
   generate
     if (1) begin : selected
@@ -626,6 +664,50 @@ begin
     raw_value <= lane_math.selected_value;
     generated_alias <= architecture_adjust(raw_value);
 end generate lanes;
+end architecture;
+)";
+    generated_vhdl_source += R"(
+entity generated_vhdl_scope_visibility is
+  port (
+    nested_parent_visible : out bit_vector(3 downto 0);
+    shadowed_value : out bit_vector(3 downto 0);
+    left_value : out bit_vector(3 downto 0);
+    right_value : out bit_vector(3 downto 0));
+end entity;
+architecture rtl of generated_vhdl_scope_visibility is
+  constant scope_value : bit_vector(3 downto 0) := "0001";
+begin
+  outer_scope : if true generate
+    constant scope_value : bit_vector(3 downto 0) := "0010";
+    signal parent_value : bit_vector(3 downto 0);
+  begin
+    parent_value <= "1010";
+
+    nested_scope : if true generate
+      constant scope_value : bit_vector(3 downto 0) := "0011";
+      signal nested_value : bit_vector(3 downto 0);
+    begin
+      nested_value <= parent_value;
+      nested_parent_visible <= nested_value;
+      shadowed_value <= scope_value;
+    end generate nested_scope;
+
+    left_scope : if true generate
+      constant sibling_value : bit_vector(3 downto 0) := "0100";
+      signal sibling_local : bit_vector(3 downto 0);
+    begin
+      sibling_local <= sibling_value;
+      left_value <= sibling_local;
+    end generate left_scope;
+
+    right_scope : if true generate
+      constant sibling_value : bit_vector(3 downto 0) := "1000";
+      signal sibling_local : bit_vector(3 downto 0);
+    begin
+      sibling_local <= sibling_value;
+      right_value <= sibling_local;
+    end generate right_scope;
+  end generate outer_scope;
 end architecture;
 )";
     generated_vhdl_source += R"(
@@ -1777,6 +1859,42 @@ end architecture;
             .to_msb_string()
         == "0100");
 
+    const auto generated_sv_scope_visibility = compile_and_elaborate(
+        generated_design,
+        "sv:work.generated_sv_scope_visibility");
+    assert(generated_sv_scope_visibility.ok());
+    const auto generated_sv_nested_local =
+        generated_sv_scope_visibility.design->find_signal(
+            "outer_scope.nested_scope.nested_value");
+    const auto generated_sv_left_local =
+        generated_sv_scope_visibility.design->find_signal(
+            "outer_scope.left_scope.sibling_local");
+    const auto generated_sv_right_local =
+        generated_sv_scope_visibility.design->find_signal(
+            "outer_scope.right_scope.sibling_local");
+    assert(
+        generated_sv_nested_local && generated_sv_left_local
+        && generated_sv_right_local);
+    assert(*generated_sv_left_local != *generated_sv_right_local);
+    auto generated_sv_scope_interpreter =
+        generated_sv_scope_visibility.design->create_interpreter();
+    assert(
+        generated_sv_scope_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto generated_sv_value = [&](const std::string_view name) {
+        const auto signal =
+            generated_sv_scope_visibility.design->find_signal(name);
+        assert(signal);
+        return generated_sv_scope_interpreter
+            ->signal_value(*signal).to_msb_string();
+    };
+    assert(generated_sv_value("outer_scope.nested_scope.nested_value")
+        == "1010");
+    assert(generated_sv_value("nested_parent_visible") == "1010");
+    assert(generated_sv_value("shadowed_value") == "0011");
+    assert(generated_sv_value("left_value") == "0100");
+    assert(generated_sv_value("right_value") == "1000");
+
     const auto generated_vhdl_block_behavior =
         compile_and_elaborate(
             generated_design,
@@ -1809,6 +1927,118 @@ end architecture;
             ->signal_value(*generated_vhdl_block_observed)
             .to_msb_string()
         == "1000");
+
+    const auto generated_vhdl_scope_visibility = compile_and_elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_scope_visibility(rtl)");
+    assert(generated_vhdl_scope_visibility.ok());
+    const auto generated_vhdl_nested_local =
+        generated_vhdl_scope_visibility.design->find_signal(
+            "outer_scope.nested_scope.nested_value");
+    const auto generated_vhdl_left_local =
+        generated_vhdl_scope_visibility.design->find_signal(
+            "outer_scope.left_scope.sibling_local");
+    const auto generated_vhdl_right_local =
+        generated_vhdl_scope_visibility.design->find_signal(
+            "outer_scope.right_scope.sibling_local");
+    assert(
+        generated_vhdl_nested_local && generated_vhdl_left_local
+        && generated_vhdl_right_local);
+    assert(*generated_vhdl_left_local != *generated_vhdl_right_local);
+    auto generated_vhdl_scope_interpreter =
+        generated_vhdl_scope_visibility.design->create_interpreter();
+    assert(
+        generated_vhdl_scope_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto generated_vhdl_value = [&](const std::string_view name) {
+        const auto signal =
+            generated_vhdl_scope_visibility.design->find_signal(name);
+        assert(signal);
+        return generated_vhdl_scope_interpreter
+            ->signal_value(*signal).to_msb_string();
+    };
+    assert(generated_vhdl_value(
+        "outer_scope.nested_scope.nested_value") == "1010");
+    assert(generated_vhdl_value("nested_parent_visible") == "1010");
+    assert(generated_vhdl_value("shadowed_value") == "0011");
+    assert(generated_vhdl_value("left_value") == "0100");
+    assert(generated_vhdl_value("right_value") == "1000");
+
+    constexpr auto nested_scope_count = 16U;
+    constexpr auto sibling_scope_count = 12U;
+    std::string scope_overlay_source = R"(
+module generated_sv_scope_overlay_stress (
+  output logic [7:0] deepest_shadow,
+  output logic [7:0] middle_shadow,
+  output logic [7:0] root_visible,
+  output logic [11:0] sibling_bits
+);
+  localparam logic [7:0] shadow = 8'd1;
+  localparam logic [7:0] root_visible_value = 8'd165;
+  generate
+)";
+    for (auto depth = 0U; depth < nested_scope_count; ++depth) {
+        scope_overlay_source += "if (1) begin : depth_"
+            + std::to_string(depth) + "\n";
+        scope_overlay_source += "  localparam logic [7:0] shadow = 8'd"
+            + std::to_string(depth + 2U) + ";\n";
+        if (depth + 1U == nested_scope_count / 2U) {
+            scope_overlay_source += "  assign middle_shadow = shadow;\n";
+        }
+    }
+    scope_overlay_source += R"(
+  assign deepest_shadow = shadow;
+  assign root_visible = root_visible_value;
+)";
+    for (auto depth = nested_scope_count; depth > 0U; --depth) {
+        scope_overlay_source += "end\n";
+    }
+    for (auto sibling = 0U; sibling < sibling_scope_count; ++sibling) {
+        scope_overlay_source += "if (1) begin : sibling_"
+            + std::to_string(sibling) + "\n";
+        scope_overlay_source += "  localparam logic sibling_value = 1'b";
+        scope_overlay_source += (sibling % 2U == 0U) ? '1' : '0';
+        scope_overlay_source += ";\n";
+        scope_overlay_source += R"(
+  logic sibling_local;
+  assign sibling_local = sibling_value;
+)";
+        scope_overlay_source += "  assign sibling_bits["
+            + std::to_string(sibling) + "] = sibling_local;\nend\n";
+    }
+    scope_overlay_source += R"(
+  endgenerate
+endmodule
+)";
+    const auto scope_overlay_parsed = fsim::frontend::parse_text(
+        "generated-sv-scope-overlay-stress.sv",
+        scope_overlay_source,
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(scope_overlay_parsed.ok());
+    const auto scope_overlay = compile_and_elaborate(
+        scope_overlay_parsed.design,
+        "sv:work.generated_sv_scope_overlay_stress");
+    assert(scope_overlay.ok());
+    auto scope_overlay_interpreter
+        = scope_overlay.design->create_interpreter();
+    assert(scope_overlay_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto scope_overlay_value = [&](const std::string_view name) {
+        const auto signal = scope_overlay.design->find_signal(
+            "generated_sv_scope_overlay_stress." + std::string { name });
+        assert(signal);
+        return scope_overlay_interpreter
+            ->signal_value(*signal)
+            .to_msb_string();
+    };
+    std::string expected_sibling_bits;
+    for (auto sibling = sibling_scope_count; sibling > 0U; --sibling) {
+        expected_sibling_bits += (sibling - 1U) % 2U == 0U ? '1' : '0';
+    }
+    assert(scope_overlay_value("deepest_shadow") == "00010001");
+    assert(scope_overlay_value("middle_shadow") == "00001001");
+    assert(scope_overlay_value("root_visible") == "10100101");
+    assert(scope_overlay_value("sibling_bits") == expected_sibling_bits);
 
     const auto block_interface = compile_and_elaborate(
         generated_design,

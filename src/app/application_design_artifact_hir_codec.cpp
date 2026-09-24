@@ -141,6 +141,18 @@ namespace codec_detail {
         });
     }
 
+    template <typename Records>
+    auto validation_span(const Records& records)
+    {
+        using Record = typename Records::value_type;
+        if constexpr (requires { records.source(); }) {
+            return records.source();
+        } else {
+            return std::span<const Record> {
+                records.data(), records.size() };
+        }
+    }
+
 #endif
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_VHDL_HIR)
@@ -243,13 +255,17 @@ namespace codec_detail {
         }
         if (!semantic::sv::top_level_hir_collections_well_formed(
                 semantics,
-                { state.instances, state.udps, state.dpi_declarations,
-                    state.covergroup_instances })) {
+                { validation_span(state.instances),
+                    validation_span(state.udps),
+                    validation_span(state.dpi_declarations),
+                    validation_span(state.covergroup_instances) })) {
             return "top-level instance, UDP, DPI, or coverage records are invalid";
         }
         if (auto error = semantic::sv::class_hir_error(
-                semantics, state.units, state.declarations,
-                state.statements, state.classes);
+                semantics, validation_span(state.units),
+                validation_span(state.declarations),
+                validation_span(state.statements),
+                validation_span(state.classes));
             !error.empty()) {
             return error;
         }
@@ -295,6 +311,28 @@ namespace codec_detail {
 using namespace codec_detail;
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_SV_HIR)
+namespace codec_detail {
+
+std::optional<std::string> serialize_systemverilog_constraint_hir_state(
+    const SystemVerilogConstraintHirView& state,
+    const semantic::Model& semantics,
+    diagnostic::Engine& diagnostics)
+{
+    if (const auto error = systemverilog_hir_state_error(
+            state, semantics);
+        !error.empty()) {
+        diagnostics.error(
+            std::string { kCode },
+            "SystemVerilog HIR state is structurally invalid: " + error);
+        return std::nullopt;
+    }
+    return serialize(
+        "FSIMSVCH", kSystemVerilogConstraintHirStateSchema,
+        state, diagnostics);
+}
+
+} // namespace codec_detail
+
 std::optional<std::string> serialize_systemverilog_constraint_hir_state(
     const semantic::sv::Hir& hir,
     const semantic::Model& semantics,
@@ -313,17 +351,8 @@ std::optional<std::string> serialize_systemverilog_constraint_hir_state(
         hir.dpi_declarations(),
         hir.covergroup_instances()
     };
-    if (const auto error = systemverilog_hir_state_error(
-            state, semantics);
-        !error.empty()) {
-        diagnostics.error(
-            std::string { kCode },
-            "SystemVerilog HIR state is structurally invalid: " + error);
-        return std::nullopt;
-    }
-    return serialize(
-        "FSIMSVCH", kSystemVerilogConstraintHirStateSchema,
-        state, diagnostics);
+    return codec_detail::serialize_systemverilog_constraint_hir_state(
+        state, semantics, diagnostics);
 }
 
 std::optional<semantic::sv::Hir>
@@ -383,6 +412,24 @@ deserialize_systemverilog_constraint_hir_state_with_budget(
 #endif
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_VHDL_HIR)
+namespace codec_detail {
+
+std::optional<std::string> serialize_vhdl_hir_state(
+    const VhdlHirView& state,
+    const semantic::Model& semantics,
+    diagnostic::Engine& diagnostics)
+{
+    if (!valid_vhdl_hir_state(state, semantics)) {
+        diagnostics.error(
+            std::string { kCode },
+            "VHDL/PSL HIR state is structurally inconsistent with semantic state");
+        return std::nullopt;
+    }
+    return serialize("FSIMVHIR", kVhdlHirStateSchema, state, diagnostics);
+}
+
+} // namespace codec_detail
+
 std::optional<std::string> serialize_vhdl_hir_state(
     const semantic::vhdl::Hir& hir,
     const semantic::Model& semantics,
@@ -398,13 +445,8 @@ std::optional<std::string> serialize_vhdl_hir_state(
         hir.processes(),
         hir.instances()
     };
-    if (!valid_vhdl_hir_state(state, semantics)) {
-        diagnostics.error(
-            std::string { kCode },
-            "VHDL/PSL HIR state is structurally inconsistent with semantic state");
-        return std::nullopt;
-    }
-    return serialize("FSIMVHIR", kVhdlHirStateSchema, state, diagnostics);
+    return codec_detail::serialize_vhdl_hir_state(
+        state, semantics, diagnostics);
 }
 
 std::optional<semantic::vhdl::Hir> deserialize_vhdl_hir_state(
@@ -467,7 +509,7 @@ std::optional<std::string> serialize_compiled_hir_bundle(
             "compiled HIR bundle is structurally invalid");
         return std::nullopt;
     }
-    auto semantic_state = serialize_semantic_state(
+    auto semantic_state = serialize_validated_semantic_state(
         design.semantics, diagnostics);
     auto systemverilog_hir_state
         = serialize_systemverilog_constraint_hir_state(
@@ -487,6 +529,58 @@ std::optional<std::string> serialize_compiled_hir_bundle(
     return serialize(
         "FSIMCHIR", kCompiledHirBundleSchema, state, diagnostics);
 }
+
+namespace application_detail {
+
+std::optional<std::string>
+serialize_cache_compiled_hir_bundle_with_projected_sources(
+    const semantic::CompiledDesign& design,
+    semantic::Model projected_semantics,
+    const std::span<const semantic::CompiledDependency>
+        projected_dependencies,
+    const codec_detail::SystemVerilogConstraintHirView& projected_systemverilog,
+    const std::span<const semantic::vhdl::Unit> projected_vhdl_units,
+    diagnostic::Engine& diagnostics)
+{
+    if (!design.valid()) {
+        diagnostics.error(
+            std::string { kCode },
+            "compiled HIR bundle is structurally invalid");
+        return std::nullopt;
+    }
+    auto semantic_state = codec_detail::serialize_validated_semantic_state(
+        projected_semantics, diagnostics);
+    auto systemverilog_hir_state
+        = codec_detail::serialize_systemverilog_constraint_hir_state(
+            projected_systemverilog, projected_semantics, diagnostics);
+    const VhdlHirView vhdl_view {
+        projected_vhdl_units,
+        design.vhdl_hir.declarations(),
+        design.vhdl_hir.types(),
+        design.vhdl_hir.overload_sets(),
+        design.vhdl_hir.expressions(),
+        design.vhdl_hir.statements(),
+        design.vhdl_hir.processes(),
+        design.vhdl_hir.instances()
+    };
+    auto vhdl_hir_state = codec_detail::serialize_vhdl_hir_state(
+        vhdl_view, projected_semantics, diagnostics);
+    if (!semantic_state || !systemverilog_hir_state || !vhdl_hir_state) {
+        return std::nullopt;
+    }
+    const codec_detail::CompiledHirBundleView state {
+        std::move(*semantic_state),
+        std::move(*systemverilog_hir_state),
+        std::move(*vhdl_hir_state),
+        projected_dependencies,
+        design.references()
+    };
+    return codec_detail::serialize(
+        "FSIMCHIR", kCompiledHirBundleSchema,
+        state, diagnostics);
+}
+
+} // namespace application_detail
 
 std::optional<semantic::CompiledDesign> deserialize_compiled_hir_bundle(
     const std::string_view bytes,

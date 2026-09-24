@@ -310,6 +310,7 @@ void test_codec_and_limits(const Identities& ids,
 
 } // namespace
 
+FSIM_TEST_SC_MAIN_DIAGNOSTIC_PUSH
 extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
 {
     const auto ids = make_identities();
@@ -321,3 +322,4 @@ extern "C" FSIM_TEST_SC_MAIN_EXPORT int sc_main(int, char**)
     test_codec_and_limits(ids, observer);
     return 0;
 }
+FSIM_TEST_SC_MAIN_DIAGNOSTIC_POP

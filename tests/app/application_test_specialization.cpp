@@ -170,6 +170,30 @@ const auto run_parameter_specializations =
       assert(project);
       assert(project->design.specializations().size() == 3);
       assert(project->specialization_cache_keys.size() == 3);
+      const auto& design_ir = project->design_ir;
+      const auto& instances = design_ir.instances();
+      const auto instance_for_path = [&](const std::string_view path) {
+        return std::ranges::find_if(
+            instances, [&](const auto& instance) {
+              return instance.path == path;
+            });
+      };
+      const auto root_instance = instance_for_path("parameter_top");
+      const auto narrow_instance =
+          instance_for_path("parameter_top.u_narrow");
+      const auto wide_instance =
+          instance_for_path("parameter_top.u_wide");
+      assert(root_instance != instances.end());
+      assert(narrow_instance != instances.end());
+      assert(wide_instance != instances.end());
+      assert(narrow_instance->parent == root_instance->id);
+      assert(wide_instance->parent == root_instance->id);
+      const auto narrow_object = std::ranges::find_if(
+          design_ir.objects(), [](const auto& object) {
+            return object.path == "parameter_top.u_narrow.q";
+          });
+      assert(narrow_object != design_ir.objects().end());
+      assert(narrow_object->specialization == narrow_instance->specialization);
       ParameterRun result;
       for (std::size_t index = 0;
            index < project->design.specializations().size();

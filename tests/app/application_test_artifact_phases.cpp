@@ -1429,6 +1429,19 @@ end architecture;
         assert(nonportable_diagnostics.diagnostics().front().message
             == "semantic state contains a producer-absolute source path: "
                 + nonportable_source_path);
+        semantic::CompiledDesign nonportable_compiled_design {
+            *nonportable_semantics,
+            built->systemverilog_hir,
+            built->vhdl_hir };
+        assert(nonportable_compiled_design.valid());
+        diagnostic::Engine nonportable_bundle_diagnostics;
+        assert(!app::serialize_compiled_hir_bundle(
+            nonportable_compiled_design, nonportable_bundle_diagnostics));
+        assert(nonportable_bundle_diagnostics.diagnostics().size() == 1U);
+        assert(nonportable_bundle_diagnostics.diagnostics().front().code
+            == nonportable_diagnostics.diagnostics().front().code);
+        assert(nonportable_bundle_diagnostics.diagnostics().front().message
+            == nonportable_diagnostics.diagnostics().front().message);
         const auto verilog_provenance =
             app::verilog_scope_provenance(*built);
         assert(!verilog_provenance.empty());

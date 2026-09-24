@@ -60,13 +60,12 @@ void relocate_instruction_targets(
 
 Lowerer::Lowerer(
     ElaboratedDesign& design,
-    const std::unordered_map<std::string, SignalId>& signals,
-    const std::unordered_set<SignalId>& read_only_signals,
-    const std::unordered_map<std::string, StringObjectId>& string_objects,
-    const std::unordered_set<StringObjectId>& read_only_string_objects,
-    const std::unordered_map<std::string, ContainerObjectId>&
-        container_objects,
-    const std::unordered_set<std::string>& read_only_container_objects,
+    const SignalBindings& signals,
+    const ReadOnlySignalBindings& read_only_signals,
+    const StringObjectBindings& string_objects,
+    const ReadOnlyStringBindings& read_only_string_objects,
+    const ContainerObjectBindings& container_objects,
+    const ReadOnlyContainerBindings& read_only_container_objects,
     std::vector<Diagnostic>& diagnostics)
     : design_(design)
     , signals_(signals)

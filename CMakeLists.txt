@@ -774,15 +774,28 @@ target_link_libraries(fsim_runtime PRIVATE fsim_tf)
       src/elaboration/elaboration_vhdl_configuration_hir.cpp
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_vhdl_associations.cpp
+      src/elaboration/hierarchy_vhdl_instance_worklist.cpp
+      src/elaboration/hierarchy_vhdl_processes.cpp
+      src/elaboration/hierarchy_vhdl_resolution.cpp
+      src/elaboration/hierarchy_vhdl_subprograms.cpp
       src/elaboration/hierarchy_builder.cpp
       src/elaboration/hierarchy_compiled_occurrence.cpp
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
+      src/elaboration/hierarchy_sv_aliases.cpp
+      src/elaboration/hierarchy_sv_configuration.cpp
       src/elaboration/hierarchy_sv_constant_evaluator.cpp
-  src/elaboration/hierarchy_sv_aliases.cpp
-  src/elaboration/hierarchy_sv_configuration.cpp
-      src/elaboration/hierarchy_instantiate.cpp
+      src/elaboration/hierarchy_sv_declarations.cpp
+      src/elaboration/hierarchy_sv_generate.cpp
+      src/elaboration/hierarchy_sv_instance_worklist.cpp
+      src/elaboration/hierarchy_sv_interface_ports.cpp
+      src/elaboration/hierarchy_sv_parameters.cpp
+      src/elaboration/hierarchy_sv_ports.cpp
+      src/elaboration/hierarchy_sv_processes.cpp
+      src/elaboration/hierarchy_sv_strings.cpp
+      src/elaboration/hierarchy_sv_type_layout.cpp
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_udp.cpp
       src/elaboration/vhdl_hir_type_validation.cpp

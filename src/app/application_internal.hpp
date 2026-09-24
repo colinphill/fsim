@@ -367,12 +367,31 @@ void complete_systemverilog_executable_hir(
     semantic::Model& semantics,
     semantic::sv::Hir& hir);
 
+/// Owned, sorted runtime path snapshots for one DesignIR build and validation
+/// pass. Consumers borrow these views while the elaborated design is immutable.
+struct RuntimePathViews {
+    std::vector<std::pair<std::string, runtime::simir::SignalId>>
+        signal_paths;
+    std::vector<std::pair<
+        std::string, runtime::simir::ContainerObjectId>>
+        container_paths;
+};
+
+[[nodiscard]] RuntimePathViews make_runtime_path_views(
+    const elaboration::ElaboratedDesign& elaborated);
+
 [[nodiscard]] semantic::design::DesignIr build_design_ir(
     CheckedProject& checked,
-    const elaboration::ElaboratedDesign& elaborated);
+    const elaboration::ElaboratedDesign& elaborated,
+    const RuntimePathViews& runtime_paths);
 
 [[nodiscard]] bool design_object_is_signal_bearing(
     const semantic::design::Object& object) noexcept;
+
+[[nodiscard]] bool valid_runtime_projection(
+    const semantic::design::DesignIr& design,
+    const elaboration::ElaboratedDesign& runtime,
+    const RuntimePathViews& runtime_paths);
 
 [[nodiscard]] bool valid_runtime_projection(
     const semantic::design::DesignIr& design,
@@ -1301,6 +1320,35 @@ struct CompilationWorkspace final : CheckedProject {
 
 [[nodiscard]] bool relocate_compiled_design_sources(
     semantic::CompiledDesign& design,
+    std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics);
+
+/// Project compiled-HIR source names without modifying the source strings.
+[[nodiscard]] std::optional<std::vector<std::string>>
+project_compiled_design_source_names(
+    std::span<const std::string_view> names,
+    std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics);
+
+/// Project semantic source-name fields into a serialization-owned record set.
+[[nodiscard]] std::optional<semantic::ModelRecords>
+project_compiled_semantic_source_names(
+    const semantic::Model& semantics,
+    std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics);
+
+/// Cache-only semantic serializer; standalone artifact validation is unchanged.
+[[nodiscard]] std::optional<std::string>
+serialize_cache_semantic_state_with_source_projection(
+    const semantic::Model& semantics,
+    std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics);
+
+/// Serialize a cache bundle with source-bearing fields projected into the
+/// cache namespace, without mutating the source bundle.
+[[nodiscard]] std::optional<std::string>
+serialize_cache_compiled_hir_bundle_with_source_projection(
+    const semantic::CompiledDesign& design,
     std::span<const library::SourceNameMapping> mappings,
     diagnostic::Engine& diagnostics);
 

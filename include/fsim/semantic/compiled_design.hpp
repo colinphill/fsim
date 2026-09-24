@@ -69,6 +69,23 @@ struct CompiledVhdlPackageMemberIndexEntry {
     DeclarationId member;
 };
 
+/// Resolved name metadata for one VHDL expression. This is used by the
+/// linked-expression annotation update, which deliberately excludes every
+/// field consumed by the compiled-design lookup indexes.
+struct CompiledVhdlExpressionNameResolution {
+    std::optional<DeclarationId> selected;
+    std::vector<DeclarationId> overloads;
+};
+
+/// Link-phase annotations for one existing VHDL expression identity.
+struct CompiledVhdlExpressionAnnotation {
+    ExpressionId expression;
+    vhdl::BuiltinOperatorIdentity builtin_operator {
+        vhdl::BuiltinOperatorIdentity::none
+    };
+    std::optional<CompiledVhdlExpressionNameResolution> name_resolution;
+};
+
 /// Non-owning language dispatch returned by CompiledDesign. Exactly one unit
 /// pointer is present. Shared elaboration code may inspect this view but may
 /// not retain or mutate it.
@@ -196,6 +213,17 @@ public:
     /// Rebuild non-owning dense-ID indexes after a completed HIR mutation
     /// phase and before sharing the design with parallel readers.
     void refresh_lookup_indexes();
+    /// Apply only linker-owned VHDL expression annotations. The input must
+    /// contain one record per expression, in collection order, with matching
+    /// identities. Only builtin_operator and referenced-name resolution
+    /// metadata are changed; the expression vector and all lookup-index
+    /// inputs remain untouched, so a current index may retain its addresses
+    /// while this method advances only its VHDL revision stamp. Returns false
+    /// without mutation if the indexes are stale or the identity contract
+    /// does not match. Successful application consumes each overload vector
+    /// in the supplied records by swapping it into the referenced name.
+    [[nodiscard]] bool apply_linked_vhdl_expression_annotations(
+        std::vector<CompiledVhdlExpressionAnnotation>& annotations);
 
     Model semantics;
     sv::Hir systemverilog_hir;
@@ -258,6 +286,8 @@ private:
             vhdl_package_members;
     };
 
+    [[nodiscard]] bool lookup_indexes_current() const noexcept;
+
     template <typename SystemVerilogRecord, typename VhdlRecord,
         typename Identity>
     [[nodiscard]] CompiledLanguageView<SystemVerilogRecord, VhdlRecord>
@@ -280,7 +310,6 @@ private:
         return { };
     }
 
-    [[nodiscard]] bool lookup_indexes_current() const noexcept;
     [[nodiscard]] CompiledDeclarationView
     indexed_declaration(const DeclarationId id) const noexcept
     {

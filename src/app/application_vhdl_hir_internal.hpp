@@ -4,6 +4,8 @@
 #include "application_internal.hpp"
 
 #include <functional>
+#include <map>
+#include <tuple>
 
 namespace fsim::app::application_detail {
 namespace vh = semantic::vhdl;
@@ -457,6 +459,12 @@ private:
     semantic::Model& model_;
 
     vh::Hir& hir_;
+
+    // Seeded in semantic-value order; ensure_value appends only after adding
+    // a new value, and try_emplace keeps the original first-match winner.
+    using ValueLookupKey = std::tuple<semantic::ScopeId,
+        semantic::SourceSpanId, std::string>;
+    std::map<ValueLookupKey, semantic::ValueId> values_by_lookup_key_;
 
     // The unit being projected is not published into hir_ until all of its
     // declarations are complete.  Keep a non-owning view of that local unit

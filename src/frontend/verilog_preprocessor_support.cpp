@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_preprocessor_internal.hpp"
 
+#include "fsim/support/path.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -307,13 +309,7 @@ namespace fsim::frontend::preprocessor_detail {
     [[nodiscard]] std::filesystem::path normalized_path(
         const std::filesystem::path& path)
     {
-        std::error_code error;
-        auto absolute = std::filesystem::absolute(path, error);
-        if (error) {
-            return path.lexically_normal();
-        }
-        auto canonical = std::filesystem::weakly_canonical(absolute, error);
-        return error ? absolute.lexically_normal() : canonical;
+        return fsim::support::detail::normalized_absolute_path(path);
     }
 
 

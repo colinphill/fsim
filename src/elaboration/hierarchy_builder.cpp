@@ -5,6 +5,47 @@
 
 namespace fsim::elaboration {
 
+void HierarchyBuilder::canonicalize_process_operations(Process& process)
+{
+    if (!process_operations_shareable(process)) {
+        return;
+    }
+
+    std::uint64_t bucket = UINT64_C(1469598103934665603);
+    const auto mix = [&](const std::uint64_t value) {
+        bucket ^= value;
+        bucket *= UINT64_C(1099511628211);
+    };
+    mix(process.operations.size());
+    mix(process.register_count);
+    mix(process.string_register_count);
+    mix(process.container_register_count);
+    for (const auto kind : process.register_value_kinds) {
+        mix(static_cast<std::uint64_t>(kind));
+    }
+    for (const auto& operation : process.operations) {
+        mix(operation_group_index(operation));
+        mix(operation_alternative_index(operation));
+    }
+
+    auto& representatives = process_operation_representatives_[bucket];
+    std::erase_if(
+        representatives,
+        [&](const ProcessId representative) {
+            return representative >= design_.processes_.size();
+        });
+    for (const auto representative : representatives) {
+        if (share_process_operations(
+                design_.processes_[representative],
+                process,
+                design_.signals_,
+                &operation_scratch_)) {
+            return;
+        }
+    }
+    representatives.push_back(process.id);
+}
+
 HierarchyBuilder::HierarchyBuilder(
     const semantic::ValidatedCompiledDesign compiled,
     ElaboratedDesign& design,

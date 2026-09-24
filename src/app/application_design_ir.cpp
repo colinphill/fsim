@@ -103,12 +103,18 @@ class DesignIrBuilder final {
  public:
   DesignIrBuilder(
       CheckedProject& checked,
-      const elaboration::ElaboratedDesign& elaborated)
-      : checked_(checked), model_(checked.semantics), elaborated_(elaborated) {}
+      const elaboration::ElaboratedDesign& elaborated,
+      const RuntimePathViews& runtime_paths)
+      : checked_(checked),
+        model_(checked.semantics),
+        elaborated_(elaborated),
+        runtime_paths_(runtime_paths) {}
 
   [[nodiscard]] di::DesignIr build() {
     result_.mutable_top() = elaborated_.top();
     result_.mutable_roots() = elaborated_.roots();
+    build_declaration_name_index();
+    build_declaration_direction_index();
     add_hdl_specializations();
     add_systemc_specializations();
     link_instance_parents();
@@ -120,6 +126,11 @@ class DesignIrBuilder final {
   }
 
  private:
+  struct InstancePathPositions {
+    std::size_t first{};
+    std::size_t last{};
+  };
+
   [[nodiscard]] semantic::SourceSpanId source(
       const frontend::SourceSpan& span) {
     return intern_semantic_span(model_, span);
@@ -217,64 +228,87 @@ class DesignIrBuilder final {
   [[nodiscard]] std::optional<semantic::DeclarationId> declaration(
       const semantic::ScopeId scope,
       const std::string_view name) const noexcept {
-    const auto found = std::ranges::find_if(
-        model_.declarations(), [&](const semantic::Declaration& item) {
-          return item.scope == scope && item.name == name;
-        });
-    return found == model_.declarations().end()
+    const auto scoped = declaration_by_scope_and_name_.find(scope);
+    if (scoped == declaration_by_scope_and_name_.end()) {
+      return std::nullopt;
+    }
+    const auto found = scoped->second.find(name);
+    return found == scoped->second.end()
         ? std::nullopt
-        : std::optional<semantic::DeclarationId>{found->id};
+        : std::optional<semantic::DeclarationId>{found->second};
+  }
+
+  void build_declaration_name_index() {
+    declaration_by_scope_and_name_.clear();
+    for (const auto& declaration : model_.declarations()) {
+      declaration_by_scope_and_name_[declaration.scope].try_emplace(
+          declaration.name, declaration.id);
+    }
+  }
+
+  [[nodiscard]] static std::optional<di::Direction> vhdl_direction(
+      const semantic::vhdl::Declaration& declaration) noexcept {
+    switch (declaration.direction) {
+      case semantic::vhdl::Direction::unknown:
+        return di::Direction::unknown;
+      case semantic::vhdl::Direction::input:
+        return di::Direction::input;
+      case semantic::vhdl::Direction::output:
+        return di::Direction::output;
+      case semantic::vhdl::Direction::inout:
+        return di::Direction::inout;
+      case semantic::vhdl::Direction::buffer:
+        return di::Direction::buffer;
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] static di::Direction systemverilog_direction(
+      const semantic::sv::Declaration& declaration) noexcept {
+    switch (declaration.direction) {
+      case semantic::sv::Direction::unknown:
+        if (declaration.form == semantic::sv::DeclarationForm::port
+            && (!declaration.interface_type.empty()
+                || (declaration.type
+                    && declaration.type->target.spelling == "interface"))) {
+          return di::Direction::inout;
+        }
+        return di::Direction::unknown;
+      case semantic::sv::Direction::input:
+        return di::Direction::input;
+      case semantic::sv::Direction::output:
+        return di::Direction::output;
+      case semantic::sv::Direction::inout:
+        return di::Direction::inout;
+      case semantic::sv::Direction::ref:
+        return di::Direction::ref;
+    }
+    return di::Direction::unknown;
+  }
+
+  void build_declaration_direction_index() {
+    vhdl_declaration_directions_.clear();
+    for (const auto& declaration : checked_.vhdl_hir.declarations()) {
+      vhdl_declaration_directions_.try_emplace(
+          declaration.id, vhdl_direction(declaration));
+    }
+    systemverilog_declaration_directions_.clear();
+    for (const auto& declaration : checked_.systemverilog_hir.declarations()) {
+      systemverilog_declaration_directions_.try_emplace(
+          declaration.id, systemverilog_direction(declaration));
+    }
   }
 
   [[nodiscard]] di::Direction declaration_direction(
       const semantic::DeclarationId id) const noexcept {
-    const auto vhdl = std::ranges::find_if(
-        checked_.vhdl_hir.declarations(),
-        [&](const semantic::vhdl::Declaration& declaration) {
-          return declaration.id == id;
-        });
-    if (vhdl != checked_.vhdl_hir.declarations().end()) {
-      switch (vhdl->direction) {
-        case semantic::vhdl::Direction::unknown:
-          return di::Direction::unknown;
-        case semantic::vhdl::Direction::input:
-          return di::Direction::input;
-        case semantic::vhdl::Direction::output:
-          return di::Direction::output;
-        case semantic::vhdl::Direction::inout:
-          return di::Direction::inout;
-        case semantic::vhdl::Direction::buffer:
-          return di::Direction::buffer;
-      }
+    const auto vhdl = vhdl_declaration_directions_.find(id);
+    if (vhdl != vhdl_declaration_directions_.end() && vhdl->second) {
+      return *vhdl->second;
     }
-    const auto systemverilog = std::ranges::find_if(
-        checked_.systemverilog_hir.declarations(),
-        [&](const semantic::sv::Declaration& declaration) {
-          return declaration.id == id;
-        });
-    if (systemverilog != checked_.systemverilog_hir.declarations().end()) {
-      switch (systemverilog->direction) {
-        case semantic::sv::Direction::unknown:
-          if (systemverilog->form
-                  == semantic::sv::DeclarationForm::port
-              && (!systemverilog->interface_type.empty()
-                  || (systemverilog->type
-                      && systemverilog->type->target.spelling
-                          == "interface"))) {
-            return di::Direction::inout;
-          }
-          return di::Direction::unknown;
-        case semantic::sv::Direction::input:
-          return di::Direction::input;
-        case semantic::sv::Direction::output:
-          return di::Direction::output;
-        case semantic::sv::Direction::inout:
-          return di::Direction::inout;
-        case semantic::sv::Direction::ref:
-          return di::Direction::ref;
-      }
-    }
-    return di::Direction::unknown;
+    const auto systemverilog = systemverilog_declaration_directions_.find(id);
+    return systemverilog == systemverilog_declaration_directions_.end()
+        ? di::Direction::unknown
+        : systemverilog->second;
   }
 
   void add_parameter_values(
@@ -400,33 +434,47 @@ class DesignIrBuilder final {
 
   void link_instance_parents() {
     auto& instances = result_.mutable_instances();
+    instance_path_positions_.clear();
+    for (std::size_t index = 0; index < instances.size(); ++index) {
+      const auto [position, inserted] = instance_path_positions_.try_emplace(
+          instances[index].path, InstancePathPositions{index, index});
+      if (!inserted) {
+        position->second.last = index;
+      }
+    }
     for (auto& instance : instances) {
       const auto parent = parent_path(instance.path);
       if (parent.empty()) {
         continue;
       }
-      const auto found = std::ranges::find_if(
-          instances, [&](const di::InstanceOccurrence& candidate) {
-            return candidate.path == parent;
-          });
-      if (found != instances.end()) {
-        instance.parent = found->id;
+      const auto found = instance_path_positions_.find(parent);
+      if (found != instance_path_positions_.end()) {
+        instance.parent = instances[found->second.first].id;
       }
     }
   }
 
   [[nodiscard]] di::SpecializationId specialization_for_path(
       const std::string_view path) const {
-    std::optional<di::SpecializationId> result;
-    std::size_t best{};
-    for (const auto& instance : result_.instances()) {
-      if (owns_path(instance.path, path) && instance.path.size() >= best) {
-        result = instance.specialization;
-        best = instance.path.size();
+    const auto& instances = result_.instances();
+    auto prefix_size = path.size();
+    while (true) {
+      const auto found = instance_path_positions_.find(
+          path.substr(0, prefix_size));
+      if (found != instance_path_positions_.end()) {
+        const auto& owner = instances[found->second.last];
+        if (owns_path(owner.path, path)) {
+          return owner.specialization;
+        }
       }
-    }
-    if (result) {
-      return *result;
+      if (prefix_size == 0U) {
+        break;
+      }
+      const auto separator = path.find_last_of("./", prefix_size - 1U);
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      prefix_size = separator;
     }
     return result_.specializations().empty()
         ? di::SpecializationId{}
@@ -573,7 +621,8 @@ class DesignIrBuilder final {
   }
 
   void add_signal_aliases() {
-    for (const auto& [path, runtime_signal] : elaborated_.signal_paths()) {
+    for (const auto& [path, runtime_signal] :
+         runtime_paths_.signal_paths) {
       if (object_by_path_.contains(path)) {
         continue;
       }
@@ -632,7 +681,7 @@ class DesignIrBuilder final {
 
   void add_container_aliases() {
     for (const auto& [path, runtime_object] :
-         elaborated_.container_paths()) {
+         runtime_paths_.container_paths) {
       const auto existing = object_by_path_.find(path);
       if (existing != object_by_path_.end()
           && result_.objects()[existing->second.value()].kind
@@ -849,14 +898,15 @@ class DesignIrBuilder final {
       const std::uint64_t native_handle,
       const std::optional<runtime::simir::SignalId> signal,
       const bool export_writable = false) {
-    const auto named = std::ranges::find_if(
-        elaborated_.systemc_objects(), [&](const auto& candidate) {
-          return candidate.native_handle == native_handle
-              && candidate.name == path;
-        });
-    const auto object_source = named == elaborated_.systemc_objects().end()
+    const auto named = systemc_named_object_by_handle_and_name_.find(
+        {native_handle, path});
+    const auto* named_object
+        = named == systemc_named_object_by_handle_and_name_.end()
+        ? nullptr
+        : named->second;
+    const auto object_source = named_object == nullptr
         ? std::nullopt
-        : source(named->source);
+        : source(named_object->source);
     const auto object = add_object(
         kind,
         name,
@@ -868,9 +918,9 @@ class DesignIrBuilder final {
             signal_object_by_runtime_.at(*signal).value()].width : 0,
         false,
         object_source);
-    if (named != elaborated_.systemc_objects().end()) {
+    if (named_object != nullptr) {
       result_.mutable_objects()[object.value()].external_type =
-          named->type_name;
+          named_object->type_name;
     }
     object_by_path_.try_emplace(path, object);
     std::optional<semantic::PortId> port;
@@ -901,6 +951,12 @@ class DesignIrBuilder final {
   }
 
   void add_systemc_objects() {
+    systemc_named_object_by_handle_and_name_.clear();
+    for (const auto& named_object : elaborated_.systemc_objects()) {
+      systemc_named_object_by_handle_and_name_.try_emplace(
+          std::pair{named_object.native_handle, named_object.name},
+          &named_object);
+    }
     for (const auto& instance : elaborated_.systemc_instances()) {
       const auto specialization =
           systemc_specialization_by_handle_.at(instance.native_handle);
@@ -1308,10 +1364,31 @@ class DesignIrBuilder final {
   CheckedProject& checked_;
   semantic::Model& model_;
   const elaboration::ElaboratedDesign& elaborated_;
+  const RuntimePathViews& runtime_paths_;
   di::DesignIr result_;
   std::size_t hdl_specialization_count_{};
+  // Built after all instance occurrences are appended and kept read-only
+  // while objects and aliases are projected.
+  std::map<std::string, InstancePathPositions, std::less<>>
+      instance_path_positions_;
   std::map<std::uint64_t, di::SpecializationId>
       systemc_specialization_by_handle_;
+  // The semantic declaration inventory is immutable during this build pass;
+  // try_emplace preserves the first exact scope/name match.
+  std::map<semantic::ScopeId,
+      std::map<std::string, semantic::DeclarationId, std::less<>>>
+      declaration_by_scope_and_name_;
+  // Preserve the original VHDL-first search order and first duplicate while
+  // indexing repeated declaration-direction lookups.
+  std::map<semantic::DeclarationId, std::optional<di::Direction>>
+      vhdl_declaration_directions_;
+  std::map<semantic::DeclarationId, di::Direction>
+      systemverilog_declaration_directions_;
+  // Built once from the immutable elaborated-object inventory; try_emplace
+  // preserves the first exact (native handle, name) match used by find_if.
+  std::map<std::pair<std::uint64_t, std::string>,
+      const elaboration::SystemCNamedObjectInfo*>
+      systemc_named_object_by_handle_and_name_;
   std::map<runtime::simir::SignalId, di::ObjectId>
       signal_object_by_runtime_;
   std::map<runtime::simir::ContainerObjectId, di::ObjectId>
@@ -1324,10 +1401,20 @@ class DesignIrBuilder final {
 
 } // namespace
 
+RuntimePathViews make_runtime_path_views(
+    const elaboration::ElaboratedDesign& elaborated)
+{
+    return {
+        elaborated.signal_paths(),
+        elaborated.container_paths(),
+    };
+}
+
 semantic::design::DesignIr build_design_ir(
     CheckedProject& checked,
-    const elaboration::ElaboratedDesign& elaborated) {
-  return DesignIrBuilder{checked, elaborated}.build();
+    const elaboration::ElaboratedDesign& elaborated,
+    const RuntimePathViews& runtime_paths) {
+  return DesignIrBuilder{checked, elaborated, runtime_paths}.build();
 }
 
 bool design_object_is_signal_bearing(
@@ -1345,7 +1432,8 @@ bool design_object_is_signal_bearing(
 
 bool valid_runtime_projection(
     const semantic::design::DesignIr& design,
-    const elaboration::ElaboratedDesign& runtime) {
+    const elaboration::ElaboratedDesign& runtime,
+    const RuntimePathViews& runtime_paths) {
   using ObjectKind = semantic::design::ObjectKind;
   using BoundaryKind = semantic::design::BoundaryKind;
   const bool trace_projection
@@ -1454,7 +1542,7 @@ bool valid_runtime_projection(
   }
   std::ranges::sort(projected_signal_paths);
   std::ranges::sort(projected_container_paths);
-  for (const auto& [path, signal] : runtime.signal_paths()) {
+  for (const auto& [path, signal] : runtime_paths.signal_paths) {
     if (!std::ranges::binary_search(
             projected_signal_paths,
             RuntimePath { path, signal })) {
@@ -1465,7 +1553,7 @@ bool valid_runtime_projection(
       return reject("signal-path");
     }
   }
-  for (const auto& [path, object] : runtime.container_paths()) {
+  for (const auto& [path, object] : runtime_paths.container_paths) {
     if (!std::ranges::binary_search(
             projected_container_paths,
             RuntimePath { path, object })) {
@@ -1613,6 +1701,13 @@ bool valid_runtime_projection(
     }
   }
   return true;
+}
+
+bool valid_runtime_projection(
+    const semantic::design::DesignIr& design,
+    const elaboration::ElaboratedDesign& runtime) {
+  const auto runtime_paths = make_runtime_path_views(runtime);
+  return valid_runtime_projection(design, runtime, runtime_paths);
 }
 
 } // namespace fsim::app::application_detail

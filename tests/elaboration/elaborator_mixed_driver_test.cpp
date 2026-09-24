@@ -111,6 +111,7 @@ end architecture;
   const auto siblings = compile_and_elaborate(
       sibling_design, "sv:work.sibling_driver_top", sibling_bindings);
   assert(!siblings.ok());
+  assert(!siblings.design);
   assert(has_diagnostic(siblings, "FSIM-ELAB-BIND-024"));
   assert(!has_diagnostic(siblings, "FSIM-ELAB-DRV-001"));
 

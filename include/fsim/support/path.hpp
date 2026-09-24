@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace fsim::support {
 
@@ -47,5 +48,21 @@ namespace fsim::support {
       && encoded[1] == ':'
       && (encoded[2] == '/' || encoded[2] == '\\');
 }
+
+namespace detail {
+
+/// Resolve a path with lexical fallbacks when filesystem queries fail.
+[[nodiscard]] inline std::filesystem::path normalized_absolute_path(
+    const std::filesystem::path& path) {
+  std::error_code error;
+  auto absolute = std::filesystem::absolute(path, error);
+  if (error) {
+    return path.lexically_normal();
+  }
+  auto canonical = std::filesystem::weakly_canonical(absolute, error);
+  return error ? absolute.lexically_normal() : canonical;
+}
+
+}  // namespace detail
 
 }  // namespace fsim::support

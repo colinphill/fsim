@@ -1610,82 +1610,136 @@ std::string vhdl_architecture_primary_profile_error(
 
 void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
 {
-    auto& expressions = design.vhdl_hir.mutable_expressions();
-    design.refresh_lookup_indexes();
-    for (auto& expression : expressions) {
-        expression.builtin_operator
-            = vhdl::BuiltinOperatorIdentity::none;
-        if (!expression.scope.valid()
-            || expression.scope.value() >= design.semantics.scopes().size()) {
-            continue;
-        }
-
-        auto builtin_operator = vhdl::BuiltinOperatorIdentity::none;
-        const auto& operation = expression.text;
-        if (expression.kind == vhdl::ExpressionKind::unary
-            && expression.operands.size() == 1U
-            && same_vhdl_identifier(operation, "not")) {
-            builtin_operator
-                = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not;
-        } else if (expression.kind == vhdl::ExpressionKind::binary
-            && expression.operands.size() == 2U) {
-            if (same_vhdl_identifier(operation, "and")) {
-                builtin_operator
-                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_and;
-            } else if (same_vhdl_identifier(operation, "or")) {
-                builtin_operator
-                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_or;
-            } else if (same_vhdl_identifier(operation, "nand")) {
-                builtin_operator
-                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_nand;
-            } else if (same_vhdl_identifier(operation, "nor")) {
-                builtin_operator
-                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_nor;
-            } else if (same_vhdl_identifier(operation, "xor")) {
-                builtin_operator
-                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_xor;
-            } else if (same_vhdl_identifier(operation, "xnor")) {
-                builtin_operator
-                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_xnor;
+    const auto resolve_annotations = [&] {
+        std::vector<CompiledVhdlExpressionAnnotation> annotations;
+        const auto& expressions = design.vhdl_hir.expressions();
+        annotations.reserve(expressions.size());
+        for (const auto& expression : expressions) {
+            CompiledVhdlExpressionAnnotation annotation;
+            annotation.expression = expression.id;
+            if (!expression.scope.valid()
+                || expression.scope.value()
+                    >= design.semantics.scopes().size()) {
+                annotations.push_back(std::move(annotation));
+                continue;
             }
+
+            auto builtin_operator = vhdl::BuiltinOperatorIdentity::none;
+            const auto& operation = expression.text;
+            if (expression.kind == vhdl::ExpressionKind::unary
+                && expression.operands.size() == 1U
+                && same_vhdl_identifier(operation, "not")) {
+                builtin_operator
+                    = vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not;
+            } else if (expression.kind == vhdl::ExpressionKind::binary
+                && expression.operands.size() == 2U) {
+                if (same_vhdl_identifier(operation, "and")) {
+                    builtin_operator
+                        = vhdl::BuiltinOperatorIdentity::
+                            ieee_std_logic_1164_and;
+                } else if (same_vhdl_identifier(operation, "or")) {
+                    builtin_operator
+                        = vhdl::BuiltinOperatorIdentity::
+                            ieee_std_logic_1164_or;
+                } else if (same_vhdl_identifier(operation, "nand")) {
+                    builtin_operator
+                        = vhdl::BuiltinOperatorIdentity::
+                            ieee_std_logic_1164_nand;
+                } else if (same_vhdl_identifier(operation, "nor")) {
+                    builtin_operator
+                        = vhdl::BuiltinOperatorIdentity::
+                            ieee_std_logic_1164_nor;
+                } else if (same_vhdl_identifier(operation, "xor")) {
+                    builtin_operator
+                        = vhdl::BuiltinOperatorIdentity::
+                            ieee_std_logic_1164_xor;
+                } else if (same_vhdl_identifier(operation, "xnor")) {
+                    builtin_operator
+                        = vhdl::BuiltinOperatorIdentity::
+                            ieee_std_logic_1164_xnor;
+                }
+            }
+            if (builtin_operator == vhdl::BuiltinOperatorIdentity::none
+                && !expression.referenced_name) {
+                annotations.push_back(std::move(annotation));
+                continue;
+            }
+            const auto unit_id
+                = design.semantics.scopes()[expression.scope.value()].unit;
+            const auto unit = design.find_unit(unit_id);
+            if (!unit || unit->vhdl == nullptr
+                || unit->vhdl->kind != vhdl::UnitKind::architecture) {
+                annotations.push_back(std::move(annotation));
+                continue;
+            }
+            const auto retained_candidate = expression.referenced_name
+                && (expression.referenced_name->selected.has_value()
+                    || !expression.referenced_name->overloads.empty());
+            const CompiledDesignResolver resolver { design, unit_id };
+            auto synthetic_name = vhdl::Name { };
+            synthetic_name.spelling = operation;
+            synthetic_name.canonical = operation;
+            synthetic_name.source = expression.source;
+            const auto& resolution_name = expression.referenced_name
+                ? *expression.referenced_name
+                : synthetic_name;
+            auto resolved = resolver.resolve_vhdl(
+                resolution_name, expression.scope);
+            if (builtin_operator != vhdl::BuiltinOperatorIdentity::none
+                && !retained_candidate
+                && resolved.status
+                    == CompiledResolutionStatus::not_found
+                && resolved.candidates.empty()
+                && resolver.vhdl_builtin_package_member_imported("ieee",
+                    "std_logic_1164", operation, expression.scope)) {
+                annotation.builtin_operator = builtin_operator;
+            }
+            if (expression.referenced_name) {
+                annotation.name_resolution.emplace(
+                    CompiledVhdlExpressionNameResolution {
+                        resolved.unique(), std::move(resolved.candidates) });
+            }
+            annotations.push_back(std::move(annotation));
         }
-        if (builtin_operator == vhdl::BuiltinOperatorIdentity::none
-            && !expression.referenced_name) {
-            continue;
-        }
-        const auto unit_id
-            = design.semantics.scopes()[expression.scope.value()].unit;
-        const auto unit = design.find_unit(unit_id);
-        if (!unit || unit->vhdl == nullptr
-            || unit->vhdl->kind != vhdl::UnitKind::architecture) {
-            continue;
-        }
-        const auto retained_candidate = expression.referenced_name
-            && (expression.referenced_name->selected.has_value()
-                || !expression.referenced_name->overloads.empty());
-        const CompiledDesignResolver resolver { design, unit_id };
-        auto synthetic_name = vhdl::Name { };
-        synthetic_name.spelling = operation;
-        synthetic_name.canonical = operation;
-        synthetic_name.source = expression.source;
-        const auto& resolution_name = expression.referenced_name
-            ? *expression.referenced_name
-            : synthetic_name;
-        const auto resolved = resolver.resolve_vhdl(
-            resolution_name, expression.scope);
-        if (expression.referenced_name) {
-            expression.referenced_name->overloads = resolved.candidates;
-            expression.referenced_name->selected = resolved.unique();
-        }
-        if (builtin_operator != vhdl::BuiltinOperatorIdentity::none
-            && !retained_candidate
-            && resolved.status == CompiledResolutionStatus::not_found
-            && resolved.candidates.empty()
-            && resolver.vhdl_builtin_package_member_imported("ieee",
-                "std_logic_1164", operation, expression.scope)) {
-            expression.builtin_operator = builtin_operator;
-        }
+        return annotations;
+    };
+
+    auto annotations = resolve_annotations();
+    if (design.apply_linked_vhdl_expression_annotations(annotations)) {
+        return;
     }
+
+    // A stale lookup cache can be used safely through the resolver's linear
+    // fallback, but refresh before retrying so the linker keeps its usual
+    // indexed-resolution behavior.
+    design.refresh_lookup_indexes();
+    annotations = resolve_annotations();
+    if (design.apply_linked_vhdl_expression_annotations(annotations)) {
+        return;
+    }
+
+    // This is only a defensive path for a malformed identity sequence. Do
+    // not restore the revision stamp unless the scoped API proves its
+    // contract; finish through an ordinary mutation and full index rebuild.
+    auto& expressions = design.vhdl_hir.mutable_expressions();
+    for (std::size_t position = 0;
+        position < std::min(expressions.size(), annotations.size());
+        ++position) {
+        auto& expression = expressions[position];
+        auto& annotation = annotations[position];
+        if (expression.id != annotation.expression) {
+            continue;
+        }
+        expression.builtin_operator = annotation.builtin_operator;
+        if (!annotation.name_resolution || !expression.referenced_name) {
+            continue;
+        }
+        expression.referenced_name->selected
+            = annotation.name_resolution->selected;
+        expression.referenced_name->overloads.swap(
+            annotation.name_resolution->overloads);
+    }
+    design.refresh_lookup_indexes();
 }
 
 CompiledReference systemverilog_configuration_reference(

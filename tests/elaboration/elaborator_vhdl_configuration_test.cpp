@@ -1008,6 +1008,7 @@ end configuration;
             recursive.design,
             "vhdl:work.recursive_configuration");
     assert(!recursive_result.ok());
+    assert(!recursive_result.design);
     assert(has_diagnostic(
         recursive_result, "FSIM-ELAB-HIER-002"));
 
@@ -1083,12 +1084,28 @@ end architecture;
             transactional_compiled,
             "vhdl:work.rollback_top(rtl)");
     assert(!transactional_result.ok());
+    assert(!transactional_result.design);
     assert(has_diagnostic(
         transactional_result, "FSIM-ELAB-HIER-002"));
     assert(!has_diagnostic(
         transactional_result, "FSIM-ELAB-HIER-001"));
     assert(!has_diagnostic(
         transactional_result, "FSIM-ELAB-BIND-024"));
+
+    const std::array roots{
+        fsim::elaboration::Root{
+            "vhdl:work.rollback_leaf(rtl)", "good"},
+        fsim::elaboration::Root{
+            "vhdl:work.rollback_top(rtl)", "bad"},
+    };
+    const auto later_root_failure = fsim::elaboration::elaborate(
+        transactional_compiled,
+        std::span<const fsim::elaboration::Root>{roots},
+        {}, {}, nullptr, {});
+    assert(!later_root_failure.ok());
+    assert(!later_root_failure.design);
+    assert(has_diagnostic(
+        later_root_failure, "FSIM-ELAB-HIER-002"));
 }
 
 }  // namespace fsim::tests::elaboration

@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <istream>
 #include <limits>
 #include <memory>
@@ -102,18 +103,136 @@ namespace codec_detail {
         std::vector<semantic::sv::CovergroupInstance> covergroup_instances;
     };
 
+    template <typename T>
+    class ProjectedHirRecords final {
+    public:
+        using value_type = T;
+
+        class ConstIterator final {
+        public:
+            using value_type = T;
+            using difference_type = std::ptrdiff_t;
+            using iterator_category = std::forward_iterator_tag;
+
+            ConstIterator() = default;
+
+            [[nodiscard]] const T& operator*() const
+            {
+                return records_->at(index_);
+            }
+
+            ConstIterator& operator++()
+            {
+                ++index_;
+                return *this;
+            }
+
+            ConstIterator operator++(int)
+            {
+                auto previous = *this;
+                ++*this;
+                return previous;
+            }
+
+            friend bool operator==(
+                const ConstIterator&, const ConstIterator&) = default;
+
+        private:
+            friend class ProjectedHirRecords;
+
+            ConstIterator(
+                const ProjectedHirRecords* records, const std::size_t index)
+                : records_(records)
+                , index_(index)
+            {
+            }
+
+            const ProjectedHirRecords* records_ { };
+            std::size_t index_ { };
+        };
+
+        ProjectedHirRecords() = default;
+
+        ProjectedHirRecords(const std::span<const T> source)
+            : source_(source)
+        {
+        }
+
+        ProjectedHirRecords(const std::vector<T>& source)
+            : source_(source)
+        {
+        }
+
+        [[nodiscard]] std::size_t size() const noexcept
+        {
+            return source_.size();
+        }
+
+        [[nodiscard]] const T& at(const std::size_t index) const noexcept
+        {
+            const auto replacement = std::ranges::lower_bound(
+                replacements_, index, { }, &Replacement::index);
+            if (replacement != replacements_.end()
+                && replacement->index == index) {
+                return replacement->value;
+            }
+            return source_[index];
+        }
+
+        [[nodiscard]] const T& operator[](const std::size_t index) const noexcept
+        {
+            return at(index);
+        }
+
+        [[nodiscard]] T& project(const std::size_t index)
+        {
+            auto replacement = std::ranges::lower_bound(
+                replacements_, index, { }, &Replacement::index);
+            if (replacement == replacements_.end()
+                || replacement->index != index) {
+                replacement = replacements_.insert(
+                    replacement, Replacement { index, source_[index] });
+            }
+            return replacement->value;
+        }
+
+        [[nodiscard]] std::span<const T> source() const noexcept
+        {
+            return source_;
+        }
+
+        [[nodiscard]] ConstIterator begin() const noexcept
+        {
+            return { this, 0U };
+        }
+
+        [[nodiscard]] ConstIterator end() const noexcept
+        {
+            return { this, size() };
+        }
+
+    private:
+        struct Replacement {
+            std::size_t index { };
+            T value;
+        };
+
+        std::span<const T> source_;
+        std::vector<Replacement> replacements_;
+    };
+
     struct SystemVerilogConstraintHirView {
-        std::span<const semantic::sv::Unit> units;
-        std::span<const semantic::sv::Declaration> declarations;
-        std::span<const semantic::sv::TypeDefinition> types;
-        std::span<const semantic::sv::Expression> expressions;
-        std::span<const semantic::sv::Statement> statements;
-        std::span<const semantic::sv::Process> processes;
-        std::span<const semantic::sv::ClassDeclaration> classes;
-        std::span<const semantic::sv::Instance> instances;
-        std::span<const semantic::sv::UdpDeclaration> udps;
-        std::span<const semantic::sv::DpiDeclaration> dpi_declarations;
-        std::span<const semantic::sv::CovergroupInstance>
+        ProjectedHirRecords<semantic::sv::Unit> units;
+        ProjectedHirRecords<semantic::sv::Declaration> declarations;
+        ProjectedHirRecords<semantic::sv::TypeDefinition> types;
+        ProjectedHirRecords<semantic::sv::Expression> expressions;
+        ProjectedHirRecords<semantic::sv::Statement> statements;
+        ProjectedHirRecords<semantic::sv::Process> processes;
+        ProjectedHirRecords<semantic::sv::ClassDeclaration> classes;
+        ProjectedHirRecords<semantic::sv::Instance> instances;
+        ProjectedHirRecords<semantic::sv::UdpDeclaration> udps;
+        ProjectedHirRecords<semantic::sv::DpiDeclaration> dpi_declarations;
+        ProjectedHirRecords<semantic::sv::CovergroupInstance>
             covergroup_instances;
     };
 
@@ -147,12 +266,22 @@ namespace codec_detail {
         std::vector<semantic::CompiledReference> references;
     };
 
+    struct CompiledHirBundleView {
+        std::string semantic_state;
+        std::string systemverilog_hir_state;
+        std::string vhdl_hir_state;
+        std::span<const semantic::CompiledDependency> dependencies;
+        std::span<const semantic::CompiledReference> references;
+    };
+
     template <typename T>
     struct IsVector : std::false_type { };
     template <typename T, typename Allocator>
     struct IsVector<std::vector<T, Allocator>> : std::true_type { };
     template <typename T>
     struct IsVector<support::RareVector<T>> : std::true_type { };
+    template <typename T>
+    struct IsVector<ProjectedHirRecords<T>> : std::true_type { };
 
     template <typename T>
     struct IsSpan : std::false_type { };
@@ -1688,6 +1817,10 @@ namespace codec_detail {
         std::string source_name,
         diagnostic::Engine& diagnostics,
         DecodeBudget& budget);
+    /// Serialize after the enclosing CompiledDesign has validated its model.
+    std::optional<std::string> serialize_validated_semantic_state(
+        const semantic::Model& model,
+        diagnostic::Engine& diagnostics);
     std::optional<semantic::sv::Hir>
     deserialize_systemverilog_constraint_hir_state_with_budget(
         std::string_view bytes,
@@ -1709,4 +1842,17 @@ namespace codec_detail {
         DecodeBudget& budget);
 
 } // namespace codec_detail
+
+namespace application_detail {
+
+[[nodiscard]] std::optional<std::string>
+serialize_cache_compiled_hir_bundle_with_projected_sources(
+    const semantic::CompiledDesign& design,
+    semantic::Model projected_semantics,
+    std::span<const semantic::CompiledDependency> projected_dependencies,
+    const codec_detail::SystemVerilogConstraintHirView& projected_systemverilog,
+    std::span<const semantic::vhdl::Unit> projected_vhdl_units,
+    diagnostic::Engine& diagnostics);
+
+} // namespace application_detail
 } // namespace fsim::app

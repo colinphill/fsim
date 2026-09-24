@@ -92,7 +92,7 @@ bool portable_semantics(
     return true;
 }
 
-} // namespace codec_detail
+}  // namespace codec_detail
 
 
 using namespace codec_detail;
@@ -264,17 +264,58 @@ deserialize_systemverilog_uvm_state(
 #endif
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_SEMANTIC)
-std::optional<std::string> serialize_semantic_state(
-    const semantic::Model& model,
+namespace codec_detail {
+
+std::optional<std::string> serialize_semantic_records(
+    semantic::ModelRecords records,
     diagnostic::Engine& diagnostics)
 {
-    auto records = model.records();
-    if (!model.valid() || !portable_semantics(records, diagnostics)) {
+    if (!portable_semantics(records, diagnostics)) {
         return std::nullopt;
     }
     return serialize(
         "FSIMSEM1", kSemanticStateSchema, records, diagnostics);
 }
+
+std::optional<std::string> serialize_validated_semantic_state(
+    const semantic::Model& model,
+    diagnostic::Engine& diagnostics)
+{
+    return serialize_semantic_records(model.records(), diagnostics);
+}
+
+} // namespace codec_detail
+
+std::optional<std::string> serialize_semantic_state(
+    const semantic::Model& model,
+    diagnostic::Engine& diagnostics)
+{
+    auto records = model.records();
+    if (!model.valid()) {
+        return std::nullopt;
+    }
+    return codec_detail::serialize_semantic_records(
+        std::move(records), diagnostics);
+}
+
+namespace application_detail {
+
+std::optional<std::string>
+serialize_cache_semantic_state_with_source_projection(
+    const semantic::Model& semantics,
+    const std::span<const library::SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics)
+{
+    auto records = project_compiled_semantic_source_names(
+        semantics, mappings, diagnostics);
+    if (!records) {
+        return std::nullopt;
+    }
+    return codec_detail::serialize_semantic_records(
+        std::move(*records), diagnostics);
+}
+
+} // namespace application_detail
 
 std::optional<semantic::Model> deserialize_semantic_state(
     const std::string_view bytes,

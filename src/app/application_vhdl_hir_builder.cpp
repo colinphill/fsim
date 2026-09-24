@@ -7,6 +7,12 @@ VhdlHirBuilder::VhdlHirBuilder(semantic::Model& model, vh::Hir& hir)
     : model_(model)
     , hir_(hir)
 {
+    for (const auto& value : model_.values()) {
+        values_by_lookup_key_.try_emplace(
+            ValueLookupKey { value.scope, value.source,
+                canonical_vhdl_name(value.name) },
+            value.id);
+    }
 }
 
 void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)

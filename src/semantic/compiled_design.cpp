@@ -687,17 +687,25 @@ void CompiledDesign::refresh_lookup_indexes()
             .push_back(declaration.id);
     }
     rebuilt.vhdl_imports_by_unit.resize(semantics.units().size());
+    std::vector<std::vector<const CompiledReference*>>
+        package_references_by_owner(rebuilt.vhdl_imports_by_unit.size());
+    for (const auto& reference : references_) {
+        if (reference.kind != CompiledReferenceKind::package
+            || !reference.owner.valid()
+            || reference.owner.value() >= package_references_by_owner.size()) {
+            continue;
+        }
+        package_references_by_owner[reference.owner.value()].push_back(
+            &reference);
+    }
     for (const auto& unit : vhdl_hir.units()) {
         if (!unit.id.valid()
             || unit.id.value() >= rebuilt.vhdl_imports_by_unit.size()) {
             continue;
         }
         auto& imports = rebuilt.vhdl_imports_by_unit[unit.id.value()];
-        for (const auto& reference : references_) {
-            if (reference.kind != CompiledReferenceKind::package
-                || reference.owner != unit.id) {
-                continue;
-            }
+        for (const auto* reference :
+             package_references_by_owner[unit.id.value()]) {
             for (const auto& item : unit.context) {
                 if (item.kind != vhdl::ContextKind::use_clause) {
                     continue;
@@ -720,14 +728,14 @@ void CompiledDesign::refresh_lookup_indexes()
                         ? std::string_view { parts[1] }
                         : std::string_view { parts.front() };
                     if (!same_vhdl_identifier(
-                            library, reference.library)
+                            library, reference->library)
                         || !same_vhdl_identifier(
-                            package, reference.name)) {
+                            package, reference->name)) {
                         continue;
                     }
                     CompiledVhdlImport imported {
-                        canonical_vhdl_identifier(reference.library),
-                        canonical_vhdl_identifier(reference.name),
+                        canonical_vhdl_identifier(reference->library),
+                        canonical_vhdl_identifier(reference->name),
                         canonical_vhdl_identifier(parts.back()),
                     };
                     const auto duplicate = std::ranges::find_if(
@@ -808,6 +816,46 @@ void CompiledDesign::refresh_lookup_indexes()
     rebuilt.owner = this;
     rebuilt.initialized = true;
     lookup_indexes_ = std::move(rebuilt);
+}
+
+bool CompiledDesign::apply_linked_vhdl_expression_annotations(
+    std::vector<CompiledVhdlExpressionAnnotation>& annotations)
+{
+    const auto& current_expressions = vhdl_hir.expressions();
+    if (!lookup_indexes_current()
+        || annotations.size() != current_expressions.size()) {
+        return false;
+    }
+    for (std::size_t position = 0; position < annotations.size();
+        ++position) {
+        if (annotations[position].expression
+                != current_expressions[position].id
+            || (annotations[position].name_resolution
+                && !current_expressions[position].referenced_name)) {
+            return false;
+        }
+    }
+
+    // This scoped write changes no expression identity, vector position, or
+    // other index-driving collection. The mutable accessor advances the HIR
+    // revision, so retain the already-current index addresses by updating
+    // only their VHDL revision stamp after the annotation writes complete.
+    auto& expressions = vhdl_hir.mutable_expressions();
+    for (std::size_t position = 0; position < annotations.size();
+        ++position) {
+        auto& expression = expressions[position];
+        auto& annotation = annotations[position];
+        expression.builtin_operator = annotation.builtin_operator;
+        if (!annotation.name_resolution) {
+            continue;
+        }
+        auto& referenced_name = *expression.referenced_name;
+        referenced_name.selected = annotation.name_resolution->selected;
+        referenced_name.overloads.swap(
+            annotation.name_resolution->overloads);
+    }
+    lookup_indexes_.vhdl_revision = vhdl_hir.revision();
+    return true;
 }
 
 std::span<const CompiledDependency>

@@ -10,6 +10,8 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <map>
 
 namespace fsim::app::application_detail {
 
@@ -89,6 +91,22 @@ std::string make_cache_key(
     const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics)
 {
+    std::map<std::filesystem::path::string_type, std::string>
+        stable_source_names;
+    const auto stable_source_name = [&stable_source_names, &config](
+                                        const std::filesystem::path& path)
+        -> const std::string& {
+        const auto& spelling = path.native();
+        const auto found = stable_source_names.find(spelling);
+        if (found != stable_source_names.end()) {
+            return found->second;
+        }
+        return stable_source_names
+            .emplace(spelling,
+                stable_cache_source_name(path, config.base_directory))
+            .first->second;
+    };
+
     compiler::CacheKeyBuilder key;
     add_compiled_hir_cache_key_identity(key);
     key.add("fsim-version", version);
@@ -157,14 +175,12 @@ std::string make_cache_key(
         for (const auto& include : set.include_directories) {
             key.add(
                 "include",
-                stable_cache_source_name(
-                    include, config.base_directory));
+                stable_source_name(include));
         }
         for (const auto& file : set.files) {
             key.add(
                 "source-path",
-                stable_cache_source_name(
-                    file, config.base_directory));
+                stable_source_name(file));
             if (set.language == project::Language::systemc) {
                 if (systemc_source_index
                         >= checked.systemc_sources.size()
@@ -209,8 +225,7 @@ std::string make_cache_key(
                 checked.hdl_sources[hdl_source_index].dependencies) {
                 key.add(
                     "dependency-path",
-                    stable_cache_source_name(
-                        dependency.path, config.base_directory));
+                    stable_source_name(dependency.path));
                 key.add(
                     "dependency-content",
                     dependency.content_digest);
@@ -244,8 +259,7 @@ std::string make_cache_key(
         const auto& source = checked.hdl_sources[hdl_source_index];
         key.add(
             "mapped-source-path",
-            stable_cache_source_name(
-                source.path, config.base_directory));
+            stable_source_name(source.path));
         key.add("mapped-source-content", source.content_digest);
         key.add("mapped-source-compilation-unit", source.compilation_unit_digest);
     }
