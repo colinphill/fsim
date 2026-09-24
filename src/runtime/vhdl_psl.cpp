@@ -8,6 +8,19 @@
 namespace fsim::runtime {
 namespace {
 
+    template<typename Value>
+    void reserve_append(std::vector<Value>& values)
+    {
+        if (values.size() != values.capacity()) {
+            return;
+        }
+        const auto required = values.size() + 1U;
+        const auto grown = values.capacity() > values.max_size() / 2U
+            ? values.max_size()
+            : 2U * values.capacity();
+        values.reserve(std::max(required, grown));
+    }
+
     [[nodiscard]] std::string resource_message(
         const VhdlPslResourceKind kind, const std::size_t limit)
     {
@@ -32,6 +45,8 @@ namespace {
 
 struct VhdlPslAttemptEngine::Monitor {
     VhdlPslMonitorPlan plan;
+    std::size_t clock_binding { };
+    std::size_t active_attempts { };
     bool enabled { true };
 };
 
@@ -39,6 +54,17 @@ struct VhdlPslAttemptEngine::ActiveAttempt {
     std::size_t monitor { };
     std::size_t snapshot { };
     bool active { true };
+};
+
+struct VhdlPslAttemptEngine::ClockBinding {
+    std::string identity;
+    std::vector<VhdlPslClockedSample> samples;
+    VhdlPslTruth previous { VhdlPslTruth::unknown };
+    VhdlPslTruth current { VhdlPslTruth::unknown };
+    bool current_present { };
+    bool rising_edge { };
+    bool falling_edge { };
+    bool append_sample { };
 };
 
 VhdlPslAttemptEngine::~VhdlPslAttemptEngine() = default;
@@ -82,10 +108,14 @@ std::size_t VhdlPslAttemptEngine::add_monitor(VhdlPslMonitorPlan plan)
         })) {
         throw std::invalid_argument("duplicate VHDL PSL monitor identity");
     }
-    const auto new_clock = !histories_.contains(plan.clock_identity);
+    const auto clock = std::ranges::find(clock_bindings_, plan.clock_identity,
+        &ClockBinding::identity);
+    const auto new_clock = clock == clock_bindings_.end();
+    const auto clock_binding = new_clock
+        ? clock_bindings_.size()
+        : static_cast<std::size_t>(clock - clock_bindings_.begin());
     const auto clock_storage = new_clock
-        ? 2U * (3U * sizeof(void*) + sizeof(std::string) + plan.clock_identity.size())
-            + sizeof(std::vector<VhdlPslClockedSample>)
+        ? 2U * (sizeof(ClockBinding) + plan.clock_identity.size())
         : 0U;
     // The factor of two covers geometric vector-capacity growth. The fixed
     // allowance covers the type-erased evaluator and allocator bookkeeping,
@@ -97,12 +127,15 @@ std::size_t VhdlPslAttemptEngine::add_monitor(VhdlPslMonitorPlan plan)
         throw VhdlPslResourceError { VhdlPslResourceKind::storage_bytes,
             limits_.maximum_storage_bytes };
     }
-    monitors_.push_back(Monitor { std::move(plan), true });
+    reserve_append(monitors_);
     if (new_clock) {
-        const auto& identity = monitors_.back().plan.clock_identity;
-        histories_.try_emplace(identity);
-        previous_clocks_.try_emplace(identity, VhdlPslTruth::unknown);
+        reserve_append(clock_bindings_);
+        ClockBinding binding;
+        binding.identity = plan.clock_identity;
+        clock_bindings_.push_back(std::move(binding));
     }
+    monitors_.push_back(Monitor { std::move(plan), clock_binding, 0U, true });
+    ++enabled_monitor_count_;
     monitor_storage_bytes_ += additional;
     storage_bytes_ += additional;
     return monitors_.size() - 1U;
@@ -121,6 +154,11 @@ void VhdlPslAttemptEngine::set_enabled(
         return;
     }
     found->enabled = enabled;
+    if (enabled) {
+        ++enabled_monitor_count_;
+    } else {
+        --enabled_monitor_count_;
+    }
     if (!enabled) {
         const auto index = static_cast<std::size_t>(found - monitors_.begin());
         for (auto& active : active_) {
@@ -132,21 +170,14 @@ void VhdlPslAttemptEngine::set_enabled(
     }
 }
 
-bool VhdlPslAttemptEngine::clock_edge(const Monitor& monitor,
-    const VhdlPslTruth previous, const VhdlPslTruth current) const noexcept
+bool VhdlPslAttemptEngine::clock_edge(const Monitor& monitor) const noexcept
 {
-    if (previous == VhdlPslTruth::unknown
-        || current == VhdlPslTruth::unknown) {
-        return false;
-    }
-    const auto rising = previous == VhdlPslTruth::false_value
-        && current == VhdlPslTruth::true_value;
-    const auto falling = previous == VhdlPslTruth::true_value
-        && current == VhdlPslTruth::false_value;
+    const auto& binding = clock_bindings_[monitor.clock_binding];
     return monitor.plan.edge == VhdlPslClockEdge::rising
-        ? rising
-        : monitor.plan.edge == VhdlPslClockEdge::falling ? falling
-                                                         : rising || falling;
+        ? binding.rising_edge
+        : monitor.plan.edge == VhdlPslClockEdge::falling
+        ? binding.falling_edge
+        : binding.rising_edge || binding.falling_edge;
 }
 
 void VhdlPslAttemptEngine::complete(ActiveAttempt& active,
@@ -157,14 +188,16 @@ void VhdlPslAttemptEngine::complete(ActiveAttempt& active,
     snapshot.outcome = outcome;
     snapshot.end_time = time;
     snapshot.end_delta = delta;
-    const auto& history = histories_.at(snapshot.clock_identity);
+    auto& monitor = monitors_[active.monitor];
+    const auto& history = clock_bindings_[monitor.clock_binding].samples;
     snapshot.end_sample = history.empty() ? snapshot.start_sample
                                           : history.size() - 1U;
     active.active = false;
     --active_count_;
-    if (monitors_[active.monitor].plan.complete) {
+    --monitor.active_attempts;
+    if (monitor.plan.complete) {
         try {
-            monitors_[active.monitor].plan.complete(snapshot);
+            monitor.plan.complete(snapshot);
         } catch (...) {
             // Assertion observers cannot corrupt or roll back committed
             // simulation state. The owning application may retain its own
@@ -179,7 +212,7 @@ void VhdlPslAttemptEngine::evaluate_active(const std::size_t monitor_index,
     const bool end_of_run, std::size_t& evaluation_count)
 {
     auto& monitor = monitors_.at(monitor_index);
-    auto& history = histories_.at(monitor.plan.clock_identity);
+    auto& history = clock_bindings_[monitor.clock_binding].samples;
     for (auto& active : active_) {
         if (!active.active || active.monitor != monitor_index) {
             continue;
@@ -207,29 +240,43 @@ void VhdlPslAttemptEngine::observe(
     VhdlPslSampleValues values, const SimulationTick time,
     const std::uint64_t delta)
 {
-    std::vector<bool> edges(monitors_.size());
-    for (std::size_t index = 0U; index < monitors_.size(); ++index) {
-        const auto& monitor = monitors_[index];
-        const auto current = clocks.find(monitor.plan.clock_identity);
-        const auto previous = previous_clocks_.find(monitor.plan.clock_identity);
-        if (current != clocks.end() && previous != previous_clocks_.end()) {
-            edges[index] = clock_edge(
-                monitor, previous->second, current->second);
+    for (auto& binding : clock_bindings_) {
+        binding.current_present = false;
+        binding.rising_edge = false;
+        binding.falling_edge = false;
+        binding.append_sample = false;
+        if (const auto current = clocks.find(binding.identity);
+            current != clocks.end()) {
+            binding.current = current->second;
+            binding.current_present = true;
+            if (binding.previous != VhdlPslTruth::unknown
+                && binding.current != VhdlPslTruth::unknown) {
+                binding.rising_edge = binding.previous
+                        == VhdlPslTruth::false_value
+                    && binding.current == VhdlPslTruth::true_value;
+                binding.falling_edge = binding.previous
+                        == VhdlPslTruth::true_value
+                    && binding.current == VhdlPslTruth::false_value;
+            }
         }
     }
-    std::map<std::string, bool, std::less<>> edge_histories;
     std::size_t spawning { };
-    for (std::size_t index = 0U; index < monitors_.size(); ++index) {
-        if (!monitors_[index].enabled || !edges[index]) {
+    if (enabled_monitor_count_ != 0U) {
+        for (auto& monitor : monitors_) {
+            if (!monitor.enabled || !clock_edge(monitor)) {
+                continue;
+            }
+            ++spawning;
+            clock_bindings_[monitor.clock_binding].append_sample = true;
+        }
+    }
+    std::size_t sampled_clocks { };
+    for (const auto& binding : clock_bindings_) {
+        if (!binding.append_sample) {
             continue;
         }
-        ++spawning;
-        edge_histories.emplace(monitors_[index].plan.clock_identity, true);
-    }
-    for (const auto& [clock, unused] : edge_histories) {
-        (void)unused;
-        if (histories_.at(clock).size()
-            == limits_.maximum_history_samples) {
+        ++sampled_clocks;
+        if (binding.samples.size() == limits_.maximum_history_samples) {
             throw VhdlPslResourceError {
                 VhdlPslResourceKind::history_samples,
                 limits_.maximum_history_samples
@@ -249,27 +296,22 @@ void VhdlPslAttemptEngine::observe(
         throw VhdlPslResourceError { VhdlPslResourceKind::evaluations,
             limits_.maximum_evaluations_per_observation };
     }
-    // Histories share one immutable value map per observation. Charge each
-    // history's possible vector-capacity growth and the shared ordered-map
-    // nodes/string storage before any state is published.
-    std::size_t value_bytes = sizeof(VhdlPslSampleValues)
-        + 2U * sizeof(void*);
-    for (const auto& [name, unused] : values) {
-        (void)unused;
-        value_bytes += sizeof(VhdlPslSampleValues::value_type)
-            + 3U * sizeof(void*) + 2U * name.size();
-    }
     std::size_t additional_storage { };
-    if (!edge_histories.empty()
-        && 2U * sizeof(VhdlPslClockedSample)
-            > (std::numeric_limits<std::size_t>::max() - additional_storage)
-                / edge_histories.size()) {
-        throw VhdlPslResourceError { VhdlPslResourceKind::storage_bytes,
-            limits_.maximum_storage_bytes };
-    }
-    additional_storage += 2U * sizeof(VhdlPslClockedSample)
-        * edge_histories.size();
-    if (!edge_histories.empty()) {
+    if (sampled_clocks != 0U) {
+        if (2U * sizeof(VhdlPslClockedSample)
+            > std::numeric_limits<std::size_t>::max() / sampled_clocks) {
+            throw VhdlPslResourceError { VhdlPslResourceKind::storage_bytes,
+                limits_.maximum_storage_bytes };
+        }
+        additional_storage += 2U * sizeof(VhdlPslClockedSample)
+            * sampled_clocks;
+        std::size_t value_bytes = sizeof(VhdlPslSampleValues)
+            + 2U * sizeof(void*);
+        for (const auto& [name, unused] : values) {
+            (void)unused;
+            value_bytes += sizeof(VhdlPslSampleValues::value_type)
+                + 3U * sizeof(void*) + 2U * name.size();
+        }
         if (value_bytes
             > std::numeric_limits<std::size_t>::max() - additional_storage) {
             throw VhdlPslResourceError { VhdlPslResourceKind::storage_bytes,
@@ -278,7 +320,7 @@ void VhdlPslAttemptEngine::observe(
         additional_storage += value_bytes;
     }
     for (std::size_t index = 0U; index < monitors_.size(); ++index) {
-        if (!monitors_[index].enabled || !edges[index]) {
+        if (!monitors_[index].enabled || !clock_edge(monitors_[index])) {
             continue;
         }
         const auto& plan = monitors_[index].plan;
@@ -299,18 +341,23 @@ void VhdlPslAttemptEngine::observe(
     storage_bytes_ += additional_storage;
     last_time_ = time;
     last_delta_ = delta;
-    for (auto& [clock, previous] : previous_clocks_) {
-        if (const auto current = clocks.find(clock); current != clocks.end()) {
-            previous = current->second;
+    for (auto& binding : clock_bindings_) {
+        if (binding.current_present) {
+            binding.previous = binding.current;
         }
     }
-    auto retained_values = edge_histories.empty()
+    if (spawning == 0U && active_count_ == 0U) {
+        return;
+    }
+    auto retained_values = sampled_clocks == 0U
         ? std::shared_ptr<const VhdlPslSampleValues> { }
         : std::make_shared<const VhdlPslSampleValues>(std::move(values));
     const auto& current_values = retained_values ? *retained_values : values;
-    for (const auto& [clock, unused] : edge_histories) {
-        (void)unused;
-        histories_.at(clock).push_back(
+    for (auto& binding : clock_bindings_) {
+        if (!binding.append_sample) {
+            continue;
+        }
+        binding.samples.push_back(
             VhdlPslClockedSample { time, delta, retained_values });
     }
 
@@ -320,12 +367,16 @@ void VhdlPslAttemptEngine::observe(
         if (!monitor.enabled) {
             continue;
         }
-        if (!edges[index]) {
+        const auto edge = clock_edge(monitor);
+        if (!edge && monitor.active_attempts == 0U) {
+            continue;
+        }
+        if (!edge) {
             evaluate_active(index, false, current_values, time, delta, false,
                 evaluation_count);
             continue;
         }
-        auto& history = histories_[monitor.plan.clock_identity];
+        auto& history = clock_bindings_[monitor.clock_binding].samples;
         VhdlPslAttemptSnapshot snapshot;
         snapshot.attempt = next_attempt_++;
         snapshot.monitor = monitor.plan.identity;
@@ -343,6 +394,7 @@ void VhdlPslAttemptEngine::observe(
         active_.push_back(
             ActiveAttempt { index, attempts_.size() - 1U, true });
         ++active_count_;
+        ++monitor.active_attempts;
         evaluate_active(index, true, *history.back().values, time, delta,
             false, evaluation_count);
     }
@@ -351,6 +403,9 @@ void VhdlPslAttemptEngine::observe(
 void VhdlPslAttemptEngine::finish(
     const SimulationTick time, const std::uint64_t delta)
 {
+    if (active_count_ == 0U) {
+        return;
+    }
     const VhdlPslSampleValues empty;
     std::size_t evaluation_count { };
     for (std::size_t index = 0U; index < monitors_.size(); ++index) {
@@ -363,13 +418,17 @@ void VhdlPslAttemptEngine::reset() noexcept
 {
     active_.clear();
     attempts_.clear();
-    for (auto& [unused, previous] : previous_clocks_) {
-        (void)unused;
-        previous = VhdlPslTruth::unknown;
+    for (auto& binding : clock_bindings_) {
+        binding.previous = VhdlPslTruth::unknown;
+        binding.current = VhdlPslTruth::unknown;
+        binding.current_present = false;
+        binding.rising_edge = false;
+        binding.falling_edge = false;
+        binding.append_sample = false;
+        binding.samples.clear();
     }
-    for (auto& [unused, history] : histories_) {
-        (void)unused;
-        history.clear();
+    for (auto& monitor : monitors_) {
+        monitor.active_attempts = 0U;
     }
     next_attempt_ = 1U;
     active_count_ = 0U;

@@ -1659,6 +1659,12 @@ std::optional<VcdScale> vcd_scale(
 class TraceObservationRecorder;
 class TraceSelectionControl;
 
+struct TraceState;
+
+struct TraceCallbackLifetime {
+    TraceState* state { };
+};
+
 enum class TraceTerminalStatus : std::uint8_t {
     open,
     complete,
@@ -1674,6 +1680,7 @@ struct TraceState {
     std::unique_ptr<runtime::TraceDeclarationModel> declarations;
     std::unique_ptr<TraceObservationRecorder> observations;
     std::unique_ptr<TraceSelectionControl> selection;
+    std::shared_ptr<TraceCallbackLifetime> callback_lifetime;
     std::shared_ptr<const TraceControlApplication> control;
     std::vector<std::vector<runtime::VcdSignal>> handles;
     std::vector<runtime::VcdSignal> declaration_handles;
@@ -1687,6 +1694,8 @@ struct TraceState {
     std::filesystem::path lock_directory;
     std::filesystem::path staging_path;
     std::filesystem::path backup_path;
+    std::uint64_t observation_writer_observer { };
+    std::uint64_t signal_change_observer { };
     std::uint64_t uvm_activity_observer { };
     SimulationTick tick_multiplier { 1 };
     TraceTerminalStatus terminal_status { TraceTerminalStatus::open };

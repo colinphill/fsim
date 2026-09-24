@@ -36,7 +36,7 @@ Simulation::Simulation(
 {
     auto* const lifetime = impl_.get();
     impl_->hdl_vcd.remove_observer = [lifetime](const std::uint64_t token) {
-        lifetime->signal_observers.erase(token);
+        lifetime->remove_signal_observer(token);
     };
     impl_->hdl_vcd.current_time = [lifetime] {
         return lifetime->interpreter->scheduler().now();
@@ -189,11 +189,13 @@ void Simulation::deposit_container_object(
 {
     impl_->interpreter->deposit_container_object(
         object, std::move(value));
+    impl_->refresh_observation_hooks();
 }
 
 void Simulation::release_signal(const SignalId signal)
 {
     impl_->interpreter->release_signal(signal);
+    impl_->refresh_observation_hooks();
 }
 
 bool Simulation::signal_is_forced(const SignalId signal) const
@@ -209,7 +211,9 @@ void Simulation::start()
     try {
         impl_->start_vpi();
         impl_->start_systemc();
+        impl_->refresh_observation_hooks();
         impl_->interpreter->start();
+        impl_->refresh_observation_hooks();
     } catch (...) {
         impl_->lifecycle = Impl::Lifecycle::poisoned;
         throw;
@@ -253,6 +257,7 @@ runtime::RunResult Simulation::run(
     try {
         impl_->start_vpi();
         impl_->start_systemc();
+        impl_->refresh_observation_hooks();
         auto result = impl_->interpreter->run(until);
         if (impl_->vpi_control->state()
             == runtime::SystemVerilogVpiControlState::Finished) {
@@ -273,6 +278,7 @@ runtime::RunResult Simulation::run(
             impl_->end_systemc(result.time);
             impl_->lifecycle = Impl::Lifecycle::finished;
         }
+        impl_->refresh_observation_hooks();
         return result;
     } catch (...) {
         impl_->lifecycle = Impl::Lifecycle::poisoned;

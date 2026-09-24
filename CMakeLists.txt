@@ -746,6 +746,9 @@ add_library(
 add_library(fsim::runtime ALIAS fsim_runtime)
 fsim_configure_library(fsim_runtime)
 target_link_libraries(fsim_runtime PRIVATE fsim_tf)
+if(WIN32)
+  target_link_libraries(fsim_runtime PUBLIC Advapi32)
+endif()
 
   add_library(
     fsim_elaboration

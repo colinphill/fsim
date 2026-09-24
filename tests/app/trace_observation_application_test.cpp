@@ -18,6 +18,7 @@ namespace {
 using fsim::app::application_detail::TraceObservationKind;
 using fsim::app::application_detail::TraceObservationLimits;
 using fsim::app::application_detail::TraceObservationRecorder;
+using fsim::app::application_detail::TraceObservationRetention;
 using fsim::app::application_detail::TraceObservationValue;
 
 template <typename Exception, typename Function>
@@ -178,11 +179,7 @@ void test_atomic_correlated_fanout()
     accept_one(TraceObservationKind::Sdf, 7U, TraceRegion::Postponed,
         "sdf:top.path", 7U, "10XZ0011");
 
-    assert(recorder.records().size() == 7U);
-    assert(recorder.records()[1].values.size() == 2U);
-    assert(recorder.records()[1].time == 2U);
-    assert(recorder.records()[1].delta == 12U);
-    assert(recorder.records()[1].region == TraceRegion::Callback);
+    assert(recorder.records().empty());
     assert(failing_attempts == 7U);
     assert(complete_sequences
         == std::vector<std::uint64_t>({ 1U, 2U, 3U, 4U, 5U, 6U, 7U }));
@@ -193,6 +190,39 @@ void test_atomic_correlated_fanout()
     vcd.flush();
     assert(!fst_bytes.str().empty());
     assert(vcd_text.str().find("#7") != std::string::npos);
+}
+
+void test_streaming_and_bounded_capture_retention()
+{
+    using namespace fsim::runtime;
+    const auto fixture = make_fixture();
+    TraceObservationLimits limits;
+    limits.maximum_records = 1U;
+    const std::array values { TraceObservationValue { fixture.signals[0],
+        PackedLogic4::from_msb_string("1010"), std::nullopt } };
+
+    TraceObservationRecorder streaming(fixture.declarations, limits);
+    std::size_t streamed_records = 0U;
+    static_cast<void>(streaming.add_observer(
+        [&](const auto&) { ++streamed_records; }));
+    static_cast<void>(streaming.accept(TraceObservationKind::Signal,
+        1U, 0U, TraceRegion::Active, "first", values));
+    static_cast<void>(streaming.accept(TraceObservationKind::Signal,
+        2U, 0U, TraceRegion::Active, "second", values));
+    assert(streamed_records == 2U);
+    assert(streaming.records().empty());
+    assert(!streaming.would_reorder(3U, 0U, TraceRegion::Active));
+    assert(streaming.would_reorder(1U, 0U, TraceRegion::Callback));
+
+    TraceObservationRecorder capture(fixture.declarations, limits,
+        TraceObservationRetention::BoundedCapture);
+    static_cast<void>(capture.accept(TraceObservationKind::Signal, 1U, 0U,
+        TraceRegion::Active, "captured", values));
+    expect_throws<std::length_error>([&] {
+        static_cast<void>(capture.accept(TraceObservationKind::Signal,
+            2U, 0U, TraceRegion::Active, "over-limit", values));
+    });
+    assert(capture.records().size() == 1U);
 }
 
 void test_transactional_negatives()
@@ -206,7 +236,8 @@ void test_transactional_negatives()
     limits.maximum_payload_bits = 64U;
     limits.maximum_identity_bytes = 8U;
     limits.maximum_observers = 1U;
-    TraceObservationRecorder recorder(fixture.declarations, limits);
+    TraceObservationRecorder recorder(fixture.declarations, limits,
+        TraceObservationRetention::BoundedCapture);
 
     expect_throws<std::invalid_argument>([&] {
         static_cast<void>(recorder.add_observer({ }));
@@ -315,7 +346,8 @@ void test_transactional_negatives()
 void test_reentrant_callback_containment()
 {
     const auto fixture = make_fixture();
-    TraceObservationRecorder recorder(fixture.declarations);
+    TraceObservationRecorder recorder(fixture.declarations, { },
+        TraceObservationRetention::BoundedCapture);
     std::size_t complete = 0U;
     static_cast<void>(recorder.add_observer([&](const auto& record) {
         static_cast<void>(recorder.accept(record.kind, record.time,
@@ -349,7 +381,8 @@ void test_systemc_repeated_dirty_phase()
         "systemc_root.wide_input", signal, source);
     const auto declarations = std::move(builder).freeze();
     assert(declarations.alias(alias).target == signal);
-    TraceObservationRecorder recorder(declarations);
+    TraceObservationRecorder recorder(declarations, { },
+        TraceObservationRetention::BoundedCapture);
     std::string symbols(257U, '0');
     for (std::size_t index = 0U; index < symbols.size(); ++index) {
         constexpr std::array states { '0', '1', 'X', 'Z' };
@@ -374,6 +407,7 @@ void test_systemc_repeated_dirty_phase()
 int main()
 {
     test_atomic_correlated_fanout();
+    test_streaming_and_bounded_capture_retention();
     test_transactional_negatives();
     test_reentrant_callback_containment();
     test_systemc_repeated_dirty_phase();

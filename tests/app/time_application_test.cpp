@@ -285,6 +285,12 @@ ScalarSurfaceCapture verify_scalar_surfaces(
     std::vector<std::pair<fsim::runtime::simir::SignalId,
         fsim::runtime::SystemVerilogScalarValue>>
         changes;
+    std::size_t scalar_mutator_calls = 0U;
+    std::size_t removed_scalar_observer_calls = 0U;
+    std::size_t added_scalar_observer_calls = 0U;
+    bool scalar_observer_mutated = false;
+    std::uint64_t removed_scalar_observer = 0U;
+    std::uint64_t added_scalar_observer = 0U;
     std::vector<fsim::runtime::SystemVerilogChandleEvent> chandle_events;
     ScalarSurfaceCapture capture;
     const auto chandle_observer = simulation.chandle_registry().add_observer(
@@ -299,9 +305,41 @@ ScalarSurfaceCapture verify_scalar_surfaces(
             [&](const auto signal, const auto& value, const auto, const auto) {
                 changes.emplace_back(signal, value);
             });
+        const auto scalar_mutator_observer
+            = simulation.add_scalar_signal_change_hook(
+            [&](const auto signal, const auto&, const auto, const auto) {
+                if (signal != *real_signal) {
+                    return;
+                }
+                ++scalar_mutator_calls;
+                if (scalar_observer_mutated) {
+                    return;
+                }
+                scalar_observer_mutated = true;
+                simulation.remove_scalar_signal_change_hook(
+                    removed_scalar_observer);
+                added_scalar_observer
+                    = simulation.add_scalar_signal_change_hook(
+                        [&](const auto added_signal, const auto&,
+                            const auto, const auto) {
+                            if (added_signal == *real_signal) {
+                                ++added_scalar_observer_calls;
+                            }
+                        });
+            });
+        removed_scalar_observer
+            = simulation.add_scalar_signal_change_hook(
+                [&](const auto signal, const auto&, const auto, const auto) {
+                    if (signal == *real_signal) {
+                        ++removed_scalar_observer_calls;
+                    }
+                });
         simulation.deposit_scalar_signal(
             *real_signal,
             fsim::runtime::SystemVerilogScalarValue::real(-0.0));
+        assert(scalar_mutator_calls == 1U);
+        assert(removed_scalar_observer_calls == 1U);
+        assert(added_scalar_observer_calls == 0U);
         assert(
             simulation.read_scalar_signal(*real_signal).bits
             == UINT64_C(0x8000000000000000));
@@ -320,6 +358,8 @@ ScalarSurfaceCapture verify_scalar_surfaces(
             fsim::runtime::SystemVerilogScalarValue::chandle(foreign));
         debugger.execute({ "show", "scalar_surfaces.r" });
         debugger.execute({ "deposit", "scalar_surfaces.r", "1.25" });
+        assert(scalar_mutator_calls == 2U);
+        assert(added_scalar_observer_calls == 1U);
         debugger.execute({ "show", "scalar_surfaces.r" });
         debugger.execute({ "force", "scalar_surfaces.ticks", "9007199254740995" });
         debugger.execute({ "show", "scalar_surfaces.ticks" });
@@ -375,6 +415,14 @@ ScalarSurfaceCapture verify_scalar_surfaces(
             stale_deposit_rejected = true;
         }
         assert(stale_deposit_rejected);
+
+        simulation.remove_scalar_signal_change_hook(
+            scalar_mutator_observer);
+        simulation.remove_scalar_signal_change_hook(
+            removed_scalar_observer);
+        simulation.remove_scalar_signal_change_hook(
+            added_scalar_observer);
+        simulation.set_scalar_signal_change_hook({ });
     }
     assert(simulation.chandle_registry().remove_observer(chandle_observer));
     assert(changes.size() >= 8);

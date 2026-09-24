@@ -1336,12 +1336,25 @@ std::unique_ptr<TraceState> attach_trace(
             }
         }
         trace->observations = std::make_unique<TraceObservationRecorder>(
-            *trace->declarations);
-        auto* state = trace.get();
-        static_cast<void>(trace->observations->add_observer(
-            [state](const auto& record) {
-                write_trace_observation(*state, record);
-            }));
+            *trace->declarations, TraceObservationLimits { },
+            TraceObservationRetention::Streaming);
+        trace->callback_lifetime
+            = std::make_shared<TraceCallbackLifetime>();
+        trace->callback_lifetime->state = trace.get();
+        const auto callback_lifetime = trace->callback_lifetime;
+        trace->observation_writer_observer
+            = trace->observations->add_observer(
+                [callback_lifetime](const auto& record) {
+                    auto* state = callback_lifetime->state;
+                    if (!state
+                        || state->terminal_status != TraceTerminalStatus::open
+                        || (state->format == project::TraceFormat::vcd
+                            ? !state->writer
+                            : !state->fst_writer)) {
+                        return;
+                    }
+                    write_trace_observation(*state, record);
+                });
         if (simulation.now()
             > std::numeric_limits<SimulationTick>::max()
                 / trace->tick_multiplier) {
@@ -1407,16 +1420,33 @@ std::unique_ptr<TraceState> attach_trace(
             write_uvm_activity_trace_event(*trace, event);
         }
         trace->simulation = &simulation;
+        const auto observer_lifetime = trace->callback_lifetime;
         trace->uvm_activity_observer = simulation.add_uvm_activity_hook(
-            [state](const auto& event) {
+            [observer_lifetime](const auto& event) {
+                auto* state = observer_lifetime->state;
+                if (!state
+                    || state->terminal_status != TraceTerminalStatus::open
+                    || (state->format == project::TraceFormat::vcd
+                        ? !state->writer
+                        : !state->fst_writer)) {
+                    return;
+                }
                 write_uvm_activity_trace_event(*state, event);
             });
-        simulation.set_signal_change_hook(
-            [state](
+        trace->signal_change_observer = simulation.add_signal_change_hook(
+            [observer_lifetime](
                 const SignalId signal,
                 const PackedLogic4& value,
                 const SimulationTick time,
                 const std::uint64_t delta) {
+                auto* state = observer_lifetime->state;
+                if (!state
+                    || state->terminal_status != TraceTerminalStatus::open
+                    || (state->format == project::TraceFormat::vcd
+                        ? !state->writer
+                        : !state->fst_writer)) {
+                    return;
+                }
                 if (signal < state->handles.size()
                     && !state->handles[signal].empty()
                     && state->selection->selected(signal)) {

@@ -10,12 +10,13 @@ starts on branch codex/v3 from clean v2 checkpoint
 - Allocate exactly twenty implementation batches, Batches 178 through 197,
   with exactly twenty numbered changes in every batch.
 - Changes 1 through 19 accumulate in one recoverable worktree with focused
-  warnings-as-errors Debug builds and tests. Change 20 alone owns clean full
-  Debug and Release qualification, documentation, one implementation commit,
-  and one push.
-- At Change 20, compile the clean Release configuration before running the
-  Debug suite. Resolve any Release compiler error first so the subsequent
-  Debug qualification applies to the final corrected tree.
+  warnings-as-errors Debug builds and tests. Change 20 alone owns full Debug
+  and Release qualification, documentation, one implementation commit, and
+  one push. Closure builds need not clean; rerun CMake configuration so it
+  rescans dependencies before building.
+- At Change 20, compile the Release configuration before running the Debug
+  suite. Resolve any Release compiler error first so the subsequent Debug
+  qualification applies to the final corrected tree.
 - Sanitizers and hosted Linux and Windows qualification run only at every
   tenth batch: Batch 180 and Batch 190. Release-closing Change 20s outside
   those boundaries do not add sanitizer or hosted-CI runs; they still own
@@ -6562,10 +6563,12 @@ materialization adapter are under bounded repair; the JIT ROM-context
 defect is independently under read-only reduction. These are prerequisite
 diagnostics and implementation results, not a frozen corrected baseline,
 seven-sample qualification, or permission to begin Changes 7-20. The
-detailed evidence and next action are in `docs/v3-resume.md` items 83-99.
+detailed historical evidence remains in the ignored baseline artifacts. The
+current next action is in `docs/v3-resume.md`.
 
 Change 6 baseline readiness closed on 2026-09-23 against the corrected frozen
-executable/helper identities in `docs/v3-resume.md` item 165. All 38 mandatory
+executable/helper identities in the fixed-baseline section of
+`docs/v3-resume.md`. All 38 mandatory
 case/configuration pairs have one oracle-passing timed sample and a separate
 untimed profile with verified source, manifest, executable, helper, and root
 identities. The six repository cases cover interpreter/O0/O2; all ten real
@@ -6835,8 +6838,9 @@ On 2026-09-23, the user extended the seven-sample matrix waiver to all
 remaining batches before 188I: Batches 188C-188H. This supersedes the
 preceding prospective gate sentence for those batches. Record the waiver
 at each Change 20; do not claim a measured performance pass. The full
-seven-sample matrix resumes at Batch 188I. All correctness, clean-build,
-full-suite, source-package, commit/push, and applicable hosted-CI
+seven-sample matrix resumes at Batch 188I. All correctness,
+dependency-rescanned build, full-suite, source-package, commit/push, and
+applicable hosted-CI
 requirements remain in force.
 
 The user also waived post-push CI monitoring for Batches 188C-188H.
@@ -7188,35 +7192,72 @@ under the explicit post-push monitoring waiver. Resume at Batch 188F Change
 
 #### Batch 188F - bounded lifetimes, tracing, and observers
 
-1. Define cancellation handles using owner identity, slot index, and generation.
-2. Implement reusable cancellation slots and release completed/cancelled task payloads.
-3. Adapt handle queries and cancellation without allowing stale handles to affect reused slots.
-4. Reclaim cancelled queue entries through amortized compaction without changing scheduling order.
-5. Make reset, destruction, foreign-owner handles, and generation exhaustion safe.
-6. Migrate timer users and add long-running cancellation/reuse stress tests.
-7. Make observation retention explicit: streaming by default, bounded capture on request.
-8. Replace history scans for late snapshots with maintained ordering metadata.
-9. Adapt CLI and SystemC tracing; make capture-dependent tests request retention explicitly.
-10. Cache trace identities, declaration lookups, and selection metadata.
-11. Reuse encoding buffers while preserving all supported value kinds.
-12. Add bounded FST event buffering with sorted temporary runs and bounded-fan-in merging.
-13. Assemble the existing FST container incrementally, avoiding whole-history/
+1. **Complete.** Define cancellation handles using owner identity, slot index, and generation.
+2. **Complete.** Implement reusable cancellation slots and release completed/cancelled task payloads.
+3. **Complete.** Adapt handle queries and cancellation without allowing stale handles to affect reused slots.
+4. **Complete.** Reclaim cancelled queue entries through amortized compaction without changing scheduling order.
+5. **Complete.** Make reset, destruction, foreign-owner handles, and generation exhaustion safe.
+6. **Complete.** Migrate timer users and add long-running cancellation/reuse stress tests.
+7. **Complete.** Make observation retention explicit: streaming by default, bounded capture on request.
+8. **Complete.** Replace history scans for late snapshots with maintained ordering metadata.
+9. **Complete.** Adapt CLI and SystemC tracing; make capture-dependent tests request retention explicitly.
+10. **Complete.** Cache trace identities, declaration lookups, and selection metadata.
+11. **Complete.** Reuse encoding buffers while preserving all supported value kinds.
+12. **Complete.** Add bounded FST event buffering with sorted temporary runs and bounded-fan-in merging.
+13. **Complete.** Assemble the existing FST container incrementally, avoiding whole-history/
     container memory copies.
-14. Preserve arbitrary event submission order, non-seekable output, flush/close
+14. **Complete.** Preserve arbitrary event submission order, non-seekable output, flush/close
     semantics, and deterministic cleanup.
-15. Reuse observer snapshots between registration changes while preserving in-
+15. **Complete.** Reuse observer snapshots between registration changes while preserving in-
     flight callback behavior.
-16. Install optional observation hooks only while required; retain existing public defaults.
-17. Index VPI value-change registrations by signal.
-18. Avoid empty PSL observation work and use stable binding identities.
-19. Test capture limits, callback failures, disk/output failures, and traces
+16. **Complete.** Install optional observation hooks only while required; retain existing public defaults.
+17. **Complete.** Index VPI value-change registrations by signal.
+18. **Complete.** Avoid empty PSL observation work and use stable binding identities.
+19. **Complete.** Test capture limits, callback failures, disk/output failures, and traces
     exceeding one million events.
-20. Run standard closure and hand off to 188G.
+20. **Complete.** Run standard closure and hand off to 188G.
 
 FST memory must scale with declarations, current values, and a bounded working
 buffer, not elapsed event count. Use a 64 MiB default event-work budget with
 explicit failure when an individual payload exceeds its permitted budget.
 Preserve existing format bytes where encoding is unchanged.
+
+Changes 1-19 were completed with focused validation.
+Scheduler cancellation uses owner/slot/generation identities, releases task
+payloads, and compacts cancelled queue entries. Timer callers already use the
+opaque handle API. Clang/LLVM 22 Release `fsim.runtime` passed with stale
+handle, ordering, reset, reentrancy, VPI, PSL, and 250,000-iteration reuse
+coverage. `fsim.runtime.trace_model` passed with cached VCD identities and
+byte-preservation cases. Trace observation streams by default, with explicit
+bounded capture and maintained late-snapshot ordering metadata; its focused
+trace-observation, trace-control, and SystemC tests passed.
+
+The focused `fsim.runtime.fst_writer` test passed after the bounded sorted-run
+merge repair, including a 1,000,001-event round trip, non-seekable byte
+comparison, disk/output failure cleanup, and close-time validation. The
+observer time and ordering tests passed with in-flight mutation coverage.
+The final focused 188F set passed 14/14 after trace close-time callback
+lifetime guards and terminal selection rejection. The first clean Release
+build passed, but its unfiltered suite passed 418/421 because two trace-public
+governance anchors still referred to the pre-refactor VCD source line; the
+composed Verilog closure gate depended on one of them. A final FST review also
+found that temporary trace runs needed a private workspace.
+Both governance anchors now validate the reusable VCD encoding path, and the
+three affected checks passed 3/3. FST temporary workspaces now use atomic
+private creation on POSIX and a protected owner-rights ACL on Windows; the
+focused Release FST writer test passed with its workspace permission case.
+The user removed the clean-before-closure requirement; rerun CMake
+configuration so dependencies are rescanned before building. The
+corrected-source Release build passed all 3,079 steps and its unfiltered
+suite passed 421/421. Debug CMake configuration rescanned dependencies; the
+Debug build passed all 1,927 pending steps without cleaning, and its
+unfiltered suite passed 421/421. `git diff --check` passed. The latest
+applicable hosted run inspected before this commit was `35997982063` at
+Batch 188E head `2dca7f74`; all four LLVM-only Linux/Windows Debug/Release
+lanes passed. The user waived Batch 188F's seven-sample performance matrix
+and post-push hosted monitoring; no performance or new exact-head hosted
+pass is claimed. This cohesive implementation commit and push close Change
+20; resume at Batch 188G Change 1 without a release tag.
 
 #### Batch 188G - scheduler and runtime storage
 
@@ -7369,8 +7410,10 @@ count.
    hosted-CI results. Make any in-scope corrections indicated by the prior
    run before starting the full local Debug/Release matrices, so they qualify
    the intended final code and do not need avoidable reruns.
-2. Build clean warnings-as-errors Release first, then qualify clean Debug and
-   Release against final code.
+2. Rerun CMake configuration to rescan dependencies, then build
+   warnings-as-errors Release first. Rerun configuration for Debug, then
+   qualify Debug and Release against final code. Cleaning either build
+   directory is optional.
 3. Run the benchmark matrix and record cumulative baseline comparisons,
    except for the user-waived seven-sample matrix in Batches 188C-188H;
    record the waiver explicitly and do not claim a performance pass.
@@ -7438,7 +7481,7 @@ for those outcomes.
 17. Serialize worker-independent logical scheduler state.
 18. Prove checkpoint/restart equivalence across worker counts.
 19. Run race, deadlock, cancellation, and ThreadSanitizer stress.
-20. Run clean Debug/Release, sanitizer, and hosted monitoring closure.
+20. Run dependency-rescanned Debug/Release, sanitizer, and hosted monitoring closure.
 
 ### Batch 191 - throughput policy, performance gates, and v3.1 release
 

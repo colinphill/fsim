@@ -3,9 +3,11 @@
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
+#include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 namespace {
@@ -289,7 +291,7 @@ void test_vcd_model_equivalence()
 
     TraceDeclarationBuilder builder;
     const auto clock = builder.add_variable("top.clock", 1);
-    static_cast<void>(builder.add_alias("mirror.clock", clock));
+    const auto clock_alias = builder.add_alias("mirror.clock", clock);
     const auto bus = builder.add_variable("top.core.bus", 4);
     const auto model = std::move(builder).freeze();
     std::ostringstream neutral_output;
@@ -299,13 +301,16 @@ void test_vcd_model_equivalence()
     neutral.begin(0);
     neutral.set_event({ clock, 0, 0, TraceRegion::Snapshot, 1 });
     neutral.change(handles[0], Logic4::zero);
+    neutral.set_event({ clock, 0, 0, TraceRegion::Snapshot, 2 });
+    neutral.set_event({ clock_alias, 0, 0, TraceRegion::Snapshot, 3 });
     neutral.change(handles[1], Logic4::zero);
-    neutral.set_event({ bus, 0, 0, TraceRegion::Snapshot, 2 });
+    neutral.set_event({ bus, 0, 0, TraceRegion::Snapshot, 4 });
     neutral.change(handles[2], PackedLogic4::from_msb_string("0011"));
-    neutral.set_event({ clock, 10, 0, TraceRegion::Active, 3 });
+    neutral.set_event({ clock, 10, 0, TraceRegion::Active, 5 });
     neutral.change(handles[0], Logic4::one);
+    neutral.set_event({ clock_alias, 10, 0, TraceRegion::Active, 6 });
     neutral.change(handles[1], Logic4::one);
-    neutral.set_event({ bus, 10, 0, TraceRegion::Active, 4 });
+    neutral.set_event({ bus, 10, 0, TraceRegion::Active, 7 });
     neutral.change(handles[2], PackedLogic4::from_msb_string("1010"));
     neutral.flush();
     assert(neutral_output.str() == legacy_output.str());
@@ -327,6 +332,84 @@ void test_vcd_model_equivalence()
     assert(backward_rejected);
 }
 
+void test_vcd_reused_encoding_buffers()
+{
+    using namespace fsim::runtime;
+    std::ostringstream output;
+    VcdWriter writer { output, "1ns", 256 };
+    const auto bits = writer.declare_signal("top.bits", 4);
+    const auto logic4 = writer.declare_signal("top.logic4", 4);
+    const auto logic9 = writer.declare_signal("top.logic9", 6);
+    const auto shortreal = writer.declare_systemverilog_scalar(
+        "top.shortreal", SystemVerilogScalarKind::ShortReal);
+    const auto real = writer.declare_systemverilog_scalar(
+        "top.real", SystemVerilogScalarKind::Real);
+    const auto realtime = writer.declare_systemverilog_scalar(
+        "top.realtime", SystemVerilogScalarKind::Realtime);
+    const auto time = writer.declare_systemverilog_scalar(
+        "top.time", SystemVerilogScalarKind::Time);
+    const auto chandle = writer.declare_systemverilog_scalar(
+        "top.chandle", SystemVerilogScalarKind::Chandle);
+
+    const auto shortreal_value = SystemVerilogScalarValue::shortreal(-0.0F);
+    const auto real_value = SystemVerilogScalarValue::real(1.25);
+    const auto realtime_value = SystemVerilogScalarValue::realtime(1.5);
+    const auto time_value =
+        SystemVerilogScalarValue::time(UINT64_C(9007199254740993));
+    const auto chandle_value =
+        SystemVerilogScalarValue::chandle(UINT64_C(0xfedcba9876543210));
+    const auto time_payload = encode_systemverilog_scalar_payload(time_value);
+    const auto chandle_payload = encode_systemverilog_scalar_payload(chandle_value);
+    assert(time_payload && chandle_payload);
+    assert(time_payload.value.to_msb_string()
+        == "0000000000100000000000000000000000000000000000000000000000000001");
+    assert(chandle_payload.value.to_msb_string()
+        == "1111111011011100101110101001100001110110010101000011001000010000");
+
+    writer.begin();
+    writer.change(bits, PackedBit2::from_msb_string("1010"));
+    writer.change(time, time_value);
+    writer.change(logic4, PackedLogic4::from_msb_string("10xz"));
+    writer.change(real, real_value);
+    writer.change(logic9, PackedLogic9::from_msb_string("uhwlz0"));
+    writer.change(shortreal, shortreal_value);
+    writer.change(chandle, chandle_value);
+    writer.change(realtime, realtime_value);
+    writer.change(bits, PackedBit2::from_msb_string("1010"));
+    writer.change(time, time_value);
+    writer.change(logic4, PackedLogic4::from_msb_string("10xz"));
+    writer.flush();
+    const auto vcd = output.str();
+
+    const auto encoded_line = [](const char prefix,
+                                  const std::string_view value,
+                                  const VcdSignal signal) {
+        std::string line;
+        line.reserve(value.size() + 4U);
+        line.push_back(prefix);
+        line.append(value);
+        line.push_back(' ');
+        line.push_back(static_cast<char>('!' + signal.index));
+        line.push_back('\n');
+        return line;
+    };
+    const auto require_once = [&vcd](const std::string& expected) {
+        const auto first = vcd.find(expected);
+        assert(first != std::string::npos);
+        assert(vcd.find(expected, first + expected.size()) == std::string::npos);
+    };
+    require_once(encoded_line('b', "1010", bits));
+    require_once(encoded_line('b', "10xz", logic4));
+    require_once(encoded_line('b', "x1x0z0", logic9));
+    require_once(encoded_line('r', "-0", shortreal));
+    require_once(encoded_line('r', "1.25", real));
+    require_once(encoded_line('r', "1.5", realtime));
+    require_once(encoded_line(
+        'b', time_payload.value.to_msb_string(), time));
+    require_once(encoded_line(
+        'b', chandle_payload.value.to_msb_string(), chandle));
+}
+
 } // namespace
 
 int main()
@@ -336,4 +419,5 @@ int main()
     test_mixed_root_source_provenance();
     test_event_identity_and_order();
     test_vcd_model_equivalence();
+    test_vcd_reused_encoding_buffers();
 }

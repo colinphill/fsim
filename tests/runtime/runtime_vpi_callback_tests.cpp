@@ -260,6 +260,169 @@ namespace {
             "DPI and VPI callbacks preserve every scheduler phase, contain same-kind VPI re-entry, and restore nested DPI context deterministically");
     }
 
+    void test_vpi_value_change_registration_index()
+    {
+        SystemVerilogVpiObjectRegistry registry { 904 };
+        Scheduler scheduler;
+        SystemVerilogVpiTimeService time_service {
+            scheduler, SystemVerilogVpiTimeProfile { -9, -12 }
+        };
+        SystemVerilogVpiCallbackManager manager {
+            registry, scheduler, time_service, 50'000
+        };
+        const auto root = registry.create(
+            SystemVerilogVpiObjectKind::Root, 0, "top");
+        const auto type = callback_logic_type();
+        const auto signal_a = registry.create(SystemVerilogVpiObjectDescriptor {
+            SystemVerilogVpiObjectKind::Variable,
+            root.value,
+            "signal_a",
+            std::nullopt,
+            type });
+        const auto signal_b = registry.create(SystemVerilogVpiObjectDescriptor {
+            SystemVerilogVpiObjectKind::Variable,
+            root.value,
+            "signal_b",
+            std::nullopt,
+            type });
+        const auto zero = callback_scalar(type, Logic9::zero);
+        const auto one = callback_scalar(type, Logic9::one);
+        require_vpi_callback(
+            root && signal_a && signal_b
+                && registry.bind_value(signal_a.value, zero)
+                    == SystemVerilogVpiValueError::None
+                && registry.bind_value(signal_b.value, zero)
+                    == SystemVerilogVpiValueError::None,
+            "VPI indexed value-change fixtures bind two independent signals");
+
+        std::vector<std::string_view> order;
+        bool exact_values { true };
+        bool mutated { };
+        bool late_registered { };
+        std::size_t failed_callback_calls { };
+        std::size_t other_callback_calls { };
+        fsim::runtime::SystemVerilogVpiCallbackHandle victim_handle;
+        fsim::runtime::SystemVerilogVpiCallbackHandle late_handle;
+        const auto first = manager.register_callback(
+            { SystemVerilogVpiCallbackKind::ValueChange,
+                signal_a.value,
+                std::nullopt,
+                41,
+                [&](const SystemVerilogVpiCallbackEvent& event) {
+                    order.push_back("first");
+                    exact_values = exact_values
+                        && event.object == signal_a.value
+                        && event.value == (mutated ? zero : one);
+                    if (!mutated) {
+                        mutated = true;
+                        exact_values = exact_values
+                            && manager.remove_callback(victim_handle)
+                                == SystemVerilogVpiCallbackError::None;
+                        const auto late = manager.register_callback(
+                            { SystemVerilogVpiCallbackKind::ValueChange,
+                                signal_a.value,
+                                std::nullopt,
+                                42,
+                                [&](const SystemVerilogVpiCallbackEvent& late_event) {
+                                    order.push_back("late");
+                                    exact_values = exact_values
+                                        && late_event.object == signal_a.value
+                                        && late_event.value == zero;
+                                } });
+                        late_handle = late.value;
+                        late_registered = static_cast<bool>(late);
+                    }
+                } });
+        const auto victim = manager.register_callback(
+            { SystemVerilogVpiCallbackKind::ValueChange,
+                signal_a.value,
+                std::nullopt,
+                43,
+                [&](const SystemVerilogVpiCallbackEvent&) {
+                    order.push_back("victim");
+                } });
+        victim_handle = victim.value;
+        const auto failing = manager.register_callback(
+            { SystemVerilogVpiCallbackKind::ValueChange,
+                signal_a.value,
+                std::nullopt,
+                44,
+                [&](const SystemVerilogVpiCallbackEvent&) {
+                    ++failed_callback_calls;
+                    order.push_back("failure");
+                    throw std::runtime_error { "contained value-change callback" };
+                } });
+        const auto other = manager.register_callback(
+            { SystemVerilogVpiCallbackKind::ValueChange,
+                signal_b.value,
+                std::nullopt,
+                45,
+                [&](const SystemVerilogVpiCallbackEvent& event) {
+                    order.push_back("other");
+                    ++other_callback_calls;
+                    exact_values = exact_values
+                        && event.object == signal_b.value
+                        && event.value
+                            == (other_callback_calls == 1U ? one : zero);
+                } });
+        require_vpi_callback(
+            first && victim && failing && other,
+            "VPI indexed value-change fixture registers signal-specific callbacks");
+
+        require_vpi_callback(
+            registry.deposit_value(signal_a.value, one)
+                    == SystemVerilogVpiValueError::None
+                && registry.deposit_value(signal_b.value, one)
+                    == SystemVerilogVpiValueError::None,
+            "VPI indexed value-change fixture publishes independent changes");
+        (void)scheduler.run();
+        require_vpi_callback(
+            order == std::vector<std::string_view> {
+                "first", "failure", "other"
+            }
+                && late_registered
+                && manager.status(victim_handle).status
+                    == SystemVerilogVpiCallbackStatus::Removed
+                && manager.status(failing.value).status
+                    == SystemVerilogVpiCallbackStatus::CallbackFailed
+                && manager.status(late_handle).status
+                    == SystemVerilogVpiCallbackStatus::Active
+                && failed_callback_calls == 1U,
+            "VPI value-change dispatch targets one signal and preserves in-flight removal and registration semantics");
+
+        require_vpi_callback(
+            registry.deposit_value(signal_a.value, zero)
+                == SystemVerilogVpiValueError::None,
+            "VPI indexed value-change fixture republishes the mutated signal");
+        (void)scheduler.run();
+        require_vpi_callback(
+            order == std::vector<std::string_view> {
+                "first", "failure", "other", "first", "late"
+            }
+                && failed_callback_calls == 1U,
+            "VPI value-change callbacks retain registration order and exclude removed or failed entries");
+
+        require_vpi_callback(
+            registry.deposit_value(signal_b.value, zero)
+                == SystemVerilogVpiValueError::None,
+            "VPI indexed value-change fixture republishes the independent signal");
+        (void)scheduler.run();
+        require_vpi_callback(
+            order == std::vector<std::string_view> {
+                "first", "failure", "other", "first", "late", "other"
+            },
+            "VPI value-change signal index retains signal isolation and registration order");
+        require_vpi_callback(
+            exact_values,
+            "VPI value-change callbacks retain the exact object and published value");
+        require_vpi_callback(
+            manager.status(first.value).status
+                    == SystemVerilogVpiCallbackStatus::Active
+                && manager.status(other.value).status
+                    == SystemVerilogVpiCallbackStatus::Active,
+            "VPI value-change callbacks remain active after successful dispatch");
+    }
+
 } // namespace
 
 void test_systemverilog_vpi_callbacks()
@@ -566,6 +729,7 @@ void test_systemverilog_vpi_callbacks()
             == SystemVerilogVpiCallbackError::CrossManager,
         "VPI callback handles preserve manager ownership within one simulation");
 
+    test_vpi_value_change_registration_index();
     test_foreign_callbacks_across_scheduler_phases();
 }
 void test_systemverilog_vpi_callback_lifecycle()

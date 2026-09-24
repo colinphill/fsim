@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace fsim::tests::runtime {
 namespace {
@@ -209,6 +210,67 @@ void test_vhdl_psl_attempt_engine()
         51U, 0U);
     require(left_values != nullptr && left_values == right_values,
         "simultaneous root clocks share one immutable value snapshot");
+
+    std::vector<std::size_t> shared_history_sizes;
+    VhdlPslAttemptEngine shared_binding;
+    auto rising = delayed_monitor("shared-binding-rising");
+    rising.evaluate = [&](const VhdlPslEvaluationContext& context) {
+        shared_history_sizes.push_back(context.samples.size());
+        return VhdlPslAttemptOutcome::pass;
+    };
+    auto falling = delayed_monitor("shared-binding-falling");
+    falling.edge = VhdlPslClockEdge::falling;
+    falling.evaluate = [&](const VhdlPslEvaluationContext& context) {
+        shared_history_sizes.push_back(context.samples.size());
+        return VhdlPslAttemptOutcome::pass;
+    };
+    shared_binding.add_monitor(std::move(rising));
+    shared_binding.add_monitor(std::move(falling));
+    observe(shared_binding, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 60U);
+    observe(shared_binding, VhdlPslTruth::true_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 61U);
+    observe(shared_binding, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 62U);
+    require(shared_binding.attempts().size() == 2U
+            && shared_binding.attempts()[0].clock_identity == "rise:clk"
+            && shared_binding.attempts()[1].clock_identity == "rise:clk"
+            && shared_binding.attempts()[0].start_sample == 0U
+            && shared_binding.attempts()[1].start_sample == 1U
+            && shared_history_sizes == std::vector<std::size_t> { 1U, 2U },
+        "monitors bound to one stable clock identity share ordered history");
+
+    VhdlPslAttemptEngine disabled_binding;
+    auto disabled_monitor = delayed_monitor("disabled-binding");
+    disabled_monitor.evaluate = [](const VhdlPslEvaluationContext&) {
+        return VhdlPslAttemptOutcome::pass;
+    };
+    disabled_binding.add_monitor(std::move(disabled_monitor));
+    observe(disabled_binding, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 70U);
+    disabled_binding.set_enabled("disabled-binding", false);
+    observe(disabled_binding, VhdlPslTruth::true_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 71U);
+    disabled_binding.set_enabled("disabled-binding", true);
+    observe(disabled_binding, VhdlPslTruth::true_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 72U);
+    require(disabled_binding.attempts().empty(),
+        "disabled observations advance the bound clock without creating work");
+    observe(disabled_binding, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 73U);
+    observe(disabled_binding, VhdlPslTruth::true_value,
+        VhdlPslTruth::false_value, VhdlPslTruth::false_value,
+        VhdlPslTruth::false_value, 74U);
+    require(disabled_binding.attempts().size() == 1U
+            && disabled_binding.attempts().front().start_time == 74U,
+        "a re-enabled monitor starts only on a later real edge");
 }
 
 void test_vhdl_psl_attempt_limits()

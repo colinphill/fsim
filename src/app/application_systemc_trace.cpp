@@ -121,7 +121,8 @@ struct SystemCTracePipeline::Impl {
         , observations(declaration_model,
               TraceObservationLimits { requested_limits.maximum_records,
                   requested_limits.maximum_values_per_batch,
-                  requested_limits.maximum_bits_per_batch, 4096U, 2U })
+                  requested_limits.maximum_bits_per_batch, 4096U, 2U },
+              requested_limits.observation_retention)
         , vcd(vcd_output)
         , fst(fst_output)
     {

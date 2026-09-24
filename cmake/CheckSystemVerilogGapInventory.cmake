@@ -374,11 +374,33 @@ foreach(FSIM_INDEX RANGE 2 26)
     message(FATAL_ERROR "${FSIM_WIDTH_ID} has a misplaced width owner")
   endif()
   file(READ "${FSIM_SOURCE_DIR}/${FSIM_WIDTH_OWNER}" FSIM_OWNER_CONTENTS)
-  string(FIND "${FSIM_OWNER_CONTENTS}" "${FSIM_WIDTH_ANCHOR}"
-    FSIM_WIDTH_ANCHOR_OFFSET)
-  if(FSIM_WIDTH_ANCHOR_OFFSET EQUAL -1)
-    message(FATAL_ERROR
-      "${FSIM_WIDTH_ID} source anchor drifted: ${FSIM_WIDTH_ANCHOR}")
+  if(FSIM_WIDTH_ID STREQUAL "SVW-TRACE-PUBLIC")
+    # VCD now fills one reusable encoding buffer instead of constructing an
+    # x-filled temporary string. Keep the public width-preservation audit
+    # tied to the equivalent four-state encoding and write path.
+    foreach(FSIM_TRACE_TOKEN IN ITEMS
+        "void encode_value(const PackedLogic4& value)"
+        "encoded_value.resize(width);"
+        "encoded_value[width - index - 1U] = value.is_logic9()"
+        "vcd_char(value.get_logic9(index))"
+        "vcd_char(value.get(index))"
+        "impl_->encode_value(value);"
+        "impl_->write_value(declaration, impl_->encoded_value);")
+      string(FIND "${FSIM_OWNER_CONTENTS}" "${FSIM_TRACE_TOKEN}"
+        FSIM_TRACE_TOKEN_OFFSET)
+      if(FSIM_TRACE_TOKEN_OFFSET EQUAL -1)
+        message(FATAL_ERROR
+          "${FSIM_WIDTH_ID} reusable VCD source seam drifted: "
+          "${FSIM_TRACE_TOKEN}")
+      endif()
+    endforeach()
+  else()
+    string(FIND "${FSIM_OWNER_CONTENTS}" "${FSIM_WIDTH_ANCHOR}"
+      FSIM_WIDTH_ANCHOR_OFFSET)
+    if(FSIM_WIDTH_ANCHOR_OFFSET EQUAL -1)
+      message(FATAL_ERROR
+        "${FSIM_WIDTH_ID} source anchor drifted: ${FSIM_WIDTH_ANCHOR}")
+    endif()
   endif()
 endforeach()
 

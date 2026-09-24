@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_callback.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <limits>
@@ -138,6 +139,8 @@ struct SystemVerilogVpiCallbackManager::Impl {
     SystemVerilogVpiTimeService* time_service { };
     mutable std::mutex mutex;
     std::map<std::uint64_t, Record> records;
+    std::map<fsim_vpi_handle_v1, std::vector<std::uint64_t>>
+        value_change_callbacks_by_object;
     std::array<bool,
         static_cast<std::size_t>(SystemVerilogVpiCallbackKind::EndOfRestart)
             + 1U>
@@ -146,6 +149,25 @@ struct SystemVerilogVpiCallbackManager::Impl {
 };
 
 namespace {
+
+    void unindex_value_change_callback(
+        SystemVerilogVpiCallbackManager::Impl& state,
+        const fsim_vpi_handle_v1 object,
+        const std::uint64_t id)
+    {
+        const auto indexed = state.value_change_callbacks_by_object.find(object);
+        if (indexed == state.value_change_callbacks_by_object.end()) {
+            return;
+        }
+        const auto callback = std::lower_bound(
+            indexed->second.begin(), indexed->second.end(), id);
+        if (callback != indexed->second.end() && *callback == id) {
+            indexed->second.erase(callback);
+        }
+        if (indexed->second.empty()) {
+            state.value_change_callbacks_by_object.erase(indexed);
+        }
+    }
 
     SystemVerilogVpiCallbackEvent make_event(
         const SystemVerilogVpiCallbackManager::Impl& state,
@@ -210,6 +232,12 @@ namespace {
         }
         if (failed) {
             found->second.status = SystemVerilogVpiCallbackStatus::CallbackFailed;
+            if (found->second.kind
+                    == SystemVerilogVpiCallbackKind::ValueChange
+                && found->second.object) {
+                unindex_value_change_callback(
+                    *state, *found->second.object, id);
+            }
         } else if (one_shot) {
             found->second.status = SystemVerilogVpiCallbackStatus::Fired;
         }
@@ -273,13 +301,10 @@ namespace {
         std::vector<std::uint64_t> callbacks;
         {
             std::scoped_lock lock { state->mutex };
-            for (const auto& [id, record] : state->records) {
-                if (record.status == SystemVerilogVpiCallbackStatus::Active
-                    && record.kind
-                        == SystemVerilogVpiCallbackKind::ValueChange
-                    && record.object == object) {
-                    callbacks.push_back(id);
-                }
+            const auto indexed
+                = state->value_change_callbacks_by_object.find(object);
+            if (indexed != state->value_change_callbacks_by_object.end()) {
+                callbacks = indexed->second;
             }
         }
 
@@ -308,6 +333,7 @@ namespace {
                 const auto found = state->records.find(id);
                 if (found != state->records.end()) {
                     found->second.status = SystemVerilogVpiCallbackStatus::CallbackFailed;
+                    unindex_value_change_callback(*state, object, id);
                 }
             }
         }
@@ -482,6 +508,27 @@ SystemVerilogVpiCallbackManager::register_callback(
         return registration_failure(
             SystemVerilogVpiCallbackError::ResourceLimit);
     }
+    if (registration.kind
+        == SystemVerilogVpiCallbackKind::ValueChange) {
+        try {
+            auto [indexed, created]
+                = impl_->value_change_callbacks_by_object.try_emplace(
+                    *registration.object);
+            (void)created;
+            try {
+                indexed->second.push_back(id);
+            } catch (...) {
+                if (indexed->second.empty()) {
+                    impl_->value_change_callbacks_by_object.erase(indexed);
+                }
+                throw;
+            }
+        } catch (...) {
+            impl_->records.erase(position);
+            return registration_failure(
+                SystemVerilogVpiCallbackError::ResourceLimit);
+        }
+    }
     impl_->has_registrations.store(true, std::memory_order_release);
 
     const std::weak_ptr<Impl> weak = impl_;
@@ -553,6 +600,12 @@ SystemVerilogVpiCallbackManager::remove_callback(
             return SystemVerilogVpiCallbackError::NotActive;
         }
         found->second.status = SystemVerilogVpiCallbackStatus::Removed;
+        if (found->second.kind
+                == SystemVerilogVpiCallbackKind::ValueChange
+            && found->second.object) {
+            unindex_value_change_callback(
+                *impl_, *found->second.object, handle.id);
+        }
         scheduler_handle = found->second.scheduler_handle;
         timed_handle = found->second.timed_handle;
     }

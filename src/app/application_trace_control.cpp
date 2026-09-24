@@ -9,7 +9,6 @@
 #include <set>
 #include <stdexcept>
 #include <string_view>
-#include <tuple>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -36,16 +35,8 @@ namespace {
         const runtime::SimulationTick time,
         const std::uint64_t delta)
     {
-        const auto records = observations.records();
-        const auto precedes_existing = std::ranges::any_of(
-            records, [&](const TraceObservationRecord& record) {
-                return std::tuple { time, delta,
-                    static_cast<std::uint8_t>(
-                        runtime::TraceRegion::Callback) }
-                < std::tuple { record.time, record.delta,
-                      static_cast<std::uint8_t>(record.region) };
-            });
-        if (precedes_existing) {
+        if (observations.would_reorder(
+                time, delta, runtime::TraceRegion::Callback)) {
             throw std::logic_error(
                 "late trace snapshot would reorder an accepted record");
         }

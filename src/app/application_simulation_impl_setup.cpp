@@ -823,86 +823,7 @@ Simulation::Impl::Impl(
             return vhdl_psl->apply_api(kind, enable);
         });
     setup_execution(engine);
-    interpreter->set_signal_change_hook(
-        [this](
-            const SignalId signal,
-            const PackedLogic4& value,
-            const SimulationTick time) {
-            publish_vpi_signal(signal, value);
-            if (signal_change_hook) {
-                signal_change_hook(
-                    signal, value, time, interpreter->scheduler().delta());
-            }
-            if (!signal_observers.empty()) {
-                // Copy callbacks so observers may safely remove themselves while
-                // receiving a synchronous simulation-thread notification.
-                std::vector<SignalChangeHook> callbacks;
-                callbacks.reserve(signal_observers.size());
-                for (const auto& [token, callback] : signal_observers) {
-                    (void)token;
-                    callbacks.push_back(callback);
-                }
-                for (const auto& callback : callbacks) {
-                    callback(signal, value, time, interpreter->scheduler().delta());
-                }
-            }
-        });
-    interpreter->set_stored_signal_change_hook(
-        [this](const SignalId signal, const SimulationTick) {
-            publish_vpi_stored_signal(signal);
-        });
-    interpreter->set_driver_change_hook(
-        [this](const runtime::simir::ProcessId process, const SignalId signal,
-            const SimulationTick) {
-            publish_vpi_driver(process, signal);
-        });
-    interpreter->set_event_trigger_hook(
-        [this](const SignalId event, const SimulationTick) {
-            publish_vpi_event(event);
-        });
-    interpreter->set_container_object_change_hook(
-        [this](const runtime::simir::ContainerObjectId object,
-            const SimulationTick) {
-            publish_vpi_container(object);
-        });
-    interpreter->set_scalar_signal_change_hook(
-        [this](
-            const SignalId signal,
-            const runtime::SystemVerilogScalarValue& value,
-            const SimulationTick time) {
-            if (scalar_signal_change_hook) {
-                scalar_signal_change_hook(
-                    signal, value, time, interpreter->scheduler().delta());
-            }
-            std::vector<ScalarSignalChangeHook> callbacks;
-            callbacks.reserve(scalar_signal_observers.size());
-            for (const auto& [token, callback] : scalar_signal_observers) {
-                (void)token;
-                callbacks.push_back(callback);
-            }
-            for (const auto& callback : callbacks) {
-                callback(
-                    signal, value, time, interpreter->scheduler().delta());
-            }
-        });
-    interpreter->set_native_signal_observation_required_hook(
-        [this](const SignalId signal) {
-            return signal_change_hook || !signal_observers.empty()
-                || (vpi_runtime_updates_enabled
-                    && vpi_callbacks->has_registrations()
-                    && (vpi_signal_handles.contains(signal)
-                        || vpi_driver_bindings.contains(signal)
-                        || vpi_event_handles.contains(signal)));
-        });
-    interpreter->set_native_signal_observation_any_hook(
-        [this] {
-            return signal_change_hook || !signal_observers.empty()
-                || (vpi_runtime_updates_enabled
-                    && vpi_callbacks->has_registrations()
-                    && (!vpi_signal_handles.empty()
-                        || !vpi_driver_bindings.empty()
-                        || !vpi_event_handles.empty()));
-        });
+    refresh_observation_hooks();
     interpreter->set_fork_spawn_filter(
         [this](const runtime::simir::ProcessId process) {
             return !concurrent_assertion_design_processes.contains(process)
@@ -1403,6 +1324,11 @@ Simulation::Impl::Impl(
         [this](
             runtime::Scheduler& scheduler,
             const runtime::SchedulerPhase phase) {
+            if (observation_hooks_refresh_pending
+                && signal_observer_hook_depth == 0U
+                && scalar_signal_observer_hook_depth == 0U) {
+                refresh_observation_hooks();
+            }
             if (phase == runtime::SchedulerPhase::update) {
                 vhdl_psl->observe(scheduler.now(), scheduler.delta());
             }
@@ -1423,6 +1349,173 @@ Simulation::Impl::Impl(
                 callback(scheduler, phase);
             }
         });
+}
+
+void Simulation::Impl::refresh_observation_hooks()
+{
+    if (signal_observer_hook_depth != 0U
+        || scalar_signal_observer_hook_depth != 0U) {
+        observation_hooks_refresh_pending = true;
+        return;
+    }
+    observation_hooks_refresh_pending = false;
+
+    const bool has_public_signal_observer
+        = static_cast<bool>(signal_change_hook)
+        || !signal_observers.empty();
+    const bool needs_signal_bridge = has_public_signal_observer
+        || (vpi_runtime_updates_enabled && !vpi_signal_handles.empty());
+
+    if (signal_observation_bridge_installed != needs_signal_bridge) {
+        if (needs_signal_bridge) {
+            interpreter->set_signal_change_hook(
+                [this](const SignalId signal,
+                    const PackedLogic4& value,
+                    const SimulationTick time) {
+                    ++signal_observer_hook_depth;
+                    try {
+                        publish_vpi_signal(signal, value);
+                        if (signal_change_hook) {
+                            signal_change_hook(
+                                signal, value, time,
+                                interpreter->scheduler().delta());
+                        }
+                        {
+                            const auto callbacks = signal_observer_snapshot;
+                            const auto generation
+                                = signal_observer_generation.next();
+                            signal_observer_generation = generation;
+                            for (const auto& observer : *callbacks) {
+                                if (observer->visible_at(generation)) {
+                                    observer->callback(signal, value, time,
+                                        interpreter->scheduler().delta());
+                                }
+                            }
+                        }
+                    } catch (...) {
+                        --signal_observer_hook_depth;
+                        compact_signal_observer_snapshot();
+                        throw;
+                    }
+                    --signal_observer_hook_depth;
+                    compact_signal_observer_snapshot();
+                });
+        } else {
+            interpreter->set_signal_change_hook({});
+        }
+        signal_observation_bridge_installed = needs_signal_bridge;
+    }
+
+    const bool has_public_scalar_observer
+        = static_cast<bool>(scalar_signal_change_hook)
+        || !scalar_signal_observers.empty();
+    if (scalar_signal_observation_bridge_installed
+        != has_public_scalar_observer) {
+        if (has_public_scalar_observer) {
+            interpreter->set_scalar_signal_change_hook(
+                [this](const SignalId signal,
+                    const runtime::SystemVerilogScalarValue& value,
+                    const SimulationTick time) {
+                    ++scalar_signal_observer_hook_depth;
+                    try {
+                        if (scalar_signal_change_hook) {
+                            scalar_signal_change_hook(
+                                signal, value, time,
+                                interpreter->scheduler().delta());
+                        }
+                        {
+                            const auto callbacks
+                                = scalar_signal_observer_snapshot;
+                            const auto generation
+                                = scalar_signal_observer_generation.next();
+                            scalar_signal_observer_generation = generation;
+                            for (const auto& observer : *callbacks) {
+                                if (observer->visible_at(generation)) {
+                                    observer->callback(
+                                        signal, value, time,
+                                        interpreter->scheduler().delta());
+                                }
+                            }
+                        }
+                    } catch (...) {
+                        --scalar_signal_observer_hook_depth;
+                        compact_scalar_signal_observer_snapshot();
+                        throw;
+                    }
+                    --scalar_signal_observer_hook_depth;
+                    compact_scalar_signal_observer_snapshot();
+                });
+        } else {
+            interpreter->set_scalar_signal_change_hook({});
+        }
+        scalar_signal_observation_bridge_installed
+            = has_public_scalar_observer;
+    }
+
+    const bool has_vpi_observation = vpi_runtime_updates_enabled
+        && vpi_callbacks->has_registrations()
+        && (!vpi_signal_handles.empty() || !vpi_driver_bindings.empty()
+            || !vpi_event_handles.empty());
+    const bool needs_native_observation_hooks
+        = needs_signal_bridge || has_vpi_observation;
+    if (native_signal_observation_hooks_installed
+        != needs_native_observation_hooks) {
+        if (needs_native_observation_hooks) {
+            interpreter->set_native_signal_observation_required_hook(
+                [this](const SignalId signal) {
+                    return signal_change_hook || !signal_observers.empty()
+                        || (vpi_runtime_updates_enabled
+                            && vpi_callbacks->has_registrations()
+                            && (vpi_signal_handles.contains(signal)
+                                || vpi_driver_bindings.contains(signal)
+                                || vpi_event_handles.contains(signal)));
+                });
+            interpreter->set_native_signal_observation_any_hook(
+                [this] {
+                    return signal_change_hook || !signal_observers.empty()
+                        || (vpi_runtime_updates_enabled
+                            && vpi_callbacks->has_registrations()
+                            && (!vpi_signal_handles.empty()
+                                || !vpi_driver_bindings.empty()
+                                || !vpi_event_handles.empty()));
+                });
+        } else {
+            interpreter->set_native_signal_observation_required_hook({});
+            interpreter->set_native_signal_observation_any_hook({});
+        }
+        native_signal_observation_hooks_installed
+            = needs_native_observation_hooks;
+    }
+
+    if (vpi_observation_hooks_installed != vpi_runtime_updates_enabled) {
+        if (vpi_runtime_updates_enabled) {
+            interpreter->set_stored_signal_change_hook(
+                [this](const SignalId signal, const SimulationTick) {
+                    publish_vpi_stored_signal(signal);
+                });
+            interpreter->set_driver_change_hook(
+                [this](const runtime::simir::ProcessId process,
+                    const SignalId signal, const SimulationTick) {
+                    publish_vpi_driver(process, signal);
+                });
+            interpreter->set_event_trigger_hook(
+                [this](const SignalId event, const SimulationTick) {
+                    publish_vpi_event(event);
+                });
+            interpreter->set_container_object_change_hook(
+                [this](const runtime::simir::ContainerObjectId object,
+                    const SimulationTick) {
+                    publish_vpi_container(object);
+                });
+        } else {
+            interpreter->set_stored_signal_change_hook({});
+            interpreter->set_driver_change_hook({});
+            interpreter->set_event_trigger_hook({});
+            interpreter->set_container_object_change_hook({});
+        }
+        vpi_observation_hooks_installed = vpi_runtime_updates_enabled;
+    }
+
 }
 
 [[nodiscard]] std::size_t Simulation::Impl::ensure_concurrent_assertion_coverage(

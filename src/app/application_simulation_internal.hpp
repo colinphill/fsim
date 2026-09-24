@@ -14,14 +14,73 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <future>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <set>
+#include <stdexcept>
 #include <tuple>
+#include <vector>
 
 namespace fsim::app {
 using namespace application_detail;
 
 struct Simulation::Impl {
+
+    struct ObserverDispatchGeneration {
+        std::uint64_t high { };
+        std::uint64_t low { };
+
+        [[nodiscard]] ObserverDispatchGeneration next() const
+        {
+            auto result = *this;
+            if (result.low == std::numeric_limits<std::uint64_t>::max()) {
+                if (result.high == std::numeric_limits<std::uint64_t>::max()) {
+                    throw std::overflow_error {
+                        "observer dispatch generation exhausted"
+                    };
+                }
+                ++result.high;
+                result.low = 0;
+            } else {
+                ++result.low;
+            }
+            return result;
+        }
+
+        friend bool operator==(
+            const ObserverDispatchGeneration&,
+            const ObserverDispatchGeneration&) noexcept = default;
+
+        friend bool operator<(
+            const ObserverDispatchGeneration left,
+            const ObserverDispatchGeneration right) noexcept
+        {
+            return left.high < right.high
+                || (left.high == right.high && left.low < right.low);
+        }
+    };
+
+    template <typename Callback>
+    struct ObserverEntry {
+        std::uint64_t token { };
+        Callback callback;
+        ObserverDispatchGeneration visible_from;
+        std::optional<ObserverDispatchGeneration> visible_through;
+
+        [[nodiscard]] bool visible_at(
+            const ObserverDispatchGeneration generation) const noexcept
+        {
+            return !(generation < visible_from)
+                && (!visible_through || !(generation < *visible_through));
+        }
+    };
+
+    template <typename Callback>
+    using ObserverSnapshot
+        = std::vector<std::shared_ptr<ObserverEntry<Callback>>>;
 
     enum class Lifecycle {
         ready,
@@ -301,6 +360,18 @@ struct Simulation::Impl {
         const SignalId signal,
         const PackedLogic4& value);
 
+    void refresh_observation_hooks();
+
+    void rebuild_signal_observer_snapshot();
+
+    void compact_signal_observer_snapshot() noexcept;
+
+    void remove_signal_observer(std::uint64_t token) noexcept;
+
+    void rebuild_scalar_signal_observer_snapshot();
+
+    void compact_scalar_signal_observer_snapshot() noexcept;
+
     void publish_vpi_assertion(
         const ConcurrentAssertionEvent& event);
 
@@ -543,13 +614,48 @@ struct Simulation::Impl {
 
     SignalChangeHook signal_change_hook;
 
-    std::map<std::uint64_t, SignalChangeHook> signal_observers;
+    std::map<std::uint64_t,
+        std::shared_ptr<ObserverEntry<SignalChangeHook>>> signal_observers;
+
+    std::shared_ptr<ObserverSnapshot<SignalChangeHook>>
+        signal_observer_snapshot {
+            std::make_shared<ObserverSnapshot<SignalChangeHook>>()
+        };
+
+    ObserverDispatchGeneration signal_observer_generation;
+
+    bool signal_observer_snapshot_dirty { };
+
+    std::size_t signal_observer_hook_depth { };
+
+    bool signal_observation_bridge_installed { };
 
     std::uint64_t next_signal_observer { 1 };
 
     ScalarSignalChangeHook scalar_signal_change_hook;
 
-    std::map<std::uint64_t, ScalarSignalChangeHook> scalar_signal_observers;
+    std::map<std::uint64_t,
+        std::shared_ptr<ObserverEntry<ScalarSignalChangeHook>>>
+        scalar_signal_observers;
+
+    std::shared_ptr<ObserverSnapshot<ScalarSignalChangeHook>>
+        scalar_signal_observer_snapshot {
+            std::make_shared<ObserverSnapshot<ScalarSignalChangeHook>>()
+        };
+
+    ObserverDispatchGeneration scalar_signal_observer_generation;
+
+    bool scalar_signal_observer_snapshot_dirty { };
+
+    std::size_t scalar_signal_observer_hook_depth { };
+
+    bool scalar_signal_observation_bridge_installed { };
+
+    bool observation_hooks_refresh_pending { };
+
+    bool native_signal_observation_hooks_installed { };
+
+    bool vpi_observation_hooks_installed { };
 
     std::uint64_t next_scalar_signal_observer { 1 };
 

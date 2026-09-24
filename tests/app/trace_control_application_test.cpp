@@ -2,6 +2,7 @@
 #include "application_trace_control.hpp"
 #include "application_trace_observation.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/app/trace_api.hpp"
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -27,6 +29,7 @@ namespace {
 using fsim::app::application_detail::TraceObservationKind;
 using fsim::app::application_detail::TraceObservationLimits;
 using fsim::app::application_detail::TraceObservationRecorder;
+using fsim::app::application_detail::TraceObservationRetention;
 using fsim::app::application_detail::TraceObservationValue;
 using fsim::app::application_detail::TraceSelectionControl;
 using fsim::app::application_detail::TraceSelectionDeclaration;
@@ -95,7 +98,9 @@ selection_declarations(const Fixture& fixture)
     const std::filesystem::path& directory,
     const fsim::project::TraceFormat format,
     const std::string_view identity,
-    const bool select_a)
+    const bool select_a,
+    std::string* debugger_output = nullptr,
+    const bool mutate_after_close = false)
 {
     const auto source = directory / "trace_control.sv";
     if (!std::filesystem::exists(source)) {
@@ -164,6 +169,14 @@ endmodule
             debugger.execute({ "trace", "remove", "top.a" });
         }
         debugger.execute({ "continue" });
+        if (mutate_after_close) {
+            debugger.execute({ "trace", "close" });
+            debugger.execute({ "trace", "clear" });
+            debugger.execute({ "trace", "add", "top.a" });
+        }
+        if (debugger_output) {
+            *debugger_output = output.str();
+        }
     }
     if (!error.str().empty() || diagnostics.has_error()) {
         fsim::diagnostic::print_text(std::cerr, diagnostics);
@@ -224,7 +237,8 @@ void test_selective_lifecycle_and_append_only_snapshots()
     const auto fixture = make_fixture();
     const auto declarations = selection_declarations(fixture);
     TraceSelectionControl selection(fixture.declarations, declarations);
-    TraceObservationRecorder observations(fixture.declarations);
+    TraceObservationRecorder observations(fixture.declarations, { },
+        TraceObservationRetention::BoundedCapture);
 
     std::ostringstream vcd_text;
     VcdWriter vcd(vcd_text);
@@ -348,7 +362,7 @@ void test_selective_lifecycle_and_append_only_snapshots()
     assert(read.trace->values[3].payload == "0011");
 }
 
-void test_snapshot_checks_every_existing_record()
+void test_snapshot_uses_streaming_order_metadata()
 {
     using namespace fsim::runtime;
     const auto fixture = make_fixture();
@@ -361,12 +375,14 @@ void test_snapshot_checks_every_existing_record()
         5U, 0U, TraceRegion::Active, "future", first));
     static_cast<void>(observations.accept(TraceObservationKind::Signal,
         1U, 0U, TraceRegion::Active, "appended-late", first));
+    assert(observations.records().empty());
+    assert(observations.would_reorder(2U, 0U, TraceRegion::Callback));
     expect_throws<std::logic_error>([&] {
         static_cast<void>(selection.set_enabled(1U, true, 2U, 0U,
             PackedLogic4::from_msb_string("1010"), observations));
     });
     assert(!selection.selected(1U));
-    assert(observations.records().size() == 2U);
+    assert(observations.records().empty());
 }
 
 void test_transactional_and_resource_negatives()
@@ -416,7 +432,8 @@ void test_transactional_and_resource_negatives()
     TraceObservationLimits observation_limits;
     observation_limits.maximum_records = 1U;
     TraceObservationRecorder observations(
-        fixture.declarations, observation_limits);
+        fixture.declarations, observation_limits,
+        TraceObservationRetention::BoundedCapture);
     const std::array initial { TraceObservationValue { fixture.signals[0],
         PackedLogic4::from_msb_string("0"), 0U } };
     static_cast<void>(observations.accept(TraceObservationKind::Signal,
@@ -443,8 +460,18 @@ void test_debugger_paths_for_vcd_and_fst()
         / ("fsim-trace-control-" + std::to_string(nonce)) };
     std::filesystem::create_directories(directory.path);
 
-    const auto vcd = run_debug_trace(
-        directory.path, fsim::project::TraceFormat::vcd, "selected-vcd", true);
+    std::string vcd_debugger_output;
+    const auto vcd = run_debug_trace(directory.path,
+        fsim::project::TraceFormat::vcd, "selected-vcd", true,
+        &vcd_debugger_output, true);
+    const auto selection_rejected
+        = "trace selection requires an open trace";
+    const auto rejected_clear = vcd_debugger_output.find(selection_rejected);
+    assert(rejected_clear != std::string::npos);
+    assert(vcd_debugger_output.find(selection_rejected,
+               rejected_clear + std::char_traits<char>::length(
+                                    selection_rejected))
+        != std::string::npos);
     const auto a_identifier = vcd_identifier(vcd, "a");
     const auto b_identifier = vcd_identifier(vcd, "b");
     assert(!a_identifier.empty());
@@ -497,12 +524,137 @@ void test_debugger_paths_for_vcd_and_fst()
         }));
 }
 
+void test_trace_close_detaches_observers()
+{
+    using namespace fsim;
+    const auto nonce = std::chrono::steady_clock::now()
+                           .time_since_epoch()
+                           .count();
+    TemporaryDirectory directory { std::filesystem::temp_directory_path()
+        / ("fsim-trace-close-" + std::to_string(nonce)) };
+    std::filesystem::create_directories(directory.path);
+
+    const auto source = directory.path / "trace_close.sv";
+    {
+        std::ofstream output(source);
+        output << R"(
+module trace_close;
+  real measurement;
+  logic q;
+  initial begin
+    measurement = 0.0;
+    q = 1'b0;
+    #1 measurement = 1.0;
+    q = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "trace-close";
+    config.project.top = "sv:work.trace_close";
+    config.project.time_resolution = "1ns";
+    config.build.cache_path = directory.path / "cache";
+    config.run.max_deltas = 1'000U;
+    config.run.trace_file = directory.path / "trace-close.vcd";
+    config.run.trace_format = project::TraceFormat::vcd;
+    project::SourceSet sources;
+    sources.language = project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files = { source };
+    config.source_sets.push_back(std::move(sources));
+
+    diagnostic::Engine diagnostics;
+    auto built = app::build_project(config, diagnostics);
+    if (!built) {
+        diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(built);
+    app::Simulation simulation {
+        std::move(*built), config.run.max_deltas,
+        app::SimulationEngine::interpreter
+    };
+    const auto measurement = simulation.find_signal("trace_close.measurement");
+    const auto q = simulation.find_signal("trace_close.q");
+    assert(measurement && q);
+
+    std::vector<char> callback_order;
+    simulation.set_signal_change_hook(
+        [&](const auto, const auto&, const auto, const auto) {
+            callback_order.push_back('s');
+        });
+    const auto observer = simulation.add_signal_change_hook(
+        [&](const auto, const auto&, const auto, const auto) {
+            callback_order.push_back('a');
+        });
+    enum class TraceObserverAction {
+        none,
+        close,
+        destroy
+    };
+    app::TraceRuntime* trace_runtime { };
+    bool close_succeeded { };
+    std::unique_ptr<app::TraceRuntime> trace;
+    auto action = TraceObserverAction::none;
+    const auto close_observer = simulation.add_signal_change_hook(
+        [&](const auto, const auto&, const auto, const auto) {
+            const auto requested_action = std::exchange(
+                action, TraceObserverAction::none);
+            if (requested_action == TraceObserverAction::close) {
+                close_succeeded = trace_runtime->close(diagnostics);
+            } else if (requested_action == TraceObserverAction::destroy) {
+                trace.reset();
+                trace_runtime = nullptr;
+            }
+        });
+
+    trace = app::TraceRuntime::attach(simulation, config, diagnostics);
+    assert(trace);
+    trace_runtime = trace.get();
+    const auto result = simulation.run();
+    assert(result.status == runtime::RunStatus::stopped);
+    action = TraceObserverAction::close;
+    callback_order.clear();
+    simulation.deposit_scalar_signal(
+        *measurement, runtime::SystemVerilogScalarValue::real(2.0));
+    assert(close_succeeded);
+    assert(trace->status().lifecycle == app::TraceLifecycle::Complete);
+    assert(!diagnostics.has_error());
+
+    callback_order.clear();
+    simulation.deposit_signal(*q, runtime::PackedLogic4::from_msb_string("0"));
+    assert(callback_order == std::vector<char>({ 's', 'a' }));
+
+    config.run.trace_file = directory.path / "trace-destroy.vcd";
+    diagnostic::Engine destruction_diagnostics;
+    trace = app::TraceRuntime::attach(
+        simulation, config, destruction_diagnostics);
+    assert(trace);
+    trace_runtime = trace.get();
+    callback_order.clear();
+    action = TraceObserverAction::destroy;
+    simulation.deposit_signal(*q, runtime::PackedLogic4::from_msb_string("1"));
+    assert(!trace);
+    assert(callback_order == std::vector<char>({ 's', 'a' }));
+    assert(destruction_diagnostics.has_error());
+
+    simulation.remove_signal_change_hook(close_observer);
+    simulation.remove_signal_change_hook(observer);
+    simulation.set_signal_change_hook({ });
+}
+
 } // namespace
 
 int main()
 {
     test_selective_lifecycle_and_append_only_snapshots();
-    test_snapshot_checks_every_existing_record();
+    test_snapshot_uses_streaming_order_metadata();
     test_transactional_and_resource_negatives();
     test_debugger_paths_for_vcd_and_fst();
+    test_trace_close_detaches_observers();
 }

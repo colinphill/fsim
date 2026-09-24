@@ -38,7 +38,11 @@ struct SystemCTraceLimits {
     std::size_t maximum_pending_batches { 4096U };
     std::size_t maximum_values_per_batch { 4096U };
     std::size_t maximum_bits_per_batch { 1U << 24U };
+    // Bounds retained observations when observation_retention requests capture.
     std::size_t maximum_records { 1U << 20U };
+    TraceObservationRetention observation_retention {
+        TraceObservationRetention::Streaming
+    };
 };
 
 struct SystemCTraceRoute {

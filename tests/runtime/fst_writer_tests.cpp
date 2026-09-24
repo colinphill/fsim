@@ -8,17 +8,85 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <streambuf>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#else
+#include <sys/stat.h>
+#endif
 
 namespace {
 
 using Bytes = std::vector<std::uint8_t>;
+
+[[nodiscard]] std::filesystem::path unique_temporary_path(
+    const std::string_view label)
+{
+    const auto nonce = std::chrono::steady_clock::now()
+                           .time_since_epoch()
+                           .count();
+    return std::filesystem::temp_directory_path()
+        / (std::string { label } + "-" + std::to_string(nonce));
+}
+
+void assert_private_workspace(const std::filesystem::path& path)
+{
+#if defined(_WIN32)
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const auto status = GetNamedSecurityInfoW(
+        const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr,
+        &descriptor);
+    assert(status == ERROR_SUCCESS);
+    BOOL dacl_present = FALSE;
+    BOOL dacl_defaulted = FALSE;
+    assert(GetSecurityDescriptorDacl(
+        descriptor, &dacl_present, &dacl, &dacl_defaulted));
+    assert(dacl_present && dacl != nullptr && dacl->AceCount == 1U);
+
+    void* raw_ace = nullptr;
+    assert(GetAce(dacl, 0U, &raw_ace));
+    const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw_ace);
+    assert(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE);
+    assert(ace->Mask == FILE_ALL_ACCESS);
+    PSID owner_rights = nullptr;
+    assert(ConvertStringSidToSidW(L"S-1-3-4", &owner_rights));
+    assert(EqualSid(const_cast<DWORD*>(&ace->SidStart), owner_rights));
+    if (std::filesystem::is_directory(path)) {
+        SECURITY_DESCRIPTOR_CONTROL control = 0;
+        DWORD revision = 0;
+        assert(GetSecurityDescriptorControl(descriptor, &control, &revision));
+        assert((control & SE_DACL_PROTECTED) != 0U);
+        assert((ace->Header.AceFlags
+                   & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE))
+            == (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE));
+    } else {
+        assert((ace->Header.AceFlags & INHERITED_ACE) != 0U);
+    }
+    static_cast<void>(LocalFree(owner_rights));
+    static_cast<void>(LocalFree(descriptor));
+#else
+    struct stat status { };
+    assert(::stat(path.c_str(), &status) == 0);
+    assert((status.st_mode & (S_IRWXG | S_IRWXO)) == 0);
+#endif
+}
 
 class ControlledStreamBuffer final : public std::streambuf {
 public:
@@ -1130,7 +1198,8 @@ void test_ordered_changes_and_validation()
     const auto model = std::move(builder).freeze();
     std::ostringstream output;
     FstWriter writer { output, -9,
-        { .maximum_events = 1U, .maximum_timestamps = 1U } };
+        { .maximum_events = 1U, .maximum_timestamps = 1U,
+            .temporary_directory = { } } };
     writer.declare(model);
     writer.begin(5U);
     bool alias_rejected = false;
@@ -1168,6 +1237,245 @@ void test_ordered_changes_and_validation()
         close_rejected = true;
     }
     assert(close_rejected && output.str().empty());
+}
+
+void test_streaming_event_work_and_cleanup()
+{
+    using namespace fsim::runtime;
+    assert(FstWriterLimits { }.maximum_event_work_bytes == (64U << 20U));
+
+    constexpr std::size_t event_count = 1'000'001U;
+    TraceDeclarationBuilder builder;
+    const auto signal = builder.add_variable("top.value", 1U);
+    const auto model = std::move(builder).freeze();
+    const auto temporary_parent
+        = unique_temporary_path("fsim-fst-writer-streaming");
+    if (!std::filesystem::create_directory(temporary_parent)) {
+        throw std::runtime_error("could not create FST test directory");
+    }
+
+    FstWriterLimits limits;
+    limits.maximum_events = event_count;
+    limits.maximum_timestamps = 17U;
+    limits.temporary_directory = temporary_parent;
+    std::ostringstream output;
+    FstWriter writer { output, -9, limits };
+    writer.declare(model);
+    const auto declaration_bytes = writer.status().buffered_bytes;
+    writer.begin();
+    const auto zero = encode_fst_logic_value(
+        PackedLogic4::from_msb_string("0"));
+    const auto one = encode_fst_logic_value(
+        PackedLogic4::from_msb_string("1"));
+    for (std::size_t index = 0; index < event_count; ++index) {
+        const auto timestamp = static_cast<SimulationTick>(index % 17U);
+        writer.change(
+            { signal, timestamp, 0U, TraceRegion::Active,
+                static_cast<std::uint64_t>(index) },
+            (index & 1U) == 0U ? zero : one);
+        if (index % 100'000U == 0U) {
+            assert(writer.status().buffered_bytes
+                <= declaration_bytes + limits.maximum_event_work_bytes);
+        }
+    }
+    assert(!std::filesystem::is_empty(temporary_parent));
+    writer.close(16U);
+    assert(writer.status().state == FstWriterState::complete);
+    assert(writer.bytes_written() == output.str().size());
+
+    FstReaderLimits reader_limits;
+    reader_limits.maximum_values = event_count;
+    reader_limits.maximum_timestamps = 17U;
+    const auto bytes = output.str();
+    const auto parsed = read_fst(bytes, reader_limits);
+    assert(parsed.ok());
+    assert(parsed.trace->values.size() == event_count);
+    assert(parsed.trace->timestamps.size() == 17U);
+    assert(std::filesystem::is_empty(temporary_parent));
+    std::filesystem::remove(temporary_parent);
+}
+
+void test_streaming_disk_and_individual_budget_failures()
+{
+    using namespace fsim::runtime;
+    TraceDeclarationBuilder builder;
+    const auto signal = builder.add_variable("top.value", 1U);
+    const auto model = std::move(builder).freeze();
+    const auto value = encode_fst_logic_value(
+        PackedLogic4::from_msb_string("1"));
+
+    {
+        const auto blocker = unique_temporary_path("fsim-fst-not-a-directory");
+        {
+            std::ofstream file { blocker, std::ios::binary };
+            assert(file.good());
+        }
+        FstWriterLimits limits;
+        limits.temporary_directory = blocker;
+        std::ostringstream output;
+        FstWriter writer { output, -9, limits };
+        writer.declare(model);
+        writer.begin();
+        writer.change(
+            { signal, 0U, 0U, TraceRegion::Active, 0U }, value);
+        bool rejected = false;
+        try {
+            writer.close(0U);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && output.str().empty());
+        assert(writer.status().state == FstWriterState::failed);
+        assert(writer.status().failure.starts_with(
+            "failed to create FST temporary workspace"));
+        std::filesystem::remove(blocker);
+    }
+
+    {
+        const auto temporary_parent
+            = unique_temporary_path("fsim-fst-failed-close-cleanup");
+        if (!std::filesystem::create_directory(temporary_parent)) {
+            throw std::runtime_error("could not create FST test directory");
+        }
+        FstWriterLimits limits;
+        limits.temporary_directory = temporary_parent;
+        std::ostringstream output;
+        FstWriter writer { output, -9, limits };
+        writer.declare(model);
+        writer.begin();
+        writer.change(
+            { signal, 2U, 0U, TraceRegion::Active, 0U }, value);
+        writer.flush();
+        assert(!std::filesystem::is_empty(temporary_parent));
+        const auto workspace = *std::filesystem::directory_iterator(
+            temporary_parent);
+        assert(workspace.is_directory());
+        assert_private_workspace(workspace.path());
+#if defined(_WIN32)
+        const auto run_file = *std::filesystem::directory_iterator(
+            workspace.path());
+        assert(run_file.is_regular_file());
+        assert_private_workspace(run_file.path());
+#endif
+        bool rejected = false;
+        try {
+            writer.close(1U);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        assert(rejected && output.str().empty());
+        assert(writer.status().state == FstWriterState::failed);
+        assert(std::filesystem::is_empty(temporary_parent));
+        std::filesystem::remove(temporary_parent);
+    }
+
+    {
+        FstWriterLimits limits;
+        limits.maximum_event_work_bytes = 1024U;
+        std::ostringstream output;
+        FstWriter writer { output, -9, limits };
+        writer.declare(model);
+        writer.begin();
+        bool rejected = false;
+        try {
+            writer.change(
+                { signal, 0U, 0U, TraceRegion::Active, 0U }, value);
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        assert(rejected && output.str().empty());
+        assert(writer.status().state == FstWriterState::failed);
+        assert(writer.status().failure
+            == "FST individual event exceeds its permitted event-work budget");
+    }
+}
+
+void test_streaming_output_does_not_seek()
+{
+    using namespace fsim::runtime;
+    const auto model = make_model();
+    const auto expected = write_container(model);
+    ControlledStreamBuffer buffer;
+    std::ostream output { &buffer };
+    FstWriter writer { output };
+    writer.declare(model);
+    writer.begin(5U);
+    writer.close(10U);
+    assert(buffer.bytes == expected);
+}
+
+void test_streaming_validation_at_close()
+{
+    using namespace fsim::runtime;
+    TraceDeclarationBuilder builder;
+    const auto signal = builder.add_variable("top.value", 1U);
+    const auto model = std::move(builder).freeze();
+    const auto value = encode_fst_logic_value(
+        PackedLogic4::from_msb_string("1"));
+
+    {
+        const auto temporary_parent
+            = unique_temporary_path("fsim-fst-duplicate-cleanup");
+        if (!std::filesystem::create_directory(temporary_parent)) {
+            throw std::runtime_error("could not create FST test directory");
+        }
+        FstWriterLimits limits;
+        limits.temporary_directory = temporary_parent;
+        std::ostringstream output;
+        FstWriter writer { output, -9, limits };
+        writer.declare(model);
+        writer.begin();
+        const TraceEvent duplicate {
+            signal, 0U, 0U, TraceRegion::Active, 7U
+        };
+        writer.change(duplicate, value);
+        writer.change(duplicate, value);
+        assert(writer.status().state == FstWriterState::open);
+        bool rejected = false;
+        try {
+            writer.close(0U);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        assert(rejected && output.str().empty());
+        assert(writer.status().state == FstWriterState::failed);
+        assert(writer.status().failure
+            == "FST change ordering identity is duplicated");
+        assert(std::filesystem::is_empty(temporary_parent));
+        std::filesystem::remove(temporary_parent);
+    }
+
+    {
+        const auto temporary_parent
+            = unique_temporary_path("fsim-fst-timestamp-limit-cleanup");
+        if (!std::filesystem::create_directory(temporary_parent)) {
+            throw std::runtime_error("could not create FST test directory");
+        }
+        FstWriterLimits limits;
+        limits.maximum_timestamps = 1U;
+        limits.temporary_directory = temporary_parent;
+        std::ostringstream output;
+        FstWriter writer { output, -9, limits };
+        writer.declare(model);
+        writer.begin();
+        writer.change(
+            { signal, 0U, 0U, TraceRegion::Active, 1U }, value);
+        writer.change(
+            { signal, 1U, 0U, TraceRegion::Active, 2U }, value);
+        assert(writer.status().state == FstWriterState::open);
+        bool rejected = false;
+        try {
+            writer.close(1U);
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        assert(rejected && output.str().empty());
+        assert(writer.status().state == FstWriterState::failed);
+        assert(writer.status().failure
+            == "FST timestamp count exceeds its limit");
+        assert(std::filesystem::is_empty(temporary_parent));
+        std::filesystem::remove(temporary_parent);
+    }
 }
 
 void test_compression_profiles()
@@ -1238,6 +1546,10 @@ int main(const int argc, const char* const argv[])
     test_typed_leaf_profiles();
     test_logic9_storage_profile();
     test_ordered_changes_and_validation();
+    test_streaming_event_work_and_cleanup();
+    test_streaming_disk_and_individual_budget_failures();
+    test_streaming_output_does_not_seek();
+    test_streaming_validation_at_close();
     test_compression_profiles();
     if (argc == 3 && std::string_view { argv[1] } == "--emit") {
         const auto bytes = write_container(make_model());

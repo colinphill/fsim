@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <limits>
 #include <ostream>
@@ -10,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -85,6 +85,36 @@ namespace {
   return 'x';
 }
 
+template <typename Number>
+[[nodiscard]] bool encode_vcd_real(Number value, std::string& encoded) {
+  std::array<char, 512> formatted{};
+  const auto converted = std::to_chars(
+      formatted.data(), formatted.data() + formatted.size(), value,
+      std::chars_format::general,
+      std::numeric_limits<Number>::max_digits10);
+  if (converted.ec != std::errc{}) {
+    return false;
+  }
+  encoded.assign(
+      formatted.data(),
+      static_cast<std::size_t>(converted.ptr - formatted.data()));
+  return true;
+}
+
+[[nodiscard]] bool encode_vcd_real(
+    const SystemVerilogScalarValue& value, std::string& encoded) {
+  if (value.kind == SystemVerilogScalarKind::ShortReal) {
+    const auto real = value.as_shortreal();
+    return real && encode_vcd_real(*real, encoded);
+  }
+  if (value.kind == SystemVerilogScalarKind::Real
+      || value.kind == SystemVerilogScalarKind::Realtime) {
+    const auto real = value.as_real();
+    return real && encode_vcd_real(*real, encoded);
+  }
+  return false;
+}
+
 struct Scope {
   std::string name;
   std::vector<std::uint32_t> declarations;
@@ -115,6 +145,11 @@ struct VcdWriter::Impl {
     bool has_value{};
   };
 
+  struct TraceSelection {
+    std::uint64_t identity{};
+    VcdSignal signal;
+  };
+
   Impl(std::ostream &stream, std::string_view scale, std::size_t capacity)
       : output(stream), timescale(scale),
         buffer_capacity(std::max<std::size_t>(capacity, 256)) {
@@ -128,13 +163,15 @@ struct VcdWriter::Impl {
   std::string timescale;
   std::size_t buffer_capacity;
   std::string buffer;
+  std::string encoded_value;
   std::vector<Declaration> declarations;
   bool started{};
   bool checkpoint_open{};
   SimulationTick current_time{};
   std::uint64_t byte_count{};
   std::optional<TraceEvent> last_event;
-  std::unordered_set<std::uint64_t> trace_signals;
+  std::optional<TraceSelection> selected_trace;
+  std::unordered_map<std::uint64_t, TraceSelection> trace_signals;
 
   void append(std::string_view value) {
     buffer.append(value);
@@ -198,7 +235,7 @@ struct VcdWriter::Impl {
     }
   }
 
-  void write_value(Declaration &declaration, std::string value) {
+  void write_value(Declaration &declaration, const std::string_view value) {
     if (!started) {
       throw std::logic_error("VCD writer has not begun");
     }
@@ -215,7 +252,7 @@ struct VcdWriter::Impl {
         && declaration.has_value && declaration.last_value == value) {
       return;
     }
-    declaration.last_value = std::move(value);
+    declaration.last_value.assign(value.data(), value.size());
     declaration.has_value = true;
 
     if (declaration.width == 1) {
@@ -231,19 +268,45 @@ struct VcdWriter::Impl {
     append('\n');
   }
 
-  void write_real(Declaration& declaration, std::string value) {
+  void write_real(Declaration& declaration, const std::string_view value) {
     if (!started) {
       throw std::logic_error("VCD writer has not begun");
     }
     if (!checkpoint_open
         && declaration.has_value && declaration.last_value == value) return;
-    declaration.last_value = std::move(value);
+    declaration.last_value.assign(value.data(), value.size());
     declaration.has_value = true;
     append('r');
     append(declaration.last_value);
     append(' ');
     append(declaration.identifier);
     append('\n');
+  }
+
+  void encode_value(const PackedBit2& value) {
+    const auto width = value.width();
+    encoded_value.resize(width);
+    for (std::size_t index = 0; index < width; ++index) {
+      encoded_value[width - index - 1U] = value.get(index) ? '1' : '0';
+    }
+  }
+
+  void encode_value(const PackedLogic4& value) {
+    const auto width = value.width();
+    encoded_value.resize(width);
+    for (std::size_t index = 0; index < width; ++index) {
+      encoded_value[width - index - 1U] = value.is_logic9()
+          ? vcd_char(value.get_logic9(index))
+          : vcd_char(value.get(index));
+    }
+  }
+
+  void encode_value(const PackedLogic9& value) {
+    const auto width = value.width();
+    encoded_value.resize(width);
+    for (std::size_t index = 0; index < width; ++index) {
+      encoded_value[width - index - 1U] = vcd_char(value.get(index));
+    }
   }
 };
 
@@ -312,10 +375,19 @@ VcdSignal VcdWriter::declare_systemverilog_scalar(
 
 std::vector<VcdSignal> VcdWriter::declare_model(
     const TraceDeclarationModel& model) {
-  std::vector<VcdSignal> result;
-  result.reserve(model.entries().size());
-  for (const auto& entry : model.entries()) {
-    if (!impl_->trace_signals.insert(entry.id.value).second) {
+  struct PendingSelection {
+    TraceSignalId identity;
+    std::string_view hierarchical_name;
+    std::size_t width{};
+    SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
+    bool is_scalar{};
+  };
+
+  const auto entries = model.entries();
+  std::vector<PendingSelection> pending;
+  pending.reserve(entries.size());
+  for (const auto& entry : entries) {
+    if (impl_->trace_signals.contains(entry.id.value)) {
       throw std::invalid_argument("duplicate trace model signal identity");
     }
     const TraceVariableDeclaration* variable = nullptr;
@@ -329,9 +401,29 @@ std::vector<VcdSignal> VcdWriter::declare_model(
       hierarchical_name = alias.hierarchical_name;
     }
     const auto& type = model.type(variable->type);
-    result.push_back(type.kind == TraceTypeKind::SystemVerilogScalar
-        ? declare_systemverilog_scalar(hierarchical_name, type.scalar_kind)
-        : declare_signal(hierarchical_name, type.width));
+    pending.push_back({
+        entry.id, hierarchical_name, type.width, type.scalar_kind,
+        type.kind == TraceTypeKind::SystemVerilogScalar});
+  }
+
+  if (pending.size()
+      > impl_->declarations.max_size() - impl_->declarations.size()) {
+    throw std::length_error("too many VCD signals");
+  }
+  impl_->declarations.reserve(impl_->declarations.size() + pending.size());
+  impl_->trace_signals.reserve(impl_->trace_signals.size() + pending.size());
+
+  std::vector<VcdSignal> result;
+  result.reserve(pending.size());
+  for (const auto& selection : pending) {
+    const auto signal = selection.is_scalar
+        ? declare_systemverilog_scalar(
+              selection.hierarchical_name, selection.scalar_kind)
+        : declare_signal(selection.hierarchical_name, selection.width);
+    impl_->trace_signals.emplace(
+        selection.identity.value,
+        Impl::TraceSelection{selection.identity.value, signal});
+    result.push_back(signal);
   }
   return result;
 }
@@ -376,43 +468,32 @@ void VcdWriter::begin(SimulationTick initial_time) {
 
 void VcdWriter::change(VcdSignal signal, Logic4 value) {
   auto &declaration = impl_->get(signal);
-  impl_->write_value(declaration, std::string(1, vcd_char(value)));
+  impl_->encoded_value.assign(1U, vcd_char(value));
+  impl_->write_value(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::change(VcdSignal signal, Logic9 value) {
   auto &declaration = impl_->get(signal);
-  impl_->write_value(declaration, std::string(1, vcd_char(value)));
+  impl_->encoded_value.assign(1U, vcd_char(value));
+  impl_->write_value(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::change(VcdSignal signal, const PackedBit2 &value) {
   auto &declaration = impl_->get(signal);
-  impl_->write_value(declaration, value.to_msb_string());
+  impl_->encode_value(value);
+  impl_->write_value(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::change(VcdSignal signal, const PackedLogic4 &value) {
   auto &declaration = impl_->get(signal);
-  std::string encoded(value.width(), 'x');
-  if (value.is_logic9()) {
-    for (std::size_t index = 0; index < value.width(); ++index) {
-      encoded[value.width() - index - 1] =
-          vcd_char(value.get_logic9(index));
-    }
-  } else {
-    for (std::size_t index = 0; index < value.width(); ++index) {
-      encoded[value.width() - index - 1] =
-          vcd_char(value.get(index));
-    }
-  }
-  impl_->write_value(declaration, std::move(encoded));
+  impl_->encode_value(value);
+  impl_->write_value(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::change(VcdSignal signal, const PackedLogic9 &value) {
   auto &declaration = impl_->get(signal);
-  std::string encoded(value.width(), 'x');
-  for (std::size_t index = 0; index < value.width(); ++index) {
-    encoded[value.width() - index - 1] = vcd_char(value.get(index));
-  }
-  impl_->write_value(declaration, std::move(encoded));
+  impl_->encode_value(value);
+  impl_->write_value(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::change(
@@ -428,14 +509,14 @@ void VcdWriter::change(
     if (!encoded) {
       throw std::invalid_argument("invalid VCD exact scalar payload");
     }
-    change(signal, encoded.value);
+    impl_->encode_value(encoded.value);
+    impl_->write_value(declaration, impl_->encoded_value);
     return;
   }
-  const auto formatted = format_systemverilog_scalar(value);
-  if (!formatted) {
+  if (!encode_vcd_real(value, impl_->encoded_value)) {
     throw std::invalid_argument("invalid VCD real payload");
   }
-  impl_->write_real(declaration, formatted.text);
+  impl_->write_real(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::begin_checkpoint(const std::string_view command) {
@@ -471,7 +552,8 @@ void VcdWriter::change_unknown(const VcdSignal signal) {
     impl_->write_real(declaration, "NaN");
     return;
   }
-  impl_->write_value(declaration, std::string(declaration.width, 'x'));
+  impl_->encoded_value.assign(declaration.width, 'x');
+  impl_->write_value(declaration, impl_->encoded_value);
 }
 
 void VcdWriter::comment(const std::string_view text) {
@@ -505,7 +587,16 @@ void VcdWriter::set_event(
   if (!impl_->started) {
     throw std::logic_error("VCD writer has not begun");
   }
-  if (!impl_->trace_signals.contains(event.signal.value)) {
+  if (!impl_->selected_trace
+      || impl_->selected_trace->identity != event.signal.value) {
+    const auto selection = impl_->trace_signals.find(event.signal.value);
+    if (selection == impl_->trace_signals.end()) {
+      throw std::invalid_argument(
+          "trace event signal identity is not declared");
+    }
+    impl_->selected_trace = selection->second;
+  }
+  if (impl_->selected_trace->signal.index >= impl_->declarations.size()) {
     throw std::invalid_argument("trace event signal identity is not declared");
   }
   if (tick_multiplier == 0

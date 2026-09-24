@@ -176,6 +176,208 @@ void test_scheduler_ownership_and_failure_containment() {
       "a moved-from scheduler cannot cancel transferred work");
   destination.cancel(moved);
   require(!moved, "scheduler moves preserve cancelable-work ownership");
+
+  Scheduler reuse;
+  std::weak_ptr<int> cancelled_payload;
+  ScheduledTaskHandle stale;
+  {
+    auto payload = std::make_shared<int>(17);
+    cancelled_payload = payload;
+    stale = reuse.schedule_after_cancelable(
+        1, SchedulerPhase::active, 0,
+        [payload](Scheduler&) { (void)payload; });
+  }
+  reuse.cancel(stale);
+  require(!stale && cancelled_payload.expired(),
+          "cancellation releases a captured payload immediately");
+
+  Scheduler reentrant;
+  std::vector<ScheduledTaskHandle> spawned;
+  int spawned_count = 0;
+  ScheduledTaskHandle source;
+  {
+    auto payload = std::shared_ptr<int>(new int(1), [&](int* value) {
+      delete value;
+      for (int index = 0; index < 128; ++index) {
+        spawned.push_back(reentrant.schedule_after_cancelable(
+            1, SchedulerPhase::active, static_cast<StableOrder>(index),
+            [&](Scheduler&) { ++spawned_count; }));
+      }
+    });
+    source = reentrant.schedule_after_cancelable(
+        1, SchedulerPhase::active, 0,
+        [payload](Scheduler&) { (void)payload; });
+  }
+  reentrant.cancel(source);
+  require(!source && spawned.size() == 128U,
+          "cancellation completes its slot before destroying a reentrant payload");
+  require(reentrant.run().status == RunStatus::completed
+              && spawned_count == 128,
+          "tasks scheduled by a cancelled payload retain valid slots");
+
+  Scheduler discarding;
+  ScheduledTaskHandle rejected_during_discard;
+  ScheduledTaskHandle discarded_reentrant;
+  {
+    auto payload = std::shared_ptr<int>(new int(1), [&](int* value) {
+      delete value;
+      rejected_during_discard = discarding.schedule_after_cancelable(
+          1, SchedulerPhase::active, 0,
+          [](Scheduler&) { throw std::runtime_error("discard reentry ran"); });
+    });
+    discarded_reentrant = discarding.schedule_after_cancelable(
+        1'000, SchedulerPhase::active, 0,
+        [payload](Scheduler&) { (void)payload; });
+  }
+  discarding.discard_pending();
+  require(!discarded_reentrant && !rejected_during_discard
+              && !discarding.has_pending(),
+          "discard rejects work scheduled by a destroyed task payload");
+
+  Scheduler nested_discard;
+  ScheduledTaskHandle rejected_after_nested_reset;
+  {
+    auto first = std::shared_ptr<int>(new int(1), [&](int* value) {
+      delete value;
+      nested_discard.reset();
+    });
+    auto second = std::shared_ptr<int>(new int(2), [&](int* value) {
+      delete value;
+      rejected_after_nested_reset = nested_discard.schedule_after_cancelable(
+          1, SchedulerPhase::active, 0,
+          [](Scheduler&) { throw std::runtime_error("nested discard reentry ran"); });
+    });
+    const auto first_handle = nested_discard.schedule_after_cancelable(
+        1, SchedulerPhase::active, 0,
+        [first](Scheduler&) { (void)first; });
+    const auto second_handle = nested_discard.schedule_after_cancelable(
+        2, SchedulerPhase::active, 0,
+        [second](Scheduler&) { (void)second; });
+    require(first_handle && second_handle,
+            "nested discard starts with two live handles");
+  }
+  nested_discard.discard_pending();
+  require(!rejected_after_nested_reset && !nested_discard.has_pending(),
+          "nested reset keeps the outer discard guard active");
+
+  Scheduler move_source;
+  Scheduler move_destination;
+  bool source_alive_during_move = false;
+  {
+    auto payload = std::shared_ptr<int>(new int(1), [&](int* value) {
+      delete value;
+      source_alive_during_move = static_cast<bool>(
+          move_source.schedule_after_cancelable(
+              1, SchedulerPhase::active, 0, [](Scheduler&) {}));
+    });
+    const auto handle = move_destination.schedule_after_cancelable(
+        1, SchedulerPhase::active, 0,
+        [payload](Scheduler&) { (void)payload; });
+    require(static_cast<bool>(handle),
+            "move destination starts with queued work");
+  }
+  move_destination = std::move(move_source);
+  require(source_alive_during_move,
+          "move assignment releases old payloads while the source is alive");
+
+  Scheduler running_move;
+  Scheduler move_peer;
+  int move_callback_count = 0;
+  running_move.schedule_after(1, SchedulerPhase::active, 0,
+                              [&](Scheduler& active) {
+    active = std::move(move_peer);
+    move_peer = std::move(active);
+    ++move_callback_count;
+    active.schedule_after(1, SchedulerPhase::active, 0,
+                          [&](Scheduler&) { ++move_callback_count; });
+  });
+  require(running_move.run().status == RunStatus::completed
+              && move_callback_count == 2,
+          "move assignment during a callback preserves the running state");
+
+  ScheduledTaskHandle rejected_during_destruction;
+  {
+    Scheduler dying;
+    auto payload = std::shared_ptr<int>(new int(1), [&](int* value) {
+      delete value;
+      rejected_during_destruction = dying.schedule_after_cancelable(
+          1, SchedulerPhase::active, 0,
+          [](Scheduler&) { throw std::runtime_error("destructor reentry ran"); });
+    });
+    static_cast<void>(dying.schedule_after_cancelable(
+        1'000, SchedulerPhase::active, 0,
+        [payload](Scheduler&) { (void)payload; }));
+  }
+  require(!rejected_during_destruction,
+          "destruction rejects work from a destroyed task payload");
+
+  int reused_count = 0;
+  auto live = reuse.schedule_after_cancelable(
+      1, SchedulerPhase::active, 0,
+      [&](Scheduler&) { ++reused_count; });
+  reuse.cancel(stale);
+  require(static_cast<bool>(live),
+          "an old handle cannot cancel a reused slot");
+  require(reuse.run().status == RunStatus::completed && reused_count == 1,
+          "reused cancellation slot executes the new task");
+  require(!live, "completed task invalidates its handle");
+
+  for (int iteration = 0; iteration < 250'000; ++iteration) {
+    auto handle = reuse.schedule_after_cancelable(
+        1, SchedulerPhase::active, 0,
+        [](Scheduler&) { throw std::runtime_error("cancelled task ran"); });
+    reuse.cancel(handle);
+    require(!handle, "cancelled handle must expire during slot reuse");
+  }
+  live = reuse.schedule_after_cancelable(
+      1, SchedulerPhase::active, 0,
+      [&](Scheduler&) { ++reused_count; });
+  reuse.cancel(stale);
+  require(live && reuse.run().status == RunStatus::completed
+              && reused_count == 2,
+          "repeated cancellation retains the latest task only");
+
+  const auto before_reset = reuse.schedule_after_cancelable(
+      1, SchedulerPhase::active, 0,
+      [](Scheduler&) { throw std::runtime_error("reset task ran"); });
+  reuse.reset();
+  live = reuse.schedule_after_cancelable(
+      1, SchedulerPhase::active, 0,
+      [&](Scheduler&) { ++reused_count; });
+  reuse.cancel(before_reset);
+  require(!before_reset && live
+              && reuse.run().status == RunStatus::completed
+              && reused_count == 3,
+          "reset invalidates old handles without cancelling reused slots");
+
+  Scheduler ordered;
+  std::vector<int> observed;
+  for (int order = 127; order >= 0; --order) {
+    auto handle = ordered.schedule_after_cancelable(
+        1, SchedulerPhase::active, static_cast<StableOrder>(order),
+        [&, order](Scheduler&) { observed.push_back(order); });
+    if ((order & 1) != 0)
+      ordered.cancel(handle);
+  }
+  require(ordered.run().status == RunStatus::completed,
+          "compacted cancellation queue completes");
+  require(observed.size() == 64U,
+          "compaction excludes every cancelled task");
+  for (std::size_t index = 0; index < observed.size(); ++index)
+    require(observed[index] == static_cast<int>(2U * index),
+            "compaction preserves stable scheduler order");
+
+  Scheduler sparse_future;
+  for (SimulationTick delay = 1; delay <= 100'000; ++delay) {
+    auto handle = sparse_future.schedule_after_cancelable(
+        delay, SchedulerPhase::active, 0,
+        [](Scheduler&) { throw std::runtime_error("sparse task ran"); });
+    sparse_future.cancel(handle);
+  }
+  require(!sparse_future.has_pending()
+              && sparse_future.run().status == RunStatus::completed
+              && sparse_future.now() == 0U,
+          "cancelled distinct future buckets do not advance simulation time");
 }
 
 void test_scheduler_batch_contract() {

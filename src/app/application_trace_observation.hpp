@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace fsim::app::application_detail {
@@ -44,11 +45,17 @@ struct TraceObservationRecord {
 };
 
 struct TraceObservationLimits {
+    // Bounds retained history when BoundedCapture is requested.
     std::size_t maximum_records { 1U << 20U };
     std::size_t maximum_values_per_record { 4'096U };
     std::size_t maximum_payload_bits { 1U << 24U };
     std::size_t maximum_identity_bytes { 4'096U };
     std::size_t maximum_observers { 16U };
+};
+
+enum class TraceObservationRetention : std::uint8_t {
+    Streaming,
+    BoundedCapture
 };
 
 class TraceObservationRecorder final {
@@ -57,7 +64,8 @@ public:
 
     explicit TraceObservationRecorder(
         const runtime::TraceDeclarationModel& declarations,
-        TraceObservationLimits limits = { });
+        TraceObservationLimits limits = { },
+        TraceObservationRetention retention = TraceObservationRetention::Streaming);
 
     [[nodiscard]] std::uint64_t add_observer(Observer observer);
     void remove_observer(std::uint64_t token);
@@ -71,17 +79,29 @@ public:
         std::span<const TraceObservationValue> values);
     [[nodiscard]] std::uint64_t claim_sequence();
 
-    [[nodiscard]] std::span<const TraceObservationRecord>
-    records() const noexcept;
+    [[nodiscard]] bool would_reorder(
+        runtime::SimulationTick time,
+        std::uint64_t delta,
+        runtime::TraceRegion region) const noexcept;
+
+    // Empty in Streaming mode; bounded history in BoundedCapture mode.
+    [[nodiscard]] std::span<const TraceObservationRecord> records() const noexcept;
     [[nodiscard]] std::uint64_t callback_failures() const noexcept;
     [[nodiscard]] std::exception_ptr callback_failure() const noexcept;
 
 private:
+    void note_order(
+        runtime::SimulationTick time,
+        std::uint64_t delta,
+        runtime::TraceRegion region) noexcept;
     void fan_out(const TraceObservationRecord& record) noexcept;
 
     const runtime::TraceDeclarationModel* declarations_ { };
     TraceObservationLimits limits_;
+    TraceObservationRetention retention_ { TraceObservationRetention::Streaming };
     std::vector<TraceObservationRecord> records_;
+    std::optional<std::tuple<runtime::SimulationTick, std::uint64_t, std::uint8_t>>
+        maximum_order_;
     std::map<std::uint64_t, Observer> observers_;
     std::uint64_t next_observer_ { 1 };
     std::uint64_t next_sequence_ { 1 };

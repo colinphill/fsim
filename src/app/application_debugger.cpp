@@ -1284,6 +1284,16 @@ void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
       }
       return;
     }
+    const auto changes_selection
+        = (command.size() == 2
+              && (command[1] == "all" || command[1] == "clear"))
+        || (command.size() == 3
+            && (command[1] == "add" || command[1] == "remove"));
+    if (changes_selection
+        && trace_->terminal_status != TraceTerminalStatus::open) {
+      output_ << "trace selection requires an open trace\n";
+      return;
+    }
     if (command.size() == 2 && command[1] == "flush") {
       if (trace_->terminal_status == TraceTerminalStatus::complete) {
         output_ << "trace already complete\n";

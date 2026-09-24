@@ -160,13 +160,51 @@ Capture execute(
     trace.begin(simulation.now());
     trace.change(trace_result, simulation.read_signal(*result));
     std::size_t callbacks = 0;
-    const auto callback = simulation.add_signal_change_hook(
+    std::size_t removed_callbacks = 0;
+    std::size_t added_callbacks = 0;
+    bool mutation_done = false;
+    bool final_removal_done = false;
+    std::uint64_t callback_observer = 0;
+    std::uint64_t removed_observer = 0;
+    std::uint64_t added_observer = 0;
+    std::uint64_t ephemeral_observer = 0;
+    std::size_t ephemeral_callbacks = 0;
+    callback_observer = simulation.add_signal_change_hook(
         [&](const auto signal, const auto& value,
             const auto time, const auto) {
           if (signal == *result) {
             ++callbacks;
             trace.set_time(time);
             trace.change(trace_result, value);
+            if (!mutation_done) {
+              mutation_done = true;
+              simulation.remove_signal_change_hook(removed_observer);
+              added_observer = simulation.add_signal_change_hook(
+                  [&](const auto added_signal, const auto&, const auto,
+                      const auto) {
+                    if (added_signal == *result) {
+                      ++added_callbacks;
+                    }
+                  });
+            }
+            if (callbacks > 1U && !final_removal_done) {
+              final_removal_done = true;
+              simulation.remove_signal_change_hook(callback_observer);
+              simulation.remove_signal_change_hook(added_observer);
+            }
+          }
+        });
+    removed_observer = simulation.add_signal_change_hook(
+        [&](const auto observed_signal, const auto&, const auto, const auto) {
+          if (observed_signal == *result) {
+            ++removed_callbacks;
+          }
+        });
+    ephemeral_observer = simulation.add_signal_change_hook(
+        [&](const auto observed_signal, const auto&, const auto, const auto) {
+          if (observed_signal == *result) {
+            ++ephemeral_callbacks;
+            simulation.remove_signal_change_hook(ephemeral_observer);
           }
         });
 
@@ -174,7 +212,17 @@ Capture execute(
     capture.cache = simulation.native_cache_statistics();
     capture.mapped_libraries = simulation.mapped_libraries().size();
     capture.result = simulation.run();
-    simulation.remove_signal_change_hook(callback);
+    simulation.remove_signal_change_hook(callback_observer);
+    simulation.remove_signal_change_hook(removed_observer);
+    simulation.remove_signal_change_hook(added_observer);
+    simulation.remove_signal_change_hook(ephemeral_observer);
+    assert(mutation_done);
+    assert(final_removal_done);
+    assert(removed_callbacks == 1U);
+    assert(ephemeral_callbacks == 1U);
+    assert(callbacks == 2U);
+    assert(added_callbacks == 1U);
+    assert(added_callbacks + 1U == callbacks);
     debugger.execute({"show", "ordering_interactions.shared"});
     assert(debugger_error.str().empty());
     capture.callbacks = callbacks;

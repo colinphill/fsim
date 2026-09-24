@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iosfwd>
 #include <memory>
 #include <string>
@@ -23,7 +24,11 @@ struct FstWriterLimits {
     std::size_t maximum_value_bytes { 1U << 20U };
     std::size_t maximum_hierarchy_bytes { 256U << 20U };
     std::size_t maximum_buffer_bytes { 512U << 20U };
+    /// Maximum in-memory work area for event sorting and merging (64 MiB).
+    std::size_t maximum_event_work_bytes { 64U << 20U };
     std::size_t maximum_container_bytes { 512U << 20U };
+    /// Optional parent directory for temporary bounded-work files.
+    std::filesystem::path temporary_directory;
 };
 
 enum class FstWriterState : std::uint8_t {
@@ -67,6 +72,8 @@ public:
     void declare(const TraceDeclarationModel& model);
     void begin(SimulationTick initial_time = 0);
     void set_initial_value(TraceSignalId signal, const FstEncodedValue& value);
+    /// Records the event; duplicate ordering identities and distinct timestamp
+    /// limits are validated during close() after external sorting.
     void change(const TraceEvent& event, const FstEncodedValue& value);
     void flush();
     void close(SimulationTick final_time);

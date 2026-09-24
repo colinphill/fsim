@@ -9,6 +9,79 @@
 #include <utility>
 
 namespace fsim::runtime {
+
+class CancellationSlots {
+public:
+    struct Identity {
+        std::size_t slot;
+        std::uint64_t generation;
+    };
+
+    [[nodiscard]] Identity acquire(Scheduler::Task task)
+    {
+        if (free_head_ != no_slot) {
+            const auto index = free_head_;
+            auto& slot = slots_[index];
+            free_head_ = slot.next_free;
+            ++slot.generation;
+            slot.task = std::move(task);
+            slot.active = true;
+            return { index, slot.generation };
+        }
+        slots_.push_back({ 1U, true, no_slot, std::move(task) });
+        return { slots_.size() - 1U, 1U };
+    }
+
+    [[nodiscard]] bool active(Identity identity) const noexcept
+    {
+        return identity.slot < slots_.size()
+            && slots_[identity.slot].generation == identity.generation
+            && slots_[identity.slot].active;
+    }
+
+    void release(Identity identity) noexcept
+    {
+        if (!active(identity))
+            return;
+        auto& slot = slots_[identity.slot];
+        auto released_task = std::move(slot.task);
+        slot.active = false;
+        if (slot.generation != std::numeric_limits<std::uint64_t>::max()) {
+            slot.next_free = free_head_;
+            free_head_ = identity.slot;
+        }
+        // A captured payload can reenter Scheduler as it is destroyed. Finish
+        // all slot mutations before invoking any of its destructors.
+        released_task = nullptr;
+    }
+
+    [[nodiscard]] Scheduler::Task take(Identity identity) noexcept
+    {
+        auto task = std::move(slots_[identity.slot].task);
+        release(identity);
+        return task;
+    }
+
+private:
+    static constexpr std::size_t no_slot = std::numeric_limits<std::size_t>::max();
+
+    struct Slot {
+        std::uint64_t generation;
+        bool active;
+        std::size_t next_free;
+        Scheduler::Task task;
+    };
+
+    std::vector<Slot> slots_;
+    std::size_t free_head_ = no_slot;
+};
+
+ScheduledTaskHandle::operator bool() const noexcept
+{
+    const auto owner = owner_.lock();
+    return owner && owner->active({ slot_, generation_ });
+}
+
 namespace {
 
     constexpr std::size_t phase_count = 8;
@@ -22,29 +95,51 @@ namespace {
         StableOrder order { };
         std::uint64_t sequence { };
         Scheduler::Task task;
-        std::vector<std::uint8_t>* cancel_states { };
-        std::uint64_t cancel_token { };
+        CancellationSlots* cancel_slots { };
+        CancellationSlots::Identity cancellation { };
         SchedulerBatchTask* batch_task { };
         std::uint64_t batch_payload { };
 
         [[nodiscard]] bool is_cancelled() const noexcept
         {
-            return cancel_states
-                && (*cancel_states)[cancel_token] == 0U;
+            return cancel_slots && !cancel_slots->active(cancellation);
         }
 
         void complete() noexcept
         {
-            if (cancel_states) {
-                (*cancel_states)[cancel_token] = 0U;
-            }
+            if (cancel_slots)
+                cancel_slots->release(cancellation);
+        }
+
+        [[nodiscard]] Scheduler::Task take_task() noexcept
+        {
+            if (cancel_slots)
+                return cancel_slots->take(cancellation);
+            return std::move(task);
         }
     };
 
     struct WorkQueue {
         std::vector<Entry> entries;
         std::size_t cursor { };
+        std::size_t pushes_since_compaction { };
         bool needs_sort { };
+        bool has_cancelable { };
+
+        void compact() noexcept
+        {
+            entries.erase(entries.begin(),
+                entries.begin() + static_cast<std::ptrdiff_t>(cursor));
+            cursor = 0;
+            entries.erase(std::remove_if(entries.begin(), entries.end(),
+                [](const Entry& entry) { return entry.is_cancelled(); }),
+                entries.end());
+            pushes_since_compaction = 0;
+            has_cancelable = std::any_of(entries.begin(), entries.end(),
+                [](const Entry& entry) { return entry.cancel_slots != nullptr; });
+            if (entries.empty())
+                needs_sort = false;
+        }
 
         [[nodiscard]] bool empty() const noexcept
         {
@@ -56,13 +151,22 @@ namespace {
 
         void push(Entry entry)
         {
+            // A cancelled task has already released its payload. Reclaim its
+            // queue entry after enough pushes to amortize a scan of the
+            // remaining bucket.
+            if (has_cancelable && entries.size() >= 64U
+                && pushes_since_compaction >= entries.size() / 2U)
+                compact();
             if (!needs_sort && cursor < entries.size()) {
                 const auto& last = entries.back();
                 needs_sort = entry.order < last.order
                     || (entry.order == last.order
                         && entry.sequence < last.sequence);
             }
+            const bool cancelable = entry.cancel_slots != nullptr;
             entries.push_back(std::move(entry));
+            has_cancelable |= cancelable;
+            ++pushes_since_compaction;
         }
 
         void prepare()
@@ -80,6 +184,9 @@ namespace {
             while (cursor < entries.size() && entries[cursor].is_cancelled()) {
                 ++cursor;
             }
+            if (has_cancelable && cursor >= 64U
+                && cursor >= entries.size() / 2U)
+                compact();
         }
 
         [[nodiscard]] const Entry* next()
@@ -99,7 +206,9 @@ namespace {
             if (empty()) {
                 entries.clear();
                 cursor = 0;
+                pushes_since_compaction = 0;
                 needs_sort = false;
+                has_cancelable = false;
             }
         }
 
@@ -126,6 +235,16 @@ namespace {
 
     struct Bucket {
         std::array<WorkQueue, phase_count> queues;
+
+        [[nodiscard]] std::size_t compact_cancelled() noexcept
+        {
+            std::size_t retained = 0;
+            for (auto& queue : queues) {
+                queue.compact();
+                retained += queue.entries.size();
+            }
+            return retained;
+        }
 
         [[nodiscard]] bool empty() const noexcept
         {
@@ -213,20 +332,69 @@ struct Scheduler::Impl {
     bool in_run { };
     bool in_callback { };
     bool in_safe_point { };
+    bool discarding { };
     std::atomic_bool stop { false };
-    std::shared_ptr<const void> owner = std::make_shared<const bool>(true);
-    std::shared_ptr<std::vector<std::uint8_t>> cancel_states
-        = std::make_shared<std::vector<std::uint8_t>>();
+    std::shared_ptr<CancellationSlots> cancel_slots
+        = std::make_shared<CancellationSlots>();
     SlotStartHook slot_start_hook;
     SafePointHook safe_point_hook;
     std::vector<RuntimeSignalId> recent_signals;
     std::size_t recent_signal_cursor { };
+    std::size_t cancellations_since_compaction { };
+    std::size_t cancellation_compaction_threshold { 64U };
+
+    void note_cancellation() noexcept
+    {
+        ++cancellations_since_compaction;
+        if (cancellations_since_compaction < cancellation_compaction_threshold)
+            return;
+
+        std::size_t retained = 0;
+        if (current) {
+            retained += current->current.compact_cancelled();
+            retained += current->next_delta.compact_cancelled();
+        }
+        for (auto bucket = future.begin(); bucket != future.end();) {
+            retained += bucket->second.compact_cancelled();
+            if (bucket->second.empty())
+                bucket = future.erase(bucket);
+            else
+                ++bucket;
+        }
+        cancellations_since_compaction = 0;
+        cancellation_compaction_threshold = std::max<std::size_t>(
+            64U, retained / 2U);
+    }
+
+    void discard_queued() noexcept
+    {
+        const auto was_discarding = discarding;
+        discarding = true;
+        auto discarded_current = std::move(current);
+        current.reset();
+        std::map<SimulationTick, Bucket> discarded_future;
+        discarded_future.swap(future);
+
+        if (discarded_current) {
+            discarded_current->current.cancel_pending();
+            discarded_current->next_delta.cancel_pending();
+        }
+        for (auto& [time, bucket] : discarded_future) {
+            (void)time;
+            bucket.cancel_pending();
+        }
+        discarded_current.reset();
+        discarded_future.clear();
+        cancellations_since_compaction = 0;
+        cancellation_compaction_threshold = 64U;
+        discarding = was_discarding;
+    }
 
     [[nodiscard]] Entry make_entry(
         StableOrder order,
         Task task,
-        std::vector<std::uint8_t>* cancel_state = nullptr,
-        const std::uint64_t cancel_token = 0U,
+        CancellationSlots* cancellation_slots = nullptr,
+        const CancellationSlots::Identity cancellation = { },
         SchedulerBatchTask* batch_task = nullptr,
         const std::uint64_t batch_payload = 0U)
     {
@@ -237,8 +405,8 @@ struct Scheduler::Impl {
             throw std::overflow_error("scheduler insertion sequence overflow");
         }
         return Entry {
-            order, next_sequence++, std::move(task), cancel_state,
-            cancel_token, batch_task, batch_payload
+            order, next_sequence++, std::move(task), cancellation_slots,
+            cancellation, batch_task, batch_payload
         };
     }
 
@@ -274,13 +442,28 @@ Scheduler::Scheduler(SchedulerOptions options)
 {
 }
 
-Scheduler::~Scheduler() = default;
+Scheduler::~Scheduler()
+{
+    if (impl_)
+        impl_->discard_queued();
+}
 Scheduler::Scheduler(Scheduler&&) noexcept = default;
-Scheduler& Scheduler::operator=(Scheduler&&) noexcept = default;
+Scheduler& Scheduler::operator=(Scheduler&& other) noexcept
+{
+    if (this == &other || (impl_ && (impl_->discarding || impl_->in_run))
+        || (other.impl_ && (other.impl_->discarding || other.impl_->in_run)))
+        return *this;
+    if (impl_)
+        impl_->discard_queued();
+    impl_ = std::move(other.impl_);
+    return *this;
+}
 
 void Scheduler::schedule_at(SimulationTick time, SchedulerPhase phase,
     StableOrder stable_order, Task task)
 {
+    if (impl_->discarding)
+        return;
     if (time < impl_->now) {
         throw std::invalid_argument("cannot schedule an event in the past");
     }
@@ -318,6 +501,8 @@ void Scheduler::schedule_at(SimulationTick time, SchedulerPhase phase,
 void Scheduler::schedule_after(SimulationTick delay, SchedulerPhase phase,
     StableOrder stable_order, Task task)
 {
+    if (impl_->discarding)
+        return;
     if (delay > std::numeric_limits<SimulationTick>::max() - impl_->now) {
         throw std::overflow_error("simulation time overflow while scheduling event");
     }
@@ -330,6 +515,8 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
     const StableOrder stable_order,
     Task task)
 {
+    if (impl_->discarding)
+        return { };
     if (delay > std::numeric_limits<SimulationTick>::max() - impl_->now) {
         throw std::overflow_error("simulation time overflow while scheduling event");
     }
@@ -338,32 +525,41 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
     if (index >= phase_count) {
         throw std::invalid_argument("invalid scheduler phase");
     }
-    const auto token = impl_->cancel_states->size();
-    impl_->cancel_states->push_back(1U);
-    auto entry = impl_->make_entry(
-        stable_order, std::move(task), impl_->cancel_states.get(), token);
+    auto entry = impl_->make_entry(stable_order, std::move(task));
+    const auto cancellation = impl_->cancel_slots->acquire(std::move(entry.task));
+    entry.cancel_slots = impl_->cancel_slots.get();
+    entry.cancellation = cancellation;
 
-    if (impl_->current && time == impl_->current->time) {
-        const bool phase_finished = index < impl_->current->phase;
-        auto& bucket = phase_finished ? impl_->current->next_delta : impl_->current->current;
-        bucket.queues[index].push(std::move(entry));
-        if (!phase_finished && index == impl_->current->phase) {
-            ++impl_->current_phase_revision;
+    try {
+        if (impl_->current && time == impl_->current->time) {
+            const bool phase_finished = index < impl_->current->phase;
+            auto& bucket = phase_finished ? impl_->current->next_delta : impl_->current->current;
+            bucket.queues[index].push(std::move(entry));
+            if (!phase_finished && index == impl_->current->phase) {
+                ++impl_->current_phase_revision;
+            }
+        } else {
+            impl_->future[time].queues[index].push(std::move(entry));
         }
-    } else {
-        impl_->future[time].queues[index].push(std::move(entry));
+    } catch (...) {
+        impl_->cancel_slots->release(cancellation);
+        throw;
     }
-    return ScheduledTaskHandle { impl_->cancel_states, token, impl_->owner };
+    return ScheduledTaskHandle {
+        impl_->cancel_slots, cancellation.slot, cancellation.generation };
 }
 
 void Scheduler::cancel(const ScheduledTaskHandle& handle) noexcept
 {
-    if (!impl_ || !handle.active_)
+    if (!impl_)
         return;
     const auto owner = handle.owner_.lock();
-    if (owner && owner.get() == impl_->owner.get()
-        && handle.token_ < impl_->cancel_states->size()) {
-        (*impl_->cancel_states)[handle.token_] = 0U;
+    const CancellationSlots::Identity identity {
+        handle.slot_, handle.generation_ };
+    if (owner && owner.get() == impl_->cancel_slots.get()
+        && impl_->cancel_slots->active(identity)) {
+        impl_->cancel_slots->release(identity);
+        impl_->note_cancellation();
     }
 }
 
@@ -376,6 +572,8 @@ void Scheduler::schedule(SchedulerPhase phase, StableOrder stable_order,
 void Scheduler::schedule_next_delta(SchedulerPhase phase,
     StableOrder stable_order, Task task)
 {
+    if (impl_->discarding)
+        return;
     auto entry = impl_->make_entry(stable_order, std::move(task));
     const auto index = phase_index(phase);
     if (index >= phase_count) {
@@ -397,8 +595,10 @@ void Scheduler::schedule_next_delta_batchable(
     const std::uint64_t batch_payload,
     Task fallback_task)
 {
+    if (impl_->discarding)
+        return;
     auto entry = impl_->make_entry(
-        stable_order, std::move(fallback_task), nullptr, 0U,
+        stable_order, std::move(fallback_task), nullptr, { },
         &batch_task, batch_payload);
     const auto index = phase_index(phase);
     if (index >= phase_count) {
@@ -446,6 +646,10 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
     std::vector<std::uint64_t> batch_payloads;
 
     auto result = [&](RunStatus status) {
+        if (!impl_->current && impl_->future.empty()) {
+            impl_->cancellations_since_compaction = 0;
+            impl_->cancellation_compaction_threshold = 64U;
+        }
         return RunResult { status,
             impl_->now,
             impl_->current ? impl_->current->delta : 0,
@@ -575,10 +779,10 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                 }
                 continue;
             }
-            entry.complete();
+            auto task = entry.take_task();
             impl_->in_callback = true;
             try {
-                entry.task(*this);
+                task(*this);
             } catch (...) {
                 impl_->in_callback = false;
                 throw;
@@ -626,16 +830,7 @@ void Scheduler::discard_pending()
         throw std::logic_error(
             "cannot discard scheduler work while it is running");
     }
-    if (impl_->current) {
-        impl_->current->current.cancel_pending();
-        impl_->current->next_delta.cancel_pending();
-    }
-    for (auto& [time, bucket] : impl_->future) {
-        (void)time;
-        bucket.cancel_pending();
-    }
-    impl_->current.reset();
-    impl_->future.clear();
+    impl_->discard_queued();
 }
 
 void Scheduler::reset()

@@ -23,6 +23,7 @@ using fsim::app::application_detail::SystemCTraceDirtyValue;
 using fsim::app::application_detail::SystemCTraceLimits;
 using fsim::app::application_detail::SystemCTracePipeline;
 using fsim::app::application_detail::SystemCTraceRoute;
+using fsim::app::application_detail::TraceObservationRetention;
 
 template <typename Exception, typename Function>
 void expect_throws(Function&& function)
@@ -185,6 +186,8 @@ void test_official_post_update_pipeline()
     limits.maximum_values_per_batch = 2U;
     limits.maximum_bits_per_batch = 512U;
     limits.maximum_records = 16U;
+    limits.observation_retention
+        = TraceObservationRetention::BoundedCapture;
     std::ostringstream vcd;
     std::ostringstream fst(std::ios::binary);
     SystemCTracePipeline pipeline(declarations, inventory.snapshot(),
@@ -260,6 +263,29 @@ void test_official_post_update_pipeline()
     assert(vcd.str().find("wide_alias") != std::string::npos);
     assert(vcd.str().find("$dumpall") != std::string::npos);
     assert(!fst.str().empty());
+
+    auto streaming_limits = limits;
+    streaming_limits.maximum_records = 1U;
+    streaming_limits.observation_retention = TraceObservationRetention::Streaming;
+    const std::array streaming_routes { SystemCTraceRoute {
+        wide_endpoint, wide_signal, { wide_alias }, true } };
+    std::ostringstream streaming_vcd;
+    std::ostringstream streaming_fst(std::ios::binary);
+    SystemCTracePipeline streaming_pipeline(declarations, inventory.snapshot(),
+        bindings.snapshot(), streaming_routes, streaming_vcd, streaming_fst,
+        streaming_limits);
+    const auto stream_time = sc_core::sc_time_stamp().value();
+    const auto stream_delta = sc_core::sc_delta_count();
+    assert(streaming_pipeline.try_post_update(wide_endpoint, stream_time,
+        stream_delta, systemc_trace_value(wide_value(4))));
+    streaming_pipeline.flush();
+    assert(streaming_pipeline.try_post_update(wide_endpoint, stream_time,
+        stream_delta + 1U, systemc_trace_value(wide_value(5))));
+    streaming_pipeline.close(stream_time);
+    assert(streaming_pipeline.observations().empty());
+    assert(streaming_pipeline.status().delivered_batches == 2U);
+    assert(!streaming_vcd.str().empty());
+    assert(!streaming_fst.str().empty());
 
     expect_throws<std::logic_error>([&] {
         static_cast<void>(pipeline.try_post_update(wide_endpoint, 4U, 0U,

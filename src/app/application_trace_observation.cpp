@@ -45,7 +45,6 @@ namespace {
     void validate_request(
         const runtime::TraceDeclarationModel& declarations,
         const TraceObservationLimits& limits,
-        const std::size_t record_count,
         const TraceObservationKind kind,
         const runtime::TraceRegion region,
         const std::string_view identity,
@@ -61,10 +60,6 @@ namespace {
         if (values.empty() || values.size() > limits.maximum_values_per_record) {
             throw std::length_error("trace observation value count is invalid");
         }
-        if (record_count >= limits.maximum_records) {
-            throw std::length_error("trace observation record limit exceeded");
-        }
-
         std::set<std::uint64_t> signals;
         std::size_t payload_bits = 0U;
         for (const auto& observed : values) {
@@ -98,9 +93,11 @@ namespace {
 
 TraceObservationRecorder::TraceObservationRecorder(
     const runtime::TraceDeclarationModel& declarations,
-    TraceObservationLimits limits)
+    TraceObservationLimits limits,
+    const TraceObservationRetention retention)
     : declarations_(&declarations)
     , limits_(limits)
+    , retention_(retention)
 {
     if (limits_.maximum_records == 0U
         || limits_.maximum_values_per_record == 0U
@@ -108,6 +105,10 @@ TraceObservationRecorder::TraceObservationRecorder(
         || limits_.maximum_identity_bytes == 0U
         || limits_.maximum_observers == 0U) {
         throw std::invalid_argument("trace observation limits must be positive");
+    }
+    if (retention_ != TraceObservationRetention::Streaming
+        && retention_ != TraceObservationRetention::BoundedCapture) {
+        throw std::invalid_argument("trace observation retention is invalid");
     }
 }
 
@@ -148,6 +149,30 @@ std::uint64_t TraceObservationRecorder::claim_sequence()
     return next_sequence_++;
 }
 
+bool TraceObservationRecorder::would_reorder(
+    const runtime::SimulationTick time,
+    const std::uint64_t delta,
+    const runtime::TraceRegion region) const noexcept
+{
+    if (!maximum_order_) {
+        return false;
+    }
+    return std::tuple { time, delta, static_cast<std::uint8_t>(region) }
+        < *maximum_order_;
+}
+
+void TraceObservationRecorder::note_order(
+    const runtime::SimulationTick time,
+    const std::uint64_t delta,
+    const runtime::TraceRegion region) noexcept
+{
+    const auto order
+        = std::tuple { time, delta, static_cast<std::uint8_t>(region) };
+    if (!maximum_order_ || *maximum_order_ < order) {
+        maximum_order_ = order;
+    }
+}
+
 std::uint64_t TraceObservationRecorder::accept(
     const TraceObservationKind kind,
     const runtime::SimulationTick time,
@@ -159,8 +184,12 @@ std::uint64_t TraceObservationRecorder::accept(
     if (fanning_out_) {
         throw std::logic_error("trace observation fanout cannot be reentrant");
     }
-    validate_request(*declarations_, limits_, records_.size(), kind, region,
-        identity, values);
+    validate_request(
+        *declarations_, limits_, kind, region, identity, values);
+    if (retention_ == TraceObservationRetention::BoundedCapture
+        && records_.size() >= limits_.maximum_records) {
+        throw std::length_error("trace observation record limit exceeded");
+    }
 
     TraceObservationRecord record;
     record.kind = kind;
@@ -170,9 +199,16 @@ std::uint64_t TraceObservationRecorder::accept(
     record.sequence = claim_sequence();
     record.identity = std::move(identity);
     record.values.assign(values.begin(), values.end());
-    records_.push_back(std::move(record));
-    fan_out(records_.back());
-    return records_.back().sequence;
+    const auto sequence = record.sequence;
+    if (retention_ == TraceObservationRetention::BoundedCapture) {
+        records_.push_back(std::move(record));
+        note_order(time, delta, region);
+        fan_out(records_.back());
+    } else {
+        note_order(time, delta, region);
+        fan_out(record);
+    }
+    return sequence;
 }
 
 void TraceObservationRecorder::fan_out(

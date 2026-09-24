@@ -157,9 +157,9 @@ public:
 private:
     struct Monitor;
     struct ActiveAttempt;
+    struct ClockBinding;
 
-    [[nodiscard]] bool clock_edge(const Monitor& monitor,
-        VhdlPslTruth previous, VhdlPslTruth current) const noexcept;
+    [[nodiscard]] bool clock_edge(const Monitor& monitor) const noexcept;
     void evaluate_active(std::size_t monitor, bool edge,
         const VhdlPslSampleValues& values, SimulationTick time,
         std::uint64_t delta, bool end_of_run,
@@ -171,11 +171,10 @@ private:
     std::vector<Monitor> monitors_;
     std::vector<ActiveAttempt> active_;
     std::vector<VhdlPslAttemptSnapshot> attempts_;
-    std::map<std::string, VhdlPslTruth, std::less<>> previous_clocks_;
-    std::map<std::string, std::vector<VhdlPslClockedSample>, std::less<>>
-        histories_;
+    std::vector<ClockBinding> clock_bindings_;
     std::uint64_t next_attempt_ { 1U };
     std::size_t active_count_ { };
+    std::size_t enabled_monitor_count_ { };
     std::size_t monitor_storage_bytes_ { };
     std::size_t storage_bytes_ { };
     SimulationTick last_time_ { };

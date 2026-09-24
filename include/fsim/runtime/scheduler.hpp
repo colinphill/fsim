@@ -72,6 +72,7 @@ struct SchedulerBatchResult {
 };
 
 class Scheduler;
+class CancellationSlots;
 
 /// Stable, caller-owned executor for adjacent opt-in scheduler tasks.
 /// Implementations consume only a leading payload prefix and contain any
@@ -87,23 +88,20 @@ class ScheduledTaskHandle {
 public:
   ScheduledTaskHandle() = default;
 
-  [[nodiscard]] explicit operator bool() const noexcept {
-    return active_ && token_ < active_->size() && (*active_)[token_] != 0U
-        && !owner_.expired();
-  }
+  [[nodiscard]] explicit operator bool() const noexcept;
 
 private:
   friend class Scheduler;
 
   explicit ScheduledTaskHandle(
-      std::shared_ptr<const std::vector<std::uint8_t>> active,
-      std::uint64_t token,
-      std::weak_ptr<const void> owner)
-      : active_(std::move(active)), token_(token), owner_(std::move(owner)) {}
+      std::weak_ptr<const CancellationSlots> owner,
+      std::size_t slot,
+      std::uint64_t generation)
+      : owner_(std::move(owner)), slot_(slot), generation_(generation) {}
 
-  std::shared_ptr<const std::vector<std::uint8_t>> active_;
-  std::uint64_t token_ { };
-  std::weak_ptr<const void> owner_;
+  std::weak_ptr<const CancellationSlots> owner_;
+  std::size_t slot_ { };
+  std::uint64_t generation_ { };
 };
 
 /// Raised before executing a delta cycle beyond max_delta_cycles.
@@ -144,7 +142,9 @@ public:
 
   explicit Scheduler(SchedulerOptions options = {});
   ~Scheduler();
+  /// Do not move a scheduler while it is running or releasing queued tasks.
   Scheduler(Scheduler &&) noexcept;
+  /// An assignment during either scheduler's run or cleanup has no effect.
   Scheduler &operator=(Scheduler &&) noexcept;
   Scheduler(const Scheduler &) = delete;
   Scheduler &operator=(const Scheduler &) = delete;

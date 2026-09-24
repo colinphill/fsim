@@ -48,6 +48,32 @@ namespace {
         }
     }
 
+    void detach_trace_observers(TraceState& state) noexcept
+    {
+        if (state.callback_lifetime) {
+            state.callback_lifetime->state = nullptr;
+        }
+        if (state.observations && state.observation_writer_observer != 0U) {
+            try {
+                state.observations->remove_observer(
+                    state.observation_writer_observer);
+                state.observation_writer_observer = 0U;
+            } catch (...) {
+                // A retained callback checks the invalidated lifetime token.
+            }
+        }
+        if (state.simulation && state.signal_change_observer != 0U) {
+            state.simulation->remove_signal_change_hook(
+                state.signal_change_observer);
+            state.signal_change_observer = 0U;
+        }
+        if (state.simulation && state.uvm_activity_observer != 0U) {
+            state.simulation->remove_uvm_activity_hook(
+                state.uvm_activity_observer);
+            state.uvm_activity_observer = 0U;
+        }
+    }
+
     void publish_staging(TraceState& state)
     {
         std::error_code error;
@@ -132,6 +158,7 @@ void fail_trace(
     if (state.terminal_status == TraceTerminalStatus::complete) {
         return;
     }
+    detach_trace_observers(state);
     if (state.terminal_status != TraceTerminalStatus::failed) {
         state.terminal_status = TraceTerminalStatus::failed;
         try {
@@ -157,9 +184,7 @@ void fail_trace(
 
 TraceState::~TraceState()
 {
-    if (simulation && uvm_activity_observer != 0) {
-        simulation->remove_uvm_activity_hook(uvm_activity_observer);
-    }
+    detach_trace_observers(*this);
     if (terminal_status == TraceTerminalStatus::open) {
         fail_trace(*this,
             "trace lifecycle ended without a clean close", diagnostics);
@@ -347,6 +372,7 @@ bool finish_trace(TraceState& state, diagnostic::Engine& diagnostics)
     if (state.terminal_status == TraceTerminalStatus::failed) {
         return false;
     }
+    detach_trace_observers(state);
     try {
         if (!state.stream.is_open()) {
             throw std::logic_error { "trace output is not open" };
