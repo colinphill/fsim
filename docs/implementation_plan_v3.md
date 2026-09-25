@@ -6850,15 +6850,19 @@ matrix was stopped during `original_codec/llvm_o0` sample 3; no complete
 comparison or measured performance pass is claimed. Keep the frozen
 corrected baseline, required workload set, seven alternating samples, and
 110% per-workload wall/RSS limits below as the deferred performance work.
-This waiver does not waive Batch 188I's commit/push or exact-head hosted
-LLVM Linux/Windows Debug/Release lanes.
+This performance waiver did not waive Batch 188I's commit/push or starting
+its exact-head hosted LLVM Linux/Windows Debug/Release lanes.
 
 The user also waived post-push CI monitoring for Batches 188C-188H.
 Before each commit/push, inspect the latest applicable hosted run and
 its failures for any changes needed in the batch. Then commit/push
 without waiting for the newly pushed run, and record hosted status as
 unverified rather than passed. Exact-head four-lane monitoring and
-bounded CI repair resume at Batch 188I.
+bounded CI repair were originally scheduled to resume at Batch 188I. After
+the Batch 188I implementation commit was pushed and its exact-head run
+queued on 2026-09-25, the user separately waived monitoring that run and
+directed the handoff to new work. Record all four hosted lanes as unverified,
+not passing; do not wait for or repair this run as part of Batch 188I.
 
 Batch 188B was committed and pushed as `c2507598` after the clean
 warnings-as-errors Release and Debug builds and both unfiltered 417/417
@@ -7600,8 +7604,17 @@ must never establish semantic equality or persistent cache identity.
     time, and four final signals. The focused warnings-as-errors Debug
     artifact-phase and reload CTests and source-package manifest passed on
     2026-09-24.
-20. Run standard closure plus final local ASan/UBSan qualification; hand off to
-    Batch 189 without tagging a release.
+20. **Complete.** Dependency-rescanned warnings-as-errors Release and Debug
+    builds and their immediately following full suites passed 428/428 each.
+    The LLVM-enabled ASan/UBSan build and full suite also passed 428/428,
+    including the hierarchy-path lifetime and 32-load artifact retention
+    fixtures. The user deferred the seven-sample performance matrix to future
+    work; no performance pass is claimed. The latest prior hosted run was
+    inspected and its Windows cancellation failure repaired. One cohesive
+    implementation commit `c531fd6a` was pushed and exact-head hosted run
+    `36119757637` queued. The user then waived post-push monitoring, so its
+    Linux/Windows Debug/Release results are unverified. Hand off to Batch 189
+    without a release tag.
 
 Windows cancellation payload note (2026-09-24): H-head hosted run
 `36064852692` passed both Ubuntu LLVM lanes and exposed the same
@@ -7620,7 +7633,8 @@ slot. Any residual source wrapper dies when scheduling
 returns, after the queue entry is linked, and cancellation can then release
 the sole persistent scheduler-owned callback after completing slot state
 changes. The local warnings-as-errors Debug `fsim.runtime` test passed.
-Exact-head Windows CI confirmation remains required for Batch 188I closure.
+The exact-head Windows run was started, but the user waived monitoring on
+2026-09-25; hosted confirmation of this fix is not claimed.
 
 Change 20 runtime-decode repair (2026-09-24): the first fixed-baseline
 performance sample exposed a valid 251,504,954-byte runtime section rejected
@@ -7673,8 +7687,11 @@ active. The user deferred the full fixed-baseline performance matrix to
 future work after this local correctness qualification. The final-source
 attempt in `.local-artifacts/188i-performance-final3/` was stopped during
 `original_codec/llvm_o0` sample 3 with exit 130; its partial evidence is
-diagnostic only. No performance pass is claimed. Commit/push and exact-head
-hosted lanes remain open, so Change 20 is not yet complete.
+diagnostic only. No performance pass is claimed. The cohesive implementation
+commit `c531fd6a1d1fb67bde638c68c1dc3472984daf20` was pushed. Exact-head
+hosted run `36119757637` was queued. The user waived monitoring after push,
+so all four LLVM lane results remain unverified. Change 20 closes on the
+passing local correctness gates, pushed implementation, and explicit waivers.
 
 Canonical artifact path IDs derive from sorted path content, not allocation
 order. Standalone component serialization includes its own required path table.
@@ -7751,7 +7768,7 @@ count.
 5. Publish one cohesive implementation commit and push.
 6. Monitor all four LLVM-only hosted lanes: Linux Debug/Release and Windows
    Debug/Release, except for the user-waived post-push monitoring in Batches
-   188C-188H; still inspect the latest applicable run before commit/push.
+   188C-188I; still inspect the latest applicable run before commit/push.
 7. Make bounded in-scope CI repair commits as necessary where monitoring is
    required; do not advance with a required lane failing. For waived batches,
    report the new run as unverified and proceed without monitoring it.

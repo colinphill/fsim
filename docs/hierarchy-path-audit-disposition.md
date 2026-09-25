@@ -22,13 +22,13 @@ disposition uses four statuses:
 - **Pending** means completion is not established by the current plan or live
   evidence. Pending is not a rejection.
 
-The live plan records 188B–188H complete and 188I Changes 1–19 complete.
+The live plan records Batches 188B–188I complete.
 The final-source Release, Debug, and LLVM-enabled ASan/UBSan full suites each
 passed 428/428 tests. LeakSanitizer was disabled for the sandbox ptrace
 constraint. At the user's direction, 188I performance qualification is
 deferred to future work after the local correctness gates; no measured
-speedup or performance pass is claimed. Remaining Change 20 closure status
-is governed by the plan.
+speedup or performance pass is claimed. The user waived post-push hosted
+monitoring, so the Batch 188I hosted results are unverified.
 
 ## Verification infrastructure — audit §2.10
 
@@ -195,8 +195,8 @@ audit is not treated as a current measurement. Its line counts, timing samples,
 allocation estimates, and projected gains describe its original snapshot and
 remain historical until remeasured.
 
-Recommendations tagged **Pending** and any remaining 188I Change 20 closure
-items are governed by the plan. The final-source Release, Debug, and
+Recommendations tagged **Pending** are governed by the plan. The final-source
+Release, Debug, and
 LLVM-enabled ASan/UBSan full suites passed 428/428 each; LeakSanitizer was
 disabled for the sandbox ptrace constraint. The cumulative performance
 qualification is explicitly deferred to future work and has no passing result.
