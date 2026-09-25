@@ -413,26 +413,4 @@ int handle_run(
         config, invocation.plusargs, diagnostics, output);
 }
 
-void print_debug_help(std::ostream& output)
-{
-    output
-        << "Commands: continue|run [DURATION], run-until TIME, "
-           "step statement|process|phase|delta|time,\n"
-        << "          break source [PATH:]LINE, break time TIME, "
-           "break signal SIGNAL [==|!= VALUE], break phase IDENTITY|*, "
-           "break uvm IDENTITY|*,\n"
-        << "          breakpoints,\n"
-        << "          delete ID, clear, scope [PATH], scopes [PATH], "
-           "signals [PATH],\n"
-        << "          show SIGNAL,\n"
-        << "          classes, class HANDLE [PROPERTY], chandles, "
-           "chandle HANDLE,\n"
-        << "          uvm [summary|phases|objections|tlm1|tlm2|all],\n"
-        << "          vhdl [summary|scopes|objects|processes|psl|all],\n"
-        << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
-        << "          trace add|remove SIGNAL, trace all|clear|list|status|report|flush|close,\n"
-        << "          locals, where, help, quit\n";
-}
-
-
 } // namespace fsim::app::application_detail

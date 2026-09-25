@@ -54,9 +54,13 @@ fsim_require_tokens(
 fsim_require_tokens(
   "${FSIM_SOURCE_DIR}/tests/app/application_test_cli.cpp"
   "\"fsim\", \"debug\""
-  "fsim debugger: tb"
-  "(O0 hybrid, 2 compiled process(es) in "
-  "time 0, delta 0, scope tb")
+  "set initial [fsim::debug status]"
+  "[dict get $initial scope] ne \"tb\""
+  "set partial [fsim::debug continue 1ns]"
+  "[dict get $partial time] != 1"
+  "set completed [fsim::debug continue]"
+  "[dict get $completed finished]"
+  "structured-debug-cli-ok")
 
 fsim_require_tokens(
   "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt"

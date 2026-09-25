@@ -157,6 +157,11 @@ foreach(FSIM_REQUIRED IN ITEMS
     examples/vertical_slice/sv_child.sv
     LICENSE
     third_party/ieee-1076-2019/LICENSE
+    third_party/isocline/LICENSE
+    third_party/isocline/PROVENANCE.md
+    third_party/isocline/include/isocline.h
+    third_party/isocline/src/isocline.c
+    third_party/isocline/src/wcwidth.c
     third_party/systemc-3.0.2/LICENSE
     third_party/systemc-3.0.2/NOTICE
     third_party/systemc-3.0.2/SOURCE_MANIFEST.txt

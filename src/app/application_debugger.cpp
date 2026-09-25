@@ -1,8 +1,251 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_simulation_internal.hpp"
 #include "application_trace_control.hpp"
 #include "application_workspace.hpp"
 #include "fsim/support/path.hpp"
+
+namespace fsim::app {
+
+namespace {
+
+  std::filesystem::path systemc_plugin_metadata_directory(
+      const std::filesystem::path& plugin)
+  {
+    std::error_code error;
+    auto directory = plugin;
+    if (!std::filesystem::is_directory(directory, error)) {
+      directory = directory.parent_path();
+    }
+    while (!directory.empty()) {
+      error.clear();
+      if (std::filesystem::exists(
+              directory / systemc::kIncrementalPluginMetadataFilename, error)
+          && !error) {
+        return directory;
+      }
+      const auto parent = directory.parent_path();
+      if (parent == directory) {
+        break;
+      }
+      directory = parent;
+    }
+    return { };
+  }
+
+  std::vector<SystemCPluginProvenance> systemc_plugin_provenance(
+      const BuiltProject& project)
+  {
+    std::vector<std::filesystem::path> directories;
+    directories.reserve(project.systemc_plugins.size());
+    for (const auto& plugin : project.systemc_plugins) {
+      auto directory = systemc_plugin_metadata_directory(plugin);
+      if (!directory.empty()) {
+        directories.push_back(std::move(directory));
+      }
+    }
+    std::ranges::sort(directories);
+    directories.erase(
+        std::unique(directories.begin(), directories.end()), directories.end());
+
+    std::vector<SystemCPluginProvenance> result;
+    result.reserve(directories.size());
+    for (const auto& directory : directories) {
+      diagnostic::Engine metadata_diagnostics;
+      const auto metadata = systemc::load_incremental_plugin_metadata(
+          directory, metadata_diagnostics);
+      if (!metadata) {
+        continue;
+      }
+      SystemCPluginProvenance item;
+      item.logical_library = metadata->logical_library;
+      item.input_digest = metadata->input_digest;
+      item.link_digest = metadata->link_digest;
+      item.compiler_fingerprint = metadata->compiler_fingerprint;
+      item.library_checksum = metadata->library_checksum;
+      item.factories.reserve(metadata->factories.size());
+      for (const auto& factory : metadata->factories) {
+        item.factories.push_back(factory.name);
+      }
+      std::ranges::sort(item.factories);
+      result.push_back(std::move(item));
+    }
+    std::ranges::sort(
+        result, { }, &SystemCPluginProvenance::logical_library);
+    result.erase(
+        std::unique(result.begin(), result.end(), [](const auto& left, const auto& right) {
+          return left.logical_library == right.logical_library;
+        }),
+        result.end());
+    return result;
+  }
+
+  void append_debug_source(
+      DebuggerSourceProvenance& result,
+      const semantic::Model& semantics,
+      const std::optional<semantic::SourceSpanId> source)
+  {
+    if (!source || source->value() >= semantics.source_spans().size()) {
+      return;
+    }
+    const auto& span = semantics.source_spans()[source->value()];
+    result.source_id = source->value();
+    if (span.file.valid() && span.file.value() < semantics.source_files().size()) {
+      const auto& file = semantics.source_files()[span.file.value()];
+      result.source_identity = file.content_digest;
+      if (result.source_path.empty() && span.logical_name.empty()) {
+        result.source_path = file.physical_name;
+      }
+    }
+    if (result.source_path.empty() && !span.logical_name.empty()) {
+      result.source_path = span.logical_name;
+    }
+    if (result.source_line == 0U) {
+      result.source_line = span.begin.line;
+    }
+    if (result.source_column == 0U) {
+      result.source_column = span.begin.column;
+    }
+  }
+
+} // namespace
+
+std::vector<SystemCPluginProvenance>
+Simulation::systemc_plugin_provenance() const
+{
+  return fsim::app::systemc_plugin_provenance(impl_->built);
+}
+
+std::vector<DebuggerSourceProvenance> structured_provenance(
+    const BuiltProject& project,
+    const std::optional<std::string_view> requested_path)
+{
+  std::vector<DebuggerSourceProvenance> result;
+  for (const auto& source : fsim::app::verilog_scope_provenance(project)) {
+    DebuggerSourceProvenance item;
+    item.path = source.path;
+    item.language = source.language == semantic::Language::verilog
+        ? "verilog"
+        : "systemverilog";
+    item.library = source.library;
+    item.unit = source.unit_name;
+    item.unit_id = source.unit.value();
+    item.source_id = source.source.value();
+    item.source_path = source.source_path;
+    item.source_line = source.source_line;
+    item.source_column = source.source_column;
+    item.standard = source.standard;
+    item.compatibility_profile = source.compatibility_profile;
+    item.instance = source.path;
+    append_debug_source(item, project.semantics, source.source);
+    result.push_back(std::move(item));
+  }
+
+  const auto& design = project.design_ir;
+  for (const auto& specialization : design.specializations()) {
+    if (specialization.language != semantic::Language::vhdl
+        || specialization.instance.value() >= design.instances().size()) {
+      continue;
+    }
+    const auto& instance = design.instances()[specialization.instance.value()];
+    DebuggerSourceProvenance item;
+    item.path = std::string { design.path(instance.path) };
+    item.instance = item.path;
+    item.language = "vhdl";
+    item.library = specialization.library;
+    item.unit = specialization.name;
+    item.unit_id = specialization.unit.value();
+    auto source = specialization.source;
+    if (!source && specialization.unit.value() < project.semantics.units().size()) {
+      source = project.semantics.units()[specialization.unit.value()].source;
+    }
+    append_debug_source(item, project.semantics, source);
+    const auto provenance = std::ranges::find(
+        project.vhdl_unit_provenance, specialization.unit,
+        &VhdlUnitProvenance::unit);
+    if (provenance != project.vhdl_unit_provenance.end()) {
+      item.standard = provenance->standard;
+      item.compatibility_profile = provenance->compatibility_profile;
+    }
+    result.push_back(std::move(item));
+  }
+
+  const auto plugins = systemc_plugin_provenance(project);
+  for (const auto& specialization : design.specializations()) {
+    if (specialization.language != semantic::Language::systemc
+        || specialization.instance.value() >= design.instances().size()) {
+      continue;
+    }
+    const auto& instance = design.instances()[specialization.instance.value()];
+    DebuggerSourceProvenance item;
+    item.path = std::string { design.path(instance.path) };
+    item.instance = item.path;
+    item.language = "systemc";
+    item.library = specialization.library;
+    item.unit = specialization.name;
+    item.unit_id = specialization.unit.value();
+    item.plugin_identity = specialization.name;
+    constexpr std::string_view prefix { "systemc:" };
+    const auto target = std::string_view { specialization.name };
+    if (target.starts_with(prefix)) {
+      const auto plugin_and_factory = target.substr(prefix.size());
+      const auto separator = plugin_and_factory.find('.');
+      if (separator != std::string_view::npos) {
+        item.unit = plugin_and_factory.substr(separator + 1U);
+        item.plugin_identity = std::string { plugin_and_factory };
+      }
+      for (const auto& plugin : plugins) {
+        const auto plugin_prefix = plugin.logical_library + ".";
+        if (!plugin_and_factory.starts_with(plugin_prefix)) {
+          continue;
+        }
+        const auto factory = plugin_and_factory.substr(plugin_prefix.size());
+        if (std::ranges::find(plugin.factories, factory)
+            == plugin.factories.end()) {
+          continue;
+        }
+        item.plugin_identity = plugin.logical_library + ":"
+            + std::string { factory };
+        item.source_identity = plugin.input_digest;
+        item.plugin_input_digest = plugin.input_digest;
+        item.plugin_link_digest = plugin.link_digest;
+        item.plugin_compiler_fingerprint = plugin.compiler_fingerprint;
+        item.plugin_library_checksum = plugin.library_checksum;
+        item.library = plugin.logical_library;
+        break;
+      }
+    }
+    result.push_back(std::move(item));
+  }
+
+  std::ranges::sort(result, { }, &DebuggerSourceProvenance::path);
+  if (!requested_path) {
+    return result;
+  }
+  const DebuggerSourceProvenance* selected = nullptr;
+  for (const auto& candidate : result) {
+    const bool owns_path = *requested_path == candidate.path
+        || (requested_path->size() > candidate.path.size()
+            && requested_path->starts_with(candidate.path)
+            && (*requested_path)[candidate.path.size()] == '.');
+    if (owns_path
+        && (selected == nullptr
+            || candidate.path.size() > selected->path.size())) {
+      selected = &candidate;
+    }
+  }
+  return selected == nullptr
+      ? std::vector<DebuggerSourceProvenance> { }
+      : std::vector<DebuggerSourceProvenance> { *selected };
+}
+
+std::vector<DebuggerSourceProvenance> Simulation::structured_provenance(
+    const std::optional<std::string_view> path) const
+{
+  return fsim::app::structured_provenance(impl_->built, path);
+}
+
+} // namespace fsim::app
 
 namespace fsim::app::application_detail {
 
@@ -310,7 +553,8 @@ DebuggerSession::DebuggerSession(
           const auto found = std::find_if(
               breakpoints_.begin(), breakpoints_.end(),
               [signal, &value](const DebugBreakpoint& breakpoint) {
-                if (breakpoint.kind != DebugBreakpointKind::signal
+                if ((breakpoint.kind != DebugBreakpointKind::signal
+                        && breakpoint.kind != DebugBreakpointKind::watch)
                     || breakpoint.signal != signal) {
                   return false;
                 }
@@ -712,6 +956,562 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
     output_ << "unknown or malformed command; type help\n";
   }
 
+DebuggerStatus DebuggerSession::status() const
+{
+  DebuggerStatus result;
+  result.time = simulation_.now();
+  result.delta = simulation_.delta();
+  result.scope = scope_;
+  result.finished = simulation_.finished();
+  result.poisoned = simulation_.poisoned();
+  if (hit_) {
+    result.breakpoint_id = hit_->id;
+    result.stop_reason = hit_->description;
+  } else if (phase_transition_) {
+    result.stop_reason = *phase_transition_;
+  } else if (current_execution_point_) {
+    result.stop_reason = current_execution_point_->source.path + ":"
+        + std::to_string(current_execution_point_->source.line) + ":"
+        + std::to_string(current_execution_point_->source.column);
+  }
+  return result;
+}
+
+void DebuggerSession::require_executable()
+{
+  if (simulation_.poisoned()) {
+    throw std::runtime_error(
+        "simulation is unavailable after a fatal runtime error");
+  }
+  if (simulation_.finished()) {
+    throw std::runtime_error("simulation has finished");
+  }
+}
+
+void DebuggerSession::step(const std::string_view kind)
+{
+  structured_execution_error_.reset();
+  require_executable();
+  if (kind == "statement") {
+    step_execution(false);
+  } else if (kind == "process") {
+    step_execution(true);
+  } else if (kind == "phase") {
+    step_phase();
+  } else if (kind == "delta" || kind == "time") {
+    step(kind == "delta");
+  } else {
+    throw std::invalid_argument(
+        "debug step expects statement, process, phase, delta, or time");
+  }
+  if (structured_execution_error_) {
+    throw std::runtime_error(*structured_execution_error_);
+  }
+}
+
+void DebuggerSession::continue_run(
+    const std::optional<std::string_view> duration)
+{
+  structured_execution_error_.reset();
+  require_executable();
+  std::optional<SimulationTick> limit;
+  if (duration) {
+    std::string error;
+    const auto relative = parse_time(
+        *duration, simulation_.time_resolution(), error);
+    if (!relative) {
+      throw std::invalid_argument(std::move(error));
+    }
+    if (*relative > std::numeric_limits<SimulationTick>::max()
+            - simulation_.now()) {
+      throw std::overflow_error("debug continue duration overflows time");
+    }
+    limit = simulation_.now() + *relative;
+  }
+  run(limit);
+  if (structured_execution_error_) {
+    throw std::runtime_error(*structured_execution_error_);
+  }
+}
+
+DebuggerBreakpointInfo DebuggerSession::breakpoint_info(
+    const DebugBreakpoint& breakpoint) const
+{
+  DebuggerBreakpointInfo result;
+  result.id = breakpoint.id;
+  switch (breakpoint.kind) {
+  case DebugBreakpointKind::time:
+    result.kind = "time";
+    result.time = breakpoint.time;
+    break;
+  case DebugBreakpointKind::signal:
+    result.kind = "signal";
+    break;
+  case DebugBreakpointKind::watch:
+    result.kind = "watch";
+    break;
+  case DebugBreakpointKind::source:
+    result.kind = "source";
+    result.line = breakpoint.line;
+    break;
+  case DebugBreakpointKind::phase:
+    result.kind = "phase";
+    break;
+  case DebugBreakpointKind::uvm:
+    result.kind = "uvm";
+    break;
+  }
+  result.path = breakpoint.path;
+  if (breakpoint.signal_condition) {
+    result.comparison = breakpoint.signal_condition_equal ? "==" : "!=";
+    result.value = breakpoint.signal_condition->to_msb_string();
+  }
+  return result;
+}
+
+DebuggerBreakpointInfo DebuggerSession::add_breakpoint(
+    const std::string_view kind,
+    const std::string_view location,
+    const std::optional<std::string_view> comparison,
+    const std::optional<std::string_view> value)
+{
+  if (comparison.has_value() != value.has_value()) {
+    throw std::invalid_argument(
+        "a signal breakpoint condition requires both comparator and value");
+  }
+  if ((comparison || value) && kind != "signal" && kind != "watch") {
+    throw std::invalid_argument(
+        "only signal breakpoints and watches accept a condition");
+  }
+
+  DebugBreakpoint breakpoint;
+  if (kind == "time") {
+    std::string error;
+    const auto time = parse_time(
+        location, simulation_.time_resolution(), error);
+    if (!time) {
+      throw std::invalid_argument(std::move(error));
+    }
+    if (*time <= simulation_.now()) {
+      throw std::invalid_argument(
+          "time breakpoint must be later than the current time");
+    }
+    breakpoint.kind = DebugBreakpointKind::time;
+    breakpoint.time = *time;
+    breakpoint.path = std::string(location);
+  } else if (kind == "signal" || kind == "watch") {
+    const auto signal = resolve_signal(location, false);
+    if (!signal) {
+      throw std::invalid_argument("unknown signal: " + std::string(location));
+    }
+    breakpoint.kind = kind == "watch"
+        ? DebugBreakpointKind::watch
+        : DebugBreakpointKind::signal;
+    breakpoint.signal = signal->second;
+    breakpoint.path = signal->first;
+    if (comparison) {
+      if (*comparison != "==" && *comparison != "!=") {
+        throw std::invalid_argument(
+            "signal condition comparator must be == or !=");
+      }
+      const auto* object = design_signal_object(
+          simulation_, breakpoint.signal);
+      if (object == nullptr) {
+        throw std::logic_error(
+            "signal breakpoint lacks its DesignIR runtime adapter");
+      }
+      std::string error;
+      auto condition = parse_value(*value, object->width, error);
+      if (!condition) {
+        throw std::invalid_argument(std::move(error));
+      }
+      breakpoint.signal_condition_equal = *comparison == "==";
+      breakpoint.signal_condition = std::move(*condition);
+    }
+  } else if (kind == "source") {
+    const auto separator = location.rfind(':');
+    const auto line_text = separator == std::string_view::npos
+        ? location
+        : location.substr(separator + 1U);
+    std::uint64_t line { };
+    const auto [end, conversion_error] = std::from_chars(
+        line_text.data(), line_text.data() + line_text.size(), line);
+    if (conversion_error != std::errc { }
+        || end != line_text.data() + line_text.size() || line == 0
+        || line > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::invalid_argument(
+          "source breakpoint must be LINE or PATH:LINE");
+    }
+    breakpoint.kind = DebugBreakpointKind::source;
+    breakpoint.line = static_cast<std::uint32_t>(line);
+    if (separator != std::string_view::npos) {
+      breakpoint.path = std::string(location.substr(0, separator));
+    }
+  } else if (kind == "phase") {
+    auto matches = std::vector<std::string> { };
+    const auto states = phase_states();
+    for (const auto& [identity, state] : states) {
+      (void)state;
+      if (identity == location
+          || (location.find('.') == std::string_view::npos
+              && identity.ends_with("." + std::string { location }))) {
+        matches.push_back(identity);
+      }
+    }
+    if (location != "*" && matches.empty()) {
+      throw std::invalid_argument("unknown UVM phase: " + std::string(location));
+    }
+    if (matches.size() > 1U) {
+      throw std::invalid_argument("ambiguous UVM phase: " + std::string(location));
+    }
+    breakpoint.kind = DebugBreakpointKind::phase;
+    breakpoint.path = location == "*"
+        ? std::string { location }
+        : std::move(matches.front());
+    phase_states_ = states;
+  } else if (kind == "uvm") {
+    breakpoint.kind = DebugBreakpointKind::uvm;
+    breakpoint.path = std::string(location);
+  } else {
+    throw std::invalid_argument(
+        "debug break expects time, signal, source, phase, or uvm");
+  }
+  breakpoint.id = next_breakpoint_++;
+  breakpoints_.push_back(breakpoint);
+  return breakpoint_info(breakpoint);
+}
+
+DebuggerBreakpointInfo DebuggerSession::add_watch(
+    const std::string_view signal,
+    const std::optional<std::string_view> comparison,
+    const std::optional<std::string_view> value)
+{
+  return add_breakpoint("watch", signal, comparison, value);
+}
+
+std::vector<DebuggerBreakpointInfo> DebuggerSession::breakpoints() const
+{
+  std::vector<DebuggerBreakpointInfo> result;
+  result.reserve(breakpoints_.size());
+  for (const auto& breakpoint : breakpoints_) {
+    result.push_back(breakpoint_info(breakpoint));
+  }
+  return result;
+}
+
+std::vector<DebuggerBreakpointInfo> DebuggerSession::watches() const
+{
+  std::vector<DebuggerBreakpointInfo> result;
+  for (const auto& breakpoint : breakpoints_) {
+    if (breakpoint.kind == DebugBreakpointKind::watch) {
+      result.push_back(breakpoint_info(breakpoint));
+    }
+  }
+  return result;
+}
+
+void DebuggerSession::delete_breakpoint(const std::uint64_t id)
+{
+  const auto found = std::ranges::find(
+      breakpoints_, id, &DebugBreakpoint::id);
+  if (found == breakpoints_.end()) {
+    throw std::invalid_argument("unknown breakpoint: " + std::to_string(id));
+  }
+  breakpoints_.erase(found);
+}
+
+void DebuggerSession::delete_watch(const std::uint64_t id)
+{
+  const auto found = std::ranges::find_if(
+      breakpoints_, [id](const auto& breakpoint) {
+        return breakpoint.id == id
+            && breakpoint.kind == DebugBreakpointKind::watch;
+      });
+  if (found == breakpoints_.end()) {
+    throw std::invalid_argument("unknown watch: " + std::to_string(id));
+  }
+  breakpoints_.erase(found);
+}
+
+void DebuggerSession::clear_breakpoints()
+{
+  breakpoints_.clear();
+}
+
+std::vector<DebuggerFrameInfo> DebuggerSession::frames() const
+{
+  if (!current_execution_point_) {
+    return { };
+  }
+  return { frame(0U) };
+}
+
+DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
+{
+  if (index != 0U || !current_execution_point_) {
+    throw std::out_of_range("debug frame index is unavailable");
+  }
+  const auto& point = *current_execution_point_;
+  const auto* process = design_process_occurrence(
+      simulation_, point.design_process);
+  if (process == nullptr) {
+    throw std::runtime_error("selected debugger process is unavailable");
+  }
+  const auto& program = simulation_.process_program(point.design_process);
+  DebuggerFrameInfo result;
+  result.index = 0U;
+  result.process_id = point.process;
+  result.process = process->name;
+  result.scope = point.scope;
+  result.source_path = point.source.path;
+  result.source_line = point.source.line;
+  result.source_column = point.source.column;
+  switch (point.kind) {
+  case runtime::simir::ExecutionPointKind::statement:
+    result.point_kind = "statement";
+    break;
+  case runtime::simir::ExecutionPointKind::call:
+    result.point_kind = "call";
+    break;
+  case runtime::simir::ExecutionPointKind::wait:
+    result.point_kind = "wait";
+    break;
+  case runtime::simir::ExecutionPointKind::assertion:
+    result.point_kind = "assertion";
+    break;
+  case runtime::simir::ExecutionPointKind::process_entry:
+    result.point_kind = "process_entry";
+    break;
+  case runtime::simir::ExecutionPointKind::process_suspend:
+    result.point_kind = "process_suspend";
+    break;
+  }
+  const auto process_id = point.process;
+  for (std::size_t local_index = 0U;
+      local_index < program.debug_locals.size(); ++local_index) {
+    const auto& local = program.debug_locals[local_index];
+    std::string value;
+    try {
+      if (local.systemverilog_scalar
+          != runtime::SystemVerilogScalarKind::None) {
+        value = format_scalar_local(
+            simulation_, simulation_.read_process_scalar_local(process_id, local_index));
+      } else {
+        const auto packed = simulation_.read_process_local(
+            process_id, local_index);
+        if (const auto handle = format_class_local(
+                simulation_, local.type_name, packed)) {
+          value = *handle;
+        } else {
+          value = format_value(packed, local.enumeration_literals);
+        }
+      }
+    } catch (const std::logic_error&) {
+      value = "<uninitialized>";
+    }
+    result.locals.push_back({ local.name, local.type_name, std::move(value) });
+  }
+  for (std::size_t local_index = 0U;
+      local_index < program.debug_string_locals.size(); ++local_index) {
+    const auto& local = program.debug_string_locals[local_index];
+    std::string value;
+    try {
+      value = escaped_string(simulation_.read_process_string_local(
+          process_id, local_index));
+    } catch (const std::logic_error&) {
+      value = "<uninitialized>";
+    }
+    result.locals.push_back({ local.name, "string", std::move(value) });
+  }
+  for (std::size_t local_index = 0U;
+      local_index < program.debug_container_locals.size(); ++local_index) {
+    const auto& local = program.debug_container_locals[local_index];
+    std::string value;
+    try {
+      value = format_container(simulation_.read_process_container_local(
+          process_id, local_index));
+    } catch (const std::logic_error&) {
+      value = "<uninitialized>";
+    }
+    result.locals.push_back({ local.name, "container", std::move(value) });
+  }
+  return result;
+}
+
+DebuggerScopeInfo DebuggerSession::scope(
+    const std::optional<std::string_view> path)
+{
+  if (path) {
+    const auto resolved = resolve_scope(*path);
+    if (!resolved) {
+      throw std::invalid_argument("unknown scope: " + std::string(*path));
+    }
+    scope_ = *resolved;
+  }
+  return { scope_, child_scopes(scope_) };
+}
+
+std::vector<std::string> DebuggerSession::child_scopes(
+    const std::string_view base) const
+{
+  const auto prefix = std::string(base) + ".";
+  std::set<std::string> children;
+  const auto add_child = [&](const std::string_view path) {
+    if (!path.starts_with(prefix)) {
+      return;
+    }
+    const auto remainder = path.substr(prefix.size());
+    const auto separator = remainder.find('.');
+    if (separator != std::string_view::npos) {
+      children.insert(prefix + std::string(remainder.substr(0, separator)));
+    }
+  };
+  for (const auto& [path, signal] : signal_paths_) {
+    (void)signal;
+    add_child(path);
+  }
+  for (const auto& [path, object] : container_paths_) {
+    (void)object;
+    add_child(path);
+  }
+  for (const auto& path : execution_scope_paths_) {
+    if (!path.starts_with(prefix)) {
+      continue;
+    }
+    const auto remainder = std::string_view { path }.substr(prefix.size());
+    const auto separator = remainder.find('.');
+    children.insert(prefix + std::string(remainder.substr(0, separator)));
+  }
+    return { children.begin(), children.end() };
+}
+
+DebuggerInspection DebuggerSession::inspect(
+    const std::string_view requested_path) const
+{
+  std::string path;
+  std::optional<std::pair<std::string, SignalId>> signal;
+  if (auto resolved = const_cast<DebuggerSession*>(this)->resolve_signal(
+          requested_path, false)) {
+    signal = std::move(resolved);
+    path = signal->first;
+  }
+  std::optional<std::pair<std::string, runtime::simir::StringObjectId>> string;
+  if (path.empty()) {
+    string = resolve_string_object(requested_path);
+    if (string)
+      path = string->first;
+  }
+  std::optional<std::pair<std::string, runtime::simir::ContainerObjectId>>
+      container;
+  if (path.empty()) {
+    container = resolve_container_object(requested_path);
+    if (container)
+      path = container->first;
+  }
+  if (path.empty()) {
+    if (const auto resolved = resolve_scope(requested_path)) {
+      DebuggerInspection result;
+      result.path = *resolved;
+      const auto separator = resolved->rfind('.');
+      result.name = separator == std::string::npos
+          ? *resolved
+          : resolved->substr(separator + 1U);
+      result.kind = "scope";
+      result.children = child_scopes(*resolved);
+      return result;
+    }
+    throw std::invalid_argument(
+        "unknown design object: " + std::string(requested_path));
+  }
+
+  const auto object = std::ranges::find_if(
+      simulation_.design_ir().objects(), [&](const auto& candidate) {
+        return design_path(simulation_, candidate.path) == path;
+      });
+  if (object == simulation_.design_ir().objects().end()) {
+    throw std::runtime_error("debug object metadata is unavailable: " + path);
+  }
+  DebuggerInspection result;
+  result.path = path;
+  result.name = object->name;
+  result.type = object->external_type.empty()
+      ? object->type.spelling
+      : object->external_type;
+  result.width = object->width;
+  switch (object->kind) {
+  case semantic::design::ObjectKind::signal:
+    result.kind = "signal";
+    break;
+  case semantic::design::ObjectKind::string:
+    result.kind = "string";
+    break;
+  case semantic::design::ObjectKind::container:
+    result.kind = "container";
+    break;
+  case semantic::design::ObjectKind::protected_object:
+    result.kind = "protected_object";
+    break;
+  case semantic::design::ObjectKind::protected_member:
+    result.kind = "protected_member";
+    break;
+  case semantic::design::ObjectKind::systemc_module:
+    result.kind = "systemc_module";
+    break;
+  case semantic::design::ObjectKind::systemc_port:
+    result.kind = "systemc_port";
+    break;
+  case semantic::design::ObjectKind::systemc_event:
+    result.kind = "systemc_event";
+    break;
+  case semantic::design::ObjectKind::systemc_channel:
+    result.kind = "systemc_channel";
+    break;
+  case semantic::design::ObjectKind::systemc_signal:
+    result.kind = "systemc_signal";
+    break;
+  case semantic::design::ObjectKind::systemc_export:
+    result.kind = "systemc_export";
+    break;
+  }
+  if (signal) {
+    const auto& runtime_info = simulation_.runtime_adapter().signals().at(signal->second);
+    if (runtime_info.systemverilog_scalar
+        != runtime::SystemVerilogScalarKind::None) {
+      result.value = format_scalar_local(
+          simulation_, simulation_.read_scalar_signal(signal->second));
+    } else if (const auto handle = format_class_local(
+                   simulation_, object->type.spelling,
+                   simulation_.read_signal(signal->second))) {
+      result.value = *handle;
+    } else {
+      result.value = format_value(
+          simulation_.read_signal(signal->second),
+          runtime_info.enumeration_literals);
+    }
+    result.forced = simulation_.signal_is_forced(signal->second);
+  } else if (string) {
+    try {
+      result.value = simulation_.read_string_object(string->second);
+    } catch (const std::logic_error&) {
+      result.value = "<uninitialized>";
+    }
+  } else if (container) {
+    try {
+      result.value = format_container(
+          simulation_.read_container_object(container->second));
+    } catch (const std::logic_error&) {
+      result.value = "<uninitialized>";
+    }
+  }
+  return result;
+}
+
+std::vector<DebuggerSourceProvenance> DebuggerSession::provenance(
+    const std::optional<std::string_view> requested_path) const
+{
+  return simulation_.structured_provenance(requested_path);
+}
+
 [[nodiscard]] std::string DebuggerSession::format_value(
     const PackedLogic4& value,
     const std::vector<std::string>& enumeration_literals)  {
@@ -838,7 +1638,8 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
   }
 
 [[nodiscard]] std::optional<std::pair<std::string, SignalId>>
-DebuggerSession::resolve_signal(const std::string_view name)  {
+DebuggerSession::resolve_signal(
+    const std::string_view name, const bool report_error)  {
     for (const auto& path : lexical_paths(name)) {
       if (const auto signal = simulation_.find_signal(path)) {
         return std::pair{path, *signal};
@@ -863,7 +1664,9 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
           found == signal_paths_.end() ? std::string{name} : found->first,
           *signal};
     }
-    output_ << "unknown signal: " << name << '\n';
+    if (report_error) {
+      output_ << "unknown signal: " << name << '\n';
+    }
     return std::nullopt;
   }
 
@@ -1529,8 +2332,11 @@ void DebuggerSession::list_breakpoints() const  {
         if (!breakpoint.path.empty()) {
           output_ << " (" << breakpoint.path << ")";
         }
-      } else if (breakpoint.kind == DebugBreakpointKind::signal) {
-        output_ << "signal " << breakpoint.path;
+      } else if (breakpoint.kind == DebugBreakpointKind::signal
+          || breakpoint.kind == DebugBreakpointKind::watch) {
+        output_ << (breakpoint.kind == DebugBreakpointKind::watch
+                ? "watch " : "signal ")
+                << breakpoint.path;
         if (breakpoint.signal_condition) {
           output_ << ' '
                   << (breakpoint.signal_condition_equal ? "== " : "!= ")
@@ -1774,6 +2580,7 @@ void DebuggerSession::run(const std::optional<SimulationTick> requested_limit)  
       }
       report_result(result);
     } catch (const std::exception& exception) {
+      structured_execution_error_ = exception.what();
       error_ << exception.what() << '\n';
     }
     install_interrupt_hook(simulation_);
@@ -1815,6 +2622,7 @@ void DebuggerSession::step(const bool delta_step)  {
       }
       report_result(result);
     } catch (const std::exception& exception) {
+      structured_execution_error_ = exception.what();
       error_ << exception.what() << '\n';
     }
     install_interrupt_hook(simulation_);
@@ -1836,6 +2644,7 @@ void DebuggerSession::step_phase() {
     const auto result = simulation_.run();
     report_result(result);
   } catch (const std::exception& exception) {
+    structured_execution_error_ = exception.what();
     error_ << exception.what() << '\n';
   }
   stop_on_phase_transition_ = false;
@@ -1888,130 +2697,10 @@ void DebuggerSession::step_execution(const bool process_step)  {
       const auto result = simulation_.run();
       report_result(result);
     } catch (const std::exception& exception) {
+      structured_execution_error_ = exception.what();
       error_ << exception.what() << '\n';
     }
     install_interrupt_hook(simulation_);
   }
-
-std::vector<std::string> words(const std::string& line)  {
-  std::istringstream input(line);
-  std::vector<std::string> result;
-  for (std::string word; input >> word;) {
-    result.push_back(std::move(word));
-  }
-  return result;
-}
-
-int run_debug_repl_impl(
-    Simulation& simulation,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error,
-    TraceState* trace)  {
-  DebuggerSession debugger(simulation, output, error, trace);
-  std::string line;
-  while (true) {
-    output << "(fsim) " << std::flush;
-    if (!std::getline(input, line)) {
-      output << '\n';
-      break;
-    }
-    const auto command = words(line);
-    if (command.empty()) {
-      continue;
-    }
-    if (command[0] == "quit" || command[0] == "q") {
-      break;
-    }
-    if (command[0] == "help") {
-      print_debug_help(output);
-      continue;
-    }
-    debugger.execute(command);
-  }
-  return 0;
-}
-
-int handle_debug(
-    const cli::Invocation& invocation,
-    const project::Config& config,
-    diagnostic::Engine& diagnostics,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error_output)  {
-  auto built = load_workspace_snapshot(invocation, config, diagnostics);
-  if (!built) {
-    return 1;
-  }
-  if (built->entropy_seed) {
-    output << "random seed " << built->seed << '\n';
-  }
-  Simulation simulation(
-      std::move(*built),
-      config.run.max_deltas,
-      SimulationEngine::debug);
-  if (!apply_uvm_command_line(
-          simulation, invocation.plusargs, diagnostics)) {
-    return 1;
-  }
-  simulation.set_output_hook(
-      [&output](
-          const runtime::simir::ProcessId,
-          const std::string_view text,
-          const bool newline,
-          const SimulationTick,
-          const std::uint64_t) {
-        output << text;
-        if (newline) {
-          output << '\n';
-        }
-      });
-  simulation.set_report_hook(
-      [&output](
-          const runtime::simir::ProcessId,
-          const std::string_view message,
-          const runtime::simir::AssertionSeverity severity,
-          const runtime::simir::SourceLocation& source,
-          const SimulationTick,
-          const std::uint64_t) {
-        output << source.path << ':' << source.line << ':'
-               << source.column << ": "
-               << report_severity_name(severity)
-               << "[FSIM-HDL-REPORT]: " << message << '\n';
-      });
-  report_native_cache_failures(simulation, diagnostics);
-  auto trace = attach_trace(simulation, config, diagnostics, true);
-  if (config.run.trace_file && config.run.trace_enabled && !trace) {
-    return 1;
-  }
-  install_interrupt_hook(simulation);
-  const InterruptSignalGuard interrupt_signal;
-  simulation.start();
-  output << "fsim debugger: ";
-  for (std::size_t index = 0;
-       index < simulation.design_ir().roots().size(); ++index) {
-    if (index != 0) {
-      output << ", ";
-    }
-    output << simulation.design_ir().path(
-        simulation.design_ir().roots()[index]);
-  }
-  if (simulation.compiled_process_count() == 0) {
-    output << " (reference evaluator)\n";
-  } else {
-    output << " (O0 hybrid, "
-           << simulation.compiled_process_count()
-           << " compiled process(es) in "
-           << simulation.compiled_module_count()
-           << " specialization module(s))\n";
-  }
-  print_debug_help(output);
-  const auto status = run_debug_repl_impl(
-      simulation, input, output, error_output, trace.get());
-  if (trace && !finish_trace(*trace, diagnostics)) {
-    return 1;
-  }
-  return status;
-}
 
 } // namespace fsim::app::application_detail

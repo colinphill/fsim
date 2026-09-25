@@ -133,6 +133,7 @@ struct Invocation {
   std::vector<std::string> tcl_arguments;
   std::vector<std::string> tcl_commands;
   DiagnosticFormat diagnostic_format{DiagnosticFormat::text};
+  diagnostic::ColorMode color_mode{diagnostic::ColorMode::automatic};
   bool help{false};
   bool version{false};
 };

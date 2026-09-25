@@ -3,10 +3,12 @@
 
 #include "application_internal.hpp"
 #include "tcl.hpp"
+#include "tcl_references.hpp"
 #include "fsim/app/sdf_control.hpp"
 
 #include <array>
 #include <sstream>
+#include <string_view>
 
 #if defined(FSIM_HAS_TCL)
 #include <tcl.h>
@@ -41,6 +43,7 @@ struct TclContext {
     int exit_code { };
     SdfControlRequest sdf_request { };
     std::shared_ptr<const SdfControlApplication> sdf_control;
+    std::unique_ptr<TclReferenceTable> references;
 };
 
 Tcl_Size tcl_size(std::size_t value);
@@ -59,6 +62,22 @@ int fsim_command(
     Tcl_Interp* interpreter,
     Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) noexcept;
+
+int command_error(Tcl_Interp*, std::string_view message);
+int command_diagnostic_error(
+    TclContext&, Tcl_Interp*, std::string_view fallback);
+bool ensure_built(TclContext&, Tcl_Interp*);
+bool ensure_simulation(TclContext&, Tcl_Interp*,
+    std::optional<SimulationEngine> requested_engine = std::nullopt);
+const semantic::design::DesignIr* current_design_ir(const TclContext&);
+
+// Native workspace commands call this only after successful publication.
+void catalog_changed(
+    TclContext&, std::string_view library, TclCatalogMutation mutation);
+
+// Loads a snapshot transactionally, preserving the previous session on error.
+int reload_snapshot(
+    TclContext&, Tcl_Interp*, std::string_view snapshot);
 
 #endif
 

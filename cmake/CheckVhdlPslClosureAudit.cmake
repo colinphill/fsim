@@ -154,7 +154,7 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "33 rows split 29 supported, 0 unresolved, 4 deferred"
-    "diagnostic catalog covers 2766 production codes"
+    "diagnostic catalog covers 2781 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
@@ -215,6 +215,6 @@ endforeach()
 
 message(STATUS
   "VHDL/PSL closure audit: 44 contracts, 17 governed stages, 29 supported "
-  "rows, 19 PSL diagnostics, 2766 catalog codes, 1510 bounded sources, "
+  "rows, 19 PSL diagnostics, 2781 catalog codes, 1510 bounded sources, "
   "436 test/control files, cognitive complexity 20, loop depth 1, no "
   "recursion, 195272 KiB observed RSS, 6 GiB ceiling, and zero unresolved rows")

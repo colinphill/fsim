@@ -10,6 +10,27 @@ foreach(FSIM_REQUIRED_VARIABLE IN ITEMS
   endif()
 endforeach()
 
+set(FSIM_TCL_MODE_CACHE "${FSIM_BINARY_DIR}/CMakeCache.txt")
+if(NOT EXISTS "${FSIM_TCL_MODE_CACHE}")
+  message(FATAL_ERROR "configured Tcl mode is unavailable: ${FSIM_TCL_MODE_CACHE}")
+endif()
+file(STRINGS "${FSIM_TCL_MODE_CACHE}" FSIM_TCL_MODE_ROWS
+  REGEX "^FSIM_TCL_MODE:STRING=")
+list(LENGTH FSIM_TCL_MODE_ROWS FSIM_TCL_MODE_COUNT)
+if(NOT FSIM_TCL_MODE_COUNT EQUAL 1)
+  message(FATAL_ERROR "configured Tcl mode is missing or duplicated in CMakeCache")
+endif()
+list(GET FSIM_TCL_MODE_ROWS 0 FSIM_TCL_MODE_ROW)
+string(REGEX REPLACE "^FSIM_TCL_MODE:STRING=" "" FSIM_TCL_MODE_VALUE
+  "${FSIM_TCL_MODE_ROW}")
+string(TOUPPER "${FSIM_TCL_MODE_VALUE}" FSIM_TCL_MODE_VALUE)
+if(NOT FSIM_TCL_MODE_VALUE MATCHES "^(AUTO|ON|OFF)$")
+  message(FATAL_ERROR "configured Tcl mode is invalid: ${FSIM_TCL_MODE_VALUE}")
+endif()
+if(FSIM_TCL_MODE_VALUE STREQUAL "OFF")
+  set(FSIM_OPTIONAL_REQUIRED_CTESTS fsim.application.tcl)
+endif()
+
 execute_process(
   COMMAND "${FSIM_CTEST_COMMAND}" --test-dir "${FSIM_BINARY_DIR}"
           --show-only=json-v1

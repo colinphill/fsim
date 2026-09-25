@@ -16,6 +16,53 @@ enum class Severity : std::uint8_t {
   fatal,
 };
 
+enum class ColorMode : std::uint8_t {
+  automatic,
+  always,
+  never,
+};
+
+enum class SeverityColor : std::uint8_t {
+  cyan,
+  yellow,
+  red,
+  bold_red,
+};
+
+/// Stable severity style mapping for text and interactive renderers.
+[[nodiscard]] constexpr SeverityColor severity_color(
+    const Severity severity) noexcept
+{
+  switch (severity) {
+    case Severity::note:
+      return SeverityColor::cyan;
+    case Severity::warning:
+      return SeverityColor::yellow;
+    case Severity::error:
+      return SeverityColor::red;
+    case Severity::fatal:
+      return SeverityColor::bold_red;
+  }
+  return SeverityColor::red;
+}
+
+/// Resolve automatic mode from terminal status and the NO_COLOR policy.
+[[nodiscard]] constexpr bool color_enabled(
+    const ColorMode mode,
+    const bool is_terminal,
+    const bool no_color) noexcept
+{
+  switch (mode) {
+    case ColorMode::automatic:
+      return is_terminal && !no_color;
+    case ColorMode::always:
+      return true;
+    case ColorMode::never:
+      return false;
+  }
+  return false;
+}
+
 struct SourcePosition {
   std::uint32_t line{1};
   std::uint32_t column{1};
@@ -65,7 +112,15 @@ class Engine {
 };
 
 void print_text(std::ostream& output, const Diagnostic& diagnostic);
+void print_text(
+    std::ostream& output,
+    const Diagnostic& diagnostic,
+    bool color_enabled);
 void print_text(std::ostream& output, const Engine& diagnostics);
+void print_text(
+    std::ostream& output,
+    const Engine& diagnostics,
+    bool color_enabled);
 void print_json(std::ostream& output, const Diagnostic& diagnostic);
 void print_json(std::ostream& output, const Engine& diagnostics);
 

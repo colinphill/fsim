@@ -591,30 +591,18 @@ core with Tcl's native Linux or Windows build, and installs the Tcl
 standard-library scripts in a relocatable fsim data directory. Set
 `FSIM_TCL_LIBRARY` to an alternate standard-library directory when packaging
 with a custom layout. Set `FSIM_TCL_MODE=OFF` only when intentionally building
-without the Tcl command.
+without the Tcl interpreter and editor. The `tcl` and `debug` commands remain
+in CLI help and report that Tcl is unavailable when run in such a build.
 
-The first Tcl slice supports `fsim tcl` for a multiline interactive shell,
-`fsim tcl -c SCRIPT` for repeatable batch commands, and
-`fsim tcl FILE [ARG ...]` for scripts with standard Tcl argument variables.
-It exposes `fsim::version`, project metadata, check/build, signal enumeration
-and reads, deposit/force/release, run, and status commands over the same native
-application model. The stateful `fsim::debug COMMAND ?ARG ...?` adapter also
-exposes scope/signal/local inspection, debugger mutation, relative and absolute
-runs, source/time/conditional-signal breakpoints, and
-statement/process/delta/time stepping through the same O0 debugger engine used
-by the CLI. `fsim::diagnostics`, `fsim::stop`, and `fsim::trace` provide
-structured diagnostic lifecycle, callback-safe stop requests, and live
-add/remove/all/clear/list VCD selection. `fsim::on`, `fsim::off`, and
-`fsim::callbacks` register synchronous safe-point, value-change, and lifecycle
-command-prefix callbacks; callback failures stop the run and become catchable
-Tcl errors. Safe-point observers compose with debugger and interrupt control,
-so callback-driven stops also work during `fsim::debug` runs. Assertion
-callbacks receive process, severity, message, and source metadata while adding
-a structured diagnostic. `fsim::workspace` queries the current workspace and
-`fsim::load ?SNAPSHOT?` selects a managed snapshot, while
-`fsim::trace configure|disable|status` controls the next debugger trace before
-simulation starts. Interactive and batch Python support is planned later,
-after the Tcl and native control contracts stabilize.
+`fsim tcl` starts a general Tcl session; `fsim debug` loads the selected
+snapshot before starting the debugger session. Both accept repeated
+`-c`/`--command` scripts or a script file with standard Tcl argument
+variables. The command catalog includes structured workspace, library,
+loaded-object, debugger, and provenance queries, along with simulation,
+trace, SDF, diagnostics, and callback controls. `fsim::help` describes the
+available Tcl commands. See the [Tcl console and automation guide](docs/tcl.md)
+for the command catalog, console keys and history settings, color modes,
+redirected input behavior, and structured examples.
 
 The native C API accepts append-only structure prefixes and never reads or
 writes fields beyond the caller-advertised size. Its hierarchy includes
@@ -697,8 +685,8 @@ fsim check FILE...
 fsim compile [--library NAME] FILE...
 fsim elaborate TOP... [--snapshot NAME]
 fsim simulate [--snapshot NAME]
-fsim debug [--snapshot NAME]
-fsim tcl [--snapshot NAME] [SCRIPT]
+fsim debug [--snapshot NAME] [-c SCRIPT ... | SCRIPT [ARG ...]]
+fsim tcl [--snapshot NAME] [-c SCRIPT ... | SCRIPT [ARG ...]]
 fsim systemc compile [--library NAME] FILE...
 fsim systemc link [--library NAME]
 fsim library map NAME DIRECTORY
@@ -720,7 +708,15 @@ build/dev/fsim elaborate work.tb
 build/dev/fsim simulate --trace vertical.vcd
 build/dev/fsim debug
 build/dev/fsim tcl -c 'puts [fsim::version]'
+build/dev/fsim debug --snapshot default \
+  -c 'puts [fsim::debug status]'
 ```
+
+Use `--diagnostics text|json` to choose diagnostic output and
+`--color auto|always|never` to select text diagnostic colors. Automatic color
+uses terminal detection and honors `NO_COLOR`; JSON diagnostics contain no
+ANSI sequences. The Tcl console and its structured command catalog are
+documented in the [Tcl guide](docs/tcl.md).
 
 Compilation assigns artifact names and records named units in
 `.fsim/libraries/work/library.sqlite3`. Recompiling a source replaces its

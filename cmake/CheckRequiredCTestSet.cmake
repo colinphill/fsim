@@ -58,6 +58,37 @@ fsim_read_ctest_names(
 fsim_read_ctest_names(
   "${FSIM_REGISTERED_CTESTS_FILE}" registered FSIM_REGISTERED_CTEST_NAMES)
 
+# The canonical V3 set retains Tcl coverage for enabled builds. Callers may
+# condition only explicitly listed tests when the configured build disables
+# that capability; all other required names continue through the strict check.
+set(FSIM_OMITTED_REQUIRED_CTEST_NAMES)
+foreach(FSIM_OPTIONAL_REQUIRED_CTEST IN LISTS FSIM_OPTIONAL_REQUIRED_CTESTS)
+  set(FSIM_OPTIONAL_REQUIRED_CTEST_OCCURRENCES 0)
+  foreach(FSIM_REQUIRED_CTEST IN LISTS FSIM_REQUIRED_CTEST_NAMES)
+    if("${FSIM_REQUIRED_CTEST}" STREQUAL
+       "${FSIM_OPTIONAL_REQUIRED_CTEST}")
+      math(EXPR FSIM_OPTIONAL_REQUIRED_CTEST_OCCURRENCES
+        "${FSIM_OPTIONAL_REQUIRED_CTEST_OCCURRENCES} + 1")
+    endif()
+  endforeach()
+  if(FSIM_OPTIONAL_REQUIRED_CTEST_OCCURRENCES GREATER 1)
+    message(FATAL_ERROR
+      "conditioned required CTest is duplicated: ${FSIM_OPTIONAL_REQUIRED_CTEST}")
+  endif()
+  if(FSIM_OPTIONAL_REQUIRED_CTEST_OCCURRENCES EQUAL 1)
+    list(REMOVE_ITEM FSIM_REQUIRED_CTEST_NAMES
+      "${FSIM_OPTIONAL_REQUIRED_CTEST}")
+    list(APPEND FSIM_OMITTED_REQUIRED_CTEST_NAMES
+      "${FSIM_OPTIONAL_REQUIRED_CTEST}")
+  endif()
+endforeach()
+if(FSIM_OMITTED_REQUIRED_CTEST_NAMES)
+  list(JOIN FSIM_OMITTED_REQUIRED_CTEST_NAMES ", "
+    FSIM_OMITTED_REQUIRED_CTEST_DESCRIPTION)
+else()
+  set(FSIM_OMITTED_REQUIRED_CTEST_DESCRIPTION "none")
+endif()
+
 if(NOT FSIM_REQUIRED_CTEST_NAMES)
   message(FATAL_ERROR "required CTest-name file contains no names")
 endif()
@@ -98,4 +129,5 @@ endforeach()
 message(
   STATUS
   "required CTest set: ${FSIM_REQUIRED_CTEST_COUNT} required names are registered exactly once; "
-  "${FSIM_REGISTERED_CTEST_COUNT} total registered names allow additions")
+  "${FSIM_REGISTERED_CTEST_COUNT} total registered names allow additions; "
+  "conditioned names omitted: ${FSIM_OMITTED_REQUIRED_CTEST_DESCRIPTION}")

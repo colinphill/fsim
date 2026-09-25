@@ -602,6 +602,18 @@ public:
     UvmDebugSection section = UvmDebugSection::all,
     std::size_t maximum_bytes = 1U << 20U);
 
+/// Archived identity for a SystemC plug-in used by a loaded design.
+struct SystemCPluginProvenance {
+    std::string logical_library;
+    std::string input_digest;
+    std::string link_digest;
+    std::string compiler_fingerprint;
+    std::string library_checksum;
+    std::vector<std::string> factories;
+};
+
+struct DebuggerSourceProvenance;
+
 class Simulation final {
 public:
     using SignalChangeHook = std::function<void(
@@ -668,6 +680,11 @@ public:
     [[nodiscard]] const semantic::Model& semantics() const noexcept;
     [[nodiscard]] const std::vector<MappedLibraryProvenance>&
     mapped_libraries() const noexcept;
+    [[nodiscard]] std::vector<SystemCPluginProvenance>
+    systemc_plugin_provenance() const;
+    [[nodiscard]] std::vector<DebuggerSourceProvenance>
+    structured_provenance(
+        std::optional<std::string_view> path = std::nullopt) const;
     [[nodiscard]] const std::vector<VhdlUnitProvenance>&
     vhdl_unit_provenance() const noexcept;
     [[nodiscard]] std::vector<std::string>
@@ -1021,6 +1038,13 @@ private:
 /// Embedders supply already-tokenized commands and own the streams for the
 /// adapter lifetime. This retains breakpoints, scope, and selected process
 /// state across calls without exposing debugger implementation layouts.
+struct DebuggerStatus;
+struct DebuggerBreakpointInfo;
+struct DebuggerFrameInfo;
+struct DebuggerScopeInfo;
+struct DebuggerInspection;
+struct DebuggerSourceProvenance;
+
 class DebuggerControl final {
 public:
     DebuggerControl(
@@ -1040,6 +1064,35 @@ public:
     DebuggerControl& operator=(const DebuggerControl&) = delete;
 
     void execute(const std::vector<std::string>& command);
+
+    /// Structured state exposed to native clients such as the Tcl debugger.
+    /// String fields are owned copies of archived or live DesignIR data.
+    [[nodiscard]] DebuggerStatus status() const;
+    void step(std::string_view kind);
+    void continue_run(
+        std::optional<std::string_view> duration = std::nullopt);
+    [[nodiscard]] DebuggerBreakpointInfo add_breakpoint(
+        std::string_view kind,
+        std::string_view location,
+        std::optional<std::string_view> comparison = std::nullopt,
+        std::optional<std::string_view> value = std::nullopt);
+    [[nodiscard]] DebuggerBreakpointInfo add_watch(
+        std::string_view signal,
+        std::optional<std::string_view> comparison = std::nullopt,
+        std::optional<std::string_view> value = std::nullopt);
+    [[nodiscard]] std::vector<DebuggerBreakpointInfo> breakpoints() const;
+    [[nodiscard]] std::vector<DebuggerBreakpointInfo> watches() const;
+    void delete_breakpoint(std::uint64_t id);
+    void delete_watch(std::uint64_t id);
+    void clear_breakpoints();
+    [[nodiscard]] std::vector<DebuggerFrameInfo> frames() const;
+    [[nodiscard]] DebuggerFrameInfo frame(std::size_t index) const;
+    [[nodiscard]] DebuggerScopeInfo scope(
+        std::optional<std::string_view> path = std::nullopt);
+    [[nodiscard]] DebuggerInspection inspect(
+        std::string_view path) const;
+    [[nodiscard]] std::vector<DebuggerSourceProvenance> provenance(
+        std::optional<std::string_view> path = std::nullopt) const;
     [[nodiscard]] std::optional<TraceControlStatus> trace_status() const;
     [[nodiscard]] std::span<const TraceControlReportEntry> trace_report()
         const noexcept;
@@ -1048,6 +1101,85 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+struct DebuggerStatus {
+    runtime::SimulationTick time { };
+    std::uint64_t delta { };
+    std::string scope;
+    bool finished { };
+    bool poisoned { };
+    std::optional<std::uint64_t> breakpoint_id;
+    std::string stop_reason;
+};
+
+struct DebuggerBreakpointInfo {
+    std::uint64_t id { };
+    std::string kind;
+    std::string path;
+    std::optional<runtime::SimulationTick> time;
+    std::optional<std::uint32_t> line;
+    std::string comparison;
+    std::string value;
+};
+
+struct DebuggerLocalInfo {
+    std::string name;
+    std::string type;
+    std::string value;
+};
+
+struct DebuggerFrameInfo {
+    std::size_t index { };
+    std::uint64_t process_id { };
+    std::string process;
+    std::string scope;
+    std::string source_path;
+    std::uint32_t source_line { };
+    std::uint32_t source_column { };
+    std::string point_kind;
+    std::vector<DebuggerLocalInfo> locals;
+};
+
+struct DebuggerScopeInfo {
+    std::string path;
+    std::vector<std::string> children;
+};
+
+struct DebuggerInspection {
+    std::string path;
+    std::string name;
+    std::string kind;
+    std::string type;
+    std::uint64_t width { };
+    std::string value;
+    bool forced { };
+    std::vector<std::string> children;
+};
+
+struct DebuggerSourceProvenance {
+    std::string path;
+    std::string language;
+    std::string library;
+    std::string unit;
+    std::string source_path;
+    std::string source_identity;
+    std::optional<std::uint64_t> unit_id;
+    std::optional<std::uint64_t> source_id;
+    std::uint32_t source_line { };
+    std::uint32_t source_column { };
+    std::string standard;
+    std::string compatibility_profile;
+    std::string instance;
+    std::string plugin_identity;
+    std::string plugin_input_digest;
+    std::string plugin_link_digest;
+    std::string plugin_compiler_fingerprint;
+    std::string plugin_library_checksum;
+};
+
+[[nodiscard]] std::vector<DebuggerSourceProvenance> structured_provenance(
+    const BuiltProject& project,
+    std::optional<std::string_view> path = std::nullopt);
 
 /// Parse a canonical 2/4-state textual value of exactly width bits.
 [[nodiscard]] std::optional<runtime::PackedLogic4> parse_value(
@@ -1066,12 +1198,5 @@ private:
 /// Stream-injectable variant used by embedders and non-interactive tests.
 /// The input stream must outlive the returned services object.
 [[nodiscard]] cli::Services make_cli_services(std::istream& input);
-
-/// Run the command-line debugger against an already-started simulation.
-int run_debug_repl(
-    Simulation& simulation,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error);
 
 } // namespace fsim::app

@@ -66,6 +66,32 @@ void print_json_span(std::ostream& output, const SourceSpan& span) {
   output << '}';
 }
 
+std::string_view ansi_color_code(const SeverityColor color) noexcept {
+  switch (color) {
+    case SeverityColor::cyan:
+      return "\033[36m";
+    case SeverityColor::yellow:
+      return "\033[33m";
+    case SeverityColor::red:
+      return "\033[31m";
+    case SeverityColor::bold_red:
+      return "\033[1;31m";
+  }
+  return "\033[31m";
+}
+
+void print_severity(
+    std::ostream& output,
+    const Severity severity,
+    const bool color_enabled) {
+  if (!color_enabled) {
+    output << to_string(severity);
+    return;
+  }
+  output << ansi_color_code(severity_color(severity)) << to_string(severity)
+         << "\033[0m";
+}
+
 }  // namespace
 
 std::string_view to_string(const Severity severity) noexcept {
@@ -114,11 +140,18 @@ void Engine::clear() noexcept {
 }
 
 void print_text(std::ostream& output, const Diagnostic& diagnostic) {
+  print_text(output, diagnostic, false);
+}
+
+void print_text(
+    std::ostream& output,
+    const Diagnostic& diagnostic,
+    const bool color_enabled) {
   if (!diagnostic.span.path.empty()) {
     output << diagnostic.span.path << ':' << diagnostic.span.begin.line << ':'
            << diagnostic.span.begin.column << ": ";
   }
-  output << to_string(diagnostic.severity);
+  print_severity(output, diagnostic.severity, color_enabled);
   if (!diagnostic.code.empty()) {
     output << '[' << diagnostic.code << ']';
   }
@@ -129,13 +162,21 @@ void print_text(std::ostream& output, const Diagnostic& diagnostic) {
       output << note.span.path << ':' << note.span.begin.line << ':'
              << note.span.begin.column << ": ";
     }
-    output << "note: " << note.message << '\n';
+    print_severity(output, Severity::note, color_enabled);
+    output << ": " << note.message << '\n';
   }
 }
 
 void print_text(std::ostream& output, const Engine& diagnostics) {
+  print_text(output, diagnostics, false);
+}
+
+void print_text(
+    std::ostream& output,
+    const Engine& diagnostics,
+    const bool color_enabled) {
   for (const auto& diagnostic : diagnostics.diagnostics()) {
-    print_text(output, diagnostic);
+    print_text(output, diagnostic, color_enabled);
   }
 }
 

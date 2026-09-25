@@ -137,6 +137,11 @@ set(FSIM_REQUIRED_PATHS
     "${FSIM_DATADIR}/fsim/examples/vertical_slice/sv_child.sv"
     "${FSIM_DATADIR}/fsim/examples/three_language_hierarchy/README.md"
     "${FSIM_DATADIR}/fsim/vhdl/ieee-1076-2019/LICENSE")
+if(FSIM_WITH_TCL)
+  list(APPEND FSIM_REQUIRED_PATHS
+    "${FSIM_DOCDIR}/third-party/isocline/LICENSE"
+    "${FSIM_DOCDIR}/third-party/isocline/PROVENANCE.md")
+endif()
 foreach(FSIM_PATH IN LISTS FSIM_REQUIRED_PATHS)
   list(FIND FSIM_MANIFEST_RELATIVE "${FSIM_PATH}" FSIM_REQUIRED_INDEX)
   if(FSIM_REQUIRED_INDEX EQUAL -1)

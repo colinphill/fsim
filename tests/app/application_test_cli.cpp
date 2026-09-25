@@ -3,6 +3,7 @@
 #include "application_workflow_test_support.hpp"
 
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/cli/driver.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/systemc/hierarchy.hpp"
@@ -46,6 +47,38 @@ namespace {
                     std::filesystem::perm_options::add);
             }
         }
+    }
+
+    void execute_debugger_checks(fsim::app::DebuggerControl& debugger)
+    {
+        debugger.execute({ "scope" });
+        debugger.execute({ "scopes" });
+        debugger.execute({ "scope", "u_child" });
+        debugger.execute({ "signals" });
+        debugger.execute({ "show", "value" });
+        debugger.execute({ "scope", ".." });
+        debugger.execute({ "break", "signal", "q", "==", "1" });
+        debugger.execute({ "break", "time", "1ns" });
+        debugger.execute({ "breakpoints" });
+        debugger.execute({ "continue" });
+        debugger.execute({ "delete", "2" });
+        debugger.execute({ "break", "source", "tb.sv:14" });
+        debugger.execute({ "run-until", "3ns" });
+        debugger.execute({ "delete", "3" });
+        debugger.execute({ "locals" });
+        debugger.execute({ "step", "statement" });
+        debugger.execute({ "locals" });
+        debugger.execute({ "step", "statement" });
+        debugger.execute({ "delete", "1" });
+        debugger.execute({ "locals" });
+        debugger.execute({ "step", "process" });
+        debugger.execute({ "where" });
+        debugger.execute({ "break", "signal", "child_y" });
+        debugger.execute({ "clear" });
+        debugger.execute({ "breakpoints" });
+        debugger.execute({ "continue" });
+        debugger.execute({ "continue" });
+        debugger.execute({ "step", "delta" });
     }
 
 } // namespace
@@ -822,18 +855,19 @@ endmodule
         assert(!forbidden_write);
     }
 
-    std::istringstream mapped_debug_input(
-        "break source sources/00000000/tb.sv:14\ncontinue\nquit\n");
     std::ostringstream mapped_debug_output;
     std::ostringstream mapped_debug_error;
     fsim::app::Simulation mapped_debug_simulation(
         std::move(*relocation_second),
         relocation_config.run.max_deltas,
         fsim::app::SimulationEngine::debug);
-    assert(fsim::app::run_debug_repl(
-               mapped_debug_simulation, mapped_debug_input,
-               mapped_debug_output, mapped_debug_error)
-        == 0);
+    fsim::app::DebuggerControl mapped_debugger {
+        mapped_debug_simulation, mapped_debug_output, mapped_debug_error
+    };
+    mapped_debugger.execute(
+        { "break", "source", "sources/00000000/tb.sv:14" });
+    mapped_debugger.execute({ "continue" });
+    assert(mapped_debug_error.str().empty());
     assert(mapped_debug_output.str().find(
                "breakpoint 1 set at sources/00000000/tb.sv:14")
         != std::string::npos);
@@ -1365,35 +1399,6 @@ endmodule
 
     auto compiled_debug_project = fsim::app::build_project(config, diagnostics);
     assert(compiled_debug_project);
-    const std::string debug_commands = "scope\n"
-                                       "scopes\n"
-                                       "scope u_child\n"
-                                       "signals\n"
-                                       "show value\n"
-                                       "scope ..\n"
-                                       "break signal q == 1\n"
-                                       "break time 1ns\n"
-                                       "breakpoints\n"
-                                       "continue\n"
-                                       "delete 2\n"
-                                       "break source tb.sv:14\n"
-                                       "run-until 3ns\n"
-                                       "delete 3\n"
-                                       "locals\n"
-                                       "step statement\n"
-                                       "locals\n"
-                                       "step statement\n"
-                                       "delete 1\n"
-                                       "locals\n"
-                                       "step process\n"
-                                       "where\n"
-                                       "break signal child_y\n"
-                                       "clear\n"
-                                       "breakpoints\n"
-                                       "continue\n"
-                                       "continue\n"
-                                       "step delta\n"
-                                       "quit\n";
     fsim::app::Simulation debug_simulation(
         std::move(*second),
         config.run.max_deltas,
@@ -1407,13 +1412,12 @@ endmodule
             fsim::runtime::SimulationTick,
             std::uint64_t) { ++observed_changes; });
     debug_simulation.start();
-    std::istringstream debug_input { debug_commands };
     std::ostringstream debug_output;
     std::ostringstream debug_error;
-    assert(
-        fsim::app::run_debug_repl(
-            debug_simulation, debug_input, debug_output, debug_error)
-        == 0);
+    fsim::app::DebuggerControl debugger {
+        debug_simulation, debug_output, debug_error
+    };
+    execute_debugger_checks(debugger);
     assert(debug_error.str().empty());
     const auto transcript = debug_output.str();
     assert(transcript.find("tb.u_child") != std::string::npos);
@@ -1460,6 +1464,9 @@ endmodule
     assert(debug_simulation.finished());
     assert(!debug_simulation.poisoned());
     assert(observed_changes > 0);
+    const auto debug_status = debugger.status();
+    assert(debug_status.finished);
+    assert(!debug_status.poisoned);
 
     fsim::app::Simulation compiled_debug_simulation(
         std::move(*compiled_debug_project),
@@ -1486,16 +1493,14 @@ endmodule
             fsim::runtime::SimulationTick,
             std::uint64_t) { ++compiled_observed_changes; });
     compiled_debug_simulation.start();
-    std::istringstream compiled_debug_input { debug_commands };
     std::ostringstream compiled_debug_output;
     std::ostringstream compiled_debug_error;
-    assert(
-        fsim::app::run_debug_repl(
-            compiled_debug_simulation,
-            compiled_debug_input,
-            compiled_debug_output,
-            compiled_debug_error)
-        == 0);
+    fsim::app::DebuggerControl compiled_debugger {
+        compiled_debug_simulation,
+        compiled_debug_output,
+        compiled_debug_error
+    };
+    execute_debugger_checks(compiled_debugger);
     assert(compiled_debug_error.str().empty());
     assert(compiled_debug_output.str() == transcript);
     assert(compiled_debug_simulation.finished());
@@ -1525,23 +1530,19 @@ endmodule
             throw std::runtime_error("fatal signal observer");
         });
     poisoned_simulation.start();
-    std::istringstream poisoned_input {
-        "continue\n"
-        "continue\n"
-        "step delta\n"
-        "quit\n"
-    };
     std::ostringstream poisoned_output;
     std::ostringstream poisoned_error;
-    assert(
-        fsim::app::run_debug_repl(
-            poisoned_simulation,
-            poisoned_input,
-            poisoned_output,
-            poisoned_error)
-        == 0);
+    fsim::app::DebuggerControl poisoned_debugger {
+        poisoned_simulation, poisoned_output, poisoned_error
+    };
+    poisoned_debugger.execute({ "continue" });
+    poisoned_debugger.execute({ "continue" });
+    poisoned_debugger.execute({ "step", "delta" });
     assert(poisoned_simulation.poisoned());
     assert(!poisoned_simulation.finished());
+    const auto poisoned_status = poisoned_debugger.status();
+    assert(poisoned_status.poisoned);
+    assert(!poisoned_status.finished);
     assert(
         poisoned_error.str().find("fatal signal observer")
         != std::string::npos);
@@ -1554,8 +1555,10 @@ endmodule
             unavailable + 1)
         != std::string::npos);
 
+    std::istringstream cli_input;
+    auto services = fsim::test::make_fixture_services(cli_input);
+#if defined(FSIM_HAS_TCL)
     const auto manifest = directory / "fsim.toml";
-    const auto debug_trace = directory / "debug-select.vcd";
     {
         std::ofstream output(manifest);
         output << R"(
@@ -1581,25 +1584,55 @@ trace_file = "debug-select.vcd"
 trace_filters = ["__none__"]
 )";
     }
-    std::istringstream cli_input {
-        "where\n"
-        "trace list\n"
-        "trace add q\n"
-        "trace list\n"
-        "trace status\n"
-        "trace status\n"
-        "run 1ns\n"
-        "trace remove q\n"
-        "trace list\n"
-        "continue\n"
-        "quit\n"
-    };
+    const auto debug_trace = directory / "debug-select.vcd";
+    const std::string cli_script = R"tcl(
+set initial [fsim::debug status]
+if {[dict get $initial time] != 0 ||
+    [dict get $initial delta] != 0 ||
+    [dict get $initial scope] ne "tb" ||
+    [dict get $initial finished]} {
+  error "bad initial debugger status: $initial"
+}
+if {[fsim::trace list] ne "(no traced signals)"} {
+  error "trace selection was not initially empty"
+}
+if {[fsim::trace add q] ne "tracing tb.q" ||
+    [fsim::trace list] ne "tb.q"} {
+  error "trace selection did not retain tb.q"
+}
+set trace_status_first [fsim::trace status]
+set trace_status_second [fsim::trace status]
+set trace_runtime [dict get $trace_status_first runtime]
+set trace_pattern "format vcd, output *, compression none, lifecycle open, "
+append trace_pattern "declared 3, selected 1, generation *"
+if {[dict get $trace_status_first format] ne "vcd" ||
+    [dict get $trace_status_first lifecycle] ne "open" ||
+    [string length [dict get $trace_status_first identity]] != 64 ||
+    $trace_runtime ne [dict get $trace_status_second runtime] ||
+    ![string match $trace_pattern $trace_runtime]} {
+  error "trace status did not retain the configured profile: $trace_status_first"
+}
+set partial [fsim::debug continue 1ns]
+if {[dict get $partial time] != 1 || [dict get $partial finished]} {
+  error "bounded debugger continue did not stop at 1ns: $partial"
+}
+if {[fsim::trace remove q] ne "stopped tracing tb.q" ||
+    [fsim::trace list] ne "(no traced signals)"} {
+  error "trace selection did not remove tb.q"
+}
+set completed [fsim::debug continue]
+if {[dict get $completed time] != 3 || ![dict get $completed finished] ||
+    [dict get [fsim::trace status] lifecycle] ne "complete"} {
+  error "debugger or trace did not complete: $completed"
+}
+puts "structured-debug-cli-ok"
+)tcl";
     std::ostringstream cli_output;
     std::ostringstream cli_error;
-    auto services = fsim::test::make_fixture_services(cli_input);
     const auto manifest_text = manifest.string();
     const std::vector<const char*> arguments {
-        "fsim", "debug", "-p", manifest_text.c_str()
+        "fsim", "debug", "-p", manifest_text.c_str(),
+        "-c", cli_script.c_str()
     };
     const auto cli_status = fsim::test::run_fixture_command(
         static_cast<int>(arguments.size()),
@@ -1611,44 +1644,7 @@ trace_filters = ["__none__"]
         std::cerr << cli_error.str();
     assert(cli_status == 0);
     assert(
-        cli_output.str().find("fsim debugger: tb") != std::string::npos);
-#if defined(FSIM_HAS_LLVM)
-    assert(
-        cli_output.str().find(
-            "(O0 hybrid, 2 compiled process(es) in "
-            "2 specialization module(s))")
-        != std::string::npos);
-#else
-    assert(
-        cli_output.str().find("(reference evaluator)")
-        != std::string::npos);
-#endif
-    assert(
-        cli_output.str().find("time 0, delta 0, scope tb")
-        != std::string::npos);
-    assert(
-        cli_output.str().find("(no traced signals)")
-        != std::string::npos);
-    assert(
-        cli_output.str().find("tracing tb.q")
-        != std::string::npos);
-    assert(
-        cli_output.str().find("stopped tracing tb.q")
-        != std::string::npos);
-    const auto first_trace_status = cli_output.str().find(
-        "format vcd, output ");
-    assert(first_trace_status != std::string::npos);
-    assert(
-        cli_output.str().find(
-            "format vcd, output ", first_trace_status + 1U)
-        != std::string::npos);
-    const auto first_trace_profile = cli_output.str().find(
-        "compression none, lifecycle open, declared 3, selected 1");
-    assert(first_trace_profile != std::string::npos);
-    assert(
-        cli_output.str().find(
-            "compression none, lifecycle open, declared 3, selected 1",
-            first_trace_profile + 1U)
+        cli_output.str().find("structured-debug-cli-ok")
         != std::string::npos);
     std::ifstream debug_trace_stream(debug_trace);
     const std::string debug_vcd {
@@ -1684,18 +1680,43 @@ trace_filters = ["__none__"]
     restored_interrupt_count = 0;
     const auto previous_interrupt_handler = std::signal(SIGINT, record_restored_interrupt);
     assert(previous_interrupt_handler != SIG_ERR);
-    std::istringstream interrupted_cli_input {
-        "continue\n"
-        "continue\n"
-        "quit\n"
-    };
-    InterruptingOutputBuffer interrupted_output_buffer;
-    std::ostream interrupted_cli_output { &interrupted_output_buffer };
+    const std::string interrupted_cli_script = R"tcl(
+set initial [fsim::debug status]
+if {[dict get $initial time] != 0 || [dict get $initial finished]} {
+  error "debugger did not start at time 0: $initial"
+}
+set stepped [fsim::debug step statement]
+if {[dict get $stepped time] != 0 ||
+    ![dict exists $stepped stop_reason]} {
+  error "debugger step did not stop at time 0: $stepped"
+}
+set frame [fsim::debug frame]
+set stopped [fsim::debug status]
+if {[dict get $stopped time] != 0 ||
+    [dict get $frame process] eq "" ||
+    [dict get $frame point_kind] eq ""} {
+  error "structured process stop was not reported: $stopped / $frame"
+}
+set finished [fsim::debug continue]
+if {[dict get $finished time] != 3 || ![dict get $finished finished]} {
+  error "debug simulation did not finish: $finished"
+}
+puts "process [dict get $frame process]"
+puts "stopped at time [dict get $stopped time]"
+puts "simulation finished at time [dict get $finished time]"
+)tcl";
+    std::ostringstream interrupted_cli_output;
     std::ostringstream interrupted_cli_error;
-    auto interrupted_services = fsim::test::make_fixture_services(interrupted_cli_input);
+    std::istringstream interrupted_cli_input;
+    auto interrupted_services = fsim::test::make_fixture_services(
+        interrupted_cli_input);
+    const std::vector<const char*> interrupted_arguments {
+        "fsim", "debug", "-p", manifest_text.c_str(),
+        "-c", interrupted_cli_script.c_str()
+    };
     const auto interrupted_result = fsim::test::run_fixture_command(
-        static_cast<int>(arguments.size()),
-        arguments.data(),
+        static_cast<int>(interrupted_arguments.size()),
+        interrupted_arguments.data(),
         interrupted_services,
         interrupted_cli_output,
         interrupted_cli_error);
@@ -1704,7 +1725,7 @@ trace_filters = ["__none__"]
     }
     assert(interrupted_result == 0);
     assert(interrupted_cli_error.str().empty());
-    const auto interrupted_transcript = interrupted_output_buffer.str();
+    const auto interrupted_transcript = interrupted_cli_output.str();
     assert(
         interrupted_transcript.find("process ")
         != std::string::npos);
@@ -1717,6 +1738,26 @@ trace_filters = ["__none__"]
     (void)std::raise(SIGINT);
     assert(restored_interrupt_count == 1);
     assert(std::signal(SIGINT, previous_interrupt_handler) != SIG_ERR);
+#else
+    std::istringstream tcl_off_input;
+    std::ostringstream tcl_off_output;
+    std::ostringstream tcl_off_error;
+    auto tcl_off_services = fsim::app::make_cli_services(tcl_off_input);
+    const std::vector<const char*> tcl_off_arguments { "fsim", "debug" };
+    const auto tcl_off_status = fsim::cli::run(
+        static_cast<int>(tcl_off_arguments.size()),
+        tcl_off_arguments.data(),
+        tcl_off_services,
+        tcl_off_output,
+        tcl_off_error);
+    assert(tcl_off_status != 0);
+    assert(tcl_off_error.str().find("FSIM-TCL-0001") != std::string::npos);
+    assert(tcl_off_error.str().find(
+               "the Tcl interface is unavailable in this build")
+        != std::string::npos);
+    assert(tcl_off_error.str().find("-DFSIM_TCL_MODE=ON")
+        != std::string::npos);
+#endif
 
     const auto differently_named = directory / "different_filename.sv";
     {

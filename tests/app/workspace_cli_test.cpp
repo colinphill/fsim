@@ -113,8 +113,12 @@ namespace {
             "-c", "puts ready" });
         assert(tcl.snapshot == "nightly-1");
         assert(tcl.tcl_commands == std::vector<std::string> { "puts ready" });
+        const auto debug_script = parse({ "debug", "debugger.tcl", "fixture-arg" });
+        assert(debug_script.tcl_script
+            == std::filesystem::path { "debugger.tcl" });
+        assert(debug_script.tcl_arguments
+            == std::vector<std::string> { "fixture-arg" });
         reject({ "simulate", "source.sv" });
-        reject({ "debug", "source.sv" });
         reject({ "compile", "--snapshot", "default", "source.sv" });
         reject({ "simulate", "--snapshot", "../outside" });
         reject({ "simulate", "--snapshot", "path\\outside" });

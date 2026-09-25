@@ -1271,6 +1271,12 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   src/app/application_tf_scheduler.cpp
       src/app/tcl.cpp
       src/app/tcl_commands.cpp
+      src/app/tcl_command_catalog.cpp
+      src/app/tcl_references.cpp
+      src/app/tcl_workspace_commands.cpp
+      src/app/tcl_object_commands.cpp
+      src/app/tcl_debugger_commands.cpp
+      src/app/tcl_completion.cpp
   )
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)
@@ -1308,6 +1314,27 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     target_compile_definitions(fsim_application PUBLIC FSIM_HAS_LLVM=1)
   endif()
   if(FSIM_WITH_TCL)
+    add_library(fsim_isocline STATIC third_party/isocline/src/isocline.c)
+    target_compile_features(fsim_isocline PRIVATE c_std_99)
+    set_target_properties(fsim_isocline PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if(MSVC)
+      target_compile_options(fsim_isocline PRIVATE /W0)
+    else()
+      target_compile_options(fsim_isocline PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow
+        -Wno-unused-function -Wno-conversion -Wno-shadow)
+      if(FSIM_WARNINGS_AS_ERRORS)
+        target_compile_options(fsim_isocline PRIVATE -Werror)
+      endif()
+    endif()
+    target_include_directories(
+      fsim_isocline
+      PUBLIC "${PROJECT_SOURCE_DIR}/third_party/isocline/include"
+      PRIVATE "${PROJECT_SOURCE_DIR}/third_party/isocline/src")
+    target_sources(fsim_application PRIVATE
+      src/app/tcl_completion_adapter.cpp
+      src/app/tcl_console.cpp)
+    target_link_libraries(fsim_application PRIVATE fsim_isocline)
     target_link_libraries(fsim_application PRIVATE fsim_tcl_dependency)
     target_compile_definitions(fsim_application PUBLIC FSIM_HAS_TCL=1)
     if(FSIM_WITH_BUNDLED_TCL)
@@ -1444,6 +1471,14 @@ if(FSIM_WITH_BUNDLED_TCL)
     FILES "${FSIM_FETCHED_TCL_LICENSE_FILE}"
     DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party"
     RENAME "tcl-license.terms"
+  )
+endif()
+if(FSIM_WITH_TCL)
+  install(
+    FILES
+      third_party/isocline/LICENSE
+      third_party/isocline/PROVENANCE.md
+    DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/isocline"
   )
 endif()
 install(

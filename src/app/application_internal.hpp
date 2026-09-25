@@ -1942,13 +1942,10 @@ int handle_coverage_report(
     std::ostream& output,
     std::ostream& error);
 
-void print_debug_help(std::ostream& output);
-
-std::vector<std::string> words(const std::string& line);
-
 enum class DebugBreakpointKind {
     time,
     signal,
+    watch,
     source,
     phase,
     uvm,
@@ -1985,6 +1982,31 @@ public:
 
     void execute(const std::vector<std::string>& command);
 
+    [[nodiscard]] DebuggerStatus status() const;
+    void step(std::string_view kind);
+    void continue_run(std::optional<std::string_view> duration);
+    [[nodiscard]] DebuggerBreakpointInfo add_breakpoint(
+        std::string_view kind,
+        std::string_view location,
+        std::optional<std::string_view> comparison,
+        std::optional<std::string_view> value);
+    [[nodiscard]] DebuggerBreakpointInfo add_watch(
+        std::string_view signal,
+        std::optional<std::string_view> comparison,
+        std::optional<std::string_view> value);
+    [[nodiscard]] std::vector<DebuggerBreakpointInfo> breakpoints() const;
+    [[nodiscard]] std::vector<DebuggerBreakpointInfo> watches() const;
+    void delete_breakpoint(std::uint64_t id);
+    void delete_watch(std::uint64_t id);
+    void clear_breakpoints();
+    [[nodiscard]] std::vector<DebuggerFrameInfo> frames() const;
+    [[nodiscard]] DebuggerFrameInfo frame(std::size_t index) const;
+    [[nodiscard]] DebuggerScopeInfo scope(
+        std::optional<std::string_view> path);
+    [[nodiscard]] DebuggerInspection inspect(std::string_view path) const;
+    [[nodiscard]] std::vector<DebuggerSourceProvenance> provenance(
+        std::optional<std::string_view> path) const;
+
 private:
     struct ExecutionGuard {
         bool& executing;
@@ -2004,7 +2026,7 @@ private:
         const std::string_view requested) const;
 
     [[nodiscard]] std::optional<std::pair<std::string, SignalId>>
-    resolve_signal(const std::string_view name);
+    resolve_signal(const std::string_view name, bool report_error = true);
 
     [[nodiscard]] std::optional<std::pair<
         std::string, runtime::simir::StringObjectId>>
@@ -2076,6 +2098,12 @@ private:
 
     void step_execution(const bool process_step);
 
+    [[nodiscard]] std::vector<std::string> child_scopes(
+        std::string_view base) const;
+    [[nodiscard]] DebuggerBreakpointInfo breakpoint_info(
+        const DebugBreakpoint& breakpoint) const;
+    void require_executable();
+
     Simulation& simulation_;
     std::ostream& output_;
     std::ostream& error_;
@@ -2089,6 +2117,7 @@ private:
     std::vector<DebugBreakpoint> breakpoints_;
     std::optional<DebugBreakpointHit> hit_;
     std::optional<runtime::simir::ExecutionPoint> current_execution_point_;
+    std::optional<std::string> structured_execution_error_;
     std::vector<std::pair<
         std::string, runtime::SystemVerilogUvmPhaseState>>
         phase_states_;
@@ -2099,21 +2128,6 @@ private:
     bool executing_ { };
     bool stop_on_phase_transition_ { };
 };
-
-int run_debug_repl_impl(
-    Simulation& simulation,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error,
-    TraceState* trace);
-
-int handle_debug(
-    const cli::Invocation&,
-    const project::Config& config,
-    diagnostic::Engine& diagnostics,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error_output);
 
 struct ParsedMagnitude {
     std::uint64_t magnitude { };

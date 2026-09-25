@@ -6,15 +6,6 @@
 namespace fsim::app {
 using namespace application_detail;
 
-int run_debug_repl(
-    Simulation& simulation,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error) {
-  return run_debug_repl_impl(
-      simulation, input, output, error, nullptr);
-}
-
 std::optional<PackedLogic4> parse_value(
     const std::string_view text,
     const std::size_t width,
@@ -101,16 +92,6 @@ std::optional<SimulationTick> parse_time(
 }
 
 cli::Services make_cli_services(std::istream& input) {
-  cli::Handler debug =
-      [&input](
-          const cli::Invocation& invocation,
-          const project::Config& config,
-          diagnostic::Engine& diagnostics,
-          std::ostream& output,
-          std::ostream& error) {
-        return handle_debug(
-            invocation, config, diagnostics, input, output, error);
-      };
   cli::Handler tcl =
       [&input](
           const cli::Invocation& invocation,
@@ -130,7 +111,7 @@ cli::Services make_cli_services(std::istream& input) {
       handle_check,
       handle_build,
       handle_run,
-      std::move(debug),
+      tcl,
       std::move(tcl),
       handle_workspace_compile,
       handle_workspace_elaborate,

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "tcl.hpp"
+#include "tcl_command_catalog.hpp"
+#include "tcl_completion_adapter.hpp"
+#include "tcl_console.hpp"
 #include "tcl_internal.hpp"
 
 #include "fsim/api.h"
@@ -79,6 +82,188 @@ namespace tcl_detail {
         runtime::simir::AssertionSeverity severity);
     diagnostic::Severity assertion_diagnostic_severity(
         runtime::simir::AssertionSeverity severity);
+
+    void catalog_changed(TclContext& context, const std::string_view library,
+        const TclCatalogMutation mutation)
+    {
+        if (context.references) {
+            context.references->catalog_mutation_completed(
+                library, mutation, true);
+        }
+    }
+
+    struct TclCdCommandState {
+        TclContext* context { };
+        Tcl_CmdProc* native_string_proc { };
+        void* native_string_client_data { };
+        Tcl_ObjCmdProc* native_object_proc { };
+        void* native_object_client_data { };
+#if TCL_MAJOR_VERSION > 8
+        Tcl_ObjCmdProc2* native_object_proc2 { };
+        void* native_object_client_data2 { };
+#endif
+    };
+
+    int reject_callback_cd(Tcl_Interp* interpreter) noexcept
+    {
+        Tcl_SetObjResult(
+            interpreter,
+            Tcl_NewStringObj(
+                "Tcl cd is not allowed inside a simulation callback", -1));
+        Tcl_SetErrorCode(
+            interpreter, "FSIM", "TCL", "WORKSPACE", "CALLBACK", nullptr);
+        return TCL_ERROR;
+    }
+
+    bool callback_cd_is_allowed(
+        const TclCdCommandState& state, Tcl_Interp* interpreter) noexcept
+    {
+        if (state.context != nullptr && state.context->callback_depth == 0) {
+            return true;
+        }
+        if (state.context == nullptr) {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj("Tcl cd guard is not initialized", -1));
+            return false;
+        }
+        (void)reject_callback_cd(interpreter);
+        return false;
+    }
+
+    int synchronize_after_cd(
+        TclCdCommandState& state,
+        Tcl_Interp* interpreter,
+        const int command_result) noexcept
+    {
+        if (command_result != TCL_OK) {
+            return command_result;
+        }
+        try {
+            return synchronize_workspace(*state.context, interpreter)
+                ? TCL_OK
+                : TCL_ERROR;
+        } catch (const std::exception& exception) {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj(exception.what(), -1));
+        } catch (...) {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj("failed to synchronize the Tcl workspace", -1));
+        }
+        return TCL_ERROR;
+    }
+
+    int guarded_cd_string_command(
+        void* client_data,
+        Tcl_Interp* interpreter,
+        const int argument_count,
+        const char* arguments[]) noexcept
+    {
+        auto& state = *static_cast<TclCdCommandState*>(client_data);
+        if (!callback_cd_is_allowed(state, interpreter)) {
+            return TCL_ERROR;
+        }
+        const int result = state.native_string_proc(
+            state.native_string_client_data,
+            interpreter,
+            argument_count,
+            arguments);
+        return synchronize_after_cd(state, interpreter, result);
+    }
+
+    int guarded_cd_object_command(
+        void* client_data,
+        Tcl_Interp* interpreter,
+        const int argument_count,
+        Tcl_Obj* const arguments[]) noexcept
+    {
+        auto& state = *static_cast<TclCdCommandState*>(client_data);
+        if (!callback_cd_is_allowed(state, interpreter)) {
+            return TCL_ERROR;
+        }
+        const int result = state.native_object_proc(
+            state.native_object_client_data,
+            interpreter,
+            argument_count,
+            arguments);
+        return synchronize_after_cd(state, interpreter, result);
+    }
+
+#if TCL_MAJOR_VERSION > 8
+    int guarded_cd_object_command2(
+        void* client_data,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[]) noexcept
+    {
+        auto& state = *static_cast<TclCdCommandState*>(client_data);
+        if (!callback_cd_is_allowed(state, interpreter)) {
+            return TCL_ERROR;
+        }
+        const int result = state.native_object_proc2(
+            state.native_object_client_data2,
+            interpreter,
+            argument_count,
+            arguments);
+        return synchronize_after_cd(state, interpreter, result);
+    }
+#endif
+
+    bool install_cd_callback_guard(
+        Tcl_Interp* interpreter,
+        TclContext& context,
+        TclCdCommandState& state)
+    {
+        Tcl_CmdInfo command_info { };
+        if (Tcl_GetCommandInfo(interpreter, "::cd", &command_info) == 0) {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj("Tcl's built-in cd command is unavailable", -1));
+            return false;
+        }
+        state.context = &context;
+        if (command_info.isNativeObjectProc == 1) {
+            state.native_object_proc = command_info.objProc;
+            state.native_object_client_data = command_info.objClientData;
+            if (state.native_object_proc == nullptr) {
+                Tcl_SetObjResult(interpreter,
+                    Tcl_NewStringObj("Tcl's built-in cd object command is invalid", -1));
+                return false;
+            }
+            command_info.objProc = guarded_cd_object_command;
+            command_info.objClientData = &state;
+        } else if (command_info.isNativeObjectProc == 0) {
+            state.native_string_proc = command_info.proc;
+            state.native_string_client_data = command_info.clientData;
+            if (state.native_string_proc == nullptr) {
+                Tcl_SetObjResult(interpreter,
+                    Tcl_NewStringObj("Tcl's built-in cd string command is invalid", -1));
+                return false;
+            }
+            command_info.proc = guarded_cd_string_command;
+            command_info.clientData = &state;
+#if TCL_MAJOR_VERSION > 8
+        } else if (command_info.isNativeObjectProc == 2) {
+            state.native_object_proc2 = command_info.objProc2;
+            state.native_object_client_data2 = command_info.objClientData2;
+            if (state.native_object_proc2 == nullptr) {
+                Tcl_SetObjResult(interpreter,
+                    Tcl_NewStringObj("Tcl's built-in cd object2 command is invalid", -1));
+                return false;
+            }
+            command_info.objProc2 = guarded_cd_object_command2;
+            command_info.objClientData2 = &state;
+#endif
+        } else {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj("Tcl's built-in cd command type is unsupported", -1));
+            return false;
+        }
+        if (Tcl_SetCommandInfo(interpreter, "::cd", &command_info) == 0) {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj("failed to install the Tcl cd guard", -1));
+            return false;
+        }
+        return true;
+    }
 
     struct TclChannelState {
         std::istream* input { };
@@ -491,47 +676,99 @@ namespace tcl_detail {
         std::istream& input)
     {
         bool had_error = false;
-        std::string command;
-        std::string line;
+        TclConsole::Options options;
+        options.input = &input;
+        options.output = &context.output;
+        options.error = &context.error;
+        options.workspace_root = context.config.base_directory;
+        options.color_mode = context.invocation.color_mode;
+        options.command_complete = [](const std::string_view text) {
+            const std::string command { text };
+            return Tcl_CommandComplete(command.c_str()) != 0;
+        };
+        options.completion_query = [&context](const std::string_view text,
+                                       const std::size_t cursor_byte) {
+            if (!synchronize_workspace(context, context.interpreter)) {
+                Tcl_ResetResult(context.interpreter);
+                tcl_completion::CompletionResult failed;
+                failed.status = tcl_completion::CompletionStatus::stale_snapshot;
+                return failed;
+            }
+            return complete_tcl(context, text, cursor_byte);
+        };
+        options.live_generations = [&context] {
+            if (!synchronize_workspace(context, context.interpreter)) {
+                Tcl_ResetResult(context.interpreter);
+                return tcl_completion::Generations { };
+            }
+            return tcl_completion_generations(context);
+        };
+        if (const char* history = std::getenv("FSIM_TCL_HISTORY")) {
+            if (std::string_view { history } == "off")
+                options.persist_history = false;
+            else if (*history != '\0')
+                options.history_path = history;
+        }
+        if (const char* limit = std::getenv("FSIM_TCL_HISTORY_LIMIT")) {
+            std::size_t value { };
+            const std::string_view text { limit };
+            const auto parsed = std::from_chars(
+                text.data(), text.data() + text.size(), value);
+            if (parsed.ec == std::errc { }
+                && parsed.ptr == text.data() + text.size())
+                options.history_limit = std::min<std::size_t>(value, 10000U);
+        }
+        auto console_workspace = options.workspace_root;
+        auto console = std::make_unique<TclConsole>(options);
         while (!context.exit_requested) {
-            context.output << (command.empty() ? "(fsim:tcl) " : "... ");
-            context.output.flush();
-            if (!std::getline(input, line)) {
-                if (!command.empty()) {
-                    diagnostics.error(
+            if (!synchronize_workspace(context, interpreter))
+                return kUserError;
+            if (context.config.base_directory != console_workspace) {
+                console_workspace = context.config.base_directory;
+                options.workspace_root = console_workspace;
+                console = std::make_unique<TclConsole>(options);
+            }
+            auto command = console->read_command();
+            if (command.status == TclConsoleReadStatus::cancelled
+                || command.status == TclConsoleReadStatus::interrupted)
+                continue;
+            if (command.status == TclConsoleReadStatus::error) {
+                diagnostics.error("FSIM-TCL-0004", "Tcl console input failed");
+                return kUserError;
+            }
+            if (command.status == TclConsoleReadStatus::end_of_file) {
+                if (!command.text.empty()) {
+                    diagnostic::Diagnostic value { diagnostic::Severity::error,
                         "FSIM-TCL-0004",
                         "incomplete Tcl command at end of input",
-                        { "<interactive>", { 1, 1, 0 }, { 1, 1, 0 } });
+                        { "<interactive>", { 1, 1, 0 }, { 1, 1, 0 } }, { } };
+                    diagnostics.report(value);
                     had_error = true;
                 }
                 break;
             }
-            command += line;
-            command.push_back('\n');
-            if (Tcl_CommandComplete(command.c_str()) == 0) {
-                continue;
-            }
             const int result = Tcl_EvalEx(
                 interpreter,
-                command.data(),
-                tcl_size(command.size()),
+                command.text.data(),
+                tcl_size(command.text.size()),
                 TCL_EVAL_GLOBAL);
             if (context.exit_requested) {
                 break;
             }
             if (result != TCL_OK) {
                 const auto text = interpreter_result(interpreter);
-                context.error << (text.empty() ? "Tcl evaluation failed" : text)
-                              << '\n';
+                console->write_diagnostic({ diagnostic::Severity::error,
+                    "FSIM-TCL-0005",
+                    text.empty() ? "Tcl evaluation failed" : text,
+                    { "<interactive>", { 1, 1, 0 }, { 1, 1, 0 } }, { } });
                 had_error = true;
             } else {
                 const auto text = interpreter_result(interpreter);
                 if (!text.empty()) {
-                    context.output << text << '\n';
+                    console->write_output(text + '\n');
                 }
             }
             Tcl_ResetResult(interpreter);
-            command.clear();
         }
         if (context.exit_requested) {
             return context.exit_code;
@@ -567,6 +804,7 @@ int handle_tcl(
 #else
     const auto executable = fsim::support::path_to_utf8(invocation.program_path);
     Tcl_FindExecutable(executable.c_str());
+    TclCdCommandState cd_command_state;
     TclInterpreter interpreter { Tcl_CreateInterp() };
     if (!interpreter) {
         diagnostics.error(
@@ -616,8 +854,10 @@ int handle_tcl(
         false,
         0,
         { },
+        nullptr,
         nullptr
     };
+    context.references = std::make_unique<TclReferenceTable>();
     context.sdf_request.surface = SdfControlSurface::Tcl;
     context.sdf_request.phase = SdfControlPhase::Elaborate;
     if (invocation.delay_mode == project::DelayMode::minimum)
@@ -653,32 +893,40 @@ int handle_tcl(
                 + interpreter_result(interpreter.get()));
         return kUnavailable;
     }
-    constexpr std::array fsim_commands {
-        "::fsim::workspace",
-        "::fsim::load",
-        "::fsim::signals",
-        "::fsim::provenance",
-        "::fsim::read",
-        "::fsim::deposit",
-        "::fsim::force",
-        "::fsim::release",
-        "::fsim::run",
-        "::fsim::status",
-        "::fsim::diagnostics",
-        "::fsim::sdf",
-        "::fsim::on",
-        "::fsim::off",
-        "::fsim::callbacks",
-        "::fsim::stop",
-        "::fsim::trace",
-        "::fsim::debug"
-    };
+    if (!install_cd_callback_guard(
+            interpreter.get(), context, cd_command_state)) {
+        diagnostics.error(
+            "FSIM-TCL-0002",
+            "failed to install the Tcl cd callback guard: "
+                + interpreter_result(interpreter.get()));
+        return kUnavailable;
+    }
+    const auto fsim_commands = command_specs();
+    const auto duplicate = std::adjacent_find(
+        fsim_commands.begin(), fsim_commands.end(),
+        [](const auto& left, const auto& right) {
+            return left.name == right.name;
+        });
+    if (duplicate != fsim_commands.end()) {
+        diagnostics.error("FSIM-TCL-0002",
+            "duplicate fsim Tcl command catalog entry: "
+                + std::string { duplicate->name });
+        return kUnavailable;
+    }
     bool commands_ok = true;
-    for (const char* command : fsim_commands) {
+    for (const auto& command : fsim_commands) {
+        if (!command.name.starts_with("fsim::")) {
+            diagnostics.error("FSIM-TCL-0002",
+                "noncanonical fsim Tcl command catalog entry: "
+                    + std::string { command.name });
+            return kUnavailable;
+        }
+        std::string qualified_name { "::" };
+        qualified_name.append(command.name);
         if (Tcl_CreateObjCommand2(
                 interpreter.get(),
-                command,
-                fsim_command,
+                qualified_name.c_str(),
+                invoke_catalog_command,
                 &context,
                 nullptr)
             == nullptr) {
@@ -687,13 +935,6 @@ int handle_tcl(
         }
     }
     if (Tcl_CreateObjCommand2(
-            interpreter.get(),
-            "::fsim::version",
-            version_command,
-            &context,
-            nullptr)
-            == nullptr
-        || Tcl_CreateObjCommand2(
                interpreter.get(),
                "exit",
                exit_command,
@@ -707,6 +948,14 @@ int handle_tcl(
             "failed to initialize fsim Tcl commands and variables: "
                 + interpreter_result(interpreter.get()));
         return kUnavailable;
+    }
+
+    if (invocation.command == cli::Command::debug) {
+        if (reload_snapshot(context, interpreter.get(), invocation.snapshot)
+            != TCL_OK) {
+            return kUserError;
+        }
+        Tcl_ResetResult(interpreter.get());
     }
 
     if (invocation.tcl_script || !invocation.tcl_commands.empty()) {

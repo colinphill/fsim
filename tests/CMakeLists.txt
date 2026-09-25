@@ -1502,6 +1502,7 @@ add_test(
     "-DFSIM_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}"
     "-DFSIM_DOCDIR=${CMAKE_INSTALL_DOCDIR}"
     "-DFSIM_DATADIR=${CMAKE_INSTALL_DATADIR}"
+    "-DFSIM_WITH_TCL=${FSIM_WITH_TCL}"
     "-DFSIM_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim>"
     "-DFSIM_API_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_api>"
     "-DFSIM_TF_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_tf>"
@@ -5999,6 +6000,55 @@ fsim_register_simple_test(
     endif()
   endif()
 
+  endif()
+
+  add_executable(
+    fsim_cli_diagnostic_color_tests
+    app/cli_diagnostic_color_test.cpp
+  )
+  fsim_configure_test(fsim_cli_diagnostic_color_tests)
+  target_link_libraries(fsim_cli_diagnostic_color_tests PRIVATE fsim_cli)
+  fsim_register_simple_test(
+    fsim.cli.diagnostic-color
+    fsim_cli_diagnostic_color_tests
+    "fast;cli;diagnostic")
+
+  add_executable(fsim_tcl_completion_tests app/tcl_completion_test.cpp)
+  fsim_configure_test(fsim_tcl_completion_tests)
+  target_include_directories(
+    fsim_tcl_completion_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
+  target_link_libraries(fsim_tcl_completion_tests PRIVATE fsim_application)
+  fsim_register_simple_test(
+    fsim.application.tcl-completion
+    fsim_tcl_completion_tests
+    "fast;tcl;completion")
+
+  if(FSIM_WITH_TCL)
+    foreach(tcl_case IN ITEMS
+        references workspace_commands object_commands debugger_commands
+        completion_adapter console)
+      add_executable(
+        fsim_tcl_${tcl_case}_tests
+        "app/tcl_${tcl_case}_test.cpp"
+      )
+      fsim_configure_test(fsim_tcl_${tcl_case}_tests)
+      target_include_directories(
+        fsim_tcl_${tcl_case}_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
+      target_link_libraries(fsim_tcl_${tcl_case}_tests PRIVATE fsim_application)
+      if(tcl_case STREQUAL "completion_adapter")
+        target_link_libraries(
+          fsim_tcl_completion_adapter_tests PRIVATE fsim_tcl_dependency)
+      endif()
+      fsim_register_simple_test(
+        fsim.application.tcl-${tcl_case}
+        fsim_tcl_${tcl_case}_tests
+        "fast;tcl")
+      if(FSIM_WITH_BUNDLED_TCL)
+        set_tests_properties(
+          fsim.application.tcl-${tcl_case}
+          PROPERTIES ENVIRONMENT "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}")
+      endif()
+    endforeach()
   endif()
 
   add_executable(

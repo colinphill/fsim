@@ -121,22 +121,20 @@ endmodule
       config.run.max_deltas,
       fsim::app::SimulationEngine::interpreter};
   debugger.start();
-  std::istringstream debugger_input{
-      "scope sink\nshow value\nscope source\nshow value\nquit\n"};
   std::ostringstream debugger_output;
   std::ostringstream debugger_error;
-  assert(
-      fsim::app::run_debug_repl(
-          debugger,
-          debugger_input,
-          debugger_output,
-          debugger_error)
-      == 0);
+  fsim::app::DebuggerControl debugger_control {
+      debugger, debugger_output, debugger_error
+  };
+  debugger_control.execute({ "scope", "sink" });
+  debugger_control.execute({ "show", "value" });
+  debugger_control.execute({ "scope", "source" });
+  debugger_control.execute({ "show", "value" });
   assert(debugger_error.str().empty());
   assert(debugger_output.str().find("sink.value = X")
-         != std::string::npos);
+      != std::string::npos);
   assert(debugger_output.str().find("source.value = X")
-         != std::string::npos);
+      != std::string::npos);
 
   const auto vhdl_root_source = directory / "multiple-root-vhdl.vhd";
   const auto sv_root_source = directory / "multiple-root-mixed.sv";

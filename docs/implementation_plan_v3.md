@@ -46,6 +46,19 @@ starts on branch codex/v3 from clean v2 checkpoint
   dependency-rescanned Release build and full suite, then Debug build and full
   suite, documentation, commit, and push. It creates no release tag and adds
   no performance, sanitizer, or hosted-monitoring gate before Batch 190.
+- Batch 188K is a one-time, exactly twenty-change Tcl object-model
+  and interactive-console closure after Batch 188J and before Batch 189.
+  It preserves Batches 189-197. The user approved implementation on
+  2026-09-25; its accepted contract and progress appear below.
+- Every library referenced for adoption or redistribution must have a
+  license compatible with a future closed-source fsim distribution under
+  the intended linking and packaging model. Prefer permissive licenses.
+  Verify the exact pinned release, bundled and transitive dependencies,
+  and any selected dual-license option. Record required copyright notices,
+  license texts, attribution, and other redistribution obligations in the
+  dependency provenance and package inventory. An unverified or incompatible
+  dependency must not become a required implementation dependency. This
+  project-wide requirement was added at the user's request on 2026-09-25.
 - Whenever the governing cadence authorizes a new hosted CI run, inspect the
   most recent applicable run first, including the status and failing job logs,
   and identify existing errors before triggering the new run. Resolve known
@@ -7983,13 +7996,14 @@ sanitizer reruns, and hosted monitoring retain their recorded deferrals.
 Batch 189 remains unstarted; the user has requested Tcl closure planning
 before further implementation.
 
-##### Deferred Tcl object-model integration
+##### Tcl object-model gaps carried into Batch 188K
 
 Recorded at the user's request on 2026-09-25. The current Tcl interface is
 useful for snapshot-based simulation control, signal inspection/mutation,
 callbacks, tracing, SDF, and scripted debugging. Its object-model coverage
-is partial. The following work is deferred; existing batch numbering and
-Batch 188J's closure scope remain as recorded above.
+is partial. On 2026-09-25 the user requested a follow-on closure plan for
+these gaps. The user approved their implementation in Batch 188K;
+Batch 188J is complete and retains its recorded scope.
 
 - Expose native Tcl compilation, elaboration, library mapping/unmapping,
   compiled-object enumeration/deletion, and whole-library deletion. Return
@@ -8015,6 +8029,264 @@ or delete library definitions, reload snapshots, and diagnose stale object
 references. Exercise mixed-language designs and source-free snapshots, using
 Tcl lists/dictionaries or defined object references rather than textual
 debugger-output parsing. Preserve the existing tested simulation controls.
+
+#### Batch 188K - Tcl object-model closure and rich console
+
+**Status: complete, 2026-09-25.** The user explicitly approved implementation
+after settling the product decisions below. All twenty changes closed. No
+questions are pending. If further clarification is needed, ask one unresolved
+decision set at a time and wait for the answer.
+
+##### Accepted decisions and implementation contract
+
+- Use a rich Tcl console with multiline editing, syntax color, contextual
+  hints, tab completion, persistent history/search, and standard editing
+  controls. Full-screen hierarchy/source/debugger panes are outside this
+  requested console design.
+- Keep `fsim tcl` as the general console entry point. Keep `fsim debug` as
+  an entry point into the same Tcl console with the selected default/named
+  snapshot loaded for debugging. The user's later instruction to keep
+  `fsim debug` supersedes the earlier answer to remove it.
+- Remove the non-Tcl interactive command loop and its public entry paths.
+  Preserve the debugger's execution and inspection capabilities through
+  native Tcl commands and shared services. Normal Tcl debugger operations
+  return structured values rather than requiring text-command parsing.
+- When Tcl support is absent, tools are command-line only. Respect the
+  existing `FSIM_HAS_TCL` capability (the request's `HAVE_TCL` condition):
+  no console, fallback REPL, terminal-editor dependency, or unsolicited
+  prompt. Tcl/debug entry requests report that the capability is unavailable.
+  Compile, elaborate, simulate, library, coverage, and other applicable
+  noninteractive commands remain available.
+- Preserve Tcl file/command batch execution. Redirected input/output uses
+  a documented noninteractive path without prompts or terminal control
+  sequences. A basic terminal may use plain Tcl input with reduced visual
+  presentation; it must never select the removed debugger language.
+- Tcl's `cd` changes the fsim workspace. Later commands, completion, and
+  workspace history use the new directory's `.fsim`; old catalog references
+  become stale while an independently loaded snapshot remains usable.
+- Color diagnostics by their actual severity, including warning, error,
+  fatal, note, and any other existing categories. Keep severity, diagnostic
+  code, locations, and related information as structured fields. Renderers
+  choose styles; plain output retains severity labels and meaning. Provide
+  automatic/always/never color control and honor `NO_COLOR` in automatic mode.
+- Implementation uses a `gpt-6-sol` orchestrator at `high` effort and up to
+  six `gpt-6-luna` workers at `max` effort. Select model and effort explicitly
+  at every launch, including nested workers, within the same worker limit.
+  The user approved starting this implementation context on 2026-09-25.
+  The primary session must act as the orchestrator; do not delegate that
+  role to a separate agent. The user clarified this before implementation.
+- Apply the project-wide closed-source-compatible dependency requirement
+  above to the editor backend and all other referenced libraries.
+
+##### Shared services and object lifetime
+
+Use one command/service catalog for command names, subcommands, argument
+schemas, capabilities, help, structured results, and diagnostics. Tcl binds
+to application services directly; workspace operations do not shell out to
+fsim or parse CLI text. Shared services retain the managed-library and
+snapshot ownership rules introduced in Batch 188J.
+
+Expose structured hierarchy, object kind, parent/children, types, dimensions,
+packages, class objects, values, debugger state, and source provenance.
+Return Tcl lists/dictionaries or defined object references. Distinguish
+definition metadata from mutable runtime state, with deterministic errors
+for unsupported queries or mutations. Reading an object must not depend on
+reconstructing ASTs or reopening source files.
+
+Use opaque, generation-checked object references rather than pointer strings.
+Define workspace/library and loaded-design/runtime lifetimes separately:
+recompilation/deletion invalidates the affected catalog references, while an
+already loaded independent snapshot remains usable. Loading another snapshot
+invalidates references to the replaced session; runtime-object destruction
+invalidates its references. Specify restart behavior before implementing it,
+and cover every invalidation transition with tests. Mutations and callbacks
+operate only at existing simulation control boundaries.
+
+##### Completion, hinting, and terminal editing
+
+Provide a terminal-independent completion/hint service with structured input
+(buffer, cursor, context, capabilities, and object/session generation) and
+structured output (replacement ranges, candidate text, kind, help, hints,
+and syntax/diagnostic spans). Keep ANSI sequences, terminal handles, prompts,
+and editor-library types out of this interface. A future GUI must be able to
+use the service through an adapter without importing the console frontend.
+
+Providers cover Tcl commands, namespaces, procedures, variables, command
+options, paths, libraries, snapshots, HDL objects, packages, types, and
+debugger entities. Understand incomplete Tcl input, quoting, braces, nested
+commands, Unicode cursor positions, and multiple statements. Suggestions
+must not evaluate the edited input, advance simulation, or mutate workspace
+state. Bound query work, provide deterministic ordering, and reject or
+refresh results when their captured object/session generation is stale.
+
+The editor acceptance contract includes navigation by character/word/line
+and across multiline input; insertion/deletion; undo/redo; history navigation
+and incremental search; completion selection/cycling; paste without premature
+execution; resize/redraw; and documented cancel/interrupt/EOF behavior.
+Preserve partially edited input when diagnostics or simulator output arrive.
+Persist workspace console history below `.fsim`, with configurable retention
+and the ability to disable persistence. Keep terminal operations on their
+owning thread and restore terminal state after errors, interrupts, and exit.
+
+[Isocline](https://github.com/daanx/isocline) v1.1.0 was selected and pinned
+after checking its license, provenance, and editing behavior. Its upstream
+[license](https://github.com/daanx/isocline/blob/main/LICENSE) is MIT; the
+vendored provenance records the bundled `wcwidth.c` notice and local patches.
+Semantic completion/hint providers remain independent of the terminal editor.
+
+##### Windows CI repair folded into Batch 188K
+
+The [2026-09-25 CI run](https://github.com/colinphill/fsim/actions/runs/36135428089)
+at published HEAD `5b6890ca` built the Windows LLVM-MinGW Release lane, then
+failed `fsim.application.tcl` at the managed-directory assertion in
+`tests/app/tcl_application_test.cpp`. The test compared the UTF-8 path returned
+by the C++ workspace store directly with Tcl's `[file join [pwd] .fsim]` text.
+On Windows, the C++ current-directory path and Tcl's path spelling can name
+the same directory while differing lexically; the test's immediately preceding
+workspace-root assertion already used `file normalize` for this reason. On
+Linux the spellings matched, so that raw-string assertion passed. The fix
+normalizes both managed-directory operands with Tcl `file normalize` before
+comparison and reports both normalized values if they still differ. This
+retains the semantic directory check while removing the Windows-only path
+spelling mismatch. The separate standard-mode matrix was not run because it
+depends on the failed Tcl test; it is not an independent observed failure.
+Recheck the targeted Tcl test locally and include it in the Batch 188K full
+suites; a post-fix Windows execution remains unverified until that lane runs.
+
+##### Twenty-change implementation checklist
+
+1. **Complete (2026-09-25):** Freeze the approved command, object, lifetime,
+   editing, diagnostic, and Tcl-enabled/disabled contracts; register concrete
+   acceptance obligations in [tcl-closure-contract.md](tcl-closure-contract.md).
+2. **Complete (2026-09-25):** Define the shared command catalog,
+   application-service boundaries, and structured result/diagnostic
+   contracts. The command metadata drives Tcl help and completion, and the
+   registered callbacks invoke application services directly.
+3. **Complete (2026-09-25):** Implement generation-checked object references
+   and deterministic lifetime, stale-reference, restart, and callback-safety
+   rules. Reference and workspace-switch tests cover catalog invalidation
+   separately from loaded-session references.
+4. **Complete (2026-09-25):** Add native Tcl compilation and elaboration with
+   structured results, diagnostics, verbosity, and managed default/named
+   snapshots. The focused workspace workflow passes, including Tcl `cd`.
+5. **Complete (2026-09-25):** Add native Tcl library mapping/unmapping,
+   library/object enumeration, object deletion, and whole-library deletion
+   through existing store services. The focused workspace workflow passes.
+6. **Complete (2026-09-25):** Expose structured hierarchy and object queries,
+   including identity, parent/children, object kinds, types, widths, and
+   dimensions. The focused object workflow passes after source removal.
+7. **Complete (2026-09-25):** Expose package/member and class-object discovery
+   and reflection, preserving compiled definitions separately from live
+   runtime objects. Class properties use local display names and canonical
+   stored identities.
+8. **Complete (2026-09-25):** Add structured reads of supported scalar,
+   composite, and class state, including language-specific logic values and
+   shape/type metadata. The focused object workflow passes.
+9. **Complete (2026-09-25):** Add validated typed mutations with explicit
+   permissions and control-boundary semantics; retain deposit/force/release
+   behavior and callbacks. The focused workflow covers composite integer
+   width normalization and rejected overflow.
+10. **Complete (2026-09-25):** Expose debugger stepping, execution control,
+    breakpoints, watches, frames, and inspection through native structured Tcl
+    operations. The focused debugger and migrated Tcl application tests pass;
+    typed completion now finalizes attached traces.
+11. **Complete (2026-09-25):** Extend structured source provenance across
+    Verilog/SystemVerilog, VHDL, and SystemC, including archived source and
+    plugin/instance identity. The focused debugger test passes with deleted
+    input source and archived plugin metadata.
+12. **Complete (2026-09-25):** Implement the terminal-independent completion/
+    hint request/result interface, Tcl context analysis, deterministic ordering,
+    and bounded/stale-result handling in `tcl_completion.hpp/.cpp`. Its headless
+    strict warnings-as-errors test passed; provider population is Change 13.
+13. **Complete (2026-09-25):** Add command, option, path, Tcl-symbol,
+    library/snapshot, HDL-object, package/type, and debugger completion/hint
+    providers, with no evaluation side effects. Headless completion and Tcl
+    adapter tests pass, including Unicode paths, Tcl `cd` workspace changes,
+    stale generations, and command/subcommand capability metadata.
+14. **Complete (2026-09-25):** Pin Isocline v1.1.0 after license and feature
+    qualification; integrate its MIT provenance, notices, source/archive
+    packaging, and Tcl-enabled build gate. The source manifest and authored
+    license inventory checks pass.
+15. **Complete (2026-09-25):** Implement the rich console's editing/history
+    contract and connect it to shared completion/hint providers and Tcl
+    command completeness. The Unix PTY test covers editing, multiline paste,
+    history search, completion, redraw, interrupt, and EOF; Windows console
+    execution remains unverified locally.
+16. **Complete (2026-09-25):** Add syntax and diagnostic-severity color,
+    plain/color controls, output coordination, cancellation, terminal resize,
+    and reliable terminal cleanup. Strict CLI color and real Unix PTY tests
+    pass for warning/note styles, redirected stderr even with forced color,
+    redraw under output, resize, interrupt, and EOF. Windows console
+    execution remains unverified locally and is not claimed as a pass.
+17. **Complete (2026-09-25):** Route `fsim tcl` and `fsim debug` through the
+    common Tcl session/console; remove the old non-Tcl REPL and migrate its
+    callers, scripts, and examples. The migrated Tcl application test passes
+    and no public `run_debug_repl`/`handle_debug` residue remains.
+18. **Complete (2026-09-25):** Enforce command-line-only Tcl-disabled builds
+    and noninteractive stream behavior. The dependency-rescanned Tcl-disabled
+    build and applicable suite pass 438/438 tests, including public Tcl/debug
+    capability errors and governance checks. Its target graph excludes the
+    editor and Tcl console translation units.
+19. **Complete (2026-09-25):** Complete end-to-end Tcl workflows, terminal
+    interaction tests, headless completion-service tests, documentation, and
+    substantive governance checks. All 446 warnings-as-errors LLVM Release
+    CTests pass, including the Tcl workflows, Unix PTY editor, completion,
+    diagnostic catalog, conformance corpus, and composed closure audits.
+20. **Complete (2026-09-25):** Dependency-rescanned warnings-as-errors LLVM
+    Release and Debug builds each passed their full 446-test suite. The
+    dependency-rescanned Tcl-disabled build passed its applicable 438-test
+    suite and excludes the editor targets. After the last capability-aware
+    test and CMake edits, the affected five tests passed again in each
+    Tcl-enabled build. The implementation is committed and pushed for handoff;
+    Batch 189 has not started. The user deferred performance and new hosted
+    monitoring, so neither is claimed as a pass.
+
+##### Follow-up gaps after Batch 188K
+
+- Run the repaired managed-directory assertion in hosted Windows CI and
+  exercise the rich console through Windows console/ConPTY. Linux verification
+  does not establish Windows terminal behavior.
+- Extend the structured Tcl mutation surface where the underlying object
+  services support more nested aggregates, container elements, and class
+  graphs; add explicit lifecycle coverage for those future handles.
+- A future GUI can reuse the headless completion/hint service, but no GUI
+  adapter or interface is part of this batch.
+- The inactive historical `CheckV1InventoryRelease.cmake` still pins old
+  exact counts. Migrate any remaining useful obligations before retiring its
+  archival record; current composed governance checks own the active gate.
+
+##### Worker allocation and qualification
+
+The orchestrator owns shared interfaces, registrations, integration, CMake
+wiring, the plan/resume records, central builds/tests, commits, and pushes.
+Assign exclusive files and focused evidence before launching each worker.
+Split command implementations into cohesive translation units so workers do
+not concurrently edit a single Tcl dispatcher or shared context definition.
+
+| Worker area | Bounded responsibility |
+| --- | --- |
+| Service/object foundations | Command catalog implementation, object references, lifetime validation |
+| Workspace Tcl commands | Compile/elaborate, libraries, structured results and diagnostics |
+| Object inspection and values | Hierarchy/types/packages/classes, reads and validated mutations |
+| Debugger and provenance | Structured debug operations and mixed-language source identity |
+| Completion and hints | Context analysis, providers, structured requests/results, headless tests |
+| Terminal console | Editor adapter, editing/history, color/output behavior, terminal tests |
+
+Acceptance must exercise an entire Tcl-managed workspace from compilation
+through source-free snapshot reload, object inspection and simulation,
+replacement/deletion, and stale-reference errors. Preserve existing Tcl
+simulation, tracing, SDF, callback, and debugger coverage. Include mixed HDL
+and SystemC designs and supported composite/class values. Verify that the
+completion/hint service can be consumed without a terminal/editor dependency.
+
+Test real key sequences and transcript/output behavior through Unix PTYs and
+Windows console/ConPTY facilities where available, including Unicode,
+multiline paste, history, undo/redo, completion, interrupts, redirects, and
+each diagnostic severity. Report platform coverage accurately; an unexecuted
+Windows terminal test is not a Windows pass. The existing sanitizer and
+hosted-monitoring cadence remains at Batch 190 unless the user changes it.
+This batch has no performance-comparison requirement and creates no release
+tag. Mark each numbered change complete only when its obligations close.
 
 ## v3.1.0
 

@@ -31,3 +31,4 @@ tests/app/application_test_cli.cpp|fsim.application|interpreter,llvm-o0,cache-co
 tests/app/line_directive_application_test.cpp|fsim.application.line_directives|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,callbacks,source-map,portable-path
 tests/project/project_config_test.cpp|fsim.project|project,source-map,portable-path,diagnostic
 tests/app/tcl_application_test.cpp|fsim.application.tcl|tcl,cli,source-map,portable-path,diagnostic
+tests/app/tcl_debugger_commands_test.cpp|fsim.application.tcl-debugger_commands|tcl,debugger,diagnostic,source-map,portable-path,plugin,lifecycle

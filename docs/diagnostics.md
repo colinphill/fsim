@@ -60,6 +60,20 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
 | `FSIM-TCL-0004` | error | Interactive input ended with an incomplete Tcl command. |
+| `FSIM-TCL-0005` | error | A complete interactive Tcl command failed during evaluation; the diagnostic includes the interpreter's error result. |
+| `FSIM-TCL-WORKSPACE-0001` | error | Tcl could not determine the process working directory while synchronizing the active workspace. |
+| `FSIM-TCL-DEBUG` | domain | Diagnostic domain assigned to `fsim::debug` and `fsim::provenance`; classified command failures use the child codes below. |
+| `FSIM-TCL-DEBUG-0001` | error | An exception or unexpected failure occurred during debugger or provenance command execution and was reported at the Tcl command boundary. |
+| `FSIM-TCL-DEBUG-0002` | error | A debugger request contains an invalid numeric identifier or frame index, or an unknown debugger operation. |
+| `FSIM-TCL-DEBUG-CALLBACK-0001` | error | A Tcl callback failed while a debugger command was executing. |
+| `FSIM-TCL-DEBUG-REF-0001` | error | `fsim::debug inspect` received an invalid, stale, wrong-kind, unresolved, or otherwise non-inspectable loaded-object reference. |
+| `FSIM-TCL-OBJECT` | domain | Diagnostic domain assigned to `fsim::object`; classified object-command failures use the child codes below. |
+| `FSIM-TCL-OBJECT-0001` | error | An object command received a malformed reference token or a reference of the wrong kind. |
+| `FSIM-TCL-OBJECT-0002` | error | An object reference no longer names a live object after its owning catalog, loaded design, or runtime object lifetime changed. |
+| `FSIM-TCL-OBJECT-0003` | error | A requested design path, compiled definition, or loaded design could not be resolved. |
+| `FSIM-TCL-OBJECT-0004` | error | The requested object operation or value access is unsupported for that reference or object kind. |
+| `FSIM-TCL-OBJECT-0005` | error | An object mutation is prohibited by the current execution policy or by read-only, constant, or parameter semantics. |
+| `FSIM-TCL-OBJECT-0006` | error | An object value could not be parsed, converted, read, or otherwise processed. |
 | `FSIM-TCL-ASSERT-0001` | note/warning/error/fatal | An HDL assertion failed while a Tcl-controlled simulation was running. |
 | `FSIM-TCL-REPORT-0001` | note/warning/error/fatal | A VHDL report or SystemVerilog severity task was delivered to Tcl diagnostics and callbacks. |
 | `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
@@ -81,6 +95,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-WS-SC002` | error | The SystemC workspace source identity, library catalog, managed artifact allocation, or commit cannot be resolved or published. |
 | `FSIM-WS-SC003` | error | A managed SystemC library has no compiled translation units, or an object's source ownership/fingerprint disagrees with its catalog entry. |
 | `FSIM-WS-TCL001` | error | Tcl cannot read the current workspace's local and mapped library locations. |
+| `FSIM-WS-TCL002` | error | A Tcl workspace command has an invalid argument count, option, value, source list, language, or library operation. |
 
 ## Legacy ACC host boundary
 

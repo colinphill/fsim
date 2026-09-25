@@ -168,18 +168,30 @@ paths so a previous snapshot can retain a loaded plugin on Windows.
 Compile, elaborate, SystemC, and library commands support progress verbosity. Use
 `--verbosity quiet` or `-q` to suppress progress, and `--verbosity verbose` or
 `-v` for source and publication detail. Diagnostics remain available at every
-verbosity; `--diagnostics=json` selects structured diagnostics.
+verbosity; `--diagnostics=json` selects structured diagnostics. The global
+`--color auto|always|never` option controls text diagnostic colors; automatic
+mode detects terminal output and honors `NO_COLOR`.
 
 ```sh
 fsim compile -v --library work tb.sv
 fsim elaborate work.tb --snapshot debug -q
 fsim debug --snapshot debug
-fsim tcl --snapshot debug script.tcl
+fsim debug --snapshot debug inspect.tcl top.counter
+fsim tcl -c 'puts [fsim::version]'
 ```
 
-Debug and Tcl default to the `default` snapshot. Tcl exposes
-`fsim::workspace` to query the workspace and `fsim::load ?SNAPSHOT?` to select
-a snapshot; `fsim::run` retains simulation control.
+Debug and Tcl use the `default` snapshot unless `--snapshot NAME` selects
+another one. `fsim debug` loads that snapshot before starting the Tcl
+debugger; `fsim tcl` starts a general Tcl session and `fsim::load ?SNAPSHOT?`
+loads simulation state. The [Tcl console and automation guide](tcl.md)
+documents all commands, structured workspace/object/debug/provenance results,
+console controls, history, and redirected behavior. Within Tcl, the built-in
+`cd` changes the active workspace; catalog references from the previous
+workspace become stale while the loaded snapshot remains usable. Subsequent
+fsim commands and completion use the new workspace, and interactive history
+uses its `.fsim/tcl_history` file by default. Relative paths from
+`FSIM_TCL_HISTORY` are resolved against the new workspace; an absolute path
+stays fixed.
 
 `simulate` accepts engine, duration, delta, seed, file-I/O, and trace options,
 for example `fsim simulate --engine compiled --duration 100ns --trace run.vcd`.

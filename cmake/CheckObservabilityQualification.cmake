@@ -21,7 +21,10 @@ endfunction()
 
 fsim_require_tokens(
   tests/app/application_test_cli.cpp
-  "fsim::app::run_debug_repl("
+  "fsim::app::DebuggerControl debugger {"
+  "execute_debugger_checks(debugger);"
+  "const auto debug_status = debugger.status();"
+  "assert(poisoned_status.poisoned);"
   "compiled_debug_output.str() == transcript"
   "set_signal_change_hook("
   "const auto debug_trace = directory / \"debug-select.vcd\""

@@ -28,8 +28,6 @@ int handle_build(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_run(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
-int handle_debug(const cli::Invocation&, const project::Config&,
-    diagnostic::Engine&, std::istream&, std::ostream&, std::ostream&);
 int handle_compile(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_elaborate(const cli::Invocation&, const project::Config&,

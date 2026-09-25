@@ -37,6 +37,14 @@ struct DebuggerControl::Impl {
     }
   }
 
+  void finish_trace_if_finished()
+  {
+    if (trace && trace->diagnostics && simulation.finished()
+        && !finish_trace(*trace, *trace->diagnostics)) {
+      throw std::runtime_error("failed to finalize debugger trace output");
+    }
+  }
+
   Simulation& simulation;
   std::unique_ptr<TraceState> trace;
   DebuggerSession session;
@@ -68,10 +76,95 @@ void DebuggerControl::execute(
     throw std::invalid_argument("debugger command cannot be empty");
   }
   impl_->session.execute(command);
-  if (impl_->trace && impl_->simulation.finished()
-      && !finish_trace(*impl_->trace, *impl_->trace->diagnostics)) {
-    throw std::runtime_error("failed to finalize debugger trace output");
-  }
+  impl_->finish_trace_if_finished();
+}
+
+DebuggerStatus DebuggerControl::status() const
+{
+  return impl_->session.status();
+}
+
+void DebuggerControl::step(const std::string_view kind)
+{
+  impl_->session.step(kind);
+  impl_->finish_trace_if_finished();
+}
+
+void DebuggerControl::continue_run(
+    const std::optional<std::string_view> duration)
+{
+  impl_->session.continue_run(duration);
+  impl_->finish_trace_if_finished();
+}
+
+DebuggerBreakpointInfo DebuggerControl::add_breakpoint(
+    const std::string_view kind,
+    const std::string_view location,
+    const std::optional<std::string_view> comparison,
+    const std::optional<std::string_view> value)
+{
+  return impl_->session.add_breakpoint(kind, location, comparison, value);
+}
+
+DebuggerBreakpointInfo DebuggerControl::add_watch(
+    const std::string_view signal,
+    const std::optional<std::string_view> comparison,
+    const std::optional<std::string_view> value)
+{
+  return impl_->session.add_watch(signal, comparison, value);
+}
+
+std::vector<DebuggerBreakpointInfo> DebuggerControl::breakpoints() const
+{
+  return impl_->session.breakpoints();
+}
+
+std::vector<DebuggerBreakpointInfo> DebuggerControl::watches() const
+{
+  return impl_->session.watches();
+}
+
+void DebuggerControl::delete_breakpoint(const std::uint64_t id)
+{
+  impl_->session.delete_breakpoint(id);
+}
+
+void DebuggerControl::delete_watch(const std::uint64_t id)
+{
+  impl_->session.delete_watch(id);
+}
+
+void DebuggerControl::clear_breakpoints()
+{
+  impl_->session.clear_breakpoints();
+}
+
+std::vector<DebuggerFrameInfo> DebuggerControl::frames() const
+{
+  return impl_->session.frames();
+}
+
+DebuggerFrameInfo DebuggerControl::frame(const std::size_t index) const
+{
+  return impl_->session.frame(index);
+}
+
+DebuggerScopeInfo DebuggerControl::scope(
+    const std::optional<std::string_view> path)
+{
+  return impl_->session.scope(path);
+}
+
+DebuggerInspection DebuggerControl::inspect(
+    const std::string_view path) const
+{
+  return impl_->session.inspect(path);
+}
+
+std::vector<DebuggerSourceProvenance> DebuggerControl::provenance(
+    const std::optional<std::string_view> path) const
+{
+  return impl_->session.provenance(path);
 }
 
 std::optional<TraceControlStatus> DebuggerControl::trace_status() const

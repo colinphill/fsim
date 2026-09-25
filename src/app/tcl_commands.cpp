@@ -306,7 +306,7 @@ namespace fsim::app::tcl_detail {
     bool ensure_simulation(
         TclContext& context,
         Tcl_Interp* interpreter,
-        const std::optional<SimulationEngine> requested_engine = std::nullopt)
+        const std::optional<SimulationEngine> requested_engine)
     {
         if (context.simulation) {
             if (requested_engine
@@ -441,20 +441,13 @@ namespace fsim::app::tcl_detail {
         return TCL_OK;
     }
 
-    int load_command(
+    int reload_snapshot(
         TclContext& context,
         Tcl_Interp* interpreter,
-        const Tcl_Size argument_count,
-        Tcl_Obj* const arguments[])
+        const std::string_view snapshot)
     {
-        if (argument_count < 1 || argument_count > 2) {
-            Tcl_WrongNumArgs(interpreter, 1, arguments, "?SNAPSHOT?");
-            return TCL_ERROR;
-        }
         auto selection = context.invocation;
-        if (argument_count == 2) {
-            selection.snapshot = Tcl_GetString(arguments[1]);
-        }
+        selection.snapshot = snapshot;
         diagnostic::Engine load_diagnostics;
         auto built = load_workspace_snapshot(
             selection, context.initial_config, load_diagnostics);
@@ -467,6 +460,9 @@ namespace fsim::app::tcl_detail {
                 context, interpreter, "fsim snapshot load failed");
         }
         reset_session(context);
+        if (context.references) {
+            context.references->snapshot_load_completed(true);
+        }
         context.invocation.snapshot = std::move(selection.snapshot);
         context.config = context.initial_config;
         context.built = std::move(*built);
@@ -531,6 +527,22 @@ namespace fsim::app::tcl_detail {
         dict_put(interpreter, result, "mapped_libraries", mapped_libraries);
         Tcl_SetObjResult(interpreter, result);
         return TCL_OK;
+    }
+
+    int load_command(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        if (argument_count < 1 || argument_count > 2) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments, "?SNAPSHOT?");
+            return TCL_ERROR;
+        }
+        return reload_snapshot(context, interpreter,
+            argument_count == 2
+                ? std::string_view { Tcl_GetString(arguments[1]) }
+                : std::string_view { context.invocation.snapshot });
     }
 
     int signals_command(

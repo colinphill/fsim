@@ -158,8 +158,10 @@ set workspace [fsim::workspace]
 if {[file normalize [dict get $workspace directory]] ne [file normalize [pwd]]} {
   error "workspace is not the current directory"
 }
-if {[dict get $workspace managed_directory] ne [file join [pwd] .fsim]} {
-  error "bad managed directory"
+set managed_directory [file normalize [dict get $workspace managed_directory]]
+set expected_directory [file normalize [file join [pwd] .fsim]]
+if {$managed_directory ne $expected_directory} {
+  error "bad managed directory: $managed_directory != $expected_directory"
 }
 set libraries [dict get $workspace libraries]
 if {[llength $libraries] != 1 || [dict get [lindex $libraries 0] library] ne "work"} {
@@ -169,7 +171,8 @@ foreach removed {::fsim::project ::fsim::check ::fsim::build} {
   if {[llength [info commands $removed]] != 0} {error "old project command remains: $removed"}
 }
 puts "workspace-description-ok"
-)tcl" }, input, output, error);
+)tcl" },
+            input, output, error);
         if (result != 0) {
             std::cerr << error.str();
         }
@@ -199,7 +202,13 @@ puts "workspace-description-ok"
         std::ostringstream output;
         std::ostringstream error;
         const int result = run_cli(
-            { "fsim", "tcl", "--snapshot", "older-verilog", "-c", R"tcl(
+            {
+                "fsim",
+                "tcl",
+                "--snapshot",
+                "older-verilog",
+                "-c",
+                R"tcl(
 set provenance [fsim::provenance]
 if {[llength $provenance] != 1} {error "bad provenance count"}
 set owner [lindex $provenance 0]
@@ -218,8 +227,10 @@ if {[dict get $owner path] ne "older_verilog" ||
 set selected [fsim::provenance older_verilog]
 if {$selected ne $provenance} {error "provenance selection mismatch"}
 set debug_provenance [fsim::debug provenance older_verilog]
-if {[string first "work:older_verilog" $debug_provenance] < 0 ||
-    [string first "verilog-2001-noconfig" $debug_provenance] < 0} {
+if {$debug_provenance ne $selected ||
+    [dict get [lindex $debug_provenance 0] library] ne "work" ||
+    [dict get [lindex $debug_provenance 0] unit] ne "older_verilog" ||
+    [dict get [lindex $debug_provenance 0] standard] ne "verilog-2001-noconfig"} {
   error "bad debugger provenance: $debug_provenance"
 }
 puts "verilog-standard-profiles-ok"
@@ -296,7 +307,8 @@ if {[dict get $provenance library] ne "work" ||
     [dict get $provenance unit] ne "display"} {
   error "bad mapped unit provenance"
 }
-)tcl" }, input, output, error);
+)tcl" },
+            input, output, error);
         if (result != 0) {
             std::cerr << error.str();
         }
@@ -347,8 +359,8 @@ if {[dict get $provenance library] ne "work" ||
         std::ostringstream error;
         const int result = run_cli({ "fsim", "tcl" }, input, output, error);
         assert(result == 0);
-        assert(output.str().find("(fsim:tcl) ") != std::string::npos);
-        assert(output.str().find("... ") != std::string::npos);
+        assert(output.str().find("(fsim:tcl) ") == std::string::npos);
+        assert(output.str().find("... ") == std::string::npos);
         assert(output.str().find("hello from Tcl") != std::string::npos);
         assert(error.str().empty());
     }
@@ -484,7 +496,7 @@ set final [fsim::run]
 if {[dict get $final time] != 2} {error "bad final time"}
 if {[dict get [fsim::status] state] ne "finished"} {error "not finished"}
 if {[fsim::stop] ne "stop_requested"} {error "stop request failed"}
-if {![catch {fsim::debug where} mode_error]} {
+if {![catch {fsim::debug status} mode_error]} {
   error "debug accepted a compiled-mode session"
 }
 if {[string first "different execution mode" $mode_error] < 0} {
@@ -515,18 +527,20 @@ puts "control-ok"
     }
     {
         const std::string debug_script = R"FSIM_TCL(
-set where [fsim::debug where]
-if {![string match "time 0, delta 0, scope tb" $where]} {
-  error "bad initial location: $where"
+set initial [fsim::debug status]
+if {[dict get $initial time] != 0 || [dict get $initial delta] != 0 ||
+    [dict get $initial scope] ne "tb" || [dict get $initial finished]} {
+  error "bad initial debugger status: $initial"
 }
-if {[fsim::debug scope] ne "tb"} {error "bad current scope"}
-set child_scopes [fsim::debug scopes]
-if {$child_scopes ne "tb.process_0"} {
-  error "bad child scopes: $child_scopes"
+set selected_scope [fsim::debug scope]
+if {[dict get $selected_scope path] ne "tb" ||
+    [dict get $selected_scope children] ne "tb.process_0"} {
+  error "bad selected debugger scope: $selected_scope"
 }
-set initial_signals [fsim::debug signals]
-if {![string match "*tb.q = *" $initial_signals]} {
-  error "missing debug signal: $initial_signals"
+set initial_signal [fsim::debug inspect tb.q]
+if {[dict get $initial_signal kind] ne "signal" ||
+    [dict get $initial_signal path] ne "tb.q"} {
+  error "missing structured debug signal: $initial_signal"
 }
 if {[fsim::trace list] ne "tb.q\ntb.wide"} {error "bad initial trace list"}
 if {[fsim::trace clear] ne "cleared trace selection"} {
@@ -552,10 +566,15 @@ if {$trace_status_first ne $trace_status_second ||
         $trace_status_first]} {
   error "trace status is not stable: $trace_status_first / $trace_status_second"
 }
-set debugger_trace_report [fsim::debug trace report]
-if {![string match "output output=* identity=*" $debugger_trace_report] ||
-    [string first "lifecycle lifecycle=configured identity=" \
-        $debugger_trace_report] < 0} {
+set debugger_trace_report [fsim::trace report]
+set output_report [lindex $debugger_trace_report 0]
+set lifecycle_report [lindex $debugger_trace_report end]
+if {[dict get $output_report kind] ne "output" ||
+    [dict get $output_report name] ne "output" ||
+    [string length [dict get $output_report identity]] != 64 ||
+    [dict get $lifecycle_report kind] ne "lifecycle" ||
+    [dict get $lifecycle_report value] ne "configured" ||
+    [string length [dict get $lifecycle_report identity]] != 64} {
   error "bad debugger trace report: $debugger_trace_report"
 }
 if {[fsim::trace flush] ne "trace flushed"} {
@@ -565,53 +584,65 @@ if {![catch {fsim::trace close} early_close_error] ||
     [string first "finished simulation" $early_close_error] < 0} {
   error "debugger trace closed before simulation completion"
 }
-fsim::debug deposit tb.q 0
-if {[fsim::debug show tb.q] ne "tb.q = 0"} {
+fsim::deposit tb.q 0
+if {[fsim::read tb.q] ne "0"} {
   error "debug deposit failed"
 }
-fsim::debug force tb.q 1
-if {[fsim::debug show tb.q] ne "tb.q = 1 (forced)"} {
+fsim::force tb.q 1
+if {[fsim::read tb.q] ne "1"} {
   error "debug force failed"
 }
-fsim::debug release tb.q
-if {[fsim::debug show tb.q] ne "tb.q = 0"} {
+fsim::release tb.q
+if {[fsim::read tb.q] ne "0"} {
   error "debug release failed"
 }
-if {![string match "breakpoint 1 set at time 1*" \
-          [fsim::debug break time 1ns]]} {
+set time_breakpoint [fsim::debug break add time 1ns]
+if {[dict get $time_breakpoint id] != 1 ||
+    [dict get $time_breakpoint kind] ne "time" ||
+    [dict get $time_breakpoint time] != 1} {
   error "time breakpoint failed"
 }
-if {![string match "breakpoint 2 set at *control.sv:4" \
-          [fsim::debug break source control.sv:4]]} {
+set source_breakpoint [fsim::debug break add source control.sv:4]
+if {[dict get $source_breakpoint id] != 2 ||
+    [dict get $source_breakpoint kind] ne "source" ||
+    [dict get $source_breakpoint path] ne "control.sv" ||
+    [dict get $source_breakpoint line] != 4} {
   error "source breakpoint failed"
 }
-if {[fsim::debug break signal tb.q == 1] ne \
-        "breakpoint 3 set on tb.q == 1"} {
+set signal_breakpoint [fsim::debug break add signal tb.q == 1]
+if {[dict get $signal_breakpoint id] != 3 ||
+    [dict get $signal_breakpoint kind] ne "signal" ||
+    [dict get $signal_breakpoint path] ne "tb.q" ||
+    [dict get $signal_breakpoint comparison] ne "==" ||
+    [dict get $signal_breakpoint value] ne "1"} {
   error "signal breakpoint failed"
 }
-set breakpoints [fsim::debug breakpoints]
-foreach expected {"1: time 1 ticks" "2: source control.sv:4" \
-                  "3: signal tb.q == 1"} {
-  if {[string first $expected $breakpoints] < 0} {
-    error "missing breakpoint: $expected"
-  }
+set breakpoints [fsim::debug break list]
+if {[llength $breakpoints] != 3 ||
+    [dict get [lindex $breakpoints 0] id] != 1 ||
+    [dict get [lindex $breakpoints 1] path] ne "control.sv" ||
+    [dict get [lindex $breakpoints 2] value] ne "1"} {
+  error "structured breakpoint list is incomplete: $breakpoints"
 }
-if {[fsim::debug delete 2] ne "deleted breakpoint 2"} {
+set remaining_breakpoints [fsim::debug break delete 2]
+if {[llength $remaining_breakpoints] != 2 ||
+    [dict get [lindex $remaining_breakpoints 0] id] != 1 ||
+    [dict get [lindex $remaining_breakpoints 1] id] != 3} {
   error "breakpoint deletion failed"
 }
-if {[fsim::debug clear] ne "cleared all breakpoints"} {
+if {[llength [fsim::debug break clear]] != 0} {
   error "breakpoint clear failed"
 }
-if {[fsim::debug breakpoints] ne "no breakpoints"} {
+if {[llength [fsim::debug break list]] != 0} {
   error "breakpoints were not cleared"
 }
-set relative [fsim::debug run 1ns]
-if {[string first "stopped at time 1" $relative] < 0} {
-  error "relative debug run failed: $relative"
+set relative [fsim::debug continue 1ns]
+if {[dict get $relative time] != 1 || [dict get $relative finished]} {
+  error "relative debugger continue failed: $relative"
 }
-set absolute [fsim::debug run-until 2ns]
-if {[string first "simulation finished at time 2" $absolute] < 0} {
-  error "absolute debug run failed: $absolute"
+set absolute [fsim::debug continue 1ns]
+if {[dict get $absolute time] != 2 || ![dict get $absolute finished]} {
+  error "bounded debugger continue failed: $absolute"
 }
 set completed_trace_status [fsim::trace status]
 if {[dict get $completed_trace_status lifecycle] ne "complete" ||
@@ -626,21 +657,28 @@ if {[fsim::trace close] ne "trace complete"} {
 # Reloading starts a fresh debugger session for step coverage.
 fsim::load
 set statement [fsim::debug step statement]
-if {[string first "process tb." $statement] < 0} {
-  error "statement step failed: $statement"
+if {[dict get $statement time] != 0 || ![dict exists $statement stop_reason]} {
+  error "statement step did not return structured status: $statement"
 }
-set locals [fsim::debug locals]
-if {$locals ne "(no locals)"} {error "bad locals result: $locals"}
+set frames [fsim::debug frames]
+if {[llength $frames] != 1} {error "bad debugger frame list: $frames"}
+set frame [fsim::debug frame]
+if {[dict get $frame scope] ne "tb.process_0" ||
+    [dict get $frame process] ne [dict get $frame scope] ||
+    [dict get $frame point_kind] eq "" ||
+    [llength [dict get $frame locals]] != 0} {
+  error "bad structured debugger frame: $frame"
+}
 set process [fsim::debug step process]
-if {[string first "stopped at time 0" $process] < 0} {
+if {[dict get $process time] != 0} {
   error "process step failed: $process"
 }
 set delta [fsim::debug step delta]
-if {[string first "stopped at time 0" $delta] < 0} {
+if {[dict get $delta time] != 0} {
   error "delta step failed: $delta"
 }
 set time [fsim::debug step time]
-if {[string first "time 1" $time] < 0} {
+if {[dict get $time time] != 1} {
   error "time step failed: $time"
 }
 puts "debug-control-ok"
@@ -954,15 +992,14 @@ proc stop_debug_at_one {time delta phase} {
   }
 }
 fsim::on safe_point stop_debug_at_one
-set stopped [fsim::debug run]
-if {[string first "stopped at time 1" $stopped] < 0 ||
+set stopped [fsim::debug continue]
+if {[dict get $stopped time] != 1 || [dict get $stopped finished] ||
     $::debug_safe_points == 0} {
   error "debugger replaced the Tcl safe-point callback: $stopped"
 }
 fsim::off safe_point
-set finished [fsim::debug run]
-if {[string first "simulation finished" $finished] < 0 ||
-    [string first "time 2" $finished] < 0} {
+set finished [fsim::debug continue]
+if {[dict get $finished time] != 2 || ![dict get $finished finished]} {
   error "debugger did not resume after callback stop: $finished"
 }
 puts "debug-callback-ok"

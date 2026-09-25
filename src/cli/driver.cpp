@@ -9,6 +9,8 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -18,6 +20,12 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fsim::cli {
 namespace {
@@ -587,8 +595,8 @@ namespace {
             << "  compile FILE...        Compile sources into a workspace library\n"
             << "  elaborate TOP...       Elaborate library units into a snapshot\n"
             << "  simulate               Simulate a workspace snapshot\n"
-            << "  debug                  Debug a workspace snapshot interactively\n"
-            << "  tcl                    Open a snapshot in Tcl or evaluate a script\n"
+            << "  debug                  Open the Tcl debugger on a workspace snapshot\n"
+            << "  tcl                    Open the Tcl console or evaluate a script\n"
             << "  systemc compile FILE... Compile SystemC translation units into a library\n"
             << "  systemc link           Link the managed SystemC library objects\n"
             << "  library map NAME DIR   Persist an external library mapping\n"
@@ -666,6 +674,7 @@ namespace {
             << "                           Auto-consume matching forced-all AOT receipts\n"
             << "      --seed COUNT|random\n"
             << "      --diagnostics text|json\n"
+            << "      --color auto|always|never\n"
             << "\n"
             << "Coverage options:\n"
             << "  -o, --output PATH        Coverage merge database or report output\n"
@@ -678,7 +687,7 @@ namespace {
             << "Tcl options:\n"
             << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
             << "  SCRIPT [ARG...]         Evaluate a Tcl file with argv/argc set\n"
-            << "                          Omit both forms for interactive Tcl\n"
+            << "                          Available with tcl or debug; omit both for the Tcl console\n"
             << "  -h, --help\n"
             << "      --version\n";
     }
@@ -686,13 +695,35 @@ namespace {
     void print_diagnostics(
         std::ostream& error,
         const diagnostic::Engine& diagnostics,
-        const DiagnosticFormat format)
+        const DiagnosticFormat format,
+        const diagnostic::ColorMode color_mode,
+        const bool error_is_terminal,
+        const bool no_color)
     {
         if (format == DiagnosticFormat::json) {
             diagnostic::print_json(error, diagnostics);
         } else {
-            diagnostic::print_text(error, diagnostics);
+            diagnostic::print_text(
+                error,
+                diagnostics,
+                diagnostic::color_enabled(
+                    color_mode, error_is_terminal, no_color));
         }
+    }
+
+    bool standard_error_is_terminal() noexcept
+    {
+#if defined(_WIN32)
+        return _isatty(_fileno(stderr)) != 0;
+#else
+        return ::isatty(STDERR_FILENO) != 0;
+#endif
+    }
+
+    bool no_color_requested() noexcept
+    {
+        const char* value = std::getenv("NO_COLOR");
+        return value != nullptr && value[0] != '\0';
     }
 
     const Handler* select_handler(const Services& services, const Command command)
@@ -751,6 +782,9 @@ namespace {
                 continue;
             }
             const std::string_view argument { argv[index] };
+            if (argument == "--") {
+                break;
+            }
             std::string_view value;
             if (argument.starts_with("--diagnostics=")) {
                 value = argument.substr(std::string_view { "--diagnostics=" }.size());
@@ -768,6 +802,187 @@ namespace {
             }
         }
         return result;
+    }
+
+    diagnostic::ColorMode requested_color_mode(
+        const int argc,
+        const char* const* argv) noexcept
+    {
+        auto result = diagnostic::ColorMode::automatic;
+        if (argc <= 1 || argv == nullptr) {
+            return result;
+        }
+        for (int index = 1; index < argc; ++index) {
+            if (argv[index] == nullptr) {
+                continue;
+            }
+            const std::string_view argument { argv[index] };
+            if (argument == "--") {
+                break;
+            }
+            std::string_view value;
+            if (argument.starts_with("--color=")) {
+                value = argument.substr(std::string_view { "--color=" }.size());
+            } else if (
+                argument == "--color" && index + 1 < argc
+                && argv[index + 1] != nullptr) {
+                value = argv[++index];
+            } else {
+                continue;
+            }
+            if (value == "always") {
+                result = diagnostic::ColorMode::always;
+            } else if (value == "never") {
+                result = diagnostic::ColorMode::never;
+            } else if (value == "auto") {
+                result = diagnostic::ColorMode::automatic;
+            }
+        }
+        return result;
+    }
+
+    enum class OptionScan {
+        unrecognized,
+        flag,
+        separate_value,
+        inline_value,
+    };
+
+    OptionScan scan_cli_option(const std::string_view argument) noexcept
+    {
+        static constexpr std::string_view value_options[] = {
+            "--snapshot",
+            "--verbosity",
+            "--top",
+            "--lang",
+            "--standard",
+            "--compatibility",
+            "--uvm-release",
+            "--compilation-unit",
+            "--library",
+            "--search-library",
+            "-o",
+            "--output",
+            "--compiler",
+            "--compile-option",
+            "--link-option",
+            "--link-library",
+            "--cache",
+            "--aot-scope",
+            "--compiled-processes",
+            "--file-root",
+            "-I",
+            "--include",
+            "-D",
+            "--define",
+            "-O",
+            "--optimization",
+            "-j",
+            "--jobs",
+            "--format",
+            "--threshold",
+            "--duration",
+            "--max-deltas",
+            "--delay-mode",
+            "--sdf",
+            "--sdf-root",
+            "--sdf-cell",
+            "--sdf-report-limit",
+            "--trace",
+            "--trace-output",
+            "--trace-format",
+            "--trace-compression",
+            "--trace-filter",
+            "--trace-select",
+            "--trace-lifecycle",
+            "--engine",
+            "--seed",
+            "--diagnostics",
+            "--color",
+            "-c",
+            "--command",
+        };
+        for (const auto option : value_options) {
+            if (argument == option) {
+                return OptionScan::separate_value;
+            }
+            if (option.starts_with("--")
+                && argument.size() > option.size()
+                && argument.starts_with(option)
+                && argument[option.size()] == '=') {
+                return OptionScan::inline_value;
+            }
+        }
+
+        static constexpr std::string_view flags[] = {
+            "-h",
+            "--help",
+            "--version",
+            "-q",
+            "--quiet",
+            "-v",
+            "--verbose",
+            "--aot",
+            "--no-aot",
+            "--code-coverage",
+            "--partial",
+        };
+        for (const auto flag : flags) {
+            if (argument == flag) {
+                return OptionScan::flag;
+            }
+        }
+
+        if ((argument.starts_with("-I") && argument.size() > 2)
+            || (argument.starts_with("-D") && argument.size() > 2)
+            || (argument.starts_with("-j") && argument.size() > 2)
+            || (argument.starts_with("-O") && argument.size() == 3)) {
+            return OptionScan::inline_value;
+        }
+        return OptionScan::unrecognized;
+    }
+
+    std::optional<Command> entry_command_for_color_policy(
+        const int argc,
+        const char* const* argv) noexcept
+    {
+        if (argc <= 1 || argv == nullptr) {
+            return std::nullopt;
+        }
+
+        bool positional_only = false;
+        for (int index = 1; index < argc; ++index) {
+            if (argv[index] == nullptr) {
+                return std::nullopt;
+            }
+            const std::string_view argument { argv[index] };
+            if (!positional_only && argument == "--") {
+                positional_only = true;
+                continue;
+            }
+            if (!positional_only && argument.starts_with('-')) {
+                switch (scan_cli_option(argument)) {
+                case OptionScan::separate_value:
+                    if (index + 1 >= argc || argv[index + 1] == nullptr) {
+                        return std::nullopt;
+                    }
+                    ++index;
+                    continue;
+                case OptionScan::flag:
+                case OptionScan::inline_value:
+                    continue;
+                case OptionScan::unrecognized:
+                    return std::nullopt;
+                }
+            }
+
+            const auto command = parse_command(argument);
+            if (command == Command::tcl || command == Command::debug) {
+                return command;
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
     }
 
 } // namespace
@@ -1324,6 +1539,23 @@ std::optional<Invocation> parse_arguments(
                     argument_error(diagnostics, "diagnostics must be 'text' or 'json'");
                     return std::nullopt;
                 }
+            } else if (is_option(argument, "", "--color")) {
+                const auto value
+                    = take_value(index, argc, argv, argument, "--color", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                if (*value == "auto") {
+                    invocation.color_mode = diagnostic::ColorMode::automatic;
+                } else if (*value == "always") {
+                    invocation.color_mode = diagnostic::ColorMode::always;
+                } else if (*value == "never") {
+                    invocation.color_mode = diagnostic::ColorMode::never;
+                } else {
+                    argument_error(diagnostics,
+                        "color must be 'auto', 'always', or 'never'");
+                    return std::nullopt;
+                }
             } else if (is_option(argument, "-c", "--command")) {
                 const auto value = take_value(index, argc, argv, argument, "--command", diagnostics);
                 if (!value.has_value()) {
@@ -1449,7 +1681,8 @@ std::optional<Invocation> parse_arguments(
             }
         } else if (invocation.command == Command::elaborate) {
             invocation.tops.push_back(parse_top_option(argument));
-        } else if (invocation.command == Command::tcl) {
+        } else if (invocation.command == Command::tcl
+            || invocation.command == Command::debug) {
             if (!invocation.tcl_script.has_value()) {
                 invocation.tcl_script = fsim::support::path_from_utf8(argument);
             } else {
@@ -1680,8 +1913,9 @@ std::optional<Invocation> parse_arguments(
         return std::nullopt;
     }
     if (invocation.command != Command::tcl
+        && invocation.command != Command::debug
         && !invocation.tcl_commands.empty()) {
-        argument_error(diagnostics, "--command requires tcl");
+        argument_error(diagnostics, "--command requires tcl or debug");
         return std::nullopt;
     }
     if (invocation.tcl_script && !invocation.tcl_commands.empty()) {
@@ -1837,6 +2071,99 @@ std::optional<Invocation> parse_arguments(
     return invocation;
 }
 
+namespace {
+
+    int run_impl(
+        const int argc,
+        const char* const* argv,
+        const Services& services,
+        std::ostream& output,
+        std::ostream& error,
+        const bool error_is_terminal)
+    {
+        diagnostic::Engine diagnostics;
+        const auto requested_format = requested_diagnostic_format(argc, argv);
+        const auto requested_color = requested_color_mode(argc, argv);
+        auto diagnostic_color = requested_color;
+        if (!error_is_terminal) {
+            const auto entry_command
+                = entry_command_for_color_policy(argc, argv);
+            if (entry_command == Command::tcl
+                || entry_command == Command::debug) {
+                diagnostic_color = diagnostic::ColorMode::never;
+            }
+        }
+        const bool no_color = no_color_requested();
+        try {
+            auto invocation = parse_arguments(argc, argv, diagnostics);
+            if (!invocation.has_value()) {
+                print_diagnostics(error, diagnostics, requested_format,
+                    diagnostic_color, error_is_terminal, no_color);
+                return kUsageError;
+            }
+            if (!error_is_terminal
+                && (invocation->command == Command::tcl
+                    || invocation->command == Command::debug)) {
+                diagnostic_color = diagnostic::ColorMode::never;
+            }
+            invocation->color_mode = diagnostic_color;
+            if (invocation->version) {
+                output << "fsim " << fsim::version << " (C API "
+                       << FSIM_API_VERSION << ")\n";
+                return kSuccess;
+            }
+            if (invocation->help) {
+                print_help(output, invocation->program_name);
+                return kSuccess;
+            }
+            std::optional<project::Config> config;
+            if (invocation->command == Command::compile
+                || invocation->command == Command::check
+                || invocation->command == Command::systemc_compile) {
+                config = make_direct_config(*invocation, diagnostics);
+            } else {
+                config = make_workspace_config(*invocation, diagnostics);
+            }
+            if (config.has_value()) {
+                apply_overrides(*invocation, *config);
+            }
+            if (!config.has_value() || diagnostics.has_error()) {
+                print_diagnostics(error, diagnostics, invocation->diagnostic_format,
+                    invocation->color_mode, error_is_terminal, no_color);
+                return kUserError;
+            }
+
+            const Handler* handler = select_handler(services, invocation->command);
+            if (handler == nullptr || !*handler) {
+                diagnostics.error(
+                    "FSIM-CLI-0002",
+                    "command '" + std::string(command_name(invocation->command)) + "' is not connected to a simulation engine in this build");
+                print_diagnostics(error, diagnostics, invocation->diagnostic_format,
+                    invocation->color_mode, error_is_terminal, no_color);
+                return kUnavailable;
+            }
+
+            const int result = (*handler)(*invocation, *config, diagnostics, output, error);
+            if (!diagnostics.empty()) {
+                print_diagnostics(error, diagnostics, invocation->diagnostic_format,
+                    invocation->color_mode, error_is_terminal, no_color);
+            }
+            return result;
+        } catch (const std::exception& exception) {
+            diagnostics.error(
+                "FSIM-CLI-0003",
+                "unhandled command failure: " + std::string { exception.what() });
+        } catch (...) {
+            diagnostics.error(
+                "FSIM-CLI-0003", "unhandled unknown command failure");
+        }
+        print_diagnostics(error, diagnostics, requested_format, diagnostic_color,
+            error_is_terminal, no_color);
+        return kUserError;
+    }
+
+} // namespace
+
 int run(
     const int argc,
     const char* const* argv,
@@ -1844,63 +2171,9 @@ int run(
     std::ostream& output,
     std::ostream& error)
 {
-    diagnostic::Engine diagnostics;
-    const auto requested_format = requested_diagnostic_format(argc, argv);
-    try {
-        auto invocation = parse_arguments(argc, argv, diagnostics);
-        if (!invocation.has_value()) {
-            print_diagnostics(error, diagnostics, requested_format);
-            return kUsageError;
-        }
-        if (invocation->version) {
-            output << "fsim " << fsim::version << " (C API "
-                   << FSIM_API_VERSION << ")\n";
-            return kSuccess;
-        }
-        if (invocation->help) {
-            print_help(output, invocation->program_name);
-            return kSuccess;
-        }
-        std::optional<project::Config> config;
-        if (invocation->command == Command::compile
-            || invocation->command == Command::check
-            || invocation->command == Command::systemc_compile) {
-            config = make_direct_config(*invocation, diagnostics);
-        } else {
-            config = make_workspace_config(*invocation, diagnostics);
-        }
-        if (config.has_value()) {
-            apply_overrides(*invocation, *config);
-        }
-        if (!config.has_value() || diagnostics.has_error()) {
-            print_diagnostics(error, diagnostics, invocation->diagnostic_format);
-            return kUserError;
-        }
-
-        const Handler* handler = select_handler(services, invocation->command);
-        if (handler == nullptr || !*handler) {
-            diagnostics.error(
-                "FSIM-CLI-0002",
-                "command '" + std::string(command_name(invocation->command)) + "' is not connected to a simulation engine in this build");
-            print_diagnostics(error, diagnostics, invocation->diagnostic_format);
-            return kUnavailable;
-        }
-
-        const int result = (*handler)(*invocation, *config, diagnostics, output, error);
-        if (!diagnostics.empty()) {
-            print_diagnostics(error, diagnostics, invocation->diagnostic_format);
-        }
-        return result;
-    } catch (const std::exception& exception) {
-        diagnostics.error(
-            "FSIM-CLI-0003",
-            "unhandled command failure: " + std::string { exception.what() });
-    } catch (...) {
-        diagnostics.error(
-            "FSIM-CLI-0003", "unhandled unknown command failure");
-    }
-    print_diagnostics(error, diagnostics, requested_format);
-    return kUserError;
+    // A caller-supplied stream has no portable terminal query. Treat it as
+    // redirected in automatic mode; --color always remains an explicit opt-in.
+    return run_impl(argc, argv, services, output, error, false);
 }
 
 int run(
@@ -1908,7 +2181,8 @@ int run(
     const char* const* argv,
     const Services& services)
 {
-    return run(argc, argv, services, std::cout, std::cerr);
+    return run_impl(
+        argc, argv, services, std::cout, std::cerr, standard_error_is_terminal());
 }
 
 } // namespace fsim::cli
