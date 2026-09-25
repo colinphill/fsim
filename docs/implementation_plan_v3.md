@@ -7859,7 +7859,7 @@ deleted providers require recompilation; existing snapshots remain usable.
     named/default snapshots, and source-free snapshot reload.
 19. **Complete.** Update current user guides, examples, package manifests, and substantive
     governance checks to describe and exercise workspace mode.
-20. **Local qualification complete; publication pending.** Run dependency-rescanned
+20. **Complete.** Run dependency-rescanned
     warnings-as-errors Release and its full suite,
     then Debug and its full suite; record evidence, commit, push, and hand off
     to Batch 189 without a release tag.
@@ -7976,9 +7976,12 @@ by 438/438 tests in 142.02 seconds (`/tmp/fsim-j-debug-configure-final.log`,
 `/tmp/fsim-j-debug-build-final.log`, `/tmp/fsim-j-debug-tests-final.log`).
 Both builds used LLVM/Clang 22.1.8 and twelve build workers, with 120-minute
 command timeouts and no clean prerequisite. `git diff --check` passed.
-Local correctness qualification is complete; commit/push and the closing
-handoff remain. Performance/harness migration, sanitizer reruns, and hosted
-monitoring retain their recorded deferrals. Batch 189 remains unstarted.
+Change 20 closed on 2026-09-25. Implementation commit `13b1f174` was pushed
+to `origin/codex/v3`; all twenty changes are complete. The clean resume
+records the qualification and handoff. Performance/harness migration,
+sanitizer reruns, and hosted monitoring retain their recorded deferrals.
+Batch 189 remains unstarted; the user has requested Tcl closure planning
+before further implementation.
 
 ##### Deferred Tcl object-model integration
 

@@ -5,10 +5,11 @@
 
 Read [implementation_plan_v3.md](implementation_plan_v3.md), then verify
 branch, HEAD, tracking ref, worktree, and active agents before acting.
-Batch 188J's implementation and local qualification are complete on
-`codex/v3`; publication is pending from base `c1ccaa0a`. The parent owns
-commit/push and the closing handoff. Plan Changes 1-19 are complete;
-Change 20 awaits publication. Batch 189 remains unstarted.
+Batch 188J is complete on `codex/v3`. Implementation commit `13b1f174`
+is published to `origin/codex/v3`, and all twenty plan changes are complete.
+The next work is the user's requested Tcl closure plan, including a rich
+Tcl console and removal of the non-Tcl interactive mode. Wait for the user's
+answers and explicit implementation approval. Batch 189 remains unstarted.
 
 The workspace is cwd. `.fsim/libraries/<name>` contains managed libraries
 (default `work`); `.fsim/libraries.toml` maps external libraries. SQLite
@@ -34,18 +35,19 @@ The plan records the Windows artifact-relocation failure in CI run
 repaired test passes locally; post-fix Windows execution remains unverified.
 Hosted monitoring and sanitizer reruns are not required again before
 Batch 190. Performance measurement and harness migration remain deferred.
-The plan also records the requested future Tcl object-model work and its
-acceptance criteria. These deferrals do not expand this closure.
+The plan's Tcl object-model gap list is the basis of the requested follow-on
+plan. Its implementation has not been authorized to start.
 
 ## Guardrails
 
 Preserve user-owned untracked `phase.fst` and `scripts/__pycache__/`; do not
 clean, reset, stage, or package them. Keep the frozen corrected baseline and
-external design sources read-only. Use up to six `gpt-6-luna` workers with
-`max` reasoning, explicitly selected on every launch, including nested
-workers. Existing worker roles are `workspace_*_luna`; earlier inherited-model
-workers were stopped. Use at least twelve local build workers and 120-minute
+external design sources read-only. Tcl implementation is to use a
+`gpt-6-sol` orchestrator at `high` effort and up to six `gpt-6-luna` workers
+at `max` effort, explicitly selected on every launch, including nested
+workers. Earlier inherited-model workers were stopped. Use at least twelve local build workers and 120-minute
 qualification timeouts. Rescan CMake dependencies before closure builds;
 cleaning is optional. Avoid `shared_ptr::unique()`. Preserve table-local IDs,
 sorted-content artifact identity, the SystemC plugin C ABI, and public string
-lifetimes. The next batch is 189: parallel execution foundation and elaboration.
+lifetimes. Preserve the existing numeric batch sequence when inserting the
+Tcl closure work before Batch 189.
