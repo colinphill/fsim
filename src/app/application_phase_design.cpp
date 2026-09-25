@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_workspace_internal.hpp"
 #include "application_hierarchy_path_codec.hpp"
 #include "../systemc/producer_fingerprint.hpp"
 
@@ -1577,18 +1578,16 @@ struct AotReceipt {
 
 } // namespace
 
-int handle_elaborate(
+int elaborate_built_workspace(
     const cli::Invocation& invocation,
     const project::Config& config,
+    std::optional<BuiltProject> built,
     diagnostic::Engine& diagnostics,
-    std::ostream& output,
-    std::ostream&)
+    std::ostream& output)
 {
     if (!invocation.artifact_output) {
         return 1;
     }
-    auto built = build_objects(
-        config, invocation.objects, invocation.systemc_plugins, diagnostics);
     const auto root_count = built ? built->design.roots().size() : 0;
     if (!built || !publish_design_artifact(config, std::move(*built),
             *invocation.artifact_output, diagnostics)) {
@@ -1663,6 +1662,16 @@ int handle_elaborate(
         "portable design remains valid");
     return 1;
 #endif
+}
+
+int handle_elaborate(const cli::Invocation& invocation,
+    const project::Config& config, diagnostic::Engine& diagnostics,
+    std::ostream& output, std::ostream&)
+{
+    auto built = build_objects(config, invocation.objects,
+        invocation.systemc_plugins, diagnostics);
+    return elaborate_built_workspace(invocation, config, std::move(built),
+        diagnostics, output);
 }
 
 int handle_simulate(

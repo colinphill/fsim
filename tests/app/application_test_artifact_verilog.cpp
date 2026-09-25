@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "application_workflow_test_support.hpp"
 #include "governed_process_limits.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
@@ -86,7 +87,7 @@ endmodule
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(
+    assert(run_fixture_command(
                static_cast<int>(verilog_compile.size()), verilog_compile.data(),
                services, output, error)
         == 0);
@@ -123,7 +124,7 @@ endmodule
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(
+    assert(run_fixture_command(
                static_cast<int>(verilog_elaborate.size()), verilog_elaborate.data(),
                services, output, error)
         == 0);
@@ -163,7 +164,7 @@ endmodule
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(
+    assert(run_fixture_command(
                static_cast<int>(implicit_alias_elaborate.size()),
                implicit_alias_elaborate.data(), services, output, error)
         == 0);
@@ -321,7 +322,7 @@ endmodule
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(
+    assert(run_fixture_command(
                static_cast<int>(verilog_simulate.size()), verilog_simulate.data(),
                services, output, error)
         == 0);
@@ -398,7 +399,7 @@ endmodule
         };
         output.str({ });
         error.str({ });
-        assert(cli::run(
+        assert(run_fixture_command(
                    static_cast<int>(compile.size()), compile.data(), services,
                    output, error)
             == 0);
@@ -422,7 +423,7 @@ endmodule
         };
         output.str({ });
         error.str({ });
-        assert(cli::run(
+        assert(run_fixture_command(
                    8, mode_elaborate.data(), services, output, error)
             == 0);
         assert(error.str().empty());

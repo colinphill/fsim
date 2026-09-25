@@ -16,13 +16,13 @@ VHDL / Verilog / SystemVerilog / SystemC
        deterministic runtime, debugger, VCD/FST
 ```
 
-## Project status
+## Implementation status
 
-This repository is an **internal vertical slice**, not the fsim v1 release.
-It establishes the semantic and platform spine on which the full language
-implementations will be built.
+This branch contains the v3 implementation and the managed workspace interface.
+The language guides describe supported behavior; release records identify the
+configurations that have completed qualification.
 
-See the [v2 ABI and schema reference](docs/abi-schema-reference.md) for the
+See the [ABI and schema reference](docs/abi-schema-reference.md) for the
 current installed targets, public layouts and symbols, artifact formats,
 native-cache identity rules, rejection policy, and source rebuild workflows.
 
@@ -91,7 +91,7 @@ The current tree contains:
   reads/writes with exact declared-range mapping,
   explicit mixed-language wrapper enforcement, and interpreter/LLVM O0/O2,
   debugger, VCD, and cache equivalence;
-- architecture-local or project-package, non-nested VHDL record types with
+- architecture-local or library-package, non-nested VHDL record types with
   case-insensitive scalar/packed logic, bit, and Boolean elements;
   use-clause or selected-name visibility; reusable same-language entity ports;
   declaration-order flattened layouts; exact element defaults; whole-record
@@ -178,7 +178,7 @@ The current tree contains:
 - bounded Verilog-2005/SystemVerilog `$clog2` folding for nonnegative integral
   constant arguments in parameter/localparam defaults and specialized packed
   ranges, with zero and exact/non-power-of-two edge behavior;
-- Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
+- Verilog/SystemVerilog preprocessing with quoted/angle includes, CLI
   macros, object/function expansion with default arguments, multiline
   replacements, token concatenation/stringification, conditional compilation,
   source ancestry, `file`/`source-set`/`combined` state-sharing policies, and
@@ -326,7 +326,7 @@ The current tree contains:
   governed explicitly. UVM 2020.3.1 policy/copier/field-operation, long-integer
   packing, printer/comparer/packer/recorder, reporting, version, retained-
   compatibility, and removed-API differences are frozen independently;
-  explicit manifest/CLI release selection normalizes the complete difference
+  explicit CLI release selection normalizes the complete difference
   dispatch and retains release plus exact source identity through objects,
   native caches, designs, schema-2 checkpoints, and replay while rejecting
   mixed or mismatched state transactionally. An explicit project-owned core
@@ -474,7 +474,7 @@ The current tree contains:
   LLVM native-object reuse plus cold/warm/prune telemetry beneath the
   configured application cache;
 - buffered VCD output;
-- a schema-1 project-manifest loader and command-line driver;
+- managed workspace libraries, SQLite catalogs, snapshots, and a command-line driver;
 - an executable versioned C session API for build, hierarchy/value access,
   simulation control, and synchronous callbacks;
 - versioned SystemC plug-in ABI, dynamic-library loading, typed factory
@@ -610,8 +610,8 @@ command-prefix callbacks; callback failures stop the run and become catchable
 Tcl errors. Safe-point observers compose with debugger and interrupt control,
 so callback-driven stops also work during `fsim::debug` runs. Assertion
 callbacks receive process, severity, message, and source metadata while adding
-a structured diagnostic. `fsim::project load` transactionally replaces the
-manifest and resets any live, finished, or poisoned session, while
+a structured diagnostic. `fsim::workspace` queries the current workspace and
+`fsim::load ?SNAPSHOT?` selects a managed snapshot, while
 `fsim::trace configure|disable|status` controls the next debugger trace before
 simulation starts. Interactive and batch Python support is planned later,
 after the Tcl and native control contracts stabilize.
@@ -688,102 +688,104 @@ The [user and platform guide](docs/user-platform-guide.md) records the current
 release configuration matrix, resource budgets, cache and Windows recovery,
 migration policy, and failure-triage workflow.
 
-The primary interface is:
+The [workspace guide](docs/workspace-mode.md) describes the current interface.
+The current working directory is the workspace; `.fsim` owns its libraries,
+catalogs, snapshots, and caches. The default library is `work`.
 
 ```text
-fsim check
-fsim build
-fsim run
-fsim debug
-fsim tcl
-fsim compile
-fsim systemc compile
-fsim systemc link
-fsim elaborate
-fsim simulate
+fsim check FILE...
+fsim compile [--library NAME] FILE...
+fsim elaborate TOP... [--snapshot NAME]
+fsim simulate [--snapshot NAME]
+fsim debug [--snapshot NAME]
+fsim tcl [--snapshot NAME] [SCRIPT]
+fsim systemc compile [--library NAME] FILE...
+fsim systemc link [--library NAME]
+fsim library map NAME DIRECTORY
+fsim library list
+fsim library unmap NAME
+fsim library objects [NAME]
+fsim library delete-object NAME OBJECT_ID
+fsim library delete NAME
 ```
 
-For example:
-
-```sh
-build/dev/fsim check -p examples/vertical_slice/fsim.toml
-build/dev/fsim build -p examples/vertical_slice/fsim.toml
-build/dev/fsim run   -p examples/vertical_slice/fsim.toml
-build/dev/fsim debug -p examples/vertical_slice/fsim.toml
-build/dev/fsim tcl -c 'puts [fsim::version]'
-```
-
-Direct source files are also accepted:
+For example, from the repository root:
 
 ```sh
 build/dev/fsim check --lang systemverilog examples/vertical_slice/tb.sv
+build/dev/fsim compile --library work examples/vertical_slice/counter.vhd
+build/dev/fsim compile --library work \
+  examples/vertical_slice/tb.sv examples/vertical_slice/sv_child.sv
+build/dev/fsim elaborate work.tb
+build/dev/fsim simulate --trace vertical.vcd
+build/dev/fsim debug
+build/dev/fsim tcl -c 'puts [fsim::version]'
 ```
 
-Manifest-free, restartable artifact phases are available for portable HDL:
+Compilation assigns artifact names and records named units in
+`.fsim/libraries/work/library.sqlite3`. Recompiling a source replaces its
+published definitions; failed compilation preserves the previous library.
+Each primary HDL unit has its own managed artifact where practical, with
+package classes and supporting definitions retained with their owner.
+Already compiled packages can be used by later compilations without their
+original sources.
+
+Elaboration resolves tops from that metadata and replaces
+`.fsim/snapshots/default`. Use `--snapshot NAME` on elaborate and simulate to
+select another snapshot. Library-qualified tops such as `work.tb` usually
+suffice; a language qualifier such as `sv:work.tb` disambiguates a conflicting
+name. Several tops may be listed in one command. A snapshot remains usable
+after its sources or libraries are changed or removed.
+
+Elaboration can also prepare native code for a matching compiled simulation:
 
 ```sh
-fsim compile --lang systemverilog --standard 2017 --library work \
-  --output unit.fsimobj source.sv
-fsim elaborate --object unit.fsimobj --top top=sv:work.top \
-  --output design.fsimdesign
-fsim simulate --design design.fsimdesign --engine compiled \
-  --cache .fsim-native --file-root . --trace run.vcd
+fsim elaborate work.tb --snapshot fast --aot --aot-scope all
+fsim simulate --snapshot fast --engine compiled
 ```
 
-Elaboration can optionally populate the external native cache without changing
-the portable `.fsimdesign`. A forced-all AOT result is consumed automatically
-by a matching compiled simulation; no simulation-side switch is required:
-
-```sh
-fsim elaborate --object unit.fsimobj --top top=sv:work.top \
-  --output design.fsimdesign --aot --aot-scope all --cache .fsim-native
-fsim simulate --design design.fsimdesign --engine compiled \
-  --cache .fsim-native
-```
-
-`--compiled-processes selected` explicitly ignores that receipt, while
+`--compiled-processes selected` ignores the forced-all AOT receipt, while
 `--compiled-processes all` forces eager compilation when no receipt exists.
 If a cached object was pruned after forced-all AOT, simulation rebuilds it
-before time zero.
+before time zero. Generated caches default to `.fsim/cache`.
 
-SystemC translation units and their linked logical-library plug-in are equally
-explicit:
+SystemC uses the same managed libraries:
 
 ```sh
-fsim systemc compile --output bridge.fsimscobj bridge.cpp
-fsim systemc link --object bridge.fsimscobj --library models \
-  --output models.fsimscplugin
-fsim elaborate --object unit.fsimobj \
-  --systemc-plugin models.fsimscplugin --top top=sv:work.top \
-  --search-library models --output design.fsimdesign
+fsim systemc compile --library models bridge.cpp helper.cpp
+fsim systemc link --library models
+fsim elaborate work.tb --search-library models --snapshot mixed
+fsim simulate --snapshot mixed
 ```
 
-Each SystemC translation unit has its own dependency-complete compile cache;
-linking records the ordered object identities and exported factory schemas.
-Artifact directories are immutable and overwrite-safe. A design that selects
-a SystemC factory embeds the checksummed native plug-in and reconstructs its
-hierarchy during standalone simulation, so producer sources and intermediate
-objects are no longer needed. See the
-[non-project phase tutorial](examples/non_project_phases/README.md).
+Each SystemC translation unit has its own managed object. Linking uses the
+library's current objects and registers exported factory schemas. A snapshot
+that selects a factory embeds the native plugin, so producer sources and
+intermediate objects are no longer needed. See the
+[workspace phase tutorial](examples/non_project_phases/README.md).
 
-For Verilog/SystemVerilog source sets, `compilation_unit = "file"` resets
-macro and directive context for every listed file, `"source-set"` shares
-ordered context across that source set, and `"combined"` shares context across
-all combined source sets with the same language and standard. Combined sets
-retain their declared libraries; their include directories and manifest
-definitions are accumulated in source-set order. VHDL files remain independent
-analysis units.
+Use `--verbosity quiet|normal|verbose`, `-q`, or `-v` on compile, elaborate,
+SystemC, and library commands to choose progress detail. Diagnostics remain
+visible. Project-file discovery,
+`--project`, and the public `build`/`run` commands have been removed. Artifact
+filenames are no longer command arguments; coverage merge/report retain
+`--output` for their result files.
 
-`--diagnostics=json` selects structured diagnostics. Manifest values can be
-overridden with options such as `--top`, `--duration`, `--max-deltas`,
+For Verilog/SystemVerilog compilation, `--compilation-unit file` resets macro
+and directive context for each listed file. `source-set` shares ordered context
+within the invocation, and `combined` groups compatible inputs. Include
+directories and definitions are supplied with the compilation command. VHDL
+files remain independent analysis units.
+
+`--diagnostics=json` selects structured diagnostics. Elaboration and simulation
+accept their applicable controls such as `--duration`, `--max-deltas`,
 `--delay-mode`, `--trace`, `--seed`, `-O`, and `-j`. Parenthesized Verilog or
-SystemVerilog `min:typ:max` delays use schema-1
-`[run].delay_mode = "min" | "typ" | "max"`; `typ` is the deterministic
-default and `--delay-mode` overrides it. Continuous assignments accept one,
-two, or three delay values for rise, fall, and turnoff; each may be a triplet.
-Supported gates accept one or two. Selection precedes precision rounding and
-automatic resolution, and delayed continuous writes reject superseded pulses
-inertially while procedural delayed NBA remains transport.
+SystemVerilog `min:typ:max` delays use `--delay-mode min|typ|max`; `typ` is the
+default. Continuous assignments accept one, two, or three delay values for
+rise, fall, and turnoff; each may be a triplet. Supported gates accept one or
+two. Selection precedes precision rounding and automatic resolution, and
+delayed continuous writes reject superseded pulses inertially while procedural
+delayed NBA remains transport.
 Blocking and nonblocking procedural assignments also accept bounded
 intra-assignment delay or event controls. Blocking delays capture before
 suspending, event controls evaluate after waking, and NBAs publish in
@@ -791,41 +793,27 @@ deterministic source/stable-process order with last-assignment behavior for
 overlapping whole and packed-slice targets.
 One-element VHDL signal waveforms accept implicit or explicit inertial,
 transport, and optional `reject TIME inertial`. Rejection limits and waveform
-delays normalize exactly to project ticks; the runtime edits projected
+delays normalize exactly to simulation ticks; the runtime edits projected
 transactions independently for every packed scalar subelement.
 
-Schema 2 also accepts an ordered set of aliased simulation roots. Every root
-shares one scheduler, time domain, library/package index, trace, debugger, and
-native session, but retains its own instance-local state:
+Multiple tops share one scheduler, time domain, library/package index, trace,
+debugger, and native session, while retaining their own instance-local state:
 
-```toml
-[project]
-name = "device-with-global-signals"
-time_resolution = "1ns"
-
-[[project.top]]
-target = "sv:work.device_tb"
-alias = "dut"
-
-[[project.top]]
-target = "sv:vendor.glbl"
-alias = "glbl"
+```sh
+fsim elaborate dut=work.device_tb glbl=vendor.glbl --snapshot full
+fsim simulate --snapshot full
 ```
 
-The equivalent command-line replacement is `--top dut=device_tb --top
-glbl=vendor.glbl`. When more than one `--top` is present, every occurrence
-must have a unique portable alias. A single legacy `[project].top` or one
-unaliased `--top NAME` remains supported. SystemVerilog roots may read or drive
-another root's packed root-level signal through its ordinary top-level
-hierarchical name, such as `glbl.GSR`; deeper descendant shortcuts are
-rejected and should be surfaced through a root port or signal. Trace filters,
-debugger paths, Tcl hierarchy values, and C API lookup use the selected aliases
-as their first path component.
+Aliases default to each top's final name; use unique `ALIAS=TOP` names when
+those would collide. SystemVerilog roots may read or drive another root's
+packed root-level signal through its hierarchical name, such as `glbl.GSR`.
+Deeper descendant shortcuts should be surfaced through a root port or signal.
+Trace filters, debugger paths, Tcl hierarchy values, and C API lookup use the
+selected aliases as their first path component.
 
-Random facilities use deterministic per-process streams and default to project
-seed `1`. A numeric `seed`/`--seed` value reproduces a run. Explicit
-`--seed=random` selects host entropy once and prints the effective numeric seed
-so it can be reused.
+Random facilities use deterministic per-process streams and default to seed
+`1`. A numeric `--seed` value reproduces a run. Explicit `--seed=random`
+selects host entropy once and prints the effective numeric seed for reuse.
 
 The current debugger supports relative or absolute time runs,
 statement/process/delta/time stepping, source/time/signal-change breakpoints,
@@ -845,7 +833,7 @@ names by `locals` through interpreter or compiled frames. A design
 `$finish` is terminal for that simulation; a debugger or Ctrl-C stop remains
 resumable, while a fatal runtime error poisons the simulation and prevents
 further execution. The CLI installs its SIGINT handler only for the active
-run/debug command and restores the host's previous handler on exit.
+simulate/debug command and restores the host's previous handler on exit.
 
 The native C session API also exposes tested statement/process/delta/time
 stepping and an asynchronous stop request that may be issued from a synchronous
@@ -856,8 +844,8 @@ blocks that have never executed report unavailable in both interpreter and
 compiled modes. A terminal HDL stop takes precedence when it coincides with an
 external step/stop request, so a finished design is never reported resumable.
 
-With LLVM enabled, `fsim build` compiles eligible processes and `fsim run`
-uses a hybrid engine. Native word operations execute through LLVM at the
+With LLVM enabled, `fsim simulate --engine compiled` uses a hybrid engine.
+Native word operations execute through LLVM at the
 selected O0/O2 setting—O2 by default—while typed capability misses fall back
 per process to the reference evaluator under the same deterministic kernel.
 Validated service operations can own arbitrary-width values without narrowing:
@@ -876,7 +864,7 @@ Logic9 callbacks and caller-owned frame planes so aggregate calling
 conventions never cross the compiler boundary; generated code size-gates
 those fields per process before use. The configured
 cache stores one native object per compiled specialization module under
-`llvm-native`; `fsim build` reports compiled process/module counts and native
+`llvm-native`; compiled simulation reports process/module counts and native
 cache hits, misses, stores, rejected entries, and maintenance failures. The
 LLVM adapter performs best-effort startup pruning with defaults of 10 GiB,
 10,000 entries, and 30 days; successful hits refresh entry recency, live
@@ -948,19 +936,19 @@ post-push hosted rows; no Linux result substitutes for it.
 
 The [three-language hierarchy tutorial](examples/three_language_hierarchy/README.md)
 builds on that slice with a SystemVerilog top, a SystemC factory and method,
-and a VHDL child in one recursive hierarchy. It includes executable check,
-build, run, VCD/FST, hierarchy-navigation, breakpoint, and trace-selection
-steps. VCD remains the default; the sibling FST manifest records the same
-canonical mixed-language declarations and events with deterministic portable
-compression.
+and a VHDL child in one recursive hierarchy. It includes compile, elaborate,
+simulate, VCD/FST, hierarchy-navigation, breakpoint, and trace-selection steps.
+The trace filename extension or `--trace-format` selects VCD or FST with the
+same canonical mixed-language declarations and events.
 
 ## Design documents
 
 - [Architecture](docs/architecture.md)
-- [v1 resume handoff](docs/v1-resume.md)
-- [Implementation plan and progress](docs/implementation-plan.md)
+- [Current resume handoff](docs/v3-resume.md)
+- [Implementation plan and progress](docs/implementation_plan_v3.md)
 - [Deterministic cross-language semantics](docs/cross-language-semantics.md)
 - [Diagnostic code catalog](docs/diagnostics.md)
+- [Managed workspaces, libraries, and snapshots](docs/workspace-mode.md)
 - [User, platform, migration, and troubleshooting guide](docs/user-platform-guide.md)
 - [Release evidence and post-v2 boundary](docs/release-and-post-v2.md)
 - [v2.0.0 release notes](docs/changelog-v2.md)

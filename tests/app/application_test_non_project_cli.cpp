@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "application_test_support.hpp"
+#include "application_workflow_test_support.hpp"
 #include "../../src/app/application_hierarchy_path_codec.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -367,7 +368,7 @@ void ApplicationTestFixture::test_non_project_cli()
     const auto consumer_cache_text = fsim::support::path_to_utf8(consumer_cache);
     const auto consumer_file_root_text = fsim::support::path_to_utf8(consumer_file_root);
 
-    const std::vector<const char*> compile_arguments { "fsim",
+    const std::vector<const char*> fixture_compile_arguments { "fsim",
         "compile",
         "--lang",
         "systemverilog",
@@ -407,12 +408,19 @@ void ApplicationTestFixture::test_non_project_cli()
         extra_object_text.c_str(),
         extra_source_text.c_str()
     };
+    const std::vector<const char*> compile_arguments {
+        "fsim", "compile", "--lang", "systemverilog", "--standard", "2017",
+        "--library", "work", "--trace-output", fst_trace_text.c_str(),
+        "--trace-format", "fst", "--trace-compression", "deterministic",
+        "--trace-select", "primary.*", "--trace-report-limit", "12",
+        "--trace-lifecycle", "configured", source_text.c_str()
+    };
     diagnostic::Engine compile_diagnostics;
     const auto compile = cli::parse_arguments(static_cast<int>(compile_arguments.size()),
         compile_arguments.data(), compile_diagnostics);
     assert(compile && !compile_diagnostics.has_error());
     assert(compile->command == cli::Command::compile);
-    assert(compile->artifact_output == object);
+    assert(!compile->artifact_output);
     assert(compile->files == std::vector { source });
     assert(compile->trace_file == fst_trace);
     assert(compile->trace_format == project::TraceFormat::fst);
@@ -438,15 +446,11 @@ void ApplicationTestFixture::test_non_project_cli()
         invalid_uvm_release_arguments.data(), invalid_uvm_release_diagnostics));
 
     const std::vector<const char*> elaborate_arguments { "fsim",
-        "elaborate",
-        "--object",
-        object_text.c_str(),
+        "elaborate", "--snapshot", "phase",
         "--top",
         "primary=sv:work.tb",
         "--search-library",
         "vendor",
-        "--output",
-        design_text.c_str(),
         "--delay-mode",
         "max",
         "--trace-output",
@@ -468,8 +472,8 @@ void ApplicationTestFixture::test_non_project_cli()
         elaborate_arguments.data(), elaborate_diagnostics);
     assert(elaborate && !elaborate_diagnostics.has_error());
     assert(elaborate->command == cli::Command::elaborate);
-    assert(elaborate->objects == std::vector { object });
-    assert(elaborate->artifact_output == design);
+    assert(elaborate->objects.empty());
+    assert(!elaborate->artifact_output && elaborate->snapshot == "phase");
     assert(elaborate->tops.size() == 1);
     assert(elaborate->tops.front().alias == "primary");
     assert(elaborate->trace_file == fst_trace);
@@ -477,10 +481,8 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(elaborate->trace_compression == project::TraceCompression::deterministic);
 
     const std::vector<const char*> aot_parse_arguments {
-        "fsim", "elaborate",
-        "--object", object_text.c_str(),
+        "fsim", "elaborate", "--snapshot", "phase",
         "--top", "primary=sv:work.tb",
-        "--output", aot_design_text.c_str(),
         "--aot", "--aot-scope", "all",
         "--cache", consumer_cache_text.c_str()
     };
@@ -493,10 +495,8 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(aot_parse->aot_scope == cli::AotScope::all);
     assert(aot_parse->cache_directory == consumer_cache);
     const std::vector<const char*> disabled_aot_arguments {
-        "fsim", "elaborate",
-        "--object", object_text.c_str(),
+        "fsim", "elaborate", "--snapshot", "phase",
         "--top", "primary=sv:work.tb",
-        "--output", selected_aot_design_text.c_str(),
         "--aot", "--no-aot"
     };
     diagnostic::Engine disabled_aot_diagnostics;
@@ -506,10 +506,8 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(disabled_aot && !disabled_aot_diagnostics.has_error());
     assert(disabled_aot->aot == false);
     const std::vector<const char*> invalid_aot_scope_arguments {
-        "fsim", "elaborate",
-        "--object", object_text.c_str(),
+        "fsim", "elaborate", "--snapshot", "phase",
         "--top", "primary=sv:work.tb",
-        "--output", design_text.c_str(),
         "--aot-scope", "all"
     };
     diagnostic::Engine invalid_aot_scope_diagnostics;
@@ -517,7 +515,7 @@ void ApplicationTestFixture::test_non_project_cli()
         static_cast<int>(invalid_aot_scope_arguments.size()),
         invalid_aot_scope_arguments.data(), invalid_aot_scope_diagnostics));
 
-    const std::vector<const char*> simulate_arguments {
+    const std::vector<const char*> fixture_simulate_arguments {
         "fsim", "simulate",
         "--design", design_text.c_str(),
         "--engine", "compiled",
@@ -533,12 +531,21 @@ void ApplicationTestFixture::test_non_project_cli()
         "--cache", consumer_cache_text.c_str(),
         "--file-root", consumer_file_root_text.c_str()
     };
+    const std::vector<const char*> simulate_arguments {
+        "fsim", "simulate", "--snapshot", "phase", "--engine", "compiled",
+        "--optimization", "O0", "--duration", "10ns", "--max-deltas", "1000",
+        "--trace", trace_text.c_str(), "--trace-format", "fst",
+        "--trace-compression", "deterministic", "--trace-select", "primary.*",
+        "--trace-report-limit", "12", "--trace-lifecycle", "configured",
+        "--cache", consumer_cache_text.c_str(),
+        "--file-root", consumer_file_root_text.c_str()
+    };
     diagnostic::Engine simulate_diagnostics;
     const auto simulate = cli::parse_arguments(static_cast<int>(simulate_arguments.size()),
         simulate_arguments.data(), simulate_diagnostics);
     assert(simulate && !simulate_diagnostics.has_error());
     assert(simulate->command == cli::Command::simulate);
-    assert(simulate->design == design);
+    assert(!simulate->design && simulate->snapshot == "phase");
     assert(simulate->engine == "compiled");
     assert(simulate->optimization == project::Optimization::o0);
     assert(simulate->trace_filters == std::vector<std::string> { "primary.*" });
@@ -550,7 +557,7 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(simulate->file_root == consumer_file_root);
     assert(!simulate->compiled_processes.has_value());
     const std::vector<const char*> selected_simulate_arguments {
-        "fsim", "simulate", "--design", design_text.c_str(),
+        "fsim", "simulate", "--snapshot", "phase",
         "--compiled-processes", "selected"
     };
     diagnostic::Engine selected_simulate_diagnostics;
@@ -561,7 +568,7 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(selected_simulate->compiled_processes
         == cli::CompiledProcessPolicy::selected);
     const std::vector<const char*> invalid_interpreter_policy_arguments {
-        "fsim", "simulate", "--design", design_text.c_str(),
+        "fsim", "simulate", "--snapshot", "phase",
         "--engine", "interpreter", "--compiled-processes", "all"
     };
     diagnostic::Engine invalid_interpreter_policy_diagnostics;
@@ -577,7 +584,7 @@ void ApplicationTestFixture::test_non_project_cli()
     const auto systemc_source_text = support::path_to_utf8(incremental_systemc_source);
     const auto systemc_object_text = support::path_to_utf8(systemc_object);
     const auto systemc_plugin_text = support::path_to_utf8(systemc_plugin);
-    const std::vector<const char*> systemc_compile_arguments {
+    const std::vector<const char*> fixture_systemc_compile_arguments {
         "fsim",
         "systemc",
         "compile",
@@ -589,6 +596,10 @@ void ApplicationTestFixture::test_non_project_cli()
         "-fno-omit-frame-pointer",
         systemc_source_text.c_str()
     };
+    const std::vector<const char*> systemc_compile_arguments {
+        "fsim", "systemc", "compile", "--define", "FSIM_TEST_WIDTH=8",
+        "--compile-option", "-fno-omit-frame-pointer", systemc_source_text.c_str()
+    };
     diagnostic::Engine systemc_compile_diagnostics;
     const auto systemc_compile = cli::parse_arguments(
         static_cast<int>(systemc_compile_arguments.size()),
@@ -596,12 +607,12 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(systemc_compile && !systemc_compile_diagnostics.has_error());
     assert(systemc_compile->command == cli::Command::systemc_compile);
     assert(systemc_compile->files == std::vector { incremental_systemc_source });
-    assert(systemc_compile->artifact_output == systemc_object);
+    assert(!systemc_compile->artifact_output);
     assert(systemc_compile->defines
         == std::vector<std::string> { "FSIM_TEST_WIDTH=8" });
     assert(systemc_compile->systemc_compile_options == std::vector<std::string> { "-fno-omit-frame-pointer" });
 
-    const std::vector<const char*> systemc_link_arguments {
+    const std::vector<const char*> fixture_systemc_link_arguments {
         "fsim",
         "systemc",
         "link",
@@ -620,34 +631,32 @@ void ApplicationTestFixture::test_non_project_cli()
         "--output",
         systemc_plugin_text.c_str()
     };
+    const std::vector<const char*> systemc_link_arguments {
+        "fsim", "systemc", "link", "--library", "vendor"
+    };
     diagnostic::Engine systemc_link_diagnostics;
     const auto systemc_link = cli::parse_arguments(
         static_cast<int>(systemc_link_arguments.size()),
         systemc_link_arguments.data(), systemc_link_diagnostics);
     assert(systemc_link && !systemc_link_diagnostics.has_error());
     assert(systemc_link->command == cli::Command::systemc_link);
-    assert(systemc_link->objects == std::vector { systemc_object });
+    assert(systemc_link->objects.empty());
     assert(systemc_link->library == "vendor");
-    assert(systemc_link->artifact_output == systemc_plugin);
+    assert(!systemc_link->artifact_output);
 
     const std::vector<const char*> systemc_elaborate_arguments {
         "fsim",
-        "elaborate",
-        "--object",
-        object_text.c_str(),
-        "--systemc-plugin",
-        systemc_plugin_text.c_str(),
+        "elaborate", "--snapshot", "phase",
         "--top",
         "systemc:vendor.first",
-        "--output",
-        design_text.c_str()
     };
     diagnostic::Engine systemc_elaborate_diagnostics;
     const auto systemc_elaborate = cli::parse_arguments(
         static_cast<int>(systemc_elaborate_arguments.size()),
         systemc_elaborate_arguments.data(), systemc_elaborate_diagnostics);
     assert(systemc_elaborate && !systemc_elaborate_diagnostics.has_error());
-    assert(systemc_elaborate->systemc_plugins == std::vector { systemc_plugin });
+    assert(systemc_elaborate->systemc_plugins.empty());
+    assert(systemc_elaborate->top == "systemc:vendor.first");
 
     const std::vector<const char*> project_arguments {
         "fsim", "simulate", "--project",
@@ -764,7 +773,7 @@ void ApplicationTestFixture::test_non_project_cli()
                              std::ostream&, std::ostream&) {
         elaborate_called = true;
         assert(invocation.command == cli::Command::elaborate);
-        assert(config.manifest_path == "<non-project>");
+        assert(config.manifest_path == "<workspace>");
         assert(config.project.tops == invocation.tops);
         return 0;
     };
@@ -778,7 +787,7 @@ void ApplicationTestFixture::test_non_project_cli()
 
     output.str({ });
     error.str({ });
-    auto production_services = app::make_cli_services();
+    auto production_services = make_fixture_services();
 
     {
         std::ofstream systemc_output(incremental_systemc_source);
@@ -797,9 +806,9 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     }
     output.str({ });
     error.str({ });
-    const auto systemc_compile_status = cli::run(
-        static_cast<int>(systemc_compile_arguments.size()),
-        systemc_compile_arguments.data(), production_services, output, error);
+    const auto systemc_compile_status = run_fixture_command(
+        static_cast<int>(fixture_systemc_compile_arguments.size()),
+        fixture_systemc_compile_arguments.data(), production_services, output, error);
     if (systemc_compile_status != 0) {
         std::cerr << error.str();
     }
@@ -807,9 +816,9 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(error.str().empty());
     output.str({ });
     error.str({ });
-    const auto systemc_link_status = cli::run(
-        static_cast<int>(systemc_link_arguments.size()),
-        systemc_link_arguments.data(), production_services, output, error);
+    const auto systemc_link_status = run_fixture_command(
+        static_cast<int>(fixture_systemc_link_arguments.size()),
+        fixture_systemc_link_arguments.data(), production_services, output, error);
     if (systemc_link_status != 0) {
         std::cerr << error.str();
     }
@@ -1046,8 +1055,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(systemc_standalone_value == "00000101");
     std::cerr << "non-project producer hiding: embedded simulation validated\n";
 
-    const auto compile_status = cli::run(
-        static_cast<int>(compile_arguments.size()), compile_arguments.data(),
+    const auto compile_status = run_fixture_command(
+        static_cast<int>(fixture_compile_arguments.size()), fixture_compile_arguments.data(),
         production_services, output, error);
     if (compile_status != 0) {
         std::cerr << error.str();
@@ -1100,7 +1109,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
 
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(extra_compile_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(extra_compile_arguments.size()),
                extra_compile_arguments.data(), production_services, output,
                error)
         == 0);
@@ -1405,7 +1414,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(production_elaborate_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(production_elaborate_arguments.size()),
                production_elaborate_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1425,7 +1434,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    const auto aot_status = cli::run(
+    const auto aot_status = run_fixture_command(
         static_cast<int>(aot_elaborate_arguments.size()),
         aot_elaborate_arguments.data(), production_services, output, error);
     if (aot_status != 0) {
@@ -1459,7 +1468,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(receipt_probe_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(receipt_probe_arguments.size()),
                receipt_probe_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1480,7 +1489,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(selected_aot_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(selected_aot_arguments.size()),
                selected_aot_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1488,7 +1497,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(output.str().find("scope=selected") != std::string::npos);
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(receipt_probe_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(receipt_probe_arguments.size()),
                receipt_probe_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1509,7 +1518,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         "--aot", "--aot-scope", "all",
         "--cache", consumer_cache_text.c_str()
     };
-    assert(cli::run(static_cast<int>(final_aot_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(final_aot_arguments.size()),
                final_aot_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1524,7 +1533,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(selected_override_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(selected_override_arguments.size()),
                selected_override_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1777,7 +1786,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(conflict_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(conflict_arguments.size()),
                conflict_arguments.data(), production_services, output,
                error)
         != 0);
@@ -1785,8 +1794,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(!std::filesystem::exists(conflict_trace));
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(simulate_arguments.size()),
-               simulate_arguments.data(), production_services, output,
+    assert(run_fixture_command(static_cast<int>(fixture_simulate_arguments.size()),
+               fixture_simulate_arguments.data(), production_services, output,
                error)
         == 0);
     assert(error.str().empty());
@@ -1827,7 +1836,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(fst_simulate_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(fst_simulate_arguments.size()),
                fst_simulate_arguments.data(), production_services, output,
                error)
         == 0);
@@ -1904,7 +1913,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(interpreter_simulate_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(interpreter_simulate_arguments.size()),
                interpreter_simulate_arguments.data(), production_services,
                output, error)
         == 0);
@@ -1918,7 +1927,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(debug_simulate_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(debug_simulate_arguments.size()),
                debug_simulate_arguments.data(), production_services, output,
                error)
         == 0);
@@ -1931,7 +1940,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(incompatible_delay_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(incompatible_delay_arguments.size()),
                incompatible_delay_arguments.data(), production_services,
                output, error)
         != 0);
@@ -2167,7 +2176,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    const auto relocated_result = cli::run(
+    const auto relocated_result = run_fixture_command(
         static_cast<int>(relocated_arguments.size()),
         relocated_arguments.data(), production_services, output, error);
     if (relocated_result != 0) {
@@ -2279,7 +2288,7 @@ end architecture;
     };
     output.str({ });
     error.str({ });
-    const auto vhdl_compile_result = cli::run(
+    const auto vhdl_compile_result = run_fixture_command(
         static_cast<int>(vhdl_compile_arguments.size()),
         vhdl_compile_arguments.data(), production_services, output, error);
     if (vhdl_compile_result != 0) {
@@ -2401,7 +2410,7 @@ module isolated; endmodule
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(isolated_arguments.size()),
+    assert(run_fixture_command(static_cast<int>(isolated_arguments.size()),
                isolated_arguments.data(), production_services, output,
                error)
         == 0);
@@ -2412,8 +2421,10 @@ module isolated; endmodule
 
     output.str({ });
     error.str({ });
-    assert(cli::run(static_cast<int>(compile_arguments.size()),
-               compile_arguments.data(), production_services, output,
+    // The low-level publisher requires a fresh directory. Workspace recompiles
+    // publish a new revision and replace the catalog entry transactionally.
+    assert(run_fixture_command(static_cast<int>(fixture_compile_arguments.size()),
+               fixture_compile_arguments.data(), production_services, output,
                error)
         == 1);
     assert(error.str().find("already exists") != std::string::npos);

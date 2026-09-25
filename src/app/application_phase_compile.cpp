@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_workspace.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -79,8 +80,10 @@ std::optional<std::filesystem::path> relative_to(
 
 }  // namespace
 
-bool compile_object(
+bool publish_workspace_object(
     const project::Config& config,
+    const CheckedProject& checked,
+    semantic::CompiledDesign compiled_bundle,
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics) {
   if (config.source_sets.size() != 1
@@ -91,13 +94,6 @@ bool compile_object(
     return false;
   }
   const auto& source_set = config.source_sets.front();
-  auto workspace = check_project_for_object(config, diagnostics);
-  if (!workspace.has_value()) {
-    return false;
-  }
-  auto checked = release_compiled_project(std::move(*workspace));
-  workspace.reset();
-
   artifact::ObjectMetadata metadata;
   metadata.producer = std::string{"fsim "} + std::string{version};
   metadata.language = std::string{project::to_string(source_set.language)};
@@ -200,23 +196,6 @@ bool compile_object(
     }
   }
 
-  std::vector<std::string> persisted_libraries { source_set.library };
-  for (const auto& dependency : metadata.vhdl_package_dependencies) {
-    const auto separator = dependency.package.find('.');
-    const auto library = dependency.package.substr(0, separator);
-    if (std::ranges::find(persisted_libraries, library)
-        == persisted_libraries.end()) {
-      persisted_libraries.push_back(library);
-    }
-  }
-  auto projected_bundle = semantic::extract_compiled_libraries(
-      std::move(static_cast<semantic::CompiledDesign&>(checked)),
-      persisted_libraries);
-  if (!projected_bundle.ok()) {
-    diagnostics.error("FSIM-ART-0004", projected_bundle.error);
-    return false;
-  }
-  auto compiled_bundle = std::move(*projected_bundle.design);
   if (!relocate_compiled_design_sources(
           compiled_bundle, source_mappings, diagnostics)) {
     return false;
@@ -311,6 +290,36 @@ bool compile_object(
       artifact::compute_object_compilation_digest(metadata);
   return artifact::publish_object(
       destination, metadata, payloads, diagnostics);
+}
+
+bool compile_object(const project::Config& config,
+    const std::filesystem::path& destination, diagnostic::Engine& diagnostics)
+{
+    if (config.source_sets.size() != 1
+        || config.source_sets.front().language == project::Language::systemc) {
+        diagnostics.error("FSIM-ART-0004",
+            "one .fsimobj compile request must contain exactly one HDL source set");
+        return false;
+    }
+    auto workspace = check_project_for_object(config, diagnostics);
+    if (!workspace) {
+        return false;
+    }
+    auto checked = release_compiled_project(std::move(*workspace));
+    std::vector<std::string> libraries { config.source_sets.front().library };
+    for (const auto& dependency : vhdl_package_dependencies(checked)) {
+        const auto library = dependency.package.substr(0, dependency.package.find('.'));
+        if (std::ranges::find(libraries, library) == libraries.end()) {
+            libraries.push_back(library);
+        }
+    }
+    auto projected = semantic::extract_compiled_libraries(checked, libraries);
+    if (!projected.ok()) {
+        diagnostics.error("FSIM-ART-0004", projected.error);
+        return false;
+    }
+    return publish_workspace_object(config, checked, std::move(*projected.design),
+        destination, diagnostics);
 }
 
 int handle_compile(

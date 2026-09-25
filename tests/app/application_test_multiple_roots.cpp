@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "application_workflow_test_support.hpp"
 
 #include "fsim/cli/driver.hpp"
 
@@ -268,11 +269,11 @@ trace_filters = ["sink.*"]
   std::istringstream cli_input;
   std::ostringstream cli_output;
   std::ostringstream cli_error;
-  auto services = fsim::app::make_cli_services(cli_input);
+  auto services = fsim::test::make_fixture_services(cli_input);
   const auto manifest_text = manifest.string();
   const std::vector<const char*> arguments{
       "fsim", "run", "-p", manifest_text.c_str()};
-  const auto cli_status = fsim::cli::run(
+  const auto cli_status = fsim::test::run_fixture_command(
       static_cast<int>(arguments.size()),
       arguments.data(),
       services,

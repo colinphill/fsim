@@ -137,14 +137,16 @@ VerilogParser::VerilogParser(
 VerilogParser::VerilogParser(
     LexResult lexed,
     const StandardRevision standard_revision,
-    std::string compatibility_profile)
+    std::string compatibility_profile,
+    SystemVerilogPackageMemberLookup package_member_lookup)
     : ParserBase(std::move(lexed.tokens),
                  std::move(lexed.diagnostics)),
       language_(language_for_standard_revision(standard_revision)),
       standard_revision_(standard_revision),
       compatibility_profile_(std::move(compatibility_profile)),
       keyword_set_(compatibility_keyword_set(
-          standard_revision, compatibility_profile_)) {}
+          standard_revision, compatibility_profile_)),
+      package_member_lookup_(std::move(package_member_lookup)) {}
 
 ParseResult VerilogParser::run() {
     ParsedDesign design;

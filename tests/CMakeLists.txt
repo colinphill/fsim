@@ -1090,6 +1090,20 @@ fsim_register_simple_test(
   "fast;support;codec;bytes;bounds;endianness;positive;negative"
 )
 
+foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages objects selection systemc controls application)
+  fsim_add_single_source_test_target(
+    fsim_workspace_${workspace_case}_tests
+    app/workspace_${workspace_case}_test.cpp
+    fsim_application
+  )
+  fsim_register_simple_test(
+    fsim.application.workspace-${workspace_case}
+    fsim_workspace_${workspace_case}_tests
+    "fast;application;workspace;artifact;library"
+  )
+endforeach()
+target_link_libraries(fsim_workspace_store_tests PRIVATE fsim_sqlite)
+
 fsim_add_single_source_test_target(
   fsim_hierarchy_path_artifact_tests
   app/hierarchy_path_artifact_test.cpp

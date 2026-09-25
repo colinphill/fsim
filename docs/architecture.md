@@ -112,7 +112,7 @@ references use IDs and never parser addresses. Files, expansion chains, and
 exact spans are interned, while semantic occurrences remain distinct.
 
 `check_project` constructs this model after deterministic source merging and
-standard-library injection. Root and transitive input digests enter in manifest
+standard-library injection. Root and transitive input digests enter in selected source
 and first-use order; units remain in canonical source order; declarations use
 physical source offset with stable category/index tie breakers. A preassigned
 dense type-ID range permits forward local type references without pointer
@@ -434,7 +434,7 @@ activation: reviewed stages enter analysis individually. An explicit
 `ieee.std_logic_1164` use currently activates the checksum-pinned declaration
 and body through an intrinsic package projection that retains fsim's existing
 nine-state type and operator identity. Compiler-supplied roots are stored
-separately from manifest roots so source counts and manifest/cache alignment
+separately from user source roots so source counts and source/cache alignment
 remain stable; their exact path, bytes, compilation-unit digest, and semantic
 dependency identity still enter design and specialization cache keys. The
 native-cache standard-library version changes whenever a reviewed package
@@ -474,7 +474,7 @@ closure, and no platform floating-point ABI enters SimIR or the JIT boundary.
 
 Reusable VHDL contexts may activate the reviewed package set once and expose
 it to later entity/architecture units. Injection follows the fixed dependency
-order before manifest analysis while keeping compiler-supplied and manifest
+order before source analysis while keeping compiler-supplied and user
 source inventories separate. Fully qualified references to declarations in an
 intrinsic package are validated against its reviewed declaration inventory,
 add that package's complete semantic source closure, and remain qualified until
@@ -705,12 +705,11 @@ they retain module-scope names while their nested generated regions inherit
 the parent's constant and object environments.
 Unqualified children resolve from an immutable per-build candidate index. Each
 lookup lazily queries the parent logical library followed by first occurrences
-from `[elaboration].search_libraries`, or the ordered replacement supplied by
-repeated `--search-library`. All queried libraries form one ambiguity scope;
+from the ordered libraries supplied by repeated `--search-library`. All queried libraries form one ambiguity scope;
 library order never hides a later collision. Missing or ambiguous diagnostics
 therefore retain the ordered scope and canonical identities considered. An
 unavailable configured library remains inert until an unqualified lookup needs
-it. A manifest
+it. A programmatic elaboration
 binding may override an instance with a language-qualified VHDL or SV target;
 the builder then connects named or positional whole-signal actuals by aliasing
 the child port ID to the parent signal ID. It diagnoses missing or duplicate
@@ -781,7 +780,7 @@ plug-in registries are build-global; instance signals, variables, processes,
 and native module objects remain root-local. Before process lowering, the
 elaborator specializes and allocates every SystemVerilog root's packed
 root-level signal surface. That makes language-defined top-level hierarchical
-references such as `glbl.GSR` independent of manifest order, including the
+references such as `glbl.GSR` independent of root selection order, including the
 conventional separately selected vendor global-signaling module. Descendant
 paths are deliberately not opened as an fsim-specific backdoor: a reference
 such as `glbl.child.internal` is rejected with `FSIM-ELAB-ROOT-001` and must be
@@ -789,9 +788,11 @@ exposed through a root-level port or signal. VHDL and SystemC cross-root
 communication likewise uses their defined ports, signals, packages, or common
 kernel services rather than arbitrary foreign hierarchy shortcuts.
 
-Schema-2 `[[library_map]]` records and repeated `--map-library
-LIBRARY=DIRECTORY` replacements map a logical library to one read-only,
-relocatable `.fsimlib` directory. A mapping is metadata-only until a qualified
+`fsim library map LIBRARY DIRECTORY` records an external managed library in
+`.fsim/libraries.toml`; normal commands read its unit catalog when resolving
+sources and tops. The retained low-level SDK also supports read-only,
+relocatable `.fsimlib` directories through `Config::library_mappings`.
+For those SDK artifacts, a mapping is metadata-only until a qualified
 top, explicit binding, visible VHDL library reference, or complete unqualified
 search scope actually queries it. The loader then verifies canonical
 `fsim-library.toml` metadata, declared dependency order, every selected payload
@@ -807,8 +808,8 @@ names and optional source text
 remain artifact-relative, so diagnostics, debugger breakpoints, VCD, and cache
 identity survive moving the complete directory.
 
-`fsim build --export-library LIBRARY=DIRECTORY` publishes through a sibling
-staging tree and one directory rename, refuses replacement, and removes partial
+The retained `app::export_library` SDK API publishes through a sibling staging
+tree and one directory rename, refuses replacement, and removes partial
 staging state after failure. The final tree is read-only. All design caches,
 recompiled SystemC images, LLVM objects, trace output, and debugger state live
 under the consumer cache instead. Optional host-native variants are
@@ -826,44 +827,50 @@ does not. Format-1 SystemC publication rejects producer-only include paths,
 definitions, compiler/linker options, and external libraries rather than
 publishing a bundled-source fallback that cannot reproduce the producer build.
 
-Manifest-free execution uses two additional immutable directory artifacts.
-`fsim compile` publishes one explicit VHDL, Verilog, or SystemVerilog
-compilation unit as `.fsimobj`: canonical metadata indexes independently
-checksummed relocated sources and one compiled-HIR bundle. Repeated objects load
-in command order, preserve VHDL analysis dependencies and SV compilation-unit
-isolation, and never reopen producer sources. `fsim elaborate` resolves one or
-more roots through the ordinary candidate index and publishes `.fsimdesign`.
-Its checksummed runtime, semantic, and DesignIR projections construct a
-scheduler without entering a frontend or elaborator.
+Workspace execution stores managed library catalogs under
+`.fsim/libraries/<name>` and snapshots under `.fsim/snapshots/<name>`. Compilation
+assigns each HDL primary unit a generated `.fsimobj` artifact while retaining
+its required compilation context in the compiled-HIR bundle. The library
+catalog maps source ownership and named units to the active artifact revision.
+Replacing a source removes its previous unit ownership only after the complete
+compilation transaction succeeds. Previously compiled packages can supply the
+semantic environment for subsequent compilation without reopening their sources.
 
-The design digest covers ordered object contents, selected identities,
-bindings/search scope, timing/seed/optimization policy, runtime ABI, state
-indexes, and specialization keys. It salts native module identity; LLVM's
-host/ABI/options fingerprint remains the final cache boundary. Both artifact
-trees install by a sibling staging rename, are read-only, and reject overwrite.
-`fsim systemc compile` publishes one host-native C++20 translation unit as a
-`.fsimscobj`. Its canonical metadata records the complete compiler dependency
-closure, settings, toolchain/target/runtime ABI fingerprints, and object
-checksum. `fsim systemc link` consumes an ordered object list and publishes one
-logical-library `.fsimscplugin` after loading the image and transactionally
-validating its sorted factory and parameter-schema inventory. Project builds
-use the same content-addressed compile/link path, so editing one translation
-unit does not rebuild its peers.
+`fsim elaborate` resolves one or more named roots through the library catalogs
+and publishes a managed `.fsimdesign` snapshot. Its checksummed runtime,
+semantic, and DesignIR projections construct a scheduler without entering a
+frontend or elaborator. The design digest covers ordered object contents,
+selected identities, bindings/search scope, timing/seed/optimization policy,
+runtime ABI, state indexes, and specialization keys. It salts native module
+identity; LLVM's host/ABI/options fingerprint remains the final cache boundary.
 
-`fsim elaborate --systemc-plugin` merges those factory candidates with ordered
-HDL objects. Format-2 `.fsimdesign` metadata embeds every selected plug-in and
-its native provenance. Standalone loading checksum-validates the embedded
-image, recreates factory roots and their native children, remaps serialized
-handles by stable hierarchy path, and reconnects ports, events, signals,
-processes, exports, lifecycle callbacks, debugger objects, and trace signals to
-the owning official Accellera context and fsim boundary adapters. Designs
-containing SystemC are therefore relocatable only
-between exact-compatible hosts; HDL-only format-1 and format-2 designs remain
-portable. `fsim simulate` places LLVM objects and HDL file state in explicit
-`--cache` and `--file-root` consumer directories and writes traces to the
-requested path, never inside `.fsimdesign`. Delay selection is fixed by
-elaboration. The additive C++ phase/inspection API does not change the v1 C
-ABI.
+`fsim systemc compile --library NAME` stores one host-native C++20 object per
+translation unit. Canonical object metadata records the complete compiler
+dependency closure, settings, toolchain/target/runtime ABI fingerprints, and
+payload checksum. `fsim systemc link --library NAME` consumes the library's
+current managed objects and publishes a generated plugin after validating its
+sorted factory and construction-parameter inventory. Successful recompilation
+or object deletion invalidates that factory catalog until the library is linked
+again; failed compilation or linking leaves the preceding transaction intact.
+
+Elaboration finds native factories in that catalog and embeds each selected
+plugin and its native provenance in the snapshot. Loading checksum-validates
+the embedded image, recreates factory roots and native children, remaps handles
+by stable hierarchy path, and reconnects ports, events, signals, processes,
+exports, lifecycle callbacks, debugger objects, and trace signals to the owning
+Accellera context and fsim boundary adapters. SystemC snapshots therefore
+require compatible host/compiler/runtime identities; HDL state remains portable.
+
+Low-level artifact publishers install immutable trees through a sibling staging
+rename. Workspace transactions select fresh physical paths and replace catalog
+references, allowing repeated compilation, linking, and elaboration without user
+artifact management. Loaded native images remain mapped for Accellera type
+information safety; deferred cleanup handles DLLs still locked on Windows.
+Existing snapshots remain independent of changes to library objects. Derived
+LLVM objects use the workspace cache, while trace and HDL file-output controls
+remain runtime options. Delay selection is fixed by elaboration. The retained
+C++ phase/inspection API continues to accept explicit artifact paths and does
+not change the v1 C ABI.
 
 An HDL instance path may bind to a registered SystemC factory. The common
 elaborator remains authoritative for that boundary and retains one stable-ID
@@ -1525,7 +1532,7 @@ and VCD views retain the deterministic whole-object packed representation.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The elaborator selects the finest declared VHDL, SV, or SystemC
-precision when the manifest says `auto`. It applies SV
+precision when the selected time resolution is `auto`. It applies SV
 `timeprecision` rounding before converting to ticks, require VHDL and SystemC
 delays to be exactly representable, and diagnose overflow before an event is
 scheduled. The current slice accepts Verilog/SystemVerilog `` `timescale``
@@ -1778,7 +1785,7 @@ registers without extending the C ABI. A standalone `failure` publishes once
 then terminates, while a failed assertion terminates without double-reporting.
 Both preserve exact source metadata. VHDL doubled quotes are decoded in the
 frontend; a configurable stop threshold remains targeted.
-VHDL file objects reuse the common manifest-confined file service while
+VHDL file objects reuse the common simulation-confined file service while
 keeping their source-level state in opaque 32-bit registers. `FileOpen`
 distinguishes status and nonstatus calls, returns the four predefined status
 ordinals without clearing an already-open object, and never exposes a host
@@ -1813,7 +1820,7 @@ one-shot postponed-monitor path. The operation captures the validated opaque
 file handle when it executes but retains direct signal identities until the
 postponed phase, so final same-timestep values and radix formatting match
 terminal `$strobe`. Interpreter and compiled execution both read the handle
-from the active process frame and call the same manifest-confined file writer;
+from the active process frame and call the same simulation-confined file writer;
 the portable runtime-state and native-cache schemas include the optional file
 handle register. Compound file-strobe expressions remain a checked bounded
 exclusion rather than being sampled early.
@@ -2344,8 +2351,9 @@ instruction, resume-PC, frame-state, and ABI checks.
 `LlvmJitUnsupportedError` identifies capability misses that the application
 hybrid engine handles with per-process interpreter fallback. Malformed SimIR,
 ABI mismatches, LLVM/cache failures, and generated-runtime failures remain
-fatal `LlvmJitError`s. LLVM-enabled `fsim build` and `fsim run` install
-compiled executors for eligible processes; within each elaborated
+fatal `LlvmJitError`s. LLVM-enabled snapshot simulation installs compiled
+executors for eligible processes; elaboration can request native precompilation
+with `--aot`. Within each elaborated
 specialization, those processes are lowered and optimized in one LLVM module.
 An unsupported sibling is omitted without preventing eligible siblings from
 compiling. Builds without LLVM remain interpreter-only. LLVM-enabled
@@ -2397,10 +2405,10 @@ invalidation, projected mode/delay/rejection invalidation,
 wait-kind/operand invalidation, and optimization-mode
 invalidation are also tested at O0 and O2.
 
-LLVM-enabled `fsim build` and `fsim run` select this cache beneath the
-configured project cache as `llvm-native`. The adapter and application expose
-hit, miss, store, rejected-entry, and load/store-failure counters; `fsim build`
-reports the principal counters. Application tests require a cold miss and
+LLVM-enabled snapshot elaboration and simulation select this cache beneath
+`.fsim/cache` as `llvm-native`, unless an explicit cache location is supplied.
+The adapter and application expose hit, miss, store, rejected-entry, and
+load/store-failure counters. Application tests require a cold miss and
 store for every compiled specialization module followed by a warm hit with no
 misses or cache failures at both O0 and O2. The two-process static-sensitivity
 application fixture specifically requires one module miss/store followed by
@@ -2408,11 +2416,12 @@ one warm module hit. The application snapshots every HDL root and each
 Verilog/SV transitive include before parsing, hashes the exact in-memory bytes
 actually consumed, and retains those ordered digests with the checked root.
 Repeated inclusion within one compilation unit reuses the first snapshot.
-`compilation_unit = "file"` creates one state/digest per file,
-`"source-set"` shares ordered macro/conditional/directive state within that
-source set, and `"combined"` shares compatible language/standard state across
-all source sets selecting that mode. Combined roots retain their source-set
-library ownership; their include roots and manifest definitions are appended
+CLI `--compilation-unit file` creates one state/digest per file, while
+`--compilation-unit source-set` shares ordered macro/conditional/directive
+state within the invocation. The retained SDK `combined` policy shares
+compatible language/standard state across source sets selecting that mode.
+Combined roots retain their source-set library ownership; their include roots
+and configured definitions are appended
 in source-set order before preprocessing. Each specialization provenance key
 covers its ordered compilation-unit roots and complete include closure,
 language and standard, library, compilation-unit mode, macro/include settings,
@@ -2459,8 +2468,8 @@ class, container, coverage, and assertion leaves. Multiple Verilog,
 SystemVerilog, VHDL, and SystemC roots retain canonical hierarchy, provenance,
 libraries, and forward aliases.
 
-One `TraceControlApplication` validates project, CLI, Tcl, debugger, native C,
-C++, and manifest-free phase requests before publishing format, compression,
+One `TraceControlApplication` validates workspace CLI, Tcl, debugger, native C,
+C++, and retained programmatic phase requests before publishing format, compression,
 selection, lifecycle, report, and semantic identity. Object, design,
 mapped-library, native-cache, and checkpoint archives store versioned trace
 snapshots with relocation-safe output intent. Staging, destination locks, and
@@ -2541,7 +2550,7 @@ exact-state signal `==`/`!=` conditions, hierarchy/scope navigation, signal
 examination, and deposit/force/release. A configured debug VCD predeclares the
 design signal table and permits live `add`/`remove`/`all`/`clear` selection;
 enabling a signal records its current value and subsequent committed changes.
-Run-mode VCD continues to declare only manifest-selected signals. A design
+Snapshot simulation VCD declares only the selected signals. A design
 `$finish` marks the simulation finished, an external stop may be resumed, and a
 fatal runtime exception poisons the simulation so later execution commands are
 refused. Ctrl-C only sets an atomic stop request; the simulation thread observes
@@ -2603,7 +2612,7 @@ and language-file paths use UTF-8; one conversion seam creates native
 inputs enter through UTF-16 APIs. SystemC source compilation passes argument
 arrays directly to the selected GCC-like or MSVC-compatible toolchain and
 never invokes a shell. A fingerprinted test launcher preserves any required
-parent compiler discovery arguments without making the manifest cache-unsafe.
+parent compiler discovery arguments without making the compiler configuration cache-unsafe.
 
 Batch 175 qualification records deterministic Debug performance separately
 from correctness. The checked 44-row Linux baseline matrix is

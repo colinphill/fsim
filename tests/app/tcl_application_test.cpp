@@ -33,6 +33,31 @@ int run_cli(
         error);
 }
 
+void require_cli(const std::vector<std::string>& arguments)
+{
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli(arguments, input, output, error) != 0) {
+        throw std::runtime_error("workspace fixture command failed: " + error.str());
+    }
+}
+
+struct WorkingDirectory {
+    std::filesystem::path previous { std::filesystem::current_path() };
+
+    explicit WorkingDirectory(const std::filesystem::path& path)
+    {
+        std::filesystem::current_path(path);
+    }
+
+    ~WorkingDirectory()
+    {
+        std::error_code error;
+        std::filesystem::current_path(previous, error);
+    }
+};
+
 } // namespace
 
 int main()
@@ -115,56 +140,41 @@ puts "sdf-control-tcl-ok"
     const auto directory = std::filesystem::temp_directory_path()
         / ("fsim-tcl-test-" + std::to_string(suffix));
     std::filesystem::create_directories(directory);
+    WorkingDirectory working_directory(directory);
     const auto older_vhdl_source = directory / "older-standard.vhd";
     {
         std::ofstream file(older_vhdl_source);
         file << "entity older_standard is end entity;\n";
     }
-    const auto older_vhdl_manifest = directory / "older-standard.toml";
-    {
-        std::ofstream file(older_vhdl_manifest);
-        file
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"older-standard\"\n"
-            << "top = \"vhdl:work.older_standard\"\n"
-            << "[[source_set]]\n"
-            << "language = \"vhdl\"\n"
-            << "standard = \"93\"\n"
-            << "files = [\"older-standard.vhd\"]\n";
-    }
+    require_cli({ "fsim", "compile", "--lang", "vhdl", "--standard", "93",
+        older_vhdl_source.string() });
     {
         std::istringstream input;
         std::ostringstream output;
         std::ostringstream error;
         const int result = run_cli(
-            {
-                "fsim",
-                "tcl",
-                "-p",
-                older_vhdl_manifest.string(),
-                "-c",
-                R"tcl(
-set project [fsim::project]
-set profiles [dict get $project source_profiles]
-if {[llength $profiles] != 1} {error "bad source profile count"}
-set profile [lindex $profiles 0]
-if {[dict get $profile language] ne "vhdl" ||
-    [dict get $profile standard] ne "1993" ||
-    [dict get $profile library] ne "work"} {
-  error "bad canonical source profile: $profile"
+            { "fsim", "tcl", "-c", R"tcl(
+set workspace [fsim::workspace]
+if {[file normalize [dict get $workspace directory]] ne [file normalize [pwd]]} {
+  error "workspace is not the current directory"
 }
-puts "vhdl-standard-profile-ok"
-)tcl",
-            },
-            input, output, error);
+if {[dict get $workspace managed_directory] ne [file join [pwd] .fsim]} {
+  error "bad managed directory"
+}
+set libraries [dict get $workspace libraries]
+if {[llength $libraries] != 1 || [dict get [lindex $libraries 0] library] ne "work"} {
+  error "compiled library is missing"
+}
+foreach removed {::fsim::project ::fsim::check ::fsim::build} {
+  if {[llength [info commands $removed]] != 0} {error "old project command remains: $removed"}
+}
+puts "workspace-description-ok"
+)tcl" }, input, output, error);
         if (result != 0) {
             std::cerr << error.str();
         }
         assert(result == 0);
-        assert(
-            output.str().find("vhdl-standard-profile-ok")
-            != std::string::npos);
+        assert(output.str().find("workspace-description-ok") != std::string::npos);
         assert(error.str().empty());
     }
     const auto older_verilog_source = directory / "older-verilog.v";
@@ -177,49 +187,19 @@ puts "vhdl-standard-profile-ok"
         std::ofstream file(older_systemverilog_source);
         file << "module older_systemverilog; endmodule\n";
     }
-    const auto older_verilog_manifest = directory / "older-verilog.toml";
-    {
-        std::ofstream file(older_verilog_manifest);
-        file
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"older-verilog\"\n"
-            << "top = \"verilog:work.older_verilog\"\n"
-            << "[[source_set]]\n"
-            << "language = \"verilog-2001-noconfig\"\n"
-            << "standard = \"v2001-noconfig\"\n"
-            << "files = [\"older-verilog.v\"]\n"
-            << "[[source_set]]\n"
-            << "language = \"sv-2009\"\n"
-            << "standard = \"09\"\n"
-            << "files = [\"older-systemverilog.sv\"]\n";
-    }
+    require_cli({ "fsim", "compile", "--lang", "verilog-2001-noconfig",
+        older_verilog_source.string() });
+    require_cli({ "fsim", "compile", "--lang", "sv-2009",
+        older_systemverilog_source.string() });
+    require_cli({ "fsim", "elaborate", "--top", "verilog:work.older_verilog",
+        "--snapshot", "older-verilog" });
+    assert(std::filesystem::remove(older_verilog_source));
     {
         std::istringstream input;
         std::ostringstream output;
         std::ostringstream error;
         const int result = run_cli(
-            {
-                "fsim",
-                "tcl",
-                "-p",
-                older_verilog_manifest.string(),
-                "-c",
-                R"tcl(
-set profiles [dict get [fsim::project] source_profiles]
-if {[llength $profiles] != 2} {error "bad source profile count"}
-set verilog [lindex $profiles 0]
-set systemverilog [lindex $profiles 1]
-if {[dict get $verilog language] ne "verilog" ||
-    [dict get $verilog standard] ne "2001-noconfig" ||
-    [dict get $verilog library] ne "work"} {
-  error "bad canonical Verilog source profile: $verilog"
-}
-if {[dict get $systemverilog language] ne "systemverilog" ||
-    [dict get $systemverilog standard] ne "2009" ||
-    [dict get $systemverilog library] ne "work"} {
-  error "bad canonical SystemVerilog source profile: $systemverilog"
-}
+            { "fsim", "tcl", "--snapshot", "older-verilog", "-c", R"tcl(
 set provenance [fsim::provenance]
 if {[llength $provenance] != 1} {error "bad provenance count"}
 set owner [lindex $provenance 0]
@@ -229,7 +209,10 @@ if {[dict get $owner path] ne "older_verilog" ||
     [dict get $owner language] ne "verilog" ||
     [dict get $owner standard] ne "verilog-2001-noconfig" ||
     [dict get $owner compatibility_profile] ne "none" ||
-    [dict get $owner source_line] == 0} {
+    ![regexp {^objects/[0-9a-f]{64}/sources/roots/root/00000000/older-verilog\.v$} \
+        [dict get $owner source_path]] ||
+    [dict get $owner source_line] != 1 ||
+    [dict get $owner source_column] != 1} {
   error "bad public provenance: $owner"
 }
 set selected [fsim::provenance older_verilog]
@@ -253,7 +236,6 @@ puts "verilog-standard-profiles-ok"
         assert(error.str().empty());
     }
     const auto display_source = directory / "display.sv";
-    const auto display_manifest = directory / "display.toml";
     {
         std::ofstream file(display_source);
         file
@@ -264,25 +246,8 @@ puts "verilog-standard-profiles-ok"
             << "  end\n"
             << "endmodule\n";
     }
-    {
-        std::ofstream file(display_manifest);
-        file
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"tcl-display\"\n"
-            << "top = \"sv:work.display\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"display.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"display-cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 1000\n";
-    }
+    require_cli({ "fsim", "compile", display_source.string() });
+    require_cli({ "fsim", "elaborate", "--top", "sv:work.display", "--snapshot", "display" });
     {
         std::istringstream input;
         std::ostringstream output;
@@ -291,8 +256,8 @@ puts "verilog-standard-profiles-ok"
             {
                 "fsim",
                 "tcl",
-                "-p",
-                display_manifest.string(),
+                "--snapshot",
+                "display",
                 "-c",
                 "fsim::run",
             },
@@ -305,65 +270,33 @@ puts "verilog-standard-profiles-ok"
             != std::string::npos);
         assert(error.str().empty());
     }
-    const auto mapped_artifact = directory / "tcl-display.fsimlib";
-    fsim::diagnostic::Engine mapped_export_diagnostics;
-    const auto mapped_export_config = fsim::project::load(
-        display_manifest, mapped_export_diagnostics);
-    assert(mapped_export_config);
-    const auto mapped_exported = fsim::app::export_library(
-        *mapped_export_config, "work", mapped_artifact,
-        mapped_export_diagnostics);
-    if (!mapped_exported) {
-        fsim::diagnostic::print_text(std::cerr, mapped_export_diagnostics);
-    }
-    assert(mapped_exported);
-    const auto mapped_manifest = directory / "mapped-display.toml";
+    const auto consumer_directory = directory / "consumer";
+    std::filesystem::create_directories(consumer_directory);
     {
-        std::ofstream file(mapped_manifest);
-        file
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"tcl-mapped-display\"\n"
-            << "top = \"sv:work.display\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[library_map]]\n"
-            << "library = \"work\"\n"
-            << "path = \"" << mapped_artifact.generic_string() << "\"\n"
-            << "[build]\n"
-            << "cache_path = \"mapped-display-cache\"\n";
-    }
-    {
+        WorkingDirectory consumer(consumer_directory);
+        require_cli({ "fsim", "library", "map", "work",
+            (directory / ".fsim" / "libraries" / "work").string() });
+        require_cli({ "fsim", "elaborate", "--top", "sv:work.display",
+            "--snapshot", "mapped-display" });
         std::istringstream input;
         std::ostringstream output;
         std::ostringstream error;
         const int result = run_cli(
-            {
-                "fsim",
-                "tcl",
-                "-p",
-                mapped_manifest.string(),
-                "-c",
-                R"tcl(
-set project [fsim::project]
-set mappings [dict get $project library_mappings]
-if {[llength $mappings] != 1} {error "bad mapping count"}
-if {[dict get [lindex $mappings 0] library] ne "work"} {
-  error "bad mapping library"
+            { "fsim", "tcl", "--snapshot", "mapped-display", "-c", R"tcl(
+set libraries [dict get [fsim::workspace] libraries]
+if {[llength $libraries] != 1} {error "bad mapping count"}
+set mapped [lindex $libraries 0]
+if {[dict get $mapped library] ne "work" || ![dict get $mapped mapped]} {
+  error "bad mapped library"
 }
-set built [fsim::build]
-set selected [dict get $built mapped_libraries]
-if {[llength $selected] != 1} {error "bad selected count"}
-set mapped [lindex $selected 0]
-if {[dict get $mapped library] ne "work" ||
-    [dict get $mapped units] != 1} {
-  error "bad mapped provenance"
+set loaded [fsim::load]
+if {[dict get $loaded top] ne "display"} {error "bad mapped snapshot top"}
+set provenance [lindex [fsim::provenance display] 0]
+if {[dict get $provenance library] ne "work" ||
+    [dict get $provenance unit] ne "display"} {
+  error "bad mapped unit provenance"
 }
-if {[dict get $mapped native_accepted] ni {0 1}} {
-  error "bad native admission value"
-}
-)tcl",
-            },
-            input, output, error);
+)tcl" }, input, output, error);
         if (result != 0) {
             std::cerr << error.str();
         }
@@ -436,16 +369,16 @@ if {[dict get $mapped native_accepted] ni {0 1}} {
     }
     {
         const std::string diagnostic_script = R"FSIM_TCL(
-if {![catch {fsim::check} check_error]} {
-  error "empty project unexpectedly passed"
+if {![catch {fsim::load missing-snapshot} load_error]} {
+  error "missing snapshot unexpectedly loaded"
 }
 set diagnostics [fsim::diagnostics]
 if {[llength $diagnostics] != 1} {
-  error "missing project diagnostic: $diagnostics"
+  error "missing snapshot diagnostic: $diagnostics"
 }
 set diagnostic [lindex $diagnostics 0]
 if {[dict get $diagnostic severity] ne "error" ||
-    [dict get $diagnostic code] ne "FSIM-FE-0001" ||
+    ![string match "FSIM-WS-*" [dict get $diagnostic code]] ||
     [dict get $diagnostic message] eq ""} {
   error "malformed diagnostic dictionary: $diagnostic"
 }
@@ -482,7 +415,7 @@ puts "diagnostics-ok"
     {
         std::ofstream file(source);
         file
-            << "module tb;\n"
+            << "module tb; timeunit 1ns; timeprecision 1ns;\n"
             << "  logic q;\n"
             << "  logic [136:0] wide;\n"
             << "  initial begin\n"
@@ -492,27 +425,9 @@ puts "diagnostics-ok"
             << "  end\n"
             << "endmodule\n";
     }
-    const auto manifest = directory / "fsim.toml";
-    {
-        std::ofstream file(manifest);
-        file
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"tcl-control\"\n"
-            << "top = \"sv:work.tb\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"control.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 100000\n"
-            << "trace_file = \"debug.vcd\"\n";
-    }
+    require_cli({ "fsim", "compile", source.string() });
+    require_cli({ "fsim", "elaborate", "--top", "sv:work.tb", "--snapshot", "control" });
+    require_cli({ "fsim", "elaborate", "--top", "sv:work.tb" });
     const auto assertion_source = directory / "assertion.sv";
     {
         std::ofstream file(assertion_source);
@@ -523,40 +438,23 @@ puts "diagnostics-ok"
             << "  end\n"
             << "endmodule\n";
     }
-    const auto assertion_manifest = directory / "assertion.toml";
-    {
-        std::ofstream file(assertion_manifest);
-        file
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"tcl-assertion\"\n"
-            << "top = \"sv:work.assertion_tb\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"assertion.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"assertion-cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 100000\n";
-    }
+    require_cli({ "fsim", "compile", assertion_source.string() });
+    require_cli({ "fsim", "elaborate", "--top", "sv:work.assertion_tb",
+        "--snapshot", "assertion" });
+    std::filesystem::remove(source);
+    std::filesystem::remove(assertion_source);
     {
         const std::string control_script = R"(
-set project [fsim::project]
-if {[dict get $project name] ne "tcl-control"} {error "bad project"}
-if {[dict get $project top] ne "sv:work.tb"} {error "bad top"}
+set workspace [fsim::workspace]
+if {[dict get $workspace snapshot] ne "control"} {error "bad selected snapshot"}
 if {[llength [fsim::diagnostics]] != 0} {
   error "unexpected initial diagnostics"
 }
 if {[fsim::diagnostics clear] != 0} {
   error "diagnostic clear failed"
 }
-set checked [fsim::check]
-if {[dict get $checked sources] != 1} {error "bad source count"}
-set built [fsim::build]
+set built [fsim::load]
+if {[dict get $built top] ne "tb"} {error "bad top"}
 if {[dict get $built signals] != 2} {error "bad signal count"}
 if {[lsearch -exact [fsim::signals] "tb.q"] < 0} {error "missing signal"}
 if {[lsearch -exact [fsim::signals] "tb.wide"] < 0} {error "missing wide signal"}
@@ -601,8 +499,10 @@ puts "control-ok"
             {
                 "fsim",
                 "tcl",
-                "-p",
-                manifest.string(),
+                "--snapshot",
+                "control",
+                "--trace",
+                (directory / "debug.vcd").string(),
                 "-c",
                 control_script,
             },
@@ -723,8 +623,8 @@ if {[fsim::trace close] ne "trace complete"} {
   error "completed debugger trace close was not idempotent"
 }
 
-# Rebuilding deliberately starts a fresh debugger session for step coverage.
-fsim::build
+# Reloading starts a fresh debugger session for step coverage.
+fsim::load
 set statement [fsim::debug step statement]
 if {[string first "process tb." $statement] < 0} {
   error "statement step failed: $statement"
@@ -752,8 +652,10 @@ puts "debug-control-ok"
             {
                 "fsim",
                 "tcl",
-                "-p",
-                manifest.string(),
+                "--snapshot",
+                "control",
+                "--trace",
+                (directory / "debug.vcd").string(),
                 "-c",
                 debug_script,
             },
@@ -840,8 +742,10 @@ puts "callbacks-ok"
             {
                 "fsim",
                 "tcl",
-                "-p",
-                manifest.string(),
+                "--snapshot",
+                "control",
+                "--trace",
+                (directory / "debug.vcd").string(),
                 "-c",
                 callback_script,
             },
@@ -878,8 +782,10 @@ puts "callback-error-ok"
             {
                 "fsim",
                 "tcl",
-                "-p",
-                manifest.string(),
+                "--snapshot",
+                "control",
+                "--trace",
+                (directory / "debug.vcd").string(),
                 "-c",
                 callback_error_script,
             },
@@ -896,20 +802,16 @@ puts "callback-error-ok"
         assert(error.str().empty());
     }
     {
-        const std::string project_script = "set control_manifest {"
-            + manifest.string()
-            + "}\nset assertion_manifest {"
-            + assertion_manifest.string()
-            + R"FSIM_TCL(}
-if {![catch {fsim::project load definitely-missing.toml} load_error]} {
-  error "missing project unexpectedly loaded"
+        const std::string snapshot_script = R"FSIM_TCL(
+if {![catch {fsim::load definitely-missing} load_error]} {
+  error "missing snapshot unexpectedly loaded"
 }
-if {[dict get [fsim::project] name] ne "tcl"} {
-  error "failed load mutated the current project"
+if {[dict get [fsim::workspace] snapshot] ne "default"} {
+  error "failed load mutated the selected snapshot"
 }
-set loaded [fsim::project load $control_manifest]
-if {[dict get $loaded name] ne "tcl-control"} {
-  error "valid project load failed"
+set loaded [fsim::load control]
+if {[dict get $loaded snapshot] ne "control"} {
+  error "valid snapshot load failed"
 }
 set trace_path [fsim::trace configure runtime-debug.fst \
     -format fst -compression deterministic -select tb.q \
@@ -944,40 +846,38 @@ if {[fsim::trace list] ne "tb.q"} {
 if {![catch {fsim::trace configure too-late.vcd} trace_error]} {
   error "live trace reconfiguration unexpectedly succeeded"
 }
-set replaced [fsim::project load $assertion_manifest]
-if {[dict get $replaced name] ne "tcl-assertion" ||
-    [dict get [fsim::status] state] ne "unbuilt"} {
-  error "project replacement did not reset the live session"
+set replaced [fsim::load assertion]
+if {[dict get $replaced snapshot] ne "assertion" ||
+    [dict get [fsim::status] state] ne "loaded"} {
+  error "snapshot replacement did not reset the live session"
 }
 if {[dict get [fsim::trace status] file] ne ""} {
-  error "replacement project retained old trace configuration"
+  error "replacement snapshot retained old trace configuration"
 }
-set control_again [fsim::project load $control_manifest]
-if {[dict get $control_again name] ne "tcl-control"} {
-  error "second project replacement failed"
+set control_again [fsim::load control]
+if {[dict get $control_again snapshot] ne "control"} {
+  error "second snapshot replacement failed"
 }
-puts "project-load-ok"
+puts "snapshot-load-ok"
 )FSIM_TCL";
         std::istringstream input;
         std::ostringstream output;
         std::ostringstream error;
         const int result = run_cli(
-            { "fsim", "tcl", "-c", project_script },
+            { "fsim", "tcl", "-c", snapshot_script },
             input,
             output,
             error);
         if (result != 0) {
             throw std::runtime_error(
-                "Tcl project-load test failed:\n" + error.str()
+                "Tcl snapshot-load test failed:\n" + error.str()
                 + "\nTcl output:\n" + output.str());
         }
-        assert(output.str().find("project-load-ok") != std::string::npos);
+        assert(output.str().find("snapshot-load-ok") != std::string::npos);
         assert(error.str().empty());
     }
     {
-        const std::string assertion_script = "set assertion_manifest {"
-            + assertion_manifest.string()
-            + R"FSIM_TCL(}
+        const std::string assertion_script = R"FSIM_TCL(
 set ::assertion_event {}
 set ::assertion_lifecycle {}
 proc record_assertion {tag process severity message path line column} {
@@ -993,7 +893,7 @@ if {[dict get [fsim::callbacks] assertion] ne \
         "record_assertion tagged"} {
   error "assertion command prefix was not retained"
 }
-fsim::project load $assertion_manifest
+fsim::load assertion
 if {![catch {fsim::run} assertion_error]} {
   error "failing assertion did not fail the Tcl run"
 }
@@ -1074,8 +974,10 @@ puts "debug-callback-ok"
             {
                 "fsim",
                 "tcl",
-                "-p",
-                manifest.string(),
+                "--snapshot",
+                "control",
+                "--trace",
+                (directory / "debug.vcd").string(),
                 "-c",
                 debug_callback_script,
             },
@@ -1101,6 +1003,7 @@ puts "debug-callback-ok"
         assert(contents.str().find("q $end") != std::string::npos);
     }
 
+    std::filesystem::current_path(working_directory.previous);
     std::error_code remove_error;
     for (std::filesystem::recursive_directory_iterator iterator(
              directory, remove_error),

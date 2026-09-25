@@ -70,6 +70,21 @@ void refresh_compiled_design_metadata(CompiledDesign& design);
     std::span<const UnitId> units,
     std::span<const std::string> supporting_libraries);
 
+struct CompiledUdpIdentity {
+    std::string library;
+    std::string name;
+};
+
+/// Project an explicit catalog selection, including declarations which do not
+/// have a semantic unit identity. Classes omitted from the selection are
+/// removed even when their enclosing compilation unit remains selected.
+[[nodiscard]] CompiledLinkResult extract_compiled_objects(
+    const CompiledDesign& design,
+    std::span<const UnitId> units,
+    std::span<const std::string> class_identities,
+    std::span<const CompiledUdpIdentity> udp_identities,
+    std::span<const std::string> supporting_libraries = {});
+
 /// Project every logical library except the named libraries into a
 /// self-contained bundle. This is used when decoded compiled libraries must
 /// replace compatibility-only syntax sidecars in a combined workspace.

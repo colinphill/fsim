@@ -42,45 +42,20 @@ Unknown clock values do not create a sample. Assert/assume failures are
 reported, restrict failures use warning routing, and cover misses affect
 coverage only.
 
-## 2. Create a project
+## 2. Compile and elaborate a workspace snapshot
 
-Save this beside the source as `fsim.toml`:
-
-```toml
-# SPDX-License-Identifier: Apache-2.0
-schema = 3
-
-[project]
-name = "psl-counter"
-top = "vhdl:work.psl_counter(rtl)"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "vhdl"
-standard = "2008"
-library = "work"
-files = ["psl_counter.vhd"]
-
-[build]
-optimization = "O2"
-jobs = 8
-cache_path = ".fsim-cache"
-
-[run]
-duration = "10ns"
-max_deltas = 1000
-trace_file = "psl-counter.vcd"
-```
-
-Check and run it with either the primary executable or installed VHDL alias:
+Run from the directory containing `psl_counter.vhd`:
 
 ```sh
-fsim check -p fsim.toml
-fsim run -p fsim.toml
-fsim-vhdl run -p fsim.toml
+fsim check --lang vhdl --standard 2008 psl_counter.vhd
+fsim compile --lang vhdl --standard 2008 --library work psl_counter.vhd
+fsim elaborate 'work.psl_counter(rtl)'
+fsim simulate --duration 10ns --max-deltas 1000 --trace psl-counter.vcd
 ```
 
-Run a second time to exercise the warm native cache. The attempt outcomes and
+The installed `fsim-vhdl` alias accepts the same commands. Parentheses are
+quoted for the shell. The top's language is inferred from library metadata.
+Run simulation again to exercise the warm cache; PSL attempt outcomes and
 VCD must remain identical.
 
 ## 3. Inspect VHDL and PSL state
@@ -88,7 +63,7 @@ VCD must remain identical.
 Start the debugger:
 
 ```sh
-fsim debug -p fsim.toml
+fsim debug
 ```
 
 The `vhdl summary`, `vhdl scopes`, `vhdl objects`, `vhdl processes`, `vhdl
@@ -96,24 +71,19 @@ psl`, and `vhdl all` commands inspect the same bounded occurrence-owned state
 used by callbacks and VCD. Signal breakpoints can stop at a clock change; clear
 the breakpoint and continue to retain the same final PSL results.
 
-## 4. Produce source-independent artifacts
-
-The portable flow separates compile, elaborate, and simulate:
+## 4. Keep a source-independent snapshot
 
 ```sh
-fsim compile --lang vhdl --standard 2008 --library work \
-  --output psl-counter.fsimobj psl_counter.vhd
-fsim elaborate --object psl-counter.fsimobj \
-  --top root=vhdl:work.psl_counter(rtl) \
-  --output psl-counter.fsimdesign
-fsim simulate --design psl-counter.fsimdesign --engine compiled \
-  --cache .fsim-cache/portable --trace portable.vcd
+fsim elaborate 'root=work.psl_counter(rtl)' --snapshot portable
+fsim simulate --snapshot portable --engine compiled --duration 10ns \
+  --trace portable.vcd
 ```
 
-Move the complete `.fsimdesign` directory and hide the producer source before
-the final command to test relocation. Do not mix individual payload files or
-reuse a cache/checkpoint from an incompatible artifact identity; validation
-rejects those combinations before simulation state is published.
+Hide the producer source before repeating simulation. The snapshot under
+`.fsim/snapshots/portable` remains usable after source removal or library
+updates. Move complete workspace state for relocation; fsim manages artifact
+filenames and rejects incompatible snapshots or checkpoints before publishing
+simulation state.
 
 ## 5. Diagnose failures
 
@@ -128,7 +98,7 @@ For a failure:
 2. check that every property has a compatible explicit or inherited clock;
 3. distinguish failure from vacuity or abort in `vhdl psl` output;
 4. compare cold/warm VCD and debugger state;
-5. verify that relocated artifacts moved as complete directories; and
+5. verify that relocation preserved complete workspace state; and
 6. treat resource-limit errors as physical/work boundaries, not language
    syntax errors.
 

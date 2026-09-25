@@ -92,20 +92,21 @@ module smoke_top;
 endmodule
 ```
 
-Keep the UVM package before project sources in one SystemVerilog-2017 source
+Keep the UVM package before user sources in one SystemVerilog-2017 source
 set. Include `$UVM_ROOT/src` so the macro include resolves to the selected kit.
 
 ## 3. Run through the reference engine
 
-The interpreter is the behavioral reference. Use at least eight frontend
+The interpreter is the behavioral reference. Use at least twelve frontend
 workers for the governed package:
 
 ```sh
-fsim run \
+fsim compile --library work \
   --lang systemverilog --standard 2017 \
-  --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 8 \
-  -I "$UVM_ROOT/src" --top smoke_top --engine interpreter \
-  "$UVM_ROOT/src/uvm_pkg.sv" smoke_test.sv
+  --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 12 \
+  -I "$UVM_ROOT/src" "$UVM_ROOT/src/uvm_pkg.sv" smoke_test.sv
+fsim elaborate work.smoke_top --snapshot smoke
+fsim simulate --snapshot smoke --engine interpreter
 ```
 
 A successful run selects `smoke_test`, executes its phase callbacks, balances
@@ -119,12 +120,7 @@ Run the same source with the compiled engine. Optimization changes native code,
 not UVM ownership or ordering:
 
 ```sh
-fsim run \
-  --lang systemverilog --standard 2017 \
-  --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 8 \
-  -I "$UVM_ROOT/src" --top smoke_top --engine compiled -O O2 \
-  --cache .fsim-cache/uvm-smoke --trace smoke.fst \
-  "$UVM_ROOT/src/uvm_pkg.sv" smoke_test.sv
+fsim simulate --snapshot smoke --engine compiled -O O2 --trace smoke.fst
 ```
 
 Repeat once with the same cache to exercise warm-cache loading. The test
@@ -132,49 +128,30 @@ selection, report order, payload, terminal time, and trace transitions must
 match the interpreter run. Use `--engine debug` when debugger state or a VCD is
 required; it calls the same simulation-owned UVM services.
 
-## 5. Use a project manifest
+## 5. Keep repeatable workspace commands
 
-For repeatable automation, put the release selector and source order in
-`fsim.toml`:
+For automation, retain the ordered compile, elaborate, and simulate commands in
+a shell or build-system script. Set `UVM_RELEASE` to `1.2` or `2020.3.1` and
+select the matching source tree with `UVM_ROOT`. fsim verifies the release
+against the parsed package API and retains the release and exact source
+identity in the library and snapshot. It does not load `fsim.toml`.
 
-```toml
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-uvm_release = "1.2" # change to "2020.3.1" with the matching source tree
-include_dirs = ["uvm/src"]
-files = ["uvm/src/uvm_pkg.sv", "smoke_test.sv"]
-```
+## 6. Reuse compiled libraries and snapshots
 
-The project may be produced by any build generator as long as it emits this
-ordinary source-set contract. Fsim validates the selected release against the
-parsed package API and retains the canonical release plus exact source identity
-through checked projects and downstream artifacts.
-
-## 6. Separate compile, elaborate, and simulate
-
-Portable phases are useful for build farms and for reproducing a failure
-without reparsing the governed package:
+The published `smoke` snapshot can be simulated without reparsing the UVM
+package or retaining its source tree:
 
 ```sh
-fsim compile \
-  --lang systemverilog --standard 2017 \
-  --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 8 \
-  -I "$UVM_ROOT/src" --output smoke.fsimobj \
-  "$UVM_ROOT/src/uvm_pkg.sv" smoke_test.sv
-
-fsim elaborate \
-  --object smoke.fsimobj --top root=smoke_top -O O2 \
-  --output smoke.fsimdesign
-
-fsim simulate \
-  --design smoke.fsimdesign --engine compiled \
-  --cache .fsim-cache/uvm-smoke --trace smoke.fst
+fsim library objects work
+fsim elaborate root=work.smoke_top --snapshot regression -O O2
+fsim simulate --snapshot regression --engine compiled --trace smoke.fst
 ```
 
-Move the complete design directory when testing relocation. Do not substitute
-an object, design, native cache, or checkpoint created from the other UVM
-release: source/release mismatches reject before state publication.
+Recompiling the source set replaces its managed definitions. Re-elaborating
+`regression` replaces only that snapshot; `smoke` retains its previous behavior.
+For relocation, preserve the complete workspace state. A snapshot or checkpoint
+from another UVM release is not interchangeable: source/release mismatches
+reject before state publication.
 
 ## 7. Add standard command-line controls
 
@@ -217,8 +194,8 @@ For a reliable pass, require all of the following:
 
 | Symptom | Check |
 |---|---|
-| Mixed-release or API-surface diagnostic | Make `uvm_release`, `uvm_pkg.sv`, macro include, object, design, cache, and checkpoint originate from one release |
-| Macro is undefined | Put `$UVM_ROOT/src` on the include path and compile `uvm_pkg.sv` before the project source in the same source set |
+| Mixed-release or API-surface diagnostic | Make `--uvm-release`, `uvm_pkg.sv`, macro include, library, snapshot, cache, and checkpoint originate from one release |
+| Macro is undefined | Put `$UVM_ROOT/src` on the include path and compile `uvm_pkg.sv` before the user source in the same source set |
 | Test is not selected | Verify registration, the `run_test` name, and any `+UVM_TESTNAME` setting |
 | Configuration lookup misses | Enable `+UVM_CONFIG_DB_TRACE` and inspect the component-relative scope and nominal value type |
 | Run phase does not finish | Balance objections, inspect objection tracing, and check for suspended sequence/phase work without scheduler progress |

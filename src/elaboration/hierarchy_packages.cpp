@@ -11645,6 +11645,31 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             published_parameter_names,
             specialization);
     };
+    const auto is_parameter_metadata = [](const auto& declaration) {
+        if (!declaration || declaration->systemverilog == nullptr) {
+            return false;
+        }
+        using Form = semantic::sv::DeclarationForm;
+        const auto form = declaration->systemverilog->form;
+        return form == Form::parameter
+            || form == Form::local_parameter
+            || form == Form::type_parameter;
+    };
+    std::unordered_set<std::string> local_parameter_names;
+    for (const auto declaration_id : unit.declarations) {
+        const auto declaration
+            = specialized->find_declaration(declaration_id);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            if (!append_parameter_metadata(declaration_id, true)) {
+                return false;
+            }
+            continue;
+        }
+        if (is_parameter_metadata(declaration)) {
+            local_parameter_names.insert(
+                declaration->systemverilog->name);
+        }
+    }
     for (const auto dependency_id : dependency_units) {
         if (dependency_id == unit.id) {
             continue;
@@ -11657,6 +11682,13 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         }
         for (const auto declaration_id :
             dependency->systemverilog->declarations) {
+            const auto declaration
+                = specialized->find_declaration(declaration_id);
+            if (is_parameter_metadata(declaration)
+                && local_parameter_names.contains(
+                    declaration->systemverilog->name)) {
+                continue;
+            }
             static_cast<void>(append_parameter_metadata(
                 declaration_id, false));
         }

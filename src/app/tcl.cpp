@@ -595,6 +595,7 @@ int handle_tcl(
     TclContext context {
         invocation,
         config,
+        config,
         diagnostics,
         interpreter.get(),
         output,
@@ -653,9 +654,8 @@ int handle_tcl(
         return kUnavailable;
     }
     constexpr std::array fsim_commands {
-        "::fsim::project",
-        "::fsim::check",
-        "::fsim::build",
+        "::fsim::workspace",
+        "::fsim::load",
         "::fsim::signals",
         "::fsim::provenance",
         "::fsim::read",

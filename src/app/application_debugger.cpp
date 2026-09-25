@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "application_trace_control.hpp"
+#include "application_workspace.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
@@ -1938,7 +1939,7 @@ int handle_debug(
     std::istream& input,
     std::ostream& output,
     std::ostream& error_output)  {
-  auto built = build_project(config, diagnostics);
+  auto built = load_workspace_snapshot(invocation, config, diagnostics);
   if (!built) {
     return 1;
   }

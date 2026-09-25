@@ -28,11 +28,23 @@ enum class Command {
   systemc_link,
   coverage_merge,
   coverage_report,
+  library_map,
+  library_list,
+  library_unmap,
+  library_objects,
+  library_delete_object,
+  library_delete,
 };
 
 enum class DiagnosticFormat {
   text,
   json,
+};
+
+enum class Verbosity {
+  quiet,
+  normal,
+  verbose,
 };
 
 enum class AotScope {
@@ -58,8 +70,13 @@ struct Invocation {
   std::string program_name{"fsim"};
   std::filesystem::path program_path{"fsim"};
   Command command{Command::check};
-  std::filesystem::path manifest{"fsim.toml"};
+  std::filesystem::path manifest;
   bool manifest_explicit{false};
+  std::string snapshot{"default"};
+  Verbosity verbosity{Verbosity::normal};
+  std::optional<std::string> library_name;
+  std::optional<std::filesystem::path> library_mapping_path;
+  std::optional<std::string> library_object_id;
   std::vector<std::filesystem::path> files;
   std::optional<project::Language> language;
   std::optional<std::string> standard;
@@ -140,6 +157,12 @@ struct Services {
   Handler systemc_link;
   Handler coverage_merge;
   Handler coverage_report;
+  Handler library_map;
+  Handler library_list;
+  Handler library_unmap;
+  Handler library_objects;
+  Handler library_delete_object;
+  Handler library_delete;
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(

@@ -39,6 +39,7 @@ include(cmake/FsimTcl.cmake)
 include(cmake/FsimUvmSources.cmake)
 include(cmake/FsimSystemCAccellera.cmake)
 include(cmake/FsimScv.cmake)
+include(cmake/FsimSqlite.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -1128,11 +1129,27 @@ if(FSIM_WITH_LLVM)
 endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
+  fsim_add_sqlite()
   add_library(
     fsim_application
     STATIC
       src/app/application.cpp
       src/app/application_analysis.cpp
+      src/app/application_compiled_environment.cpp
+      src/app/application_compiled_environment_sv.cpp
+      src/app/application_compiled_environment_vhdl.cpp
+      src/app/application_workspace.cpp
+      src/app/application_workspace_catalogs.cpp
+      src/app/application_workspace_compile.cpp
+      src/app/application_workspace_objects.cpp
+      src/app/application_workspace_selection.cpp
+      src/app/application_workspace_store.cpp
+      src/app/application_workspace_store_io.cpp
+      src/app/application_workspace_store_sqlite.cpp
+      src/app/application_workspace_store_catalog.cpp
+      src/app/application_workspace_store_transaction.cpp
+      src/app/application_workspace_store_snapshot.cpp
+      src/app/application_workspace_systemc.cpp
       src/app/application_sdf_annotation_scope.cpp
       src/app/application_sdf_cell_resolution.cpp
       src/app/application_sdf_endpoint_resolution.cpp
@@ -1284,6 +1301,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       fsim_systemc
     PRIVATE
       fsim_boost_pfr_headers
+      fsim_sqlite
   )
   if(FSIM_WITH_LLVM)
     target_link_libraries(fsim_application PRIVATE fsim_llvm)
@@ -1503,6 +1521,7 @@ install(
   DIRECTORY examples/
   DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/examples"
   PATTERN ".fsim-cache" EXCLUDE
+  PATTERN ".fsim" EXCLUDE
   PATTERN "*.dll" EXCLUDE
   PATTERN "*.dylib" EXCLUDE
   PATTERN "*.fst" EXCLUDE

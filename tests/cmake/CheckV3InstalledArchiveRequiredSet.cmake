@@ -12,13 +12,52 @@ set(FSIM_ROOT_NAME fsim-v3-required-set-fixture)
 set(FSIM_ARCHIVE_ROOT "${FSIM_FIXTURE_DIR}/archive/${FSIM_ROOT_NAME}")
 foreach(FSIM_DIRECTORY IN ITEMS
     bin include/fsim include/fsim/diagnostic include/fsim/semantic
-    lib/pkgconfig share/doc/fsim extra)
+    lib/pkgconfig share/doc/fsim/third-party/sqlite-3.53.4 extra)
   file(MAKE_DIRECTORY "${FSIM_ARCHIVE_ROOT}/${FSIM_DIRECTORY}")
 endforeach()
+set(FSIM_EXECUTABLE_CONTENTS [=[#!/bin/sh
+set -eu
+case "$*" in
+  --version)
+    printf '%s\n' 'fsim 3.0.0 (C API 1)'
+    ;;
+  'compile --library work top.sv')
+    test -f top.sv
+    mkdir -p .fsim/libraries/work
+    printf '%s\n' fixture > .fsim/libraries/work/library.sqlite3
+    ;;
+  'library objects work')
+    test -f .fsim/libraries/work/library.sqlite3
+    printf '%s\n' archive_top
+    ;;
+  'elaborate work.archive_top'|'elaborate work.archive_top --snapshot retained')
+    test ! -f top.sv
+    test -f .fsim/libraries/work/library.sqlite3
+    snapshot=default
+    if [ "$#" -eq 4 ]; then snapshot="$4"; fi
+    mkdir -p ".fsim/snapshots/$snapshot"
+    printf '%s\n' fixture > ".fsim/snapshots/$snapshot/runtime.bin"
+    ;;
+  'library delete work')
+    test -f .fsim/libraries/work/library.sqlite3
+    rm -r .fsim/libraries/work
+    ;;
+  'simulate --engine interpreter'|'simulate --snapshot retained --engine interpreter')
+    test ! -e .fsim/libraries/work
+    snapshot=default
+    if [ "$#" -eq 5 ]; then snapshot="$3"; fi
+    test -f ".fsim/snapshots/$snapshot/runtime.bin"
+    printf '%s\n' WORKSPACE_ARCHIVE_PASS
+    ;;
+  *)
+    printf 'unexpected fixture command: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+]=])
 foreach(FSIM_EXECUTABLE IN ITEMS fsim fsim-sv fsim-vhdl)
   set(FSIM_PATH "${FSIM_ARCHIVE_ROOT}/bin/${FSIM_EXECUTABLE}")
-  file(WRITE "${FSIM_PATH}"
-    "#!/bin/sh\nprintf '%s\\n' 'fsim 3.0.0 (C API 1)'\n")
+  file(WRITE "${FSIM_PATH}" "${FSIM_EXECUTABLE_CONTENTS}")
   file(CHMOD "${FSIM_PATH}" PERMISSIONS
     OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
     WORLD_READ WORLD_EXECUTE)
@@ -34,6 +73,11 @@ file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/version.hpp" "fixture\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/lib/pkgconfig/fsim.pc"
   "Version: 3.0.0\nLibs: -L\${libdir} -lfsim_api\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/share/doc/fsim/LICENSE" "fixture\n")
+foreach(FSIM_SQLITE_FILE IN ITEMS
+    LICENSE NOTICE SOURCE_MANIFEST.txt sqlite-3.53.4.spdx.json)
+  file(COPY "${FSIM_SOURCE_DIR}/third_party/sqlite-3.53.4/${FSIM_SQLITE_FILE}"
+    DESTINATION "${FSIM_ARCHIVE_ROOT}/share/doc/fsim/third-party/sqlite-3.53.4")
+endforeach()
 file(WRITE "${FSIM_ARCHIVE_ROOT}/extra/additive.txt" "allowed\n")
 set(FSIM_ARCHIVE "${FSIM_FIXTURE_DIR}/fixture.zip")
 execute_process(

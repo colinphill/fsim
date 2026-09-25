@@ -5,6 +5,7 @@
 /.cache/
 /.local-artifacts/
 .fsim-cache/
+.fsim/
 /.idea/
 /.vscode/
 *.user

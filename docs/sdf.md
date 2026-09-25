@@ -79,12 +79,13 @@ bound design root, `--sdf-cell` applies a cell glob, `--delay-mode` selects
 For example:
 
 ```sh
-fsim run --project fsim.toml --sdf cells.sdf --sdf-root tb \
+fsim elaborate work.tb --snapshot timed --sdf cells.sdf --sdf-root tb \
   --sdf-cell 'tb.dut.*' --delay-mode max --sdf-report-limit 256
+fsim simulate --snapshot timed
 ```
 
-The same controls are available to project `build`, `debug` and `tcl`, and to
-manifest-free `elaborate` and `simulate`. Selector/report options without an
+The same controls are available to workspace `elaborate`, `simulate`, `debug`,
+and `tcl` commands. Selector/report options without an
 SDF input and SDF options on compile-only phases are rejected.
 
 ## Tcl control

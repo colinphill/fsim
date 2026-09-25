@@ -1014,6 +1014,12 @@ bool HierarchyBuilder::instantiate_compiled_udp(
     profile.unit = "sv:" + library + "." + declaration.name;
     profile.instance = path;
     profile.source_instance = instance.id;
+    const auto owner = compiled_->find_unit(
+        semantic::UnitKind::systemverilog_compilation_unit,
+        library, "$unit$udp$" + declaration.name);
+    if (owner && owner->identity->source == declaration.source) {
+        profile.source_unit = owner->identity->id;
+    }
     profile.source_span = declaration.source;
     profile.origin = declaration.origin;
     const auto declaration_source = compiled_source_span(

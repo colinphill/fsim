@@ -464,8 +464,8 @@ diagnostic. Library, use, and context clauses require their exact selected-name
 shape; trailing clauses cannot disappear at end of file. Primary-unit and
 architecture/package-body secondary identities are library-scoped,
 deterministically ordered, and diagnosed independently of the legacy generic
-duplicate-unit error. Project manifests select only the implemented `2008` or
-`08` VHDL mode; older and post-2008 modes are rejected rather than silently
+duplicate-unit error. Source compilation retains the selected VHDL standard
+in library metadata; unsupported revisions are diagnosed instead of silently
 reinterpreted.
 
 Batch 163 Change 3 declaration work is complete. An incomplete type may
@@ -526,7 +526,7 @@ accessing storage. Live-object and lifetime counts are bounded by explicit
 representation-derived container ceilings rather than an arbitrary language
 width limit.
 
-VHDL direct and TextIO file operations share the manifest-confined SimIR file
+VHDL direct and TextIO file operations share the workspace file-service SimIR file
 service. Read/write/append modes, lookahead `endfile`, direct integer and line
 read/write, status opens, close, file-formal aliasing, and early-return or
 simulation finalization agree across interpreter and compiled engines. File
@@ -1261,7 +1261,7 @@ receiver nonmutation, object/port/callable coherence, and interpreter/native
 parity are preserved. Associative receivers, arithmetic or function calls
 involving the iterator, side effects, multiple/nested conditionals, and
 non-element transformation roots remain unsupported.
-`$readmemb` and `$readmemh` load fixed arrays through the manifest-root file
+`$readmemb` and `$readmemh` load fixed arrays through the workspace file-root
 service with optional start/finish indices, line/block comments, hexadecimal
 `@` addresses, a 1 MiB input bound, and exact X/Z digit preservation.
 Unaddressed data defaults to numerically increasing indices; explicit
@@ -1399,7 +1399,7 @@ and retain recursive configurations for existing labeled blocks and
 statically selected one-dimensional for/if/case-generate occurrences.
 Architecture declarative configuration specifications use the same binding
 model. Explicit label lists, `all`, and `others` select only component-style
-instances; direct entity instances and external manifest bindings remain
+instances; direct entity instances and explicit internal bindings remain
 independent. `use entity library.entity(architecture)` and same-language
 `use configuration library.name` bindings may compose named generic and port
 maps through normalized component actuals. `use open` explicitly defers to the
@@ -1562,7 +1562,7 @@ packed-signal operands. The descriptor is captured when the task executes;
 signal values are sampled after same-slot NBA publication in the postponed
 phase and rendered with the selected default radix. Runtime-state replay,
 stop/resume, interpreter, and LLVM O0/O2 cold/warm execution share the same
-manifest-confined file service. Compound file-strobe operands remain a checked
+workspace file-service file service. Compound file-strobe operands remain a checked
 diagnostic. `$fmonitor`, `$fmonitorb`, `$fmonitorh`, and `$fmonitoro` use the
 same global registration and control semantics with a process-owned file
 descriptor.
@@ -1726,8 +1726,8 @@ For the bounded hierarchy slice, child ports alias parent signal IDs after
 unique target resolution and then width, signedness, and lossy-2-state checks.
 Unqualified names search VHDL, Verilog/SystemVerilog, and exported SystemC
 factories across the parent logical library plus ordered
-`[elaboration].search_libraries`, without a same-language or parent-library
-preference. Repeated `--search-library` options replace the manifest list,
+`--search-library` options, without a same-language or parent-library
+preference. Workspace catalogs provide the named units;
 complete-scope collisions are ambiguous, unavailable configured libraries fail
 only when queried, and explicit targets override inference. Automated runtime
 evidence
@@ -1750,58 +1750,50 @@ SystemC factories elaborate as peer hierarchy nodes under their exported
 public names. HDL remains the owner of any HDL child hierarchy around those
 factory instances.
 
-Schema 2 supports one or more independently resolved top roots. Repeated
-`[[project.top]]` records retain declaration order and require unique aliases
-when the list has more than one member; repeated `--top ALIAS=TARGET` options
-replace that list. All roots share one scheduler, time resolution, parsed
-library/package/configuration state, SystemC kernel lifecycle, trace namespace,
-debugger session, and callback stream. Hierarchy paths begin with the alias,
-and single-root manifests retain their former names and API view. SystemVerilog
-top-level hierarchical references to packed signals on another selected root
-are executable independent of root order, supporting the conventional
-separate `glbl` module. Descendant-state shortcuts and cross-root references
-that are not defined by the source language are rejected; expose that state
-through a root-level port/signal or a language-defined package/global service.
-The ordered aliased root set participates in design and native-cache identity.
+Workspace elaboration accepts one or more independently resolved tops.
+`fsim elaborate work.device vendor.glbl` retains root order and infers aliases
+from their names. Use `ALIAS=TOP` when aliases would collide. Roots share one
+scheduler, time resolution, compiled library/package/configuration state,
+SystemC lifecycle, trace namespace, debugger session, and callback stream.
+SystemVerilog root-level hierarchical references to another selected root's
+packed signals are executable independent of root order, including the
+conventional separate `glbl` module. Descendant shortcuts outside the source
+language's rules are rejected. The ordered root set participates in snapshot
+and native-cache identity.
 
-Schema 2 also supports relocatable out-of-tree precompiled libraries. Each
-ordered `[[library_map]]` names a logical library and `.fsimlib` directory;
-repeated `--map-library NAME=DIRECTORY` options replace the manifest list.
-Mapping-only projects are valid. Libraries remain unopened until elaboration
-actually queries them, and declared logical dependencies require explicit
-mappings. Portable VHDL and SystemVerilog units restore without reparsing and
-participate in the same case, ambiguity, architecture, configuration,
-parameter/generic, package, mixed-boundary, and multiple-root rules as local
-units. Relocated logical source identities retain debugger and diagnostic
-locations. Optional exact-host SystemC plug-ins and LLVM objects are used only
-after complete compatibility and checksum validation; incompatible variants
-fall back to bundled SystemC source or portable HDL. Format-1 SystemC export
-accepts self-contained sources that use fsim/SystemC and standard host headers;
-it rejects producer-only include paths, definitions, compiler/linker options,
-or external libraries because those inputs cannot be relocated into the
-portable fallback yet. See the
-[precompiled-library tutorial](../examples/precompiled_library/README.md) for
-the export, relocation, mapping, build, and run workflow.
+The current working directory is the workspace. Its `.fsim` directory owns
+local libraries at `.fsim/libraries/<name>`, snapshots, and caches. Use
+`library map NAME DIRECTORY` to select an external library directory before
+compiling into it. `.fsim/libraries.toml` stores mappings, while each library's
+`library.sqlite3` catalog stores named-unit, artifact, source, and dependency
+identities. Compiled packages and contexts are available to later compilation
+without reparsing their old sources. Provider changes make affected consumers
+stale until they are recompiled.
 
-The same portable VHDL, Verilog, and SystemVerilog unit representation is
-available without a project manifest. `fsim compile` turns one explicitly
-scripted language/standard/library compilation into a read-only `.fsimobj`;
-`fsim elaborate` consumes ordered objects and explicit aliased tops to publish
-a read-only `.fsimdesign`; and `fsim simulate` restores that design directly
-with interpreter, compiled, or debug/O0 execution. Multiple roots,
-cross-language inference, packages, contexts, configurations,
-generics/parameters, source/debug locations, callbacks, and VCD retain their
-ordinary project-mode semantics. `fsim systemc compile` independently compiles
-one dependency-complete C++20 translation unit to `.fsimscobj`; `fsim systemc
-link` combines ordered objects into a logical-library `.fsimscplugin` with a
-validated factory/schema inventory. Repeated `--systemc-plugin` inputs join HDL
-objects during elaboration. Selected plug-ins are embedded in format-2 designs,
-then checksum-validated, reloaded, path-remapped, rebound, and lifecycle-started
-during standalone simulation. Producer sources, `.fsimobj`, `.fsimscobj`, and
-original `.fsimscplugin` directories are unnecessary after design publication.
-The embedded native image still requires the recorded exact-compatible host,
-compiler, runtime, and SystemC ABI. See the
-[non-project phase tutorial](../examples/non_project_phases/README.md).
+`fsim compile --library NAME FILE...` generates one artifact per primary named
+HDL unit where practical; associated classes and supporting definitions remain
+with their owner. A successful recompile replaces prior source ownership and
+removes stale definitions; failures preserve the previous catalog. Elaboration
+looks up top names in the catalogs and replaces a default or named snapshot.
+`fsim simulate` consumes `default`, or `--snapshot NAME` chooses another.
+Snapshots retain source/debug locations, mixed-language hierarchy, runtime
+state, callbacks, and VCD/FST identity after source or library deletion.
+
+`fsim systemc compile --library NAME FILE...` produces one managed object per
+C++20 translation unit. `fsim systemc link --library NAME` combines the current
+library objects and registers the plugin's factories and parameter schemas.
+Elaboration copies selected plugin payloads into its snapshot. Simulation
+validates checksums and the compatible host, compiler, runtime, and SystemC
+ABI, then reconstructs and reconnects the native hierarchy.
+
+`library objects [NAME]` enumerates managed IDs and definitions.
+`library delete-object NAME OBJECT_ID` removes one object; `library delete NAME`
+removes managed library state and its mapping while preserving unrelated files
+in mapped directories. Existing snapshots remain usable. Public project files,
+`build`/`run`, `--project`, and explicit artifact filename options are removed.
+See the [workspace guide](workspace-mode.md),
+[precompiled-library tutorial](../examples/precompiled_library/README.md), and
+[workspace phase tutorial](../examples/non_project_phases/README.md).
 
 Batch 119 frontend closure now retains nested waits rather than rejecting a
 successfully parsed statement tree; general assertion/report and severity
@@ -1819,7 +1811,7 @@ concatenation and `severity_level` values only on the failing path, retain
 source provenance, continue through `error`, and distinguish standalone
 failure publication from assertion termination in both engines. File/TextIO
 HIR now lowers bounded process, procedure, and block-local file objects to
-manifest-confined opaque handles. Declaration and status/nonstatus opens,
+workspace file-service opaque handles. Declaration and status/nonstatus opens,
 static modes, exact status ordinals, close/lifetime, file-formal state aliasing,
 lookahead `endfile`, and direct signed-integer element I/O agree across the
 interpreter and LLVM O0/O2. Bounded `std.textio` adds 4,096-byte `line`
@@ -1828,7 +1820,7 @@ cursor-aware integer/Boolean/bit reads with optional `good`, and appended
 integer/Boolean/bit/string writes with static side and field formatting.
 The predefined nonnegative 64-bit `time` type now folds exact `fs`, `ps`, `ns`,
 `us`, `ms`, `sec`, `min`, and `hr` literals, qualifications, arithmetic, and
-comparisons into project ticks. Expression-valued waits and timeouts share the
+comparisons into simulation ticks. Expression-valued waits and timeouts share the
 same interpreter/LLVM schedule, expression units contribute to `auto`
 resolution, and nonstatic, overflowing, or inexact values fail with targeted
 diagnostics. Dynamic time-valued objects remain outside the bounded Batch 119
@@ -1851,7 +1843,7 @@ checksums. The supported bounded profile retains fsim's exact nine-state
 `std_ulogic`/`std_logic` scalar and vector identity, complete elementwise logic
 tables, standard resolution, edge predicates, and same-domain vector type
 conversions. The upstream files participate in design and specialization
-provenance without appearing as project-manifest sources. Project
+provenance without appearing as user source inputs. Project
 redeclaration of a compiler-supplied package is rejected. Bundled floating
 packages remain inactive until their following Batch 120 stage gains positive,
 negative, elaboration, and runtime evidence; retention of an upstream
@@ -1907,7 +1899,7 @@ and the remaining package utilities are outside this reviewed profile.
 
 All reviewed packages may be collected in a reusable project context. Direct
 and context-expanded `use` clauses activate the complete standard dependency
-chain before manifest units, and fully qualified intrinsic calls retain their
+chain before user units, and fully qualified intrinsic calls retain their
 package provenance through specialization and overload dispatch. Simultaneous
 qualified `numeric_bit` and `numeric_std` types remain independently two- and
 nine-state; fixed and floating default generic-package instances coexist with

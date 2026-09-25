@@ -1,116 +1,84 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# Manifest-free compile, elaborate, and simulate
+# Workspace compile, elaborate, and simulate
 
 This tutorial runs the mixed VHDL/SystemVerilog vertical slice as three
-explicit, restartable phases. It deliberately does not load `fsim.toml`.
+restartable phases. The current directory is the workspace; fsim creates and
+manages `.fsim` automatically.
 
-From this directory, set `FSIM` to the simulator executable and create the
-consumer directories:
-
-```sh
-FSIM=../../build/llvm22-ninja-debug/fsim
-mkdir -p work files
-```
-
-Compile the VHDL and SystemVerilog compilation units independently:
+From this directory, select an executable and compile the sources:
 
 ```sh
+FSIM=../../build/dev/fsim
 "$FSIM" compile --lang vhdl --standard 2008 --library work \
-  --output work/counter.fsimobj ../vertical_slice/counter.vhd
-
+  ../vertical_slice/counter.vhd
 "$FSIM" compile --lang systemverilog --standard 2017 --library work \
-  --compilation-unit source-set --output work/testbench.fsimobj \
+  --compilation-unit source-set \
   ../vertical_slice/tb.sv ../vertical_slice/sv_child.sv
+"$FSIM" library objects work
 ```
 
-Each `.fsimobj` contains relocated source snapshots and portable owning units.
-It is checksummed, transactionally installed, read-only, and never overwritten.
+The catalog at `.fsim/libraries/work/library.sqlite3` connects named units to
+managed artifacts. Each primary HDL unit has its own artifact where practical;
+associated package classes and supporting definitions travel with their owner.
+Recompile a source with the same command to replace its previous definitions.
+A failed compile preserves the prior published library.
 
-Elaborate the ordered object list. The SystemVerilog `counter` instance
-automatically resolves the uniquely named VHDL entity in logical library
-`work`; no binding manifest is needed.
+Elaborate by top name, then simulate the default snapshot:
 
 ```sh
-"$FSIM" elaborate \
-  --object work/counter.fsimobj \
-  --object work/testbench.fsimobj \
-  --top demo=sv:work.tb \
-  --output work/vertical.fsimdesign \
-  --delay-mode typ --seed 1
+"$FSIM" elaborate demo=work.tb --delay-mode typ --seed 1
+"$FSIM" simulate --engine compiled --trace vertical.vcd --trace-filter 'demo.*'
 ```
 
-The original sources and both `.fsimobj` directories may now be moved away.
-The `.fsimdesign` contains the complete checksummed runtime, semantic/debug,
-and DesignIR projections needed for simulation.
+The SystemVerilog `counter` instance resolves the VHDL entity in `work`
+without a language qualifier or binding file. The snapshot is published under
+`.fsim/snapshots/default`; it retains the compiled runtime, semantic/debug,
+and DesignIR state needed for simulation.
 
-Run with explicit native-cache, HDL file-I/O, and filtered-trace paths:
+Use `--snapshot NAME` on both commands to keep a named snapshot:
 
 ```sh
-"$FSIM" simulate --design work/vertical.fsimdesign \
-  --engine compiled --cache work/native-cache --file-root files \
-  --trace work/vertical.vcd --trace-filter 'demo.*'
+"$FSIM" elaborate demo=work.tb --snapshot regression
+"$FSIM" simulate --snapshot regression --engine interpreter
 ```
 
-Use `--engine interpreter` for the reference evaluator or `--engine debug` for
-source-instrumented O0 execution. `--duration`, `--max-deltas`, and `--seed`
-may be supplied at simulation time. Delay selection belongs to elaboration, so
-`simulate --delay-mode` is a compatibility assertion and must match the design.
-All derived output stays in the explicit consumer paths; neither artifact tree
-is modified.
+The original sources may now be moved away. Recompiling or deleting library
+objects also leaves existing snapshots usable. Use `--engine debug` for O0
+instrumentation, and `--duration`, `--max-deltas`, or `--seed` for simulation
+controls. Delay selection belongs to elaboration; a simulation-time
+`--delay-mode` must agree with the snapshot.
+
+Progress defaults to normal. Add `-q` to suppress compile/elaborate progress
+or `-v` for more detail. Diagnostics remain available. Generated caches stay
+under `.fsim/cache`; trace and HDL file-I/O outputs use their requested paths.
 
 ## Add an incrementally compiled SystemC library
 
-SystemC uses a separate host-native object and link pair. The three-language
-example can be scripted from the repository root without reading its manifest:
+Run this part from `examples/three_language_hierarchy`, with fsim on `PATH`:
 
 ```sh
-FSIM=build/llvm22-ninja-debug/fsim
-mkdir -p /tmp/fsim-three-language
-
-"$FSIM" compile --lang vhdl --standard 2008 --library models \
-  --output /tmp/fsim-three-language/vhdl.fsimobj \
-  examples/three_language_hierarchy/logic_stage.vhd
-
-"$FSIM" compile --lang systemverilog --standard 2017 --library work \
-  --output /tmp/fsim-three-language/sv.fsimobj \
-  examples/three_language_hierarchy/three_language_tb.sv
-
-"$FSIM" systemc compile \
-  --output /tmp/fsim-three-language/bridge.fsimscobj \
-  examples/three_language_hierarchy/mixed_bridge.cpp
-
-"$FSIM" systemc link \
-  --object /tmp/fsim-three-language/bridge.fsimscobj \
-  --library models \
-  --output /tmp/fsim-three-language/models.fsimscplugin
-
-"$FSIM" elaborate \
-  --object /tmp/fsim-three-language/vhdl.fsimobj \
-  --object /tmp/fsim-three-language/sv.fsimobj \
-  --systemc-plugin /tmp/fsim-three-language/models.fsimscplugin \
-  --search-library models --top demo=sv:work.three_language_tb \
-  --output /tmp/fsim-three-language/design.fsimdesign
-
-"$FSIM" simulate \
-  --design /tmp/fsim-three-language/design.fsimdesign \
-  --engine compiled --cache /tmp/fsim-three-language/native-cache \
-  --trace /tmp/fsim-three-language/three-language.vcd
+fsim compile --lang vhdl --standard 2008 --library models logic_stage.vhd
+fsim compile --lang systemverilog --standard 2017 --library work \
+  three_language_tb.sv
+fsim systemc compile --library models mixed_bridge.cpp
+fsim systemc link --library models
+fsim elaborate demo=work.three_language_tb --search-library models \
+  --snapshot mixed
+fsim simulate --snapshot mixed --engine compiled --trace three-language.vcd
 ```
 
-Each C++ translation unit gets its own `.fsimscobj`; repeat `systemc compile`
-for additional files and pass the ordered objects to one `systemc link`.
-Unchanged translation units are independently reusable in project mode. The
-link phase loads the candidate image before publication and records the sorted
-factory names and parameter schemas. Macro exports may span translation units
-and synthesize the sole current `fsim_plugin_init_v1` ABI entry point. A low-
-level source may implement that same current entry point directly, but it is
-mutually exclusive with macro exports and is not the removed SystemC facade.
+Each C++ translation unit gets one managed object. Repeat `systemc compile`
+for changed translation units, then link the library again. The link phase
+loads the candidate image before publication and records its factories and
+parameter schemas. Macro exports can span translation units and synthesize the
+sole current `fsim_plugin_init_v1` ABI entry point. A low-level source can
+implement that entry point directly, but cannot mix it with macro exports.
 
-The final format-2 `.fsimdesign` embeds only the selected `models` plug-in.
-After elaboration, the original C++ source, `.fsimscobj`, and
-`.fsimscplugin` may all be moved away. Standalone simulation validates the
-embedded checksums and exact host ABI, reconstructs the SystemC hierarchy by
-stable path, reconnects it to the shared runtime, and preserves lifecycle,
-debugger, callback, and trace behavior. Because that image is native, move the
-design only to a host with the recorded compatible compiler target and fsim
-runtime/SystemC ABI.
+The snapshot retains the selected plugin. The original C++ sources and
+library objects are not needed by later simulation. Because that payload is
+native, simulation requires a compatible host and fsim/SystemC ABI. fsim
+validates its checksums, reconstructs the hierarchy by stable path, and
+reconnects it to the shared runtime.
+
+See the [workspace guide](../../docs/workspace-mode.md) for compiled package
+reuse, mapped libraries, object deletion, and migration from older commands.

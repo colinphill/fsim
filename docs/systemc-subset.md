@@ -13,7 +13,7 @@ The fsim boundary is a versioned C ABI used to construct model roots, expose
 typed HDL-facing ports, and synchronize the Accellera kernel with the common
 mixed-language scheduler. It is not the Accellera library ABI and does not make
 independently built SystemC binaries portable between SystemC installations or
-toolchains. fsim compiles configured model sources against its selected
+toolchains. fsim compiles selected model sources against its selected
 Accellera build and loads the resulting shared library.
 
 ## Source model
@@ -64,8 +64,10 @@ values with `construction_value<T>`.
 
 ## Mixed-language hierarchy
 
-A VHDL, Verilog, or SystemVerilog instance may select a SystemC factory with a
-`systemc:PLUGIN.FACTORY` manifest binding. Ports use ordinary official
+A VHDL, Verilog, or SystemVerilog instance may resolve a SystemC factory from
+the compiled library catalog. An elaboration top can use `LIBRARY.FACTORY`;
+add the `systemc:` prefix when a name is ambiguous across languages. Ports use
+ordinary official
 Accellera typed construction and binding syntax. SystemC source does not
 declare HDL proxy children; compose such children in the owning HDL hierarchy.
 
@@ -120,20 +122,46 @@ is now `record_payload_bytes`. The metric counts standalone persisted
 `TransactionRecord` payload bytes, not a removed transport envelope; update
 source references to the new member name.
 
-## Plug-in compilation and cache
+## Workspace compilation and linking
 
-Each schema-1 manifest may select a C++ compiler and pass include directories,
-definitions, compile options, link options, and libraries:
+The current directory is the workspace. fsim stores a local library named
+`models` in `.fsim/libraries/models` and manages its object names, plugin image,
+and factory catalog. Compile the translation units, then finalize the library:
 
-```toml
-[systemc]
-compiler = "clang++"
-includes = ["include"]
-defines = ["MODEL_REV=2"]
-compile_options = ["-O2"]
-link_options = []
-libraries = []
+```sh
+fsim systemc compile --library models -I include -D MODEL_REV=2 \
+  --compile-option=-O2 bridge.cpp helper.cpp
+fsim systemc link --library models
+fsim elaborate --top models.bridge --snapshot demo
+fsim simulate --snapshot demo
 ```
+
+Omitting `--library` selects `work`. A compilation command can contain several
+source files; each produces one managed native object. Helper translation
+units can be compiled before their exported modules. `systemc link` consumes
+the library's current objects and publishes the complete sorted factory and
+construction-parameter catalog only after a successful link and ABI check.
+Elaboration locates these factories by name without plugin filenames.
+
+Recompiling a source replaces that source's object and invalidates the linked
+factory catalog until `systemc link` runs again. A failed compilation keeps
+the previous object catalog, and a failed link keeps the previous linked
+catalog if the objects have not changed. `fsim library objects models` lists
+managed object IDs; `fsim library delete-object models OBJECT_ID` removes an
+object and invalidates the plugin catalog. Snapshots embed the selected native
+images and remain usable after their producing sources or library objects
+change. Re-elaboration replaces the selected snapshot. Without `--snapshot`,
+elaboration and simulation use `default`.
+
+Use `fsim library map models /path/to/library` to map an external managed
+library. fsim records the mapping in `.fsim/libraries.toml`. See
+[workspace mode](workspace-mode.md) for library and snapshot lifecycle rules.
+
+`--compiler`, `--include`, `--define`, and `--compile-option` control source
+compilation. `--compiler`, `--link-option`, and `--link-library` control linking.
+The compiler identity used for linking must match the objects. Both phases
+accept `--verbosity quiet|normal|verbose`; verbose output includes source,
+generated artifact, and selected option details.
 
 The driver invokes GCC, Clang, MSVC, or clang-cl directly with an argument
 vector. Its fingerprint includes ordered source content, dependency closure,
@@ -141,12 +169,14 @@ options, linked inputs, compiler identity and environment, target and shared
 library format, C++ mode, CRT, fsim ABI, and the selected Accellera runtime.
 GCC-like dependency files and MSVC `/sourceDependencies` JSON extend the cache
 identity to transitive headers and supported compiled-header inputs. Inputs
-that cannot be modeled safely make the build deliberately non-cacheable.
+that cannot be modeled safely, including volatile predefined macros, are
+rejected by incremental compilation.
 
-The cache publishes a versioned key, size, and SHA-256 record under a per-key
-process lock. The shared library is installed before metadata becomes the
-commit point. Missing, corrupt, stale, incomplete, or incompatible pairs are
-cache misses and abandoned staging state is repaired by the locked writer.
+The low-level cached compiler APIs additionally publish a versioned key, size,
+and SHA-256 record under a per-key process lock. The shared library is installed
+before metadata becomes the commit point. Missing, corrupt, stale, incomplete,
+or incompatible pairs are cache misses, and the locked writer repairs abandoned
+staging state. Workspace compilation publishes through its library transaction.
 
 On Windows, generated plug-ins match fsim's CRT configuration, use explicit
 object/PDB/import/export outputs, UTF-16 response files, and safe DLL search.
@@ -174,9 +204,12 @@ notifications, primitive-channel updates, or legacy foreign children.
 Registration is buffered and validated before factories or image ownership
 become visible. Missing symbols, ABI mismatch, malformed schemas, construction
 failure, and escaped callbacks reject the transaction without partial
-publication. Native exceptions are contained at the boundary. Loaded images
-and Accellera roots stay alive for the owning built project and are torn down
-after the native kernel finishes.
+publication. Native exceptions are contained at the boundary. Accellera roots
+remain alive for the owning simulation and are torn down after the native
+kernel finishes. Loaded images remain mapped through process teardown because
+Accellera registries can retain native type information. Managed replacement
+uses fresh physical artifact names and changes the catalog reference, which
+also avoids overwriting a loaded DLL on Windows.
 
 ## Native TLM and observation
 
@@ -196,11 +229,11 @@ explicit retryable backpressure.
 
 ## Backend and artifacts
 
-The in-process backend and serialized loopback exchange the same pointer-free,
-bounded protocol. Messages retain stable island, hierarchy, object, endpoint,
-transaction and sequence identities plus exact femtosecond time, delta and
-region. Disconnects, malformed messages, resource exhaustion and native
-exceptions are contained without partial publication.
+The in-process backend uses typed owning requests and results. Stable island,
+hierarchy, object, endpoint, transaction, and sequence identities survive
+snapshot publication, together with exact femtosecond time, delta, and region.
+Malformed state, resource exhaustion, and native exceptions are contained
+without partial publication.
 
 Source and incremental plug-ins, mapped libraries, standalone object/design
 artifacts, relocation, caches and checkpoints carry the exact upstream source,
@@ -208,10 +241,11 @@ compiler, standard-library, bridge and ABI identities. Transient native
 objects are reconstructed and rebound by stable hierarchy identity; they are
 never serialized as pointers.
 
-The protocol and island ownership are worker-ready, but v2 does not include an
-automatic partitioner, a kernel-per-worker launcher, or a conservative
-parallel scheduler. Those remain post-v2 work and require no replacement of
-the current SystemC/TLM ABI.
+The low-level C++ incremental API still exposes immutable `.fsimscobj` and
+`.fsimscplugin` directory publication for SDK callers. Those APIs require a
+fresh output directory; the workspace layer owns replacement and metadata
+transactions for CLI users. See the [ABI and schema reference](abi-schema-reference.md)
+for the persisted format identities.
 
 ## Closure evidence
 

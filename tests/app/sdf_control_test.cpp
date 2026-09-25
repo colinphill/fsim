@@ -145,19 +145,19 @@ void test_effective_counts_and_legality()
 
 void test_cli_surface()
 {
-    const std::array arguments { "fsim", "build", "--sdf", "alpha.sdf",
+    const std::array arguments { "fsim", "elaborate", "top", "--sdf", "alpha.sdf",
         "--sdf", "beta.sdf", "--sdf-root", "top", "--sdf-cell", "u*",
         "--sdf-report-limit", "3", "--delay-mode", "max" };
     fsim::diagnostic::Engine diagnostics;
     const auto parsed = fsim::cli::parse_arguments(
         static_cast<int>(arguments.size()), arguments.data(), diagnostics);
     require(parsed && !diagnostics.has_error(),
-        "project CLI must accept SDF elaborate controls");
+        "workspace CLI must accept SDF elaborate controls");
     require(parsed->sdf_files.size() == 2U
             && parsed->sdf_root == "top" && parsed->sdf_cell == "u*"
             && parsed->sdf_report_limit == 3U
             && parsed->delay_mode == fsim::project::DelayMode::maximum,
-        "project CLI must retain ordered SDF controls");
+        "workspace CLI must retain ordered SDF controls");
     require(parsed->sdf_files.front().is_absolute(),
         "CLI SDF inputs must be normalized");
 

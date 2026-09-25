@@ -1,62 +1,50 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Precompiled-library tutorial
 
-This example separates a reusable SystemVerilog library producer from a local
-consumer. The producer exports logical library `vendor` as one relocatable,
-read-only `.fsimlib` directory. The consumer maps that directory, searches the
-logical library during elaboration, and instantiates `library_child` without
-listing or parsing the producer source.
+This example separates a reusable SystemVerilog library from a local
+consumer. A mapped directory owns the `vendor` library catalog and managed
+objects. The consumer resolves `library_child` without parsing its old source.
 
-The commands below assume a Debug build at `build/dev`. From the repository
-root, first publish the producer library:
+Run from this directory with fsim on `PATH`:
 
 ```sh
-mkdir -p examples/precompiled_library/artifacts
-build/dev/fsim build \
-  -p examples/precompiled_library/producer/fsim.toml \
-  --export-library \
-  vendor=examples/precompiled_library/artifacts/vendor.fsimlib
+mkdir -p ../precompiled-library-vendor
+fsim library map vendor ../precompiled-library-vendor
+fsim compile --library vendor producer/library_child.sv
+fsim library objects vendor
+fsim compile --library work consumer/tb.sv
+fsim elaborate work.tb --search-library vendor --snapshot consumer
+fsim simulate --snapshot consumer --trace precompiled_library.vcd
 ```
 
-The exported directory contains canonical `fsim-library.toml`, checksummed
-portable unit and source payloads, and—when the local build supports LLVM—an
-optional exact-host native object. Publication refuses to overwrite an
-existing destination and makes the completed artifact read-only.
+The mapping is saved in `.fsim/libraries.toml`. The external directory contains
+`library.sqlite3` and fsim-generated artifacts. Create the mapping before
+compiling into the target library. Repeating compilation replaces the previous
+definitions transactionally; the user does not select artifact filenames.
 
-Now build and run the consumer:
+`tb.u_library_child` resolves to `vendor.library_child`. The simulation stops
+at tick 2, and the child output is the inverse of the input during both stimulus
+intervals. The snapshot remains usable after the producer source is hidden or
+the library is updated.
+
+A second workspace can map the same directory under `vendor` and reuse its
+compiled definitions. To relocate the library, stop writers and copy the whole
+directory, then change the mapping:
 
 ```sh
-build/dev/fsim check -p examples/precompiled_library/consumer/fsim.toml
-build/dev/fsim run   -p examples/precompiled_library/consumer/fsim.toml
+cp -a ../precompiled-library-vendor ../precompiled-library-relocated
+fsim library map vendor ../precompiled-library-relocated
+fsim elaborate work.tb --search-library vendor --snapshot relocated
+fsim simulate --snapshot relocated
 ```
 
-The consumer manifest maps `vendor` to the artifact and includes `vendor` in
-its elaboration search list. Its local `tb` therefore resolves
-`tb.u_library_child` to `sv:vendor.library_child`. The run stops at tick 2 and
-writes `consumer/precompiled_library.vcd`; the child output is the inverse of
-the input throughout the two stimulus intervals.
+Compiled packages work the same way. Compile a package into `vendor`, then
+compile its consumer with `--search-library vendor`; the package source need
+not remain present. If a provider changes, recompile stale consumers before
+elaborating a new snapshot.
 
-To demonstrate relocation while preserving the published read-only source
-artifact, copy the complete directory with its modes and override the manifest
-mapping without editing the project:
-
-```sh
-mkdir -p examples/precompiled_library/relocated
-cp -a examples/precompiled_library/artifacts/vendor.fsimlib \
-  examples/precompiled_library/relocated/vendor.fsimlib
-build/dev/fsim run \
-  -p examples/precompiled_library/consumer/fsim.toml \
-  --map-library \
-  vendor=examples/precompiled_library/relocated/vendor.fsimlib
-```
-
-All derived LLVM objects, traces, and other mutable state remain in the
-consumer cache or output directory; fsim never writes into the mapped tree.
-An optional native payload is admitted only on an exact host/ABI/fingerprint
-match. Otherwise fsim restores and compiles the portable unit.
-
-For SystemC libraries, the portable fallback bundles source files and supports
-self-contained plug-ins that depend only on fsim/SystemC and standard host
-headers. Producer-only include directories, definitions, compiler/linker
-options, or external libraries are not a relocatable contract and must not be
-used when exporting a portable SystemC library in this format revision.
+`library unmap vendor` preserves the external library. `library delete vendor`
+removes the library's managed state and mapping while preserving unrelated
+files in that directory. Existing snapshots remain independent. The old
+producer and consumer `fsim.toml` files are historical fixtures, not inputs to
+this workflow.

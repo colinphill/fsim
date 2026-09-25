@@ -52,10 +52,12 @@ file(READ
   FSIM_TUTORIAL)
 foreach(FSIM_TOKEN IN ITEMS
     "137'h1_0000_0000_0000_0000_0000_0000_0000_0000_xz"
-    "fsim-sv run -p fsim.toml"
+    "fsim elaborate work.wide_literal"
+    "fsim simulate --snapshot portable"
     "--lang verilog --standard 2005 --library work"
     "--engine interpreter"
-    "Move the complete `.fsimdesign` directory"
+    ".fsim/snapshots/portable"
+    "library updates or deletion"
     "A zero process exit code is not a substitute")
   string(FIND "${FSIM_TUTORIAL}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)

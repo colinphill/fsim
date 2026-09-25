@@ -23,8 +23,10 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_AUDIT}" "${FSIM_TRACING_DOC}" "${FSIM_API_DOC}"
     "${FSIM_LANGUAGE_DOC}" "${FSIM_ARCHITECTURE_DOC}"
     "${FSIM_FEATURE_DOC}" "${FSIM_RESUME_DOC}" "${FSIM_README}"
-    "${FSIM_EXAMPLE_DIR}/README.md" "${FSIM_EXAMPLE_DIR}/fsim.toml"
-    "${FSIM_EXAMPLE_DIR}/fsim-fst.toml" "${FSIM_RESOURCE_CONTRACT}"
+    "${FSIM_EXAMPLE_DIR}/README.md" "${FSIM_EXAMPLE_DIR}/debug-session.sh"
+    "${FSIM_EXAMPLE_DIR}/three_language_tb.sv"
+    "${FSIM_EXAMPLE_DIR}/logic_stage.vhd"
+    "${FSIM_EXAMPLE_DIR}/mixed_bridge.cpp" "${FSIM_RESOURCE_CONTRACT}"
     "${FSIM_LICENSE}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "FST release-audit input is missing: ${FSIM_INPUT}")
@@ -85,6 +87,7 @@ list(APPEND FSIM_AUTHORED_FILES
   "${FSIM_SOURCE_DIR}/README.md")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/\\.fsim-cache/")
+list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/\\.fsim/")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
@@ -152,7 +155,8 @@ foreach(FSIM_DOC_TOKEN IN ITEMS
     "VCD and FST tracing"
     "format-neutral trace model"
     "Verilog, SystemVerilog, VHDL, and SystemC"
-    "project, CLI, Tcl, debugger, native C, C++"
+    "fsim simulate --trace waves.fst"
+    "fsim elaborate work.three_language_tb --search-library models"
     "Release build testing is not required except during the final batch checks"
     "Header formatting changes that would induce long rebuilds are avoided"
     "Batch 172 planned restart checkpoint")

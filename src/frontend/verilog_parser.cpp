@@ -44,8 +44,18 @@ ParseResult parse_verilog(
     LexResult lexed,
     const StandardRevision standard_revision,
     const std::string_view compatibility_profile) {
+  return parse_verilog(std::move(lexed), standard_revision,
+      compatibility_profile, {});
+}
+
+ParseResult parse_verilog(
+    LexResult lexed,
+    const StandardRevision standard_revision,
+    const std::string_view compatibility_profile,
+    SystemVerilogPackageMemberLookup package_member_lookup) {
   return VerilogParser(std::move(lexed), standard_revision,
-      std::string { compatibility_profile }).run();
+      std::string { compatibility_profile },
+      std::move(package_member_lookup)).run();
 }
 
 }  // namespace fsim::frontend

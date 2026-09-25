@@ -138,12 +138,15 @@ The host validates its own required ABI prefix before opening a plug-in where
 that ordering is available. It then resolves the one versioned entry point,
 validates the returned record, and publishes registrations only after the
 whole bind succeeds. Shutdown precedes unload.
+SystemC roots shut down with their simulation, while SystemC image handles stay
+mapped through process teardown because Accellera registries retain native
+type information.
 
 ## Current persisted identities
 
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
-| `fsim.toml` | project schema 3 | user-authored project, source, library, build, run, trace, SDF, SystemC, and code-coverage settings |
+| `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
 | `.fsimobj` | `FSIMOBJ\0`, format 8, portable schema 15, compiled-HIR bundle 1 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
 | `.fsimdesign` | `FSIMDES\0`, format 14, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
 | `.fsimlib` | canonical TOML format 6, portable schema 15, compiled-HIR bundle 1 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
@@ -153,8 +156,11 @@ whole bind succeeds. Shutdown precedes unload.
 
 All numeric binary fields are canonical little-endian. Artifact payload paths
 are relative, normalized, contained, and unique within their artifact. Trees
-publish through an atomic sibling stage, become read-only, and do not overwrite
-an existing destination.
+publish through an atomic sibling stage and become read-only. These low-level
+publishers require a fresh destination. The workspace layer generates the
+physical destinations and atomically replaces the active library or snapshot
+catalog entry when compilation, linking, or elaboration succeeds. CLI users
+select libraries and snapshot names; they do not name these artifact directories.
 
 Objects, designs, design-cache records, and LLVM native-object keys retain the
 schema-3 code-coverage configuration and model identity. Disabled coverage uses
@@ -248,28 +254,34 @@ reader. Recover from an identity mismatch by rebuilding from the nearest
 available source or portable boundary with the current fsim build:
 
 ```sh
-# Recreate a portable HDL object from source.
-fsim compile --lang systemverilog --standard 2017 --library work \
-  --output unit.fsimobj source.sv
+# Replace this source's managed HDL units in work.
+fsim compile --lang systemverilog --standard 2017 --library work source.sv
 
-# Recreate a standalone design from current objects and explicit roots.
-fsim elaborate --object unit.fsimobj --top top=sv:work.top \
-  --output design.fsimdesign
+# Replace the default snapshot using library metadata to find its top.
+fsim elaborate --top work.top
+fsim simulate
 
-# Recreate an incremental SystemC object and linked plug-in.
-fsim systemc compile --output bridge.fsimscobj bridge.cpp
-fsim systemc link --object bridge.fsimscobj --library models \
-  --output models.fsimscplugin
+# Replace managed SystemC objects, then refresh the factory catalog.
+fsim systemc compile --library models bridge.cpp helper.cpp
+fsim systemc link --library models
+fsim elaborate --top models.bridge --snapshot bridge
+fsim simulate --snapshot bridge
 
-# Recreate a mapped library from a current project build.
-fsim build -p fsim.toml --export-library work=work.fsimlib
+# Reuse another workspace's managed library directory.
+fsim library map models /path/to/producer/.fsim/libraries/models
 ```
 
-For `fsim.toml`, recreate or update the source manifest with top-level
-`schema = 3`; do not copy a schema-0/1 file forward without revalidating all
-current fields. For a native cache mismatch, remove only the affected cache
-root or let a distinct content key miss and repopulate it. Do not edit cache or
-artifact metadata to claim compatibility.
+The same source selection replaces the affected managed objects; other library
+objects remain available. Re-link after changing or deleting a SystemC object.
+Published snapshots retain their embedded native images until re-elaboration
+replaces the selected snapshot. See [workspace mode](workspace-mode.md).
+
+The retained C++ artifact publishers and project configuration reader are
+low-level SDK interfaces. Callers using them still supply fresh artifact
+paths, and the configuration reader requires schema 3. They do not define the
+public CLI workflow. For a native cache mismatch, let a distinct content key
+miss and repopulate the cache. Do not edit cache or artifact metadata to claim
+compatibility.
 
 If a source-hidden artifact is incompatible and no source or current portable
 payload exists, use the exact producer build that created it or reacquire the

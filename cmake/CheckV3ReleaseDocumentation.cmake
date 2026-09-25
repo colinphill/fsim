@@ -73,12 +73,42 @@ foreach(FSIM_PATH IN LISTS FSIM_PATHS)
   endif()
 endforeach()
 foreach(FSIM_PATH IN ITEMS
-    examples/v3_coverage/fsim.toml
+    docs/workspace-mode.md
+    examples/non_project_phases/README.md
+    examples/precompiled_library/README.md
     examples/v3_coverage/counter.sv
     examples/v3_coverage/coverage_tb.sv)
   fsim_current_evidence_file("${FSIM_PATH}")
   if(NOT FSIM_PATH IN_LIST FSIM_MANIFEST)
-    message(FATAL_ERROR "v3 coverage example is not packaged: ${FSIM_PATH}")
+    message(FATAL_ERROR "workspace guide or coverage example is not packaged: ${FSIM_PATH}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_SOURCE_DIR}/docs/workspace-mode.md" FSIM_WORKSPACE_GUIDE)
+foreach(FSIM_TOKEN IN ITEMS
+    "The current working directory is the workspace"
+    ".fsim/libraries/<name>" "library.sqlite3" ".fsim/libraries.toml"
+    "fsim compile --library work" "fsim elaborate work.tb" "fsim simulate"
+    "--snapshot regression" "fsim library map vendor"
+    "fsim library delete-object vendor OBJECT_ID"
+    "fsim systemc compile --library models" "fsim systemc link --library models"
+    "--verbosity quiet" "Failed compilation preserves"
+    "Existing snapshots retain")
+  string(FIND "${FSIM_WORKSPACE_GUIDE}" "${FSIM_TOKEN}" FSIM_OFFSET)
+  if(FSIM_OFFSET EQUAL -1)
+    message(FATAL_ERROR "workspace guide lost its public contract: ${FSIM_TOKEN}")
+  endif()
+endforeach()
+foreach(FSIM_PATH IN ITEMS
+    README.md docs/user-platform-guide.md
+    examples/vertical_slice/README.md examples/non_project_phases/README.md
+    examples/precompiled_library/README.md examples/three_language_hierarchy/README.md
+    examples/v3_coverage/README.md examples/sdf_annotation/README.md
+    examples/sdf_vital_mixed/README.md)
+  file(READ "${FSIM_SOURCE_DIR}/${FSIM_PATH}" FSIM_CONTENTS)
+  if(FSIM_CONTENTS MATCHES
+      "fsim (run|build)([ \r\n]|$)|fsim[^\n]*--project|fsim[^\n]*--object|fsim[^\n]*--design")
+    message(FATAL_ERROR "current user guide regained removed project/artifact CLI: ${FSIM_PATH}")
   endif()
 endforeach()
 

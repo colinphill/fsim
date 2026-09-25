@@ -134,13 +134,9 @@ void test_manifest_surface(const TemporaryDirectory& directory)
 
 void test_cli_override(const TemporaryDirectory& directory)
 {
-    const auto manifest_path = directory.path / "fsim.toml";
-    write_text(manifest_path,
-        manifest("[coverage]\nenabled = false\n"));
-
     bool invoked = false;
     fsim::cli::Services services;
-    services.run = [&](const fsim::cli::Invocation& invocation,
+    services.simulate = [&](const fsim::cli::Invocation& invocation,
                        const fsim::project::Config& config,
                        fsim::diagnostic::Engine&,
                        std::ostream&,
@@ -151,10 +147,8 @@ void test_cli_override(const TemporaryDirectory& directory)
         assert(fsim::app::code_coverage_enabled(config));
         return 0;
     };
-    const auto manifest_text = manifest_path.generic_string();
     const std::array arguments {
-        "fsim", "run", "--project", manifest_text.c_str(),
-        "--code-coverage" };
+        "fsim", "simulate", "--code-coverage" };
     std::ostringstream output;
     std::ostringstream error;
     assert(fsim::cli::run(static_cast<int>(arguments.size()),

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_compiled_environment_vhdl.hpp"
+#include "application_workspace_objects.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/elaboration/coverage_external_exclusions.hpp"
@@ -180,6 +182,10 @@ std::optional<BuiltProject> build_checked_project(
     diagnostic::Engine& diagnostics)
 {
     if (!workspace) {
+        return std::nullopt;
+    }
+    if (!validate_and_link_vhdl_compiled_environment(
+            *workspace, diagnostics, false)) {
         return std::nullopt;
     }
     auto checked = std::optional<CheckedProject> {
@@ -806,6 +812,22 @@ std::optional<BuiltProject> build_objects(
     }
     return build_checked_project(
         config, std::move(checked), systemc_plugins, diagnostics);
+}
+
+std::optional<BuiltProject> application_detail::build_workspace_objects(
+    const project::Config& config,
+    const std::span<const WorkspaceObjectSelection> objects,
+    const std::span<const std::filesystem::path> systemc_plugins,
+    diagnostic::Engine& diagnostics)
+{
+    if (std::ranges::none_of(objects, [](const auto& object) {
+            return !object.active_units.empty();
+        })) {
+        return build_objects(config, { }, systemc_plugins, diagnostics);
+    }
+    return build_checked_project(config,
+        load_workspace_objects(objects, diagnostics), systemc_plugins,
+        diagnostics);
 }
 
 } // namespace fsim::app

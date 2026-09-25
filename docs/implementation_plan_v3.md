@@ -38,6 +38,14 @@ starts on branch codex/v3 from clean v2 checkpoint
   LLVM-enabled hosted matrix: Linux Debug/Release and Windows Debug/Release.
   Batch 188I Change 20 additionally owns local LLVM-enabled ASan/UBSan
   qualification; Batch 190 retains its planned parallel/race qualification.
+- Batch 188J is a one-time, exactly twenty-change workspace migration after
+  Batch 188I and before Batch 189, requested on 2026-09-25. It replaces the
+  user-facing project and explicit-artifact workflows with managed libraries
+  and snapshots in the current working directory. It preserves the numbering
+  of Batches 189-197. Changes 1-19 use focused validation; Change 20 owns a
+  dependency-rescanned Release build and full suite, then Debug build and full
+  suite, documentation, commit, and push. It creates no release tag and adds
+  no performance, sanitizer, or hosted-monitoring gate before Batch 190.
 - Whenever the governing cadence authorizes a new hosted CI run, inspect the
   most recent applicable run first, including the status and failing job logs,
   and identify existing errors before triggering the new run. Resolve known
@@ -7781,6 +7789,229 @@ compatibility boundaries, cumulative performance within the agreed allowance
 when that gate is required, and an exact handoff to Batch 189. No line-count
 target, weakened gate, omitted required benchmark, or release tag substitutes
 for those outcomes.
+
+#### Batch 188J - managed workspaces, libraries, and snapshots
+
+The workspace is exactly the current working directory. Its `.fsim` directory
+owns fsim-generated state. The user approved `.fsim/libraries/<name>` for
+managed libraries; `work` is the default. `.fsim/libraries.toml` maps logical
+libraries to out-of-tree library directories. Each library contains a
+SQLite catalog linking source ownership and named HDL units or SystemC
+factories to fsim-generated artifacts. The user authorized SQLite for this
+metadata on 2026-09-25. Artifacts remain managed files; recompilation replaces
+the corresponding logical records and retires superseded files after a
+successful transaction. Failed compilation preserves the previous library.
+Prefer one named object per compilation artifact. Package-owned classes and
+necessary supporting definitions stay with their owner; units sharing mutable
+compilation-unit state may remain together to preserve language semantics.
+Each SystemC native object artifact owns one translation unit.
+
+`compile` accepts sources and a target library. `elaborate` accepts top-level
+names and creates `.fsim/snapshots/default` unless `--snapshot NAME` selects
+another snapshot. `simulate` uses `default` when no snapshot name is supplied.
+Re-elaboration replaces the selected snapshot. Snapshot contents remain
+independent of later source/library changes. `systemc compile` and
+`systemc link` operate on managed library objects and plugins without artifact
+filenames. Compile and elaborate progress supports quiet, normal, and verbose
+output. Public project-file discovery, project options, and `build`/`run`
+commands are removed; internal compiler configuration types may remain.
+Top-level lookup is language-neutral by default; a source-language qualifier
+is needed only when naming is ambiguous.
+`library objects [NAME]` enumerates managed object IDs and definitions;
+`library delete-object NAME OBJECT_ID` removes an object, and
+`library delete NAME` removes the whole managed library. Deletion updates the
+catalog and invalidates affected lookups. Whole-library deletion preserves
+unrelated files in mapped directories and removes the mapping. Consumers of
+deleted providers require recompilation; existing snapshots remain usable.
+
+1. **Complete.** Define and document the workspace layout, command grammar, ownership,
+   replacement, and default/named snapshot contract.
+2. **Complete.** Add the pinned cross-platform SQLite dependency and its source provenance.
+3. **Complete.** Implement workspace creation and persistent out-of-tree library mappings.
+4. **Complete.** Implement versioned library catalogs with named-unit and source ownership,
+   object enumeration/deletion, and whole-library deletion hooks and commands.
+5. **Complete.** Publish artifact replacements transactionally, preserving usable state on
+   failure and handling retained Windows plugin images.
+6. **Complete.** Canonicalize source/compilation-unit ownership, generate artifact names,
+   and remove stale definitions when sources are recompiled.
+7. **Complete.** Build read-only compiled analysis environments from active local and mapped
+   library definitions without reparsing old sources or reconstructing ASTs.
+8. **Complete.** Support SystemVerilog compiled package imports, types, constants, functions,
+   and classes across separate compile invocations.
+9. **Complete.** Support VHDL compiled packages, package bodies, and contexts across separate
+   compile invocations, including language/profile and body-conformance checks.
+10. **Complete.** Track compiled dependency identities and reject stale consumers after a
+    provider changes instead of using previously folded values silently.
+11. **Complete.** Compile SystemC translation units into managed target-library objects.
+12. **Complete.** Link managed SystemC objects and register plugin factories in the library
+    catalog, preserving independent snapshot payloads.
+13. **Complete.** Resolve top-level names and dependencies through library metadata,
+    supporting several roots and deterministic ambiguity diagnostics.
+14. **Complete.** Publish and replace default and named snapshots under `.fsim/snapshots`.
+15. **Complete.** Route simulate, debug, and Tcl through snapshot selection and keep generated
+    caches under `.fsim`.
+16. **Complete.** Remove project-mode discovery/options and explicit artifact filename
+    management from the public compilation/elaboration/simulation commands.
+17. **Complete.** Report compile and elaborate actions at selectable verbosity while keeping
+    diagnostics and simulated output available.
+18. **Complete.** Qualify actual workspace workflows: local/mapped libraries, independent
+    package compilation, replacement/rollback, SystemC, multiple tops,
+    named/default snapshots, and source-free snapshot reload.
+19. **Complete.** Update current user guides, examples, package manifests, and substantive
+    governance checks to describe and exercise workspace mode.
+20. **Local qualification complete; publication pending.** Run dependency-rescanned
+    warnings-as-errors Release and its full suite,
+    then Debug and its full suite; record evidence, commit, push, and hand off
+    to Batch 189 without a release tag.
+
+Change 1 closed on 2026-09-25. `docs/workspace-mode.md` and the current user
+guide record the approved layout, SQLite catalogs, command naming, deletion
+semantics, per-object artifact preference, and language-optional top lookup.
+Changes 2, 3, and 5 closed after the warnings-as-errors Debug focused build
+and `fsim.application.workspace-store` passed. SQLite archive/source checks,
+source packaging, and supply-chain checks passed. The store test exercises
+source ownership, rollback, concurrent writers, mapped paths, deletion,
+snapshot replacement, schema rejection, and preservation of unrelated files.
+The first nine-test workspace run also passed CLI parsing and managed SystemC;
+six remaining fixtures/integration failures are being repaired. These are
+focused results, not the Change 20 full-suite gate.
+
+Changes 4, 9, 11, 12, 14, 16, and 17 closed with the next focused Debug
+waves. `/tmp/fsim-j-focused-tests3.log` records passing catalog, CLI, VHDL
+packages, active object projection, debugger snapshot controls, SystemC
+default/named source-free snapshots, and the migrated multiple-root,
+artifact-phase, and non-project internal fixtures. Actual CLI lifecycle
+selectors `managed-snapshots`, `mapped-library`, and `language-tops` passed
+separately (`/tmp/fsim-j-lifecycle-*-tests3.log`). Remaining failures are the
+SystemVerilog package value/runtime fixture, empty-source replacement, and
+one migrated debugger trace fixture. Dependency selection is being tightened
+so unrelated stale objects or unfinished packages do not block healthy tops.
+
+Change 19 closed with the workspace guide, current tutorials/examples,
+packaging inventory, installed-workflow checks, and substantive governance
+migration. The seven-test static slice passed 7/7 in 9.60 seconds
+(`/tmp/fsim-j-static-tests4.log`), including diagnostics, source manifest,
+supply chain, command uniqueness, restartability, and release documentation.
+Installed/archive execution remains part of Change 20. Performance harness
+migration and performance measurement remain deferred; no performance pass
+is claimed.
+
+Changes 6, 7, and 10 closed with Debug build8 and its focused tests. All actual
+workspace CLI lifecycle cases passed, including comment-only replacement,
+rollback, hidden-source package reuse and stale-provider rejection, mapped
+libraries, default/named snapshots, and language-optional top lookup.
+VHDL standard/family isolation, metadata-only incompatibility diagnostics,
+and independent global-class partitioning passed. The broader focused slice
+passed 20/24 in 23.41 seconds (`/tmp/fsim-j-focused-tests8.log`); remaining
+failures concern the SV class runtime fixture, selection DesignIR fixture,
+Tcl language-standard provenance, and the migrated debugger compilation fixture.
+
+**Windows CI repair note (2026-09-25).** On the user's request, inspected
+[CI run 36120150859](https://github.com/colinphill/fsim/actions/runs/36120150859)
+at `c1ccaa0a`. Both Windows LLVM-MinGW builds succeeded; both failed the
+artifact-phase test while renaming `artifact-mixed.fsimdesign` to
+`relocated.fsimdesign`. Eight dependent tests were not run because that
+fixture failed; the Release archive upload failure followed the skipped
+archive creation. Ubuntu Release passed.
+
+The test's hierarchy-path and DesignIR payload readers remained alive until
+the end of the whole test function. Reading an `ifstream` to EOF does not
+close its handle. Windows prevents renaming a directory while files beneath
+it have open handles; POSIX permits this directory-entry rename with open
+descendant files, which explains the Linux pass. The relevant platform rule
+is documented in Microsoft's
+[directory rename rules](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
+`read_artifact_payload` now owns each inspection stream in a short scope and
+returns only the bytes. Its destructor closes the handle before relocation.
+The payload/schema checks, actual directory rename, source-free reload, and
+replay equality assertions remain intact. Production readers already close
+their streams on return. The warnings-as-errors Debug rebuild passed, and
+the post-fix artifact-phase test passed in 0.65 seconds; its three-test slice
+passed 3/3 in 22.10 seconds (`/tmp/fsim-j-ci-focused-tests9.log`). Windows
+post-fix execution remains unverified; the Linux pass is not Windows
+confirmation.
+
+Change 8 closed with the same focused slice. The hidden-provider SV fixture
+now exercises class allocation and members through `app::Simulation`, with
+the same language/profile metadata population as production builds.
+Class/type/task dependency collection and compiled package runtime values
+pass. The migrated debugger compile-to-snapshot fixture also passes.
+
+Changes 13, 15, and 18 closed with Debug build10 and the final focused
+selection repair (`/tmp/fsim-j-focused-tests10.log` and
+`/tmp/fsim-j-focused-tests11.log`). All ten workspace tests and Tcl now pass,
+including stale-object isolation, hierarchy/UDP closure, explicit VHDL
+architecture selection and package-body companions, language-optional tops,
+and source-free default/named snapshots. Independent UDP artifacts now carry
+an explicit private semantic/HIR compilation-unit owner; elaboration binds
+the primitive to that owner without changing schemas or weakening DesignIR
+invariants. Version-bearing `--lang` aliases preserve their standards, with
+explicit `--standard` taking precedence in either option order. Change 20
+qualification remains outstanding.
+
+Change 20's initial dependency-rescanned warnings-as-errors Release build
+passed (`/tmp/fsim-j-release-configure.log`, `/tmp/fsim-j-release-build.log`).
+The immediately following full suite passed 429/438 in 147.87 seconds
+(`/tmp/fsim-j-release-tests.log`): seven tests failed and two dependent
+matrices were not run. The failures identify an SV parameter-specialization
+regression, an overly broad AST boundary check for current-source analysis
+and its negative probes, a synthetic installed-archive fixture missing the
+new SQLite license, and three stale composed diagnostic-count expectations.
+The repair wave preserves local parameter precedence in specialization
+metadata without reordering other package entries, and strengthens the
+original generated-width assertions with uniqueness checks. The AST checker
+now distinguishes the current-source adapter from the HIR-only resolver and
+checks both raw and compact text so value and reference ownership cannot be
+hidden by whitespace normalization or a borrowed-parameter exemption. Its
+focused positive/negative pair passed 2/2 in 16.23 seconds
+(`/tmp/fsim-j-ast-focused-tests12.log`). The synthetic installed archive now
+includes SQLite provenance and enforces the managed workflow; all three
+composed audits require the actual 2766 diagnostic codes. Those four static
+tests passed 4/4 in 20.60 seconds. The repeated dependency-rescanned
+warnings-as-errors Release build passed, followed immediately by the full
+438/438-test suite in 138.29 seconds (`/tmp/fsim-j-release-configure2.log`,
+`/tmp/fsim-j-release-build2.log`, `/tmp/fsim-j-release-tests2.log`). The
+dependency-rescanned warnings-as-errors Debug build then passed, followed
+by 438/438 tests in 142.02 seconds (`/tmp/fsim-j-debug-configure-final.log`,
+`/tmp/fsim-j-debug-build-final.log`, `/tmp/fsim-j-debug-tests-final.log`).
+Both builds used LLVM/Clang 22.1.8 and twelve build workers, with 120-minute
+command timeouts and no clean prerequisite. `git diff --check` passed.
+Local correctness qualification is complete; commit/push and the closing
+handoff remain. Performance/harness migration, sanitizer reruns, and hosted
+monitoring retain their recorded deferrals. Batch 189 remains unstarted.
+
+##### Deferred Tcl object-model integration
+
+Recorded at the user's request on 2026-09-25. The current Tcl interface is
+useful for snapshot-based simulation control, signal inspection/mutation,
+callbacks, tracing, SDF, and scripted debugging. Its object-model coverage
+is partial. The following work is deferred; existing batch numbering and
+Batch 188J's closure scope remain as recorded above.
+
+- Expose native Tcl compilation, elaboration, library mapping/unmapping,
+  compiled-object enumeration/deletion, and whole-library deletion. Return
+  structured results and diagnostics so scripts can manage a workspace
+  without parsing CLI output or managing artifact filenames.
+- Provide structured queries for elaborated hierarchy, object kinds,
+  parents/children, types, widths/dimensions, packages, and class objects.
+  The current `fsim::signals` command provides a flat list of signal paths.
+- Define object references and their lifetime across snapshot loading,
+  simulation restart, and library replacement/deletion. Specify deterministic
+  handling of stale references; current signal commands primarily use paths.
+- Add structured access to supported composite values and class state,
+  including explicit rules for permitted mutations and callback safety.
+  Current direct signal reads return bit strings.
+- Expose richer debugger operations as structured Tcl data. The current
+  `fsim::debug` bridge executes debugger commands and returns their text.
+- Extend structured source provenance beyond Verilog/SystemVerilog to VHDL
+  and SystemC, preserving language, library, source, and instance identity.
+
+Acceptance should include end-to-end Tcl workflows that compile and elaborate
+a workspace, enumerate/query objects, drive and check a simulation, replace
+or delete library definitions, reload snapshots, and diagnose stale object
+references. Exercise mixed-language designs and source-free snapshots, using
+Tcl lists/dictionaries or defined object references rather than textual
+debugger-output parsing. Preserve the existing tested simulation controls.
 
 ## v3.1.0
 

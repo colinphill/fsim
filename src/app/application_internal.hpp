@@ -14,6 +14,7 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/library/source_mapping.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/runtime/class_randomize.hpp"
 #include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
@@ -1321,6 +1322,7 @@ struct ParseGroup {
     std::vector<std::filesystem::path> include_directories;
     std::vector<std::string> defines;
     std::filesystem::path base_directory;
+    frontend::SystemVerilogPackageMemberLookup package_member_lookup;
 };
 
 struct ParsedSnapshot {
@@ -1340,6 +1342,12 @@ struct CompilationWorkspace final : CheckedProject {
     std::vector<frontend::SystemVerilogClassSpecialization>
         systemverilog_class_specializations;
     std::vector<semantic::CompiledDesign> mapped_compiled_designs;
+    std::vector<semantic::UnitId> source_units;
+    std::vector<std::filesystem::path> source_unit_paths;
+    std::vector<std::string> source_class_identities;
+    std::vector<std::filesystem::path> source_class_paths;
+    std::vector<semantic::CompiledUdpIdentity> source_udp_identities;
+    std::vector<std::filesystem::path> source_udp_paths;
 };
 
 [[nodiscard]] CheckedProject release_compiled_project(
@@ -1412,7 +1420,8 @@ compiled_cache_source_mappings(
 
 [[nodiscard]] std::optional<CompilationWorkspace> load_object_workspace(
     std::span<const std::filesystem::path> objects,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    bool validate_uvm_surface = true);
 
 bool same_source_path(
     const std::filesystem::path& left,
@@ -1510,10 +1519,17 @@ void report_vhdl_duplicate_design_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics);
 
+struct CompiledUnitAvailability {
+    std::string library;
+    fsim::library::UnitIndexEntry unit;
+};
+
 void validate_vhdl_analysis_order(
     std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics,
-    bool allow_external_architecture_primary = false);
+    bool allow_external_architecture_primary = false,
+    const semantic::CompiledDesign* imported = nullptr,
+    std::span<const CompiledUnitAvailability> available_units = { });
 
 void validate_vhdl_simulator_api(
     std::span<const frontend::DesignUnit> units,
@@ -1525,7 +1541,8 @@ void validate_vhdl_mode_view_interfaces(
 
 void validate_vhdl_package_declarations(
     std::span<const frontend::DesignUnit> units,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    bool allow_missing_package_bodies = false);
 
 [[nodiscard]] bool validate_vhdl_profile_compatibility(
     const frontend::ParsedDesign& parsed,
@@ -1872,7 +1889,9 @@ bool compile_object(
 
 std::optional<CompilationWorkspace> check_project_for_object(
     const project::Config& config,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    const semantic::CompiledDesign* imported = nullptr,
+    std::span<const CompiledUnitAvailability> available_units = { });
 
 int handle_compile(
     const cli::Invocation& invocation,

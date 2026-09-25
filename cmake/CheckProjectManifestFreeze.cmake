@@ -66,6 +66,9 @@ function(fsim_require_project_manifest_tokens path)
   endforeach()
 endfunction()
 
+# The schema-3 reader remains an internal compatibility fixture for native API
+# and coverage tests. Public commands use managed workspaces and must not
+# discover a project file or restore the removed project/artifact options.
 fsim_require_project_manifest_tokens("${FSIM_HEADER}"
   "kSchemaVersion = 3"
   "struct CoverageSection"
@@ -123,5 +126,35 @@ fsim_require_project_manifest_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.project-manifest-schema-freeze"
   "CheckProjectManifestFreeze.cmake")
 
+fsim_require_project_manifest_tokens(
+  "${FSIM_SOURCE_DIR}/tests/app/workspace_cli_test.cpp"
+  "test_removed_surface_and_preserved_controls"
+  "reject({ \"build\" })"
+  "reject({ \"run\" })"
+  "reject({ \"check\", \"--project\", \"fsim.toml\" })"
+  "reject({ \"compile\", \"--output\""
+  "reject({ \"elaborate\", \"--object\""
+  "reject({ \"simulate\", \"--design\""
+  "test_workspace_configuration"
+  "invalid legacy manifest that must never be loaded"
+  "config.base_directory == workspace.directory()"
+  "config.build.cache_path == workspace.directory() / \".fsim\" / \"cache\""
+  "coverage.artifact_output && coverage.artifact_output->is_absolute()")
+file(READ "${FSIM_SOURCE_DIR}/src/cli/driver.cpp" FSIM_PUBLIC_DRIVER)
+foreach(FSIM_FORBIDDEN IN ITEMS
+    "project::load("
+    "project::parse("
+    "command == \"build\""
+    "command == \"run\""
+    "argument == \"--project\""
+    "argument == \"--object\""
+    "argument == \"--design\"")
+  string(FIND "${FSIM_PUBLIC_DRIVER}" "${FSIM_FORBIDDEN}" FSIM_OFFSET)
+  if(NOT FSIM_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "public workspace driver regained project/artifact routing: ${FSIM_FORBIDDEN}")
+  endif()
+endforeach()
+
 message(STATUS
-  "project manifest schema freeze passed: rows=16 schema=3 digest=${FSIM_CONTRACT_DIGEST}")
+  "internal project schema and public workspace isolation passed: rows=16 schema=3 digest=${FSIM_CONTRACT_DIGEST}")

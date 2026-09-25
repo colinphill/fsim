@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "application_workflow_test_support.hpp"
 
 #include <cassert>
 #include <fstream>
@@ -59,7 +60,7 @@ trace_file = "wide-cli.vcd"
         "fsim", "run", "-p", wide_cli_manifest_text.c_str()
     };
     assert(
-        fsim::cli::run(
+        fsim::test::run_fixture_command(
             static_cast<int>(wide_cli_arguments.size()),
             wide_cli_arguments.data(),
             services,
@@ -117,7 +118,7 @@ trace_file = "scaled.vcd"
         "fsim", "run", "-p", scaled_manifest_text.c_str()
     };
     assert(
-        fsim::cli::run(
+        fsim::test::run_fixture_command(
             static_cast<int>(scaled_arguments.size()),
             scaled_arguments.data(),
             services,

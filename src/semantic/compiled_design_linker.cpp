@@ -734,11 +734,15 @@ void retain_record_provenance(
     }
 }
 
-template <typename UnitPredicate, typename LibraryPredicate>
+template <typename UnitPredicate, typename LibraryPredicate,
+    typename ScopePredicate, typename ClassPredicate, typename UdpPredicate>
 ModelRecords project_model_records(
     const CompiledDesign& design,
     UnitPredicate select_unit,
     LibraryPredicate select_auxiliary_library,
+    ScopePredicate select_scope,
+    ClassPredicate select_class,
+    UdpPredicate select_udp,
     Projection& projection)
 {
     const auto input = design.semantics.records();
@@ -749,7 +753,7 @@ ModelRecords project_model_records(
         });
     output.scopes = select_records(input.scopes, projection.scope,
         [&](const Scope& scope) {
-            return retained(scope.unit, projection);
+            return retained(scope.unit, projection) && select_scope(scope);
         });
     const auto retained_scope = [&](const auto& record) {
         return retained(record.scope, projection);
@@ -814,7 +818,7 @@ ModelRecords project_model_records(
     retain_record_provenance(
         design.systemverilog_hir.classes(),
         [&](const sv::ClassDeclaration& declaration) {
-            return retained_id(declaration.scope);
+            return retained_id(declaration.scope) && select_class(declaration);
         },
         retained_provenance);
     retain_record_provenance(
@@ -826,8 +830,7 @@ ModelRecords project_model_records(
     retain_record_provenance(
         design.systemverilog_hir.udps(),
         [&](const sv::UdpDeclaration& declaration) {
-            return select_auxiliary_library(
-                normalized_library(declaration.library));
+            return select_udp(declaration);
         },
         retained_provenance);
     retain_record_provenance(
@@ -973,9 +976,10 @@ ModelRecords project_model_records(
     return output;
 }
 
-template <typename Predicate>
+template <typename ClassPredicate, typename UdpPredicate>
 sv::Hir project_hir(const sv::Hir& input,
-    Predicate select_library,
+    ClassPredicate select_class,
+    UdpPredicate select_udp,
     const Projection& projection)
 {
     auto output = input;
@@ -1005,7 +1009,8 @@ sv::Hir project_hir(const sv::Hir& input,
         });
     std::erase_if(output.mutable_classes(),
         [&](const sv::ClassDeclaration& declaration) {
-            return !retained(declaration.scope, projection);
+            return !retained(declaration.scope, projection)
+                || !select_class(declaration);
         });
     std::erase_if(output.mutable_instances(),
         [&](const sv::Instance& instance) {
@@ -1013,8 +1018,7 @@ sv::Hir project_hir(const sv::Hir& input,
         });
     std::erase_if(output.mutable_udps(),
         [&](const sv::UdpDeclaration& declaration) {
-            return !select_library(
-                normalized_library(declaration.library));
+            return !select_udp(declaration);
         });
     std::erase_if(output.mutable_dpi_declarations(),
         [&](const sv::DpiDeclaration& declaration) {
@@ -1042,10 +1046,14 @@ vhdl::Hir project_hir(
     const vhdl::Hir& input,
     const Projection& projection);
 
-template <typename UnitPredicate, typename LibraryPredicate>
+template <typename UnitPredicate, typename LibraryPredicate,
+    typename ScopePredicate, typename ClassPredicate, typename UdpPredicate>
 CompiledLinkResult project_compiled_design(
     const CompiledDesign& design, UnitPredicate select_unit,
     LibraryPredicate select_auxiliary_library,
+    ScopePredicate select_scope,
+    ClassPredicate select_class,
+    UdpPredicate select_udp,
     const std::string_view invalid_projection)
 {
     if (const auto error = structural_hir_error(design);
@@ -1056,14 +1064,15 @@ CompiledLinkResult project_compiled_design(
     }
     Projection projection;
     auto records = project_model_records(
-        design, select_unit, select_auxiliary_library, projection);
+        design, select_unit, select_auxiliary_library, select_scope,
+        select_class, select_udp, projection);
     auto model = Model::from_records(std::move(records));
     if (!model) {
         return { std::nullopt,
             "compiled-HIR library projection produced an invalid semantic model" };
     }
     auto systemverilog = project_hir(
-        design.systemverilog_hir, select_auxiliary_library, projection);
+        design.systemverilog_hir, select_class, select_udp, projection);
     auto vhdl = project_hir(design.vhdl_hir, projection);
     CompiledDesign output {
         std::move(*model), std::move(systemverilog), std::move(vhdl)
@@ -1078,6 +1087,21 @@ CompiledLinkResult project_compiled_design(
                 + ": " + error };
     }
     return { std::move(output), { } };
+}
+
+template <typename UnitPredicate, typename LibraryPredicate>
+CompiledLinkResult project_compiled_design(
+    const CompiledDesign& design, UnitPredicate select_unit,
+    LibraryPredicate select_auxiliary_library,
+    const std::string_view invalid_projection)
+{
+    return project_compiled_design(design, select_unit,
+        select_auxiliary_library, [](const Scope&) { return true; },
+        [](const sv::ClassDeclaration&) { return true; },
+        [&](const sv::UdpDeclaration& declaration) {
+            return select_auxiliary_library(
+                normalized_library(declaration.library));
+        }, invalid_projection);
 }
 
 template <typename UnitPredicate, typename LibraryPredicate>
@@ -2115,6 +2139,9 @@ bool register_definitions(const CompiledDesign& design,
     std::set<UdpKey>& udps, std::string& error)
 {
     for (const auto& unit : design.semantics.units()) {
+        if (unit.kind == UnitKind::systemverilog_compilation_unit) {
+            continue;
+        }
         const auto definition = !is_external_unit(design, unit);
         const auto [registered, inserted]
             = units.try_emplace(unit_key(design, unit), definition);
@@ -2205,6 +2232,144 @@ CompiledInputOrderKey compiled_input_order_key(
             records.process_identities().size() } };
 }
 
+void append_systemverilog_package_uses(const CompiledDesign& design,
+    std::vector<CompiledReference>& references)
+{
+    const auto& model = design.semantics;
+    std::map<UnitId, const sv::Unit*> packages;
+    for (const auto& unit : design.systemverilog_units()) {
+        if (unit.kind == sv::UnitKind::package)
+            packages.emplace(unit.id, &unit);
+    }
+    const auto append = [&](const ScopeId owner_scope,
+                            const ScopeId provider_scope,
+                            const SourceSpanId source) {
+        if (!owner_scope.valid() || !provider_scope.valid()
+            || owner_scope.value() >= model.scopes().size()
+            || provider_scope.value() >= model.scopes().size())
+            return;
+        const auto owner = model.scopes()[owner_scope.value()].unit;
+        const auto provider = model.scopes()[provider_scope.value()].unit;
+        const auto selected = packages.find(provider);
+        if (owner == provider || selected == packages.end())
+            return;
+        references.push_back({ CompiledReferenceKind::package, owner,
+            selected->second->library, selected->second->name, { }, source,
+            provider });
+    };
+    const auto symbolic_use = [&](const ScopeId scope,
+                                  const std::string_view spelling,
+                                  const SourceSpanId source) {
+        if (!scope.valid() || scope.value() >= model.scopes().size())
+            return;
+        const auto owner = model.scopes()[scope.value()].unit;
+        if (!owner.valid() || owner.value() >= model.units().size())
+            return;
+        const auto first = spelling.find("::");
+        if (first == std::string_view::npos)
+            return;
+        const auto second = spelling.find("::", first + 2U);
+        const auto explicit_library = second != std::string_view::npos;
+        const auto library = explicit_library
+            ? spelling.substr(0U, first)
+            : std::string_view { model.units()[owner.value()].library };
+        const auto name = explicit_library
+            ? spelling.substr(first + 2U, second - first - 2U)
+            : spelling.substr(0U, first);
+        const sv::Unit* selected { };
+        for (const auto& [id, package] : packages) {
+            (void)id;
+            if (package->name == name && package->library == library) {
+                selected = package;
+                break;
+            }
+        }
+        if (selected == nullptr && !explicit_library) {
+            for (const auto& [id, package] : packages) {
+                (void)id;
+                if (package->name != name)
+                    continue;
+                if (selected != nullptr)
+                    return;
+                selected = package;
+            }
+        }
+        if (selected != nullptr)
+            append(scope, selected->scope, source);
+    };
+    const auto type_target = [&](const ScopeId scope,
+                                 const semantic::TypeReference& type) {
+        if (type.target.valid() && type.target.value() < model.types().size())
+            append(scope, model.types()[type.target.value()].scope, type.source);
+        symbolic_use(scope, type.spelling, type.source);
+    };
+    const auto type_use = [&](const auto& self, const ScopeId scope,
+                              const sv::TypeReference& type) -> void {
+        type_target(scope, type.target);
+        if (type.associative_index)
+            type_target(scope, *type.associative_index);
+        for (const auto& element : type.container_element_types)
+            self(self, scope, element);
+        for (const auto& actual : type.interface_parameter_actuals) {
+            if (actual.type)
+                self(self, scope, *actual.type);
+        }
+    };
+    const auto name_use = [&](const ScopeId scope, const sv::Name& name,
+                              const SourceSpanId source) {
+        auto spelling = std::string_view { name.spelling };
+        constexpr auto static_prefix = std::string_view { "@sv-static-task:" };
+        constexpr auto instance_prefix = std::string_view { "@sv-task:" };
+        if (spelling.starts_with(static_prefix))
+            spelling.remove_prefix(static_prefix.size());
+        else if (spelling.starts_with(instance_prefix))
+            spelling.remove_prefix(instance_prefix.size());
+        symbolic_use(scope, spelling, source);
+        const auto declaration_use = [&](const DeclarationId id) {
+            if (id.valid() && id.value() < model.declarations().size())
+                append(scope, model.declarations()[id.value()].scope, source);
+        };
+        if (name.selected)
+            declaration_use(*name.selected);
+        for (const auto id : name.overloads)
+            declaration_use(id);
+    };
+    for (const auto& expression : design.systemverilog_hir.expressions()) {
+        if (expression.referenced_name)
+            name_use(expression.scope, *expression.referenced_name, expression.source);
+    }
+    for (const auto& statement : design.systemverilog_hir.statements())
+        name_use(statement.scope, statement.task, statement.source);
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        if (declaration.type)
+            type_use(type_use, declaration.scope, *declaration.type);
+        if (declaration.default_type)
+            type_use(type_use, declaration.scope, *declaration.default_type);
+        if (declaration.callable)
+            type_use(type_use, declaration.scope, declaration.callable->return_type);
+    }
+    for (const auto& type : design.systemverilog_hir.types()) {
+        if (!type.id.valid() || type.id.value() >= model.types().size())
+            continue;
+        const auto scope = model.types()[type.id.value()].scope;
+        type_use(type_use, scope, type.base);
+        for (const auto& member : type.members)
+            type_use(type_use, scope, member.type);
+        if (type.container && type.container->associative_index)
+            type_use(type_use, scope, *type.container->associative_index);
+    }
+    for (const auto& instance : design.systemverilog_hir.instances()) {
+        const auto actuals_use = [&](const auto& actuals) {
+            for (const auto& actual : actuals) {
+                if (actual.type)
+                    type_use(type_use, instance.scope, *actual.type);
+            }
+        };
+        actuals_use(instance.parameters);
+        actuals_use(instance.ports);
+    }
+}
+
 } // namespace
 
 void refresh_compiled_design_metadata(CompiledDesign& design)
@@ -2231,6 +2396,7 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
         append_systemverilog_configuration_references(references, unit);
     }
     append_compiled_class_references(design, references);
+    append_systemverilog_package_uses(design, references);
     for (const auto& expression : design.systemverilog_hir.expressions()) {
         if (!expression.scope.valid()
             || expression.scope.value() >= design.semantics.scopes().size()) {
@@ -2246,6 +2412,17 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
             && !unit.primary_name.empty()) {
             references.push_back(CompiledReference {
                 CompiledReferenceKind::entity,
+                unit.id,
+                std::string { normalized_library(unit.library) },
+                unit.primary_name,
+                {},
+                unit.source,
+                std::nullopt,
+            });
+        } else if (unit.kind == vhdl::UnitKind::package
+            && !unit.primary_name.empty()) {
+            references.push_back(CompiledReference {
+                CompiledReferenceKind::package,
                 unit.id,
                 std::string { normalized_library(unit.library) },
                 unit.primary_name,
@@ -2433,6 +2610,141 @@ CompiledLinkResult extract_compiled_units(
                 || select_supporting_library(unit.library);
         }, select_supporting_library,
         "compiled-HIR unit projection is structurally invalid");
+}
+
+CompiledLinkResult extract_compiled_objects(
+    const CompiledDesign& design,
+    const std::span<const UnitId> units,
+    const std::span<const std::string> class_identities,
+    const std::span<const CompiledUdpIdentity> udp_identities,
+    const std::span<const std::string> supporting_libraries)
+{
+    const auto supporting_library = [&](const std::string_view candidate) {
+        return std::ranges::any_of(supporting_libraries,
+            [&](const std::string_view selected) {
+                return normalized_library(candidate)
+                    == normalized_library(selected);
+            });
+    };
+    const auto scopes = design.semantics.scopes();
+    const auto select_class = [&](const sv::ClassDeclaration& declaration) {
+        if (declaration.scope.valid()
+            && declaration.scope.value() < scopes.size()) {
+            const auto owner = design.find_unit(
+                scopes[declaration.scope.value()].unit);
+            if (owner && supporting_library(owner->identity->library)) {
+                return true;
+            }
+        }
+        return std::ranges::find(class_identities,
+                   sv::class_declaration_identity(declaration))
+            != class_identities.end();
+    };
+    std::vector<bool> excluded_scopes(scopes.size());
+    std::vector<UnitId> class_owners;
+    for (const auto& declaration : design.systemverilog_hir.classes()) {
+        if (declaration.scope.valid()
+            && declaration.scope.value() < scopes.size()
+            && !select_class(declaration)) {
+            excluded_scopes[declaration.scope.value()] = true;
+        }
+    }
+    for (const auto& declaration : design.systemverilog_hir.classes()) {
+        if (declaration.scope.valid()
+            && declaration.scope.value() < scopes.size()
+            && select_class(declaration)) {
+            excluded_scopes[declaration.scope.value()] = false;
+            class_owners.push_back(scopes[declaration.scope.value()].unit);
+        }
+    }
+    const auto select_scope = [&](const Scope& scope) {
+        auto current = std::optional<ScopeId> { scope.id };
+        for (std::size_t depth = 0; current && depth < scopes.size(); ++depth) {
+            if (!current->valid() || current->value() >= scopes.size()) {
+                return false;
+            }
+            if (excluded_scopes[current->value()]) {
+                return false;
+            }
+            current = scopes[current->value()].parent;
+        }
+        return !current;
+    };
+    const auto select_udp = [&](const sv::UdpDeclaration& declaration) {
+        return supporting_library(declaration.library)
+            || std::ranges::any_of(udp_identities,
+                [&](const CompiledUdpIdentity& selected) {
+                    return normalized_library(declaration.library)
+                            == normalized_library(selected.library)
+                        && declaration.name == selected.name;
+                });
+    };
+    auto result = project_compiled_design(design,
+        [&](const Unit& unit) {
+            if (unit.kind == UnitKind::systemverilog_compilation_unit
+                && unit.name.starts_with("$unit$udp$")) {
+                return std::ranges::any_of(design.systemverilog_hir.udps(),
+                    [&](const sv::UdpDeclaration& declaration) {
+                        return unit.name == "$unit$udp$" + declaration.name
+                            && unit.source == declaration.source
+                            && normalized_library(unit.library)
+                                == normalized_library(declaration.library)
+                            && select_udp(declaration);
+                    });
+            }
+            return std::ranges::find(units, unit.id) != units.end()
+                || std::ranges::find(class_owners, unit.id) != class_owners.end()
+                || supporting_library(unit.library);
+        }, supporting_library, select_scope, select_class,
+        select_udp, "compiled-HIR catalog projection is structurally invalid");
+    if (!result.ok()) {
+        return result;
+    }
+    auto& output = *result.design;
+    for (const auto& declaration : output.systemverilog_hir.udps()) {
+        const auto name = "$unit$udp$" + declaration.name;
+        const auto& library = declaration.library;
+        if (std::ranges::any_of(output.systemverilog_hir.units(),
+                [&](const sv::Unit& unit) {
+                    return unit.kind == sv::UnitKind::compilation_unit
+                        && normalized_library(unit.library)
+                            == normalized_library(library)
+                        && unit.name == name
+                        && unit.source == declaration.source;
+                })) {
+            continue;
+        }
+        // UDP declarations have no language-unit record. Give each standalone
+        // primitive a private source owner so its runtime specialization never
+        // borrows an unrelated module's semantic identity from the same file.
+        const auto id = output.semantics.add_unit(declaration.language,
+            UnitKind::systemverilog_compilation_unit, library, name, {},
+            declaration.source, declaration.origin);
+        sv::Unit unit;
+        unit.id = id;
+        unit.scope = output.semantics.units()[id.value()].scope;
+        unit.kind = sv::UnitKind::compilation_unit;
+        unit.library = library;
+        unit.name = name;
+        unit.source = declaration.source;
+        unit.origin = declaration.origin;
+        unit.compilation_unit_identity = name;
+        const auto prefix = declaration.language == Language::verilog
+            ? std::string_view { "verilog-" }
+            : std::string_view { "systemverilog-" };
+        unit.standard = declaration.standard.starts_with(prefix)
+            ? declaration.standard.substr(prefix.size())
+            : declaration.standard;
+        unit.compatibility_profile = declaration.compatibility_profile;
+        output.mutable_systemverilog().mutable_units().push_back(std::move(unit));
+    }
+    refresh_compiled_design_metadata(output);
+    if (const auto error = structural_hir_error(output); !error.empty()) {
+        return { std::nullopt,
+            "compiled-HIR primitive source ownership is structurally invalid: "
+                + error };
+    }
+    return result;
 }
 
 CompiledLinkResult exclude_compiled_libraries(

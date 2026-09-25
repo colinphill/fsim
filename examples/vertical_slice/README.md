@@ -1,71 +1,57 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Vertical-slice example
 
-This directory is the compact executable VHDL-2008/SystemVerilog-2017 starting
-point. It demonstrates one mixed-language hierarchy, shared scheduling,
-current project syntax, multiple-root overrides, optimized execution, tracing
-and source-aware debugging without requiring a binding manifest.
+This compact VHDL-2008/SystemVerilog-2017 example demonstrates mixed-language
+hierarchy, shared scheduling, multiple roots, tracing, and source-aware
+debugging in a managed workspace.
 
-- `tb.sv` is the SV executable top. It drives the clock/reset, instantiates a
-  VHDL-bound counter and an SV child, uses integer delays, and calls `$finish`.
-- `counter.vhd` is a VHDL-2008 clocked counter using a recognized
-  `rising_edge` guard.
-- `sv_child.sv` is a combinational SystemVerilog inverter driven by the
-  counter output.
-- `fsim.toml` preserves source order; both child names resolve uniquely in
-  logical library `work` without binding entries.
+- `tb.sv` drives the clock/reset, instantiates the VHDL counter and SV child,
+  uses integer delays, and calls `$finish`.
+- `counter.vhd` is a VHDL counter using a recognized `rising_edge` guard.
+- `sv_child.sv` is a combinational SystemVerilog inverter.
 
-The elaborator recursively creates `tb.u_counter` and `tb.u_child`. The
-resolver maps `counter` to the VHDL entity and `sv_child` to the
-SystemVerilog module before validating their interfaces. Connected child
-ports alias the corresponding top signals, so committed changes propagate
-through the common delta scheduler.
-
-From the repository root:
+Run from this directory, with fsim on `PATH`:
 
 ```sh
-build/dev/fsim check -p examples/vertical_slice/fsim.toml
-build/dev/fsim run   -p examples/vertical_slice/fsim.toml
-build/dev/fsim debug -p examples/vertical_slice/fsim.toml
+fsim check --lang vhdl --standard 2008 counter.vhd
+fsim check --lang systemverilog --standard 2017 tb.sv sv_child.sv
+fsim compile --library work counter.vhd
+fsim compile --library work tb.sv sv_child.sv
+fsim elaborate work.tb
+fsim simulate --engine compiled --trace vertical.vcd
+fsim debug
 ```
 
-`run` uses the manifest's optimized O2 engine and native cache; `debug` uses
-source-instrumented O0 execution over the same elaborated design. Both retain
-the same SimIR behavior and hierarchy. The run writes `vertical_slice.vcd` in
-this directory and resolves:
+The elaborator resolves `counter` and `sv_child` uniquely from `work` and
+constructs `tb.u_counter` and `tb.u_child`. Connected child ports alias the
+top signals, so committed changes propagate through the shared delta
+scheduler. Library metadata and the default snapshot are managed in `.fsim`.
+
+At the bounded final tick, the committed top signals are:
 
 ```text
-tb.u_counter -> vhdl:work.counter(rtl)
-tb.u_child   -> sv:work.sv_child
+counter_q = 00000001
+child_y   = 11111110
 ```
 
-After reset and two rising clock edges, the final committed values are:
+The VCD therefore shows counter value `1` and child value `FE`. Each boundary
+signal has one driver.
 
-```text
-tb.counter_q = 00000001
-tb.child_y   = 11111110
-```
-
-The VCD therefore shows counter value `1` and child value `FE`. No resolver is
-required because each boundary signal has one driver.
-
-To exercise the v2 multiple-root selection contract without changing the
-committed manifest, replace its single top on the command line. Every repeated
-top needs a unique alias:
+To create two independent root instances in one snapshot:
 
 ```sh
-build/dev/fsim check -p examples/vertical_slice/fsim.toml \
-  --top left=sv:work.tb --top right=sv:work.tb
+fsim elaborate left=work.tb right=work.tb --snapshot two-roots
+fsim simulate --snapshot two-roots --trace two-roots.vcd
 ```
 
-Both copies are resolved before either hierarchy is constructed. A run would
-place them in one scheduler and expose their objects beneath `left.*` and
-`right.*`; the first `$finish` remains terminal for that shared simulation.
+Both copies resolve before either hierarchy is constructed. Their objects
+appear under `left.*` and `right.*`; the first `$finish` remains terminal for
+the shared simulation. Recompiling a source and re-elaborating replaces the
+selected library definitions and snapshot. The `default` snapshot remains
+available when `two-roots` is replaced.
 
-This small example deliberately uses equal-width, descending packed vectors
-and whole-signal connections so its waveform is easy to inspect. The simulator
-also supports parameters/generics, expression actuals, vector-direction
-conversion, multi-driver resolution and SystemC factory instances; the
-[manifest-free phase tutorial](../non_project_phases/README.md) and
-[three-language tutorial](../three_language_hierarchy/README.md) exercise the
-artifact and SystemC extensions without obscuring this first run.
+The example uses equal-width descending vectors and whole-signal connections.
+See the [workspace phase tutorial](../non_project_phases/README.md) and
+[three-language tutorial](../three_language_hierarchy/README.md) for mapped
+libraries and SystemC. The historical `fsim.toml` fixture is not loaded by
+current commands.

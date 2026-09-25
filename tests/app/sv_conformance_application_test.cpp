@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_workflow_test_support.hpp"
+
 #include "fsim/app/application.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -1234,10 +1236,10 @@ endmodule
         "compiled", "--trace", trace_path.c_str(), "--trace-filter",
         "dut.*"
     };
-    auto services = fsim::app::make_cli_services();
+    auto services = fsim::test::make_fixture_services();
     std::ostringstream trace_output;
     std::ostringstream trace_error;
-    assert(fsim::cli::run(
+    assert(fsim::test::run_fixture_command(
                static_cast<int>(trace_arguments.size()),
                trace_arguments.data(), services, trace_output, trace_error)
             == 0

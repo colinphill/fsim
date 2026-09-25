@@ -28,70 +28,40 @@ high-impedance digits. Fsim must retain its exact 137-bit width, signedness, and
 four-state planes; splitting it into 64-bit chunks is neither required nor
 recommended.
 
-## 2. Create and run a project
+## 2. Compile and run in a workspace
 
-Save this beside the source as `fsim.toml`:
-
-```toml
-# SPDX-License-Identifier: Apache-2.0
-schema = 3
-
-[project]
-name = "wide-verilog"
-top = "verilog:work.wide_literal"
-time_resolution = "1ps"
-
-[[source_set]]
-language = "verilog"
-standard = "2005"
-library = "work"
-files = ["wide_literal.v"]
-
-[build]
-optimization = "O2"
-jobs = 8
-cache_path = ".fsim-cache"
-
-[run]
-duration = "2ns"
-max_deltas = 1000
-trace_file = "wide-literal.vcd"
-```
-
-Check and run it with the primary executable or installed Verilog alias:
+Run from the directory containing `wide_literal.v`:
 
 ```sh
-fsim check -p fsim.toml
-fsim run -p fsim.toml
-fsim-sv run -p fsim.toml
+fsim check --lang verilog --standard 2005 wide_literal.v
+fsim compile --lang verilog --standard 2005 --library work wide_literal.v
+fsim elaborate work.wide_literal
+fsim simulate --engine compiled --duration 2ns --max-deltas 1000 \
+  --trace wide-literal.vcd
 ```
 
-Run it a second time to exercise the warm native cache. The `WIDE=` transcript
-and VCD value must remain identical. Use `fsim debug -p fsim.toml` for the
-source-aware debugger; inspection must show the same complete value rather than
-a low-word projection.
+The installed `fsim-sv` alias accepts the same commands. Run simulation again
+to exercise the warm native cache under `.fsim/cache`. The `WIDE=` transcript
+and VCD value must remain identical. Use `fsim debug` for the source-aware
+debugger; inspection retains the complete value.
 
-## 3. Produce source-independent artifacts
+## 3. Keep a source-independent snapshot
 
-The public phase interface can compile, elaborate, and simulate the same design
-without a project manifest:
+Elaborate a named snapshot from the library metadata:
 
 ```sh
-fsim compile --lang verilog --standard 2005 --library work \
-  --output wide-literal.fsimobj wide_literal.v
-fsim elaborate --object wide-literal.fsimobj \
-  --top root=verilog:work.wide_literal \
-  --output wide-literal.fsimdesign
-fsim simulate --design wide-literal.fsimdesign --engine interpreter \
+fsim elaborate root=work.wide_literal --snapshot portable
+fsim simulate --snapshot portable --engine interpreter \
   --trace portable-interpreter.vcd
-fsim simulate --design wide-literal.fsimdesign --engine compiled \
-  --cache .fsim-cache/portable --trace portable-compiled.vcd
+fsim simulate --snapshot portable --engine compiled \
+  --trace portable-compiled.vcd
 ```
 
-Move the complete `.fsimdesign` directory and hide the producer source before a
-final simulation to exercise relocation. Move artifact directories as units;
-mixing individual payload files, stale checkpoints, or incompatible cache state
-must reject before simulation state is published.
+Hide the producer source before repeating simulation. The snapshot under
+`.fsim/snapshots/portable` retains the compiled state and remains usable after
+library updates or deletion. For relocation, move the complete workspace
+state rather than selecting individual artifact payloads. fsim manages all
+artifact filenames and validates checksums and compatible identities.
 
 ## 4. Add timing or VPI observation
 
@@ -118,9 +88,9 @@ A zero process exit code is not a substitute for those semantic checks.
 For a failure:
 
 1. retain the complete diagnostic and source location;
-2. verify `language = "verilog"` and `standard = "2005"`;
+2. verify `--lang verilog --standard 2005`;
 3. compare interpreter, compiled cold/warm, debugger, and VCD values;
-4. move portable artifact directories as complete units; and
+4. preserve the complete workspace snapshot during relocation; and
 5. treat addressability, storage, work, scalar-ABI, and VPI-format failures as
    physical representation boundaries, not arbitrary literal legality limits.
 

@@ -52,10 +52,21 @@ class AnalysisOrderValidator {
  public:
   explicit AnalysisOrderValidator(
       diagnostic::Engine& diagnostics,
-      const bool allow_external_architecture_primary)
+      const bool allow_external_architecture_primary,
+      const semantic::CompiledDesign* imported,
+      const std::span<const CompiledUnitAvailability> available_units)
       : diagnostics_(diagnostics),
         allow_external_architecture_primary_(
-            allow_external_architecture_primary) {}
+            allow_external_architecture_primary) {
+    for (const auto& unit : available_units) {
+      record_available(unit);
+    }
+    if (imported != nullptr) {
+      for (const auto& unit : imported->vhdl_units()) {
+        record_imported(unit);
+      }
+    }
+  }
 
   void run(const std::span<const DesignUnit> units) {
     if (allow_external_architecture_primary_) {
@@ -77,7 +88,64 @@ class AnalysisOrderValidator {
   }
 
  private:
-     using RevisionIndex = std::map<std::string, frontend::VhdlStandard>;
+     using RevisionIndex = std::map<std::string, std::string>;
+
+     void record_available(const CompiledUnitAvailability& available)
+     {
+         const auto& unit = available.unit;
+         if (unit.language != "vhdl") {
+             return;
+         }
+         const auto library = available.library.empty()
+             ? std::string_view { "work" }
+             : std::string_view { available.library };
+         const auto key = primary_key(library, unit.name);
+         if (unit.kind == "entity") {
+             entities_.insert_or_assign(key, unit.standard);
+         } else if (unit.kind == "architecture") {
+             architectures_.insert_or_assign(
+                 architecture_key(library, unit.primary_name,
+                     unit.architecture.empty() ? unit.name : unit.architecture),
+                 unit.standard);
+         } else if (unit.kind == "package" && unit.primary_name.empty()) {
+             packages_.insert_or_assign(key, unit.standard);
+         } else if (unit.kind == "context") {
+             contexts_.insert_or_assign(key, unit.standard);
+         } else if (unit.kind == "configuration") {
+             configurations_.insert_or_assign(key, unit.standard);
+         }
+     }
+
+     void record_imported(const semantic::vhdl::Unit& unit)
+     {
+         const auto library = unit.library.empty()
+             ? std::string_view { "work" }
+             : std::string_view { unit.library };
+         const auto key = primary_key(library, unit.name);
+         switch (unit.kind) {
+         case semantic::vhdl::UnitKind::entity:
+             entities_.insert_or_assign(key, unit.standard);
+             break;
+         case semantic::vhdl::UnitKind::architecture:
+             architectures_.insert_or_assign(
+                 architecture_key(library, unit.primary_name, unit.name),
+                 unit.standard);
+             break;
+         case semantic::vhdl::UnitKind::package:
+             if (unit.primary_name.empty()) {
+                 packages_.insert_or_assign(key, unit.standard);
+             }
+             break;
+         case semantic::vhdl::UnitKind::context:
+             contexts_.insert_or_assign(key, unit.standard);
+             break;
+         case semantic::vhdl::UnitKind::configuration:
+             configurations_.insert_or_assign(key, unit.standard);
+             break;
+         case semantic::vhdl::UnitKind::psl_verification_unit:
+             break;
+         }
+     }
 
      void report(
          const std::string_view code,
@@ -98,12 +166,12 @@ class AnalysisOrderValidator {
          if (found == index.end()) {
              return false;
          }
-         if (found->second != owner.vhdl_standard) {
+         if (found->second != frontend::to_string(owner.vhdl_standard)) {
              report(
                  "FSIM-FE-VHORDER-011",
                  "VHDL " + std::string { kind } + " '" + key
                      + "' was analyzed as "
-                     + std::string { frontend::to_string(found->second) }
+                     + found->second
                      + " but the owning source uses "
                      + std::string { frontend::to_string(owner.vhdl_standard) },
                  source);
@@ -349,6 +417,8 @@ class AnalysisOrderValidator {
 
   void record(const DesignUnit& unit) {
     const auto library = library_of(unit);
+    const auto standard = std::string {
+        frontend::to_string(unit.vhdl_standard) };
     const auto record_primary =
         [&] {
           const auto key = primary_key(library, unit.name);
@@ -365,23 +435,23 @@ class AnalysisOrderValidator {
     switch (unit.kind) {
       case frontend::UnitKind::VhdlEntity:
         record_primary();
-        entities_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
+        entities_.insert_or_assign(primary_key(library, unit.name), standard);
         break;
       case frontend::UnitKind::VhdlArchitecture:
         record_secondary(
             architecture_key(library, unit.primary_name, unit.name));
         architectures_.insert_or_assign(architecture_key(
                                             library, unit.primary_name, unit.name),
-            unit.vhdl_standard);
+            standard);
         break;
       case frontend::UnitKind::VhdlConfiguration:
         record_primary();
-        configurations_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
+        configurations_.insert_or_assign(primary_key(library, unit.name), standard);
         break;
       case frontend::UnitKind::VhdlPackage:
         if (unit.primary_name.empty()) {
           record_primary();
-          packages_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
+          packages_.insert_or_assign(primary_key(library, unit.name), standard);
         } else {
           record_secondary(
               primary_key(library, unit.name) + "\npackage-body");
@@ -389,7 +459,7 @@ class AnalysisOrderValidator {
         break;
       case frontend::UnitKind::VhdlContext:
         record_primary();
-        contexts_.insert_or_assign(primary_key(library, unit.name), unit.vhdl_standard);
+        contexts_.insert_or_assign(primary_key(library, unit.name), standard);
         break;
       case frontend::UnitKind::VhdlPslVerificationUnit:
         record_primary();
@@ -460,9 +530,12 @@ void report_vhdl_duplicate_design_unit(
 void validate_vhdl_analysis_order(
     const std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics,
-    const bool allow_external_architecture_primary) {
+    const bool allow_external_architecture_primary,
+    const semantic::CompiledDesign* imported,
+    const std::span<const CompiledUnitAvailability> available_units) {
   AnalysisOrderValidator{
-      diagnostics, allow_external_architecture_primary}.run(units);
+      diagnostics, allow_external_architecture_primary, imported,
+      available_units}.run(units);
 }
 
 void validate_vhdl_simulator_api(
@@ -941,7 +1014,8 @@ void validate_vhdl_mode_view_interfaces(
 
 void validate_vhdl_package_declarations(
     const std::span<const frontend::DesignUnit> units,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics,
+    const bool allow_missing_package_bodies) {
   for (const auto& package : units) {
     if (package.kind != frontend::UnitKind::VhdlPackage
         || !package.primary_name.empty()) {
@@ -955,6 +1029,9 @@ void validate_vhdl_package_declarations(
               && candidate.name == package.name
               && library_of(candidate) == package_library;
         });
+    if (body == units.end() && allow_missing_package_bodies) {
+      continue;
+    }
     for (const auto& declaration : package.parameters) {
       if (declaration.kind != frontend::ParameterKind::Value) {
         continue;

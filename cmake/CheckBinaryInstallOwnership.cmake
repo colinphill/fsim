@@ -127,7 +127,14 @@ set(FSIM_REQUIRED_PATHS
     "${FSIM_DOCDIR}/third-party/scv-2.0.1/PATCHES.txt"
     "${FSIM_DOCDIR}/third-party/scv-2.0.1/SOURCE_MANIFEST.txt"
     "${FSIM_DOCDIR}/third-party/scv-2.0.1/scv-2.0.1.spdx.json"
-    "${FSIM_DATADIR}/fsim/examples/vertical_slice/fsim.toml"
+    "${FSIM_DOCDIR}/third-party/sqlite-3.53.4/LICENSE"
+    "${FSIM_DOCDIR}/third-party/sqlite-3.53.4/NOTICE"
+    "${FSIM_DOCDIR}/third-party/sqlite-3.53.4/SOURCE_MANIFEST.txt"
+    "${FSIM_DOCDIR}/third-party/sqlite-3.53.4/sqlite-3.53.4.spdx.json"
+    "${FSIM_DATADIR}/fsim/examples/vertical_slice/README.md"
+    "${FSIM_DATADIR}/fsim/examples/vertical_slice/counter.vhd"
+    "${FSIM_DATADIR}/fsim/examples/vertical_slice/tb.sv"
+    "${FSIM_DATADIR}/fsim/examples/vertical_slice/sv_child.sv"
     "${FSIM_DATADIR}/fsim/examples/three_language_hierarchy/README.md"
     "${FSIM_DATADIR}/fsim/vhdl/ieee-1076-2019/LICENSE")
 foreach(FSIM_PATH IN LISTS FSIM_REQUIRED_PATHS)

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_compiled_environment.hpp"
+#include "application_compiled_environment_sv.hpp"
+#include "application_compiled_environment_vhdl.hpp"
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/class_inheritance.hpp"
@@ -142,7 +145,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     const bool complete_vhdl_environment = false,
-    const bool allow_external_vhdl_architecture_primary = false) {
+    const bool allow_external_vhdl_architecture_primary = false,
+    const semantic::CompiledDesign* imported = nullptr,
+    const std::span<const CompiledUnitAvailability> available_units = { }) {
   const auto uvm_release = selected_uvm_release(config, diagnostics);
   if (!uvm_release) {
     return std::nullopt;
@@ -253,6 +258,20 @@ static std::optional<CompilationWorkspace> check_project_impl(
     return std::nullopt;
   }
 
+  if (imported) {
+    for (auto& group : groups) {
+      if (group.language != frontend::Language::SystemVerilog2017
+          || group.inputs.empty()) {
+        continue;
+      }
+      group.package_member_lookup =
+          [imported, library = group.inputs.front().library](
+              const std::string_view package, const std::string_view member) {
+            return compiled_package_has_member(*imported, library, package, member);
+          };
+    }
+  }
+
   std::vector<std::optional<ParsedSnapshot>> parsed_inputs(
       groups.size());
   std::vector<std::exception_ptr> parse_failures(groups.size());
@@ -355,6 +374,27 @@ static std::optional<CompilationWorkspace> check_project_impl(
   std::vector<OrderedUdp> ordered_udps;
   std::vector<OrderedClass> ordered_classes;
   std::vector<OrderedClassMethod> ordered_class_methods;
+  std::vector<std::filesystem::path> root_source_paths(hdl_source_count);
+  for (const auto& group : groups) {
+    for (const auto& input : group.inputs)
+      root_source_paths[input.source_order] = input.path;
+  }
+  std::vector<ParsedSourceUnitOwner> source_owners;
+  const auto record_source_owner = [&](const frontend::SourceSpan& source,
+                                       const std::size_t order) {
+    if (order >= root_source_paths.size())
+      return;
+    source_owners.push_back({ source.physical_source_name.empty()
+            ? source.source_name.str() : source.physical_source_name.str(),
+        source.begin.offset, root_source_paths[order] });
+  };
+  const auto record_class_source_owners = [&](const auto& self,
+                                             const frontend::SystemVerilogClassDeclaration& declaration,
+                                             const std::size_t order) -> void {
+    record_source_owner(declaration.span, order);
+    for (const auto& nested : declaration.nested_classes)
+      self(self, nested, order);
+  };
   for (std::size_t input_index = 0;
        input_index < parsed_inputs.size(); ++input_index) {
     if (parse_failures[input_index]) {
@@ -599,6 +639,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
               "duplicate design unit '" + key + "'",
               span(ordered.unit.span));
       } else {
+          record_source_owner(ordered.unit.span, ordered.source_order);
+          for (const auto& declaration : ordered.unit.systemverilog_classes) {
+            record_class_source_owners(record_class_source_owners, declaration,
+                ordered.source_order);
+          }
           checked.parsed.units.push_back(std::move(ordered.unit));
       }
   }
@@ -616,12 +661,15 @@ static std::optional<CompilationWorkspace> check_project_impl(
               "duplicate design unit '" + key + "'",
               span(ordered.declaration.span));
       } else {
+          record_source_owner(ordered.declaration.span, ordered.source_order);
           checked.parsed.udp_declarations.push_back(
               std::move(ordered.declaration));
       }
   }
   checked.parsed.systemverilog_classes.reserve(ordered_classes.size());
   for (auto& ordered : ordered_classes) {
+      record_class_source_owners(record_class_source_owners,
+          ordered.declaration, ordered.source_order);
       checked.parsed.systemverilog_classes.push_back(
           std::move(ordered.declaration));
   }
@@ -671,7 +719,8 @@ static std::optional<CompilationWorkspace> check_project_impl(
       && checked.parsed.udp_declarations.empty()
       && checked.parsed.systemverilog_classes.empty()
       && checked.systemc_sources.empty()
-      && checked.mapped_libraries.empty() && !diagnostics.has_error()) {
+      && checked.mapped_libraries.empty() && imported == nullptr
+      && !diagnostics.has_error()) {
       diagnostics.error(
           "FSIM-FE-0001",
           "the project contains no local or selected mapped design units");
@@ -695,10 +744,16 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   validate_vhdl_analysis_order(
       checked.parsed.units, diagnostics,
-      allow_external_vhdl_architecture_primary);
+      allow_external_vhdl_architecture_primary && imported == nullptr,
+      imported, available_units);
   validate_vhdl_simulator_api(checked.parsed.units, diagnostics);
   validate_vhdl_mode_view_interfaces(checked.parsed.units, diagnostics);
-  validate_vhdl_package_declarations(checked.parsed.units, diagnostics);
+  validate_vhdl_package_declarations(checked.parsed.units, diagnostics,
+      allow_external_vhdl_architecture_primary);
+  if (imported && !prepare_compiled_systemverilog_environment(
+          checked.parsed, *imported, diagnostics)) {
+    return std::nullopt;
+  }
   std::vector<frontend::Diagnostic> class_diagnostics;
   (void)frontend::resolve_systemverilog_classes(
       checked.parsed, class_diagnostics);
@@ -745,7 +800,25 @@ static std::optional<CompilationWorkspace> check_project_impl(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
+  const auto source_identities = compiled_source_unit_identities(
+      checked, config, source_owners);
+  semantic::refresh_compiled_design_metadata(checked);
+  std::vector<CompiledReferenceIdentity> source_references;
+  remember_compiled_references(checked, source_references);
   if (!link_mapped_compiled_designs(checked, diagnostics)) {
+    return std::nullopt;
+  }
+  remember_compiled_references(checked, source_references);
+  if (imported && !install_compiled_environment(
+          checked, *imported, diagnostics)) {
+    return std::nullopt;
+  }
+  remember_compiled_references(checked, source_references);
+  if (!identify_compiled_source_units(checked, source_identities, diagnostics)
+      || !validate_and_link_vhdl_compiled_environment(checked, diagnostics,
+          allow_external_vhdl_architecture_primary)
+      || (imported && !resolve_compiled_systemverilog_environment(
+          checked, diagnostics))) {
     return std::nullopt;
   }
   (void)validate_vhdl_mode_view_hir(
@@ -760,6 +833,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
     return std::nullopt;
   }
   semantic::refresh_compiled_design_metadata(checked);
+  remember_compiled_references(checked, source_references);
   if (!semantic::normalize_compiled_design(checked)) {
     diagnostics.error(
         "FSIM-SEM-0002",
@@ -774,6 +848,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
           checked, config.base_directory, diagnostics)) {
     return std::nullopt;
   }
+  restore_compiled_references(checked, source_references);
   return checked;
 }
 
@@ -791,9 +866,11 @@ std::optional<CheckedProject> check_project(
 std::optional<application_detail::CompilationWorkspace>
 application_detail::check_project_for_object(
     const project::Config& config,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics,
+    const semantic::CompiledDesign* imported,
+    const std::span<const CompiledUnitAvailability> available_units)
 {
-  return check_project_impl(config, diagnostics, false, true);
+  return check_project_impl(config, diagnostics, false, true, imported, available_units);
 }
 
 std::optional<application_detail::CompilationWorkspace>

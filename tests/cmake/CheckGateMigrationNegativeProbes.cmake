@@ -56,6 +56,60 @@ fsim_expect_rejection(
   CheckAstLifetimeGovernance.cmake
   "-DFSIM_AST_LIFETIME_TEST_APPLICATION_HEADER=${FSIM_BAD_HEADER_PATH}")
 
+file(READ "${FSIM_SOURCE_DIR}/src/app/application_compiled_environment_sv.cpp"
+  FSIM_COMPILED_SV_SOURCE)
+set(FSIM_BAD_COMPILED_SV_PATH
+  "${FSIM_TEST_WORK_DIR}/bad-compiled-environment-sv.cpp")
+string(REPLACE "class LinkedEnvironment final {"
+  "class LinkedEnvironment final {\n    std::unique_ptr<frontend::Expression> retained_syntax;"
+  FSIM_BAD_COMPILED_SV_SOURCE "${FSIM_COMPILED_SV_SOURCE}")
+file(WRITE "${FSIM_BAD_COMPILED_SV_PATH}" "${FSIM_BAD_COMPILED_SV_SOURCE}")
+fsim_expect_rejection(
+  "compiled HIR resolver retained AST ownership"
+  "frontend::Expression"
+  CheckAstLifetimeGovernance.cmake
+  "-DFSIM_AST_LIFETIME_TEST_COMPILED_SV_SOURCE=${FSIM_BAD_COMPILED_SV_PATH}")
+
+string(REPLACE "class LinkedEnvironment final {"
+  "class LinkedEnvironment final {\n    frontend::Expression retained_syntax;"
+  FSIM_BAD_COMPILED_SV_SOURCE "${FSIM_COMPILED_SV_SOURCE}")
+file(WRITE "${FSIM_BAD_COMPILED_SV_PATH}" "${FSIM_BAD_COMPILED_SV_SOURCE}")
+fsim_expect_rejection(
+  "compiled HIR resolver retained AST value"
+  "frontend::Expression"
+  CheckAstLifetimeGovernance.cmake
+  "-DFSIM_AST_LIFETIME_TEST_COMPILED_SV_SOURCE=${FSIM_BAD_COMPILED_SV_PATH}")
+
+string(REPLACE "class SourceEnvironment final {"
+  "class SourceEnvironment final {\n    frontend::DesignUnit reconstructed_import;"
+  FSIM_BAD_COMPILED_SV_SOURCE "${FSIM_COMPILED_SV_SOURCE}")
+file(WRITE "${FSIM_BAD_COMPILED_SV_PATH}" "${FSIM_BAD_COMPILED_SV_SOURCE}")
+fsim_expect_rejection(
+  "compiled source adapter reconstructed imported AST"
+  "compiled source environment must not reconstruct frontend::DesignUnit"
+  CheckAstLifetimeGovernance.cmake
+  "-DFSIM_AST_LIFETIME_TEST_COMPILED_SV_SOURCE=${FSIM_BAD_COMPILED_SV_PATH}")
+
+file(READ "${FSIM_SOURCE_DIR}/src/app/application_compiled_environment_sv.hpp"
+  FSIM_COMPILED_SV_HEADER)
+set(FSIM_BAD_COMPILED_SV_HEADER_PATH
+  "${FSIM_TEST_WORK_DIR}/bad-compiled-environment-sv.hpp")
+file(WRITE "${FSIM_BAD_COMPILED_SV_HEADER_PATH}"
+  "${FSIM_COMPILED_SV_HEADER}\nstruct RetainedSyntax { frontend::ParsedDesign* parsed; };\n")
+fsim_expect_rejection(
+  "compiled environment interface retained AST"
+  "frontend::ParsedDesign"
+  CheckAstLifetimeGovernance.cmake
+  "-DFSIM_AST_LIFETIME_TEST_COMPILED_SV_HEADER=${FSIM_BAD_COMPILED_SV_HEADER_PATH}")
+
+file(WRITE "${FSIM_BAD_COMPILED_SV_HEADER_PATH}"
+  "${FSIM_COMPILED_SV_HEADER}\nstruct RetainedSyntax { frontend::ParsedDesign& parsed; };\n")
+fsim_expect_rejection(
+  "compiled environment interface retained AST reference"
+  "frontend::ParsedDesign"
+  CheckAstLifetimeGovernance.cmake
+  "-DFSIM_AST_LIFETIME_TEST_COMPILED_SV_HEADER=${FSIM_BAD_COMPILED_SV_HEADER_PATH}")
+
 execute_process(
   COMMAND "${FSIM_CTEST_COMMAND}" --test-dir "${FSIM_BINARY_DIR}"
     --show-only=json-v1
@@ -81,4 +135,5 @@ fsim_expect_rejection(
   CheckCTestCommandUniqueness.cmake
   "-DFSIM_CTEST_TEST_JSON=${FSIM_BAD_CTEST_PATH}")
 
-message(STATUS "ABI/schema, AST-lifetime, and fixture rejection probes passed")
+message(STATUS
+  "ABI/schema, AST-lifetime, compiled-environment, and fixture rejection probes passed")

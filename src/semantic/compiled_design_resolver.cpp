@@ -319,8 +319,16 @@ sv::TypeReference retain_systemverilog_declarator(
 const sv::Unit* systemverilog_package(const CompiledDesign& design,
     const std::string_view library, const std::string_view name)
 {
+    // Workspace analysis binds mapped-library imports to an explicit provider.
+    // The qualifier is semantic metadata, preserving the provider's logical
+    // identity even when the consumer is compiled into a different library.
+    const auto separator = name.find("::");
+    const auto provider_library = separator == std::string_view::npos
+        ? library : name.substr(0U, separator);
+    const auto provider_name = separator == std::string_view::npos
+        ? name : name.substr(separator + 2U);
     const auto result = design.find_unit(
-        UnitKind::systemverilog_package, library, name);
+        UnitKind::systemverilog_package, provider_library, provider_name);
     return result && result->systemverilog != nullptr
         ? result->systemverilog
         : nullptr;

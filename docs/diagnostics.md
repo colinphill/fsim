@@ -70,6 +70,18 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |
 
+## Workspace libraries and snapshots
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-WS-001` | error | Workspace storage, object ownership, snapshot selection, or top-level name lookup failed. |
+| `FSIM-WS-002` | error | A compiled object depends on a library definition that changed or was deleted; recompile the consumer. |
+| `FSIM-WORKSPACE-004` | error | Catalog object selection does not match validated compiled definitions or selects duplicates. |
+| `FSIM-WS-SC001` | error | Managed SystemC compilation has no source files or repeats the same source through equivalent paths. |
+| `FSIM-WS-SC002` | error | The SystemC workspace source identity, library catalog, managed artifact allocation, or commit cannot be resolved or published. |
+| `FSIM-WS-SC003` | error | A managed SystemC library has no compiled translation units, or an object's source ownership/fingerprint disagrees with its catalog entry. |
+| `FSIM-WS-TCL001` | error | Tcl cannot read the current workspace's local and mapped library locations. |
+
 ## Legacy ACC host boundary
 
 | Code | Severity | Meaning |
@@ -187,6 +199,10 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHDECL-001` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
 | `FSIM-FE-VHDECL-002` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
 | `FSIM-FE-VHDECL-003` | error | A package body redeclares a nondeferred constant from the package declaration. |
+| `FSIM-FE-VHDECL-004` | error | A package subprogram has no unique conforming body in the compiled package environment. |
+| `FSIM-SV-PACKAGE-001` | error | A package import is ambiguous between selected logical libraries. |
+| `FSIM-SV-PACKAGE-002` | error | A required compiled SystemVerilog package is unavailable. |
+| `FSIM-SV-PACKAGE-003` | error | A package member or imported type is ambiguous. |
 | `FSIM-FE-VHENV-001` | error | A VHDL-2019 `STD.ENV` procedure, function, or type is used in the wrong syntactic category. |
 | `FSIM-FE-VHENV-002` | error | A VHDL-2019 `STD.ENV` function call has an invalid category, argument count, or named association. |
 | `FSIM-FE-VHENV-003` | error | A VHDL-2019 `STD.ENV` directory procedure has no standardized argument profile matching the call. |

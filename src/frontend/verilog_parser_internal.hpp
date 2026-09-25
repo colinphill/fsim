@@ -91,7 +91,8 @@ class VerilogParser final : private detail::ParserBase {
   VerilogParser(LexResult lexed, bool system_verilog);
   VerilogParser(LexResult lexed, StandardRevision standard_revision);
   VerilogParser(LexResult lexed, StandardRevision standard_revision,
-      std::string compatibility_profile);
+      std::string compatibility_profile,
+      SystemVerilogPackageMemberLookup package_member_lookup = {});
 
   ParseResult run();
 
@@ -737,6 +738,7 @@ class VerilogParser final : private detail::ParserBase {
       std::string,
       std::unordered_set<std::string>>
       package_constant_names_;
+  SystemVerilogPackageMemberLookup package_member_lookup_;
   std::string current_default_nettype_{"wire"};
   bool current_cell_define_{};
   VerilogUnconnectedDrive current_unconnected_drive_{

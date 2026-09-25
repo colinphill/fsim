@@ -466,8 +466,10 @@ void VerilogParser::note_implicit_net_reference(const Token& name) {
     if ((!import_item.name.empty()
          && import_item.name == name.text)
         || (import_item.name.empty()
-            && package_constant_names_[
-                   import_item.package].contains(name.text))) {
+            && (package_constant_names_[
+                    import_item.package].contains(name.text)
+                || (package_member_lookup_
+                    && package_member_lookup_(import_item.package, name.text))))) {
       return;
     }
   }

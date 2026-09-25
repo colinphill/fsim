@@ -17,8 +17,9 @@ namespace fsim::app::tcl_detail {
 #if defined(FSIM_HAS_TCL)
 
 struct TclContext {
-    const cli::Invocation& invocation;
+    cli::Invocation invocation;
     project::Config config;
+    project::Config initial_config;
     diagnostic::Engine& diagnostics;
     Tcl_Interp* interpreter;
     std::ostream& output;

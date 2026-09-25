@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_workflow_test_support.hpp"
+
 #include "fsim/app/application.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/runtime/fst_compression.hpp"
@@ -153,10 +155,10 @@ trace_format = "fst"
     };
     std::ostringstream output;
     std::ostringstream error;
-    const auto status = fsim::cli::run(
+    const auto status = fsim::test::run_fixture_command(
         static_cast<int>(arguments.size()),
         arguments.data(),
-        fsim::app::make_cli_services(),
+        fsim::test::make_fixture_services(),
         output,
         error);
     return { status, output.str(), error.str() };

@@ -8,14 +8,16 @@ families.
 
 ## Enable and save coverage
 
-Enable code coverage in a project manifest:
+Enable code coverage while compiling and elaborating a workspace snapshot:
 
-```toml
-[coverage]
-enabled = true
+```sh
+fsim compile --code-coverage --library work counter.sv tb.sv
+fsim elaborate work.tb --code-coverage
+fsim simulate
 ```
 
-The equivalent command-line override is `--code-coverage`. Statement, branch,
+The `--code-coverage` option is also accepted by snapshot consumers.
+Statement, branch,
 line, condition, expression, toggle, FSM-state, and FSM-transition results use
 stable source and instance identities. SystemVerilog coverpoints/crosses and
 PSL directives/properties occupy their own namespaces.
@@ -33,26 +35,16 @@ assign adapter = input_value;
 // fsim coverage on metric=statement
 ```
 
-External exclusions are conjunctive and always require a reason:
+Source directives remain available in workspace compilation. Native clients
+that supply a coverage configuration can also define external exclusions by
+source, hierarchy, and metric; every exclusion requires a reason and its
+selectors are conjunctive. Those clients can supply FSM hints naming the
+instance, current/next-state objects, and legal states. Hints supplement
+automatic enum/case inference.
 
-```toml
-[[coverage.exclude]]
-source = "rtl/generated_adapter.sv"
-hierarchy = "top.generated*"
-metric = "statement"
-reason = "generated integration glue"
-```
-
-FSM hints use stable elaborated names and do not replace automatic enum/case
-inference:
-
-```toml
-[[coverage.fsm]]
-instance = "top.controller"
-current_state = "state"
-next_state = "next_state"
-legal_states = ["idle", "work", "done"]
-```
+The workspace CLI does not load the former `[[coverage.exclude]]` or
+`[[coverage.fsm]]` project tables. Use source directives and automatic FSM
+inference in command-line workflows.
 
 ## Merge, report, and gate CI
 

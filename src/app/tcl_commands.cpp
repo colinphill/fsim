@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "tcl_internal.hpp"
+#include "application_workspace.hpp"
+#include "application_workspace_store.hpp"
 
 #include "fsim/api.h"
 #include "fsim/support/path.hpp"
@@ -274,7 +276,7 @@ namespace fsim::app::tcl_detail {
     std::string simulation_state(const TclContext& context)
     {
         if (!context.simulation) {
-            return context.built ? "built" : "unbuilt";
+            return context.built ? "loaded" : "unloaded";
         }
         if (context.simulation->poisoned()) {
             return "poisoned";
@@ -290,10 +292,11 @@ namespace fsim::app::tcl_detail {
         if (context.built || context.simulation) {
             return true;
         }
-        auto built = build_project(context.config, context.diagnostics);
+        auto built = load_workspace_snapshot(
+            context.invocation, context.config, context.diagnostics);
         if (!built) {
             (void)command_diagnostic_error(
-                context, interpreter, "fsim project build failed");
+                context, interpreter, "fsim snapshot load failed");
             return false;
         }
         context.built = std::move(*built);
@@ -311,7 +314,7 @@ namespace fsim::app::tcl_detail {
                 (void)command_error(
                     interpreter,
                     "the simulation is already initialized in a different execution "
-                    "mode; rebuild before entering Tcl debug control");
+                    "mode; reload the snapshot before entering Tcl debug control");
                 return false;
             }
             return true;
@@ -398,104 +401,7 @@ namespace fsim::app::tcl_detail {
         return nullptr;
     }
 
-    int project_command(
-        TclContext& context,
-        Tcl_Interp* interpreter,
-        const Tcl_Size argument_count,
-        Tcl_Obj* const arguments[])
-    {
-        if (argument_count == 3
-            && std::string_view { Tcl_GetString(arguments[1]) } == "load") {
-            diagnostic::Engine load_diagnostics;
-            auto loaded = project::load(
-                fsim::support::path_from_utf8(Tcl_GetString(arguments[2])),
-                load_diagnostics);
-            if (!loaded) {
-                context.diagnostics.clear();
-                for (const auto& entry : load_diagnostics.diagnostics()) {
-                    context.diagnostics.report(entry);
-                }
-                return command_diagnostic_error(
-                    context, interpreter, "fsim project load failed");
-            }
-            reset_session(context);
-            context.diagnostics.clear();
-            context.config = std::move(*loaded);
-        } else if (argument_count != 1) {
-            Tcl_WrongNumArgs(interpreter, 1, arguments, "?load MANIFEST?");
-            return TCL_ERROR;
-        }
-        Tcl_Obj* result = Tcl_NewDictObj();
-        dict_put(
-            interpreter,
-            result,
-            "name",
-            string_object(context.config.project.name));
-        dict_put(
-            interpreter,
-            result,
-            "top",
-            string_object(context.config.project.top));
-        Tcl_Obj* tops = Tcl_NewListObj(0, nullptr);
-        for (const auto& top : context.config.project.tops) {
-            Tcl_Obj* entry = Tcl_NewDictObj();
-            dict_put(interpreter, entry, "alias", string_object(top.alias));
-            dict_put(interpreter, entry, "target", string_object(top.target));
-            if (Tcl_ListObjAppendElement(interpreter, tops, entry) != TCL_OK) {
-                return TCL_ERROR;
-            }
-        }
-        dict_put(interpreter, result, "tops", tops);
-        dict_put(
-            interpreter,
-            result,
-            "manifest",
-            string_object(fsim::support::path_to_utf8(context.config.manifest_path)));
-        dict_put(
-            interpreter,
-            result,
-            "time_resolution",
-            string_object(context.config.project.time_resolution));
-        dict_put(
-            interpreter,
-            result,
-            "source_sets",
-            unsigned_object(context.config.source_sets.size()));
-        Tcl_Obj* source_profiles = Tcl_NewListObj(0, nullptr);
-        for (const auto& source_set : context.config.source_sets) {
-            Tcl_Obj* entry = Tcl_NewDictObj();
-            dict_put(
-                interpreter, entry, "language",
-                string_object(project::to_string(source_set.language)));
-            dict_put(
-                interpreter, entry, "standard",
-                string_object(source_set.standard));
-            dict_put(
-                interpreter, entry, "library",
-                string_object(source_set.library));
-            if (Tcl_ListObjAppendElement(interpreter, source_profiles, entry)
-                != TCL_OK) {
-                return TCL_ERROR;
-            }
-        }
-        dict_put(interpreter, result, "source_profiles", source_profiles);
-        Tcl_Obj* mappings = Tcl_NewListObj(0, nullptr);
-        for (const auto& mapping : context.config.library_mappings) {
-            Tcl_Obj* entry = Tcl_NewDictObj();
-            dict_put(interpreter, entry, "library", string_object(mapping.library));
-            dict_put(
-                interpreter, entry, "path",
-                string_object(fsim::support::path_to_utf8(mapping.path)));
-            if (Tcl_ListObjAppendElement(interpreter, mappings, entry) != TCL_OK) {
-                return TCL_ERROR;
-            }
-        }
-        dict_put(interpreter, result, "library_mappings", mappings);
-        Tcl_SetObjResult(interpreter, result);
-        return TCL_OK;
-    }
-
-    int check_command(
+    int workspace_command(
         TclContext& context,
         Tcl_Interp* interpreter,
         const Tcl_Size argument_count,
@@ -505,44 +411,68 @@ namespace fsim::app::tcl_detail {
             Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
             return TCL_ERROR;
         }
-        auto checked = check_project(context.config, context.diagnostics);
-        if (!checked) {
-            return command_diagnostic_error(
-                context, interpreter, "fsim project check failed");
+        workspace::Store store(context.config.base_directory);
+        std::string error;
+        const auto locations = store.library_locations(error);
+        if (!locations) {
+            context.diagnostics.error("FSIM-WS-TCL001", error);
+            return command_error(interpreter, error);
         }
         Tcl_Obj* result = Tcl_NewDictObj();
-        dict_put(
-            interpreter,
-            result,
-            "sources",
-            unsigned_object(checked->source_count));
-        dict_put(
-            interpreter,
-            result,
-            "units",
-            unsigned_object(checked->semantics.units().size()));
+        dict_put(interpreter, result, "directory",
+            string_object(support::path_to_utf8(store.root())));
+        dict_put(interpreter, result, "managed_directory",
+            string_object(support::path_to_utf8(store.managed_directory())));
+        dict_put(interpreter, result, "snapshot",
+            string_object(context.invocation.snapshot));
+        Tcl_Obj* libraries = Tcl_NewListObj(0, nullptr);
+        for (const auto& location : *locations) {
+            Tcl_Obj* entry = Tcl_NewDictObj();
+            dict_put(interpreter, entry, "library", string_object(location.name));
+            dict_put(interpreter, entry, "path",
+                string_object(support::path_to_utf8(location.directory)));
+            dict_put(interpreter, entry, "mapped", Tcl_NewBooleanObj(location.mapped));
+            if (Tcl_ListObjAppendElement(interpreter, libraries, entry) != TCL_OK) {
+                return TCL_ERROR;
+            }
+        }
+        dict_put(interpreter, result, "libraries", libraries);
         Tcl_SetObjResult(interpreter, result);
         return TCL_OK;
     }
 
-    int build_command(
+    int load_command(
         TclContext& context,
         Tcl_Interp* interpreter,
         const Tcl_Size argument_count,
         Tcl_Obj* const arguments[])
     {
-        if (argument_count != 1) {
-            Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
+        if (argument_count < 1 || argument_count > 2) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments, "?SNAPSHOT?");
             return TCL_ERROR;
         }
-        auto built = build_project(context.config, context.diagnostics);
+        auto selection = context.invocation;
+        if (argument_count == 2) {
+            selection.snapshot = Tcl_GetString(arguments[1]);
+        }
+        diagnostic::Engine load_diagnostics;
+        auto built = load_workspace_snapshot(
+            selection, context.initial_config, load_diagnostics);
+        context.diagnostics.clear();
+        for (const auto& diagnostic : load_diagnostics.diagnostics()) {
+            context.diagnostics.report(diagnostic);
+        }
         if (!built) {
             return command_diagnostic_error(
-                context, interpreter, "fsim project build failed");
+                context, interpreter, "fsim snapshot load failed");
         }
         reset_session(context);
+        context.invocation.snapshot = std::move(selection.snapshot);
+        context.config = context.initial_config;
         context.built = std::move(*built);
         Tcl_Obj* result = Tcl_NewDictObj();
+        dict_put(interpreter, result, "snapshot",
+            string_object(context.invocation.snapshot));
         dict_put(
             interpreter,
             result,
@@ -1627,8 +1557,8 @@ namespace fsim::app::tcl_detail {
         try {
             const std::string_view command { Tcl_GetString(arguments[0]) };
             if (context.callback_depth != 0
-                && command != "::fsim::project"
-                && command != "fsim::project"
+                && command != "::fsim::workspace"
+                && command != "fsim::workspace"
                 && command != "::fsim::signals"
                 && command != "fsim::signals"
                 && command != "::fsim::provenance"
@@ -1647,16 +1577,12 @@ namespace fsim::app::tcl_detail {
                     interpreter,
                     "this fsim command is not safe inside a simulation callback");
             }
-            if (command == "::fsim::project" || command == "fsim::project") {
-                return project_command(
+            if (command == "::fsim::workspace" || command == "fsim::workspace") {
+                return workspace_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::check" || command == "fsim::check") {
-                return check_command(
-                    context, interpreter, argument_count, arguments);
-            }
-            if (command == "::fsim::build" || command == "fsim::build") {
-                return build_command(
+            if (command == "::fsim::load" || command == "fsim::load") {
+                return load_command(
                     context, interpreter, argument_count, arguments);
             }
             if (command == "::fsim::signals" || command == "fsim::signals") {

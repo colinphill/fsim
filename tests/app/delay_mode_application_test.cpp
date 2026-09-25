@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_workflow_test_support.hpp"
+
 #include "fsim/app/application.hpp"
 #include "fsim/cli/driver.hpp"
 
@@ -201,27 +203,10 @@ endmodule
   }
 }
 
-void verify_cli_override(
-    const std::filesystem::path& directory,
-    const std::filesystem::path& source) {
-  const auto manifest = directory / "fsim.toml";
-  {
-    std::ofstream output(manifest, std::ios::binary);
-    output
-        << "schema = 3\n"
-        << "[project]\n"
-        << "top = \"sv:work.delay_modes\"\n"
-        << "[[source_set]]\n"
-        << "language = \"systemverilog\"\n"
-        << "files = [\"" << source.filename().generic_string() << "\"]\n"
-        << "[run]\n"
-        << "delay_mode = \"max\"\n";
-    assert(output.good());
-  }
-
+void verify_cli_override() {
   bool invoked = false;
   fsim::cli::Services services;
-  services.run =
+  services.simulate =
       [&](const fsim::cli::Invocation& invocation,
           const fsim::project::Config& config,
           fsim::diagnostic::Engine&,
@@ -236,10 +221,8 @@ void verify_cli_override(
                 == fsim::project::DelayMode::minimum);
         return 0;
       };
-  const auto manifest_text = manifest.generic_string();
   const std::array arguments{
-      "fsim", "run", "--project", manifest_text.c_str(),
-      "--delay-mode", "min"};
+      "fsim", "simulate", "--delay-mode", "min"};
   std::ostringstream output;
   std::ostringstream error;
   assert(
@@ -254,10 +237,8 @@ void verify_cli_override(
   assert(error.str().empty());
 
   fsim::diagnostic::Engine diagnostics;
-  const auto source_text = source.filename().generic_string();
   const std::array invalid{
-      "fsim", "run", "--delay-mode", "slow",
-      source_text.c_str()};
+      "fsim", "simulate", "--delay-mode", "slow"};
   const auto invocation = fsim::cli::parse_arguments(
       static_cast<int>(invalid.size()), invalid.data(), diagnostics);
   assert(!invocation);
@@ -321,7 +302,7 @@ endmodule
   }
 
   verify_auto_resolution_selects_first(directory.path, source);
-  verify_cli_override(directory.path, source);
+  verify_cli_override();
   std::cout << "delay mode application tests passed\n";
   return 0;
 }

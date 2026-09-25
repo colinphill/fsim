@@ -48,11 +48,13 @@ endforeach()
 
 file(READ "${FSIM_SOURCE_DIR}/docs/vhdl-psl-tutorial.md" FSIM_TUTORIAL)
 foreach(FSIM_TOKEN IN ITEMS
-    "fsim-vhdl run -p fsim.toml"
+    "fsim elaborate 'work.psl_counter(rtl)'"
+    "fsim simulate --snapshot portable"
     "vhdl summary"
     "--lang vhdl --standard 2008 --library work"
     "--engine compiled"
-    "Move the complete `.fsimdesign` directory"
+    ".fsim/snapshots/portable"
+    "source removal or library"
     "A zero process exit code is not a substitute")
   string(FIND "${FSIM_TUTORIAL}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)

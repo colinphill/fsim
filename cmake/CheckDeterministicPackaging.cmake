@@ -281,8 +281,19 @@ if(NOT FSIM_SOURCE_ONLY)
          "${FSIM_ROOT}/lib/pkgconfig/fsim.pc")
     file(COPY_FILE "${FSIM_SOURCE_DIR}/LICENSE"
          "${FSIM_ROOT}/share/doc/fsim/LICENSE")
-    file(COPY_FILE "${FSIM_SOURCE_DIR}/examples/vertical_slice/fsim.toml"
-         "${FSIM_ROOT}/share/fsim/examples/vertical_slice/fsim.toml")
+    foreach(FSIM_EXAMPLE_FILE IN ITEMS README.md counter.vhd tb.sv sv_child.sv)
+      file(COPY_FILE
+        "${FSIM_SOURCE_DIR}/examples/vertical_slice/${FSIM_EXAMPLE_FILE}"
+        "${FSIM_ROOT}/share/fsim/examples/vertical_slice/${FSIM_EXAMPLE_FILE}")
+    endforeach()
+    file(MAKE_DIRECTORY
+      "${FSIM_ROOT}/share/doc/fsim/third-party/sqlite-3.53.4")
+    foreach(FSIM_SQLITE_FILE IN ITEMS
+        LICENSE NOTICE SOURCE_MANIFEST.txt sqlite-3.53.4.spdx.json)
+      file(COPY_FILE
+        "${FSIM_SOURCE_DIR}/third_party/sqlite-3.53.4/${FSIM_SQLITE_FILE}"
+        "${FSIM_ROOT}/share/doc/fsim/third-party/sqlite-3.53.4/${FSIM_SQLITE_FILE}")
+    endforeach()
   else()
     set(FSIM_INSTALL_COMMAND
         "${CMAKE_COMMAND}" --install "${FSIM_BINARY_DIR}" --prefix "${FSIM_ROOT}")
@@ -308,6 +319,9 @@ if(NOT FSIM_SOURCE_ONLY)
     message(FATAL_ERROR "binary package exceeds 5000 entries")
   endif()
   foreach(FSIM_RELATIVE IN LISTS FSIM_BINARY_FILES)
+    if(FSIM_RELATIVE MATCHES "(^|/)\\.fsim(/|$)")
+      message(FATAL_ERROR "binary package contains generated workspace state: ${FSIM_RELATIVE}")
+    endif()
     if(IS_SYMLINK "${FSIM_ROOT}/${FSIM_RELATIVE}")
       file(READ_SYMLINK "${FSIM_ROOT}/${FSIM_RELATIVE}" FSIM_LINK_TARGET)
       if(FSIM_LINK_TARGET STREQUAL ""
@@ -419,7 +433,11 @@ file(MAKE_DIRECTORY "${FSIM_EXTRACT}")
 file(ARCHIVE_EXTRACT
   INPUT "${FSIM_WORK_DIR}/${FSIM_SOURCE_PACKAGE}-a.zip"
   DESTINATION "${FSIM_EXTRACT}")
-foreach(FSIM_REQUIRED_PATH IN ITEMS CMakeLists.txt LICENSE cmake/fsim.pc.in)
+foreach(FSIM_REQUIRED_PATH IN ITEMS
+    CMakeLists.txt LICENSE cmake/fsim.pc.in cmake/FsimSqlite.cmake
+    docs/workspace-mode.md
+    third_party/sqlite-3.53.4/SOURCE_MANIFEST.txt
+    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip)
   if(NOT EXISTS "${FSIM_EXTRACT}/${FSIM_SOURCE_PACKAGE}/${FSIM_REQUIRED_PATH}")
     message(FATAL_ERROR
       "extracted source package omits ${FSIM_REQUIRED_PATH}")

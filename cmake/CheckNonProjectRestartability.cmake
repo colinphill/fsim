@@ -99,5 +99,36 @@ fsim_require_restart_tokens(tests/runtime/runtime_vpi_checkpoint_tests.cpp
 fsim_require_restart_tokens(tests/runtime/runtime_vhpi_checkpoint_tests.cpp
   "checkpoint" "restore")
 
+# Retain the original 36 source-free runtime/API boundaries above. Workspace
+# publication adds mutable library catalogs and replaceable named snapshots.
+fsim_require_restart_tokens(tests/app/workspace_cli_test.cpp
+  "test_phase_arguments" "test_library_arguments"
+  "test_workspace_configuration" "invalid legacy manifest that must never be loaded"
+  "simulate.snapshot == \"default\"" "--snapshot=nightly-1")
+fsim_require_restart_tokens(tests/app/workspace_application_test.cpp
+  "test_managed_objects_default_and_named_snapshots"
+  "test_recompilation_removes_old_names_and_rolls_back_errors"
+  "test_compiled_packages_and_stale_consumers"
+  "test_external_library_mapping_and_current_directory"
+  "test_language_qualification_and_multiple_roots"
+  "fs::remove(\"modules.sv\")" "fs::remove(\"package.sv\")"
+  "invoke({ \"library\", \"delete\", \"work\" })"
+  "assert_output(invoke({ \"simulate\" }), \"WORKSPACE_ALPHA\")")
+fsim_require_restart_tokens(tests/app/workspace_store_test.cpp
+  "test_source_replacement_and_group_selection"
+  "test_collision_failure_and_sql_rollback"
+  "test_native_invalidation_and_delete"
+  "test_mapping_and_corrupt_metadata"
+  "test_snapshot_replacement_and_workspace_boundary"
+  "test_serialized_writers_and_symlinks")
+fsim_require_restart_tokens(src/app/application_workspace_store_sqlite.cpp
+  "SQLITE_OPEN_READONLY" "SQLITE_DBCONFIG_DEFENSIVE"
+  "PRAGMA trusted_schema=OFF" "PRAGMA foreign_keys=ON"
+  "workspace library catalog has an unsupported schema")
+fsim_require_restart_tokens(docs/workspace-mode.md
+  ".fsim/libraries/<name>" "library.sqlite3" ".fsim/libraries.toml"
+  "fsim elaborate work.tb" "fsim simulate"
+  "Failed compilation preserves" "Existing snapshots retain")
+
 message(STATUS
-  "non-project restartability contract passed: rows=36 digest=${FSIM_ACTUAL_DIGEST}")
+  "workspace and retained restartability contract passed: rows=36 digest=${FSIM_ACTUAL_DIGEST}")

@@ -1,0 +1,15 @@
+SQLite 3.53.4
+
+SQLite's authors have dedicated its code and documentation to the public domain.
+The adjacent LICENSE reproduces the public-domain notice and blessing from
+sqlite3.h, with the C comment markers removed. The SPDX license identifier for
+that text is blessing.
+
+Upstream copyright statement: https://www.sqlite.org/copyright.html
+Official source archive:
+https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip
+
+fsim builds the unmodified sqlite3.c amalgamation as an internal static library
+with serialized thread support and dynamic extension loading disabled. The
+SQLite command-line shell is included in the upstream archive but is not built
+or installed by fsim.

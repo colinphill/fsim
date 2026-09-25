@@ -1271,8 +1271,7 @@ public:
         if (!view || view->vhdl == nullptr
             || (view->vhdl->form != vhdl::DeclarationForm::constant
                 && view->vhdl->form
-                    != vhdl::DeclarationForm::generic_constant)
-            || !view->vhdl->initializer) {
+                    != vhdl::DeclarationForm::generic_constant)) {
             return std::nullopt;
         }
         const auto declared_subtype
@@ -1313,8 +1312,7 @@ public:
         if (!view || view->vhdl == nullptr
             || (view->vhdl->form != vhdl::DeclarationForm::constant
                 && view->vhdl->form
-                    != vhdl::DeclarationForm::generic_constant)
-            || !view->vhdl->initializer) {
+                    != vhdl::DeclarationForm::generic_constant)) {
             return std::nullopt;
         }
         const auto& declaration = *view->vhdl;
@@ -2314,9 +2312,12 @@ private:
         if (view && view->vhdl != nullptr
             && (view->vhdl->form == vhdl::DeclarationForm::constant
                 || view->vhdl->form
-                    == vhdl::DeclarationForm::generic_constant)
-            && view->vhdl->initializer) {
-            result = evaluate_vhdl_value(*view->vhdl->initializer);
+                    == vhdl::DeclarationForm::generic_constant)) {
+            if (view->vhdl->initializer) {
+                result = evaluate_vhdl_value(*view->vhdl->initializer);
+            } else if (view->vhdl->deferred && view->vhdl->completion) {
+                result = evaluate_vhdl_declaration(*view->vhdl->completion);
+            }
         }
         active_vhdl_declarations_.erase(declaration);
         return result;
@@ -4556,6 +4557,9 @@ public:
                         *view->vhdl->subtype,
                         *view->vhdl->initializer);
                 }
+            } else if (!result && constant && view->vhdl->deferred
+                && view->vhdl->completion) {
+                result = evaluate_declaration(*view->vhdl->completion);
             } else if (!result && constant) {
                 result = parse_integral_identity(view->vhdl->name);
             }
@@ -4613,6 +4617,9 @@ public:
                 || form == vhdl::DeclarationForm::constant;
             if (constant && view->vhdl->initializer) {
                 result = evaluate_string(*view->vhdl->initializer);
+            } else if (constant && view->vhdl->deferred
+                && view->vhdl->completion) {
+                result = evaluate_string_declaration(*view->vhdl->completion);
             }
         }
         active_string_declarations_.erase(declaration);

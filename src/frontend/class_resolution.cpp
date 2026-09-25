@@ -322,7 +322,8 @@ void resolve_declaration_types(
     const bool deferred_type_parameter =
         declaration.base->name.find("::") == std::string::npos
         && shadowed_types.contains(declaration.base->name);
-    if (!deferred_type_parameter) {
+      if (!deferred_type_parameter
+          && declaration.base->declaration_identity.empty()) {
       auto candidates =
           resolve_name(declaration.base->name, owner, entries);
       if (candidates.empty()) {
@@ -357,8 +358,12 @@ void resolve_declaration_types(
     }
   }
   for (auto& extended : declaration.extended_interfaces) {
-    auto candidates = resolve_name(extended.name, owner, entries);
-    if (candidates.empty()) {
+    auto candidates = extended.declaration_identity.empty()
+        ? resolve_name(extended.name, owner, entries)
+        : std::vector<ClassEntry*> {};
+    if (!extended.declaration_identity.empty()) {
+      // A compiled package environment already selected this identity.
+    } else if (candidates.empty()) {
       diagnose(
           diagnostics,
           "FSIM-SV-CLASS-009",
@@ -389,8 +394,12 @@ void resolve_declaration_types(
     }
   }
   for (auto& implemented : declaration.implemented_interfaces) {
-    auto candidates = resolve_name(implemented.name, owner, entries);
-    if (candidates.empty()) {
+    auto candidates = implemented.declaration_identity.empty()
+        ? resolve_name(implemented.name, owner, entries)
+        : std::vector<ClassEntry*> {};
+    if (!implemented.declaration_identity.empty()) {
+      // Imported class declarations remain in compiled HIR.
+    } else if (candidates.empty()) {
       diagnose(
           diagnostics,
           "FSIM-SV-CLASS-009",
@@ -553,7 +562,7 @@ void migrate_class_signals(
         variables.push_back({
             std::move(signal.name),
             std::move(signal.type),
-            std::nullopt,
+            std::move(signal.default_value),
             std::move(signal.span)});
       }
     } else {

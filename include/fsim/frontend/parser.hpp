@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -109,6 +110,11 @@ struct ParseResult {
   [[nodiscard]] bool ok() const { return !has_errors(diagnostics); }
 };
 
+// Recognize imported names without constructing parser declarations for
+// compiled packages. The owning compiler keeps the lookup alive during parse.
+using SystemVerilogPackageMemberLookup = std::function<bool(
+    std::string_view package, std::string_view member)>;
+
 [[nodiscard]] ParseResult parse(SourceText source, Language language,
     VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
 [[nodiscard]] ParseResult parse_text(std::string_view source_name,
@@ -142,5 +148,10 @@ struct ParseResult {
     LexResult lexed,
     StandardRevision standard_revision,
     std::string_view compatibility_profile);
+[[nodiscard]] ParseResult parse_verilog(
+    LexResult lexed,
+    StandardRevision standard_revision,
+    std::string_view compatibility_profile,
+    SystemVerilogPackageMemberLookup package_member_lookup);
 
 }  // namespace fsim::frontend

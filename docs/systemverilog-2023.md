@@ -2,18 +2,13 @@
 # SystemVerilog-2023 support
 
 fsim v3 accepts SystemVerilog-2023 as a native, separately identified profile.
-Select `23` or `2023` in a source set or with `--standard`:
+Select `23` or `2023` with `--standard` during workspace compilation:
 
-```toml
-[[source_set]]
-language = "systemverilog"
-standard = "2023"
-files = ["rtl/design.sv", "tb/testbench.sv"]
-```
-
-```text
-fsim run --lang systemverilog --standard 2023 --top work.testbench \
+```sh
+fsim compile --lang systemverilog --standard 2023 --library work \
   rtl/design.sv tb/testbench.sv
+fsim elaborate work.testbench
+fsim simulate
 ```
 
 The selected revision is retained through preprocessing, semantic units,
@@ -38,8 +33,9 @@ LLVM O0-O3.
 
 ## Artifacts and mixed designs
 
-SystemVerilog-2023 compiles directly into v3 `.fsimobj` objects and
-`.fsimdesign` designs. Those formats reject v2 data without a migration path.
+SystemVerilog-2023 compiles into managed workspace library objects and
+snapshots. Their underlying formats reject v2 data without a migration path;
+fsim chooses artifact filenames and replaces them after successful updates.
 Relocated consumers retain source, standard, hierarchy, coverage, foreign
 interface, and cache identities. Mixed VHDL/SystemVerilog/SystemC designs use
 the same typed boundary and scheduling model.

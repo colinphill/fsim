@@ -79,6 +79,23 @@ if(NOT EXISTS "${FSIM_MANIFEST}")
 endif()
 
 fsim_collect_source_package_files("${FSIM_SOURCE_DIR}" FSIM_ACTUAL_FILES)
+fsim_load_source_package_exclusions("${FSIM_SOURCE_DIR}")
+foreach(FSIM_GENERATED IN ITEMS
+    .fsim .fsim/libraries/work/library.sqlite3
+    examples/sample/.fsim/snapshots/default/runtime.bin)
+  fsim_source_package_is_excluded("${FSIM_GENERATED}" FSIM_EXCLUDED)
+  if(NOT FSIM_EXCLUDED)
+    message(FATAL_ERROR "source-package policy includes workspace state: ${FSIM_GENERATED}")
+  endif()
+endforeach()
+foreach(FSIM_OWNED IN ITEMS
+    docs/workspace-mode.md src/app/application_workspace_store.cpp
+    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip)
+  fsim_source_package_is_excluded("${FSIM_OWNED}" FSIM_EXCLUDED)
+  if(FSIM_EXCLUDED)
+    message(FATAL_ERROR "source-package policy excludes workspace source: ${FSIM_OWNED}")
+  endif()
+endforeach()
 
 if(FSIM_WRITE_SOURCE_PACKAGE_MANIFEST)
   set(FSIM_MANIFEST_CONTENT
@@ -132,7 +149,12 @@ foreach(FSIM_REQUIRED IN ITEMS
     packaging/targets/linux-gcc13-no-llvm.txt
     packaging/targets/windows-llvm-mingw-llvm22.txt
     packaging/targets/windows-llvm-mingw-no-llvm.txt
-    examples/vertical_slice/fsim.toml
+    cmake/FsimSqlite.cmake
+    docs/workspace-mode.md
+    examples/vertical_slice/README.md
+    examples/vertical_slice/counter.vhd
+    examples/vertical_slice/tb.sv
+    examples/vertical_slice/sv_child.sv
     LICENSE
     third_party/ieee-1076-2019/LICENSE
     third_party/systemc-3.0.2/LICENSE
@@ -147,7 +169,13 @@ foreach(FSIM_REQUIRED IN ITEMS
     third_party/scv-2.0.1/patches/scv-nested-extension-constructors.patch
     third_party/scv-2.0.1/patches/scv-range-size-overflow.patch
     third_party/scv-2.0.1/patches/scv-stream-core-lifetime.patch
-    third_party/scv-2.0.1/scv-2.0.1.spdx.json)
+    third_party/scv-2.0.1/scv-2.0.1.spdx.json
+    third_party/sqlite-3.53.4/LICENSE
+    third_party/sqlite-3.53.4/NOTICE
+    third_party/sqlite-3.53.4/README.md
+    third_party/sqlite-3.53.4/SOURCE_MANIFEST.txt
+    third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json
+    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip)
   list(FIND FSIM_MANIFEST_FILES "${FSIM_REQUIRED}" FSIM_REQUIRED_INDEX)
   if(FSIM_REQUIRED_INDEX EQUAL -1)
     message(FATAL_ERROR
@@ -157,5 +185,5 @@ endforeach()
 
 list(LENGTH FSIM_MANIFEST_FILES FSIM_FILE_COUNT)
 message(STATUS
-  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 23 exclusions, "
+  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 26 exclusions, "
   "five negative classes")

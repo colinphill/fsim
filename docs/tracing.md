@@ -3,37 +3,31 @@
 
 fsim records the same immutable declaration and event model through VCD,
 FST, internal observers, debugger selection, and callbacks. VCD remains the
-default for existing projects. FST is selected explicitly or inferred from a
+default for trace outputs without an FST selection. FST is selected explicitly or inferred from a
 `.fst` output path; choosing one format does not disable or weaken the other.
 
-## Configure a project trace
+## Configure a workspace trace
 
-Schema-2 manifests accept the complete trace policy in `[run]`:
+After compiling sources and elaborating a default or named snapshot, choose
+trace settings on simulation:
 
-```toml
-[run]
-trace_file = "waves.fst"
-trace_format = "fst"
-trace_compression = "deterministic"
-trace_filters = ["top.*"]
-trace_report_limit = 4096
+```sh
+fsim simulate --trace waves.fst --trace-format fst \
+  --trace-compression deterministic --trace-filter 'top.*' \
+  --trace-report-limit 4096
+fsim simulate --snapshot regression --trace waves.vcd \
+  --trace-format vcd --trace-filter 'top.*'
 ```
 
-`trace_format` is `auto`, `vcd`, or `fst`. `auto` selects FST only for a
+`--trace-format` is `auto`, `vcd`, or `fst`. `auto` selects FST only for a
 case-insensitive `.fst` extension and otherwise preserves VCD. An explicit
 VCD/FST choice rejects the opposite known extension. FST compression is
 `none` or `deterministic`; `auto` resolves to the deterministic profile for
 FST and no compression for VCD.
 
-The same controls are available to project and manifest-free phases:
-
-```sh
-fsim run -p fsim.toml --trace waves.fst --trace-format fst \
-  --trace-compression deterministic --trace-filter 'top.*'
-
-fsim simulate --design design.fsimdesign --trace waves.vcd \
-  --trace-format vcd --trace-filter 'top.*'
-```
+The former `[run]` project table is not read by workspace commands. Trace
+outputs remain explicit user outputs; managed library and snapshot filenames
+stay under `.fsim`.
 
 `--trace-select` aliases `--trace-filter`, `--trace-output` aliases
 `--trace`, and `--trace-lifecycle configured|disabled` controls whether the

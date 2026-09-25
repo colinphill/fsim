@@ -50,7 +50,12 @@ endforeach()
 
 foreach(sbom IN ITEMS
     third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
-    third_party/scv-2.0.1/scv-2.0.1.spdx.json)
+    third_party/scv-2.0.1/scv-2.0.1.spdx.json
+    third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json)
+  set(expected_license "Apache-2.0")
+  if(sbom MATCHES "^third_party/sqlite-")
+    set(expected_license "blessing")
+  endif()
   file(READ "${FSIM_SOURCE_DIR}/${sbom}" contents)
   string(JSON spdx_version ERROR_VARIABLE json_error
     GET "${contents}" spdxVersion)
@@ -71,7 +76,7 @@ foreach(sbom IN ITEMS
   foreach(package_index RANGE 0 ${package_last})
     string(JSON declared ERROR_VARIABLE json_error
       GET "${contents}" packages ${package_index} licenseDeclared)
-    if(json_error OR NOT declared STREQUAL "Apache-2.0")
+    if(json_error OR NOT declared STREQUAL expected_license)
       message(FATAL_ERROR "SPDX SBOM ${sbom} has invalid package license")
     endif()
     foreach(field IN ITEMS checksums externalRefs)
@@ -83,6 +88,60 @@ foreach(sbom IN ITEMS
     endforeach()
   endforeach()
 endforeach()
+
+foreach(id IN ITEMS V3SUP-SQLITE-LICENSE V3SUP-SQLITE-NOTICE
+    V3SUP-SQLITE-SBOM V3SUP-SQLITE-PROVENANCE V3SUP-SQLITE-SOURCE)
+  if(NOT id IN_LIST ids)
+    message(FATAL_ERROR "workspace SQLite supply-chain row is missing: ${id}")
+  endif()
+endforeach()
+include("${FSIM_SOURCE_DIR}/cmake/FsimSqlite.cmake")
+set(sqlite_root "${FSIM_SOURCE_DIR}/third_party/sqlite-${FSIM_SQLITE_VERSION}")
+set(sqlite_archive "${sqlite_root}/${FSIM_SQLITE_ARCHIVE_NAME}")
+fsim_sqlite_validate_archive("${sqlite_archive}")
+file(SHA3_256 "${sqlite_archive}" sqlite_sha3)
+if(NOT sqlite_sha3 STREQUAL
+    "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e")
+  message(FATAL_ERROR "SQLite source archive differs from the upstream SHA3-256 identity")
+endif()
+file(STRINGS "${sqlite_root}/SOURCE_MANIFEST.txt" sqlite_manifest)
+foreach(record IN ITEMS
+    "schema=fsim-sqlite-source-v1" "name=SQLite"
+    "version=${FSIM_SQLITE_VERSION}" "release_date=2026-07-24"
+    "upstream_url=https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip"
+    "archive=${FSIM_SQLITE_ARCHIVE_NAME}" "archive_size=${FSIM_SQLITE_ARCHIVE_SIZE}"
+    "archive_sha256=${FSIM_SQLITE_ARCHIVE_SHA256}"
+    "archive_sha3_256=${sqlite_sha3}" "source_root=${FSIM_SQLITE_SOURCE_ROOT}"
+    "tree_files=4" "tree_sha256=${FSIM_SQLITE_TREE_SHA256}" "license=blessing")
+  if(NOT record IN_LIST sqlite_manifest)
+    message(FATAL_ERROR "SQLite provenance omits ${record}")
+  endif()
+endforeach()
+foreach(kind IN ITEMS license notice)
+  string(TOUPPER "${kind}" filename)
+  file(SHA256 "${sqlite_root}/${filename}" digest)
+  if(NOT "${kind}_sha256=${digest}" IN_LIST sqlite_manifest)
+    message(FATAL_ERROR "SQLite ${kind} differs from its recorded identity")
+  endif()
+endforeach()
+file(READ "${sqlite_root}/sqlite-${FSIM_SQLITE_VERSION}.spdx.json" sqlite_sbom)
+foreach(field IN ITEMS versionInfo licenseConcluded licenseDeclared)
+  string(JSON value GET "${sqlite_sbom}" packages 0 ${field})
+  if(field STREQUAL "versionInfo")
+    set(expected "${FSIM_SQLITE_VERSION}")
+  else()
+    set(expected "blessing")
+  endif()
+  if(NOT value STREQUAL expected)
+    message(FATAL_ERROR "SQLite SBOM has an invalid ${field}")
+  endif()
+endforeach()
+string(JSON sqlite_sbom_sha256 GET "${sqlite_sbom}" packages 0 checksums 0 checksumValue)
+string(JSON sqlite_sbom_sha3 GET "${sqlite_sbom}" packages 0 checksums 1 checksumValue)
+if(NOT sqlite_sbom_sha256 STREQUAL FSIM_SQLITE_ARCHIVE_SHA256
+    OR NOT sqlite_sbom_sha3 STREQUAL sqlite_sha3)
+  message(FATAL_ERROR "SQLite SBOM checksums differ from the pinned source")
+endif()
 
 set(forbidden_home "/home/" "colin/standards")
 list(JOIN forbidden_home "" forbidden_absolute)

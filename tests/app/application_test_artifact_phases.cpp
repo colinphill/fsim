@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "application_workflow_test_support.hpp"
 #include "governed_process_limits.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
@@ -24,6 +25,23 @@
 #include <vector>
 
 namespace fsim::test {
+namespace {
+
+    std::string read_artifact_payload(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        assert(input);
+        const std::string bytes {
+            std::istreambuf_iterator<char> { input },
+            std::istreambuf_iterator<char> { }
+        };
+        assert(input.good() || input.eof());
+        // The fixture relocates the artifact later. Returning only the bytes
+        // closes this handle before Windows checks the parent directory rename.
+        return bytes;
+    }
+
+} // namespace
 
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
@@ -318,7 +336,7 @@ end architecture;
     const auto vhdl_2019_design_text
         = support::path_to_utf8(vhdl_2019_design);
     const auto trace_text = support::path_to_utf8(trace);
-    auto services = app::make_cli_services();
+    auto services = make_fixture_services();
     std::ostringstream output;
     std::ostringstream error;
 
@@ -327,7 +345,7 @@ end architecture;
         "--library", "work", "--output", vhdl_object_text.c_str(),
         vhdl_source_text.c_str()
     };
-    const auto vhdl_result = cli::run(
+    const auto vhdl_result = run_fixture_command(
         static_cast<int>(vhdl_compile.size()), vhdl_compile.data(), services,
         output, error);
     if (vhdl_result != 0) {
@@ -449,7 +467,7 @@ end architecture;
         "--library", "work", "--output", vhdl_2019_object_text.c_str(),
         vhdl_source_text.c_str()
     };
-    const auto vhdl_2019_result = cli::run(
+    const auto vhdl_2019_result = run_fixture_command(
         static_cast<int>(vhdl_2019_compile.size()),
         vhdl_2019_compile.data(), services, output, error);
     if (vhdl_2019_result != 0) {
@@ -477,7 +495,7 @@ end architecture;
         "--library", "work", "--output", sv_object_text.c_str(),
         sv_source_text.c_str()
     };
-    const auto sv_result = cli::run(
+    const auto sv_result = run_fixture_command(
         static_cast<int>(sv_compile.size()), sv_compile.data(), services,
         output, error);
     if (sv_result != 0) {
@@ -520,7 +538,7 @@ end architecture;
         "--top", "virtual=sv:work.interface_artifact",
         "--output", design_text.c_str(), "--seed", "23"
     };
-    const auto elaborate_result = cli::run(
+    const auto elaborate_result = run_fixture_command(
         static_cast<int>(elaborate.size()), elaborate.data(), services,
         output, error);
     if (elaborate_result != 0) {
@@ -548,25 +566,15 @@ end architecture;
         &artifact::DesignPayload::kind);
     assert(hierarchy_paths_payload != design_metadata->payloads.end());
     assert(hierarchy_paths_payload->artifact == "state/hierarchy-paths.bin");
-    std::ifstream hierarchy_paths_input(
-        design / hierarchy_paths_payload->artifact, std::ios::binary);
-    const std::string hierarchy_paths_bytes {
-        std::istreambuf_iterator<char> { hierarchy_paths_input },
-        std::istreambuf_iterator<char> { }
-    };
-    assert(hierarchy_paths_input.good() || hierarchy_paths_input.eof());
+    const auto hierarchy_paths_bytes = read_artifact_payload(
+        design / hierarchy_paths_payload->artifact);
     assert(hierarchy_paths_bytes.starts_with("FSIMHPT1"));
     const auto design_ir_payload = std::ranges::find(
         design_metadata->payloads, std::string { "design-ir" },
         &artifact::DesignPayload::kind);
     assert(design_ir_payload != design_metadata->payloads.end());
-    std::ifstream design_ir_input(
-        design / design_ir_payload->artifact, std::ios::binary);
-    const std::string design_ir_bytes {
-        std::istreambuf_iterator<char> { design_ir_input },
-        std::istreambuf_iterator<char> { }
-    };
-    assert(design_ir_input.good() || design_ir_input.eof());
+    const auto design_ir_bytes = read_artifact_payload(
+        design / design_ir_payload->artifact);
     assert(design_ir_bytes.starts_with("FSIMDIR1"));
     auto stale_design_ir_bytes = design_ir_bytes;
     stale_design_ir_bytes[8] = static_cast<char>(
@@ -610,14 +618,8 @@ end architecture;
                 || payload.kind == "sv-constraint-hir"
                 || payload.kind == "vhdl-hir";
         }));
-    std::ifstream compiled_hir_input(
-        design / compiled_hir_payload->artifact, std::ios::binary);
-    const std::string compiled_hir_bytes {
-        std::istreambuf_iterator<char> { compiled_hir_input },
-        std::istreambuf_iterator<char> { }
-    };
-    assert(compiled_hir_input.good() || compiled_hir_input.eof());
-    compiled_hir_input.close();
+    const auto compiled_hir_bytes = read_artifact_payload(
+        design / compiled_hir_payload->artifact);
     assert(compiled_hir_bytes.starts_with("FSIMCHIR"));
     diagnostic::Engine compiled_hir_diagnostics;
     const auto compiled_hir = app::deserialize_compiled_hir_bundle(
@@ -706,7 +708,7 @@ end architecture;
         };
         output.str({ });
         error.str({ });
-        const auto result = cli::run(
+        const auto result = run_fixture_command(
             static_cast<int>(arguments.size()), arguments.data(), services,
             output, error);
         if (result != 0) {
@@ -1520,7 +1522,7 @@ end architecture;
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(
+    assert(run_fixture_command(
                static_cast<int>(missing_elaborate.size()), missing_elaborate.data(),
                services, output, error)
         != 0);
@@ -1536,7 +1538,7 @@ end architecture;
     };
     output.str({ });
     error.str({ });
-    assert(cli::run(
+    assert(run_fixture_command(
                static_cast<int>(ambiguous_elaborate.size()),
                ambiguous_elaborate.data(), services, output, error)
         != 0);
@@ -1807,7 +1809,7 @@ end architecture;
         "main.*", "--trace-filter", "observer.*", "--trace-filter",
         "scalar.*", "--trace-filter", "virtual.*"
     };
-    const auto simulate_result = cli::run(
+    const auto simulate_result = run_fixture_command(
         static_cast<int>(simulate.size()), simulate.data(), services,
         output, error);
     if (simulate_result != 0) {
@@ -1853,10 +1855,9 @@ end architecture;
         systemc_output << "SC_MODULE(ArtifactPhase) {};\n";
     }
     const auto systemc_source_text = support::path_to_utf8(systemc_phase_source);
-    const auto systemc_object_text = support::path_to_utf8(systemc_phase_object);
     const std::vector<const char*> systemc_compile {
         "fsim", "compile", "--lang", "systemc", "--standard", "2023",
-        "--library", "work", "--output", systemc_object_text.c_str(),
+        "--library", "work",
         systemc_source_text.c_str()
     };
     output.str({ });
@@ -1865,7 +1866,7 @@ end architecture;
                static_cast<int>(systemc_compile.size()), systemc_compile.data(),
                services, output, error)
         != 0);
-    assert(error.str().find("Batch 138") != std::string::npos);
+    assert(error.str().find("systemc compile") != std::string::npos);
     assert(!std::filesystem::exists(systemc_phase_object));
 
     project::Config api_compile_config;

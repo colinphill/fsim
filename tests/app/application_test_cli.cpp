@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "application_workflow_test_support.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/library/artifact.hpp"
@@ -1595,19 +1596,20 @@ trace_filters = ["__none__"]
     };
     std::ostringstream cli_output;
     std::ostringstream cli_error;
-    auto services = fsim::app::make_cli_services(cli_input);
+    auto services = fsim::test::make_fixture_services(cli_input);
     const auto manifest_text = manifest.string();
     const std::vector<const char*> arguments {
         "fsim", "debug", "-p", manifest_text.c_str()
     };
-    assert(
-        fsim::cli::run(
-            static_cast<int>(arguments.size()),
-            arguments.data(),
-            services,
-            cli_output,
-            cli_error)
-        == 0);
+    const auto cli_status = fsim::test::run_fixture_command(
+        static_cast<int>(arguments.size()),
+        arguments.data(),
+        services,
+        cli_output,
+        cli_error);
+    if (cli_status != 0)
+        std::cerr << cli_error.str();
+    assert(cli_status == 0);
     assert(
         cli_output.str().find("fsim debugger: tb") != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
@@ -1690,8 +1692,8 @@ trace_filters = ["__none__"]
     InterruptingOutputBuffer interrupted_output_buffer;
     std::ostream interrupted_cli_output { &interrupted_output_buffer };
     std::ostringstream interrupted_cli_error;
-    auto interrupted_services = fsim::app::make_cli_services(interrupted_cli_input);
-    const auto interrupted_result = fsim::cli::run(
+    auto interrupted_services = fsim::test::make_fixture_services(interrupted_cli_input);
+    const auto interrupted_result = fsim::test::run_fixture_command(
         static_cast<int>(arguments.size()),
         arguments.data(),
         interrupted_services,
@@ -1729,7 +1731,7 @@ trace_filters = ["__none__"]
         "+UVM_TIMEOUT=10,NO", direct_text.c_str()
     };
     assert(
-        fsim::cli::run(
+        fsim::test::run_fixture_command(
             static_cast<int>(direct_arguments.size()),
             direct_arguments.data(),
             services,
@@ -1746,7 +1748,7 @@ trace_filters = ["__none__"]
     std::ostringstream malformed_uvm_output;
     std::ostringstream malformed_uvm_error;
     assert(
-        fsim::cli::run(
+        fsim::test::run_fixture_command(
             static_cast<int>(malformed_uvm_arguments.size()),
             malformed_uvm_arguments.data(), services,
             malformed_uvm_output, malformed_uvm_error)
@@ -1770,10 +1772,14 @@ trace_filters = ["__none__"]
         "fsim", "run", "--include", unicode_include.c_str(),
         "--trace", unicode_trace.c_str(), unicode_text.c_str()
     };
+    const std::vector<const char*> unicode_compile_arguments {
+        "fsim", "compile", "--include", unicode_include.c_str(),
+        "--trace", unicode_trace.c_str(), unicode_text.c_str()
+    };
     fsim::diagnostic::Engine unicode_diagnostics;
     const auto unicode_invocation = fsim::cli::parse_arguments(
-        static_cast<int>(unicode_arguments.size()),
-        unicode_arguments.data(),
+        static_cast<int>(unicode_compile_arguments.size()),
+        unicode_compile_arguments.data(),
         unicode_diagnostics);
     assert(unicode_invocation && !unicode_diagnostics.has_error());
     assert(unicode_invocation->files == std::vector { unicode_source });
@@ -1785,7 +1791,7 @@ trace_filters = ["__none__"]
         == unicode_directory
             / fsim::support::path_from_utf8("trace-\xCE\xBB.vcd"));
     const std::vector<const char*> search_arguments {
-        "fsim", "build",
+        "fsim", "elaborate", "actual_top",
         "--search-library", "vendor",
         "--search-library=shared"
     };
@@ -1799,14 +1805,9 @@ trace_filters = ["__none__"]
         search_invocation->search_libraries
         == std::vector<std::string> { "vendor", "shared" }));
     const auto vendor_library = directory / "vendor.fsimlib";
-    const auto shared_library = directory / "shared.fsimlib";
     const auto vendor_library_text = vendor_library.string();
-    const auto shared_mapping_text = std::string { "shared=" } + shared_library.string();
-    const auto vendor_mapping_text = std::string { "vendor=" } + vendor_library_text;
     const std::vector<const char*> mapping_arguments {
-        "fsim", "build",
-        "--map-library", vendor_mapping_text.c_str(),
-        "--map-library", shared_mapping_text.c_str()
+        "fsim", "library", "map", "vendor", vendor_library_text.c_str()
     };
     fsim::diagnostic::Engine mapping_diagnostics;
     const auto mapping_invocation = fsim::cli::parse_arguments(
@@ -1814,12 +1815,11 @@ trace_filters = ["__none__"]
         mapping_arguments.data(),
         mapping_diagnostics);
     assert(mapping_invocation && !mapping_diagnostics.has_error());
-    assert((
-        mapping_invocation->library_mappings
-        == std::vector<fsim::project::LibraryMapping> {
-            { "vendor", vendor_library }, { "shared", shared_library } }));
+    assert(mapping_invocation->command == fsim::cli::Command::library_map);
+    assert(mapping_invocation->library_name == "vendor");
+    assert(mapping_invocation->library_mapping_path == vendor_library);
     const std::vector<const char*> invalid_mapping_arguments {
-        "fsim", "check", "--map-library", "vendor"
+        "fsim", "library", "map", "vendor"
     };
     fsim::diagnostic::Engine invalid_mapping_diagnostics;
     assert(!fsim::cli::parse_arguments(
@@ -1829,25 +1829,23 @@ trace_filters = ["__none__"]
     assert(std::ranges::any_of(
         invalid_mapping_diagnostics.diagnostics(),
         [](const auto& diagnostic) {
-            return diagnostic.message.find("LIBRARY=DIRECTORY")
+            return diagnostic.message.find("NAME DIRECTORY")
                 != std::string::npos;
         }));
     const auto export_library_path = directory / "cli-export.fsimlib";
     const auto export_mapping_text = std::string { "work=" } + export_library_path.string();
     const std::vector<const char*> export_arguments {
-        "fsim", "build", "--export-library", export_mapping_text.c_str()
+        "fsim", "compile", "--export-library", export_mapping_text.c_str(),
+        direct_text.c_str()
     };
     fsim::diagnostic::Engine export_option_diagnostics;
     const auto export_invocation = fsim::cli::parse_arguments(
         static_cast<int>(export_arguments.size()),
         export_arguments.data(),
         export_option_diagnostics);
-    assert(export_invocation && !export_option_diagnostics.has_error());
-    assert((export_invocation->library_exports
-        == std::vector<fsim::project::LibraryMapping> {
-            { "work", export_library_path } }));
+    assert(!export_invocation && export_option_diagnostics.has_error());
     const std::vector<const char*> top_arguments {
-        "fsim", "build",
+        "fsim", "elaborate",
         "--top", "source=sv:work.producer",
         "--top=sink=consumer"
     };
@@ -1864,7 +1862,7 @@ trace_filters = ["__none__"]
             { "consumer", "sink" } }));
     assert(!top_invocation->top.has_value());
     const std::vector<const char*> invalid_top_arguments {
-        "fsim", "build", "--top", "producer", "--top", "sink=consumer"
+        "fsim", "elaborate", "--top", "producer", "--top", "producer=consumer"
     };
     fsim::diagnostic::Engine invalid_top_diagnostics;
     assert(!fsim::cli::parse_arguments(
@@ -1874,30 +1872,12 @@ trace_filters = ["__none__"]
     assert(std::ranges::any_of(
         invalid_top_diagnostics.diagnostics(),
         [](const auto& diagnostic) {
-            return diagnostic.message.find("every repeated --top")
+            return diagnostic.message.find("duplicate top alias")
                 != std::string::npos;
         }));
-    const auto search_manifest = directory / "search-override.toml";
-    {
-        std::ofstream output(search_manifest);
-        output << R"(schema = 3
-[project]
-top = "actual_top"
-[elaboration]
-search_libraries = ["manifest_only"]
-[[library_map]]
-library = "manifest_only"
-path = "manifest-only.fsimlib"
-[[source_set]]
-language = "systemverilog"
-library = "work"
-files = ["different_filename.sv"]
-)";
-        assert(output.good());
-    }
     bool search_handler_called = false;
     fsim::cli::Services search_services;
-    search_services.check =
+    search_services.elaborate =
         [&](const fsim::cli::Invocation&,
             const fsim::project::Config& captured,
             fsim::diagnostic::Engine&,
@@ -1907,10 +1887,7 @@ files = ["different_filename.sv"]
             assert((
                 captured.elaboration.search_libraries
                 == std::vector<std::string> { "vendor", "shared" }));
-            assert((
-                captured.library_mappings
-                == std::vector<fsim::project::LibraryMapping> {
-                    { "vendor", vendor_library }, { "shared", shared_library } }));
+            assert(captured.library_mappings.empty());
             assert(captured.project.top.empty());
             assert((
                 captured.project.tops
@@ -1919,12 +1896,9 @@ files = ["different_filename.sv"]
                     { "actual_top", "secondary" } }));
             return 0;
         };
-    const auto search_manifest_text = search_manifest.string();
     const std::vector<const char*> search_override_arguments {
-        "fsim", "check", "--project", search_manifest_text.c_str(),
+        "fsim", "elaborate",
         "--search-library", "vendor", "--search-library", "shared",
-        "--map-library", vendor_mapping_text.c_str(),
-        "--map-library", shared_mapping_text.c_str(),
         "--top", "primary=actual_top", "--top", "secondary=actual_top"
     };
     std::ostringstream search_output;
@@ -1942,7 +1916,7 @@ files = ["different_filename.sv"]
     std::ostringstream unicode_output;
     std::ostringstream unicode_error;
     assert(
-        fsim::cli::run(
+        fsim::test::run_fixture_command(
             static_cast<int>(unicode_arguments.size()),
             unicode_arguments.data(),
             services,

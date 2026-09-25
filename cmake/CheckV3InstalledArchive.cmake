@@ -139,6 +139,16 @@ endforeach()
 if(NOT FSIM_REQUIRED_PATHS)
   message(FATAL_ERROR "v3 installed archive has no required entry set")
 endif()
+foreach(path IN ITEMS
+    share/doc/fsim/third-party/sqlite-3.53.4/LICENSE
+    share/doc/fsim/third-party/sqlite-3.53.4/NOTICE
+    share/doc/fsim/third-party/sqlite-3.53.4/SOURCE_MANIFEST.txt
+    share/doc/fsim/third-party/sqlite-3.53.4/sqlite-3.53.4.spdx.json)
+  if(NOT "${FSIM_ARCHIVE_AUDIT_ROOT}/${path}" IN_LIST seen)
+    message(FATAL_ERROR "v3 installed archive omits SQLite provenance: ${path}")
+  endif()
+  list(APPEND FSIM_REQUIRED_PATHS "${path}")
+endforeach()
 
 file(REMOVE_RECURSE "${FSIM_ARCHIVE_AUDIT_WORK_DIR}")
 file(MAKE_DIRECTORY "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract")
@@ -164,6 +174,45 @@ foreach(token IN ITEMS "Version: 3.0.0" "Libs: -L\${libdir} -lfsim_api")
     message(FATAL_ERROR "v3 installed archive pkg-config metadata misses ${token}")
   endif()
 endforeach()
+
+set(workspace "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/workspace")
+file(MAKE_DIRECTORY "${workspace}")
+file(WRITE "${workspace}/top.sv"
+  "module archive_top; initial begin $display(\"WORKSPACE_ARCHIVE_PASS\"); $finish; end endmodule\n")
+function(fsim_installed_workspace_command expected_output)
+  execute_process(COMMAND "${prefix}/bin/fsim${suffix}" ${ARGN}
+    WORKING_DIRECTORY "${workspace}"
+    TIMEOUT 7200
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR
+      "installed workspace command failed (${ARGN}): ${output}${error}")
+  endif()
+  if(NOT expected_output STREQUAL "")
+    string(FIND "${output}" "${expected_output}" offset)
+    if(offset EQUAL -1)
+      message(FATAL_ERROR
+        "installed workspace command lost ${expected_output}: ${output}${error}")
+    endif()
+  endif()
+endfunction()
+fsim_installed_workspace_command("" compile --library work top.sv)
+if(NOT EXISTS "${workspace}/.fsim/libraries/work/library.sqlite3")
+  message(FATAL_ERROR "installed compilation did not publish a workspace catalog")
+endif()
+fsim_installed_workspace_command("archive_top" library objects work)
+file(REMOVE "${workspace}/top.sv")
+fsim_installed_workspace_command("" elaborate work.archive_top)
+fsim_installed_workspace_command("" elaborate work.archive_top --snapshot retained)
+if(NOT EXISTS "${workspace}/.fsim/snapshots/default"
+    OR NOT EXISTS "${workspace}/.fsim/snapshots/retained")
+  message(FATAL_ERROR "installed elaboration did not publish both snapshots")
+endif()
+fsim_installed_workspace_command("" library delete work)
+fsim_installed_workspace_command("WORKSPACE_ARCHIVE_PASS" simulate --engine interpreter)
+fsim_installed_workspace_command("WORKSPACE_ARCHIVE_PASS"
+  simulate --snapshot retained --engine interpreter)
+file(REMOVE_RECURSE "${workspace}")
 file(REMOVE_RECURSE "${prefix}")
 if(EXISTS "${prefix}")
   message(FATAL_ERROR "v3 installed archive removal check failed")

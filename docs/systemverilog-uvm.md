@@ -6,7 +6,7 @@ the unmodified Accellera UVM 1.2 and IEEE 1800.2-2020 kit version 2020.3.1
 sources. This document describes the implemented boundary through Batch 162
 Change 18; it is not a claim of complete UVM conformance.
 
-For a tool-neutral project walkthrough using ordinary UVM registration,
+For a tool-neutral workspace walkthrough using ordinary UVM registration,
 configuration, phases, objections, reports, engines, caches, traces, and
 portable artifacts, start with the
 [producer-independent UVM tutorial](uvm-tutorial.md).
@@ -25,20 +25,17 @@ code may include/import the corresponding `uvm_macros.svh` and `uvm_pkg` names.
 No simulator compatibility define or source rewrite is required for the
 implemented example.
 
-Every governed source set selects its release explicitly:
+Select the UVM release explicitly during workspace compilation:
 
-```toml
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-uvm_release = "1.2" # or "2020.3.1"
-files = ["uvm/src/uvm_pkg.sv", "tb.sv"]
+```sh
+fsim compile --library work --lang systemverilog --standard 2017 \
+  --compilation-unit source-set --uvm-release 1.2 \
+  -I uvm/src uvm/src/uvm_pkg.sv tb.sv
 ```
 
-Manifest-free commands accept the equivalent `--uvm-release` option. Fsim
-normalizes aliases to `1.2` or `2020.3.1`, verifies the selected value against
-the parsed `uvm_pkg` API surface, and rejects mixed source/object releases
-before publishing any checked, built, cached, or portable state.
+Use `--uvm-release 2020.3.1` with its matching source tree. fsim normalizes
+aliases, verifies the release against the parsed `uvm_pkg` API, and rejects
+mixed source/object releases before publishing compiled state.
 
 ### Governed release difference matrix
 
@@ -57,8 +54,8 @@ before publishing any checked, built, cached, or portable state.
 
 The public `SystemVerilogUvmCompatibility` record is the normalized dispatch
 for this table. Release plus exact source identity is retained in `.fsimobj`
-metadata and class payloads, checked/built projects, native cache keys,
-`.fsimdesign` metadata, and schema-2 checkpoint provenance. Restore/replay
+metadata and class payloads, compiled library records, native cache keys,
+snapshot metadata, and schema-2 checkpoint provenance. Restore/replay
 compares both fields and fails transactionally on either mismatch.
 
 ## Implemented boundary
@@ -270,21 +267,16 @@ FSIM-UVM-PHASE-TLM-PASS phases=build/connect/eoe/sos/run/extract/check/report/fi
 
 ## Direct execution
 
-Assume `UVM_ROOT` names one validated extracted release root and `example.sv`
-contains the source above:
+Assume `UVM_ROOT` names one validated extracted release root, `UVM_RELEASE`
+selects that release, and `example.sv` contains the source above:
 
 ```sh
-build/llvm22-ninja-debug/fsim run \
-  --lang systemverilog --standard 2017 \
-  --compilation-unit source-set -j 8 \
-  -I "$UVM_ROOT/src" --top example --engine interpreter \
-  "$UVM_ROOT/src/uvm_pkg.sv" example.sv
-
-build/llvm22-ninja-debug/fsim run \
-  --lang systemverilog --standard 2017 \
-  --compilation-unit source-set -j 8 \
-  -I "$UVM_ROOT/src" --top example --engine compiled -O O2 \
-  "$UVM_ROOT/src/uvm_pkg.sv" example.sv
+fsim compile --library work --lang systemverilog --standard 2017 \
+  --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 12 \
+  -I "$UVM_ROOT/src" "$UVM_ROOT/src/uvm_pkg.sv" example.sv
+fsim elaborate work.example
+fsim simulate --engine interpreter
+fsim simulate --engine compiled -O O2
 ```
 
 Use explicit address-space controls in automation. The final clean package-only
@@ -316,28 +308,22 @@ remain 28,345 bytes with the governed digest. The executable
 [closure audit](uvm-closure-audit.md) freeze compatibility, diagnostic,
 source, complexity, resource, artifact, cache, and zero-gap evidence.
 
-## Portable artifact flow
+## Managed snapshot flow
 
-The same source may be separated into portable phases:
+Create another snapshot from the compiled library without reparsing sources:
 
 ```sh
-fsim compile --lang systemverilog --standard 2017 \
-  --compilation-unit source-set -j 8 -I "$UVM_ROOT/src" \
-  --output uvm-example.fsimobj \
-  "$UVM_ROOT/src/uvm_pkg.sv" example.sv
-
-fsim elaborate --object uvm-example.fsimobj \
-  --top root=example -O O2 --output uvm-example.fsimdesign
-
-fsim simulate --design uvm-example.fsimdesign \
-  --engine compiled --cache uvm-cache --trace uvm-example.fst
+fsim elaborate root=work.example --snapshot regression -O O2
+fsim simulate --snapshot regression --engine compiled --trace uvm-example.fst
 ```
 
-An explicit root alias is required when publishing a design artifact. Repeat
-`--object` and `--top alias=target` for multiple independent roots. Moving the
-complete `.fsimdesign` directory does not change its transcript or native-cache
-identity. Future, truncated, trailing, malformed, or incompatible object,
-design, class, and HIR schemas reject before simulation.
+List several tops on `elaborate` for independent roots. Aliases are inferred
+from top names; use `ALIAS=TOP` when names collide. fsim owns library artifact
+and snapshot filenames. Recompilation and re-elaboration replace the selected
+state transactionally. A published snapshot remains usable after its library
+changes or its original sources disappear. Future, truncated, trailing,
+malformed, or incompatible object, snapshot, class, and HIR schemas reject
+before simulation.
 
 ## Engines, callbacks, traces, and caches
 

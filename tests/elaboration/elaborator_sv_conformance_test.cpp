@@ -101,11 +101,21 @@ endmodule : conformance_top
           return candidate.instance == path;
         });
     assert(specialization != elaborated.design->specializations().end());
+    assert(std::ranges::count_if(
+               specialization->parameter_values,
+               [](const auto& parameter) {
+                 return parameter.first == "WIDTH";
+               }) == 1U);
     assert(std::ranges::any_of(
         specialization->parameter_values,
         [&](const auto& parameter) {
           return parameter.first == "WIDTH" && parameter.second == width;
         }));
+    assert(std::ranges::count_if(
+               specialization->parameter_identity_values,
+               [](const auto& parameter) {
+                 return parameter.first == "WIDTH";
+               }) == 1U);
   }
 
   // FSIM-CONFORMANCE CF-SV-GEN-N01 source=SRC-SV-TESTS expectation=reject

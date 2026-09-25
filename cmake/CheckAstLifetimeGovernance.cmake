@@ -185,7 +185,7 @@ function(fsim_find_structural_ast_reference contents output_type)
   foreach(FSIM_AST_TYPE IN LISTS
       FSIM_STRUCTURAL_AST_TYPES FSIM_STRUCTURAL_AST_OWNERS)
     string(REGEX MATCH
-      "frontend::${FSIM_AST_TYPE}([^A-Za-z0-9_]|$)"
+      "frontend[ \t\r\n]*::[ \t\r\n]*${FSIM_AST_TYPE}([^A-Za-z0-9_]|$)"
       FSIM_AST_REFERENCE "${contents}")
     if(FSIM_AST_REFERENCE)
       set(${output_type} "${FSIM_AST_TYPE}" PARENT_SCOPE)
@@ -193,6 +193,107 @@ function(fsim_find_structural_ast_reference contents output_type)
     endif()
   endforeach()
   set(${output_type} "" PARENT_SCOPE)
+endfunction()
+
+# The compiled SV environment has one source-analysis adapter followed by an
+# HIR-only resolver. Exempt the borrowed current-source adapter, not the file:
+# the linked resolver and any new application owners still get the full scan.
+function(fsim_compiled_sv_source_ast_boundary compact_contents source_contents
+    output_compact_contents output_source_contents)
+  string(FIND "${compact_contents}" "structClassTypeView{" FSIM_SOURCE_BEGIN)
+  string(FIND "${compact_contents}" "classLinkedEnvironmentfinal{" FSIM_SOURCE_END)
+  if(FSIM_SOURCE_BEGIN EQUAL -1 OR FSIM_SOURCE_END EQUAL -1 OR
+     NOT FSIM_SOURCE_BEGIN LESS FSIM_SOURCE_END)
+    message(FATAL_ERROR
+      "compiled source environment lost its source/HIR resolver boundary")
+  endif()
+  math(EXPR FSIM_SOURCE_LENGTH "${FSIM_SOURCE_END} - ${FSIM_SOURCE_BEGIN}")
+  string(SUBSTRING "${compact_contents}" ${FSIM_SOURCE_BEGIN} ${FSIM_SOURCE_LENGTH}
+    FSIM_SOURCE_ADAPTER)
+  foreach(FSIM_BOUNDARY IN ITEMS
+      "constfrontend::Type*source{};"
+      "constsv::TypeReference*compiled{};"
+      "boolprepare(frontend::ParsedDesign&parsed)"
+      "constsemantic::CompiledDesign&imported_;"
+      "semantic::CompiledDesignResolverresolver_;")
+    string(FIND "${FSIM_SOURCE_ADAPTER}" "${FSIM_BOUNDARY}"
+      FSIM_BOUNDARY_OFFSET)
+    if(FSIM_BOUNDARY_OFFSET EQUAL -1)
+      message(FATAL_ERROR
+        "compiled source environment lost borrowed source/immutable HIR boundary: "
+        "${FSIM_BOUNDARY}")
+    endif()
+  endforeach()
+
+  # Imported package/type definitions must remain compiled HIR. Source-side
+  # expression annotations may change, but this adapter may not manufacture
+  # owning ParsedDesign, DesignUnit, or Type records from imported definitions.
+  string(FIND "${source_contents}" "struct ClassTypeView {"
+    FSIM_SOURCE_RAW_BEGIN)
+  string(FIND "${source_contents}" "class LinkedEnvironment final {"
+    FSIM_SOURCE_RAW_END)
+  if(FSIM_SOURCE_RAW_BEGIN EQUAL -1 OR FSIM_SOURCE_RAW_END EQUAL -1 OR
+     NOT FSIM_SOURCE_RAW_BEGIN LESS FSIM_SOURCE_RAW_END)
+    message(FATAL_ERROR
+      "compiled source environment lost its source/HIR source-text boundary")
+  endif()
+  math(EXPR FSIM_SOURCE_RAW_LENGTH
+    "${FSIM_SOURCE_RAW_END} - ${FSIM_SOURCE_RAW_BEGIN}")
+  string(SUBSTRING "${source_contents}" ${FSIM_SOURCE_RAW_BEGIN}
+    ${FSIM_SOURCE_RAW_LENGTH} FSIM_SOURCE_ADAPTER_RAW)
+  set(FSIM_SOURCE_OWNERS "${FSIM_SOURCE_ADAPTER_RAW}")
+  foreach(FSIM_SOURCE_TYPE IN ITEMS ParsedDesign DesignUnit Type)
+    set(FSIM_SOURCE_TYPE_PATTERN
+      "frontend[ \t\r\n]*::[ \t\r\n]*${FSIM_SOURCE_TYPE}")
+    string(REGEX REPLACE
+      "${FSIM_SOURCE_TYPE_PATTERN}[ \t\r\n]*[&*]+" ""
+      FSIM_SOURCE_OWNERS "${FSIM_SOURCE_OWNERS}")
+    if(FSIM_SOURCE_OWNERS MATCHES
+        "${FSIM_SOURCE_TYPE_PATTERN}([^A-Za-z0-9_]|$)")
+      message(FATAL_ERROR
+        "compiled source environment must not reconstruct frontend::${FSIM_SOURCE_TYPE}")
+    endif()
+  endforeach()
+  if(FSIM_SOURCE_ADAPTER MATCHES
+      "parsed\\.(units|udp_declarations|systemverilog_classes)\\.(push_back|emplace_back|insert|assign|resize|clear|swap)\\(" OR
+     FSIM_SOURCE_ADAPTER MATCHES "frontend::(parse[A-Za-z_]*|Parser)\\(")
+    message(FATAL_ERROR
+      "compiled source environment must not import reconstructed syntax")
+  endif()
+
+  string(SUBSTRING "${compact_contents}" 0 ${FSIM_SOURCE_BEGIN}
+    FSIM_COMPACT_PREFIX)
+  string(SUBSTRING "${compact_contents}" ${FSIM_SOURCE_END} -1
+    FSIM_COMPACT_SUFFIX)
+  set(${output_compact_contents}
+    "${FSIM_COMPACT_PREFIX}${FSIM_COMPACT_SUFFIX}" PARENT_SCOPE)
+
+  string(SUBSTRING "${source_contents}" 0 ${FSIM_SOURCE_RAW_BEGIN}
+    FSIM_SOURCE_PREFIX)
+  string(SUBSTRING "${source_contents}" ${FSIM_SOURCE_RAW_END} -1
+    FSIM_SOURCE_SUFFIX)
+  set(${output_source_contents} "${FSIM_SOURCE_PREFIX}${FSIM_SOURCE_SUFFIX}"
+    PARENT_SCOPE)
+endfunction()
+
+function(fsim_remove_source_prepare_signature contents signature output_contents)
+  string(FIND "${contents}" "${signature}" FSIM_PREPARE_OFFSET)
+  if(FSIM_PREPARE_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "compiled source environment lost its borrowed source prepare boundary")
+  endif()
+  string(REPLACE "${signature}" "" FSIM_REMAINDER "${contents}")
+  set(${output_contents} "${FSIM_REMAINDER}" PARENT_SCOPE)
+endfunction()
+
+function(fsim_remove_source_prepare_borrow contents borrow output_contents)
+  string(FIND "${contents}" "${borrow}" FSIM_BORROW_OFFSET)
+  if(FSIM_BORROW_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "compiled source environment lost its borrowed source prepare reference")
+  endif()
+  string(REPLACE "${borrow}" "" FSIM_REMAINDER "${contents}")
+  set(${output_contents} "${FSIM_REMAINDER}" PARENT_SCOPE)
 endfunction()
 
 foreach(FSIM_AST_TYPE IN LISTS FSIM_STRUCTURAL_AST_TYPES)
@@ -332,10 +433,8 @@ endif()
 # is scanned with the post-compilation owners below.
 foreach(FSIM_SOURCE IN LISTS FSIM_COMPILE_LOCAL_SOURCES)
   file(READ "${FSIM_SOURCE}" FSIM_SOURCE_TEXT)
-  string(REGEX REPLACE "[ \t\r\n]" "" FSIM_COMPACT_SOURCE
-    "${FSIM_SOURCE_TEXT}")
   fsim_find_structural_ast_reference(
-    "${FSIM_COMPACT_SOURCE}" FSIM_AST_TYPE)
+    "${FSIM_SOURCE_TEXT}" FSIM_AST_TYPE)
   if(NOT FSIM_AST_TYPE)
     file(RELATIVE_PATH FSIM_RELATIVE_SOURCE
       "${FSIM_SOURCE_DIR}" "${FSIM_SOURCE}")
@@ -346,13 +445,48 @@ foreach(FSIM_SOURCE IN LISTS FSIM_COMPILE_LOCAL_SOURCES)
 endforeach()
 
 foreach(FSIM_SOURCE IN LISTS FSIM_GOVERNED_SOURCES)
-  file(READ "${FSIM_SOURCE}" FSIM_SOURCE_TEXT)
-  string(REGEX REPLACE "[ \t\r\n]" "" FSIM_COMPACT_SOURCE
-    "${FSIM_SOURCE_TEXT}")
   file(RELATIVE_PATH FSIM_RELATIVE_SOURCE
     "${FSIM_SOURCE_DIR}" "${FSIM_SOURCE}")
+  set(FSIM_SCAN_PATH "${FSIM_SOURCE}")
+  if(FSIM_RELATIVE_SOURCE STREQUAL "src/app/application_compiled_environment_sv.cpp"
+     AND DEFINED FSIM_AST_LIFETIME_TEST_COMPILED_SV_SOURCE)
+    set(FSIM_SCAN_PATH "${FSIM_AST_LIFETIME_TEST_COMPILED_SV_SOURCE}")
+  elseif(FSIM_RELATIVE_SOURCE STREQUAL "src/app/application_compiled_environment_sv.hpp"
+     AND DEFINED FSIM_AST_LIFETIME_TEST_COMPILED_SV_HEADER)
+    set(FSIM_SCAN_PATH "${FSIM_AST_LIFETIME_TEST_COMPILED_SV_HEADER}")
+  endif()
+  file(READ "${FSIM_SCAN_PATH}" FSIM_SOURCE_TEXT)
+  string(REGEX REPLACE "[ \t\r\n]" "" FSIM_COMPACT_SOURCE
+    "${FSIM_SOURCE_TEXT}")
+  set(FSIM_AST_SCAN_SOURCE "${FSIM_SOURCE_TEXT}")
+  set(FSIM_AST_SCAN_COMPACT "${FSIM_COMPACT_SOURCE}")
+  if(FSIM_RELATIVE_SOURCE STREQUAL "src/app/application_compiled_environment_sv.cpp")
+    fsim_compiled_sv_source_ast_boundary(
+      "${FSIM_COMPACT_SOURCE}" "${FSIM_SOURCE_TEXT}"
+      FSIM_AST_SCAN_COMPACT FSIM_AST_SCAN_SOURCE)
+    string(CONCAT FSIM_SOURCE_PREPARE_DEFINITION
+      "boolprepare_compiled_systemverilog_environment(frontend::ParsedDesign&parsed,"
+      "constsemantic::CompiledDesign&imported,diagnostic::Engine&diagnostics)"
+      "{returnSourceEnvironment{imported,diagnostics}.prepare(parsed);}")
+    fsim_remove_source_prepare_signature("${FSIM_AST_SCAN_COMPACT}"
+      "${FSIM_SOURCE_PREPARE_DEFINITION}" FSIM_AST_SCAN_COMPACT)
+    fsim_remove_source_prepare_borrow("${FSIM_AST_SCAN_SOURCE}"
+      "frontend::ParsedDesign& parsed" FSIM_AST_SCAN_SOURCE)
+  elseif(FSIM_RELATIVE_SOURCE STREQUAL "src/app/application_compiled_environment_sv.hpp")
+    string(CONCAT FSIM_SOURCE_PREPARE_DECLARATION
+      "[[nodiscard]]boolprepare_compiled_systemverilog_environment("
+      "frontend::ParsedDesign&,constsemantic::CompiledDesign&,diagnostic::Engine&);")
+    fsim_remove_source_prepare_signature("${FSIM_COMPACT_SOURCE}"
+      "${FSIM_SOURCE_PREPARE_DECLARATION}" FSIM_AST_SCAN_COMPACT)
+    fsim_remove_source_prepare_borrow("${FSIM_AST_SCAN_SOURCE}"
+      "frontend::ParsedDesign&" FSIM_AST_SCAN_SOURCE)
+  endif()
   fsim_find_structural_ast_reference(
-    "${FSIM_COMPACT_SOURCE}" FSIM_AST_TYPE)
+    "${FSIM_AST_SCAN_SOURCE}" FSIM_AST_TYPE)
+  if(NOT FSIM_AST_TYPE)
+    fsim_find_structural_ast_reference(
+      "${FSIM_AST_SCAN_COMPACT}" FSIM_AST_TYPE)
+  endif()
   if(FSIM_AST_TYPE)
     message(FATAL_ERROR
       "AST-lifetime boundary violation in ${FSIM_RELATIVE_SOURCE}: "
@@ -446,6 +580,25 @@ fsim_require_ast_lifetime_tokens("${FSIM_APPLICATION_CHECK}"
   "auto workspace = check_project_impl(config, diagnostics);"
   "return release_compiled_project(std::move(*workspace));"
   "return std::move(static_cast<CheckedProject&>(workspace));")
+file(READ "${FSIM_APPLICATION_CHECK}" FSIM_APPLICATION_CHECK_TEXT)
+string(REGEX REPLACE "[ \t\r\n]" "" FSIM_COMPACT_APPLICATION_CHECK
+  "${FSIM_APPLICATION_CHECK_TEXT}")
+set(FSIM_PREVIOUS_STAGE_OFFSET -1)
+foreach(FSIM_COMPILE_STAGE IN ITEMS
+    "prepare_compiled_systemverilog_environment(checked.parsed,*imported,diagnostics)"
+    "build_systemverilog_hir(checked.parsed,"
+    "install_compiled_environment(checked,*imported,diagnostics)"
+    "resolve_compiled_systemverilog_environment(checked,diagnostics)")
+  string(FIND "${FSIM_COMPACT_APPLICATION_CHECK}" "${FSIM_COMPILE_STAGE}"
+    FSIM_STAGE_OFFSET)
+  if(FSIM_STAGE_OFFSET EQUAL -1 OR
+     NOT FSIM_PREVIOUS_STAGE_OFFSET LESS FSIM_STAGE_OFFSET)
+    message(FATAL_ERROR
+      "compiled source analysis must precede source HIR projection and imported HIR linking: "
+      "${FSIM_COMPILE_STAGE}")
+  endif()
+  set(FSIM_PREVIOUS_STAGE_OFFSET ${FSIM_STAGE_OFFSET})
+endforeach()
 
 fsim_require_ast_lifetime_tokens("${FSIM_APPLICATION_BUILD}"
   "std::optional<BuiltProject> build_checked_project("

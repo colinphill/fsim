@@ -147,6 +147,74 @@ void append_declaration_references(const CompiledDesign& design,
     }
 }
 
+void append_scoped_class_references(const CompiledDesign& design,
+    std::vector<CompiledReference>& references)
+{
+    const auto& model = design.semantics;
+    const auto owner_for = [&](const ScopeId scope) -> std::optional<UnitId> {
+        if (!scope.valid() || scope.value() >= model.scopes().size())
+            return std::nullopt;
+        const auto owner = model.scopes()[scope.value()].unit;
+        return owner.valid() && owner.value() < model.units().size()
+            ? std::optional { owner } : std::nullopt;
+    };
+    const auto append_type = [&](const ScopeId scope,
+                                 const sv::TypeReference& type,
+                                 const SourceSpanId source) {
+        if (const auto owner = owner_for(scope))
+            append_type_reference(references, *owner, type, source);
+    };
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        if (declaration.type)
+            append_type(declaration.scope, *declaration.type, declaration.source);
+        if (declaration.default_type)
+            append_type(declaration.scope, *declaration.default_type, declaration.source);
+        if (declaration.callable)
+            append_type(declaration.scope, declaration.callable->return_type,
+                declaration.source);
+    }
+    for (const auto& type : design.systemverilog_hir.types()) {
+        if (!type.id.valid() || type.id.value() >= model.types().size())
+            continue;
+        const auto scope = model.types()[type.id.value()].scope;
+        append_type(scope, type.base, type.source);
+        for (const auto& member : type.members)
+            append_type(scope, member.type, member.source);
+        if (type.container && type.container->associative_index)
+            append_type(scope, *type.container->associative_index, type.source);
+    }
+    for (const auto& instance : design.systemverilog_hir.instances()) {
+        const auto append_actuals = [&](const auto& actuals) {
+            for (const auto& actual : actuals) {
+                if (actual.type)
+                    append_type(instance.scope, *actual.type, actual.source);
+            }
+        };
+        append_actuals(instance.parameters);
+        append_actuals(instance.ports);
+    }
+    for (const auto& statement : design.systemverilog_hir.statements()) {
+        const auto owner = owner_for(statement.scope);
+        if (!owner)
+            continue;
+        append_reference(references, *owner, statement.class_handle_type,
+            statement.source);
+        auto spelling = std::string_view { statement.task.spelling };
+        constexpr auto static_prefix = std::string_view { "@sv-static-task:" };
+        constexpr auto instance_prefix = std::string_view { "@sv-task:" };
+        if (spelling.starts_with(static_prefix))
+            spelling.remove_prefix(static_prefix.size());
+        else if (spelling.starts_with(instance_prefix))
+            spelling.remove_prefix(instance_prefix.size());
+        else
+            continue;
+        const auto member = spelling.rfind("::");
+        if (member != std::string_view::npos)
+            append_reference(references, *owner, spelling.substr(0U, member),
+                statement.source);
+    }
+}
+
 } // namespace
 
 std::optional<UnitId> compiled_class_owner(
@@ -195,6 +263,7 @@ void append_compiled_class_references(
     const CompiledDesign& design,
     std::vector<CompiledReference>& references)
 {
+    append_scoped_class_references(design, references);
     for (const auto& declaration : design.systemverilog_hir.classes()) {
         const auto selected_owner = compiled_class_owner(
             design, declaration);

@@ -1,0 +1,51 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fsim-sqlite-3.53.4-source",
+  "documentNamespace": "https://fsim.dev/spdx/sqlite-3.53.4/1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+  "creationInfo": {
+    "created": "2026-09-25T00:00:00Z",
+    "creators": [
+      "Tool: fsim SQLite provenance harness"
+    ]
+  },
+  "packages": [
+    {
+      "name": "SQLite",
+      "SPDXID": "SPDXRef-Package-SQLite-3.53.4",
+      "versionInfo": "3.53.4",
+      "supplier": "Organization: SQLite Development Team",
+      "downloadLocation": "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d"
+        },
+        {
+          "algorithm": "SHA3-256",
+          "checksumValue": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
+        }
+      ],
+      "sourceInfo": "Official unmodified amalgamation; SQLITE_SOURCE_ID 2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc",
+      "licenseConcluded": "blessing",
+      "licenseDeclared": "blessing",
+      "copyrightText": "NONE",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/sqlite@3.53.4?download_url=https%3A%2F%2Fwww.sqlite.org%2F2026%2Fsqlite-amalgamation-3530400.zip"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-SQLite-3.53.4"
+    }
+  ]
+}

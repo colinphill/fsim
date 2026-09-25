@@ -456,7 +456,8 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
     snapshot.result = frontend::parse_verilog(
         std::move(preprocessed.lexed),
         group.standard_revision,
-        group.compatibility_profile);
+        group.compatibility_profile,
+        group.package_member_lookup);
     for (auto& unit : snapshot.result.design.units) {
         const auto unit_source = fsim::support::path_from_utf8(physical_source(unit.span));
         auto source_order = group.inputs.empty()

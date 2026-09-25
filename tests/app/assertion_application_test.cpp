@@ -3,6 +3,7 @@
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/support/path.hpp"
+#include "application_workflow_test_support.hpp"
 #include "assertion_application_support.hpp"
 
 #include <array>
@@ -74,10 +75,10 @@ int run_cli(
     for (const auto& argument : arguments) {
         raw.push_back(argument.c_str());
     }
-    return fsim::cli::run(
+    return fsim::test::run_fixture_command(
         static_cast<int>(raw.size()),
         raw.data(),
-        fsim::app::make_cli_services(input),
+        fsim::test::make_fixture_services(input),
         output,
         error);
 }

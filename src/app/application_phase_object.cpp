@@ -53,7 +53,8 @@ std::filesystem::path object_source_root(
 std::optional<application_detail::CompilationWorkspace>
 application_detail::load_object_workspace(
     const std::span<const std::filesystem::path> objects,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics,
+    const bool validate_uvm_surface) {
   if (objects.empty()) {
     diagnostics.error(
         "FSIM-ART-0005", "elaboration requires at least one .fsimobj input");
@@ -491,8 +492,8 @@ application_detail::load_object_workspace(
     const bool has_ieee_policy = has_class("::uvm_policy");
     const auto compatibility
         = project::systemverilog_uvm_compatibility(selected_release);
-    if (!has_uvm_object
-        || has_ieee_policy != compatibility.ieee_policy_classes) {
+      if (validate_uvm_surface && (!has_uvm_object
+          || has_ieee_policy != compatibility.ieee_policy_classes)) {
       diagnostics.error(
           "FSIM-UVM-VERSION-002",
           "governed UVM object release does not match its compiled-HIR "

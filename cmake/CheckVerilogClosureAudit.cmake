@@ -243,7 +243,7 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "34 supported, 0 active, and 3 deferred"
     "12 preserved, 0 active, and 3 physical"
-    "diagnostic catalog covers 2755 production codes"
+    "diagnostic catalog covers 2766 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:"
     "language resources:")
