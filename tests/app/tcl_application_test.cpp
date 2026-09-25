@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -363,6 +364,60 @@ if {[dict get $provenance library] ne "work" ||
         assert(output.str().find("... ") == std::string::npos);
         assert(output.str().find("hello from Tcl") != std::string::npos);
         assert(error.str().empty());
+    }
+    {
+        std::istringstream input {
+            "puts before-diagnostic\n"
+            "catch {fsim::load missing-snapshot}\n"
+            "puts after-diagnostic\n"
+            "exit 0\n"
+        };
+        std::ostringstream output;
+        std::ostringstream error;
+        const int result = run_cli({ "fsim", "tcl" }, input, output, error);
+        assert(result == 0);
+        assert(output.str().find("before-diagnostic") != std::string::npos);
+        assert(output.str().find("after-diagnostic") != std::string::npos);
+        const auto first = error.str().find("error[FSIM-WS-");
+        assert(first != std::string::npos);
+        assert(error.str().find("error[FSIM-WS-", first + 1) == std::string::npos);
+    }
+    {
+        const auto transcript = directory / "interactive-tcl.log";
+        std::istringstream input {
+            "fsim::transcript start " + transcript.generic_string() + "\n"
+                                                                      "puts transcript-stdout\n"
+                                                                      "puts stderr transcript-stderr\n"
+                                                                      "catch {fsim::load missing-snapshot}\n"
+                                                                      "fsim::transcript stop\n"
+                                                                      "puts after-stop\n"
+                                                                      "exit 0\n"
+        };
+        std::ostringstream output;
+        std::ostringstream error;
+        const int result = run_cli({ "fsim", "tcl" }, input, output, error);
+        assert(result == 0);
+        assert(output.str().find("transcript-stdout") != std::string::npos);
+        assert(output.str().find("after-stop") != std::string::npos);
+        assert(error.str().find("transcript-stderr") != std::string::npos);
+        assert(error.str().find("error[FSIM-WS-") != std::string::npos);
+        std::ifstream logged { transcript, std::ios::binary };
+        assert(logged.good());
+        const std::string text { std::istreambuf_iterator<char> { logged }, { } };
+        assert(text.find("> puts transcript-stdout") != std::string::npos);
+        assert(text.find("transcript-stdout\n") != std::string::npos);
+        assert(text.find("transcript-stderr\n") != std::string::npos);
+        assert(text.find("error[FSIM-WS-") != std::string::npos);
+        assert(text.find("after-stop") == std::string::npos);
+        assert(text.find("\x1b[") == std::string::npos);
+        const auto first_command = text.find("> puts transcript-stdout");
+        const auto first_command_end = text.find('\n', first_command);
+        assert(first_command != std::string::npos);
+        assert(first_command_end != std::string::npos);
+        const auto first_output = text.find(
+            "transcript-stdout\n", first_command_end + 1);
+        assert(first_output != std::string::npos);
+        assert(first_output < text.find("> puts stderr transcript-stderr"));
     }
     {
         std::istringstream input;

@@ -4,6 +4,7 @@
 #include "tcl_completion_adapter.hpp"
 #include "tcl_console.hpp"
 #include "tcl_internal.hpp"
+#include "tcl_transcript.hpp"
 
 #include "fsim/api.h"
 #include "fsim/app/application.hpp"
@@ -414,6 +415,13 @@ namespace tcl_detail {
             Tcl_RegisterChannel(interpreter_, input_);
             Tcl_RegisterChannel(interpreter_, output_);
             Tcl_RegisterChannel(interpreter_, error_);
+            if (Tcl_SetChannelOption(interpreter_, output_, "-buffering", "line")
+                    != TCL_OK
+                || Tcl_SetChannelOption(interpreter_, error_, "-buffering", "none")
+                    != TCL_OK) {
+                cleanup();
+                return;
+            }
             Tcl_SetStdChannel(input_, TCL_STDIN);
             Tcl_SetStdChannel(output_, TCL_STDOUT);
             Tcl_SetStdChannel(error_, TCL_STDERR);
@@ -471,6 +479,41 @@ namespace tcl_detail {
         bool valid_ { };
     };
 
+    class TclTranscriptStreams final {
+    public:
+        TclTranscriptStreams(
+            std::ostream& output, std::ostream& error, TclTranscript& transcript)
+            : m_output(output)
+            , m_error(error)
+            , m_output_buffer(*output.rdbuf(), transcript)
+            , m_error_buffer(*error.rdbuf(), transcript)
+            , m_original_output(output.rdbuf())
+            , m_original_error(error.rdbuf())
+        {
+            m_output.rdbuf(&m_output_buffer);
+            if (&m_error != &m_output)
+                m_error.rdbuf(&m_error_buffer);
+        }
+
+        ~TclTranscriptStreams()
+        {
+            m_output.rdbuf(m_original_output);
+            if (&m_error != &m_output)
+                m_error.rdbuf(m_original_error);
+        }
+
+        TclTranscriptStreams(const TclTranscriptStreams&) = delete;
+        TclTranscriptStreams& operator=(const TclTranscriptStreams&) = delete;
+
+    private:
+        std::ostream& m_output;
+        std::ostream& m_error;
+        TclTranscriptTeeStreambuf m_output_buffer;
+        TclTranscriptTeeStreambuf m_error_buffer;
+        std::streambuf* m_original_output;
+        std::streambuf* m_original_error;
+    };
+
     void configure_tcl_library(Tcl_Interp* interpreter)
     {
         const auto override_path = fsim::support::environment_variable("FSIM_TCL_LIBRARY");
@@ -514,7 +557,6 @@ namespace tcl_detail {
         (void)interpreter;
 #endif
     }
-
 
     int exit_command(
         void* client_data,
@@ -605,6 +647,74 @@ namespace tcl_detail {
     {
         const char* text = Tcl_GetStringResult(interpreter);
         return text == nullptr ? std::string { } : std::string { text };
+    }
+
+    int transcript_command(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        if (context.transcript == nullptr) {
+            Tcl_SetObjResult(interpreter,
+                Tcl_NewStringObj("Tcl transcript service is unavailable", -1));
+            return TCL_ERROR;
+        }
+        if (argument_count < 2 || argument_count > 3) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments,
+                "start ?PATH? | stop | status");
+            return TCL_ERROR;
+        }
+        const std::string_view action { Tcl_GetString(arguments[1]) };
+        if (action == "start") {
+            std::filesystem::path path = context.config.base_directory
+                / ".fsim" / "tcl.log";
+            if (argument_count == 3) {
+                Tcl_Size length { };
+                const char* value = Tcl_GetStringFromObj(arguments[2], &length);
+                const std::string_view requested {
+                    value, static_cast<std::size_t>(length)
+                };
+                if (requested.empty()
+                    || requested.find('\0') != std::string_view::npos) {
+                    Tcl_SetObjResult(interpreter,
+                        Tcl_NewStringObj("transcript path must be nonempty and contain no NUL", -1));
+                    return TCL_ERROR;
+                }
+                path = fsim::support::path_from_utf8(requested);
+            }
+            std::string failure;
+            if (!context.transcript->start(path, failure)) {
+                context.diagnostics.error("FSIM-TCL-0006", failure);
+                Tcl_SetObjResult(interpreter,
+                    Tcl_NewStringObj(failure.data(), tcl_size(failure.size())));
+                return TCL_ERROR;
+            }
+        } else if (action == "stop") {
+            if (argument_count != 2) {
+                Tcl_WrongNumArgs(interpreter, 2, arguments, "");
+                return TCL_ERROR;
+            }
+            context.transcript->stop();
+        } else if (action != "status" || argument_count != 2) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments,
+                "start ?PATH? | stop | status");
+            return TCL_ERROR;
+        }
+        Tcl_Obj* result = Tcl_NewDictObj();
+        const auto path = fsim::support::path_to_utf8(context.transcript->path());
+        if (Tcl_DictObjPut(interpreter, result,
+                Tcl_NewStringObj("active", -1),
+                Tcl_NewBooleanObj(context.transcript->active()))
+                != TCL_OK
+            || Tcl_DictObjPut(interpreter, result,
+                   Tcl_NewStringObj("path", -1),
+                   Tcl_NewStringObj(path.data(), tcl_size(path.size())))
+                != TCL_OK) {
+            return TCL_ERROR;
+        }
+        Tcl_SetObjResult(interpreter, result);
+        return TCL_OK;
     }
 
     void report_evaluation_error(
@@ -720,6 +830,36 @@ namespace tcl_detail {
         }
         auto console_workspace = options.workspace_root;
         auto console = std::make_unique<TclConsole>(options);
+        for (const auto& entry : diagnostics.diagnostics()) {
+            console->write_diagnostic(entry);
+        }
+        std::size_t reported_error_count { };
+        diagnostics.set_report_observer([&](const diagnostic::Diagnostic& entry) {
+            console->write_diagnostic(entry);
+            if (entry.severity == diagnostic::Severity::error
+                || entry.severity == diagnostic::Severity::fatal) {
+                ++reported_error_count;
+            }
+        });
+        struct ObserverReset {
+            diagnostic::Engine& diagnostics;
+            ~ObserverReset()
+            {
+                diagnostics.set_report_observer({ });
+                // The interactive renderer has already written these entries.
+                diagnostics.clear();
+            }
+        } observer_reset { diagnostics };
+        if (const char* configured_log = std::getenv("FSIM_TCL_LOG")) {
+            if (*configured_log != '\0') {
+                std::string failure;
+                if (!context.transcript->start(
+                        fsim::support::path_from_utf8(configured_log), failure)) {
+                    diagnostics.error("FSIM-TCL-0006", failure);
+                    return kUserError;
+                }
+            }
+        }
         while (!context.exit_requested) {
             if (!synchronize_workspace(context, interpreter))
                 return kUserError;
@@ -747,20 +887,28 @@ namespace tcl_detail {
                 }
                 break;
             }
+            context.transcript->record_command(command.text);
+            const auto errors_before = reported_error_count;
             const int result = Tcl_EvalEx(
                 interpreter,
                 command.text.data(),
                 tcl_size(command.text.size()),
                 TCL_EVAL_GLOBAL);
+            if (const auto channel = Tcl_GetStdChannel(TCL_STDOUT))
+                (void)Tcl_Flush(channel);
+            if (const auto channel = Tcl_GetStdChannel(TCL_STDERR))
+                (void)Tcl_Flush(channel);
             if (context.exit_requested) {
                 break;
             }
             if (result != TCL_OK) {
                 const auto text = interpreter_result(interpreter);
-                console->write_diagnostic({ diagnostic::Severity::error,
-                    "FSIM-TCL-0005",
-                    text.empty() ? "Tcl evaluation failed" : text,
-                    { "<interactive>", { 1, 1, 0 }, { 1, 1, 0 } }, { } });
+                if (reported_error_count == errors_before) {
+                    console->write_diagnostic({ diagnostic::Severity::error,
+                        "FSIM-TCL-0005",
+                        text.empty() ? "Tcl evaluation failed" : text,
+                        { "<interactive>", { 1, 1, 0 }, { 1, 1, 0 } }, { } });
+                }
                 had_error = true;
             } else {
                 const auto text = interpreter_result(interpreter);
@@ -820,6 +968,8 @@ int handle_tcl(
         return kUnavailable;
     }
 
+    TclTranscript transcript;
+    TclTranscriptStreams transcript_streams { output, error, transcript };
     TclStreamChannels channels {
         interpreter.get(), input, output, error
     };
@@ -855,7 +1005,8 @@ int handle_tcl(
         0,
         { },
         nullptr,
-        nullptr
+        nullptr,
+        &transcript
     };
     context.references = std::make_unique<TclReferenceTable>();
     context.sdf_request.surface = SdfControlSurface::Tcl;
@@ -935,11 +1086,11 @@ int handle_tcl(
         }
     }
     if (Tcl_CreateObjCommand2(
-               interpreter.get(),
-               "exit",
-               exit_command,
-               &context,
-               nullptr)
+            interpreter.get(),
+            "exit",
+            exit_command,
+            &context,
+            nullptr)
             == nullptr
         || !commands_ok
         || !initialize_arguments(interpreter.get(), invocation)) {

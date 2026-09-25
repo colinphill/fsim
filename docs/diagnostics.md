@@ -61,6 +61,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
 | `FSIM-TCL-0004` | error | Interactive input ended with an incomplete Tcl command. |
 | `FSIM-TCL-0005` | error | A complete interactive Tcl command failed during evaluation; the diagnostic includes the interpreter's error result. |
+| `FSIM-TCL-0006` | error | The Tcl transcript could not be opened or written. |
 | `FSIM-TCL-WORKSPACE-0001` | error | Tcl could not determine the process working directory while synchronizing the active workspace. |
 | `FSIM-TCL-DEBUG` | domain | Diagnostic domain assigned to `fsim::debug` and `fsim::provenance`; classified command failures use the child codes below. |
 | `FSIM-TCL-DEBUG-0001` | error | An exception or unexpected failure occurred during debugger or provenance command execution and was reported at the Tcl command boundary. |

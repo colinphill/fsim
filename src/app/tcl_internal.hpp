@@ -2,9 +2,9 @@
 #pragma once
 
 #include "application_internal.hpp"
+#include "fsim/app/sdf_control.hpp"
 #include "tcl.hpp"
 #include "tcl_references.hpp"
-#include "fsim/app/sdf_control.hpp"
 
 #include <array>
 #include <sstream>
@@ -17,6 +17,8 @@
 namespace fsim::app::tcl_detail {
 
 #if defined(FSIM_HAS_TCL)
+
+class TclTranscript;
 
 struct TclContext {
     cli::Invocation invocation;
@@ -44,6 +46,7 @@ struct TclContext {
     SdfControlRequest sdf_request { };
     std::shared_ptr<const SdfControlApplication> sdf_control;
     std::unique_ptr<TclReferenceTable> references;
+    TclTranscript* transcript { };
 };
 
 Tcl_Size tcl_size(std::size_t value);
@@ -62,6 +65,8 @@ int fsim_command(
     Tcl_Interp* interpreter,
     Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) noexcept;
+int transcript_command(
+    TclContext&, Tcl_Interp*, Tcl_Size, Tcl_Obj* const[]);
 
 int command_error(Tcl_Interp*, std::string_view message);
 int command_diagnostic_error(

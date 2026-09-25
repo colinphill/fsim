@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <string_view>
@@ -92,7 +93,12 @@ struct Diagnostic {
 
 class Engine {
  public:
+  using ReportObserver = std::function<void(const Diagnostic&)>;
+
   void report(Diagnostic diagnostic);
+
+  /// Observe newly reported diagnostics without changing their stored form.
+  void set_report_observer(ReportObserver observer);
 
   void note(std::string code, std::string message, SourceSpan span = {});
   void warning(std::string code, std::string message, SourceSpan span = {});
@@ -109,6 +115,7 @@ class Engine {
 
  private:
   std::vector<Diagnostic> diagnostics_;
+  ReportObserver report_observer_;
 };
 
 void print_text(std::ostream& output, const Diagnostic& diagnostic);

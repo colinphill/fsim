@@ -63,6 +63,27 @@ namespace {
         return Tcl_ListObjAppendElement(interpreter, list, value) == TCL_OK;
     }
 
+    bool put_messages(
+        Tcl_Interp* interpreter,
+        Tcl_Obj* dictionary,
+        const std::string_view output)
+    {
+        Tcl_Obj* messages = Tcl_NewListObj(0, nullptr);
+        std::istringstream lines { std::string { output } };
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (!line.empty()
+                && !list_append(interpreter, messages, string_object(line))) {
+                return false;
+            }
+        }
+        dict_put(interpreter, dictionary, "messages", messages);
+        return true;
+    }
+
     Tcl_Obj* position_object(
         Tcl_Interp* interpreter, const diagnostic::SourcePosition& position)
     {
@@ -624,6 +645,9 @@ namespace {
         dict_put(interpreter, result, "object_count", size_object(artifact_count));
         dict_put(interpreter, result, "objects", artifacts);
         dict_put(interpreter, result, "owned_units", units);
+        if (!put_messages(interpreter, result, output.str())) {
+            return TCL_ERROR;
+        }
         dict_put(interpreter, result, "diagnostics",
             diagnostics_object(interpreter, operation_diagnostics));
         append_context_diagnostics(context, operation_diagnostics);
@@ -794,6 +818,9 @@ namespace {
         dict_put(interpreter, counts, "signals", size_object(signal_count));
         dict_put(interpreter, counts, "processes", size_object(design.processes().size()));
         dict_put(interpreter, result, "counts", counts);
+        if (!put_messages(interpreter, result, output.str())) {
+            return TCL_ERROR;
+        }
         dict_put(interpreter, result, "diagnostics",
             diagnostics_object(interpreter, operation_diagnostics));
         append_context_diagnostics(context, operation_diagnostics);
@@ -1030,7 +1057,8 @@ std::span<const TclCommandSpec> workspace_command_specs()
         TclCommandSpec {
             "fsim::compile",
             "fsim::compile ?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? SOURCE ...",
-            "Compile source files into a managed workspace library and return structured units and diagnostics.",
+            "Compile source files into a managed workspace library and return structured "
+            "results with progress messages and diagnostics.",
             TclCommandCapability::workspace,
             false,
             compile_arguments,
@@ -1041,7 +1069,8 @@ std::span<const TclCommandSpec> workspace_command_specs()
         TclCommandSpec {
             "fsim::elaborate",
             "fsim::elaborate ?-snapshot NAME? ?-verbosity LEVEL? TOP ...",
-            "Elaborate workspace library units into a managed snapshot.",
+            "Elaborate workspace library units into a managed snapshot and return "
+            "progress messages with structured results.",
             TclCommandCapability::workspace,
             false,
             elaborate_arguments,

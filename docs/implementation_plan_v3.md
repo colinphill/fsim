@@ -8032,10 +8032,12 @@ debugger-output parsing. Preserve the existing tested simulation controls.
 
 #### Batch 188K - Tcl object-model closure and rich console
 
-**Status: complete, 2026-09-25.** The user explicitly approved implementation
-after settling the product decisions below. All twenty changes closed. No
-questions are pending. If further clarification is needed, ask one unresolved
-decision set at a time and wait for the answer.
+**Status: complete, 2026-09-25.** The completion audit found discarded Tcl
+compile/elaborate progress text. The follow-up exposes it as structured
+`messages`, prints live severity-colored diagnostics, and adds a running Tcl
+command/output transcript. Release passed its full 447-test suite; the other
+configured builds passed focused verification under the user's revised gate.
+No questions are pending. Batch 189 has not started.
 
 ##### Accepted decisions and implementation contract
 
@@ -8166,9 +8168,12 @@ suites; a post-fix Windows execution remains unverified until that lane runs.
    and deterministic lifetime, stale-reference, restart, and callback-safety
    rules. Reference and workspace-switch tests cover catalog invalidation
    separately from loaded-session references.
-4. **Complete (2026-09-25):** Add native Tcl compilation and elaboration with
-   structured results, diagnostics, verbosity, and managed default/named
-   snapshots. The focused workspace workflow passes, including Tcl `cd`.
+4. **Complete (2026-09-25):** Native Tcl compilation and elaboration return
+   structured results, diagnostics, and managed default/named snapshots, and
+   the workspace workflow passes, including Tcl `cd`. Their `messages` lists
+   expose captured progress at normal/verbose levels and are empty at quiet;
+   focused tests cover all three levels for both operations in Release and
+   Debug builds.
 5. **Complete (2026-09-25):** Add native Tcl library mapping/unmapping,
    library/object enumeration, object deletion, and whole-library deletion
    through existing store services. The focused workspace workflow passes.
@@ -8210,13 +8215,17 @@ suites; a post-fix Windows execution remains unverified until that lane runs.
 15. **Complete (2026-09-25):** Implement the rich console's editing/history
     contract and connect it to shared completion/hint providers and Tcl
     command completeness. The Unix PTY test covers editing, multiline paste,
-    history search, completion, redraw, interrupt, and EOF; Windows console
-    execution remains unverified locally.
+    history search, completion, redraw, interrupt, and EOF. A controllable
+    append-only transcript records commands, Tcl stdout/stderr, and diagnostics
+    in order without ANSI color codes; focused tests and a real PTY smoke pass.
+    Windows console execution remains unverified locally.
 16. **Complete (2026-09-25):** Add syntax and diagnostic-severity color,
     plain/color controls, output coordination, cancellation, terminal resize,
     and reliable terminal cleanup. Strict CLI color and real Unix PTY tests
     pass for warning/note styles, redirected stderr even with forced color,
-    redraw under output, resize, interrupt, and EOF. Windows console
+    redraw under output, resize, interrupt, and EOF. Interactive Tcl now prints
+    newly reported diagnostics once, in their severity colors alongside normal
+    output; a real PTY check confirms red errors and log order. Windows console
     execution remains unverified locally and is not claimed as a pass.
 17. **Complete (2026-09-25):** Route `fsim tcl` and `fsim debug` through the
     common Tcl session/console; remove the old non-Tcl REPL and migrate its
@@ -8229,17 +8238,20 @@ suites; a post-fix Windows execution remains unverified until that lane runs.
     editor and Tcl console translation units.
 19. **Complete (2026-09-25):** Complete end-to-end Tcl workflows, terminal
     interaction tests, headless completion-service tests, documentation, and
-    substantive governance checks. All 446 warnings-as-errors LLVM Release
+    substantive governance checks. All 447 warnings-as-errors LLVM Release
     CTests pass, including the Tcl workflows, Unix PTY editor, completion,
     diagnostic catalog, conformance corpus, and composed closure audits.
 20. **Complete (2026-09-25):** Dependency-rescanned warnings-as-errors LLVM
-    Release and Debug builds each passed their full 446-test suite. The
-    dependency-rescanned Tcl-disabled build passed its applicable 438-test
-    suite and excludes the editor targets. After the last capability-aware
-    test and CMake edits, the affected five tests passed again in each
-    Tcl-enabled build. The implementation is committed and pushed for handoff;
-    Batch 189 has not started. The user deferred performance and new hosted
-    monitoring, so neither is claimed as a pass.
+    Release passed the full 447-test suite after the final source changes.
+    The affected Debug targets rebuilt and five focused tests passed. The
+    Tcl-disabled targets rebuilt and six focused tests passed. Earlier full
+    Debug 446/446 and Tcl-disabled 438/438 suites remain prior evidence; the
+    user explicitly limited their follow-up verification to focused tests.
+    A real Unix PTY check confirmed live red diagnostics and ordered plain
+    transcript output. The initial implementation commit was pushed as
+    `b54d7066`; this completion repair is committed and pushed with Change 20.
+    Performance and new hosted monitoring were deferred by the user and are
+    not claimed as passes. Batch 189 has not started.
 
 ##### Follow-up gaps after Batch 188K
 

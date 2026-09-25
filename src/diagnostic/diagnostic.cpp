@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <ostream>
+#include <utility>
 
 namespace fsim::diagnostic {
 namespace {
@@ -110,6 +111,13 @@ std::string_view to_string(const Severity severity) noexcept {
 
 void Engine::report(Diagnostic diagnostic) {
   diagnostics_.push_back(std::move(diagnostic));
+  if (report_observer_) {
+    report_observer_(diagnostics_.back());
+  }
+}
+
+void Engine::set_report_observer(ReportObserver observer) {
+  report_observer_ = std::move(observer);
 }
 
 void Engine::note(std::string code, std::string message, SourceSpan span) {

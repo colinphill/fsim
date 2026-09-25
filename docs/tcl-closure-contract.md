@@ -32,6 +32,7 @@ a structured fsim diagnostic. Tcl scripts may inspect `::errorCode` and
 | `fsim::object definitions` | `?LIBRARY?` | List of compiled definition dictionaries including packages/classes and members. |
 | `fsim::object definition` | `LIBRARY NAME` | Catalog reference for a named compiled definition. |
 | `fsim::debug` | `status`, `step`, `continue`, `break`, `watch`, `frames`, `frame`, `scope`, `inspect`, `restart`, `provenance` and their documented operands | Structured results for normal control and inspection. Existing provenance behavior remains compatible. |
+| `fsim::transcript` | `start ?PATH?`, `stop`, `status` | Control a running append-only log of entered Tcl commands and stdout/stderr output. |
 
 `fsim::load ?SNAPSHOT?` keeps its existing result schema; it additionally
 advances the loaded-session generation after a successful load. `fsim tcl`
@@ -93,6 +94,10 @@ are selected from the actual severity; automatic color honors `NO_COLOR`,
 with explicit always/never modes. Redirected input/output has no prompts or
 terminal control sequences. A Tcl-disabled build has no interactive loop or
 editor dependency and reports Tcl/debug unavailable through its diagnostics.
+Interactive diagnostics print when reported, with their severity colors, and
+remain available as structured Tcl data. The optional transcript records
+commands and output without terminal color sequences and survives Tcl `cd`
+until stopped.
 
 Acceptance covers source-free snapshots, mixed HDL and SystemC provenance,
 definition and runtime object data, all reference invalidation transitions,

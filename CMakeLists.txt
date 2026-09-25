@@ -1333,7 +1333,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       PRIVATE "${PROJECT_SOURCE_DIR}/third_party/isocline/src")
     target_sources(fsim_application PRIVATE
       src/app/tcl_completion_adapter.cpp
-      src/app/tcl_console.cpp)
+      src/app/tcl_console.cpp
+      src/app/tcl_transcript.cpp)
     target_link_libraries(fsim_application PRIVATE fsim_isocline)
     target_link_libraries(fsim_application PRIVATE fsim_tcl_dependency)
     target_compile_definitions(fsim_application PUBLIC FSIM_HAS_TCL=1)

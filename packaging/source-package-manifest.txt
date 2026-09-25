@@ -781,6 +781,8 @@ src/app/tcl_internal.hpp
 src/app/tcl_object_commands.cpp
 src/app/tcl_references.cpp
 src/app/tcl_references.hpp
+src/app/tcl_transcript.cpp
+src/app/tcl_transcript.hpp
 src/app/tcl_workspace_commands.cpp
 src/artifact/coverage_database.cpp
 src/artifact/coverage_database_codec.cpp
@@ -1430,6 +1432,7 @@ tests/app/tcl_console_test.cpp
 tests/app/tcl_debugger_commands_test.cpp
 tests/app/tcl_object_commands_test.cpp
 tests/app/tcl_references_test.cpp
+tests/app/tcl_transcript_test.cpp
 tests/app/tcl_workspace_commands_test.cpp
 tests/app/tf_plugin_application_test.cpp
 tests/app/tf_scheduler_application_test.cpp

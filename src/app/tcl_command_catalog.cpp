@@ -225,6 +225,26 @@ std::span<const TclCommandSpec> existing_command_specs()
     static constexpr std::array diagnostics_arguments {
         TclCommandArgument { "clear", TclCompletionDomain::literal, true },
     };
+    static constexpr std::array transcript_actions {
+        std::string_view { "start" }, std::string_view { "stop" },
+        std::string_view { "status" },
+    };
+    static constexpr std::array transcript_arguments {
+        TclCommandArgument { "action", TclCompletionDomain::literal,
+            false, false, transcript_actions },
+    };
+    static constexpr std::array transcript_path_arguments {
+        TclCommandArgument { "path", TclCompletionDomain::source_path, true },
+    };
+    static constexpr std::array transcript_subcommands {
+        TclSubcommandSpec { "start", "start ?PATH?",
+            "Append commands and output to a transcript file.",
+            transcript_path_arguments },
+        TclSubcommandSpec { "stop", "stop",
+            "Stop recording the Tcl transcript.", { } },
+        TclSubcommandSpec { "status", "status",
+            "Return the active transcript path and status.", { } },
+    };
     static constexpr std::array specs {
         TclCommandSpec { "fsim::workspace", "fsim::workspace",
             "Describe the current workspace and libraries.",
@@ -264,6 +284,11 @@ std::span<const TclCommandSpec> existing_command_specs()
         TclCommandSpec { "fsim::diagnostics", "fsim::diagnostics ?clear?",
             "Read or clear structured diagnostics.",
             TclCommandCapability::workspace, true, diagnostics_arguments, invoke_existing },
+        TclCommandSpec { "fsim::transcript", "fsim::transcript start ?PATH? | stop | status",
+            "Control the running Tcl command and output transcript.",
+            TclCommandCapability::workspace, false, transcript_arguments,
+            transcript_command, TclResultShape::dictionary, "FSIM-TCL",
+            transcript_subcommands },
         TclCommandSpec { "fsim::sdf", "fsim::sdf SUBCOMMAND ?ARGS?",
             "Configure and inspect SDF annotation.",
             TclCommandCapability::workspace, true, { }, invoke_existing },

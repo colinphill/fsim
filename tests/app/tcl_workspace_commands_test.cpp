@@ -159,7 +159,27 @@ proc assert_stale_catalog_reference {reference operation} {
   fsim::diagnostics clear
 }
 
+proc assert_messages {operation verbosity messages} {
+  if {$verbosity eq "quiet"} {
+    if {[llength $messages] != 0} {
+      error "$operation quiet verbosity returned progress messages: $messages"
+    }
+    return
+  }
+  if {[llength $messages] == 0} {
+    error "$operation $verbosity verbosity returned no progress messages"
+  }
+  foreach message $messages {
+    if {[string trim $message] eq "" ||
+        [string first "\n" $message] >= 0 ||
+        [string first "\r" $message] >= 0} {
+      error "$operation returned an empty or multiline progress message: $messages"
+    }
+  }
+}
+
 set compilation [fsim::compile -library work -verbosity quiet top.sv]
+assert_messages compile quiet [dict get $compilation messages]
 if {[dict get $compilation library] ne "work"} {
   error "compile returned the wrong library"
 }
@@ -175,6 +195,28 @@ if {[llength [dict get $compilation owned_units]] != 2} {
 if {[llength [dict get $compilation diagnostics]] != 0} {
   error "successful compile returned unexpected diagnostics"
 }
+set normal_compilation [fsim::compile -library work -verbosity normal top.sv]
+set normal_compile_messages [dict get $normal_compilation messages]
+assert_messages compile normal $normal_compile_messages
+if {![dict exists $normal_compilation diagnostics] ||
+    [llength [dict get $normal_compilation diagnostics]] != 0} {
+  error "normal compile progress changed the structured diagnostics result"
+}
+if {![string match {compiling *} [lindex $normal_compile_messages 0]] ||
+    ![string match {compiled *} [lindex $normal_compile_messages end]]} {
+  error "normal compile verbosity omitted its progress lines: $normal_compile_messages"
+}
+set verbose_compilation [fsim::compile -library work -verbosity verbose top.sv]
+set verbose_compile_messages [dict get $verbose_compilation messages]
+assert_messages compile verbose $verbose_compile_messages
+if {![dict exists $verbose_compilation diagnostics] ||
+    [llength [dict get $verbose_compilation diagnostics]] != 0} {
+  error "verbose compile progress changed the structured diagnostics result"
+}
+if {[llength $verbose_compile_messages] <= [llength $normal_compile_messages] ||
+    [lsearch -glob $verbose_compile_messages {  compiled environment:*}] < 0} {
+  error "verbose compile verbosity omitted its extra detail: $verbose_compile_messages"
+}
 set original_catalog_ref [fsim::object definition work workspace_pkg]
 set original_catalog_info [fsim::object info $original_catalog_ref]
 if {[dict get $original_catalog_info kind] ne "package"} {
@@ -187,13 +229,37 @@ if {[llength $original_artifacts] != 2} {
 set original_artifact_id [dict get [lindex $original_artifacts 0] id]
 
 set default_snapshot [fsim::elaborate -verbosity quiet top]
+assert_messages elaborate quiet [dict get $default_snapshot messages]
 if {[dict get $default_snapshot snapshot] ne "default"} {
   error "elaborate did not use the default snapshot"
 }
 if {[dict get [dict get $default_snapshot counts] roots] != 1} {
   error "elaborate returned the wrong root count"
 }
+set normal_snapshot [fsim::elaborate -snapshot normal -verbosity normal top]
+set normal_elaborate_messages [dict get $normal_snapshot messages]
+assert_messages elaborate normal $normal_elaborate_messages
+if {![dict exists $normal_snapshot diagnostics] ||
+    [llength [dict get $normal_snapshot diagnostics]] != 0} {
+  error "normal elaborate progress changed the structured diagnostics result"
+}
+if {![string match {elaborating *} [lindex $normal_elaborate_messages 0]] ||
+    ![string match {snapshot * is ready} [lindex $normal_elaborate_messages end]]} {
+  error "normal elaborate verbosity omitted its progress lines: $normal_elaborate_messages"
+}
+set verbose_snapshot [fsim::elaborate -snapshot verbose -verbosity verbose top]
+set verbose_elaborate_messages [dict get $verbose_snapshot messages]
+assert_messages elaborate verbose $verbose_elaborate_messages
+if {![dict exists $verbose_snapshot diagnostics] ||
+    [llength [dict get $verbose_snapshot diagnostics]] != 0} {
+  error "verbose elaborate progress changed the structured diagnostics result"
+}
+if {[llength $verbose_elaborate_messages] <= [llength $normal_elaborate_messages] ||
+    [lsearch -glob $verbose_elaborate_messages {  loading *}] < 0} {
+  error "verbose elaborate verbosity omitted its extra detail: $verbose_elaborate_messages"
+}
 set named_snapshot [fsim::elaborate -snapshot inspectable -verbosity quiet top]
+assert_messages elaborate quiet [dict get $named_snapshot messages]
 if {[dict get $named_snapshot snapshot] ne "inspectable"} {
   error "elaborate did not use the named snapshot"
 }

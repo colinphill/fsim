@@ -106,6 +106,13 @@ and `mapped` fields. Compile results include the selected library and language,
 source files, object count, owned units, and diagnostics. Elaboration results
 include the snapshot name, selected roots, counts, and diagnostics.
 
+Both compile and elaborate results also include a `messages` list. Each entry is
+one nonempty progress line from the operation. Quiet verbosity returns an
+empty list; normal verbosity includes progress, and verbose verbosity adds
+detail. The list contains progress only: operational results remain in their
+named fields, and diagnostics remain separately available in the `diagnostics`
+field and `fsim::diagnostics`.
+
 ## Loaded objects and debugger results
 
 `fsim::object roots` and `fsim::object children` return opaque references. Keep
@@ -216,6 +223,17 @@ resolved from the new workspace, while an absolute path stays fixed. Set
 disables history, and values above 10000 are capped at 10000. Invalid limit
 values are ignored.
 
+Use `fsim::transcript start ?PATH?` to append a running plain-text log of
+entered commands and all stdout/stderr output, including Tcl `puts`, simulator
+output, and diagnostics. The default path is `.fsim/tcl.log` in the current
+workspace; an explicit path is resolved when recording starts and remains
+fixed if Tcl later changes directory. `fsim::transcript status` returns its
+active state and path, and `fsim::transcript stop` closes it. Set
+`FSIM_TCL_LOG` to a path to start recording when the interactive console opens.
+The log starts after the `start` command, records later commands and output in
+order, and appends across sessions. Terminal color codes are omitted from the
+log.
+
 When stdin and stdout are redirected, fsim uses a plain multiline reader with
 no editor, prompts, or terminal control sequences. It still accumulates input
 until Tcl considers the command complete. An incomplete command at end of
@@ -233,6 +251,8 @@ interactive console, automatic color is enabled only for an interactive
 terminal; a nonempty `NO_COLOR` turns it off. When a `tcl` or `debug` command
 writes diagnostics to a redirected error stream, fsim keeps that output plain
 even with `--color always`.
+The interactive console prints diagnostics as they are reported, beside other
+output, while retaining their structured forms in `fsim::diagnostics`.
 
 ## Tcl-disabled builds
 

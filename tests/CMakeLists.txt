@@ -6026,7 +6026,7 @@ fsim_register_simple_test(
   if(FSIM_WITH_TCL)
     foreach(tcl_case IN ITEMS
         references workspace_commands object_commands debugger_commands
-        completion_adapter console)
+        completion_adapter console transcript)
       add_executable(
         fsim_tcl_${tcl_case}_tests
         "app/tcl_${tcl_case}_test.cpp"
