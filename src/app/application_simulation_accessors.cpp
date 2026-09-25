@@ -77,9 +77,9 @@ namespace {
         }
 
         VerilogScopeProvenance result;
-        result.path = project.design_ir.instances().at(
-                                                       specialization.instance.value())
-                          .path;
+        result.path = std::string { project.design_ir.path(
+            project.design_ir.instances().at(
+                specialization.instance.value()).path) };
         result.unit = unit.id;
         result.source = unit.source;
         result.language = unit.language;
@@ -195,7 +195,10 @@ std::optional<SignalId> Simulation::find_signal(
     const auto found = std::ranges::find_if(
         impl_->built.design_ir.objects(), [&](const auto& object) {
             return design_object_is_signal_bearing(object)
-                && object.path == path
+                && object.path.valid()
+                && object.path.value()
+                    < impl_->built.design_ir.hierarchy_paths().size()
+                && impl_->built.design_ir.path(object.path) == path
                 && object.runtime_index
                 <= std::numeric_limits<SignalId>::max();
         });
@@ -352,7 +355,11 @@ Simulation::capture_uvm_checkpoint(
     provenance.cache_identity = impl_->built.cache_key + ":"
         + std::string { project::to_string(impl_->built.optimization) };
     provenance.artifact_identity = impl_->built.artifact_identity;
-    provenance.roots = impl_->built.design_ir.roots();
+    const auto& design = impl_->built.design_ir;
+    provenance.roots.reserve(design.roots().size());
+    for (const auto root : design.roots()) {
+        provenance.roots.emplace_back(design.path(root));
+    }
     return runtime::capture_systemverilog_uvm_checkpoint(
         impl_->uvm_foreign, std::move(provenance), limits);
 }

@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "application_test_support.hpp"
+#include "../../src/app/application_hierarchy_path_codec.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/app/sdf_phase_persistence.hpp"
@@ -19,6 +23,7 @@
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/design_ir.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/incremental.hpp"
@@ -35,6 +40,98 @@
 
 namespace fsim::test {
 namespace {
+
+    void test_standalone_design_ir_path_decode_budget()
+    {
+        semantic::HierarchyPathTable::Builder paths;
+        const auto top = paths.intern("top");
+        semantic::design::DesignIr design;
+        design.mutable_top() = top;
+        design.mutable_roots().push_back(top);
+        const bool rebound = design.rebind_path_table(
+            std::move(paths).freeze());
+        assert(rebound);
+        static_cast<void>(rebound);
+
+        diagnostic::Engine serialize_diagnostics;
+        const auto base_state = app::serialize_design_ir_state(
+            design, serialize_diagnostics);
+        assert(base_state && !serialize_diagnostics.has_error());
+
+        constexpr std::size_t path_size = 1024U * 1024U;
+        constexpr std::uint32_t path_count = 96U;
+        constexpr std::size_t path_binding_offset = 21U;
+        const auto append_u32 = [](std::string& bytes,
+                                    const std::uint32_t value) {
+            for (unsigned shift = 0U; shift < 32U; shift += 8U) {
+                bytes.push_back(static_cast<char>(
+                    (value >> shift) & 0xffU));
+            }
+        };
+        std::string state;
+        std::size_t new_path_binding_size { };
+        {
+            std::string path_table;
+            const auto reserve_size = 16U + 4U + 3U
+                + static_cast<std::size_t>(path_count - 1U)
+                    * (4U + path_size);
+            path_table.reserve(reserve_size);
+            path_table.append(app::hierarchy_path_codec::kMagic);
+            append_u32(path_table, app::hierarchy_path_codec::kSchema);
+            append_u32(path_table, path_count);
+            append_u32(path_table, 3U);
+            path_table.append("top");
+
+            std::string path(path_size, 'x');
+            path[0] = 'z';
+            for (std::uint32_t index = 0U; index < path_count - 1U;
+                 ++index) {
+                path[1] = static_cast<char>('0' + index / 10U);
+                path[2] = static_cast<char>('0' + index % 10U);
+                append_u32(path_table,
+                    static_cast<std::uint32_t>(path.size()));
+                path_table.append(path);
+            }
+            new_path_binding_size = path_table.size();
+
+            std::uint64_t old_path_binding_size { };
+            for (unsigned index = 0U; index < 8U; ++index) {
+                old_path_binding_size |= static_cast<std::uint64_t>(
+                    static_cast<unsigned char>((*base_state)[13U + index]))
+                    << (8U * index);
+            }
+            assert(old_path_binding_size <= base_state->size()
+                    - path_binding_offset);
+            const auto old_path_binding_size_t
+                = static_cast<std::size_t>(old_path_binding_size);
+            const auto suffix_offset
+                = path_binding_offset + old_path_binding_size_t;
+            state.reserve(base_state->size() - old_path_binding_size_t
+                + path_table.size());
+            state.append(base_state->data(), path_binding_offset);
+            state.append(path_table);
+            state.append(base_state->data() + suffix_offset,
+                base_state->size() - suffix_offset);
+        }
+        for (unsigned index = 0U; index < 8U; ++index) {
+            state[13U + index] = static_cast<char>(
+                (static_cast<std::uint64_t>(new_path_binding_size)
+                    >> (8U * index))
+                & 0xffU);
+        }
+
+        diagnostic::Engine decode_diagnostics;
+        const auto decoded = app::deserialize_design_ir_state(
+            state, "aggregate-design-ir-paths", decode_diagnostics);
+        assert(!decoded);
+        assert(std::ranges::any_of(decode_diagnostics.diagnostics(),
+            [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-ART-0013"
+                    && diagnostic.message.find(
+                           "aggregate decode allocation budget")
+                        != std::string::npos;
+            }));
+    }
 
     std::string read_binary_file(const std::filesystem::path& path)
     {
@@ -239,6 +336,8 @@ namespace {
 
 void ApplicationTestFixture::test_non_project_cli()
 {
+    test_standalone_design_ir_path_decode_budget();
+
     const auto object = directory / "unit.fsimobj";
     const auto extra_object = directory / "extra.fsimobj";
     const auto extra_source = directory / "extra.sv";
@@ -1073,14 +1172,215 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     diagnostic::Engine v2_semantic_diagnostics;
     assert(!app::deserialize_semantic_state(
         v2_semantic_state, "v2-semantics", v2_semantic_diagnostics));
-    auto v2_design_ir_state = *design_ir_state;
-    v2_design_ir_state[8] = static_cast<char>(3U);
-    diagnostic::Engine v2_design_ir_diagnostics;
+    auto old_design_ir_state = *design_ir_state;
+    old_design_ir_state[8] = static_cast<char>(4U);
+    diagnostic::Engine old_design_ir_diagnostics;
     assert(!app::deserialize_design_ir_state(
-        v2_design_ir_state, "v2-design-ir", v2_design_ir_diagnostics));
+        old_design_ir_state, "old-design-ir", old_design_ir_diagnostics));
     assert(restored_runtime->signal_paths() == object_build->design.signal_paths());
     assert(restored_runtime->processes().size() == object_build->design.processes().size());
     assert(restored_design_ir->valid(*restored_semantics));
+    assert(restored_design_ir->top() == object_build->design_ir.top());
+    assert(restored_design_ir->roots().size()
+        == object_build->design_ir.roots().size());
+    for (std::size_t index = 0;
+         index < restored_design_ir->roots().size(); ++index) {
+        assert(restored_design_ir->path(restored_design_ir->roots()[index])
+            == object_build->design_ir.path(
+                object_build->design_ir.roots()[index]));
+    }
+    const auto matching_paths = [&](const auto& restored,
+                                    const auto& original) {
+        assert(restored.size() == original.size());
+        for (std::size_t index = 0; index < restored.size(); ++index) {
+            assert(restored_design_ir->path(restored[index].path)
+                == object_build->design_ir.path(original[index].path));
+        }
+    };
+    matching_paths(restored_design_ir->instances(),
+        object_build->design_ir.instances());
+    matching_paths(restored_design_ir->objects(),
+        object_build->design_ir.objects());
+    matching_paths(restored_design_ir->conversions(),
+        object_build->design_ir.conversions());
+    matching_paths(restored_design_ir->boundaries(),
+        object_build->design_ir.boundaries());
+
+    const auto canonical_paths
+        = app::hierarchy_path_codec::encode_canonical_hierarchy_paths(
+            object_build->design.hierarchy_paths(),
+            object_build->design_ir.hierarchy_paths());
+    assert(canonical_paths);
+    diagnostic::Engine external_diagnostics;
+    const auto external_state = app::serialize_design_ir_state(
+        object_build->design_ir, canonical_paths.payload->paths,
+        external_diagnostics);
+    assert(external_state && !external_diagnostics.has_error());
+    const auto external_restored = app::deserialize_design_ir_state(
+        *external_state, "external-design-ir",
+        canonical_paths.payload->paths, external_diagnostics);
+    assert(external_restored && !external_diagnostics.has_error());
+    assert(external_restored->valid(*restored_semantics));
+    assert(external_restored->top() == restored_design_ir->top());
+    assert(external_restored->roots().size()
+        == restored_design_ir->roots().size());
+    for (std::size_t index = 0;
+         index < external_restored->roots().size(); ++index) {
+        assert(external_restored->path(external_restored->roots()[index])
+            == restored_design_ir->path(restored_design_ir->roots()[index]));
+    }
+    const auto matching_modes = [&](const auto& external,
+                                    const auto& standalone) {
+        assert(external.size() == standalone.size());
+        for (std::size_t index = 0; index < external.size(); ++index) {
+            assert(external_restored->path(external[index].path)
+                == restored_design_ir->path(standalone[index].path));
+        }
+    };
+    matching_modes(external_restored->instances(),
+        restored_design_ir->instances());
+    matching_modes(external_restored->objects(),
+        restored_design_ir->objects());
+    matching_modes(external_restored->conversions(),
+        restored_design_ir->conversions());
+    matching_modes(external_restored->boundaries(),
+        restored_design_ir->boundaries());
+    diagnostic::Engine missing_external_diagnostics;
+    assert(!app::deserialize_design_ir_state(*external_state,
+        "missing-external-design-ir", missing_external_diagnostics));
+    semantic::HierarchyPathTable::Builder wrong_paths_builder;
+    (void)wrong_paths_builder.intern("wrong.path");
+    const auto wrong_paths = std::move(wrong_paths_builder).freeze();
+    diagnostic::Engine wrong_external_diagnostics;
+    assert(!app::deserialize_design_ir_state(*external_state,
+        "wrong-external-design-ir", wrong_paths,
+        wrong_external_diagnostics));
+
+    auto invalid_reference_state = *external_state;
+    std::uint64_t binding_size { };
+    for (unsigned index = 0U; index < 8U; ++index) {
+        binding_size |= static_cast<std::uint64_t>(
+            static_cast<unsigned char>(invalid_reference_state[13U + index]))
+            << (8U * index);
+    }
+    const auto top_offset = 21U + static_cast<std::size_t>(binding_size);
+    assert(top_offset + 4U <= invalid_reference_state.size());
+    invalid_reference_state.replace(top_offset, 4U, 4U,
+        static_cast<char>(0xfeU));
+    diagnostic::Engine invalid_reference_diagnostics;
+    assert(!app::deserialize_design_ir_state(invalid_reference_state,
+        "invalid-reference-design-ir", canonical_paths.payload->paths,
+        invalid_reference_diagnostics));
+    auto wrong_digest_state = *external_state;
+    assert(binding_size == canonical_paths.payload->digest.size());
+    wrong_digest_state[21U] = wrong_digest_state[21U] == '0' ? '1' : '0';
+    diagnostic::Engine wrong_digest_diagnostics;
+    assert(!app::deserialize_design_ir_state(wrong_digest_state,
+        "wrong-digest-design-ir", canonical_paths.payload->paths,
+        wrong_digest_diagnostics));
+    auto empty_required_path = object_build->design_ir;
+    assert(!empty_required_path.instances().empty());
+    semantic::HierarchyPathTable::Builder empty_paths_builder {
+        empty_required_path.hierarchy_paths() };
+    const auto empty_path = empty_paths_builder.intern("");
+    assert(empty_required_path.rebind_path_table(
+        std::move(empty_paths_builder).freeze()));
+    empty_required_path.mutable_instances().front().path = empty_path;
+    assert(empty_required_path.valid());
+    diagnostic::Engine empty_path_diagnostics;
+    assert(!app::serialize_design_ir_state(
+        empty_required_path, empty_path_diagnostics));
+    semantic::HierarchyPathTable::Builder canonical_with_empty_builder;
+    (void)canonical_with_empty_builder.intern("");
+    for (std::size_t index = 0;
+         index < canonical_paths.payload->paths.size(); ++index) {
+        const auto id = semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        (void)canonical_with_empty_builder.intern(
+            canonical_paths.payload->paths.view(id));
+    }
+    const auto canonical_with_empty
+        = std::move(canonical_with_empty_builder).freeze();
+    diagnostic::Engine empty_reference_diagnostics;
+    auto empty_reference_state = app::serialize_design_ir_state(
+        object_build->design_ir, canonical_with_empty,
+        empty_reference_diagnostics);
+    assert(empty_reference_state && !empty_reference_diagnostics.has_error());
+    auto alternate_path_design = object_build->design_ir;
+    const auto original_instance_path
+        = alternate_path_design.instances().front().path;
+    const auto original_canonical_path = canonical_with_empty.find(
+        alternate_path_design.path(original_instance_path));
+    assert(original_canonical_path);
+    std::optional<semantic::HierarchyPathId> alternate_instance_path;
+    for (std::size_t index = 0;
+         index < alternate_path_design.hierarchy_paths().size(); ++index) {
+        const auto id = semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        const auto canonical_id = canonical_with_empty.find(
+            alternate_path_design.path(id));
+        if (id != original_instance_path
+            && canonical_id
+            && (canonical_id->value() & 0xffU)
+                != (original_canonical_path->value() & 0xffU)
+            && !alternate_path_design.path(id).empty()) {
+            alternate_instance_path = id;
+            break;
+        }
+    }
+    assert(alternate_instance_path);
+    alternate_path_design.mutable_instances().front().path
+        = *alternate_instance_path;
+    diagnostic::Engine alternate_path_diagnostics;
+    const auto alternate_path_state = app::serialize_design_ir_state(
+        alternate_path_design, canonical_with_empty,
+        alternate_path_diagnostics);
+    assert(alternate_path_state && !alternate_path_diagnostics.has_error());
+    assert(alternate_path_state->size() == empty_reference_state->size());
+    const auto changed_instance_byte = std::mismatch(
+        empty_reference_state->begin(), empty_reference_state->end(),
+        alternate_path_state->begin()).first;
+    assert(changed_instance_byte != empty_reference_state->end());
+    const auto instance_path_offset = static_cast<std::size_t>(
+        changed_instance_byte - empty_reference_state->begin());
+    assert(instance_path_offset + 4U <= empty_reference_state->size());
+    for (std::size_t index = 0;
+         index < empty_reference_state->size(); ++index) {
+        if (index < instance_path_offset
+            || index >= instance_path_offset + 4U) {
+            assert((*empty_reference_state)[index]
+                == (*alternate_path_state)[index]);
+        }
+    }
+    empty_reference_state->replace(instance_path_offset, 4U, 4U, '\0');
+    assert(!app::deserialize_design_ir_state(*empty_reference_state,
+        "empty-reference-design-ir", canonical_with_empty,
+        empty_reference_diagnostics));
+    semantic::design::DesignIr empty_top_design;
+    semantic::HierarchyPathTable::Builder empty_top_builder;
+    const auto empty_top_id = empty_top_builder.intern("");
+    assert(empty_top_design.rebind_path_table(
+        std::move(empty_top_builder).freeze()));
+    diagnostic::Engine empty_top_diagnostics;
+    auto empty_top_state = app::serialize_design_ir_state(
+        empty_top_design, empty_top_diagnostics);
+    assert(empty_top_state && !empty_top_diagnostics.has_error());
+    std::uint64_t inline_binding_size { };
+    for (unsigned index = 0U; index < 8U; ++index) {
+        inline_binding_size |= static_cast<std::uint64_t>(
+            static_cast<unsigned char>((*empty_top_state)[13U + index]))
+            << (8U * index);
+    }
+    const auto empty_top_offset
+        = 21U + static_cast<std::size_t>(inline_binding_size);
+    assert(empty_top_offset + 4U <= empty_top_state->size());
+    empty_top_state->replace(empty_top_offset, 4U, 4U, '\0');
+    assert(!app::deserialize_design_ir_state(*empty_top_state,
+        "empty-top-design-ir", empty_top_diagnostics));
+    empty_top_design.mutable_top() = empty_top_id;
+    assert(empty_top_design.valid());
+    assert(!app::serialize_design_ir_state(
+        empty_top_design, empty_top_diagnostics));
     diagnostic::Engine deterministic_state_diagnostics;
     assert(app::serialize_runtime_state(*restored_runtime,
                deterministic_state_diagnostics)
@@ -1777,6 +2077,24 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
                     != std::string::npos;
         }));
     std::filesystem::remove_all(oversized_design);
+
+    const auto oversized_design_ir = directory / "oversized-design-ir.fsimdesign";
+    copy_tree(design, oversized_design_ir);
+    make_tree_writable(oversized_design_ir);
+    std::filesystem::resize_file(
+        oversized_design_ir / "state/design-ir.bin",
+        app::kCompiledHirDecodeBudgetBytes + 1U);
+    diagnostic::Engine oversized_design_ir_diagnostics;
+    assert(!app::load_design_artifact(
+        oversized_design_ir, oversized_design_ir_diagnostics));
+    assert(std::ranges::any_of(
+        oversized_design_ir_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0014"
+                && diagnostic.message.find("DesignIR decode byte budget")
+                    != std::string::npos;
+        }));
+    std::filesystem::remove_all(oversized_design_ir);
 
     const auto partial_design = directory / "partial.fsimdesign";
     copy_tree(design, partial_design);

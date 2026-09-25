@@ -2,10 +2,12 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fsim::semantic::design {
@@ -94,7 +96,7 @@ struct InstanceOccurrence {
     std::optional<InstanceId> source_instance;
     SpecializationId specialization;
     std::string name;
-    std::string path;
+    HierarchyPathId path;
     std::string target;
     std::optional<SourceSpanId> source;
     std::optional<OriginId> origin;
@@ -121,7 +123,7 @@ struct Object {
     SpecializationId specialization;
     ObjectKind kind{ObjectKind::signal};
     std::string name;
-    std::string path;
+    HierarchyPathId path;
     std::optional<ValueId> declaration_value;
     TypeReference type;
     std::optional<SourceSpanId> source;
@@ -191,7 +193,7 @@ struct ProcessOccurrence {
 struct Conversion {
     ConversionId id;
     ConversionKind kind{ConversionKind::ordinal_alias};
-    std::string path;
+    HierarchyPathId path;
     ObjectId formal;
     ObjectId actual;
     std::optional<ProcessOccurrenceId> process;
@@ -208,7 +210,7 @@ struct Boundary {
     BoundaryId id;
     BoundaryKind kind{BoundaryKind::language_conversion};
     std::string name;
-    std::string path;
+    HierarchyPathId path;
     std::optional<InstanceOccurrenceId> instance;
     std::optional<ObjectId> object;
     std::optional<PortId> port;
@@ -223,8 +225,11 @@ struct Boundary {
 /// only as explicit adapter locators for the Task 8 consumer migration.
 class DesignIr final {
 public:
-    [[nodiscard]] const std::string& top() const noexcept;
-    [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
+    [[nodiscard]] const HierarchyPathTable& hierarchy_paths() const noexcept;
+    [[nodiscard]] std::string_view path(HierarchyPathId id) const;
+    [[nodiscard]] HierarchyPathId top_path_id() const noexcept;
+    [[nodiscard]] std::string_view top() const;
+    [[nodiscard]] const std::vector<HierarchyPathId>& roots() const noexcept;
     [[nodiscard]] const std::vector<Specialization>&
     specializations() const noexcept;
     [[nodiscard]] const std::vector<InstanceOccurrence>&
@@ -242,8 +247,8 @@ public:
     conversions() const noexcept;
     [[nodiscard]] const std::vector<Boundary>& boundaries() const noexcept;
 
-    std::string& mutable_top() noexcept;
-    std::vector<std::string>& mutable_roots() noexcept;
+    HierarchyPathId& mutable_top() noexcept;
+    std::vector<HierarchyPathId>& mutable_roots() noexcept;
     std::vector<Specialization>& mutable_specializations() noexcept;
     std::vector<InstanceOccurrence>& mutable_instances() noexcept;
     std::vector<Object>& mutable_objects() noexcept;
@@ -259,10 +264,13 @@ public:
     [[nodiscard]] bool valid() const noexcept;
     /// Also validate every relationship into the owning semantic model.
     [[nodiscard]] bool valid(const semantic::Model& model) const noexcept;
+    /// Replace the local path owner after validating every stored handle.
+    [[nodiscard]] bool rebind_path_table(HierarchyPathTable paths) noexcept;
 
 private:
-    std::string top_;
-    std::vector<std::string> roots_;
+    HierarchyPathTable hierarchy_paths_;
+    HierarchyPathId top_;
+    std::vector<HierarchyPathId> roots_;
     std::vector<Specialization> specializations_;
     std::vector<InstanceOccurrence> instances_;
     std::vector<Object> objects_;

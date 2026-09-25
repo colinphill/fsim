@@ -3,11 +3,11 @@ id	family	v2_identity	v3_identity	evidence	containment	owner
 V3REJECT-MANIFEST	manifest	schema=2	schema=3	tests/project/project_config_test.cpp	exact-diagnostic-no-config	B188-C03
 V3REJECT-OBJECT	object	format=6,portable=10	format=8,portable=15,compiled-HIR=1	tests/artifact/object_artifact_test.cpp	header-first-exact-diagnostic	B188A-C19
 V3REJECT-PORTABLE	object	.fsimir,.fsimudp,.fsimclass	compiled-HIR=1	tests/library/library_artifact_test.cpp	metadata-first-exact-diagnostic	B188A-C19
-V3REJECT-DESIGN	design	format=11	format=13	tests/artifact/design_artifact_test.cpp	header-first-exact-diagnostic	B188A-C19
+V3REJECT-DESIGN	design	format=11	format=14	tests/artifact/design_artifact_test.cpp	header-first-exact-diagnostic	B188A-C19
 V3REJECT-LIBRARY	design	format=5,portable=10	format=6,portable=15,compiled-HIR=1	tests/library/library_artifact_test.cpp	metadata-first-exact-diagnostic	B188A-C19
-V3REJECT-RUNTIME	checkpoint	runtime=48	runtime=63	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
+V3REJECT-RUNTIME	checkpoint	runtime=48	runtime=64	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
 V3REJECT-SEMANTIC	checkpoint	semantic=3	semantic=4	tests/app/application_test_non_project_cli.cpp	header-first-no-state	B188-C03
-V3REJECT-DESIGN-IR	checkpoint	design-ir=3	design-ir=4	tests/app/application_test_non_project_cli.cpp	header-first-no-state	B188-C03
+V3REJECT-DESIGN-IR	checkpoint	design-ir=3	design-ir=5	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
 V3REJECT-CONSTRAINT	checkpoint	sv-constraint=6	sv-constraint=8	tests/app/application_test_classes.cpp	header-first-no-state	B188A-C19
 V3REJECT-COVERAGE	checkpoint	sv-coverage=4	sv-coverage=7	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03
 V3REJECT-UVM	checkpoint	sv-uvm=2	sv-uvm=3	tests/app/application_test_artifact_phases.cpp	header-first-no-state	B188-C03

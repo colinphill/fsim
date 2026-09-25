@@ -10,7 +10,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <ranges>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -110,10 +112,14 @@ void test_inventory(const NativeRoot& root)
     assert(inventory.freeze(diagnostics));
     assert(inventory.frozen() && !diagnostics.has_error());
     assert(inventory.snapshot().channels.size() == 10U);
+    assert(inventory.snapshot().paths.size()
+        == inventory.snapshot().channels.size());
     assert(std::ranges::is_sorted(inventory.snapshot().channels, { },
         [](const auto& entry) { return entry.descriptor.canonical_path; }));
 
     const auto& signal = find_entry(inventory.snapshot(), ".signal");
+    assert(inventory.snapshot().paths.view(signal.canonical_path_id)
+        == signal.descriptor.canonical_path);
     assert(signal.descriptor.kind
         == systemc::SystemCKernelChannelKind::signal);
     assert(signal.descriptor.value
@@ -148,9 +154,26 @@ void test_inventory(const NativeRoot& root)
     const auto encoded = systemc::serialize_systemc_kernel_channel_inventory(
         inventory.snapshot(), { }, diagnostics);
     assert(encoded && !diagnostics.has_error());
-    assert(systemc::deserialize_systemc_kernel_channel_inventory(
-               *encoded, { }, diagnostics)
-        == inventory.snapshot());
+    auto decoded = systemc::deserialize_systemc_kernel_channel_inventory(
+        *encoded, { }, diagnostics);
+    assert(decoded && *decoded == inventory.snapshot());
+    auto copied = *decoded;
+    auto moved = std::move(copied);
+    const auto retained_id = moved.channels.front().canonical_path_id;
+    const auto retained_path = std::string {
+        moved.paths.view(retained_id) };
+    decoded.reset();
+    assert(moved.paths.view(retained_id) == retained_path);
+    auto retained_paths = moved.paths;
+    moved = systemc::SystemCKernelChannelInventorySnapshot { };
+    assert(retained_paths.view(retained_id) == retained_path);
+
+    auto invalid_path = inventory.snapshot();
+    invalid_path.channels.front().canonical_path_id
+        = semantic::HierarchyPathId::from_index(1000U);
+    diagnostic::Engine invalid_path_diagnostics;
+    assert(!systemc::validate_systemc_kernel_channel_inventory(
+        invalid_path, { }, invalid_path_diagnostics));
     std::ranges::reverse(descriptors);
     assert(inventory.validate_live_snapshot(descriptors, diagnostics));
 

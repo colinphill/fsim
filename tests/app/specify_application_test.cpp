@@ -6,6 +6,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -46,6 +47,58 @@ struct TemporaryDirectory {
         std::filesystem::remove_all(path, error);
     }
 };
+
+std::uint64_t read_little_endian(
+    const std::string_view bytes,
+    std::size_t& offset,
+    const std::size_t width)
+{
+    assert(width <= sizeof(std::uint64_t));
+    assert(offset <= bytes.size() && width <= bytes.size() - offset);
+    std::uint64_t value { };
+    for (std::size_t byte = 0; byte < width; ++byte) {
+        value |= static_cast<std::uint64_t>(
+                     static_cast<unsigned char>(bytes[offset++]))
+            << (byte * 8U);
+    }
+    return value;
+}
+
+void skip_length_framed_bytes(
+    const std::string_view bytes,
+    std::size_t& offset,
+    const std::size_t element_width = 1U)
+{
+    const auto count = read_little_endian(
+        bytes, offset, sizeof(std::uint64_t));
+    assert(offset <= bytes.size());
+    assert(count <= (bytes.size() - offset) / element_width);
+    offset += static_cast<std::size_t>(count) * element_width;
+}
+
+std::size_t runtime_roots_count_offset(const std::string_view bytes)
+{
+    constexpr std::string_view magic = "FSIMRUN1";
+    assert(bytes.starts_with(magic));
+    std::size_t offset = magic.size();
+    const auto schema = read_little_endian(
+        bytes, offset, sizeof(std::uint32_t));
+    assert(schema == fsim::app::kRuntimeStateSchema);
+    // Standalone runtime state embeds a canonical path table, followed by a
+    // vector of 32-bit path references. The DTO then begins with its top
+    // placeholder string and roots vector.
+    const auto path_mode = read_little_endian(
+        bytes, offset, sizeof(std::uint8_t));
+    assert(path_mode == 0U);
+    skip_length_framed_bytes(bytes, offset); // Inline path table.
+    skip_length_framed_bytes(bytes, offset, sizeof(std::uint32_t));
+    skip_length_framed_bytes(bytes, offset); // Top path placeholder.
+    const auto roots_count_offset = offset;
+    const auto roots_count = read_little_endian(
+        bytes, offset, sizeof(std::uint64_t));
+    assert(roots_count == 2U);
+    return roots_count_offset;
+}
 
 struct Report {
     std::string message;
@@ -239,19 +292,8 @@ Capture run_once(
     assert(!fsim::app::deserialize_runtime_state(
         wrong_schema, "old-specify-runtime", wrong_schema_diagnostics));
     auto excessive_roots = *encoded;
-    constexpr std::size_t runtime_header_size
-        = 8U + sizeof(std::uint32_t);
-    std::uint64_t top_size { };
-    for (std::size_t byte = 0; byte < 8; ++byte) {
-        top_size |= static_cast<std::uint64_t>(
-                        static_cast<unsigned char>(
-                            excessive_roots[runtime_header_size + byte]))
-            << (byte * 8U);
-    }
-    const auto roots_size_offset = runtime_header_size + 8U
-        + static_cast<std::size_t>(top_size);
-    assert(roots_size_offset + 8 <= excessive_roots.size());
-    for (std::size_t byte = 0; byte < 8; ++byte) {
+    const auto roots_size_offset = runtime_roots_count_offset(excessive_roots);
+    for (std::size_t byte = 0; byte < sizeof(std::uint64_t); ++byte) {
         excessive_roots[roots_size_offset + byte] = '\xff';
     }
     fsim::diagnostic::Engine excessive_roots_diagnostics;

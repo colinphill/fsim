@@ -167,6 +167,7 @@ void HierarchyBuilder::finish()
         }
     }
     diagnostics_ = std::move(unique_diagnostics);
+    design_.freeze_hierarchy_paths();
 }
 
 ResolutionKind HierarchyBuilder::native_resolution(

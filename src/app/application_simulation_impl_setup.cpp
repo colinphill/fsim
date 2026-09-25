@@ -877,10 +877,10 @@ Simulation::Impl::Impl(
                 const auto requested = text.substr(
                     print_timescale_marker.size());
                 const auto find_instance = [&](const std::string_view path) {
-                    return std::ranges::find(
-                        built.design_ir.instances(),
-                        path,
-                        &semantic::design::InstanceOccurrence::path);
+                    return std::ranges::find_if(
+                        built.design_ir.instances(), [&](const auto& instance) {
+                            return built.design_ir.path(instance.path) == path;
+                        });
                 };
                 auto selected = built.design_ir.instances().end();
                 if (requested.empty()) {
@@ -894,7 +894,8 @@ Simulation::Impl::Impl(
                         target.remove_prefix(root_prefix.size());
                     }
                     selected = find_instance(target);
-                    auto prefix = current_instance.path;
+                    auto prefix = std::string {
+                        built.design_ir.path(current_instance.path) };
                     while (selected == built.design_ir.instances().end()
                         && !prefix.empty()) {
                         selected = find_instance(prefix + "."
@@ -946,7 +947,10 @@ Simulation::Impl::Impl(
                 if (output_hook) {
                     output_hook(
                         process,
-                        "Time scale of (" + selected->path + ") is "
+                        "Time scale of ("
+                            + std::string {
+                                built.design_ir.path(selected->path) }
+                            + ") is "
                             + std::string { time_unit } + " / "
                             + std::string { time_precision },
                         true,
@@ -1557,7 +1561,9 @@ void Simulation::Impl::refresh_observation_hooks()
             const auto instance_index
                 = specializations[specialization_index].instance.value();
             if (instance_index < instances.size()) {
-                coverage.instance_identity = instances[instance_index].path;
+                coverage.instance_identity = std::string {
+                    built.design_ir.path(
+                        instances[instance_index].path) };
             }
         }
     }

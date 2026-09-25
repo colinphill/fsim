@@ -35,6 +35,11 @@ one helper. The generated names, commands, and properties remained
 byte-identical; specialized argument, fixture, and environment registration
 was left explicit.
 
+Batch 188I final-source correctness qualification passed. Its fixed-baseline
+performance matrix was stopped during sample 3 and did not produce a passing
+result. The user deferred performance acceptance to future work; the cumulative
+performance obligation remains open for a future qualified run.
+
 The inventory was prepared from `codex/v3` at
 `ed5ca693704edd277ec3f055ed7d9ed0e3048f2d`. `origin/codex/v3` matched that
 revision. The only unrelated worktree entry was the intentional untracked
@@ -196,7 +201,7 @@ parts may be simplified only after the substantive column has a passing owner.
 | `fsim.v3-v2-input-rejection` / `CheckV3V2InputRejection.cmake` | v2 manifest/object/portable/design/library/checkpoint/cache/plugin inputs are rejected before state publication with stable diagnostics/containment | Fourteen-row/six-family totals, ledger digest, source-token searches, owner strings | Replace with executable negative tests for every existing `V3REJECT-*` ID and a required-ID set. Do not reduce to version-number token checks. |
 | `fsim.v3-retained-profile-qualification` / `CheckV3RetainedProfiles.cmake` | Language profile aliases select the correct semantics and survive artifact paths | Thirteen-row language totals, digest, source-token matching, owner strings | Keep all `V3PROFILE-*` identities; map each to named project/application/artifact test cases. A required-ID validator permits future profiles. |
 | `fsim.v3-warning-audit` / `CheckV3WarningAudit.cmake` | Four hosted LLVM-enabled lanes configure warnings as errors | Exact YAML occurrence counts, four-row digest, retained-log names, owner strings | Merge into the proposed hosted-lane structural validator. It must require Linux/Windows x Debug/Release, LLVM ON, warnings-as-errors, and current compiler identities without pinning YAML spelling or artifact/log names. |
-| `fsim.v3-hosted-toolchains` / `CheckV3HostedToolchains.cmake` | Ubuntu Clang 22 + LLVM 22.1.8 and Windows LLVM-MinGW 20260616 + LLVM 22.1.8 lanes, Debug/Release, timeout and bounded parallelism | Four-row digest, exact YAML text/occurrence counts, historical owner/log names | Merge with warning audit. The workflow currently uses `--parallel 4`; validate the configured current bound semantically rather than retaining old v1/v2 “two-worker” output text. |
+| `fsim.v3-hosted-toolchains` / `CheckV3HostedToolchains.cmake` | Ubuntu Clang 22 + LLVM 22.1.8 and Windows LLVM-MinGW 20260616 + LLVM 22.1.8 lanes, Debug/Release, timeout and bounded parallelism | Four-row digest, exact YAML text/occurrence counts, historical owner/log names | Merge with warning audit. The workflow currently uses `--parallel 2`; validate the configured current bound semantically. |
 | `fsim.v3-release-documentation` / `CheckV3ReleaseDocumentation.cmake` | Required guides/examples exist, are licensed, and document supported public surfaces | Six-entry total and free-form literal prose tokens | Replace only brittle wording with required document IDs/paths and durable structured headings or links. Preserve documents. |
 | `fsim.v3-deterministic-artifacts` / `CheckV3DeterministicArtifacts.cmake` | Deterministic source/binary archive construction and safe layout | Archive-layout digest and helper source-token searches | Keep behavioral archive byte comparison/path-safety tests; use required archive IDs/entries, not total-entry pins except where a published format explicitly requires an exact set. |
 | `fsim.v3-supply-chain` / `CheckV3SupplyChain.cmake` | License, NOTICE, SBOM, provenance, source-manifest coverage, and exclusion of private-reference material | Thirteen-row and inventory digest pins | Retain as a focused license/provenance gate after converting to required IDs and semantic SBOM/source-manifest checks. Never remove source manifests as simplification. |

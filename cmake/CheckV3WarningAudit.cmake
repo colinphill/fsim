@@ -45,7 +45,7 @@ foreach(FSIM_INDEX RANGE 2 5)
      NOT FSIM_COMPILER MATCHES "^(clang(-22)?|llvm-mingw-clang)$" OR
      NOT FSIM_CONFIGURATION MATCHES "^(Debug|Release|RelWithDebInfo)$" OR
      NOT FSIM_LLVM_MODE STREQUAL "ON" OR
-     NOT FSIM_OWNER STREQUAL "B188A-C20")
+     NOT FSIM_OWNER STREQUAL "V3-HOSTED-CI")
     message(FATAL_ERROR "v3 warning-audit row is malformed: ${FSIM_ID}")
   endif()
   if(FSIM_PLATFORM MATCHES "^ubuntu")
@@ -121,10 +121,10 @@ fsim_require_warning_tokens(.github/workflows/ci.yml
   "-DCMAKE_C_COMPILER=$env:LLVM_MINGW_ROOT/bin/clang.exe"
   "-DCMAKE_CXX_COMPILER=$env:LLVM_MINGW_ROOT/bin/clang++.exe"
   "-DFSIM_WARNINGS_AS_ERRORS=ON"
-  "Final closure checks"
-  "if: matrix.configuration == 'Debug'"
-  "-L '^recursive-closure$'"
-  "--parallel 4")
+  "name: Test"
+  "ctest --test-dir"
+  "--output-on-failure"
+  "--parallel 2")
 
 file(READ "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml"
   FSIM_WARNING_WORKFLOW)
@@ -219,15 +219,17 @@ fsim_require_warning_occurrences("-DFSIM_LLVM_MODE=ON" 1)
 fsim_require_warning_occurrences(
   "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}" 1)
 fsim_require_warning_occurrences("-DFSIM_WARNINGS_AS_ERRORS=ON" 2)
-fsim_require_warning_occurrences("--parallel 4" 5)
+fsim_require_warning_occurrences("--parallel 2" 4)
+fsim_require_warning_occurrences("ctest --test-dir" 2)
+fsim_require_warning_occurrences("--output-on-failure" 2)
 fsim_require_warning_occurrences("timeout-minutes: 120" 2)
 fsim_require_warning_tokens(tests/CMakeLists.txt
-  "NAME fsim.v3-warning-audit"
-  "CheckV3WarningAudit.cmake")
+  "NAME fsim.v3-hosted-toolchains"
+  "CheckCurrentHostedLanes.cmake")
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 set(FSIM_EXPECTED_DIGEST
-  "35b4ab3a0bd75d8372742aa46d023b91bf13db8b6238d1db9ac2590400aa646e")
+  "6ee60876d0834f95e610e4576ef2d97ef7d136e2f38ad1713e562eebf3e7185d")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 warning-audit digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")

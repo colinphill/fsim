@@ -1463,7 +1463,15 @@ void Simulation::Impl::setup_execution(
                     { &process, selected[tier].size() - 1U, { }, process.id });
                 ++compiled_processes;
             }
-            const auto module_identity = "fsim-specialization:" + std::to_string(specialization.id.value()) + ":" + specialization.name + "@" + built.design_ir.instances()[specialization.instance.value()].path + "#provenance=" + built.specialization_cache_keys.at(specialization.id.value())
+            const auto instance_path = built.design_ir.path(
+                built.design_ir.instances()[specialization.instance.value()].path);
+            const auto module_identity
+                = "fsim-specialization:"
+                + std::to_string(specialization.id.value()) + ":"
+                + specialization.name + "@" + std::string { instance_path }
+                + "#provenance="
+                + built.specialization_cache_keys.at(
+                    specialization.id.value())
                 + (built.artifact_identity.empty()
                         ? std::string { }
                         : "#artifact=" + built.artifact_identity);

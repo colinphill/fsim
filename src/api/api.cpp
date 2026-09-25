@@ -758,7 +758,8 @@ fsim_status_t fsim_session_find_object(
             index < value.systemc_design_object_by_object.size(); ++index) {
             const auto* design_object = design_systemc_object(value, index);
             const auto* process = design_systemc_process(value, index);
-            if ((design_object != nullptr && design_object->path == requested)
+            if ((design_object != nullptr
+                    && design.path(design_object->path) == requested)
                 || (process != nullptr && process->name == requested)) {
                 *out_object = debug_systemc_object_handle(value, index);
                 return FSIM_STATUS_OK;
@@ -813,6 +814,7 @@ fsim_status_t fsim_session_visit_children(
         if (!ready(value, "hierarchy enumeration")) {
             return FSIM_STATUS_INVALID_ARGUMENT;
         }
+        const auto& design = value.simulation->design_ir();
         const auto visit_systemc_children =
             [&](const std::string_view parent_name) {
                 for (std::size_t index = 0;
@@ -821,7 +823,7 @@ fsim_status_t fsim_session_visit_children(
                     const auto* object = design_systemc_object(value, index);
                     const auto* process = design_systemc_process(value, index);
                     const auto path = object != nullptr
-                        ? std::string_view { object->path }
+                        ? design.path(object->path)
                         : process != nullptr ? std::string_view { process->name }
                                              : std::string_view { };
                     const auto separator = path.rfind('.');
@@ -854,13 +856,15 @@ fsim_status_t fsim_session_visit_children(
                     const auto* object = design_systemc_object(value, index);
                     if (object == nullptr || object->width == 0
                         || object->runtime_index != signal.runtime_index
-                        || leaf_name(object->path) != leaf_name(signal.path)) {
+                        || leaf_name(design.path(object->path))
+                            != leaf_name(design.path(signal.path))) {
                         continue;
                     }
-                    const auto separator = object->path.rfind('.');
+                    const auto object_path = design.path(object->path);
+                    const auto separator = object_path.rfind('.');
                     const auto object_parent = separator == std::string::npos
                         ? std::string_view { }
-                        : std::string_view { object->path }.substr(0, separator);
+                        : object_path.substr(0, separator);
                     if (object_parent == parent_name) {
                         return true;
                     }
@@ -952,7 +956,8 @@ fsim_status_t fsim_session_visit_children(
                         if (signal.kind
                                 != fsim::semantic::design::ObjectKind::signal
                             || signal.parent_object
-                            || owning_design_scope(value, signal.path)
+                            || owning_design_scope(
+                                   value, design.path(signal.path))
                                 != scope_index
                             || systemc_replaces_signal(
                                 signal, parent_scope.full_name)) {
@@ -1023,17 +1028,17 @@ fsim_status_t fsim_session_visit_children(
                 return FSIM_STATUS_OK;
             }
         }
-        if (has_synthetic_root(value.simulation->design_ir())) {
+        if (has_synthetic_root(design)) {
             return FSIM_STATUS_OK;
         }
-        const auto& top = value.simulation->design_ir().top();
+        const auto top = design.top();
         if (!visit_systemc_children(top)) {
             return FSIM_STATUS_OK;
         }
         for (const auto& signal : value.simulation->design_ir().objects()) {
             if (signal.kind != fsim::semantic::design::ObjectKind::signal
                 || signal.parent_object
-                || owning_design_scope(value, signal.path)
+                || owning_design_scope(value, design.path(signal.path))
                 || systemc_replaces_signal(signal, top)) {
                 continue;
             }
@@ -1209,8 +1214,8 @@ fsim_status_t fsim_session_get_object_info(
             }
             out_info->flags |= FSIM_OBJECT_FLAG_HAS_PROVENANCE;
         };
+        const auto& design = value.simulation->design_ir();
         if (object == root_handle(value)) {
-            const auto& design = value.simulation->design_ir();
             const auto name = has_synthetic_root(design)
                 ? std::string_view { "$root" }
                 : std::string_view { design.top() };
@@ -1227,7 +1232,7 @@ fsim_status_t fsim_session_get_object_info(
             const auto* design_object = design_systemc_object(value, *systemc);
             const auto* process = design_systemc_process(value, *systemc);
             const auto path = design_object != nullptr
-                ? std::string_view { design_object->path }
+                ? design.path(design_object->path)
                 : process != nullptr ? std::string_view { process->name }
                                      : std::string_view { };
             if (path.empty()) {
@@ -1238,14 +1243,13 @@ fsim_status_t fsim_session_get_object_info(
             const auto parent_path = separator == std::string_view::npos
                 ? std::string_view { }
                 : path.substr(0, separator);
-            const auto& design = value.simulation->design_ir();
             if (!parent_path.empty()
                 && (has_synthetic_root(design)
                     || !is_design_root(design, parent_path))) {
                 const auto parent = std::ranges::find_if(
                     value.simulation->design_ir().objects(),
                     [&](const fsim::semantic::design::Object& candidate) {
-                        return candidate.path == parent_path;
+                        return design.path(candidate.path) == parent_path;
                     });
                 if (parent != value.simulation->design_ir().objects().end()) {
                     if (const auto adapter = systemc_adapter_for_object(value, parent->id)) {
@@ -1320,8 +1324,9 @@ fsim_status_t fsim_session_get_object_info(
             if (design_object == nullptr) {
                 return FSIM_STATUS_INTERNAL_ERROR;
             }
+            const auto path = design.path(design_object->path);
             const auto& runtime_info = value.simulation->runtime_adapter().signals().at(*signal);
-            const auto owner = owning_design_scope(value, design_object->path);
+            const auto owner = owning_design_scope(value, path);
             out_info->parent = owner ? scope_handle(value, *owner) : root_handle(value);
             const auto is_port = std::ranges::any_of(
                 value.simulation->design_ir().ports(), [&](const auto& port) {
@@ -1329,8 +1334,8 @@ fsim_status_t fsim_session_get_object_info(
                 });
             out_info->kind = is_port ? FSIM_OBJECT_PORT : FSIM_OBJECT_SIGNAL;
             out_info->width = design_object->width;
-            out_info->name = view(leaf_name(design_object->path));
-            out_info->full_name = view(design_object->path);
+            out_info->name = view(leaf_name(path));
+            out_info->full_name = view(path);
             out_info->type_name = design_object->type.spelling.empty()
                 ? view("logic4")
                 : view(design_object->type.spelling);
@@ -1343,7 +1348,7 @@ fsim_status_t fsim_session_get_object_info(
             }
             const auto source = design_source(value, design_object->source);
             set_source(source.path, source.line, source.column);
-            set_provenance(design_object->path);
+            set_provenance(path);
             return FSIM_STATUS_OK;
         }
         if (const auto process = object_process(value, object)) {

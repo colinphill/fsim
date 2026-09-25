@@ -58,6 +58,16 @@ namespace {
         const SystemCKernelChannelInventorySnapshot& channels,
         const std::string_view path)
     {
+        if (channels.paths.size() == channels.channels.size()) {
+            if (const auto id = channels.paths.find(path);
+                id && id->value() < channels.channels.size()) {
+                const auto& entry = channels.channels[id->value()];
+                if (entry.canonical_path_id == *id
+                    && entry.descriptor.canonical_path == path) {
+                    return &entry;
+                }
+            }
+        }
         const auto found = std::ranges::lower_bound(channels.channels, path, { },
             [](const auto& entry) {
                 return std::string_view { entry.descriptor.canonical_path };
@@ -380,7 +390,59 @@ namespace {
         return true;
     }
 
+    void index_paths(SystemCKernelBindingInventorySnapshot& snapshot)
+    {
+        semantic::HierarchyPathTable::Builder paths;
+        for (auto& binding : snapshot.bindings) {
+            auto& descriptor = binding.descriptor;
+            descriptor.declared_path_id = paths.intern(
+                descriptor.declared_path);
+            for (auto& target : descriptor.targets) {
+                target.final_channel_path_id = paths.intern(
+                    target.final_channel_path);
+                target.chain_path_ids.clear();
+                target.chain_path_ids.reserve(target.chain.size());
+                for (const auto& path : target.chain) {
+                    target.chain_path_ids.push_back(paths.intern(path));
+                }
+            }
+        }
+        snapshot.paths = std::move(paths).freeze();
+    }
+
+    bool same_paths(const semantic::HierarchyPathTable& left,
+        const semantic::HierarchyPathTable& right)
+    {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (std::size_t index = 0U; index < left.size(); ++index) {
+            const auto id = semantic::HierarchyPathId::from_index(
+                static_cast<std::uint32_t>(index));
+            if (left.view(id) != right.view(id)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool matches_path(const semantic::HierarchyPathTable& paths,
+        const semantic::HierarchyPathId id, const std::string_view spelling)
+    {
+        return id.valid() && id.value() < paths.size()
+            && paths.view(id) == spelling;
+    }
+
 } // namespace
+
+bool operator==(const SystemCKernelBindingInventorySnapshot& left,
+    const SystemCKernelBindingInventorySnapshot& right)
+{
+    return left.island == right.island
+        && left.hierarchy == right.hierarchy
+        && left.bindings == right.bindings
+        && same_paths(left.paths, right.paths);
+}
 
 SystemCKernelBindingInventory::SystemCKernelBindingInventory(
     const SystemCKernelChannelInventorySnapshot& channels,
@@ -451,6 +513,7 @@ bool SystemCKernelBindingInventory::freeze(diagnostic::Engine& diagnostics)
             snapshot_, limits_, diagnostics)) {
         return false;
     }
+    index_paths(snapshot_);
     frozen_ = true;
     return true;
 }
@@ -486,9 +549,35 @@ bool validate_systemc_kernel_binding_inventory(
             : std::nullopt;
         if (!validate_descriptor(descriptor, limits, diagnostics) || !expected
             || binding.declaration != *expected
-            || (!previous.empty() && previous >= descriptor.declared_path)) {
+            || (!previous.empty() && previous >= descriptor.declared_path)
+            || (snapshot.paths.size() != 0U
+                && !matches_path(snapshot.paths,
+                    descriptor.declared_path_id,
+                    descriptor.declared_path))) {
             return report_error(diagnostics, SystemCKernelBindingCode::metadata,
                 "SystemC binding inventory is noncanonical or unordered");
+        }
+        if (snapshot.paths.size() != 0U) {
+            for (const auto& target : descriptor.targets) {
+                if (!matches_path(snapshot.paths,
+                        target.final_channel_path_id,
+                        target.final_channel_path)
+                    || target.chain_path_ids.size() != target.chain.size()) {
+                    return report_error(diagnostics,
+                        SystemCKernelBindingCode::metadata,
+                        "SystemC binding path IDs do not match their paths");
+                }
+                for (std::size_t index = 0U;
+                    index < target.chain.size(); ++index) {
+                    if (!matches_path(snapshot.paths,
+                            target.chain_path_ids[index],
+                            target.chain[index])) {
+                        return report_error(diagnostics,
+                            SystemCKernelBindingCode::metadata,
+                            "SystemC binding path IDs do not match their paths");
+                    }
+                }
+            }
         }
         previous = descriptor.declared_path;
     }
@@ -583,6 +672,7 @@ deserialize_systemc_kernel_binding_inventory(
         }
         return std::nullopt;
     }
+    index_paths(snapshot);
     return snapshot;
 }
 

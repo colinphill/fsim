@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <cstddef>
@@ -90,6 +91,8 @@ struct SystemCKernelChannelInventoryEntry {
     SystemCObjectId object;
     SystemCEndpointId channel;
     SystemCKernelChannelDescriptor descriptor;
+    /// Table-local handle into the snapshot's immutable path owner.
+    semantic::HierarchyPathId canonical_path_id { };
 
     friend bool operator==(const SystemCKernelChannelInventoryEntry&,
         const SystemCKernelChannelInventoryEntry&) = default;
@@ -99,9 +102,11 @@ struct SystemCKernelChannelInventorySnapshot {
     SystemCIslandId island;
     SystemCHierarchyId hierarchy;
     std::vector<SystemCKernelChannelInventoryEntry> channels;
+    /// Owns every canonical_path_id in channels across snapshot copies.
+    semantic::HierarchyPathTable paths { };
 
     friend bool operator==(const SystemCKernelChannelInventorySnapshot&,
-        const SystemCKernelChannelInventorySnapshot&) = default;
+        const SystemCKernelChannelInventorySnapshot&);
 };
 
 class SystemCKernelChannelInventory {

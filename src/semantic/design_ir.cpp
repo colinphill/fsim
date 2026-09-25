@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/design_ir.hpp"
 
+#include <utility>
+
 namespace fsim::semantic::design {
 namespace {
 
@@ -9,10 +11,35 @@ template <typename IdType, typename Range>
     return id.valid() && id.value() < range.size();
 }
 
+[[nodiscard]] bool contains_path(
+    const HierarchyPathId id, const HierarchyPathTable& paths) noexcept
+{
+    return id.valid() && id.value() < paths.size();
+}
+
 } // namespace
 
-const std::string& DesignIr::top() const noexcept { return top_; }
-const std::vector<std::string>& DesignIr::roots() const noexcept {
+const HierarchyPathTable& DesignIr::hierarchy_paths() const noexcept
+{
+    return hierarchy_paths_;
+}
+
+std::string_view DesignIr::path(const HierarchyPathId id) const
+{
+    return hierarchy_paths_.view(id);
+}
+
+HierarchyPathId DesignIr::top_path_id() const noexcept
+{
+    return top_;
+}
+
+std::string_view DesignIr::top() const
+{
+    return top_.valid() ? path(top_) : std::string_view { };
+}
+
+const std::vector<HierarchyPathId>& DesignIr::roots() const noexcept {
     return roots_;
 }
 const std::vector<Specialization>&
@@ -42,8 +69,8 @@ const std::vector<Boundary>& DesignIr::boundaries() const noexcept {
     return boundaries_;
 }
 
-std::string& DesignIr::mutable_top() noexcept { return top_; }
-std::vector<std::string>& DesignIr::mutable_roots() noexcept {
+HierarchyPathId& DesignIr::mutable_top() noexcept { return top_; }
+std::vector<HierarchyPathId>& DesignIr::mutable_roots() noexcept {
     return roots_;
 }
 std::vector<Specialization>& DesignIr::mutable_specializations() noexcept {
@@ -71,8 +98,82 @@ std::vector<Boundary>& DesignIr::mutable_boundaries() noexcept {
     return boundaries_;
 }
 
+bool DesignIr::rebind_path_table(HierarchyPathTable paths) noexcept
+{
+    if ((top_.valid() && !contains_path(top_, paths))
+        || (!roots_.empty() && top_ != roots_.front())) {
+        return false;
+    }
+    if (paths.size() < hierarchy_paths_.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < hierarchy_paths_.size(); ++index) {
+        const auto id = HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        if (hierarchy_paths_.view(id) != paths.view(id)) {
+            return false;
+        }
+    }
+    for (const auto root : roots_) {
+        if (!contains_path(root, paths)) {
+            return false;
+        }
+    }
+    for (const auto& instance : instances_) {
+        if (!contains_path(instance.path, paths)) {
+            return false;
+        }
+    }
+    for (const auto& object : objects_) {
+        if (!contains_path(object.path, paths)) {
+            return false;
+        }
+    }
+    for (const auto& conversion : conversions_) {
+        if (!contains_path(conversion.path, paths)) {
+            return false;
+        }
+    }
+    for (const auto& boundary : boundaries_) {
+        if (!contains_path(boundary.path, paths)) {
+            return false;
+        }
+    }
+    hierarchy_paths_ = std::move(paths);
+    return true;
+}
+
 bool DesignIr::valid() const noexcept {
-    if (!roots_.empty() && top_ != roots_.front()) {
+    if ((top_.valid() && !contains_path(top_, hierarchy_paths_))
+        || (!roots_.empty() && top_ != roots_.front())) {
+        return false;
+    }
+    for (const auto root : roots_) {
+        if (!contains_path(root, hierarchy_paths_)) {
+            return false;
+        }
+    }
+    for (const auto& instance : instances_) {
+        if (!contains_path(instance.path, hierarchy_paths_)) {
+            return false;
+        }
+    }
+    for (const auto& object : objects_) {
+        if (!contains_path(object.path, hierarchy_paths_)) {
+            return false;
+        }
+    }
+    for (const auto& conversion : conversions_) {
+        if (!contains_path(conversion.path, hierarchy_paths_)) {
+            return false;
+        }
+    }
+    for (const auto& boundary : boundaries_) {
+        if (!contains_path(boundary.path, hierarchy_paths_)) {
+            return false;
+        }
+    }
+    if (!roots_.empty() && !top_.valid()) {
         return false;
     }
     for (std::size_t index = 0; index < specializations_.size(); ++index) {

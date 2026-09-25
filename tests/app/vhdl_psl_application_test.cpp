@@ -236,12 +236,15 @@ Capture run_built(
     capture.compiled_processes = simulation.compiled_process_count();
     capture.cache = simulation.native_cache_statistics();
     const auto debug_snapshot = simulation.vhdl_debug_snapshot();
+    const auto& design = simulation.design_ir();
     assert(debug_snapshot.simulation_identity != 0U);
     assert(debug_snapshot.time == result.time);
     assert(debug_snapshot.delta == result.delta);
     assert(debug_snapshot.psl_attempts == capture.attempts);
     assert(debug_snapshot.psl_coverage == capture.coverage);
     assert(!debug_snapshot.scopes.empty());
+    assert(!design.roots().empty());
+    assert(design.path(design.roots().front()) == design.top());
     capture.debug_signature = normalized_debug_signature(debug_snapshot);
     assert(std::ranges::any_of(debug_snapshot.processes,
         [](const auto& process) { return process.path.ends_with("clock_driver"); }));

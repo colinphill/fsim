@@ -145,7 +145,7 @@ whole bind succeeds. Shutdown precedes unload.
 | --- | --- | --- |
 | `fsim.toml` | project schema 3 | user-authored project, source, library, build, run, trace, SDF, SystemC, and code-coverage settings |
 | `.fsimobj` | `FSIMOBJ\0`, format 8, portable schema 15, compiled-HIR bundle 1 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
-| `.fsimdesign` | `FSIMDES\0`, format 13, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
+| `.fsimdesign` | `FSIMDES\0`, format 14, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
 | `.fsimlib` | canonical TOML format 6, portable schema 15, compiled-HIR bundle 1 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
@@ -164,7 +164,11 @@ rejected directly; there is no compatibility reader or migration.
 
 The compiled-HIR bundle is schema 1 and embeds semantic schema 4,
 SystemVerilog HIR schema 8, and VHDL HIR schema 5. The standalone design's
-other current state schemas are runtime 62, DesignIR 4, coverage 7, and UVM 3.
+other current state schemas are runtime 64, DesignIR 5, coverage 7, and UVM 3.
+Runtime and DesignIR references use the canonical `FSIMHPT1` hierarchy-path
+table, schema 1, stored at `state/hierarchy-paths.bin`; standalone DesignIR
+and runtime payloads carry their own inline schema-1 table when serialized
+outside a standalone design artifact.
 Checkpoint envelopes are schema 1 or 2 according to the
 typed checkpoint family. SDF application records use explicit schema 1, 2, or
 4 owners; trace archives use schema 1, and the clean-room FST container carries
@@ -191,6 +195,7 @@ source + selected language profile
 
 ordered .fsimobj + selected .fsimscplugin + roots/bindings
   -> .fsimdesign
+       -> shared checksummed hierarchy-path table
        -> checksummed portable runtime/semantic/HIR/coverage/UVM/SDF/trace state
        -> embedded selected SystemC plug-ins with exact producer identity
 
@@ -222,6 +227,12 @@ Readers reject bad magic, stale or future format/schema/ABI, truncation,
 trailing bytes, oversized fields, invalid enums, unsafe paths, duplicates,
 checksum/digest inconsistency, missing payloads, and incompatible producer
 identity. Resource ceilings are checked before allocation or publication.
+Design format 13, runtime schema 63, and DesignIR schema 4 are stale and are
+rejected without compatibility decoding. A missing required hierarchy-path
+payload kind reports `FSIM-ART-0011`; a malformed or checksum-mismatched
+payload reports `FSIM-ART-0014`. Old nested state identities report
+`FSIM-ART-0013` with the found and required schema and a `.fsimdesign`
+regeneration instruction.
 
 Portable mismatch diagnostics use the project/object/design/library or nested
 artifact family. Native mismatch diagnostics name the compiler, target,

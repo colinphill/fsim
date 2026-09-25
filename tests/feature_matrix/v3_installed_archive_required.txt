@@ -3,6 +3,9 @@ bin/fsim@EXE@
 bin/fsim-sv@EXE@
 bin/fsim-vhdl@EXE@
 include/fsim/api.h
+include/fsim/diagnostic/diagnostic.hpp
+include/fsim/semantic/hierarchy_path.hpp
+include/fsim/semantic/model.hpp
 include/fsim/version.hpp
 lib/pkgconfig/fsim.pc
 share/doc/fsim/LICENSE

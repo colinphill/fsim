@@ -10,7 +10,9 @@ endforeach()
 
 set(FSIM_ROOT_NAME fsim-v3-required-set-fixture)
 set(FSIM_ARCHIVE_ROOT "${FSIM_FIXTURE_DIR}/archive/${FSIM_ROOT_NAME}")
-foreach(FSIM_DIRECTORY IN ITEMS bin include/fsim lib/pkgconfig share/doc/fsim extra)
+foreach(FSIM_DIRECTORY IN ITEMS
+    bin include/fsim include/fsim/diagnostic include/fsim/semantic
+    lib/pkgconfig share/doc/fsim extra)
   file(MAKE_DIRECTORY "${FSIM_ARCHIVE_ROOT}/${FSIM_DIRECTORY}")
 endforeach()
 foreach(FSIM_EXECUTABLE IN ITEMS fsim fsim-sv fsim-vhdl)
@@ -22,6 +24,12 @@ foreach(FSIM_EXECUTABLE IN ITEMS fsim fsim-sv fsim-vhdl)
     WORLD_READ WORLD_EXECUTE)
 endforeach()
 file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/api.h" "fixture\n")
+file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/diagnostic/diagnostic.hpp"
+  "fixture\n")
+file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/semantic/hierarchy_path.hpp"
+  "fixture\n")
+file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/semantic/model.hpp"
+  "fixture\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/version.hpp" "fixture\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/lib/pkgconfig/fsim.pc"
   "Version: 3.0.0\nLibs: -L\${libdir} -lfsim_api\n")

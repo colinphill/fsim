@@ -50,6 +50,9 @@ struct SystemCKernelBindingTarget {
     SystemCEndpointId final_channel;
     std::optional<SystemCKernelHostLanguage> foreign_language;
     std::optional<SystemCEndpointId> foreign_endpoint;
+    /// Table-local handles into the containing snapshot's path owner.
+    semantic::HierarchyPathId final_channel_path_id { };
+    std::vector<semantic::HierarchyPathId> chain_path_ids { };
 
     friend bool operator==(const SystemCKernelBindingTarget&,
         const SystemCKernelBindingTarget&) = default;
@@ -63,6 +66,8 @@ struct SystemCKernelBindingDescriptor {
         SystemCKernelBindingDirection::none
     };
     std::vector<SystemCKernelBindingTarget> targets;
+    /// Table-local handle into the containing snapshot's path owner.
+    semantic::HierarchyPathId declared_path_id { };
 
     friend bool operator==(const SystemCKernelBindingDescriptor&,
         const SystemCKernelBindingDescriptor&) = default;
@@ -80,9 +85,11 @@ struct SystemCKernelBindingInventorySnapshot {
     SystemCIslandId island;
     SystemCHierarchyId hierarchy;
     std::vector<SystemCKernelBindingEntry> bindings;
+    /// Owns every declared, target, and chain path handle in bindings.
+    semantic::HierarchyPathTable paths { };
 
     friend bool operator==(const SystemCKernelBindingInventorySnapshot&,
-        const SystemCKernelBindingInventorySnapshot&) = default;
+        const SystemCKernelBindingInventorySnapshot&);
 };
 
 class SystemCKernelBindingInventory {

@@ -4,14 +4,18 @@
 #include "fsim/systemc/scv.hpp"
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -219,7 +223,7 @@ int main(int argc, char** argv)
     assert(parameters && parameters->size() == 1);
     assert(parameters->front().name == "WIDTH");
     assert(parameters->front().default_value == 12);
-    const auto module = hierarchy->instantiate("a_parameterized", "top", 0, error);
+    auto module = hierarchy->instantiate("a_parameterized", "top", 0, error);
     assert(module && error.empty());
     assert(module->processes.size() == 1);
     assert(module->processes.front().name == "$accellera_kernel");
@@ -227,7 +231,35 @@ int main(int argc, char** argv)
     hierarchy->complete_elaboration(roots);
     hierarchy->start_simulation(roots);
     hierarchy->end_simulation(roots);
+
+    std::optional<fsim::runtime::TraceVariableDeclaration>
+        retained_plugin_declaration;
+    std::string expected_plugin_path;
+    {
+        const auto process_handle = module->processes.front().handle;
+        assert(hierarchy->owns_handle(process_handle));
+        const auto process = hierarchy->object_info(process_handle);
+        assert(process);
+        assert(process->kind == fsim::systemc::HierarchyObjectKind::process);
+        expected_plugin_path = process->path;
+        assert(expected_plugin_path == "top.$accellera_kernel");
+
+        fsim::semantic::HierarchyPathTable::Builder paths;
+        static_cast<void>(paths.intern(process->path));
+        fsim::runtime::TraceDeclarationBuilder trace_builder {
+            std::move(paths).freeze() };
+        const auto signal = trace_builder.add_variable(process->path, 1U,
+            fsim::runtime::SystemVerilogScalarKind::None,
+            fsim::runtime::TraceSourceKind::SystemC);
+        auto declarations = std::move(trace_builder).freeze();
+        retained_plugin_declaration = declarations.variable(signal);
+    }
+    module.reset();
     hierarchy.reset();
+    assert(!hierarchy);
+    assert(retained_plugin_declaration);
+    assert(retained_plugin_declaration->hierarchical_name.view()
+        == expected_plugin_path);
 
     error.clear();
     const auto no_factory = fsim::systemc::HierarchyRegistry::load(

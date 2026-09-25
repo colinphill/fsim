@@ -108,11 +108,16 @@ class DesignIrBuilder final {
       : checked_(checked),
         model_(checked.semantics),
         elaborated_(elaborated),
-        runtime_paths_(runtime_paths) {}
+        runtime_paths_(runtime_paths),
+        paths_(elaborated.hierarchy_paths()) {}
 
   [[nodiscard]] di::DesignIr build() {
-    result_.mutable_top() = elaborated_.top();
-    result_.mutable_roots() = elaborated_.roots();
+    result_.mutable_top() = paths_.intern(elaborated_.top());
+    auto& roots = result_.mutable_roots();
+    roots.reserve(elaborated_.roots().size());
+    for (const auto& root : elaborated_.roots()) {
+      roots.push_back(paths_.intern(root));
+    }
     build_declaration_name_index();
     build_declaration_direction_index();
     add_hdl_specializations();
@@ -122,6 +127,10 @@ class DesignIrBuilder final {
     add_systemc_objects();
     add_processes();
     add_conversions();
+    if (!result_.rebind_path_table(std::move(paths_).freeze())) {
+      throw std::logic_error(
+          "DesignIR path table does not own every hierarchy path");
+    }
     return std::move(result_);
   }
 
@@ -381,7 +390,7 @@ class DesignIrBuilder final {
       instance.source_instance = find_source_instance(input);
       instance.specialization = specialization_id;
       instance.name = std::string{leaf_name(input.instance)};
-      instance.path = input.instance;
+      instance.path = paths_.intern(input.instance);
       instance.target = input.unit;
       instance.source = specialization.source;
       if (input.origin) {
@@ -413,7 +422,7 @@ class DesignIrBuilder final {
       instance.id = instance_id;
       instance.specialization = specialization_id;
       instance.name = std::string{leaf_name(input.instance)};
-      instance.path = input.instance;
+      instance.path = paths_.intern(input.instance);
       instance.target = input.target;
       result_.mutable_specializations().push_back(std::move(specialization));
       result_.mutable_instances().push_back(std::move(instance));
@@ -443,11 +452,15 @@ class DesignIrBuilder final {
       }
     }
     for (auto& instance : instances) {
-      const auto parent = parent_path(instance.path);
+      const auto parent = parent_path(paths_.view(instance.path));
       if (parent.empty()) {
         continue;
       }
-      const auto found = instance_path_positions_.find(parent);
+      const auto parent_id = paths_.find(parent);
+      if (!parent_id) {
+        continue;
+      }
+      const auto found = instance_path_positions_.find(*parent_id);
       if (found != instance_path_positions_.end()) {
         instance.parent = instances[found->second.first].id;
       }
@@ -459,11 +472,13 @@ class DesignIrBuilder final {
     const auto& instances = result_.instances();
     auto prefix_size = path.size();
     while (true) {
-      const auto found = instance_path_positions_.find(
-          path.substr(0, prefix_size));
+      const auto prefix = paths_.find(path.substr(0, prefix_size));
+      const auto found = prefix == std::nullopt
+          ? instance_path_positions_.end()
+          : instance_path_positions_.find(*prefix);
       if (found != instance_path_positions_.end()) {
         const auto& owner = instances[found->second.last];
-        if (owns_path(owner.path, path)) {
+        if (owns_path(paths_.view(owner.path), path)) {
           return owner.specialization;
         }
       }
@@ -548,7 +563,7 @@ class DesignIrBuilder final {
         specialization,
         kind,
         std::move(name),
-        std::move(path),
+        paths_.intern(path),
         value,
         std::move(type),
         object_source,
@@ -606,7 +621,7 @@ class DesignIrBuilder final {
         object_source,
         value);
     signal_object_by_runtime_.try_emplace(input.id, object);
-    object_by_path_.try_emplace(input.name, object);
+    object_by_path_.try_emplace(paths_.intern(input.name), object);
     if (input.is_port) {
       const auto declaration_id = find_declaration(value, object_source, name);
       const auto port = add_port(
@@ -616,14 +631,15 @@ class DesignIrBuilder final {
           false,
           input.direction != frontend::PortDirection::Input,
           object_source);
-      port_by_path_[input.name] = port;
+      port_by_path_[paths_.intern(input.name)] = port;
     }
   }
 
   void add_signal_aliases() {
     for (const auto& [path, runtime_signal] :
          runtime_paths_.signal_paths) {
-      if (object_by_path_.contains(path)) {
+      const auto path_id = paths_.find(path);
+      if (path_id && object_by_path_.contains(*path_id)) {
         continue;
       }
       const auto base = signal_object_by_runtime_.find(runtime_signal);
@@ -664,11 +680,11 @@ class DesignIrBuilder final {
           alias_source,
           alias_value ? alias_value : base_object.declaration_value,
           base->second);
-      object_by_path_[path] = object;
+      object_by_path_[paths_.intern(path)] = object;
       if (declaration_id
           && model_.declarations()[declaration_id->value()].kind
               == semantic::DeclarationKind::port) {
-        port_by_path_[path] = add_port(
+        port_by_path_[paths_.intern(path)] = add_port(
             object,
             declaration_id,
             declaration_direction(*declaration_id),
@@ -682,7 +698,10 @@ class DesignIrBuilder final {
   void add_container_aliases() {
     for (const auto& [path, runtime_object] :
          runtime_paths_.container_paths) {
-      const auto existing = object_by_path_.find(path);
+      const auto path_id = paths_.find(path);
+      const auto existing = path_id
+          ? object_by_path_.find(*path_id)
+          : object_by_path_.end();
       if (existing != object_by_path_.end()
           && result_.objects()[existing->second.value()].kind
               == di::ObjectKind::container) {
@@ -729,11 +748,11 @@ class DesignIrBuilder final {
           base->second);
       result_.mutable_objects()[object.value()].external_type =
           external_type;
-      object_by_path_[path] = object;
+      object_by_path_[paths_.intern(path)] = object;
       if (declaration_id
           && model_.declarations()[declaration_id->value()].kind
               == semantic::DeclarationKind::port) {
-        port_by_path_[path] = add_port(
+        port_by_path_[paths_.intern(path)] = add_port(
             object,
             declaration_id,
             declaration_direction(*declaration_id),
@@ -765,9 +784,9 @@ class DesignIrBuilder final {
           false,
           object_source,
           value);
-      object_by_path_[input.name] = object;
+      object_by_path_[paths_.intern(input.name)] = object;
       if (input.is_port) {
-        port_by_path_[input.name] = add_port(
+        port_by_path_[paths_.intern(input.name)] = add_port(
             object,
             find_declaration(value, object_source, name),
             direction(input.direction),
@@ -802,9 +821,9 @@ class DesignIrBuilder final {
           value,
           parent);
       container_object_by_runtime_[input.id] = object;
-      object_by_path_[input.name] = object;
+      object_by_path_[paths_.intern(input.name)] = object;
       if (input.is_port) {
-        port_by_path_[input.name] = add_port(
+        port_by_path_[paths_.intern(input.name)] = add_port(
             object,
             find_declaration(value, object_source, name),
             direction(input.direction),
@@ -827,7 +846,7 @@ class DesignIrBuilder final {
           0,
           false,
           object_source);
-      object_by_path_[input.name] = object;
+      object_by_path_[paths_.intern(input.name)] = object;
       for (const auto& member : input.members) {
         const auto member_path = input.name + "." + member.name;
         const auto member_source = source(member.declaration_span);
@@ -843,7 +862,7 @@ class DesignIrBuilder final {
             member_source,
             std::nullopt,
             object);
-        object_by_path_[member_path] = child;
+        object_by_path_[paths_.intern(member_path)] = child;
       }
     }
   }
@@ -922,7 +941,7 @@ class DesignIrBuilder final {
       result_.mutable_objects()[object.value()].external_type =
           named_object->type_name;
     }
-    object_by_path_.try_emplace(path, object);
+    object_by_path_.try_emplace(paths_.intern(path), object);
     std::optional<semantic::PortId> port;
     if (kind == di::ObjectKind::systemc_port
         || kind == di::ObjectKind::systemc_export) {
@@ -935,7 +954,7 @@ class DesignIrBuilder final {
           kind == di::ObjectKind::systemc_export,
           kind == di::ObjectKind::systemc_export && export_writable,
           std::nullopt);
-      port_by_path_[path] = *port;
+      port_by_path_[paths_.intern(path)] = *port;
     }
     add_boundary(
         systemc_boundary_kind(kind),
@@ -960,7 +979,8 @@ class DesignIrBuilder final {
     for (const auto& instance : elaborated_.systemc_instances()) {
       const auto specialization =
           systemc_specialization_by_handle_.at(instance.native_handle);
-      if (!object_by_path_.contains(instance.instance)) {
+      const auto instance_path = paths_.find(instance.instance);
+      if (!instance_path || !object_by_path_.contains(*instance_path)) {
         static_cast<void>(add_systemc_object(
             di::ObjectKind::systemc_module,
             std::string{leaf_name(instance.instance)},
@@ -1021,7 +1041,10 @@ class DesignIrBuilder final {
         continue;
       }
       const auto expected_kind = systemc_object_kind(input.kind);
-      if (const auto existing = object_by_path_.find(input.name);
+      const auto input_path = paths_.find(input.name);
+      if (const auto existing = input_path
+              ? object_by_path_.find(*input_path)
+              : object_by_path_.end();
           existing != object_by_path_.end()
           && result_.objects()[existing->second.value()].kind
               == expected_kind) {
@@ -1298,10 +1321,11 @@ class DesignIrBuilder final {
           ? process_by_runtime_.find(*input.process)
           : process_by_runtime_.end();
       const auto conversion_source = source(input.connection_span);
+      const auto path = paths_.intern(input.path);
       result_.mutable_conversions().push_back({
           id,
           conversion_kind(input.kind),
-          input.path,
+          path,
           *formal,
           *actual,
           process == process_by_runtime_.end()
@@ -1322,8 +1346,8 @@ class DesignIrBuilder final {
               result_.objects()[formal->value()].specialization.value()]
               .instance,
           formal,
-          port_by_path_.contains(input.path)
-              ? std::optional<semantic::PortId>{port_by_path_.at(input.path)}
+          port_by_path_.contains(path)
+              ? std::optional<semantic::PortId>{port_by_path_.at(path)}
               : std::nullopt,
           process == process_by_runtime_.end()
               ? std::nullopt
@@ -1351,7 +1375,7 @@ class DesignIrBuilder final {
         id,
         kind,
         std::move(name),
-        std::move(path),
+        paths_.intern(path),
         instance,
         object,
         port,
@@ -1365,11 +1389,12 @@ class DesignIrBuilder final {
   semantic::Model& model_;
   const elaboration::ElaboratedDesign& elaborated_;
   const RuntimePathViews& runtime_paths_;
+  semantic::HierarchyPathTable::Builder paths_;
   di::DesignIr result_;
   std::size_t hdl_specialization_count_{};
   // Built after all instance occurrences are appended and kept read-only
   // while objects and aliases are projected.
-  std::map<std::string, InstancePathPositions, std::less<>>
+  std::map<semantic::HierarchyPathId, InstancePathPositions>
       instance_path_positions_;
   std::map<std::uint64_t, di::SpecializationId>
       systemc_specialization_by_handle_;
@@ -1393,8 +1418,8 @@ class DesignIrBuilder final {
       signal_object_by_runtime_;
   std::map<runtime::simir::ContainerObjectId, di::ObjectId>
       container_object_by_runtime_;
-  std::map<std::string, di::ObjectId> object_by_path_;
-  std::map<std::string, semantic::PortId> port_by_path_;
+  std::map<semantic::HierarchyPathId, di::ObjectId> object_by_path_;
+  std::map<semantic::HierarchyPathId, semantic::PortId> port_by_path_;
   std::map<runtime::simir::ProcessId, di::ProcessOccurrenceId>
       process_by_runtime_;
 };
@@ -1444,13 +1469,19 @@ bool valid_runtime_projection(
     }
     return false;
   };
-  if (!design.valid() || design.top() != runtime.top()
-      || design.roots() != runtime.roots()) {
+  const bool roots_equal = std::ranges::equal(
+      design.roots(), runtime.roots(),
+      [&design](const semantic::HierarchyPathId root,
+          const std::string& runtime_root) {
+        return design.path(root) == runtime_root;
+      });
+  const bool top_equal = design.top() == runtime.top();
+  if (!design.valid() || !top_equal || !roots_equal) {
     if (trace_projection) {
       std::cerr << "[fsim-design-ir] top_equal="
-                << (design.top() == runtime.top())
+                << top_equal
                 << " roots_equal="
-                << (design.roots() == runtime.roots()) << '\n';
+                << roots_equal << '\n';
     }
     return reject("design-header");
   }
@@ -1487,16 +1518,17 @@ bool valid_runtime_projection(
       return reject("specialization-id");
     }
     const auto& projected = design.specializations()[specialization.id];
+    const auto projected_instance_path
+        = design.path(design.instances()[projected.instance.value()].path);
     if (projected.language == semantic::Language::systemc
-        || design.instances()[projected.instance.value()].path
-            != specialization.instance) {
+        || projected_instance_path != specialization.instance) {
       if (trace_projection) {
         std::cerr << "[fsim-design-ir] specialization_id="
                   << specialization.id
                   << " projected_language_systemc="
                   << (projected.language == semantic::Language::systemc)
                   << " projected_instance_path="
-                  << design.instances()[projected.instance.value()].path
+                  << projected_instance_path
                   << " runtime_instance_path=" << specialization.instance
                   << '\n';
       }
@@ -1518,11 +1550,11 @@ bool valid_runtime_projection(
     }
     if (design_object_is_signal_bearing(object)) {
       projected_signal_paths.emplace_back(
-          object.path, object.runtime_index);
+          design.path(object.path), object.runtime_index);
     }
     if (object.kind == ObjectKind::container) {
       projected_container_paths.emplace_back(
-          object.path, object.runtime_index);
+          design.path(object.path), object.runtime_index);
     }
   }
   if (std::ranges::any_of(
@@ -1640,7 +1672,7 @@ bool valid_runtime_projection(
     if (std::ranges::none_of(
             design.boundaries(), [&](const auto& boundary) {
               return boundary.kind == BoundaryKind::systemc_instance
-                  && boundary.path == instance.instance;
+                  && design.path(boundary.path) == instance.instance;
             })) {
       if (trace_projection) {
         std::cerr << "[fsim-design-ir] systemc_instance_boundary_missing path="
@@ -1654,7 +1686,8 @@ bool valid_runtime_projection(
       if (std::ranges::none_of(
               design.boundaries(), [&](const auto& boundary) {
                 return boundary.kind == BoundaryKind::systemc_process
-                    && boundary.path == input.name && boundary.process
+                    && design.path(boundary.path) == input.name
+                    && boundary.process
                     && input.process
                     && design.processes()[boundary.process->value()]
                            .runtime_index == *input.process;
@@ -1690,7 +1723,8 @@ bool valid_runtime_projection(
     }();
     if (std::ranges::none_of(
             design.objects(), [&](const auto& object) {
-              return object.kind == expected && object.path == input.name;
+              return object.kind == expected
+                  && design.path(object.path) == input.name;
             })) {
       if (trace_projection) {
         std::cerr << "[fsim-design-ir] systemc_object_missing name="

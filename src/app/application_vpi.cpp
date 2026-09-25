@@ -936,7 +936,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         relevant_instances_by_path;
     for (const auto& instance : project.design_ir.instances()) {
         if (instance_profiles.contains(instance.id.value())) {
-            relevant_instances_by_path.emplace(instance.path, &instance);
+            relevant_instances_by_path.emplace(
+                project.design_ir.path(instance.path), &instance);
         }
     }
 
@@ -969,6 +970,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto configured_root = std::ranges::find(
                                          project.design_ir.roots(), instance.path)
             != project.design_ir.roots().end();
+        const std::string instance_path {
+            project.design_ir.path(instance.path) };
         const semantic::design::InstanceOccurrence* ancestor { };
         if (!configured_root && instance.parent
             && instance_profiles.contains(instance.parent->value())) {
@@ -977,7 +980,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         const auto has_non_vpi_parent = instance.parent
             && !instance_profiles.contains(instance.parent->value());
-        auto ancestor_path = instance.path;
+        auto ancestor_path = instance_path;
         const auto parent_separator = ancestor_path.find_last_of('.');
         ancestor_path = parent_separator == std::string::npos
             ? std::string { }
@@ -998,11 +1001,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
 
         if (ancestor != nullptr) {
             descriptor.parent = self(self, *ancestor);
-            const auto direct_parent_end = instance.path.find_last_of('.');
-            const auto direct_parent = instance.path.substr(0U,
+            const auto direct_parent_end = instance_path.find_last_of('.');
+            const auto direct_parent = instance_path.substr(0U,
                 direct_parent_end == std::string::npos ? 0U
                                                        : direct_parent_end);
-            auto prefix = ancestor->path;
+            auto prefix
+                = std::string { project.design_ir.path(ancestor->path) };
             if (direct_parent != prefix) {
                 if (!direct_parent.starts_with(prefix)
                     || direct_parent.size() <= prefix.size()
@@ -1053,9 +1057,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             descriptor.kind
                 = vpi_instance_kind(project, specialization, true);
         }
-        descriptor.name = instance.name.empty() ? instance.path : instance.name;
+        descriptor.name = instance.name.empty() ? instance_path : instance.name;
         if (!configured_root && !descriptor.parent) {
-            descriptor.name = instance.path;
+            descriptor.name = instance_path;
             std::ranges::replace(descriptor.name, '.', '_');
         }
         runtime::SystemVerilogVpiTypeInfo scope_type;
@@ -1063,10 +1067,10 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         apply_vpi_unit_provenance(scope_type, project, unit_identity);
         descriptor.type = scope_type;
         const auto handle = create_checked(
-            *result.registry, std::move(descriptor), instance.path);
+            *result.registry, std::move(descriptor), instance_path);
         visiting_instances.erase(instance.id.value());
         instances.emplace(instance.id.value(), handle);
-        instance_paths.emplace(instance.path, handle);
+        instance_paths.emplace(instance_path, handle);
         return handle;
     };
     for (const auto& instance : project.design_ir.instances()) {
@@ -1115,7 +1119,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& occurrence = project.design_ir.instances().at(
             specialization.instance.value());
         unit_instances[unit.library + "::" + unit.name].push_back(
-            {occurrence.path, owner->second});
+            {std::string { project.design_ir.path(occurrence.path) },
+                owner->second});
     }
 
     std::map<std::string, std::vector<fsim_vpi_handle_v1>, std::less<>>
@@ -1315,7 +1320,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 parameter, *declaration, specialization.language);
             if (!decoded) {
                 throw std::logic_error {
-                    "VPI parameter '" + instance.path + '.' + parameter.name
+                    "VPI parameter '"
+                    + std::string { project.design_ir.path(instance.path) }
+                    + '.' + parameter.name
                     + "' has an invalid canonical value or type: identity '"
                     + parameter.identity + "'"
                 };
@@ -1331,7 +1338,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 *descriptor.type, project, specialization);
             apply_vpi_source(
                 *descriptor.type, project, declaration->source);
-            const auto path = instance.path + '.' + parameter.name;
+            const auto path
+                = std::string { project.design_ir.path(instance.path) }
+                + '.' + parameter.name;
             const auto handle = create_checked(
                 *result.registry, std::move(descriptor), path);
             const auto bound = result.registry->bind_value(
@@ -1382,7 +1391,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
         vpi_memory_paths.insert(
-            occurrence_path(instance.path, object.path));
+            occurrence_path(project.design_ir.path(instance.path),
+                project.design_ir.path(object.path)));
     }
     std::vector<const semantic::design::Object*> vpi_objects;
     for (const auto& object : project.design_ir.objects()) {
@@ -1396,7 +1406,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             object.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(instance.path, object.path);
+        const auto path = occurrence_path(
+            project.design_ir.path(instance.path),
+            project.design_ir.path(object.path));
         // Runtime signal aliases used to connect a selected memory word are
         // implementation details. The Memory and its bound word children are
         // the canonical VPI hierarchy for the declaration.
@@ -1411,7 +1423,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         vpi_objects.push_back(&object);
     }
-    std::ranges::stable_sort(vpi_objects, [](const auto* lhs, const auto* rhs) {
+    std::ranges::stable_sort(vpi_objects, [&](const auto* lhs, const auto* rhs) {
         // Aliases name their canonical DesignIR object through parent_object.
         // Publish every canonical signal before considering path depth so an
         // alias that shadows a generated instance scope can reuse its handle.
@@ -1419,12 +1431,14 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             != rhs->parent_object.has_value()) {
             return !lhs->parent_object.has_value();
         }
-        const auto lhs_depth = std::ranges::count(lhs->path, '.');
-        const auto rhs_depth = std::ranges::count(rhs->path, '.');
+        const auto lhs_path = project.design_ir.path(lhs->path);
+        const auto rhs_path = project.design_ir.path(rhs->path);
+        const auto lhs_depth = std::ranges::count(lhs_path, '.');
+        const auto rhs_depth = std::ranges::count(rhs_path, '.');
         if (lhs_depth != rhs_depth) {
             return lhs_depth < rhs_depth;
         }
-        return lhs->path < rhs->path;
+        return lhs_path < rhs_path;
     });
     for (const auto* object_pointer : vpi_objects) {
         const auto& object = *object_pointer;
@@ -1432,7 +1446,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             object.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(instance.path, object.path);
+        const auto path = occurrence_path(
+            project.design_ir.path(instance.path),
+            project.design_ir.path(object.path));
         if (instance_paths.contains(path)) {
             if (!object.parent_object) {
                 throw std::logic_error {
@@ -1476,7 +1492,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 instance_parent != instance_paths.end()) {
                 object_parent = instance_parent->second;
             } else {
-                auto prefix = instance.path;
+                auto prefix
+                    = std::string { project.design_ir.path(instance.path) };
                 if (parent_path.starts_with(prefix)
                     && parent_path.size() > prefix.size()
                     && parent_path[prefix.size()] == '.') {
@@ -1643,7 +1660,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (owner == instances.end()) {
             throw std::logic_error { "VPI memory has no published instance" };
         }
-        const auto path = occurrence_path(instance.path, object.path);
+        const auto path = occurrence_path(
+            project.design_ir.path(instance.path),
+            project.design_ir.path(object.path));
         auto parent = owner->second;
         const auto separator = path.find_last_of('.');
         if (separator != std::string::npos) {
@@ -1655,10 +1674,14 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 = published_scopes.find(parent_path);
                 nested_scope != published_scopes.end()) {
                 parent = nested_scope->second;
-            } else if (parent_path.starts_with(instance.path)
-                && parent_path.size() > instance.path.size()
-                && parent_path[instance.path.size()] == '.') {
-                auto prefix = instance.path;
+            } else if (parent_path.starts_with(
+                           project.design_ir.path(instance.path))
+                && parent_path.size()
+                    > project.design_ir.path(instance.path).size()
+                && parent_path[project.design_ir.path(instance.path).size()]
+                    == '.') {
+                auto prefix
+                    = std::string { project.design_ir.path(instance.path) };
                 auto offset = prefix.size() + 1U;
                 while (offset < parent_path.size()) {
                     const auto next = parent_path.find('.', offset);
@@ -1750,7 +1773,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             process.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(instance.path, process.name);
+        const auto path = occurrence_path(
+            project.design_ir.path(instance.path), process.name);
         const semantic::sv::ConcurrentAssertion* assertion_source { };
         const auto unit = std::ranges::find(
             project.systemverilog_hir.units(), specialization.unit,
@@ -1897,7 +1921,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         };
         descriptor.type = std::move(driver_type);
         const auto handle = create_checked(
-            *result.registry, std::move(descriptor), object.path);
+            *result.registry, std::move(descriptor),
+            project.design_ir.path(object.path));
         auto vpi_stored = systemverilog_vpi_signal_value(
             std::move(stored), signal_info.systemverilog_scalar, category);
         std::optional<runtime::SystemVerilogVpiDriveStrength> strength;

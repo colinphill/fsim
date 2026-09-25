@@ -228,7 +228,8 @@ namespace fsim::app::tcl_detail {
                     });
                 const auto name = object == objects.end()
                     ? std::to_string(signal)
-                    : object->path;
+                    : std::string {
+                        state->simulation->design_ir().path(object->path) };
                 (void)invoke_callback(
                     *state,
                     TclCallback::value_change,
@@ -550,7 +551,8 @@ namespace fsim::app::tcl_detail {
         Tcl_Obj* roots = Tcl_NewListObj(0, nullptr);
         for (const auto& root : context.built->design_ir.roots()) {
             if (Tcl_ListObjAppendElement(
-                    interpreter, roots, string_object(root))
+                    interpreter, roots,
+                    string_object(context.built->design_ir.path(root)))
                 != TCL_OK) {
                 return TCL_ERROR;
             }
@@ -616,14 +618,15 @@ namespace fsim::app::tcl_detail {
         }
         Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
         std::vector<std::string_view> paths;
-        for (const auto& object : current_design_ir(context)->objects()) {
+        const auto* design_ir = current_design_ir(context);
+        for (const auto& object : design_ir->objects()) {
             const auto signal_bearing_systemc_object = object.kind == semantic::design::ObjectKind::systemc_port
                 || object.kind == semantic::design::ObjectKind::systemc_event
                 || object.kind == semantic::design::ObjectKind::systemc_signal
                 || object.kind == semantic::design::ObjectKind::systemc_export;
             if (object.kind == semantic::design::ObjectKind::signal
                 || (signal_bearing_systemc_object && object.width != 0)) {
-                paths.push_back(object.path);
+                paths.push_back(design_ir->path(object.path));
             }
         }
         std::sort(paths.begin(), paths.end());

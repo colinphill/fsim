@@ -1043,12 +1043,13 @@ struct VhdlPslExecution::Impl {
                     || specialization.unit != unit.id) {
                     continue;
                 }
-                const auto& path = design_ir.instances()
-                                       .at(specialization.instance.value())
-                                       .path;
+                const auto path = std::string { design_ir.path(
+                    design_ir.instances()
+                        .at(specialization.instance.value())
+                        .path) };
                 if (std::ranges::find(occurrences, path)
                     == occurrences.end()) {
-                    occurrences.push_back(path);
+                    occurrences.emplace_back(path);
                 }
             }
             if (occurrences.empty() && !unit.psl_directives.empty()) {

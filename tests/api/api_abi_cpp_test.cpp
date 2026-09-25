@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_abi_contract.h"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/systemc/kernel_backend_binding_inventory.hpp"
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 
 extern "C" int fsim_api_abi_c_probe(void);
 
@@ -25,6 +29,22 @@ static_assert(std::is_standard_layout_v<fsim_object_info_t>);
 static_assert(std::is_trivially_copyable_v<fsim_object_info_t>);
 static_assert(std::is_standard_layout_v<fsim_callbacks_t>);
 static_assert(std::is_trivially_copyable_v<fsim_callbacks_t>);
+
+// This downstream probe checks installed header closure and public type shape.
+// HierarchyPathTable's implementation remains in the internal semantic library;
+// the package continues to promise linked fsim::api and fsim::tf targets only.
+using HierarchyPathView = decltype(
+    std::declval<const fsim::semantic::HierarchyPathTable&>().view(
+        std::declval<fsim::semantic::HierarchyPathId>()));
+static_assert(std::is_same_v<HierarchyPathView, std::string_view>);
+static_assert(std::is_same_v<
+    decltype(std::declval<
+        fsim::systemc::SystemCKernelChannelInventorySnapshot&>().paths),
+    fsim::semantic::HierarchyPathTable>);
+static_assert(std::is_same_v<
+    decltype(std::declval<
+        fsim::systemc::SystemCKernelBindingInventorySnapshot&>().paths),
+    fsim::semantic::HierarchyPathTable>);
 
 FSIM_CPP_SIGNATURE(fsim_get_api_version, std::uint32_t (*)(void));
 FSIM_CPP_SIGNATURE(fsim_status_string, const char* (*)(fsim_status_t));

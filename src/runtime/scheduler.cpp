@@ -100,8 +100,8 @@ namespace {
         Scheduler::Task fallback;
     };
 
-    using EntryTask = std::variant<
-        Scheduler::Task, BatchEntry, detail::SchedulerTaskDescriptor>;
+    using EntryTask = std::variant<Scheduler::Task, BatchEntry,
+        detail::SchedulerTaskDescriptor, std::monostate>;
 
     struct Entry {
         StableOrder order { };
@@ -682,11 +682,18 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
     if (index >= phase_count) {
         throw std::invalid_argument("invalid scheduler phase");
     }
-    auto entry = impl_->make_entry(stable_order, std::move(task));
-    const auto cancellation = impl_->cancel_slots->acquire(
-        std::move(std::get<Task>(entry.task)));
-    entry.cancel_slots = impl_->cancel_slots.get();
-    entry.cancellation = cancellation;
+    if (!task) {
+        throw std::invalid_argument("cannot schedule an empty task");
+    }
+    if (impl_->next_sequence == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error("scheduler insertion sequence overflow");
+    }
+    const auto sequence = impl_->next_sequence++;
+    const auto cancellation = impl_->cancel_slots->acquire(std::move(task));
+    // A moved-from std::function may still retain its target. Keep only the
+    // cancellation slot's callback; the source parameter dies after enqueue.
+    Entry entry { stable_order, sequence, EntryTask { std::monostate { } },
+        impl_->cancel_slots.get(), cancellation };
 
     try {
         impl_->enqueue_at(time, phase, std::move(entry), false);

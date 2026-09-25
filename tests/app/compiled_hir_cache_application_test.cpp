@@ -25,6 +25,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -302,6 +303,15 @@ ArtifactSnapshot capture_artifact(
         return entry.first;
     });
     return snapshot;
+}
+
+void require_determinism_snapshot(
+    const bool matches, const std::string_view comparison)
+{
+    if (!matches) {
+        throw std::runtime_error(
+            "artifact determinism mismatch: " + std::string { comparison });
+    }
 }
 
 void assert_compiled_hir_codec_rejections(
@@ -1460,6 +1470,14 @@ void run_artifact_worker_determinism_test(
             design_config, objects, design, design_diagnostics));
         assert(!design_diagnostics.has_error());
         auto design_snapshot = capture_artifact(design);
+        const bool has_hierarchy_path_payload = std::ranges::any_of(
+            design_snapshot, [](const auto& artifact) {
+                return artifact.first == "state/hierarchy-paths.bin";
+            });
+        require_determinism_snapshot(
+            has_hierarchy_path_payload,
+            "missing state/hierarchy-paths.bin for "
+                + std::string { label });
 
         auto library_config = mixed_config(
             checkout,
@@ -1490,19 +1508,27 @@ void run_artifact_worker_determinism_test(
         if (!worker_reference) {
             worker_reference = snapshot;
         } else {
-            assert(snapshot == *worker_reference);
+            require_determinism_snapshot(
+                snapshot == *worker_reference,
+                "worker-count-checkout worker-" + std::to_string(jobs)
+                    + " vs worker-1");
         }
         if (jobs == 4U) {
             relocation_reference = std::move(snapshot);
         }
     }
-    assert(relocation_reference);
+    if (!relocation_reference) {
+        throw std::runtime_error(
+            "artifact determinism matrix did not capture worker-4");
+    }
     for (const std::uint32_t relocation : { 1U, 2U }) {
         const auto checkout = directory
             / ("relocated-checkout-" + std::to_string(relocation));
         const auto label = "relocation-" + std::to_string(relocation);
         const auto snapshot = capture(checkout, label, 4U);
-        assert(snapshot == *relocation_reference);
+        require_determinism_snapshot(
+            snapshot == *relocation_reference,
+            label + " at 4 workers vs worker-count-checkout worker-4");
     }
 }
 
@@ -1555,12 +1581,14 @@ void assert_decoded_design_ir_origins(
     const auto input_declaration = declaration_named(*leaf, "input_value");
 
     const auto& design = project.design_ir;
-    const auto root = std::ranges::find(
-        design.instances(), std::string { "sv_root" },
-        &fsim::semantic::design::InstanceOccurrence::path);
-    const auto child = std::ranges::find(
-        design.instances(), std::string { "sv_root.child" },
-        &fsim::semantic::design::InstanceOccurrence::path);
+    const auto root = std::ranges::find_if(
+        design.instances(), [&](const auto& occurrence) {
+            return design.path(occurrence.path) == "sv_root";
+        });
+    const auto child = std::ranges::find_if(
+        design.instances(), [&](const auto& occurrence) {
+            return design.path(occurrence.path) == "sv_root.child";
+        });
     assert(root != design.instances().end());
     assert(child != design.instances().end());
 
@@ -1582,9 +1610,10 @@ void assert_decoded_design_ir_origins(
     assert(width != child_specialization.parameters.end());
     assert(width->declaration == width_declaration);
 
-    const auto input = std::ranges::find(
-        design.objects(), std::string { "sv_root.child.input_value" },
-        &fsim::semantic::design::Object::path);
+    const auto input = std::ranges::find_if(
+        design.objects(), [&](const auto& object) {
+            return design.path(object.path) == "sv_root.child.input_value";
+        });
     assert(input != design.objects().end());
     const auto input_port = std::ranges::find(
         design.ports(), input->id,

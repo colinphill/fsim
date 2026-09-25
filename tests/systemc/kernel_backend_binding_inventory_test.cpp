@@ -10,7 +10,9 @@
 #include <cassert>
 #include <cstddef>
 #include <ranges>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -152,11 +154,32 @@ void test_binding_inventory(const NativeRoot& root)
     assert(inventory.freeze(diagnostics));
     assert(inventory.frozen() && !diagnostics.has_error());
     assert(inventory.snapshot().bindings.size() == 7U);
+    std::size_t path_references { };
+    for (const auto& binding : inventory.snapshot().bindings) {
+        ++path_references;
+        for (const auto& target : binding.descriptor.targets) {
+            path_references += 1U + target.chain.size();
+        }
+    }
+    assert(inventory.snapshot().paths.size() < path_references);
     assert(std::ranges::is_sorted(inventory.snapshot().bindings, { },
         [](const auto& entry) { return entry.descriptor.declared_path; }));
 
     const auto& child_input = find_binding(inventory.snapshot(), "child.input");
+    assert(inventory.snapshot().paths.view(
+        child_input.descriptor.declared_path_id)
+        == child_input.descriptor.declared_path);
     assert(child_input.descriptor.targets.front().chain.size() == 3U);
+    const auto& child_target = child_input.descriptor.targets.front();
+    assert(child_target.chain_path_ids.size()
+        == child_target.chain.size());
+    assert(child_target.final_channel_path_id
+        == child_target.chain_path_ids.back());
+    for (std::size_t index = 0U; index < child_target.chain.size(); ++index) {
+        assert(inventory.snapshot().paths.view(
+            child_target.chain_path_ids[index])
+            == child_target.chain[index]);
+    }
     assert(child_input.descriptor.targets.front().chain[1]
         == root.parent.input.name());
     const auto& exported = find_binding(inventory.snapshot(), ".exported");
@@ -174,9 +197,27 @@ void test_binding_inventory(const NativeRoot& root)
     const auto encoded = systemc::serialize_systemc_kernel_binding_inventory(
         inventory.snapshot(), { }, diagnostics);
     assert(encoded && !diagnostics.has_error());
-    assert(systemc::deserialize_systemc_kernel_binding_inventory(
-               *encoded, { }, diagnostics)
-        == inventory.snapshot());
+    auto decoded = systemc::deserialize_systemc_kernel_binding_inventory(
+        *encoded, { }, diagnostics);
+    assert(decoded && *decoded == inventory.snapshot());
+    auto copied = *decoded;
+    auto moved = std::move(copied);
+    const auto retained_id = moved.bindings.front().descriptor
+        .targets.front().chain_path_ids.front();
+    const auto retained_path = std::string {
+        moved.paths.view(retained_id) };
+    decoded.reset();
+    assert(moved.paths.view(retained_id) == retained_path);
+    auto retained_paths = moved.paths;
+    moved = systemc::SystemCKernelBindingInventorySnapshot { };
+    assert(retained_paths.view(retained_id) == retained_path);
+
+    auto invalid_path = inventory.snapshot();
+    invalid_path.bindings.front().descriptor.declared_path_id
+        = semantic::HierarchyPathId::from_index(1000U);
+    diagnostic::Engine invalid_path_diagnostics;
+    assert(!systemc::validate_systemc_kernel_binding_inventory(
+        invalid_path, { }, invalid_path_diagnostics));
 
     diagnostic::Engine lifecycle_diagnostics;
     assert(!inventory.freeze(lifecycle_diagnostics));

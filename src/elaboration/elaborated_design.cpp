@@ -22,6 +22,160 @@ const std::vector<std::string>& ElaboratedDesign::roots() const noexcept
     return roots_;
 }
 
+const semantic::HierarchyPathTable&
+ElaboratedDesign::hierarchy_paths() const noexcept
+{
+    return hierarchy_paths_;
+}
+
+bool ElaboratedDesign::rebind_path_table(
+    semantic::HierarchyPathTable paths)
+{
+    if (paths.size() < hierarchy_paths_.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < hierarchy_paths_.size(); ++index) {
+        const auto id = semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        if (paths.view(id) != hierarchy_paths_.view(id)) {
+            return false;
+        }
+    }
+    hierarchy_paths_ = std::move(paths);
+    return true;
+}
+
+bool ElaboratedDesign::remap_path_table(
+    semantic::HierarchyPathTable paths)
+{
+    for (std::size_t index = 0; index < hierarchy_paths_.size(); ++index) {
+        const auto id = semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        if (!paths.contains(hierarchy_paths_.view(id))) {
+            return false;
+        }
+    }
+
+    decltype(signal_by_path_) remapped_signals;
+    decltype(string_by_path_) remapped_strings;
+    decltype(container_by_path_) remapped_containers;
+    remapped_signals.reserve(signal_by_path_.size());
+    remapped_strings.reserve(string_by_path_.size());
+    remapped_containers.reserve(container_by_path_.size());
+    for (const auto& [id, signal] : signal_by_path_) {
+        remapped_signals.emplace(*paths.find(hierarchy_paths_.view(id)), signal);
+    }
+    for (const auto& [id, object] : string_by_path_) {
+        remapped_strings.emplace(*paths.find(hierarchy_paths_.view(id)), object);
+    }
+    for (const auto& [id, object] : container_by_path_) {
+        remapped_containers.emplace(*paths.find(hierarchy_paths_.view(id)), object);
+    }
+    signal_by_path_.swap(remapped_signals);
+    string_by_path_.swap(remapped_strings);
+    container_by_path_.swap(remapped_containers);
+    hierarchy_paths_ = std::move(paths);
+    return true;
+}
+
+void ElaboratedDesign::freeze_hierarchy_paths()
+{
+    std::vector<std::string_view> paths;
+    const auto add = [&](const std::string_view path) {
+        if (!path.empty()) {
+            paths.push_back(path);
+        }
+    };
+    add(top_);
+    for (const auto& root : roots_) {
+        add(root);
+    }
+    for (const auto& signal : signal_info_) {
+        add(signal.name);
+        for (const auto& binding : signal.vhdl_mode_view_bindings) {
+            for (const auto& element : binding.elements) {
+                add(element.formal_path);
+                add(element.actual_path);
+            }
+        }
+    }
+    for (const auto& conversion : boundary_conversions_) {
+        add(conversion.path);
+    }
+    for (const auto& signal : signals_) {
+        add(signal.name);
+    }
+    for (const auto& object : string_object_info_) {
+        add(object.name);
+    }
+    for (const auto& object : string_objects_) {
+        add(object.name);
+    }
+    for (const auto& object : container_object_info_) {
+        add(object.name);
+    }
+    for (const auto& object : container_objects_) {
+        add(object.name);
+    }
+    for (const auto& object : vhdl_protected_object_info_) {
+        add(object.name);
+    }
+    for (const auto& process : processes_) {
+        add(process.name);
+    }
+    for (const auto& specialization : specializations_) {
+        add(specialization.instance);
+    }
+    for (const auto& specify : verilog_specify_paths_) {
+        add(specify.instance);
+    }
+    for (const auto& instance : systemc_instances_) {
+        add(instance.instance);
+    }
+    for (const auto& object : systemc_objects_) {
+        add(object.name);
+        add(object.parent);
+    }
+    for (const auto& [path, signal] : signal_by_name_) {
+        (void)signal;
+        paths.push_back(path);
+    }
+    for (const auto& [path, object] : string_by_name_) {
+        (void)object;
+        paths.push_back(path);
+    }
+    for (const auto& [path, object] : container_by_name_) {
+        (void)object;
+        paths.push_back(path);
+    }
+    std::ranges::sort(paths);
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+
+    semantic::HierarchyPathTable::Builder builder;
+    for (const auto path : paths) {
+        (void)builder.intern(path);
+    }
+    signal_by_path_.clear();
+    string_by_path_.clear();
+    container_by_path_.clear();
+    signal_by_path_.reserve(signal_by_name_.size());
+    string_by_path_.reserve(string_by_name_.size());
+    container_by_path_.reserve(container_by_name_.size());
+    for (const auto& [path, signal] : signal_by_name_) {
+        signal_by_path_.emplace(*builder.find(path), signal);
+    }
+    for (const auto& [path, object] : string_by_name_) {
+        string_by_path_.emplace(*builder.find(path), object);
+    }
+    for (const auto& [path, object] : container_by_name_) {
+        container_by_path_.emplace(*builder.find(path), object);
+    }
+    hierarchy_paths_ = std::move(builder).freeze();
+    signal_by_name_.clear();
+    string_by_name_.clear();
+    container_by_name_.clear();
+}
+
 const std::vector<SignalInfo>&
 ElaboratedDesign::signals() const noexcept
 {
@@ -104,9 +258,11 @@ std::optional<runtime::simir::SignalId>
 ElaboratedDesign::find_signal(
     const std::string_view name) const noexcept
 {
-    if (const auto found = signal_by_name_.find(std::string { name });
-        found != signal_by_name_.end()) {
-        return found->second;
+    if (const auto path = hierarchy_paths_.find(name)) {
+        if (const auto found = signal_by_path_.find(*path);
+            found != signal_by_path_.end()) {
+            return found->second;
+        }
     }
     const auto object = std::find_if(
         systemc_objects_.begin(), systemc_objects_.end(),
@@ -123,9 +279,9 @@ std::vector<std::pair<std::string, runtime::simir::SignalId>>
 ElaboratedDesign::signal_paths() const
 {
     std::vector<std::pair<std::string, runtime::simir::SignalId>> result;
-    result.reserve(signal_by_name_.size() + systemc_objects_.size());
-    for (const auto& [path, signal] : signal_by_name_) {
-        result.emplace_back(path, signal);
+    result.reserve(signal_by_path_.size() + systemc_objects_.size());
+    for (const auto& [path, signal] : signal_by_path_) {
+        result.emplace_back(hierarchy_paths_.view(path), signal);
     }
     for (const auto& object : systemc_objects_) {
         if (object.signal) {
@@ -150,9 +306,11 @@ std::optional<runtime::simir::ContainerObjectId>
 ElaboratedDesign::find_container(
     const std::string_view name) const noexcept
 {
-    if (const auto found = container_by_name_.find(std::string { name });
-        found != container_by_name_.end()) {
-        return found->second;
+    if (const auto path = hierarchy_paths_.find(name)) {
+        if (const auto found = container_by_path_.find(*path);
+            found != container_by_path_.end()) {
+            return found->second;
+        }
     }
     return std::nullopt;
 }
@@ -164,9 +322,9 @@ ElaboratedDesign::container_paths() const
     std::vector<std::pair<
         std::string, runtime::simir::ContainerObjectId>>
         result;
-    result.reserve(container_by_name_.size());
-    for (const auto& [path, object] : container_by_name_) {
-        result.emplace_back(path, object);
+    result.reserve(container_by_path_.size());
+    for (const auto& [path, object] : container_by_path_) {
+        result.emplace_back(hierarchy_paths_.view(path), object);
     }
     std::ranges::sort(
         result,
@@ -312,10 +470,18 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         systemc_instances_, systemc_processes_, systemc_objects_, { }, { },
         { }, code_coverage_inventory_
     };
-    result.signal_names.assign(signal_by_name_.begin(), signal_by_name_.end());
-    result.string_names.assign(string_by_name_.begin(), string_by_name_.end());
-    result.container_names.assign(
-        container_by_name_.begin(), container_by_name_.end());
+    result.signal_names.reserve(signal_by_path_.size());
+    for (const auto& [path, signal] : signal_by_path_) {
+        result.signal_names.emplace_back(hierarchy_paths_.view(path), signal);
+    }
+    result.string_names.reserve(string_by_path_.size());
+    for (const auto& [path, object] : string_by_path_) {
+        result.string_names.emplace_back(hierarchy_paths_.view(path), object);
+    }
+    result.container_names.reserve(container_by_path_.size());
+    for (const auto& [path, object] : container_by_path_) {
+        result.container_names.emplace_back(hierarchy_paths_.view(path), object);
+    }
     const auto by_name = [](const auto& left, const auto& right) {
         return left.first < right.first;
     };
@@ -340,17 +506,17 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(systemc_objects_), { }, { }, { },
         std::move(code_coverage_inventory_)
     };
-    result.signal_names.reserve(signal_by_name_.size());
-    for (auto& entry : signal_by_name_) {
-        result.signal_names.emplace_back(std::move(entry.first), entry.second);
+    result.signal_names.reserve(signal_by_path_.size());
+    for (const auto& [path, signal] : signal_by_path_) {
+        result.signal_names.emplace_back(hierarchy_paths_.view(path), signal);
     }
-    result.string_names.reserve(string_by_name_.size());
-    for (auto& entry : string_by_name_) {
-        result.string_names.emplace_back(std::move(entry.first), entry.second);
+    result.string_names.reserve(string_by_path_.size());
+    for (const auto& [path, object] : string_by_path_) {
+        result.string_names.emplace_back(hierarchy_paths_.view(path), object);
     }
-    result.container_names.reserve(container_by_name_.size());
-    for (auto& entry : container_by_name_) {
-        result.container_names.emplace_back(std::move(entry.first), entry.second);
+    result.container_names.reserve(container_by_path_.size());
+    for (const auto& [path, object] : container_by_path_) {
+        result.container_names.emplace_back(hierarchy_paths_.view(path), object);
     }
     const auto by_name = [](const auto& left, const auto& right) {
         return left.first < right.first;
@@ -655,6 +821,7 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
             return std::nullopt;
         }
     }
+    result.freeze_hierarchy_paths();
     try {
         runtime::simir::Interpreter validator;
         result.populate_interpreter(&validator, true);

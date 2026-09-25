@@ -870,7 +870,7 @@ make_specialization_cache_keys(
             const auto& instance = design.instances()[systemc.instance.value()];
             key.add("systemc-instance-id", std::to_string(systemc.id.value()));
             key.add("systemc-factory-target", systemc.name);
-            key.add("systemc-instance-path", instance.path);
+            key.add("systemc-instance-path", design.path(instance.path));
             key.add(
                 "systemc-construction-count",
                 std::to_string(systemc.parameters.size()));
@@ -890,7 +890,7 @@ make_specialization_cache_keys(
             }
             key.add("systemc-boundary-kind", std::to_string(static_cast<unsigned>(boundary.kind)));
             key.add("systemc-boundary-id", std::to_string(boundary.id.value()));
-            key.add("systemc-boundary-path", boundary.path);
+            key.add("systemc-boundary-path", design.path(boundary.path));
             key.add("systemc-boundary-object", boundary.object ? std::to_string(boundary.object->value()) : "none");
             key.add("systemc-boundary-process", boundary.process ? std::to_string(design.processes()[boundary.process->value()].runtime_index) : "none");
             key.add("systemc-boundary-port-writable",
@@ -907,7 +907,7 @@ make_specialization_cache_keys(
             }
             key.add("systemc-object-kind", std::to_string(static_cast<unsigned>(object.kind)));
             key.add("systemc-object-id", std::to_string(object.id.value()));
-            key.add("systemc-object-path", object.path);
+            key.add("systemc-object-path", design.path(object.path));
             key.add("systemc-object-type", object.external_type);
             key.add("systemc-object-runtime", std::to_string(object.runtime_index));
         }
@@ -1151,7 +1151,8 @@ std::unique_ptr<TraceState> attach_trace(
     }
     try {
         trace->tick_multiplier = scale->tick_multiplier;
-        runtime::TraceDeclarationBuilder declaration_builder;
+        runtime::TraceDeclarationBuilder declaration_builder {
+            simulation.design_ir().hierarchy_paths() };
         constexpr std::array<std::string_view, 7> activity_names {
             "sequence", "kind", "action", "root", "value",
             "identity_hash", "detail_hash"
@@ -1221,9 +1222,10 @@ std::unique_ptr<TraceState> attach_trace(
                 ? std::optional { canonical_fst_trace_object(
                       simulation.design_ir(), object) }
                 : std::nullopt;
+            const auto design_path = simulation.design_ir().path(object.path);
             const auto trace_path = fst_object
                 ? std::string_view { fst_object->path }
-                : std::string_view { object.path };
+                : design_path;
             const auto [existing, inserted]
                 = trace_signal_by_path.try_emplace(
                     std::string { trace_path }, signal_id);
@@ -1252,9 +1254,9 @@ std::unique_ptr<TraceState> attach_trace(
                               fst_object->path, primary, fst_object->source);
                 } else {
                     declaration = primary.value == 0
-                        ? declaration_builder.add_variable(object.path,
+                        ? declaration_builder.add_variable(design_path,
                               signal.width, signal.systemverilog_scalar)
-                        : declaration_builder.add_alias(object.path, primary);
+                        : declaration_builder.add_alias(design_path, primary);
                 }
                 if (primary.value == 0) {
                     primary = declaration;
@@ -1376,12 +1378,14 @@ std::unique_ptr<TraceState> attach_trace(
                 const auto selected_scope = filters.empty()
                     || std::ranges::any_of(
                         simulation.design_ir().objects(), [&](const auto& object) {
+                            const auto object_path
+                                = simulation.design_ir().path(object.path);
                             return trace_selected(
-                                       filters, object.path)
-                                && (object.path == scope
-                                    || (object.path.size() > scope.size()
-                                        && object.path.starts_with(scope)
-                                        && object.path[scope.size()] == '.'));
+                                       filters, object_path)
+                                && (object_path == scope
+                                    || (object_path.size() > scope.size()
+                                        && object_path.starts_with(scope)
+                                        && object_path[scope.size()] == '.'));
                         });
                 if (selected_scope) {
                     trace->writer->comment(verilog_comments[index]);
@@ -2100,7 +2104,8 @@ void initialize_hdl_vcd_inventory(HdlVcdState& state)
         state.scalar_kinds.at(signal.id) = signal.systemverilog_scalar;
     }
     for (const auto& instance : simulation.design_ir().instances()) {
-        state.instances.push_back(instance.path);
+        state.instances.emplace_back(
+            simulation.design_ir().path(instance.path));
     }
     for (const auto& object : simulation.design_ir().objects()) {
         if (!design_object_is_signal_bearing(object)
@@ -2111,7 +2116,8 @@ void initialize_hdl_vcd_inventory(HdlVcdState& state)
         }
         const auto signal
             = static_cast<runtime::simir::SignalId>(object.runtime_index);
-        state.objects.emplace_back(object.path, signal);
+        state.objects.emplace_back(
+            simulation.design_ir().path(object.path), signal);
     }
     for (const auto& port : simulation.design_ir().ports()) {
         const auto& object = simulation.design_ir().objects().at(
@@ -2134,7 +2140,8 @@ void initialize_hdl_vcd_inventory(HdlVcdState& state)
             port.instance.value());
         const auto& info = simulation.runtime_adapter().signals().at(signal);
         HdlVcdState::ExtendedPort extended;
-        extended.scope = instance.path;
+        extended.scope = std::string {
+            simulation.design_ir().path(instance.path) };
         extended.reference = object.name;
         extended.signal = signal;
         extended.direction = port.direction;

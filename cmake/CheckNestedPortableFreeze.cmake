@@ -20,7 +20,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "63b6834e10cf936cc0684bb2c8cbcf78e564c6e9d6f31e3482ee09ef35a39bf4")
+  "8a9bde5c7bf49b71cf4d5aaf60caa32b12a73d33fb4cecc97b11f749ed857fab")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "nested portable contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -120,9 +120,9 @@ set(FSIM_COMPILED_HIR_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 63"
+  "kRuntimeStateSchema = 64"
   "kSemanticStateSchema = 4"
-  "kDesignIrStateSchema = 4"
+  "kDesignIrStateSchema = 5"
   "kCompiledHirBundleSchema = 1"
   "kCompiledHirDecodeBudgetBytes"
   "kSystemVerilogConstraintHirStateSchema = 8"
@@ -143,7 +143,8 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "deserialize<runtime::SystemVerilogCoverageState>"
   "coverage state is inconsistent with compiled HIR")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 63"
+  "kRuntimeStateSchema == 64"
+  "kDesignIrStateSchema == 5"
   "kCompiledHirBundleSchema == 1"
   "kSystemVerilogConstraintHirStateSchema == 8"
   "kSystemVerilogCoverageStateSchema == 7"
@@ -152,6 +153,10 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
   "future-coverage-state.bin"
   "truncated-coverage-state.bin"
   "future_uvm")
+fsim_require_nested_portable_tokens(
+  "${FSIM_SOURCE_DIR}/src/app/application_hierarchy_path_codec.hpp"
+  "kMagic = \"FSIMHPT1\""
+  "kSchema = 1U")
 
 fsim_require_nested_portable_tokens(
   "${FSIM_SOURCE_DIR}/include/fsim/app/trace_api.hpp"

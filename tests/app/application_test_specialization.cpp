@@ -175,7 +175,7 @@ const auto run_parameter_specializations =
       const auto instance_for_path = [&](const std::string_view path) {
         return std::ranges::find_if(
             instances, [&](const auto& instance) {
-              return instance.path == path;
+              return design_ir.path(instance.path) == path;
             });
       };
       const auto root_instance = instance_for_path("parameter_top");
@@ -189,8 +189,9 @@ const auto run_parameter_specializations =
       assert(narrow_instance->parent == root_instance->id);
       assert(wide_instance->parent == root_instance->id);
       const auto narrow_object = std::ranges::find_if(
-          design_ir.objects(), [](const auto& object) {
-            return object.path == "parameter_top.u_narrow.q";
+          design_ir.objects(), [&](const auto& object) {
+            return design_ir.path(object.path)
+                == "parameter_top.u_narrow.q";
           });
       assert(narrow_object != design_ir.objects().end());
       assert(narrow_object->specialization == narrow_instance->specialization);
@@ -1223,7 +1224,9 @@ const auto has_projected_object =
       return std::ranges::any_of(
           fixed_net_array_project->design_ir.objects(),
           [&](const auto& object) {
-            return object.kind == kind && object.path == path;
+            return object.kind == kind
+                && fixed_net_array_project->design_ir.path(object.path)
+                    == path;
           });
     };
 assert(has_projected_object(

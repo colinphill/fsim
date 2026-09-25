@@ -2111,10 +2111,12 @@ void ApplicationTestFixture::test_class_simulation_integration()
     assert(standalone_runtime_state.signals[standalone_accumulator->id]
                .initial_value.to_msb_string()
         == "00000000000000000000000000000000");
-    const auto standalone_accumulator_object = std::ranges::find(
+    const auto standalone_accumulator_object = std::ranges::find_if(
         standalone->design_ir.objects(),
-        std::string { "class_top.source_accumulator" },
-        &fsim::semantic::design::Object::path);
+        [&](const auto& object) {
+            return standalone->design_ir.path(object.path)
+                == "class_top.source_accumulator";
+        });
     assert(standalone_accumulator_object != standalone->design_ir.objects().end());
     assert(standalone_accumulator_object->runtime_index
         == standalone_accumulator->id);

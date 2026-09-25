@@ -139,6 +139,17 @@ max_deltas = 1000
     assert(left_selected != right_selected);
     assert(left_lane != right_lane);
     assert(left_child != right_child);
+    const auto full_name = [&](const fsim_object_t object) {
+        fsim_object_info_t info { };
+        info.struct_size = sizeof(info);
+        info.api_version = FSIM_API_VERSION;
+        assert(
+            fsim_session_get_object_info(session, object, &info)
+            == FSIM_STATUS_OK);
+        return std::string { info.full_name.data, info.full_name.size };
+    };
+    assert(full_name(left_child) == "left.selected.lane[0].u");
+    assert(full_name(right_child) == "right.selected.lane[0].u");
     const auto parent = [&](const fsim_object_t object) {
         fsim_object_info_t info { };
         info.struct_size = sizeof(info);

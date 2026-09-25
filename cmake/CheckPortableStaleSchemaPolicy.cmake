@@ -43,7 +43,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "4ae9ec12f87ba17e571c42ac6fa7a5f4b08d05c7ffe07c267f84f246862948c2")
+  "dbe895d70cd926a38f10e0fed840e0eb7d0bc83d54a507e17a4aafb028c6f5fd")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable stale-schema contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -184,7 +184,7 @@ fsim_require_portable_policy_tokens("${FSIM_OBJECT_TEST}"
   "future-compiled-hir-schema"
   "stale-publication")
 fsim_require_portable_policy_tokens("${FSIM_DESIGN_TEST}"
-  "{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U }"
+  "{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U }"
   "future_header"
   "stale-publication")
 fsim_require_portable_policy_tokens("${FSIM_LIBRARY_TEST}"

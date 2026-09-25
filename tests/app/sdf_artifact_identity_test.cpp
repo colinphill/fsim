@@ -149,6 +149,8 @@ fsim::artifact::DesignMetadata base_metadata()
         { 0U, "systemverilog", "2017", "none" });
     metadata.payloads = {
         { "runtime", "state/runtime.bin", checksum("runtime") },
+        { "hierarchy-paths", "state/hierarchy-paths.bin",
+            checksum("hierarchy-paths") },
         { "compiled-hir", "state/compiled-design.fsimhir",
             checksum("compiled-hir") },
         { "design-ir", "state/design-ir.bin", checksum("design-ir") }
@@ -351,6 +353,7 @@ void test_library_design_relocation_and_source_hidden_archive()
     const auto design_path = unique_path("design.fsimdesign");
     const std::vector<fsim::library::PortablePayload> payloads {
         { "state/runtime.bin", "runtime" },
+        { "state/hierarchy-paths.bin", "hierarchy-paths" },
         { "state/compiled-design.fsimhir", "compiled-hir" },
         { "state/design-ir.bin", "design-ir" },
         { "sdf/annotation.bin", byte_string(encoded.bytes) }

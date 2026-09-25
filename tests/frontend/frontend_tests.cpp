@@ -3,12 +3,95 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+namespace {
+
+thread_local bool count_allocations = false;
+thread_local std::size_t allocation_count = 0;
+
+void record_allocation() noexcept
+{
+    if (count_allocations) {
+        ++allocation_count;
+    }
+}
+
+} // namespace
+
+void* operator new(const std::size_t size)
+{
+    record_allocation();
+    if (void* const allocation = std::malloc(size == 0 ? 1 : size)) {
+        return allocation;
+    }
+    throw std::bad_alloc { };
+}
+
+void* operator new[](const std::size_t size)
+{
+    return ::operator new(size);
+}
+
+void* operator new(
+    const std::size_t size, const std::nothrow_t&) noexcept
+{
+    try {
+        return ::operator new(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void* operator new[](
+    const std::size_t size, const std::nothrow_t&) noexcept
+{
+    try {
+        return ::operator new[](size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void operator delete(void* const allocation) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete(void* const allocation, std::size_t) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete[](void* const allocation) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete[](void* const allocation, std::size_t) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete(
+    void* const allocation, const std::nothrow_t&) noexcept
+{
+    ::operator delete(allocation);
+}
+
+void operator delete[](
+    void* const allocation, const std::nothrow_t&) noexcept
+{
+    ::operator delete[](allocation);
+}
 
 namespace {
 
@@ -18,6 +101,25 @@ void require(bool condition, std::string_view message)
         throw std::runtime_error(std::string { message });
     }
 }
+
+class AllocationCountingScope final {
+public:
+    AllocationCountingScope()
+    {
+        allocation_count = 0;
+        count_allocations = true;
+    }
+
+    ~AllocationCountingScope()
+    {
+        count_allocations = false;
+    }
+
+    [[nodiscard]] std::size_t count() const noexcept
+    {
+        return allocation_count;
+    }
+};
 
 void test_vhdl_2008_lexical_surface()
 {
@@ -216,6 +318,47 @@ end architecture;
         "must tokenize without ambiguity");
 }
 
+void test_source_name_heterogeneous_lookup()
+{
+    using fsim::frontend::SourceName;
+
+    const std::string contents(128, 's');
+    const SourceName canonical { std::string_view { contents } };
+    SourceName from_view;
+    SourceName from_c_string;
+    SourceName assigned_from_view;
+    SourceName assigned_from_c_string;
+
+    std::size_t allocations = 0;
+    {
+        const AllocationCountingScope allocation_scope;
+        from_view = SourceName { std::string_view { contents } };
+        from_c_string = SourceName { contents.c_str() };
+        assigned_from_view = std::string_view { contents };
+        assigned_from_c_string = contents.c_str();
+        allocations = allocation_scope.count();
+    }
+
+    require(allocations == 0,
+        "SourceName string-view and C-string hits must not allocate");
+    require(from_view.str().data() == canonical.str().data()
+            && from_c_string.str().data() == canonical.str().data()
+            && assigned_from_view.str().data() == canonical.str().data()
+            && assigned_from_c_string.str().data() == canonical.str().data(),
+        "SourceName heterogeneous hits must reuse the canonical string");
+
+    const std::string_view alias { canonical.str().data(), canonical.size() };
+    auto reassigned = canonical;
+    reassigned = alias;
+    require(reassigned == canonical,
+        "SourceName assignment from an aliased view must remain valid");
+
+    const SourceName empty_view { std::string_view { } };
+    const SourceName null_name { static_cast<const char*>(nullptr) };
+    require(empty_view.empty() && null_name.empty(),
+        "empty views and null C strings must retain empty-name behavior");
+}
+
 } // namespace
 
 int main()
@@ -223,6 +366,7 @@ int main()
     using namespace fsim::frontend;
     using namespace fsim::tests::frontend;
     try {
+        test_source_name_heterogeneous_lookup();
         test_vhdl_2008_lexical_surface();
         require(PackedRange { std::numeric_limits<std::int64_t>::max(),
                     std::numeric_limits<std::int64_t>::min(), true }

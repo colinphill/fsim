@@ -293,7 +293,7 @@ fsim_object_t debug_systemc_object_handle(
           == fsim::semantic::design::ObjectKind::systemc_module) {
     const auto& design = session.simulation->design_ir();
     if (!has_synthetic_root(design)
-        && is_design_root(design, design_object->path)) {
+        && is_design_root(design, design.path(design_object->path))) {
       return root_handle(session);
     }
     if (object < session.systemc_scope_by_object.size()
@@ -598,7 +598,8 @@ bool rebuild_debug_objects(Session& session) {
           design.boundaries(), [&](const auto& candidate) {
             return candidate.kind
                     == fsim::semantic::design::BoundaryKind::systemc_process
-                && candidate.path == adapter.name && candidate.process;
+                && design.path(candidate.path) == adapter.name
+                && candidate.process;
           });
       if (boundary == design.boundaries().end()) {
         return false;
@@ -636,7 +637,7 @@ bool rebuild_debug_objects(Session& session) {
     const auto object = std::ranges::find_if(
         design.objects(), [&](const auto& candidate) {
           return candidate.kind == expected_kind
-              && candidate.path == adapter.name;
+              && design.path(candidate.path) == adapter.name;
         });
     if (object == design.objects().end()) {
       return false;
@@ -650,8 +651,10 @@ bool rebuild_debug_objects(Session& session) {
   std::stable_sort(
       systemc_scopes.begin(), systemc_scopes.end(),
       [&](const std::size_t left, const std::size_t right) {
-        const auto& left_path = design_systemc_object(session, left)->path;
-        const auto& right_path = design_systemc_object(session, right)->path;
+        const auto left_path = design.path(
+            design_systemc_object(session, left)->path);
+        const auto right_path = design.path(
+            design_systemc_object(session, right)->path);
         const auto left_depth = static_cast<std::size_t>(std::count(
             left_path.begin(), left_path.end(), '.'));
         const auto right_depth = static_cast<std::size_t>(std::count(
@@ -660,21 +663,22 @@ bool rebuild_debug_objects(Session& session) {
       });
   for (const auto index : systemc_scopes) {
     const auto& object = *design_systemc_object(session, index);
+    const auto object_path = design.path(object.path);
     if (!has_synthetic_root(design)
-        && is_design_root(design, object.path)) {
+        && is_design_root(design, object_path)) {
       continue;
     }
-    const auto separator = object.path.rfind('.');
+    const auto separator = object_path.rfind('.');
     const auto parent_path = separator == std::string::npos
         ? std::string_view{}
-        : std::string_view{object.path}.substr(0, separator);
+        : object_path.substr(0, separator);
     const auto parent_scope = owning_design_scope(session, parent_path);
     const auto source = design_source(session, object.source);
     const auto scope = append_design_scope(
         session,
         ScopeObjectKind::instance,
         parent_scope,
-        object.path,
+        std::string { object_path },
         object.external_type,
         source.path);
     if (!scope) {
@@ -690,32 +694,35 @@ bool rebuild_debug_objects(Session& session) {
   for (const auto& instance : design.instances()) {
     const auto& specialization =
         design.specializations()[instance.specialization.value()];
+    const auto instance_path = design.path(instance.path);
     if (specialization.language == fsim::semantic::Language::systemc
         || (!has_synthetic_root(design)
-            && is_design_root(design, instance.path))) {
+            && is_design_root(design, instance_path))) {
       continue;
     }
 
     const auto owning_root = std::ranges::find_if(
         design.roots(),
         [&](const auto& root) {
-          return instance.path == root
-              || (instance.path.size() > root.size()
-                  && instance.path.starts_with(root)
-                  && instance.path[root.size()] == '.');
+          const auto root_path = design.path(root);
+          return instance_path == root_path
+              || (instance_path.size() > root_path.size()
+                  && instance_path.starts_with(root_path)
+                  && instance_path[root_path.size()] == '.');
         });
     const auto parent_path = instance.parent
         ? std::string_view{
-              design.instances()[instance.parent->value()].path}
+              design.path(
+                  design.instances()[instance.parent->value()].path)}
         : owning_root != design.roots().end()
                   && instance.path != *owning_root
-            ? std::string_view{*owning_root}
+            ? design.path(*owning_root)
             : std::string_view{};
-    auto parent_scope = owning_design_scope(session, instance.path);
-    const auto relative = instance.path.size() > parent_path.size()
-            && instance.path[parent_path.size()] == '.'
-        ? std::string_view{instance.path}.substr(parent_path.size() + 1)
-        : std::string_view{instance.path};
+    auto parent_scope = owning_design_scope(session, instance_path);
+    const auto relative = instance_path.size() > parent_path.size()
+            && instance_path[parent_path.size()] == '.'
+        ? instance_path.substr(parent_path.size() + 1)
+        : instance_path;
     const auto instance_source = design_source(session, instance.source);
     std::size_t segment_begin = 0;
     while (true) {
@@ -743,7 +750,7 @@ bool rebuild_debug_objects(Session& session) {
             session,
             ScopeObjectKind::instance,
             parent_scope,
-            instance.path,
+            std::string { instance_path },
             instance.target,
             instance_source.path)) {
       session.scopes.clear();
@@ -846,7 +853,8 @@ bool rebuild_debug_objects(Session& session) {
     session.drivers.push_back(DriverObject{
         signal,
         process.runtime_index,
-        object.path + ".$driver[" + std::to_string(ordinal) + "]"});
+        std::string { design.path(object.path) } + ".$driver["
+            + std::to_string(ordinal) + "]"});
   }
   return true;
 }

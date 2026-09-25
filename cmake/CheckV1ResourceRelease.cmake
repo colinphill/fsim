@@ -42,7 +42,7 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "v1 portability audit: 4 hosted configurations plus one local sanitizer configuration, 5 two-worker build/test steps, 14 explicit platform files, 8 repair queues"
-    "resource portability contract: five two-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks"
+    "resource portability contract: four two-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks"
     "MSVC Debug contract: /bigobj covers every target and the common 128 MiB stack policy covers C/C++ test hosts"
     "MSVC Release contract: assertions stay live"
     "Windows LLVM contract: x64 GNU Windows ABI target"

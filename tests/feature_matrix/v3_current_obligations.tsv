@@ -229,7 +229,7 @@ V3REJECT-DESIGN	tests/artifact/design_artifact_test.cpp	fsim.artifact.design
 V3REJECT-LIBRARY	tests/library/library_artifact_test.cpp	fsim.library.artifact
 V3REJECT-RUNTIME	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases
 V3REJECT-SEMANTIC	tests/app/application_test_non_project_cli.cpp	fsim.application.core_non_project_cli
-V3REJECT-DESIGN-IR	tests/app/application_test_non_project_cli.cpp	fsim.application.core_non_project_cli
+V3REJECT-DESIGN-IR	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases
 V3REJECT-CONSTRAINT	tests/app/application_test_classes.cpp	fsim.application.classes
 V3REJECT-COVERAGE	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases
 V3REJECT-UVM	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases

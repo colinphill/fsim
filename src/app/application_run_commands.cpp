@@ -143,7 +143,7 @@ int handle_build(
         if (index != 0) {
             output << ", ";
         }
-        output << roots[index];
+        output << prepared.design_ir().path(roots[index]);
     }
     output << " ("
            << signal_count << " signals, "

@@ -476,6 +476,7 @@ add_library(fsim_semantic STATIC
   src/semantic/compiled_design_specialization.cpp
   src/semantic/compiled_design_specialization_vhdl_generate.cpp
   src/semantic/design_ir.cpp
+  src/semantic/hierarchy_path.cpp
   src/semantic/model.cpp
   src/semantic/systemverilog_class_specialization.cpp
   src/semantic/systemverilog_hir.cpp
@@ -745,7 +746,9 @@ add_library(
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
 fsim_configure_library(fsim_runtime)
-target_link_libraries(fsim_runtime PRIVATE fsim_tf)
+target_link_libraries(fsim_runtime
+  PUBLIC fsim_semantic
+  PRIVATE fsim_tf)
 if(WIN32)
   target_link_libraries(fsim_runtime PUBLIC Advapi32)
 endif()
@@ -1018,6 +1021,7 @@ target_link_libraries(
     fsim_diagnostic
     fsim_object_cache
     fsim_runtime
+    fsim_semantic
     scv
 )
 add_library(fsim_api SHARED src/api/api.cpp src/api/api_session.cpp)
@@ -1183,6 +1187,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_inspection.cpp
       src/app/application_design_ir.cpp
       src/app/application_design_artifact_codec.cpp
+      src/app/application_hierarchy_path_codec.cpp
+      src/app/application_runtime_path_codec.cpp
       src/app/application_design_artifact_hir_codec.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
@@ -1361,6 +1367,16 @@ install(
     include/fsim/systemc_abi.h
     include/fsim/version.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim"
+)
+install(
+  FILES include/fsim/diagnostic/diagnostic.hpp
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/diagnostic"
+)
+install(
+  FILES
+    include/fsim/semantic/hierarchy_path.hpp
+    include/fsim/semantic/model.hpp
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/semantic"
 )
 install(
   FILES

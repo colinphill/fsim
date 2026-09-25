@@ -277,12 +277,15 @@ Simulation::Impl::select_standard_coverage(
     }
 
     const auto& occurrences = built.design_ir.instances();
+    const auto occurrence_path = [&](const auto& occurrence) {
+        return built.design_ir.path(occurrence.path);
+    };
     std::vector<std::string> seeds;
     if (selector_is_instance) {
         if (selector == "$root") {
             for (const auto& occurrence : occurrences) {
                 if (!occurrence.parent) {
-                    seeds.push_back(occurrence.path);
+                    seeds.emplace_back(occurrence_path(occurrence));
                 }
             }
         } else {
@@ -290,18 +293,23 @@ Simulation::Impl::select_standard_coverage(
             if (selector.starts_with(root_prefix)) {
                 selector.erase(0U, root_prefix.size());
             }
-            const auto exact = std::ranges::find(
-                occurrences, selector, &semantic::design::InstanceOccurrence::path);
+            const auto exact = std::ranges::find_if(occurrences,
+                [&](const auto& occurrence) {
+                    return occurrence_path(occurrence)
+                        == std::string_view { selector };
+                });
             if (exact != occurrences.end()) {
-                seeds.push_back(exact->path);
+                seeds.emplace_back(occurrence_path(*exact));
             } else if (!instance_context.empty()) {
                 auto relative = std::string { instance_context } + '.'
                     + selector;
-                const auto found = std::ranges::find(occurrences,
-                    relative,
-                    &semantic::design::InstanceOccurrence::path);
+                const auto found = std::ranges::find_if(occurrences,
+                    [&](const auto& occurrence) {
+                        return occurrence_path(occurrence)
+                            == std::string_view { relative };
+                    });
                 if (found != occurrences.end()) {
-                    seeds.push_back(found->path);
+                    seeds.emplace_back(occurrence_path(*found));
                 }
             }
         }
@@ -309,7 +317,7 @@ Simulation::Impl::select_standard_coverage(
         for (const auto& occurrence : occurrences) {
             if (standard_module_name_matches(
                     occurrence.target, selector)) {
-                seeds.push_back(occurrence.path);
+                seeds.emplace_back(occurrence_path(occurrence));
             }
         }
     }
@@ -321,14 +329,15 @@ Simulation::Impl::select_standard_coverage(
     for (const auto& occurrence : occurrences) {
         const bool selected = std::ranges::any_of(
             seeds, [&](const std::string& seed) {
-                return occurrence.path == seed
+                const auto path = occurrence_path(occurrence);
+                return path == std::string_view { seed }
                     || (scope == Scope::hierarchy
-                        && occurrence.path.size() > seed.size()
-                        && occurrence.path.starts_with(seed)
-                        && occurrence.path[seed.size()] == '.');
+                        && path.size() > seed.size()
+                        && path.starts_with(std::string_view { seed })
+                        && path[seed.size()] == '.');
             });
         if (selected) {
-            result.instances.push_back(occurrence.path);
+            result.instances.emplace_back(occurrence_path(occurrence));
         }
     }
     std::ranges::sort(result.instances);
@@ -369,8 +378,9 @@ Simulation::Impl::select_standard_coverage(
                 >= occurrences.size()) {
                 return std::nullopt;
             }
-            const auto& path
-                = occurrences[specialization.instance.value()].path;
+            const auto path = std::string {
+                occurrence_path(occurrences[specialization.instance.value()])
+            };
             if (!std::ranges::binary_search(result.instances, path)) {
                 continue;
             }
@@ -803,7 +813,8 @@ void Simulation::Impl::configure_standard_vpi_coverage()
             const auto root = std::ranges::find_if(
                 built.design_ir.instances(),
                 [](const auto& instance) { return !instance.parent; });
-            const auto object = vpi_registry->find(root->path);
+            const auto object = vpi_registry->find(
+                built.design_ir.path(root->path));
             if (object) {
                 auto& counters
                     = vpi_statement_counters[object.value->handle];

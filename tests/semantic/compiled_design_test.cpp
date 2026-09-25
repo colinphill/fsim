@@ -8950,6 +8950,49 @@ void test_vhdl_package_member_index_contract()
     assert_member(move_assigned, "READY_STATE",
         fixture.enumeration_literal);
     assert_member(move_assigned, "nano_second", fixture.physical_unit);
+
+    const auto make_vhdl_append_input = [] {
+        LinkBundleBuilder builder { "z-appended-package.vhd" };
+        const auto package = builder.add_vhdl_unit(
+            UnitKind::vhdl_package, vhdl::UnitKind::package,
+            "Appended_Package", { }, "MiXeD_Lib");
+        const auto scope = builder.model.units()[package.value()].scope;
+        for (const std::string_view name : {
+                 "Extra_One", "Extra_Two", "Extra_Three", "Extra_Four" }) {
+            const auto declaration_id = builder.model.add_declaration(
+                scope, DeclarationKind::constant, std::string { name },
+                builder.source, builder.origin);
+            vhdl::Declaration declaration;
+            declaration.id = declaration_id;
+            declaration.scope = scope;
+            declaration.form = vhdl::DeclarationForm::constant;
+            declaration.name = name;
+            declaration.source = builder.source;
+            declaration.origin = builder.origin;
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(declaration));
+            builder.vhdl_unit(package).declarations.push_back(
+                declaration_id);
+        }
+        return builder.finish();
+    };
+
+    auto indexed_input = make_vhdl_package_member_index_fixture();
+    auto append_input = make_vhdl_append_input();
+    assert(indexed_input.design.vhdl_type_declarations_named("State_Type"));
+    assert(indexed_input.design.vhdl_package_members("Member_Name"));
+    std::vector<CompiledDesign> link_inputs;
+    link_inputs.push_back(std::move(indexed_input.design));
+    link_inputs.push_back(std::move(append_input));
+    const auto linked = link_compiled_designs(std::move(link_inputs));
+    assert(linked.ok() && linked.design);
+    const auto linked_types
+        = linked.design->vhdl_type_declarations_named("STATE_TYPE");
+    assert(linked_types && linked_types->size() == 1U);
+    const auto linked_members
+        = linked.design->vhdl_package_members("MEMBER_NAME");
+    assert(linked_members && linked_members->size() == 1U);
+    assert(linked_members->front().package == "Package_Index");
 }
 
 } // namespace

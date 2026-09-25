@@ -132,7 +132,8 @@ fsim_require_v2_rejection_tokens(
   "v2-sv-uvm.bin"
   "v2-coverage-state.bin")
 fsim_require_v2_rejection_tokens(tests/app/application_test_non_project_cli.cpp
-  "v2-semantics"
+  "v2-semantics")
+fsim_require_v2_rejection_tokens(tests/app/application_test_artifact_phases.cpp
   "v2-design-ir")
 fsim_require_v2_rejection_tokens(tests/app/application_test_classes.cpp
   "{ 6U, fsim::app::kSystemVerilogConstraintHirStateSchema + 1U }"
@@ -176,7 +177,7 @@ fsim_require_v2_rejection_tokens(tests/CMakeLists.txt
   "CheckCurrentV2InputRejection.cmake")
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 set(FSIM_EXPECTED_DIGEST
-  "44bb61f9403a23c8b916edcdc025f57c26b9b30704a8d204ff03a49c38462019")
+  "601f7f20964c79f13c970ee08c94eb215b71f46e030b5b520c2a8c2cfdd7c095")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 v2-input rejection digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")

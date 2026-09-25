@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_hierarchy_path_codec.hpp"
 #include "../systemc/producer_fingerprint.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
@@ -13,6 +14,7 @@
 #include "fsim/systemc/scv_artifact.hpp"
 #include "fsim/version.hpp"
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <iterator>
@@ -40,7 +42,9 @@ namespace {
         const std::filesystem::path& path,
         const std::string_view checksum,
         diagnostic::Engine& diagnostics,
-        const std::optional<std::uintmax_t> maximum_bytes = std::nullopt)
+        const std::optional<std::uintmax_t> maximum_bytes = std::nullopt,
+        const std::string_view budget_label
+            = "compiled-HIR decode byte budget")
     {
         auto payload = application_detail::read_binary_payload(
             path, maximum_bytes);
@@ -64,7 +68,8 @@ namespace {
                 "FSIM-ART-0014",
                 "cannot " + action + " .fsimdesign payload"
                     + (payload.budget_exceeded
-                            ? " exceeding the compiled-HIR decode byte budget: "
+                            ? " exceeding the " + std::string { budget_label }
+                                + ": "
                             : ": ")
                     + support::path_to_utf8(path));
             return std::nullopt;
@@ -523,9 +528,18 @@ static bool publish_design_artifact_impl(
         : semantic::CompiledDesign { project.semantics,
               project.systemverilog_hir, project.vhdl_hir };
     semantic::refresh_compiled_design_metadata(compiled_design);
+    auto hierarchy_paths = hierarchy_path_codec::encode_canonical_hierarchy_paths(
+        project.design.hierarchy_paths(), project.design_ir.hierarchy_paths());
+    if (!hierarchy_paths) {
+        diagnostics.error("FSIM-ART-0014",
+            "cannot construct the bounded canonical .fsimdesign "
+            "hierarchy-path table");
+        return false;
+    }
     auto compiled_hir = serialize_compiled_hir_bundle(
         compiled_design, diagnostics);
-    auto design_ir = serialize_design_ir_state(project.design_ir, diagnostics);
+    auto design_ir = serialize_design_ir_state(project.design_ir,
+        hierarchy_paths.payload->paths, diagnostics);
     auto coverage = serialize_systemverilog_coverage_state(
         project.systemverilog_coverage, compiled_design.systemverilog_hir,
         compiled_design.semantics, diagnostics);
@@ -656,8 +670,10 @@ static bool publish_design_artifact_impl(
 
     auto runtime = consumable_project != nullptr
         ? serialize_runtime_state(
-              std::move(consumable_project->design), diagnostics)
-        : serialize_runtime_state(project.design, diagnostics);
+              std::move(consumable_project->design),
+              hierarchy_paths.payload->paths, diagnostics)
+        : serialize_runtime_state(project.design,
+              hierarchy_paths.payload->paths, diagnostics);
     if (!runtime) {
         return false;
     }
@@ -677,8 +693,10 @@ static bool publish_design_artifact_impl(
     add_payload("design-ir", "state/design-ir.bin", *design_ir);
     add_payload("sv-coverage", "state/sv-coverage.bin", *coverage);
     add_payload("sv-uvm", "state/sv-uvm.bin", *uvm_state);
+    metadata.payloads.push_back({ "hierarchy-paths",
+        "state/hierarchy-paths.bin", hierarchy_paths.payload->digest });
     std::vector<library::PortablePayload> payloads;
-    payloads.reserve(5);
+    payloads.reserve(6);
     payloads.push_back({ metadata.payloads[0].artifact,
         std::move(*runtime), metadata.payloads[0].checksum });
     payloads.insert(payloads.end(), {
@@ -689,7 +707,10 @@ static bool publish_design_artifact_impl(
         { metadata.payloads[3].artifact, std::move(*coverage),
             metadata.payloads[3].checksum },
         { metadata.payloads[4].artifact, std::move(*uvm_state),
-            metadata.payloads[4].checksum }
+            metadata.payloads[4].checksum },
+        { metadata.payloads[5].artifact,
+            std::move(hierarchy_paths.payload->bytes),
+            metadata.payloads[5].checksum }
     });
     std::set<std::string> plugin_libraries;
     for (std::size_t index = 0; index < project.systemc_plugins.size(); ++index) {
@@ -875,16 +896,37 @@ std::optional<BuiltProject> load_design_artifact(
         }
     }
     const auto* runtime_index = payload_by_kind(*metadata, "runtime");
+    const auto* hierarchy_paths_index = payload_by_kind(
+        *metadata, "hierarchy-paths");
     const auto* compiled_hir_index = payload_by_kind(
         *metadata, "compiled-hir");
     const auto* design_ir_index = payload_by_kind(*metadata, "design-ir");
     const auto* coverage_index = payload_by_kind(*metadata, "sv-coverage");
     const auto* uvm_index = payload_by_kind(*metadata, "sv-uvm");
-    if (runtime_index == nullptr || compiled_hir_index == nullptr
+    if (runtime_index == nullptr || hierarchy_paths_index == nullptr
+        || compiled_hir_index == nullptr
         || design_ir_index == nullptr
         || coverage_index == nullptr || uvm_index == nullptr) {
         diagnostics.error(
             "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
+        return std::nullopt;
+    }
+    auto hierarchy_path_bytes = read_design_payload(
+        directory / hierarchy_paths_index->artifact,
+        hierarchy_paths_index->checksum, diagnostics,
+        hierarchy_path_codec::Limits { }.maximum_payload_bytes,
+        "hierarchy-path decode byte budget");
+    auto hierarchy_paths = hierarchy_path_bytes
+        ? hierarchy_path_codec::decode_hierarchy_paths(
+              *hierarchy_path_bytes)
+        : hierarchy_path_codec::Result { };
+    hierarchy_path_bytes.reset();
+    if (!hierarchy_paths) {
+        if (!diagnostics.has_error()) {
+            diagnostics.error("FSIM-ART-0014",
+                ".fsimdesign hierarchy-path table is malformed or "
+                "exceeds its limits");
+        }
         return std::nullopt;
     }
     const auto runtime_path = directory / runtime_index->artifact;
@@ -901,7 +943,15 @@ std::optional<BuiltProject> load_design_artifact(
         return std::nullopt;
     }
     auto runtime = deserialize_runtime_state(runtime_input, *runtime_size,
-        support::path_to_utf8(runtime_index->artifact), diagnostics);
+        support::path_to_utf8(runtime_index->artifact),
+        hierarchy_paths.payload->paths, diagnostics);
+    if (runtime && !runtime->remap_path_table(
+                       hierarchy_paths.payload->paths)) {
+        diagnostics.error("FSIM-ART-0014",
+            ".fsimdesign runtime hierarchy paths are absent from the "
+            "canonical table");
+        return std::nullopt;
+    }
 
     auto compiled_hir_bytes = read_design_payload(
         directory / compiled_hir_index->artifact,
@@ -925,10 +975,12 @@ std::optional<BuiltProject> load_design_artifact(
 
     auto design_ir_bytes = read_design_payload(
         directory / design_ir_index->artifact, design_ir_index->checksum,
-        diagnostics);
+        diagnostics, kCompiledHirDecodeBudgetBytes,
+        "DesignIR decode byte budget");
     auto design_ir = design_ir_bytes
         ? deserialize_design_ir_state(*design_ir_bytes,
-              support::path_to_utf8(design_ir_index->artifact), diagnostics)
+              support::path_to_utf8(design_ir_index->artifact),
+              hierarchy_paths.payload->paths, diagnostics)
         : std::optional<semantic::design::DesignIr> { };
     design_ir_bytes.reset();
 
@@ -978,7 +1030,13 @@ std::optional<BuiltProject> load_design_artifact(
         metadata->uvm_release,
         metadata->uvm_source_identity
     };
-    if (runtime->roots() != roots || design_ir->roots() != roots
+    const auto design_roots_equal = std::ranges::equal(
+        design_ir->roots(), roots,
+        [&design_ir](const semantic::HierarchyPathId id,
+            const std::string& root) {
+            return design_ir->path(id) == root;
+        });
+    if (runtime->roots() != roots || !design_roots_equal
         || semantics->units().size() != metadata->unit_count
         || semantics->source_files().size() != metadata->semantic_source_count
         || runtime->specializations().size() != metadata->specialization_count

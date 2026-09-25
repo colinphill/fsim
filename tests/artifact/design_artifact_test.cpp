@@ -41,6 +41,12 @@ void store_u32(std::string& bytes, const std::size_t offset,
     }
 }
 
+void append_u32(std::string& bytes, const std::uint32_t value) {
+  for (unsigned shift = 0U; shift < 32U; shift += 8U) {
+    bytes.push_back(static_cast<char>((value >> shift) & 0xffU));
+  }
+}
+
 void store_u64(std::string& bytes, const std::size_t offset,
     const std::uint64_t value)
 {
@@ -66,7 +72,7 @@ void make_tree_writable(const std::filesystem::path& root) {
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kDesignFormatVersion == 13U);
+    static_assert(fsim::artifact::kDesignFormatVersion == 14U);
     static_assert(fsim::runtime_abi_version == 1U);
     std::string trace_source(257U, '0');
     constexpr char trace_symbols[] = { '0', '1', 'X', 'Z' };
@@ -376,6 +382,13 @@ int main() {
   const std::string systemc_observation_bytes(
       reinterpret_cast<const char*>(systemc_observation_encoded->data()),
       systemc_observation_encoded->size());
+  std::string hierarchy_paths_bytes { "FSIMHPT1" };
+  append_u32(hierarchy_paths_bytes, 1U);
+  append_u32(hierarchy_paths_bytes, 2U);
+  append_u32(hierarchy_paths_bytes, 7U);
+  hierarchy_paths_bytes.append("primary");
+  append_u32(hierarchy_paths_bytes, 13U);
+  hierarchy_paths_bytes.append("primary.child");
   fsim::artifact::DesignMetadata metadata;
   const auto coverage_identity
       = fsim::artifact::make_code_coverage_artifact_identity(false).identity;
@@ -439,7 +452,9 @@ int main() {
       {"systemc-observation-v1", "state/systemc-observations.bin",
        checksum(systemc_observation_bytes)},
       {"systemc-trace-dirty-v1", "state/systemc-trace.fst",
-       checksum(fst_output.str())}};
+       checksum(fst_output.str())},
+      {"hierarchy-paths", "state/hierarchy-paths.bin",
+       checksum(hierarchy_paths_bytes)}};
   metadata.specialization_cache_keys = {checksum("specialization")};
   metadata.trace_archive = "00ff";
   metadata.unit_count = 2;
@@ -449,9 +464,26 @@ int main() {
   metadata.process_count = 1;
   metadata.design_digest = fsim::artifact::compute_design_digest(metadata);
 
+  auto missing_hierarchy_paths = metadata;
+  std::erase_if(missing_hierarchy_paths.payloads, [](const auto& payload) {
+    return payload.kind == "hierarchy-paths";
+  });
+  missing_hierarchy_paths.design_digest =
+      fsim::artifact::compute_design_digest(missing_hierarchy_paths);
+  fsim::diagnostic::Engine missing_hierarchy_paths_diagnostics;
+  assert(!fsim::artifact::deserialize_design_metadata(
+      fsim::artifact::serialize_design_metadata(missing_hierarchy_paths),
+      "missing-hierarchy-paths", missing_hierarchy_paths_diagnostics));
+  assert(std::ranges::any_of(
+      missing_hierarchy_paths_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ART-0011"
+            && diagnostic.message.find(
+                   "missing required kind 'hierarchy-paths'")
+                != std::string::npos;
+      }));
+
   const auto encoded = fsim::artifact::serialize_design_metadata(metadata);
-  assert(checksum(encoded)
-      == "948aa79cec6340ffc53a9a46589493fe40b6c6a78ae6544bc401d2533e4edc30");
   for (std::size_t length = 0U; length < 20U; ++length) {
     fsim::diagnostic::Engine truncated_diagnostics;
     assert(!fsim::artifact::deserialize_design_metadata(
@@ -612,7 +644,7 @@ int main() {
                                                   const auto& diagnostics,
                                                   const std::string& found) {
       const auto expected = "unsupported .fsimdesign identity: found " + found
-          + "; required format 13 and runtime ABI 1; regenerate .fsimdesign "
+          + "; required format 14 and runtime ABI 1; regenerate .fsimdesign "
             "with this fsim build";
       return std::ranges::any_of(
           diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -622,7 +654,7 @@ int main() {
   };
 
   for (const auto stale_format :
-      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U }) {
+      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U }) {
       auto stale_header = encoded.substr(0, 16U);
       store_u32(stale_header, 8U, stale_format);
       fsim::diagnostic::Engine stale_format_diagnostics;
@@ -649,7 +681,7 @@ int main() {
   assert(!fsim::artifact::deserialize_design_metadata(
       future_header, "future-format-design", future_header_diagnostics));
   assert(has_design_identity_diagnostic(
-      future_header_diagnostics, "format 14 and runtime ABI 1"));
+      future_header_diagnostics, "format 15 and runtime ABI 1"));
 
   auto corrupt_magic = encoded;
   corrupt_magic[0] = 'X';
@@ -679,7 +711,7 @@ int main() {
       incompatible_runtime, "incompatible-runtime-abi",
       incompatible_runtime_diagnostics));
   assert(has_design_identity_diagnostic(
-      incompatible_runtime_diagnostics, "format 13 and runtime ABI 2"));
+      incompatible_runtime_diagnostics, "format 14 and runtime ABI 2"));
 
   auto oversized_root = encoded;
   store_u64(oversized_root, 16U, std::numeric_limits<std::uint64_t>::max());
@@ -727,7 +759,8 @@ int main() {
       {metadata.payloads[6].artifact, channel_inventory_bytes},
       {metadata.payloads[7].artifact, binding_inventory_bytes},
       {metadata.payloads[8].artifact, systemc_observation_bytes},
-      {metadata.payloads[9].artifact, fst_output.str()}};
+      {metadata.payloads[9].artifact, fst_output.str()},
+      {metadata.payloads[10].artifact, hierarchy_paths_bytes}};
   auto traversal_metadata = metadata;
   traversal_metadata.payloads[0].artifact = "../escape.fsimir";
   auto traversal_payloads = payloads;
@@ -747,7 +780,7 @@ int main() {
       stale_publication_directory, stale_publication_metadata, payloads,
       stale_publication_diagnostics));
   assert(has_design_identity_diagnostic(
-      stale_publication_diagnostics, "format 12 and runtime ABI 1"));
+      stale_publication_diagnostics, "format 13 and runtime ABI 1"));
   assert(!std::filesystem::exists(stale_publication_directory));
   fsim::diagnostic::Engine publish_diagnostics;
   assert(fsim::artifact::publish_design(directory, metadata, payloads,

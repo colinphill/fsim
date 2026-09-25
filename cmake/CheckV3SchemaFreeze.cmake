@@ -143,11 +143,11 @@ fsim_require_schema_tokens(include/fsim/library/artifact.hpp
   "kPortableSchemaVersion = 15"
   "kCompiledHirSchemaVersion = 1")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
-  "kDesignFormatVersion = 13")
+  "kDesignFormatVersion = 14")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
-  "kRuntimeStateSchema = 63"
+  "kRuntimeStateSchema = 64"
   "kSemanticStateSchema = 4"
-  "kDesignIrStateSchema = 4"
+  "kDesignIrStateSchema = 5"
   "kCompiledHirBundleSchema = 1"
   "kSystemVerilogConstraintHirStateSchema = 8"
   "kSystemVerilogCoverageStateSchema = 7"
@@ -158,4 +158,4 @@ fsim_require_schema_tokens(src/compiler/native_cache_schema.hpp
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 message(STATUS
-  "v3 schema freeze passed: domains=6 owner-rows=264 manifest=3 object=8/15/1 design=13/6 checkpoint=63/8/6 cache=v169 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 schema freeze passed: domains=6 owner-rows=264 manifest=3 object=8/15/1 design=14/6 checkpoint=64/8/6 cache=v169 digest=${FSIM_LEDGER_DIGEST}")

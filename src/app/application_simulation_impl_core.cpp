@@ -684,7 +684,12 @@ Simulation::Impl::backdoor_signal(const std::string_view path) const noexcept
 {
     const auto found = std::ranges::find_if(
         built.design_ir.objects(), [&](const auto& object) {
-            return design_object_is_signal_bearing(object) && object.path == path && object.runtime_index <= std::numeric_limits<runtime::simir::SignalId>::max();
+            return design_object_is_signal_bearing(object)
+                && object.path.valid()
+                && object.path.value() < built.design_ir.hierarchy_paths().size()
+                && built.design_ir.path(object.path) == path
+                && object.runtime_index
+                    <= std::numeric_limits<runtime::simir::SignalId>::max();
         });
     return found == built.design_ir.objects().end()
         ? std::nullopt

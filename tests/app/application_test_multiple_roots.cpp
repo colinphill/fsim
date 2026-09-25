@@ -58,8 +58,12 @@ endmodule
       reference_project->design.roots()
       == std::vector<std::string>{"source", "sink"}));
   assert(reference_project->design.top() == "source");
-  assert(reference_project->design_ir.roots()
-         == reference_project->design.roots());
+  assert(std::ranges::equal(
+      reference_project->design_ir.roots(),
+      reference_project->design.roots(),
+      [&](const auto path, const auto& expected) {
+        return reference_project->design_ir.path(path) == expected;
+      }));
   assert(reference_project->design_ir.instances().size() == 2);
   assert(!reference_project->design_ir.instances()[0].parent);
   assert(!reference_project->design_ir.instances()[1].parent);

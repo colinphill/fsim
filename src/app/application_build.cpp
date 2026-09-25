@@ -707,6 +707,10 @@ std::optional<BuiltProject> build_checked_project(
             design_ir, *elaborated.design, runtime_paths)) {
         throw std::logic_error { "constructed an incomplete DesignIR projection" };
     }
+    if (!elaborated.design->rebind_path_table(
+            design_ir.hierarchy_paths())) {
+        throw std::logic_error { "constructed inconsistent hierarchy paths" };
+    }
     auto specialization_cache_keys = make_specialization_cache_keys(
         config,
         *checked,

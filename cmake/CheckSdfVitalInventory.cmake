@@ -72,8 +72,8 @@ endforeach()
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_TEXT)
 foreach(FSIM_TOKEN IN ITEMS
     "NAME fsim.sdf-vital-inventory"
-    "CheckSdfVitalInventory.cmake"
-    "fsim.sdf-vital-inventory")
+    "-DFSIM_INVENTORY_KIND=sdf-vital"
+    "CheckCurrentTraceTimingInventory.cmake")
   string(FIND "${FSIM_TEST_CMAKE_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_OFFSET)
   if(FSIM_TOKEN_OFFSET EQUAL -1)
     message(FATAL_ERROR "SDF VITAL inventory registration lost token: ${FSIM_TOKEN}")

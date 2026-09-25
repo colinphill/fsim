@@ -483,7 +483,8 @@ namespace application_detail {
             }
             const auto& instance = project.design_ir.instances().at(
                 specialization.instance.value());
-            provenance_by_path.insert_or_assign(instance.path,
+            provenance_by_path.insert_or_assign(
+                std::string { project.design_ir.path(instance.path) },
                 ScopeProvenance { provenance->standard,
                     provenance->predefined_environment,
                     provenance->compatibility_profile,
@@ -577,7 +578,8 @@ namespace application_detail {
             vhdl_specializations.insert(specialization.id.value());
             const auto& instance = project.design_ir.instances().at(
                 specialization.instance.value());
-            const auto parent = ensure_scope(instance.path);
+            const auto instance_path = project.design_ir.path(instance.path);
+            const auto parent = ensure_scope(instance_path);
             const auto* unit = unit_for(project.vhdl_hir, specialization.unit);
             if (!unit) {
                 continue;
@@ -590,7 +592,9 @@ namespace application_detail {
                     if (!declaration || declaration->name.empty()) {
                         continue;
                     }
-                    const auto path = instance.path + "." + declaration->name;
+                    const auto path
+                        = std::string { instance_path } + "."
+                        + declaration->name;
                     if (handles.contains(path)) {
                         continue;
                     }
@@ -642,10 +646,12 @@ namespace application_detail {
                 object.specialization.value());
             const auto& instance = project.design_ir.instances().at(
                 specialization.instance.value());
-            const auto path = occurrence_path(instance.path, object.path);
+            const auto instance_path = project.design_ir.path(instance.path);
+            const auto object_path = project.design_ir.path(object.path);
+            const auto path = occurrence_path(instance_path, object_path);
             const auto parent_path = parent_path_name(path);
             auto parent = ensure_scope(
-                parent_path.empty() ? instance.path : parent_path);
+                parent_path.empty() ? instance_path : parent_path);
             if (object.parent_object) {
                 const auto& parent_object = project.design_ir.objects().at(
                     object.parent_object->value());
@@ -655,7 +661,8 @@ namespace application_detail {
                 const auto& parent_instance = project.design_ir.instances().at(
                     parent_specialization.instance.value());
                 const auto parent_object_path = occurrence_path(
-                    parent_instance.path, parent_object.path);
+                    project.design_ir.path(parent_instance.path),
+                    project.design_ir.path(parent_object.path));
                 if (const auto found = handles.find(parent_object_path);
                     found != handles.end()) {
                     parent = found->second;
@@ -703,7 +710,8 @@ namespace application_detail {
                 process.specialization.value());
             const auto& instance = project.design_ir.instances().at(
                 specialization.instance.value());
-            const auto path = occurrence_path(instance.path, process.name);
+            const auto instance_path = project.design_ir.path(instance.path);
+            const auto path = occurrence_path(instance_path, process.name);
             if (handles.contains(path)) {
                 continue;
             }
@@ -711,7 +719,7 @@ namespace application_detail {
             descriptor.kind = runtime::VhdlVhpiObjectKind::Process;
             const auto parent_path = parent_path_name(path);
             descriptor.parent = ensure_scope(
-                parent_path.empty() ? instance.path : parent_path);
+                parent_path.empty() ? instance_path : parent_path);
             const auto name = vhpi_name(leaf_path_name(path));
             descriptor.name = name;
             const auto* source_process
@@ -747,8 +755,9 @@ std::vector<std::string> Simulation::vhdl_provenance_comments() const
         }
         const auto& instance = design_ir().instances().at(
             specialization.instance.value());
+        const auto instance_path = design_ir().path(instance.path);
         std::ostringstream comment;
-        comment << "fsim-vhdl-scope path=" << instance.path << " unit="
+        comment << "fsim-vhdl-scope path=" << instance_path << " unit="
                 << specialization.library << ':' << specialization.name
                 << " source="
                 << (specialization.source
@@ -787,6 +796,7 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
         records += count;
     };
     const auto& hir = vhdl_hir();
+    const auto& design = design_ir();
     std::set<std::string, std::less<>> declaration_paths;
     for (const auto& specialization : design_ir().specializations()) {
         if (specialization.language != semantic::Language::vhdl) {
@@ -794,9 +804,10 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
         }
         const auto& instance = design_ir().instances().at(
             specialization.instance.value());
+        const auto instance_path = design.path(instance.path);
         reserve(1U);
         VhdlDebugScope scope;
-        scope.path = instance.path;
+        scope.path = std::string { instance_path };
         scope.library = specialization.library;
         scope.unit = specialization.name;
         if (const auto* provenance = unit_provenance(
@@ -842,7 +853,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
             reserve(1U);
             const auto* type = type_for(hir, *declaration);
             VhdlDebugDeclaration item;
-            item.path = instance.path + "." + declaration->name;
+            item.path = std::string { instance_path } + "."
+                + declaration->name;
             item.name = declaration->name;
             item.type = type_name(*declaration, type);
             item.kind = debug_kind(*declaration, type);
@@ -858,7 +870,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
                     if (candidate.specialization != specialization.id) {
                         return false;
                     }
-                    return occurrence_path(instance.path, candidate.path)
+                    return occurrence_path(
+                               instance_path, design.path(candidate.path))
                         == item.path;
                 });
             if (object != design_ir().objects().end()) {
@@ -883,7 +896,7 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
             const auto& process = design_ir().processes().at(process_id.value());
             reserve(1U);
             VhdlDebugProcess item;
-            item.path = occurrence_path(instance.path, process.name);
+            item.path = occurrence_path(instance_path, process.name);
             const auto* source_process = vhdl_process_for(hir, process);
             const auto source = source_process
                 ? std::optional { source_process->source }
@@ -903,7 +916,8 @@ VhdlDebugSnapshot Simulation::vhdl_debug_snapshot(
             object.specialization.value());
         const auto& instance = design_ir().instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(instance.path, object.path);
+        const auto path = occurrence_path(
+            design.path(instance.path), design.path(object.path));
         if (specialization.language != semantic::Language::vhdl
             || declaration_paths.contains(path)) {
             continue;

@@ -17,9 +17,9 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 63;
+inline constexpr std::uint32_t kRuntimeStateSchema = 64;
 inline constexpr std::uint32_t kSemanticStateSchema = 4;
-inline constexpr std::uint32_t kDesignIrStateSchema = 4;
+inline constexpr std::uint32_t kDesignIrStateSchema = 5;
 inline constexpr std::uint32_t kCompiledHirBundleSchema = 1;
 inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 8;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
@@ -32,13 +32,30 @@ inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
     const elaboration::ElaboratedDesign& design,
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
+    const elaboration::ElaboratedDesign& design,
+    const semantic::HierarchyPathTable& paths,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_runtime_state(
     elaboration::ElaboratedDesign&& design,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_runtime_state(
+    elaboration::ElaboratedDesign&& design,
+    const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<std::string> runtime_state_checksum(
     const elaboration::ElaboratedDesignState& state,
     diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> runtime_state_checksum(
+    const elaboration::ElaboratedDesignState& state,
+    const semantic::HierarchyPathTable& paths,
+    diagnostic::Engine& diagnostics);
 [[nodiscard]] bool serialize_runtime_state(
     const elaboration::ElaboratedDesignState& state,
+    std::ostream& output,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] bool serialize_runtime_state(
+    const elaboration::ElaboratedDesignState& state,
+    const semantic::HierarchyPathTable& paths,
     std::ostream& output,
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<elaboration::ElaboratedDesign>
@@ -48,9 +65,22 @@ deserialize_runtime_state(
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<elaboration::ElaboratedDesign>
 deserialize_runtime_state(
+    std::string_view bytes,
+    std::string source_name,
+    const semantic::HierarchyPathTable& paths,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<elaboration::ElaboratedDesign>
+deserialize_runtime_state(
     std::istream& input,
     std::uint64_t size,
     std::string source_name,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<elaboration::ElaboratedDesign>
+deserialize_runtime_state(
+    std::istream& input,
+    std::uint64_t size,
+    std::string source_name,
+    const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<std::string> serialize_semantic_state(
@@ -73,10 +103,20 @@ deserialize_compiled_hir_bundle(
 [[nodiscard]] std::optional<std::string> serialize_design_ir_state(
     const semantic::design::DesignIr& design,
     diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::string> serialize_design_ir_state(
+    const semantic::design::DesignIr& design,
+    const semantic::HierarchyPathTable& paths,
+    diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<semantic::design::DesignIr>
 deserialize_design_ir_state(
     std::string_view bytes,
     std::string source_name,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<semantic::design::DesignIr>
+deserialize_design_ir_state(
+    std::string_view bytes,
+    std::string source_name,
+    const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<std::string>

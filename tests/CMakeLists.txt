@@ -47,6 +47,18 @@ fsim_register_simple_test(
 )
 
 add_executable(
+  fsim_hierarchy_path_tests
+  semantic/hierarchy_path_test.cpp
+)
+fsim_configure_test(fsim_hierarchy_path_tests)
+target_link_libraries(fsim_hierarchy_path_tests PRIVATE fsim_semantic)
+fsim_register_simple_test(
+  fsim.semantic.hierarchy_paths
+  fsim_hierarchy_path_tests
+  "fast;semantic;hierarchy;paths;ownership;lifetime"
+)
+
+add_executable(
   fsim_semantic_class_specialization_tests
   semantic/systemverilog_class_specialization_test.cpp
 )
@@ -1076,6 +1088,54 @@ fsim_register_simple_test(
   fsim.support.bounded-bytes
   fsim_bounded_bytes_tests
   "fast;support;codec;bytes;bounds;endianness;positive;negative"
+)
+
+fsim_add_single_source_test_target(
+  fsim_hierarchy_path_artifact_tests
+  app/hierarchy_path_artifact_test.cpp
+  fsim_application
+)
+fsim_register_simple_test(
+  fsim.application.hierarchy-path-artifact
+  fsim_hierarchy_path_artifact_tests
+  "fast;application;artifact;hierarchy;paths;codec"
+)
+
+fsim_add_single_source_test_target(
+  fsim_runtime_path_codec_tests
+  app/application_runtime_path_codec_test.cpp
+  fsim_application
+)
+fsim_register_simple_test(
+  fsim.application.runtime-path-codec
+  fsim_runtime_path_codec_tests
+  "fast;application;artifact;runtime;hierarchy;paths;codec;negative"
+)
+
+fsim_add_single_source_test_target(
+  fsim_hierarchy_path_lifetime_tests
+  app/hierarchy_path_lifetime_application_test.cpp
+  fsim_application
+)
+target_include_directories(
+  fsim_hierarchy_path_lifetime_tests
+  PRIVATE "${PROJECT_SOURCE_DIR}/src/app"
+)
+fsim_register_simple_test(
+  fsim.application.hierarchy-path-lifetime
+  fsim_hierarchy_path_lifetime_tests
+  "fast;application;artifact;hierarchy;paths;ownership;observer"
+)
+
+fsim_add_single_source_test_target(
+  fsim_hierarchy_path_artifact_reload_tests
+  app/hierarchy_path_artifact_reload_test.cpp
+  fsim_application
+)
+fsim_register_simple_test(
+  fsim.application.hierarchy-path-artifact-reload
+  fsim_hierarchy_path_artifact_reload_tests
+  "fast;application;artifact;hierarchy;paths;ownership;reload"
 )
 
 add_executable(fsim_ctype_whitespace_tests support/ctype_whitespace_test.cpp)

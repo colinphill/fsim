@@ -15,12 +15,12 @@ REF174-12	vhpi-abi	VHPI-host-v2-plugin-v1	append-only-native	Native-plug-in-and-
 REF174-13	uvm-foreign-abi	UVM-foreign-ABI-1	append-only-native	Native-plug-in-and-foreign-ABIs	include/fsim/runtime/uvm_foreign_abi.h
 REF174-14	project-manifest	fsim.toml-schema-2	exact-current-source	Current-persisted-identities	tests/feature_matrix/project_manifest_contract.tsv
 REF174-15	portable-object	fsimobj-format-8-schema-15-compiled-hir-1	exact-current-portable	Current-persisted-identities	tests/feature_matrix/portable_object_contract.tsv
-REF174-16	standalone-design	fsimdesign-format-13-runtime-ABI-1	exact-current-portable	Current-persisted-identities	tests/feature_matrix/design_library_contract.tsv
+REF174-16	standalone-design	fsimdesign-format-14-runtime-ABI-1-hierarchy-paths-schema-1	exact-current-portable	Current-persisted-identities	tests/feature_matrix/design_library_contract.tsv
 REF174-17	mapped-library	fsimlib-format-6-schema-15-compiled-hir-1	exact-current-portable	Current-persisted-identities	tests/feature_matrix/design_library_contract.tsv
 REF174-18	systemc-object	fsimscobj-format-2-runtime-1-systemc-4	exact-current-native	Current-persisted-identities	tests/feature_matrix/incremental_native_contract.tsv
 REF174-19	systemc-plugin	fsimscplugin-format-2-runtime-1-systemc-4	exact-current-native	Current-persisted-identities	tests/feature_matrix/incremental_native_contract.tsv
 REF174-20	object-cache-envelope	FSIM-OBJECT-CACHE-V1-CHECKSUMMED-256MiB	exact-native-and-compiled-hir-cache	Current-persisted-identities	src/compiler/object_cache.cpp
-REF174-21	design-state	runtime-62-semantic-4-designir-4-compiled-hir-1-sv-hir-8-coverage-7-vhdl-hir-5	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv
+REF174-21	design-state	runtime-64-semantic-4-designir-5-hierarchy-path-table-1-compiled-hir-1-sv-hir-8-coverage-7-vhdl-hir-5	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv
 REF174-22	sdf-nested	schemas-1-2-4	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv
 REF174-23	trace-nested	archive-1-fst-v2	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv
 REF174-24	scv-nested	artifact-cache-protocol-transport-transaction-1	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv

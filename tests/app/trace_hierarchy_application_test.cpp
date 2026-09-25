@@ -18,6 +18,8 @@ namespace {
 using fsim::semantic::design::InstanceOccurrenceId;
 using fsim::semantic::design::ObjectId;
 using fsim::semantic::design::SpecializationId;
+using fsim::semantic::HierarchyPathId;
+using fsim::semantic::HierarchyPathTable;
 
 struct Fixture {
     fsim::semantic::design::DesignIr design;
@@ -46,6 +48,8 @@ struct Fixture {
     };
 
     Fixture result;
+    HierarchyPathTable::Builder paths;
+    result.design.mutable_top() = paths.intern(roots.front().alias);
     for (std::size_t index = 0; index < roots.size(); ++index) {
         const auto specialization
             = SpecializationId::from_index(static_cast<std::uint32_t>(index));
@@ -61,9 +65,9 @@ struct Fixture {
         occurrence.id = instance;
         occurrence.specialization = specialization;
         occurrence.name = roots[index].alias;
-        occurrence.path = roots[index].alias;
+        occurrence.path = paths.intern(roots[index].alias);
         occurrence.target = roots[index].unit;
-        result.design.mutable_roots().push_back(roots[index].alias);
+        result.design.mutable_roots().push_back(occurrence.path);
         result.design.mutable_specializations().push_back(
             std::move(specialization_record));
         result.design.mutable_instances().push_back(std::move(occurrence));
@@ -73,7 +77,7 @@ struct Fixture {
         object.specialization = specialization;
         object.kind = ObjectKind::signal;
         object.name = "value";
-        object.path = "value";
+        object.path = paths.intern("value");
         object.width = 1U;
         object.runtime_index = index;
         result.objects[index] = object.id;
@@ -85,11 +89,14 @@ struct Fixture {
     alias.specialization = SpecializationId::from_index(2U);
     alias.kind = ObjectKind::signal;
     alias.name = "verilog_value";
-    alias.path = "vhdl_root.verilog_value";
+    alias.path = paths.intern("vhdl_root.verilog_value");
     alias.width = 1U;
     alias.runtime_index = 0U;
     result.objects[4] = alias.id;
     result.design.mutable_objects().push_back(std::move(alias));
+    if (!result.design.rebind_path_table(std::move(paths).freeze())) {
+        throw std::logic_error("trace fixture path table does not match IDs");
+    }
     return result;
 }
 
@@ -132,7 +139,8 @@ void test_canonical_mixed_root_hierarchy()
         assert(canonical[index].path == expected_paths[index]);
         assert(canonical[index].source.language == expected_languages[index]);
         assert(canonical[index].source.root_identity
-            == fixture.design.roots()[index == 4U ? 2U : index]);
+            == fixture.design.path(
+                fixture.design.roots()[index == 4U ? 2U : index]));
     }
     assert(canonical[0].source.library == "vlib");
     assert(canonical[1].source.library == "svlib");
@@ -197,10 +205,30 @@ void test_invalid_hierarchy_provenance()
     });
     expect_invalid([] {
         auto fixture = make_fixture();
-        fixture.design.mutable_objects().front().path.clear();
+        fixture.design.mutable_objects().front().path = HierarchyPathId { };
         static_cast<void>(canonical_fst_trace_object(
             fixture.design, fixture.design.objects().front()));
     });
+}
+
+void test_design_ir_rejects_a_renamed_path_prefix()
+{
+    auto fixture = make_fixture();
+    const auto first_root = fixture.design.roots().front();
+    const auto retained_path = fixture.design.path(first_root);
+    const auto& original = fixture.design.hierarchy_paths();
+    HierarchyPathTable::Builder replacement;
+    for (std::size_t index = 0; index < original.size(); ++index) {
+        const auto id = HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        static_cast<void>(replacement.intern(
+            index == 0U ? "renamed_root" : original.view(id)));
+    }
+
+    const bool rebound = fixture.design.rebind_path_table(
+        std::move(replacement).freeze());
+    assert(!rebound);
+    assert(fixture.design.path(first_root) == retained_path);
 }
 
 void test_systemc_channel_inventory_path()
@@ -249,7 +277,8 @@ void test_systemc_channel_inventory_path()
         diagnostics));
     assert(bindings.freeze(diagnostics));
     assert(bindings.snapshot().bindings.front().descriptor.declared_path
-        == fixture.design.objects()[fixture.objects[4].value()].path);
+        == fixture.design.path(
+            fixture.design.objects()[fixture.objects[4].value()].path));
     assert(bindings.snapshot().bindings.front()
             .descriptor.targets.front().final_channel
         == inventory.snapshot().channels.front().channel);
@@ -262,5 +291,6 @@ int main()
 {
     test_canonical_mixed_root_hierarchy();
     test_invalid_hierarchy_provenance();
+    test_design_ir_rejects_a_renamed_path_prefix();
     test_systemc_channel_inventory_path();
 }

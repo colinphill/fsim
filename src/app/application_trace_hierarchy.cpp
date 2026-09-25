@@ -75,23 +75,37 @@ FstTraceObject canonical_fst_trace_object(
         throw std::invalid_argument(
             "FST trace specialization lacks library or unit provenance");
     }
-    if (occurrence->path.empty() || object.path.empty()) {
+    const auto checked_path = [&](const semantic::HierarchyPathId id) {
+        if (!id.valid() || id.value() >= design.hierarchy_paths().size()) {
+            throw std::invalid_argument(
+                "FST trace object has an invalid hierarchy path reference");
+        }
+        return design.path(id);
+    };
+    const auto occurrence_path = checked_path(occurrence->path);
+    const auto object_path = checked_path(object.path);
+    const auto root_path = checked_path(root_occurrence->path);
+    if (occurrence_path.empty() || object_path.empty()) {
         throw std::invalid_argument(
             "FST trace object lacks canonical hierarchy identity");
     }
 
     FstTraceObject result;
-    result.path = owns_path(occurrence->path, object.path)
-        ? object.path
-        : occurrence->path + "." + object.path;
+    if (owns_path(occurrence_path, object_path)) {
+        result.path = std::string { object_path };
+    } else {
+        result.path.append(occurrence_path);
+        result.path.push_back('.');
+        result.path.append(object_path);
+    }
     result.source.kind = specialization.language == semantic::Language::systemc
         ? runtime::TraceSourceKind::SystemC
         : runtime::TraceSourceKind::Hdl;
     result.source.language = trace_language(specialization.language);
-    result.source.root_identity = root_occurrence->path;
+    result.source.root_identity = std::string { root_path };
     result.source.library = specialization.library;
     result.source.owner_identity = specialization.library + ":"
-        + specialization.name + "@" + occurrence->path;
+        + specialization.name + "@" + std::string { occurrence_path };
     return result;
 }
 

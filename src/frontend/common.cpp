@@ -16,7 +16,25 @@ namespace {
 
 struct SourceNameBucket {
     std::mutex mutex;
-    std::unordered_map<std::string, std::weak_ptr<const std::string>> values;
+    struct Hash {
+        using is_transparent = void;
+
+        [[nodiscard]] std::size_t operator()(
+            const std::string_view value) const noexcept {
+            return std::hash<std::string_view> { }(value);
+        }
+    };
+    struct Equal {
+        using is_transparent = void;
+
+        [[nodiscard]] bool operator()(
+            const std::string_view left,
+            const std::string_view right) const noexcept {
+            return left == right;
+        }
+    };
+    std::unordered_map<
+        std::string, std::weak_ptr<const std::string>, Hash, Equal> values;
 };
 
 std::array<SourceNameBucket, 64>& source_name_buckets()
@@ -27,7 +45,12 @@ std::array<SourceNameBucket, 64>& source_name_buckets()
 
 } // namespace
 
-std::shared_ptr<const std::string> SourceName::intern(std::string value)
+namespace {
+
+template <typename CreateValue>
+std::shared_ptr<const std::string> intern_source_name(
+    const std::string_view value,
+    CreateValue&& create_value)
 {
     if (value.empty()) {
         return { };
@@ -42,9 +65,28 @@ std::shared_ptr<const std::string> SourceName::intern(std::string value)
             return existing;
         }
     }
-    auto result = std::make_shared<const std::string>(std::move(value));
+    auto result = create_value();
     bucket.values.insert_or_assign(*result, result);
     return result;
+}
+
+} // namespace
+
+std::shared_ptr<const std::string> SourceName::intern(std::string value)
+{
+    const auto view = std::string_view { value };
+    return intern_source_name(view, [&value] {
+        return std::make_shared<const std::string>(std::move(value));
+    });
+}
+
+std::shared_ptr<const std::string> SourceName::intern(
+    const std::string_view value)
+{
+    return intern_source_name(value, [value] {
+        return std::make_shared<const std::string>(
+            value.data(), value.size());
+    });
 }
 
 SourceName::SourceName(std::string value)
@@ -53,12 +95,14 @@ SourceName::SourceName(std::string value)
 }
 
 SourceName::SourceName(const std::string_view value)
-    : SourceName(std::string { value })
+    : value_ { intern(value) }
 {
 }
 
 SourceName::SourceName(const char* const value)
-    : SourceName(value == nullptr ? std::string { } : std::string { value })
+    : value_ { value == nullptr
+            ? std::shared_ptr<const std::string> { }
+            : intern(std::string_view { value }) }
 {
 }
 
@@ -70,12 +114,16 @@ SourceName& SourceName::operator=(std::string value)
 
 SourceName& SourceName::operator=(const std::string_view value)
 {
-    return *this = std::string { value };
+    value_ = intern(value);
+    return *this;
 }
 
 SourceName& SourceName::operator=(const char* const value)
 {
-    return *this = value == nullptr ? std::string { } : std::string { value };
+    value_ = value == nullptr
+        ? std::shared_ptr<const std::string> { }
+        : intern(std::string_view { value });
+    return *this;
 }
 
 const std::string& SourceName::str() const noexcept

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace {
 
@@ -89,6 +90,66 @@ void test_declaration_identities()
     assert(model.variable(class_leaf).type
         != model.variable(other_class_leaf).type);
     assert(model.alias(class_alias).target == class_leaf);
+}
+
+void test_interned_path_owners_survive_declaration_copies()
+{
+    using namespace fsim::runtime;
+    using fsim::semantic::HierarchyPathTable;
+
+    TraceVariableDeclaration detached_variable;
+    TraceAliasDeclaration detached_alias;
+    TraceSourceDeclaration detached_source;
+    TraceScopeDeclaration detached_scope;
+    std::string_view shared_path_view;
+    std::string_view fallback_path_view;
+    {
+        HierarchyPathTable::Builder path_builder;
+        const auto shared_root_path = path_builder.intern("shared");
+        static_cast<void>(path_builder.intern("shared.top"));
+        const auto shared_signal_path
+            = path_builder.intern("shared.top.bus");
+        const auto shared_paths = std::move(path_builder).freeze();
+
+        TraceDeclarationBuilder builder { shared_paths };
+        const auto bus = builder.add_variable("shared.top.bus", 8);
+        const auto alias = builder.add_alias("dynamic.monitor.copy", bus);
+        const auto model = std::move(builder).freeze();
+
+        const auto& variable = model.variable(bus);
+        const auto& source = model.source(variable.source);
+        assert(variable.hierarchical_name.view() == "shared.top.bus");
+        const std::string owning_path = variable.hierarchical_name;
+        assert(owning_path == "shared.top.bus");
+        assert(variable.hierarchical_name.view().data()
+            == shared_paths.view(shared_signal_path).data());
+        assert(source.canonical_name.view().data()
+            == shared_paths.view(shared_signal_path).data());
+        assert(model.scopes().front().path == "shared");
+        assert(model.scopes().front().path.view().data()
+            == shared_paths.view(shared_root_path).data());
+
+        const auto& alias_declaration = model.alias(alias);
+        const auto& alias_source = model.source(alias_declaration.source);
+        assert(alias_declaration.hierarchical_name.view()
+            == "dynamic.monitor.copy");
+        assert(alias_source.canonical_name.view()
+            == alias_declaration.hierarchical_name.view());
+        shared_path_view = variable.hierarchical_name.view();
+        fallback_path_view = alias_declaration.hierarchical_name.view();
+
+        detached_variable = variable;
+        detached_alias = alias_declaration;
+        detached_source = alias_source;
+        detached_scope = model.scopes().back();
+    }
+
+    assert(shared_path_view == "shared.top.bus");
+    assert(fallback_path_view == "dynamic.monitor.copy");
+    assert(detached_variable.hierarchical_name.view() == shared_path_view);
+    assert(detached_alias.hierarchical_name.view() == fallback_path_view);
+    assert(detached_source.canonical_name.view() == fallback_path_view);
+    assert(detached_scope.path.view() == "dynamic.monitor");
 }
 
 void test_declaration_negatives()
@@ -415,6 +476,7 @@ void test_vcd_reused_encoding_buffers()
 int main()
 {
     test_declaration_identities();
+    test_interned_path_owners_survive_declaration_copies();
     test_declaration_negatives();
     test_mixed_root_source_provenance();
     test_event_identity_and_order();

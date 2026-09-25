@@ -179,6 +179,8 @@ docs/code-coverage.md
 docs/cross-language-semantics.md
 docs/diagnostics.md
 docs/feature-matrix.md
+docs/hierarchy-path-audit-disposition.md
+docs/hierarchy-path-migration.md
 docs/implementation-plan.md
 docs/implementation_plan_v2.md
 docs/implementation_plan_v3.md
@@ -525,6 +527,7 @@ include/fsim/semantic/compiled_design_normalization.hpp
 include/fsim/semantic/compiled_design_resolver.hpp
 include/fsim/semantic/compiled_design_specialization.hpp
 include/fsim/semantic/design_ir.hpp
+include/fsim/semantic/hierarchy_path.hpp
 include/fsim/semantic/model.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
@@ -629,6 +632,8 @@ src/app/application_executor_signals.cpp
 src/app/application_executor_values.cpp
 src/app/application_executor_vital.cpp
 src/app/application_executors.cpp
+src/app/application_hierarchy_path_codec.cpp
+src/app/application_hierarchy_path_codec.hpp
 src/app/application_internal.hpp
 src/app/application_library_export.cpp
 src/app/application_library_import.cpp
@@ -637,6 +642,8 @@ src/app/application_phase_design.cpp
 src/app/application_phase_object.cpp
 src/app/application_run.cpp
 src/app/application_run_commands.cpp
+src/app/application_runtime_path_codec.cpp
+src/app/application_runtime_path_codec.hpp
 src/app/application_scv_trace.cpp
 src/app/application_scv_trace.hpp
 src/app/application_sdf_annotation_scope.cpp
@@ -1178,6 +1185,7 @@ src/semantic/compiled_design_resolver.cpp
 src/semantic/compiled_design_specialization.cpp
 src/semantic/compiled_design_specialization_vhdl_generate.cpp
 src/semantic/design_ir.cpp
+src/semantic/hierarchy_path.cpp
 src/semantic/model.cpp
 src/semantic/systemverilog_class_specialization.cpp
 src/semantic/systemverilog_hir.cpp
@@ -1235,6 +1243,7 @@ tests/app/acc_scheduler_application_test.cpp
 tests/app/application_artifact_case.cpp
 tests/app/application_case_dispatch.cpp
 tests/app/application_classes_case.cpp
+tests/app/application_runtime_path_codec_test.cpp
 tests/app/application_simulation_unsupported_pack_test.cpp
 tests/app/application_specialization_case.cpp
 tests/app/application_systemc_matrix_test.cpp
@@ -1284,6 +1293,9 @@ tests/app/fork_application_test.cpp
 tests/app/fst_corpus_test.cpp
 tests/app/governed_process_limits.cpp
 tests/app/governed_process_limits.hpp
+tests/app/hierarchy_path_artifact_reload_test.cpp
+tests/app/hierarchy_path_artifact_test.cpp
+tests/app/hierarchy_path_lifetime_application_test.cpp
 tests/app/hir_lowering_application_test.cpp
 tests/app/line_directive_application_test.cpp
 tests/app/mixed_conversion_application_test.cpp
@@ -1871,6 +1883,7 @@ tests/scv/scv_shared_runtime_test.cpp
 tests/scv/scv_smart_ptr_test.cpp
 tests/scv/scv_upstream_provenance_test.cmake
 tests/semantic/compiled_design_test.cpp
+tests/semantic/hierarchy_path_test.cpp
 tests/semantic/semantic_model_test.cpp
 tests/semantic/systemverilog_class_specialization_test.cpp
 tests/support/bounded_bytes_test.cpp

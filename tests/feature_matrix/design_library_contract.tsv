@@ -3,7 +3,7 @@ kind	name	contract
 design	directory-suffix	.fsimdesign,read-only-tree,atomic-sibling-stage-and-rename,no-overwrite
 design	metadata-file	fsim-design.bin
 design	metadata-magic	FSIMDES-NUL,8-bytes
-design	format	current-writer=13,little-endian-u32@8
+design	format	current-writer=14,little-endian-u32@8
 design	runtime-abi	version=1,little-endian-u32@12,exact-current-host
 design	root-identity	producer,design-digest,cache-key,trace-archive,uvm-release,uvm-source,seed,entropy
 design	runtime-profile	time-resolution,delay-mode=min-or-typ-or-max,optimization=O0-or-O2
@@ -14,13 +14,13 @@ design	vhdl-provenance	ordered-unit,standard,predefined-environment,profile,pack
 design	verilog-provenance	ordered-unit,verilog-or-systemverilog,standard,compatibility-profile
 design	sdf-provenance	schema,revision,adapter,timescale,selection,scope,source-design-ir-resolution-mapping-identities
 design	systemc-plugin	logical-library,input-link-compiler-digests,scv-compatibility,relative-directory,metadata-library-checksums,sorted-factories
-design	payload-index	unique-kind,unique-contained-relative-path,lowercase-sha256
-design	required-payloads	runtime,compiled-hir,design-ir
+design	payload-index	unique-kind,unique-contained-relative-path,lowercase-sha256,hierarchy-paths=state/hierarchy-paths.bin
+design	required-payloads	runtime,hierarchy-paths,compiled-hir,design-ir
 design	digest	path-independent,all-root-object-unit-sdf-plugin-payload-count-fields
 design	counts	unit,semantic-source,specialization,signal,process,u64
 design	publication	validate-metadata-and-complete-checksummed-payload-set-before-staging
 design	rejection	bad-magic,unsupported,future,runtime-mismatch,truncated,trailing,oversized,inconsistent,duplicate,unsafe
-design	reader-policy	exact-current-only,formats=0-12-and-future-reject-at-header,no-legacy-defaults
+design	reader-policy	exact-current-only,formats=0-13-and-future-reject-at-header,no-legacy-defaults
 design	relocation	no-producer-paths,relative-payloads,selected-canonical-identities
 library	directory-suffix	.fsimlib,read-only-tree,atomic-sibling-stage-and-rename,no-overwrite
 library	metadata-file	fsim-library.toml,canonical-ordered-text

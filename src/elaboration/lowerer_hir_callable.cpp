@@ -1246,7 +1246,7 @@ bool Lowerer::lower_hir_container_copy_out(
     const semantic::ExpressionId target,
     const ContainerRegisterId source)
 {
-    const auto& source_type = process_.container_register_types.at(source);
+    const auto source_type = process_.container_register_types.at(source);
     auto write = [&](const HirContainerObjectBinding& destination,
                      const ContainerRegisterId value) {
         if (destination.read_only) {
@@ -1285,13 +1285,15 @@ bool Lowerer::lower_hir_container_copy_out(
         return write(*destination, source);
     }
     const auto diagnostics_before = diagnostics_.size();
-    const auto selection = hir_static_container_selection(target);
+    auto selection = hir_static_container_selection(target);
     if (!selection && diagnostics_.size() != diagnostics_before) {
         return true;
     }
     if (!selection || selection->base.type == nullptr) {
         return false;
     }
+    const auto destination_type = *selection->base.type;
+    selection->base.type = &destination_type;
     if (selection->base.read_only) {
         report(
             "FSIM-ELAB-SVPORT-009",

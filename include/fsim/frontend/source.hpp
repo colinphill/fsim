@@ -94,6 +94,7 @@ public:
 
 private:
   static std::shared_ptr<const std::string> intern(std::string value);
+  static std::shared_ptr<const std::string> intern(std::string_view value);
   std::shared_ptr<const std::string> value_;
 };
 

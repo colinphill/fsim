@@ -9,9 +9,9 @@ project	future-schema	schema-3	schema-2	regenerate-fsim.toml	no-config
 project	oversized-schema	outside-uint32-range	schema-2	regenerate-fsim.toml	no-config
 object	envelope	format-0-through-7-or-9,portable-schema-0-through-14-or-16	format-8,portable-schema-15,compiled-HIR-schema-1	regenerate-.fsimobj	no-root-decode
 object	publication	caller-format-and-schema	format-8,portable-schema-15,compiled-HIR-schema-1	regenerate-.fsimobj	no-destination-or-staging-tree
-design	envelope	format-0-through-12-or-14,runtime-ABI-mismatch	format-13,runtime-ABI-1	regenerate-.fsimdesign	no-root-decode
-design	publication	caller-format-and-runtime-ABI	format-13,runtime-ABI-1	regenerate-.fsimdesign	no-destination-or-staging-tree
-design	state-envelope	magic-specific-schema	current-magic-specific-schema	regenerate-.fsimdesign	no-partial-state
+design	envelope	format-0-through-13-or-15,runtime-ABI-mismatch	format-14,runtime-ABI-1	regenerate-.fsimdesign	no-root-decode
+design	publication	caller-format-and-runtime-ABI	format-14,runtime-ABI-1,required-hierarchy-paths=FSIMHPT1-schema-1,missing-kind=FSIM-ART-0011	regenerate-.fsimdesign	no-destination-or-staging-tree
+design	state-envelope	magic-specific-schema-or-hierarchy-path-table	current-magic-specific-schema-and-FSIMHPT1-schema-1	regenerate-.fsimdesign	FSIM-ART-0013-or-0014,no-partial-state
 design	uvm-checkpoint-state	FSIMUVM1-schema-3	FSIMUVM1-schema-2	regenerate-.fsimdesign	no-checkpoint-return
 library	format	stale-or-future-format	format-6	regenerate-.fsimlib	no-metadata
 library	portable-schema	stale-or-future-schema	portable-schema-15,compiled-HIR-schema-1	regenerate-.fsimlib	no-metadata

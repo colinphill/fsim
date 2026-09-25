@@ -85,7 +85,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "aa05326e11b94e93d086237412b3d03bfb299e804544a5f7221b78a96ad00b2d")
+  "2325863ed536b1bdaa1db05dab4f0f45d4678bb61fd3755d2fa20e84e7f40e0d")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "schema/producer diagnostic contract changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -219,6 +219,8 @@ fsim_require_schema_diagnostic_tokens("${FSIM_OBJECT_TEST}"
 fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN_TEST}"
   "has_design_identity_diagnostic"
   "regenerate .fsimdesign"
+  "missing required kind 'hierarchy-paths'"
+  "FSIM-ART-0011"
   "stale-publication")
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "has_identity_diagnostic"
@@ -227,6 +229,9 @@ fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "stale-publication.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
   "unsupported design state FSIMUVM1 identity: found"
+  "found schema 4; required schema 5"
+  "regenerate .fsimdesign"
+  "FSIMHPT1"
   "future-vhdl-object"
   "scalar-artifact-o0.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_IMPORT_TEST}"

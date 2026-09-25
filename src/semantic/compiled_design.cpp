@@ -560,7 +560,12 @@ CompiledDesign::CompiledDesign(const CompiledDesign& other)
 }
 
 CompiledDesign::CompiledDesign(CompiledDesign&& other)
-    : semantics { std::move(other.semantics) }
+    : semantics { [&other]() -> Model&& {
+          if (!other.lookup_indexes_current()) {
+              other.lookup_indexes_ = LookupIndexes { };
+          }
+          return std::move(other.semantics);
+      }() }
     , systemverilog_hir { std::move(other.systemverilog_hir) }
     , vhdl_hir { std::move(other.vhdl_hir) }
     , dependencies_ { std::move(other.dependencies_) }
@@ -587,6 +592,10 @@ CompiledDesign& CompiledDesign::operator=(CompiledDesign&& other)
     if (this == &other) {
         return *this;
     }
+    if (!other.lookup_indexes_current()) {
+        other.lookup_indexes_ = LookupIndexes { };
+    }
+    lookup_indexes_ = LookupIndexes { };
     semantics = std::move(other.semantics);
     systemverilog_hir = std::move(other.systemverilog_hir);
     vhdl_hir = std::move(other.vhdl_hir);

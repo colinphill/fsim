@@ -2604,14 +2604,15 @@ end architecture;
     mutable_a->subtype->constraints.push_back(bit_range);
     const auto source_expression = conditional_compiled.find_expression(value);
     assert(source_expression && source_expression->vhdl != nullptr);
-    auto index_value = *source_expression->vhdl;
+    const auto expression_template = *source_expression->vhdl;
+    auto index_value = expression_template;
     index_value.id = conditional_compiled.semantics.add_expression_identity(
         index_value.scope, index_value.source, index_value.origin);
     index_value.kind = semantic::vhdl::ExpressionKind::integer_literal;
     index_value.text = "0";
     index_value.referenced_name.reset();
     conditional_compiled.vhdl_hir.mutable_expressions().push_back(index_value);
-    auto indexed = *source_expression->vhdl;
+    auto indexed = expression_template;
     indexed.id = conditional_compiled.semantics.add_expression_identity(
         indexed.scope, indexed.source, indexed.origin);
     indexed.kind = semantic::vhdl::ExpressionKind::index;
@@ -2619,7 +2620,7 @@ end architecture;
     indexed.referenced_name.reset();
     indexed.operands = { value, index_value.id };
     conditional_compiled.vhdl_hir.mutable_expressions().push_back(indexed);
-    auto condition = *source_expression->vhdl;
+    auto condition = expression_template;
     condition.id = conditional_compiled.semantics.add_expression_identity(
         condition.scope, condition.source, condition.origin);
     condition.kind = semantic::vhdl::ExpressionKind::binary;
@@ -2627,7 +2628,7 @@ end architecture;
     condition.referenced_name.reset();
     condition.operands = { value, target };
     conditional_compiled.vhdl_hir.mutable_expressions().push_back(condition);
-    auto conditional = *source_expression->vhdl;
+    auto conditional = expression_template;
     conditional.id = conditional_compiled.semantics.add_expression_identity(
         conditional.scope, conditional.source, conditional.origin);
     conditional.kind = semantic::vhdl::ExpressionKind::conditional;

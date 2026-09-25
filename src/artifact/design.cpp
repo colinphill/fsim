@@ -670,7 +670,8 @@ bool validate(
           source);
     }
   }
-  for (const auto required : {"runtime", "compiled-hir", "design-ir"}) {
+  for (const auto required : {
+           "runtime", "hierarchy-paths", "compiled-hir", "design-ir"}) {
     if (!payload_kinds.contains(required)) {
       report(
           diagnostics, kValueCode,

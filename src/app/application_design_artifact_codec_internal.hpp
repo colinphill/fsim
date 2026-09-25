@@ -1669,8 +1669,10 @@ namespace codec_detail {
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_DESIGN_IR)
     struct DesignIrRecords {
-        std::string top;
-        std::vector<std::string> roots;
+        std::uint8_t path_mode { };
+        std::string path_binding;
+        semantic::HierarchyPathId top;
+        std::vector<semantic::HierarchyPathId> roots;
         std::vector<semantic::design::Specialization> specializations;
         std::vector<semantic::design::InstanceOccurrence> instances;
         std::vector<semantic::design::Object> objects;

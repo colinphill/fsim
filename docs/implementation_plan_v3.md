@@ -6838,10 +6838,20 @@ On 2026-09-23, the user extended the seven-sample matrix waiver to all
 remaining batches before 188I: Batches 188C-188H. This supersedes the
 preceding prospective gate sentence for those batches. Record the waiver
 at each Change 20; do not claim a measured performance pass. The full
-seven-sample matrix resumes at Batch 188I. All correctness,
-dependency-rescanned build, full-suite, source-package, commit/push, and
-applicable hosted-CI
-requirements remain in force.
+seven-sample matrix was originally scheduled to resume at Batch 188I. All
+correctness, dependency-rescanned build, full-suite, source-package,
+commit/push, and applicable hosted-CI requirements remain in force.
+
+On 2026-09-25, after final-source Release, Debug, and LLVM-enabled
+ASan/UBSan suites each passed 428/428, the user also deferred Batch 188I's
+seven-sample cumulative performance qualification to future work and
+authorized the handoff on local correctness evidence. The final-source
+matrix was stopped during `original_codec/llvm_o0` sample 3; no complete
+comparison or measured performance pass is claimed. Keep the frozen
+corrected baseline, required workload set, seven alternating samples, and
+110% per-workload wall/RSS limits below as the deferred performance work.
+This waiver does not waive Batch 188I's commit/push or exact-head hosted
+LLVM Linux/Windows Debug/Release lanes.
 
 The user also waived post-push CI monitoring for Batches 188C-188H.
 Before each commit/push, inspect the latest applicable hosted run and
@@ -7510,34 +7520,166 @@ must never establish semantic equality or persistent cache identity.
 
 #### Batch 188I - shared paths, persistence, and final qualification
 
-1. Introduce project-owned interned hierarchy paths with stable handles and
-   explicit lifetime ownership.
-2. Make `SourceName` interning perform heterogeneous lookup before allocating.
-3. Migrate elaborated hierarchy names and lookup maps.
-4. Migrate DesignIR paths and public C++ accessors.
-5. Adapt hierarchy indexes without recreating owning strings.
-6. Share path storage with trace declarations.
-7. Adapt VPI/VHPI/PLI, Tcl, and debugger consumers with correct string lifetimes.
-8. Adapt SystemC path inventories without changing the plugin C ABI.
-9. Store one canonical hierarchy-path table across runtime and DesignIR artifact sections.
-10. Bump affected schemas and their enclosing format dependencies only.
-11. Remove duplicated serialized path strings while retaining distinct semantic projections.
-12. Validate path references, counts, uniqueness, ordering, and allocation budgets during decoding.
-13. Reject affected old artifacts with actionable regeneration diagnostics.
-14. Verify artifact determinism separately across worker counts and checkout relocation.
-15. Test ownership through copy/move, artifact loading, observer removal, and plugin teardown.
-16. Document all C++ migrations and remove superseded internal adapters.
-17. Complete the audit disposition record, including recommendations rejected
-    on correctness grounds.
-18. Validate installed headers, downstream C/C++ consumers, and package contents.
-19. Complete long-run retention, scaling, and final differential regression fixtures.
+1. **Complete.** Introduce project-owned interned hierarchy paths with stable
+   handles and explicit lifetime ownership. `HierarchyPathTable` provides a
+   move-only mutable builder, stable views across insertions, table-local
+   strong IDs, and a copyable immutable owner after freeze. The warnings-as-
+   errors Debug `fsim.semantic.hierarchy_paths` test passed with deduplication,
+   invalid-ID, builder-consumption, and copy/move lifetime cases; the source
+   package manifest check passed.
+2. **Complete.** Make `SourceName` interning perform heterogeneous lookup
+   before allocating. String-view and C-string hits probe the existing weak
+   interner under its bucket lock without constructing an owning string; the
+   Debug `fsim.frontend` zero-allocation hit and lifetime regression passed.
+3. **Complete.** Elaborated hierarchy names use frozen table-local path IDs;
+   lookup maps key by those IDs while preserving spelling at public boundaries.
+4. **Complete.** DesignIR paths and public C++ accessors retain their frozen
+   table owner through copy, move, and artifact projection.
+5. **Complete.** Hierarchy indexes reuse interned IDs and avoid rebuilding
+   owning path strings for lookups.
+6. **Complete.** Trace declarations retain an immutable path owner and ID,
+   including detached declaration copies.
+7. **Complete.** VPI/VHPI/PLI, Tcl, debugger, API, and coverage consumers
+   preserve owning strings where their external lifetime requires them.
+8. **Complete.** SystemC path inventories retain frozen owners and IDs while
+   leaving plugin C ABI strings unchanged. The coordinated warnings-as-errors
+   Debug build passed, followed by all 16 focused hierarchy, artifact,
+   runtime, trace, frontend, SystemC, VPI, Tcl, and API tests on 2026-09-24.
+9. **Complete.** `.fsimdesign` publishes one required `hierarchy-paths` payload,
+   a canonical sorted union shared by its runtime and DesignIR sections.
+   Standalone component states include their own canonical inline table.
+10. **Complete.** Only the affected runtime and DesignIR schemas advanced to
+    64 and 5; their enclosing design format advanced to 14. Focused schema,
+    ABI, stale-policy, and source-package checks passed.
+11. **Complete.** Runtime and DesignIR wire records now carry path IDs instead
+    of repeated path spellings. Distinct display, source, and semantic
+    identity strings remain in their original projections.
+12. **Complete.** The table and child decoders reject duplicate or unsorted
+    paths, invalid UTF-8, bad or extra references, nonempty wire placeholders,
+    wrong external table digests/order, trailing bytes, and excessive
+    allocations. Focused corruption tests and a 50,000-path scaling fixture
+    passed under the warnings-as-errors Debug build.
+13. **Complete.** Affected old runtime, DesignIR, and enclosing artifacts
+    reject with current-schema regeneration diagnostics; the v2 DesignIR
+    rejection remains explicit. The focused artifact-phase and metadata
+    CTests passed on 2026-09-24.
+14. **Complete.** The compiled-HIR cache fixture compared full object,
+    library, design, and hierarchy-table bytes at worker counts 1/2/4/8,
+    then compared separate relocated checkouts at a fixed worker count.
+    Its focused Debug CTest passed.
+15. **Complete.** Focused Debug tests passed for table and DesignIR copy/move,
+    artifact decode and load, detached trace declarations, observer removal,
+    and real SystemC plugin registry/module teardown. The plugin image itself
+    follows the existing process-lifetime loading policy.
+16. **Complete.** Documented table ownership, ID translation, artifact
+    schema migration, and external string lifetimes in the C++ migration
+    guide. Removed the superseded VPI path forwarding adapter; its callers
+    access the owning DesignIR table directly. The focused warnings-as-errors
+    Debug `fsim.application.vpi` CTest passed on 2026-09-24.
+17. **Complete.** The hierarchy-path audit disposition crosswalk records each
+    recommendation with its bounded status and evidence, including rejected
+    projection folding where distinct records are required, and a deferred
+    calendar queue pending proof of complete scheduler ordering. It identifies
+    the remaining performance and fixture gates without claiming unmeasured
+    speedups. The source-package manifest CTest and `git diff --check` passed
+    on 2026-09-24.
+18. **Complete.** Installed the diagnostic and semantic headers required by
+    the public SystemC inventory include chain. The installed-public-contract
+    gate staged the package and built its downstream C and C++ consumers;
+    the archive required-set gate checked all three added header paths.
+    Both focused CTests and the source-package manifest passed on 2026-09-24.
+    The package continues to export its existing API and TF link targets;
+    the semantic path type is included and type-checked by the downstream
+    C++ consumer without claiming an independently exported semantic library.
+19. **Complete.** A 50,000-path canonical codec fixture checks scaling and
+    bounded decode. A real `.fsimdesign` fixture reloads the same artifact 32
+    times, checking path IDs and artifact identity while a copied table remains
+    valid after each loaded project is destroyed. A live-versus-reloaded
+    five-root design fixture compares roots, runtime and DesignIR path
+    spellings, signal and container inventories, then interpreter stop status,
+    time, and four final signals. The focused warnings-as-errors Debug
+    artifact-phase and reload CTests and source-package manifest passed on
+    2026-09-24.
 20. Run standard closure plus final local ASan/UBSan qualification; hand off to
     Batch 189 without tagging a release.
+
+Windows cancellation payload note (2026-09-24): H-head hosted run
+`36064852692` passed both Ubuntu LLVM lanes and exposed the same
+`fsim.runtime` failure in Windows Debug and Release:
+canceling a queued task did not immediately release its captured payload.
+The scheduler had moved a `std::function` from the queued entry into the
+cancellation slot, but kept the moved-from wrapper in the queue. The
+[C++ `std::function` move contract](https://eel.is/c++draft/func.wrap.func.con)
+leaves the source wrapper valid with an unspecified value. The Linux pass and
+Windows LLVM-MinGW failure are consistent with that queued wrapper retaining
+a capture on Windows; this library-behavior detail is inferred from the
+ownership flow and the platform results. Releasing the slot alone could
+therefore leave a queued owner alive. The fix stores only a callback-free
+marker in the queue and moves the incoming task directly to its cancellation
+slot. Any residual source wrapper dies when scheduling
+returns, after the queue entry is linked, and cancellation can then release
+the sole persistent scheduler-owned callback after completing slot state
+changes. The local warnings-as-errors Debug `fsim.runtime` test passed.
+Exact-head Windows CI confirmation remains required for Batch 188I closure.
+
+Change 20 runtime-decode repair (2026-09-24): the first fixed-baseline
+performance sample exposed a valid 251,504,954-byte runtime section rejected
+by `FSIM-ART-0013`. Runtime decoding had reused the 256 MiB compiled-HIR
+aggregate allocation budget; reconstructing the path table, path IDs, and
+state containers can exceed that cap even when the runtime wire payload is
+valid. Runtime decoding first received a separate bounded 512 MiB allocation
+budget, while the compiled-HIR budget and 1 GiB runtime wire-size limit remain in
+force. A focused oversized-allocation rejection test passed, and the exact
+candidate LLVM O0 simulation completed with `ALL_CODEC_DONE` and empty
+stderr under the common baseline-library environment. Full Change 20
+qualification remains open.
+
+The second full-matrix attempt closed four case/configuration pairs, then
+stopped at `mixed_codec/llvm_o0` sample 1 candidate: a valid 740,243,614-byte
+runtime section also returned `FSIM-ART-0013`. This proves the interim 512 MiB
+runtime cap was inadequate for the mandatory mixed-language workload. A
+temporary 4 GiB decode probe measured 976,107,496 bytes of cumulative charges
+for that artifact; its full simulation completed with `ALL_CODEC_DONE`.
+The probe was removed. The final runtime policy permits at most 2 GiB of
+aggregate decoder charges, exactly twice the existing 1 GiB wire-size limit;
+the compiled-HIR 256 MiB cap remains unchanged. This is a finite resource
+policy, not a claim that every structurally valid 1 GiB wire state must load.
+The forged-count rejection test and final 2 GiB-codec build passed. The exact
+mixed-codec candidate simulation then exited 0 with `ALL_CODEC_DONE` and
+empty stderr under the common baseline-library environment. The complete
+matrix restarted after final-source qualification in
+`.local-artifacts/188i-performance-final3/`; its result remains pending.
+
+Change 20 DesignIR file-read guard (2026-09-24): final diff review found that
+`load_design_artifact()` read an entire `design-ir` section before the decoder's
+256 MiB aggregate allocation budget applied. The loader now rejects a section
+larger than 256 MiB before reading or checksumming it, with a specific
+`FSIM-ART-0014` budget diagnostic. A sparse oversized-section regression and
+the focused Release `fsim.application.core_non_project_cli` test passed.
+Full final-source qualification is recorded below.
+
+Final-source local correctness checkpoint (2026-09-25): after the 2 GiB
+runtime decoder repair, CMake dependency rescans and warnings-as-errors
+Release and Debug builds passed; each immediately following full CTest suite
+passed 428/428. The LLVM-enabled ASan/UBSan build and full suite also passed
+428/428, with LeakSanitizer disabled only for the sandbox ptrace constraint.
+The three suite logs are `/tmp/fsim-i20-release-ctest7.log`,
+`/tmp/fsim-i20-debug-ctest5.log`, and
+`/tmp/fsim-i20-sanitizers-ctest4.log`. They include the 32-load
+hierarchy-path artifact retention fixture, owner/copy/move and
+observer-removal lifetime fixture, installed-public-contract, archive
+required-set, and source-package gates; Release test assertions remained
+active. The user deferred the full fixed-baseline performance matrix to
+future work after this local correctness qualification. The final-source
+attempt in `.local-artifacts/188i-performance-final3/` was stopped during
+`original_codec/llvm_o0` sample 3 with exit 130; its partial evidence is
+diagnostic only. No performance pass is claimed. Commit/push and exact-head
+hosted lanes remain open, so Change 20 is not yet complete.
 
 Canonical artifact path IDs derive from sorted path content, not allocation
 order. Standalone component serialization includes its own required path table.
 
-#### Mandatory workloads and cumulative performance gate
+#### Deferred cumulative performance work
 
 Use repository compile/elaboration cases and long-running mixed-language cases
 that exercise bare execution, VCD, FST, observers, and historical-value
@@ -7599,11 +7741,11 @@ count.
    run before starting the full local Debug/Release matrices, so they qualify
    the intended final code and do not need avoidable reruns.
 2. Rerun CMake configuration to rescan dependencies, then build
-   warnings-as-errors Release first. Rerun configuration for Debug, then
-   qualify Debug and Release against final code. Cleaning either build
-   directory is optional.
+   warnings-as-errors Release and run its full suite. Rerun configuration
+   for Debug, then build and run its full suite against final code. Cleaning
+   either build directory is optional.
 3. Run the benchmark matrix and record cumulative baseline comparisons,
-   except for the user-waived seven-sample matrix in Batches 188C-188H;
+   except for the user-waived seven-sample matrix in Batches 188C-188I;
    record the waiver explicitly and do not claim a performance pass.
 4. Update authoritative progress and evidence documents.
 5. Publish one cohesive implementation commit and push.
@@ -7672,6 +7814,13 @@ for those outcomes.
 20. Run dependency-rescanned Debug/Release, sanitizer, and hosted monitoring closure.
 
 ### Batch 191 - throughput policy, performance gates, and v3.1 release
+
+Carry forward the deferred Batch 188I fixed-baseline matrix as future
+performance work. Before claiming a measured simplification performance pass,
+run all 38 case/configuration pairs with the frozen corrected baseline,
+seven alternating samples, and the wall/RSS limits above. This comparison is
+separate from the worker-scaling floors in Changes 12-14 and does not block
+the Batch 188I handoff or Batch 189 correctness work.
 
 1. Implement an explicit throughput-oriented work-stealing scheduler.
 2. Permit variation only where the language standards leave order unconstrained.

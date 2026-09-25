@@ -4,6 +4,9 @@
 #include "fsim/frontend/parser.hpp"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 
 namespace fsim::tests::elaboration {
 
@@ -68,6 +71,72 @@ endmodule
     assert(aliases[2].switch_source_offset == 0);
     assert(aliases[2].switch_target_offset == 2);
     assert(aliases[2].switch_width == 2);
+
+    const auto& paths = elaborated.design->hierarchy_paths();
+    const auto first_path = paths.find("systemverilog_alias.first");
+    assert(first_path);
+    assert(paths.view(*first_path) == "systemverilog_alias.first");
+    for (std::size_t index = 1; index < paths.size(); ++index) {
+        const auto previous = fsim::semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index - 1));
+        const auto current = fsim::semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        assert(paths.view(previous) < paths.view(current));
+    }
+
+    auto copied = *elaborated.design;
+    auto restored = fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(copied).state());
+    assert(restored);
+    assert(restored->find_signal("systemverilog_alias.first") == first);
+    assert(restored->hierarchy_paths().view(*first_path)
+        == paths.view(*first_path));
+    assert(restored->signal_paths() == elaborated.design->signal_paths());
+
+    auto remapped_design = *restored;
+    fsim::semantic::HierarchyPathTable::Builder missing_path;
+    fsim::semantic::HierarchyPathTable::Builder interleaved;
+    (void)missing_path.intern("aaa");
+    (void)interleaved.intern("aaa");
+    for (std::size_t index = 0; index < paths.size(); ++index) {
+        const auto id = fsim::semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        if (id != *first_path) {
+            (void)missing_path.intern(paths.view(id));
+        }
+        (void)interleaved.intern(paths.view(id));
+    }
+    assert(!remapped_design.remap_path_table(
+        std::move(missing_path).freeze()));
+    assert(remapped_design.hierarchy_paths().find(
+               "systemverilog_alias.first") == first_path);
+    assert(remapped_design.find_signal(
+               "systemverilog_alias.first") == first);
+    assert(remapped_design.remap_path_table(
+        std::move(interleaved).freeze()));
+    assert(remapped_design.hierarchy_paths().find(
+               "systemverilog_alias.first") != first_path);
+    assert(remapped_design.find_signal(
+               "systemverilog_alias.first") == first);
+    assert(remapped_design.signal_paths()
+        == elaborated.design->signal_paths());
+
+    fsim::semantic::HierarchyPathTable::Builder changed_prefix;
+    fsim::semantic::HierarchyPathTable::Builder extended;
+    for (std::size_t index = 0; index < paths.size(); ++index) {
+        const auto id = fsim::semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        (void)changed_prefix.intern(
+            index == 0 ? "different_root" : paths.view(id));
+        (void)extended.intern(paths.view(id));
+    }
+    (void)extended.intern("systemverilog_alias.derived");
+    assert(!restored->rebind_path_table(
+        std::move(changed_prefix).freeze()));
+    assert(restored->rebind_path_table(std::move(extended).freeze()));
+    assert(restored->hierarchy_paths().find("systemverilog_alias.first")
+        == first_path);
+    assert(restored->find_signal("systemverilog_alias.first") == first);
 
     const auto invalid = fsim::frontend::parse_text(
         "systemverilog-alias-invalid.sv",

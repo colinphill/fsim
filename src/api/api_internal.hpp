@@ -78,7 +78,10 @@ struct DesignSourceLocation {
 inline bool is_design_root(
     const fsim::semantic::design::DesignIr& design,
     const std::string_view path) {
-  return std::ranges::find(design.roots(), path) != design.roots().end();
+  return std::ranges::any_of(
+      design.roots(), [&](const auto root) {
+        return design.path(root) == path;
+      });
 }
 
 inline bool has_synthetic_root(

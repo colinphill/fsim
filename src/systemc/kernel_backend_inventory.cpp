@@ -253,7 +253,42 @@ namespace {
         return true;
     }
 
+    void index_paths(SystemCKernelChannelInventorySnapshot& snapshot)
+    {
+        semantic::HierarchyPathTable::Builder paths;
+        for (auto& entry : snapshot.channels) {
+            entry.canonical_path_id = paths.intern(
+                entry.descriptor.canonical_path);
+        }
+        snapshot.paths = std::move(paths).freeze();
+    }
+
+    bool same_paths(const semantic::HierarchyPathTable& left,
+        const semantic::HierarchyPathTable& right)
+    {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (std::size_t index = 0U; index < left.size(); ++index) {
+            const auto id = semantic::HierarchyPathId::from_index(
+                static_cast<std::uint32_t>(index));
+            if (left.view(id) != right.view(id)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 } // namespace
+
+bool operator==(const SystemCKernelChannelInventorySnapshot& left,
+    const SystemCKernelChannelInventorySnapshot& right)
+{
+    return left.island == right.island
+        && left.hierarchy == right.hierarchy
+        && left.channels == right.channels
+        && same_paths(left.paths, right.paths);
+}
 
 SystemCKernelChannelInventory::SystemCKernelChannelInventory(
     const SystemCIslandId island, const SystemCHierarchyId hierarchy,
@@ -298,7 +333,7 @@ bool SystemCKernelChannelInventory::register_channel(
         return false;
     }
     snapshot_.channels.push_back(
-        { *object, *channel, std::move(descriptor) });
+        { *object, *channel, std::move(descriptor), { } });
     return true;
 }
 
@@ -315,6 +350,7 @@ bool SystemCKernelChannelInventory::freeze(diagnostic::Engine& diagnostics)
             snapshot_, limits_, diagnostics)) {
         return false;
     }
+    index_paths(snapshot_);
     frozen_ = true;
     return true;
 }
@@ -424,7 +460,13 @@ bool validate_systemc_kernel_channel_inventory(
             || channel.object != *expected_object
             || channel.channel != *expected_channel
             || (!previous.empty()
-                && previous >= descriptor.canonical_path)) {
+                && previous >= descriptor.canonical_path)
+            || (snapshot.paths.size() != 0U
+                && (!channel.canonical_path_id.valid()
+                    || channel.canonical_path_id.value()
+                        >= snapshot.paths.size()
+                    || snapshot.paths.view(channel.canonical_path_id)
+                        != descriptor.canonical_path))) {
             return report_error(diagnostics, SystemCKernelInventoryCode::metadata,
                 "SystemC channel inventory entries are noncanonical or unordered");
         }
@@ -527,6 +569,7 @@ deserialize_systemc_kernel_channel_inventory(
         }
         return std::nullopt;
     }
+    index_paths(snapshot);
     return snapshot;
 }
 

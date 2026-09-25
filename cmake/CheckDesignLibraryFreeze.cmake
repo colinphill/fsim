@@ -50,7 +50,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "37e5952d296dcde73aa5888f17fbc7e68a1124ff9ec88386230ebaaceba783fa")
+  "22b67bce18e5d8e637a871198871c896549729ce796f5ebdb101f9158d594679")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "design/library contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -86,7 +86,7 @@ function(fsim_require_design_library_tokens path)
 endfunction()
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
-  "kDesignFormatVersion = 13"
+  "kDesignFormatVersion = 14"
   "kDesignMetadataFilename = \"fsim-design.bin\""
   "std::string scv_compatibility"
   "Producer paths are deliberately")
@@ -145,7 +145,7 @@ fsim_require_design_library_tokens("${FSIM_LIBRARY_ADMISSION}"
   "library::load_metadata(")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
-  "kDesignFormatVersion == 13U"
+  "kDesignFormatVersion == 14U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "runtime_abi_version == 1U"
@@ -157,6 +157,9 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
   "unsupported-format-3"
   "incompatible-runtime-abi"
   "stale-publication"
+  "hierarchy-paths"
+  "missing required kind 'hierarchy-paths'"
+  "FSIM-ART-0011"
   "oversized-root"
   "rejected-plugin")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_TEST}"

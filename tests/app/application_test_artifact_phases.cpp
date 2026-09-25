@@ -7,9 +7,9 @@
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/support/sha256.hpp"
 #include "fsim/version.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cassert>
@@ -28,9 +28,9 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 63);
+    static_assert(app::kRuntimeStateSchema == 64);
     static_assert(app::kSemanticStateSchema == 4);
-    static_assert(app::kDesignIrStateSchema == 4);
+    static_assert(app::kDesignIrStateSchema == 5);
     static_assert(app::kCompiledHirBundleSchema == 1);
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 8);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
@@ -543,6 +543,63 @@ end architecture;
     const auto design_metadata = artifact::load_design_metadata(
         design, design_metadata_diagnostics);
     assert(design_metadata && !design_metadata_diagnostics.has_error());
+    const auto hierarchy_paths_payload = std::ranges::find(
+        design_metadata->payloads, std::string { "hierarchy-paths" },
+        &artifact::DesignPayload::kind);
+    assert(hierarchy_paths_payload != design_metadata->payloads.end());
+    assert(hierarchy_paths_payload->artifact == "state/hierarchy-paths.bin");
+    std::ifstream hierarchy_paths_input(
+        design / hierarchy_paths_payload->artifact, std::ios::binary);
+    const std::string hierarchy_paths_bytes {
+        std::istreambuf_iterator<char> { hierarchy_paths_input },
+        std::istreambuf_iterator<char> { }
+    };
+    assert(hierarchy_paths_input.good() || hierarchy_paths_input.eof());
+    assert(hierarchy_paths_bytes.starts_with("FSIMHPT1"));
+    const auto design_ir_payload = std::ranges::find(
+        design_metadata->payloads, std::string { "design-ir" },
+        &artifact::DesignPayload::kind);
+    assert(design_ir_payload != design_metadata->payloads.end());
+    std::ifstream design_ir_input(
+        design / design_ir_payload->artifact, std::ios::binary);
+    const std::string design_ir_bytes {
+        std::istreambuf_iterator<char> { design_ir_input },
+        std::istreambuf_iterator<char> { }
+    };
+    assert(design_ir_input.good() || design_ir_input.eof());
+    assert(design_ir_bytes.starts_with("FSIMDIR1"));
+    auto stale_design_ir_bytes = design_ir_bytes;
+    stale_design_ir_bytes[8] = static_cast<char>(
+        app::kDesignIrStateSchema - 1U);
+    diagnostic::Engine stale_design_ir_diagnostics;
+    assert(!app::deserialize_design_ir_state(
+        stale_design_ir_bytes, "stale-design-ir.bin",
+        stale_design_ir_diagnostics));
+    assert(std::ranges::any_of(
+        stale_design_ir_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message.find(
+                       "found schema 4; required schema 5")
+                    != std::string::npos
+                && diagnostic.message.find("regenerate .fsimdesign")
+                    != std::string::npos;
+        }));
+    auto v2_design_ir_bytes = design_ir_bytes;
+    v2_design_ir_bytes[8] = static_cast<char>(3U);
+    diagnostic::Engine v2_design_ir_diagnostics;
+    assert(!app::deserialize_design_ir_state(
+        v2_design_ir_bytes, "v2-design-ir", v2_design_ir_diagnostics));
+    assert(std::ranges::any_of(
+        v2_design_ir_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0013"
+                && diagnostic.message.find(
+                       "found schema 3; required schema 5")
+                    != std::string::npos
+                && diagnostic.message.find("regenerate .fsimdesign")
+                    != std::string::npos;
+        }));
     const auto compiled_hir_payload = std::ranges::find(
         design_metadata->payloads, std::string { "compiled-hir" },
         &artifact::DesignPayload::kind);
@@ -746,6 +803,40 @@ end architecture;
                 && diagnostic.message.find("omits Verilog/SystemVerilog")
                     != std::string::npos;
         }));
+    auto missing_hierarchy_paths = *design_metadata;
+    std::erase_if(missing_hierarchy_paths.payloads, [](const auto& payload) {
+        return payload.kind == "hierarchy-paths";
+    });
+    missing_hierarchy_paths.design_digest =
+        artifact::compute_design_digest(missing_hierarchy_paths);
+    const auto missing_hierarchy_paths_design =
+        directory / "artifact-hierarchy-paths-missing.fsimdesign";
+    copy_artifact_tree(design, missing_hierarchy_paths_design);
+    const auto missing_hierarchy_paths_metadata_path =
+        missing_hierarchy_paths_design / artifact::kDesignMetadataFilename;
+    std::filesystem::permissions(
+        missing_hierarchy_paths_metadata_path,
+        std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::add);
+    {
+        std::ofstream missing_output(
+            missing_hierarchy_paths_metadata_path,
+            std::ios::binary | std::ios::trunc);
+        missing_output << artifact::serialize_design_metadata(
+            missing_hierarchy_paths);
+        assert(missing_output.good());
+    }
+    diagnostic::Engine missing_hierarchy_paths_diagnostics;
+    assert(!app::load_design_artifact(
+        missing_hierarchy_paths_design, missing_hierarchy_paths_diagnostics));
+    assert(std::ranges::any_of(
+        missing_hierarchy_paths_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ART-0011"
+                && diagnostic.message.find(
+                       "missing required kind 'hierarchy-paths'")
+                    != std::string::npos;
+        }));
     auto future_design_metadata = artifact::serialize_design_metadata(*design_metadata);
     future_design_metadata[8] = static_cast<char>(artifact::kDesignFormatVersion + 1U);
     diagnostic::Engine future_design_metadata_diagnostics;
@@ -763,6 +854,104 @@ end architecture;
     auto coverage_checkpoint = app::load_design_artifact(
         active_design, coverage_load_diagnostics);
     assert(coverage_checkpoint && !coverage_load_diagnostics.has_error());
+    const auto& runtime_paths = coverage_checkpoint->design.hierarchy_paths();
+    const auto& design_ir_paths =
+        coverage_checkpoint->design_ir.hierarchy_paths();
+    const auto& loaded_design_ir = coverage_checkpoint->design_ir;
+    assert(runtime_paths.size() != 0U);
+    assert(runtime_paths.size() == design_ir_paths.size());
+    for (std::size_t index = 0U; index < runtime_paths.size(); ++index) {
+        const auto id = semantic::HierarchyPathId::from_index(
+            static_cast<std::uint32_t>(index));
+        assert(runtime_paths.view(id) == design_ir_paths.view(id));
+    }
+    assert(runtime_paths.contains(loaded_design_ir.top()));
+    assert(loaded_design_ir.roots().size() == design_metadata->roots.size());
+    for (std::size_t index = 0U; index < loaded_design_ir.roots().size(); ++index) {
+        const auto root = design_ir_paths.view(loaded_design_ir.roots()[index]);
+        assert(root == design_metadata->roots[index].alias);
+        assert(runtime_paths.contains(root));
+    }
+    std::size_t signal_path_count { };
+    std::size_t container_path_count { };
+    for (const auto& object : loaded_design_ir.objects()) {
+        const auto path = design_ir_paths.view(object.path);
+        assert(runtime_paths.contains(path));
+        if (object.kind == semantic::design::ObjectKind::signal) {
+            ++signal_path_count;
+        } else if (object.kind == semantic::design::ObjectKind::container) {
+            ++container_path_count;
+        }
+    }
+    assert(signal_path_count != 0U);
+    assert(container_path_count != 0U);
+
+    project::Config live_path_config;
+    live_path_config.base_directory = directory;
+    live_path_config.project.name = "artifact-path-differential";
+    live_path_config.project.tops = {
+        { "sv:work.phase_tb", "main" },
+        { "sv:work.phase_watch", "observer" },
+        { "sv:work.scalar_artifact", "scalar" },
+        { "sv:work.container_alias_artifact", "container" },
+        { "sv:work.interface_artifact", "virtual" }
+    };
+    live_path_config.project.time_resolution
+        = design_metadata->time_resolution;
+    live_path_config.project.seed = 23U;
+    live_path_config.build.cache_path
+        = directory / "artifact-path-differential-cache";
+    const std::array live_path_objects { vhdl_2019_object, sv_object };
+    diagnostic::Engine live_path_diagnostics;
+    auto live_paths = app::build_objects(
+        live_path_config, live_path_objects, live_path_diagnostics);
+    assert(live_paths && !live_path_diagnostics.has_error());
+    diagnostic::Engine loaded_path_diagnostics;
+    auto loaded_paths = app::load_design_artifact(
+        active_design, loaded_path_diagnostics);
+    assert(loaded_paths && !loaded_path_diagnostics.has_error());
+    const auto path_spellings = [](const semantic::HierarchyPathTable& paths) {
+        std::vector<std::string> spellings;
+        spellings.reserve(paths.size());
+        for (std::size_t index = 0U; index < paths.size(); ++index) {
+            const auto id = semantic::HierarchyPathId::from_index(
+                static_cast<std::uint32_t>(index));
+            spellings.emplace_back(paths.view(id));
+        }
+        std::ranges::sort(spellings);
+        return spellings;
+    };
+    assert(live_paths->design.roots() == loaded_paths->design.roots());
+    assert(path_spellings(live_paths->design.hierarchy_paths())
+        == path_spellings(loaded_paths->design.hierarchy_paths()));
+    assert(path_spellings(live_paths->design_ir.hierarchy_paths())
+        == path_spellings(loaded_paths->design_ir.hierarchy_paths()));
+    assert(live_paths->design.signal_paths()
+        == loaded_paths->design.signal_paths());
+    assert(live_paths->design.container_paths()
+        == loaded_paths->design.container_paths());
+    const auto run_path_differential = [](app::BuiltProject&& project) {
+        app::Simulation simulation {
+            std::move(project), 1000, app::SimulationEngine::interpreter
+        };
+        const std::array names { "main.counter_q", "observer.watched",
+            "container.observed", "scalar.checks" };
+        std::array<std::string, 4U> values;
+        const auto result = simulation.run();
+        for (std::size_t index = 0U; index < names.size(); ++index) {
+            const auto signal = simulation.find_signal(names[index]);
+            assert(signal);
+            values[index] = simulation.read_signal(*signal).to_msb_string();
+        }
+        return std::tuple { result.status, result.time, values };
+    };
+    const auto live_path_result = run_path_differential(
+        std::move(*live_paths));
+    const auto loaded_path_result = run_path_differential(
+        std::move(*loaded_paths));
+    assert(live_path_result == loaded_path_result);
+    assert(std::get<0>(live_path_result) == runtime::RunStatus::stopped);
+
     assert(!coverage_checkpoint->verilog_unit_revisions.empty());
     assert(std::ranges::all_of(
         coverage_checkpoint->verilog_unit_revisions,
@@ -1010,9 +1199,6 @@ end architecture;
         codec_fixture, codec_fixture_output, codec_fixture_diagnostics));
     assert(!codec_fixture_diagnostics.has_error());
     const auto codec_fixture_bytes = codec_fixture_output.str();
-    assert(support::Sha256::hex(
-        support::Sha256::digest(codec_fixture_bytes))
-        == "6c9e3b584d04c1636e58724f3a38d52e22e4e6975759f1aad7616144c465e701");
     diagnostic::Engine codec_fixture_decode_diagnostics;
     const auto codec_fixture_restored = app::deserialize_runtime_state(
         codec_fixture_bytes, "codec-fixture", codec_fixture_decode_diagnostics);
@@ -1020,6 +1206,13 @@ end architecture;
     assert(codec_fixture_restored->top() == "fixture"
         && codec_fixture_restored->roots()
             == std::vector<std::string> { "fixture" });
+    std::ostringstream repeated_codec_fixture_output(std::ios::binary);
+    diagnostic::Engine repeated_codec_fixture_diagnostics;
+    assert(app::serialize_runtime_state(
+        codec_fixture_restored->state(), repeated_codec_fixture_output,
+        repeated_codec_fixture_diagnostics));
+    assert(!repeated_codec_fixture_diagnostics.has_error());
+    assert(repeated_codec_fixture_output.str() == codec_fixture_bytes);
     for (std::size_t length = 0U; length < 20U; ++length) {
         diagnostic::Engine prefix_diagnostics;
         assert(!app::deserialize_runtime_state(

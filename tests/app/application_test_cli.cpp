@@ -1292,18 +1292,20 @@ endmodule
         == 1);
     assert(std::ranges::any_of(
         three_language_reference_project->design_ir.objects(),
-        [](const auto& object) {
+        [&](const auto& object) {
             return object.kind
                 == fsim::semantic::design::ObjectKind::systemc_module
-                && object.path
+                && three_language_reference_project->design_ir.path(
+                       object.path)
                 == "three_language_tb.u_bridge";
         }));
     assert(std::ranges::any_of(
         three_language_reference_project->design_ir.objects(),
-        [](const auto& object) {
+        [&](const auto& object) {
             return object.kind
                 == fsim::semantic::design::ObjectKind::systemc_port
-                && object.path
+                && three_language_reference_project->design_ir.path(
+                       object.path)
                 == "three_language_tb.u_bridge.result";
         }));
     const auto three_language_reference = capture_simulation(

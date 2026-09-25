@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 
@@ -58,6 +59,52 @@ struct TraceSourceMetadata {
     std::string owner_identity;
 };
 
+/// A hierarchy path whose spelling remains available independently of the
+/// declaration model that produced it.
+///
+/// The path table is immutable and shared by value; the ID is local to that
+/// table. Use view() when a string view is needed without copying the path.
+class TracePathName final {
+public:
+    TracePathName() = default;
+    TracePathName(const TracePathName&) = default;
+    TracePathName(TracePathName&& other) noexcept;
+    TracePathName& operator=(const TracePathName&) = default;
+    TracePathName& operator=(TracePathName&& other) noexcept;
+
+    [[nodiscard]] std::string_view view() const;
+    [[nodiscard]] std::size_t size() const;
+    [[nodiscard]] bool empty() const;
+    [[nodiscard]] const char* data() const;
+    [[nodiscard]] std::size_t find(char value) const;
+    [[nodiscard]] std::size_t find(std::string_view value) const;
+    [[nodiscard]] bool starts_with(std::string_view value) const;
+    [[nodiscard]] bool ends_with(std::string_view value) const;
+    [[nodiscard]] char operator[](std::size_t index) const;
+
+    [[nodiscard]] operator std::string_view() const;
+    [[nodiscard]] operator std::string() const;
+
+    friend bool operator==(
+        const TracePathName& left, const TracePathName& right);
+    friend bool operator==(
+        const TracePathName& left, std::string_view right);
+    friend bool operator==(
+        const TracePathName& left, const std::string& right);
+    friend bool operator==(
+        const TracePathName& left, const char* right);
+
+private:
+    TracePathName(
+        semantic::HierarchyPathTable paths,
+        semantic::HierarchyPathId id);
+
+    semantic::HierarchyPathTable paths_;
+    semantic::HierarchyPathId id_;
+
+    friend class TraceDeclarationBuilder;
+};
+
 enum class TraceTypeKind : std::uint8_t {
     Packed,
     SystemVerilogScalar,
@@ -91,7 +138,7 @@ struct TraceScopeDeclaration {
     TraceScopeId parent;
     TraceSourceId source;
     std::string name;
-    std::string path;
+    TracePathName path;
 };
 
 struct TraceTypeDeclaration {
@@ -109,7 +156,7 @@ struct TraceSourceDeclaration {
     std::string root_identity;
     std::string library;
     std::string owner_identity;
-    std::string canonical_name;
+    TracePathName canonical_name;
 };
 
 struct TraceVariableDeclaration {
@@ -117,7 +164,7 @@ struct TraceVariableDeclaration {
     TraceScopeId scope;
     TraceTypeId type;
     TraceSourceId source;
-    std::string hierarchical_name;
+    TracePathName hierarchical_name;
     std::string reference;
 };
 
@@ -126,7 +173,7 @@ struct TraceAliasDeclaration {
     TraceScopeId scope;
     TraceSignalId target;
     TraceSourceId source;
-    std::string hierarchical_name;
+    TracePathName hierarchical_name;
     std::string reference;
 };
 
@@ -164,6 +211,7 @@ private:
 class TraceDeclarationBuilder final {
 public:
     TraceDeclarationBuilder();
+    explicit TraceDeclarationBuilder(semantic::HierarchyPathTable paths);
     ~TraceDeclarationBuilder();
     TraceDeclarationBuilder(TraceDeclarationBuilder&&) noexcept;
     TraceDeclarationBuilder& operator=(TraceDeclarationBuilder&&) noexcept;

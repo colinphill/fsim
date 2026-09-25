@@ -172,6 +172,12 @@ namespace {
   return formatted ? formatted.text : "<invalid scalar>";
 }
 
+[[nodiscard]] std::string_view design_path(
+    const Simulation& simulation,
+    const semantic::HierarchyPathId id) {
+  return simulation.design_ir().path(id);
+}
+
 [[nodiscard]] std::vector<std::pair<std::string, SignalId>>
 design_signal_paths(const Simulation& simulation) {
   std::vector<std::pair<std::string, SignalId>> result;
@@ -179,7 +185,8 @@ design_signal_paths(const Simulation& simulation) {
     if (design_object_is_signal_bearing(object)
         && object.runtime_index <= std::numeric_limits<SignalId>::max()) {
       result.emplace_back(
-          object.path, static_cast<SignalId>(object.runtime_index));
+          design_path(simulation, object.path),
+          static_cast<SignalId>(object.runtime_index));
     }
   }
   std::ranges::sort(result);
@@ -196,7 +203,7 @@ design_container_paths(const Simulation& simulation) {
         && object.runtime_index
             <= std::numeric_limits<runtime::simir::ContainerObjectId>::max()) {
       result.emplace_back(
-          object.path,
+          design_path(simulation, object.path),
           static_cast<runtime::simir::ContainerObjectId>(
               object.runtime_index));
     }
@@ -253,9 +260,11 @@ DebuggerSession::DebuggerSession(
             == execution_scope_paths_.end()) {
           execution_scope_paths_.push_back(candidate);
         }
-        if (std::ranges::find(
-                simulation.design_ir().roots(), candidate)
-            != simulation.design_ir().roots().end()) {
+        const auto is_root = std::ranges::find_if(
+            simulation.design_ir().roots(), [&](const auto root) {
+              return design_path(simulation, root) == candidate;
+            });
+        if (is_root != simulation.design_ir().roots().end()) {
           break;
         }
         const auto separator = candidate.rfind('.');
@@ -284,7 +293,7 @@ DebuggerSession::DebuggerSession(
     }
     for (const auto& object : simulation.design_ir().objects()) {
       if (object.kind >= semantic::design::ObjectKind::systemc_module) {
-        retain_scope(object.path);
+        retain_scope(design_path(simulation, object.path));
       }
     }
     std::ranges::sort(execution_scope_paths_);
@@ -730,8 +739,11 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
   }
 
 [[nodiscard]] bool DebuggerSession::canonical_path(const std::string_view path) const  {
-    if (std::ranges::find(simulation_.design_ir().roots(), path)
-        != simulation_.design_ir().roots().end()) {
+    const auto root = std::ranges::find_if(
+        simulation_.design_ir().roots(), [&](const auto id) {
+          return design_path(simulation_, id) == path;
+        });
+    if (root != simulation_.design_ir().roots().end()) {
       return true;
     }
     const auto prefix = std::string(path) + ".";
@@ -755,15 +767,16 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
   auto scope = scope_;
   const auto root = std::ranges::find_if(
       simulation_.design_ir().roots(),
-      [&](const auto& candidate) {
-        return scope == candidate
-            || (scope.size() > candidate.size()
-                && scope.starts_with(candidate)
-                && scope[candidate.size()] == '.');
+      [&](const auto candidate) {
+        const auto candidate_path = design_path(simulation_, candidate);
+        return scope == candidate_path
+            || (scope.size() > candidate_path.size()
+                && scope.starts_with(candidate_path)
+                && scope[candidate_path.size()] == '.');
       });
-  const auto& top = root == simulation_.design_ir().roots().end()
+  const auto top = root == simulation_.design_ir().roots().end()
       ? simulation_.design_ir().top()
-      : *root;
+      : design_path(simulation_, *root);
   while (true) {
     paths.push_back(scope + "." + std::string{name});
     if (scope == top) {
@@ -787,26 +800,30 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       return scope_;
     }
     if (requested == "/") {
-      return simulation_.design_ir().top();
+      return std::string { simulation_.design_ir().top() };
     }
     if (requested == "..") {
-      if (std::ranges::find(simulation_.design_ir().roots(), scope_)
-          != simulation_.design_ir().roots().end()) {
+      const auto root = std::ranges::find_if(
+          simulation_.design_ir().roots(), [&](const auto id) {
+            return design_path(simulation_, id) == scope_;
+          });
+      if (root != simulation_.design_ir().roots().end()) {
         return scope_;
       }
       const auto separator = scope_.rfind('.');
       return separator == std::string::npos
-          ? std::string{simulation_.design_ir().top()}
+          ? std::string { simulation_.design_ir().top() }
           : scope_.substr(0, separator);
     }
     std::string candidate;
     const auto absolute_root = std::ranges::find_if(
         simulation_.design_ir().roots(),
-        [&](const auto& root) {
-          return requested == root
-              || (requested.size() > root.size()
-                  && requested.starts_with(root)
-                  && requested[root.size()] == '.');
+        [&](const auto root) {
+          const auto root_path = design_path(simulation_, root);
+          return requested == root_path
+              || (requested.size() > root_path.size()
+                  && requested.starts_with(root_path)
+                  && requested[root_path.size()] == '.');
         });
     if (absolute_root != simulation_.design_ir().roots().end()) {
       candidate = requested;
@@ -833,9 +850,12 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
             return entry.second == *signal
                 && std::ranges::any_of(
                     simulation_.design_ir().roots(),
-                    [&](const auto& root) {
-                      return entry.first == root
-                          || entry.first.starts_with(root + ".");
+                    [&](const auto root) {
+                      const auto root_path = design_path(simulation_, root);
+                      return entry.first == root_path
+                          || (entry.first.size() > root_path.size()
+                              && entry.first.starts_with(root_path)
+                              && entry.first[root_path.size()] == '.');
                     });
           });
       return std::pair{
@@ -853,11 +873,11 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
   for (const auto& path : lexical_paths(name)) {
     for (const auto& object : simulation_.design_ir().objects()) {
       if (object.kind == semantic::design::ObjectKind::string
-          && object.path == path
+          && design_path(simulation_, object.path) == path
           && object.runtime_index
               <= std::numeric_limits<runtime::simir::StringObjectId>::max()) {
         return std::pair{
-            object.path,
+            std::string { design_path(simulation_, object.path) },
             static_cast<runtime::simir::StringObjectId>(
                 object.runtime_index)};
       }
@@ -874,7 +894,7 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
     const auto object = std::ranges::find_if(
         simulation_.design_ir().objects(), [&](const auto& candidate) {
           return candidate.kind == semantic::design::ObjectKind::container
-              && candidate.path == path
+              && design_path(simulation_, candidate.path) == path
               && candidate.runtime_index <= std::numeric_limits<
                   runtime::simir::ContainerObjectId>::max();
         });
@@ -1972,7 +1992,8 @@ int handle_debug(
     if (index != 0) {
       output << ", ";
     }
-    output << simulation.design_ir().roots()[index];
+    output << simulation.design_ir().path(
+        simulation.design_ir().roots()[index]);
   }
   if (simulation.compiled_process_count() == 0) {
     output << " (reference evaluator)\n";

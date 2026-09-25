@@ -170,22 +170,24 @@ std::string canonical_identity(
         });
     append_records(
         records, design.instances(), reverse,
-        [](auto& output, const auto& instance) {
+        [&design](auto& output, const auto& instance) {
             output.push_back(
                 "instance|" + id_text(instance.id) + '|'
                 + optional_id_text(instance.parent) + '|'
                 + id_text(instance.specialization) + '|' + instance.name + '|'
-                + instance.path + '|' + instance.target + '|'
+                + std::string { design.path(instance.path) } + '|'
+                + instance.target + '|'
                 + optional_id_text(instance.source));
         });
     append_records(
         records, design.objects(), reverse,
-        [](auto& output, const auto& object) {
+        [&design](auto& output, const auto& object) {
             output.push_back(
                 "object|" + id_text(object.id) + '|'
                 + id_text(object.specialization) + '|'
                 + std::to_string(static_cast<unsigned>(object.kind)) + '|'
-                + object.name + '|' + object.path + '|'
+                + object.name + '|'
+                + std::string { design.path(object.path) } + '|'
                 + optional_id_text(object.source));
         });
     append_records(
@@ -198,21 +200,23 @@ std::string canonical_identity(
         });
     append_records(
         records, design.conversions(), reverse,
-        [](auto& output, const auto& conversion) {
+        [&design](auto& output, const auto& conversion) {
             output.push_back(
                 "conversion|" + id_text(conversion.id) + '|'
                 + std::to_string(static_cast<unsigned>(conversion.kind)) + '|'
-                + conversion.path + '|' + id_text(conversion.formal) + '|'
+                + std::string { design.path(conversion.path) } + '|'
+                + id_text(conversion.formal) + '|'
                 + id_text(conversion.actual) + '|'
                 + optional_id_text(conversion.source));
         });
     append_records(
         records, design.boundaries(), reverse,
-        [](auto& output, const auto& boundary) {
+        [&design](auto& output, const auto& boundary) {
             output.push_back(
                 "boundary|" + id_text(boundary.id) + '|'
                 + std::to_string(static_cast<unsigned>(boundary.kind)) + '|'
-                + boundary.name + '|' + boundary.path + '|'
+                + boundary.name + '|'
+                + std::string { design.path(boundary.path) } + '|'
                 + optional_id_text(boundary.source));
         });
     std::ranges::sort(records);

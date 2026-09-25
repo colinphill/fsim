@@ -91,7 +91,7 @@ Capture run_once(
             project->design_ir.objects(), [&](const auto& object) {
               return object.kind
                       == fsim::semantic::design::ObjectKind::container
-                  && object.path == path
+                  && project->design_ir.path(object.path) == path
                   && object.runtime_index == runtime_object;
             })
         == 1);

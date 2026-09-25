@@ -3137,16 +3137,16 @@ file(READ "${FSIM_FST_CONTROL}" FSIM_FST_CONTROL_CONTENTS)
 file(READ "${FSIM_FST_CONTROL_TEST}" FSIM_FST_CONTROL_TEST_CONTENTS)
 file(READ "${FSIM_FST_APPLICATION}" FSIM_FST_APPLICATION_CONTENTS)
 
-string(REGEX MATCHALL "--parallel 4" FSIM_PARALLEL_STEPS "${FSIM_WORKFLOW_CONTENTS}")
+string(REGEX MATCHALL "--parallel 2" FSIM_PARALLEL_STEPS "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_PARALLEL_STEPS FSIM_PARALLEL_COUNT)
-if(NOT FSIM_PARALLEL_COUNT EQUAL 5)
+if(NOT FSIM_PARALLEL_COUNT EQUAL 4)
   message(FATAL_ERROR
-    "expected five four-worker hosted build/test steps, found ${FSIM_PARALLEL_COUNT}")
+    "expected four two-worker hosted build/test steps, found ${FSIM_PARALLEL_COUNT}")
 endif()
-string(REGEX MATCH "--parallel ([^4]|4[^[:space:]\r\n])" FSIM_OTHER_PARALLEL
+string(REGEX MATCH "--parallel ([^2]|2[^[:space:]\r\n])" FSIM_OTHER_PARALLEL
   "${FSIM_WORKFLOW_CONTENTS}")
 if(FSIM_OTHER_PARALLEL)
-  message(FATAL_ERROR "workflow contains a non-four-worker build/test step")
+  message(FATAL_ERROR "workflow contains a non-two-worker build/test step")
 endif()
 
 string(REGEX MATCHALL
@@ -4152,8 +4152,8 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "random distribution exceeded the bounded draw limit"
     "operation_holds<RandomDistribution>(operation)"
     "source-path"
-    "kRuntimeStateSchema = 63"
-    "kRuntimeStateSchema == 63"
+    "kRuntimeStateSchema = 64"
+    "kRuntimeStateSchema == 64"
     "$dist_erlang(dist_seed, 1000001, 1)"
     "SystemVerilogAnnexConstruct"
     "FSIM-SV-DEPR-001"
@@ -4337,6 +4337,10 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     FSIM_SYSTEMVERILOG_2023_CALLBACK_CONTENTS_LOWER)
   string(APPEND FSIM_SYSTEMVERILOG_2023_CONTENTS_LOWER
     "${FSIM_SYSTEMVERILOG_2023_CALLBACK_CONTENTS_LOWER}")
+  string(TOLOWER "${FSIM_FST_APPLICATION_CONTENTS}"
+    FSIM_SYSTEMVERILOG_2023_APPLICATION_CONTENTS_LOWER)
+  string(APPEND FSIM_SYSTEMVERILOG_2023_CONTENTS_LOWER
+    "${FSIM_SYSTEMVERILOG_2023_APPLICATION_CONTENTS_LOWER}")
   string(TOLOWER "${FSIM_SYSTEMVERILOG_2023_POLICY}"
     FSIM_SYSTEMVERILOG_2023_POLICY_LOWER)
   string(FIND "${FSIM_SYSTEMVERILOG_2023_CONTENTS_LOWER}"
@@ -4391,7 +4395,8 @@ endforeach()
 foreach(FSIM_SYSTEMVERILOG_2023_COVERAGE_POLICY IN ITEMS
     "coverage_equivalence_systemverilog_2023"
     "StandardRevision::SystemVerilog2023"
-    "coverage.instance_identity = instances[instance_index].path"
+    "coverage.instance_identity = std::string {"
+    "built.design_ir.path("
     "event.instance_identity = coverage.instance_identity"
     "instance.bin_hits.size() == 2U"
     "coverage.attempts == 1"
@@ -5275,7 +5280,7 @@ endforeach()
 foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
     "kPortableSchemaVersion = 15"
     "kCompiledHirBundleSchema = 1"
-    "kRuntimeStateSchema = 63"
+    "kRuntimeStateSchema = 64"
     "kVhdlHirStateSchema = 6"
     "vhdl_2019_type.base.predefined_attribute"
     "vhdl_2019_declaration.interface_view.emplace()"
@@ -6373,8 +6378,8 @@ foreach(FSIM_CODE_COVERAGE_POINT_POLICY IN ITEMS
     "std::uint64_t end_offset"
     "span.end_offset > source.content_bytes"
     "update_digest(hash, source.digest)"
-    "digest_word(digest, 0U)"
-    "digest_word(digest, 8U)"
+    "support::sha256_digest_word_be(digest, 0U)"
+    "support::sha256_digest_word_be(digest, 8U)"
     "d8adc683731fb1114e3957ecec2b508c"
     "point identity must not depend on request or allocation order")
   string(FIND
@@ -6667,14 +6672,14 @@ endforeach()
 
 string(FIND
   "${FSIM_TEST_CMAKE_CONTENTS}"
-  "fsim.resource-portability-contract"
+  "fsim.contract.artifact-resources"
   FSIM_REGISTRATION_INDEX)
 if(FSIM_REGISTRATION_INDEX EQUAL -1)
   message(FATAL_ERROR "resource portability contract CTest is not registered")
 endif()
 
 message(STATUS
-  "resource portability contract: five two-worker build/test steps, "
+  "resource portability contract: four two-worker build/test steps, "
   "120-minute hosted jobs, "
   "eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded "
   "large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence "

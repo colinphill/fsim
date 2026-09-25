@@ -80,6 +80,9 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/vpi_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/sv_vpi_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/api.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/diagnostic/diagnostic.hpp"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/semantic/hierarchy_path.hpp"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/semantic/model.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/native_plugin_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/tf_plugin_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/veriuser.h"
@@ -162,6 +165,30 @@ foreach(FSIM_TF_HEADER IN ITEMS
   if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
     message(FATAL_ERROR
       "installed public header changed: runtime/${FSIM_TF_HEADER}")
+  endif()
+endforeach()
+
+file(SHA256
+  "${FSIM_SOURCE_DIR}/include/fsim/diagnostic/diagnostic.hpp"
+  FSIM_SOURCE_DIGEST)
+file(SHA256
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/diagnostic/diagnostic.hpp"
+  FSIM_INSTALLED_DIGEST)
+if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
+  message(FATAL_ERROR
+    "installed public header changed: diagnostic/diagnostic.hpp")
+endif()
+
+foreach(FSIM_SEMANTIC_HEADER IN ITEMS hierarchy_path.hpp model.hpp)
+  file(SHA256
+    "${FSIM_SOURCE_DIR}/include/fsim/semantic/${FSIM_SEMANTIC_HEADER}"
+    FSIM_SOURCE_DIGEST)
+  file(SHA256
+    "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/semantic/${FSIM_SEMANTIC_HEADER}"
+    FSIM_INSTALLED_DIGEST)
+  if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
+    message(FATAL_ERROR
+      "installed public header changed: semantic/${FSIM_SEMANTIC_HEADER}")
   endif()
 endforeach()
 

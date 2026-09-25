@@ -2594,8 +2594,9 @@ endmodule
                 && specialization.instance.valid();
         }));
     const auto child = std::ranges::find_if(
-        built->design_ir.instances(), [](const auto& instance) {
-            return instance.path == "design_ir_top.child";
+        built->design_ir.instances(), [&](const auto& instance) {
+            return built->design_ir.path(instance.path)
+                == "design_ir_top.child";
         });
     assert(child != built->design_ir.instances().end());
     assert(child->parent);
@@ -2609,8 +2610,9 @@ endmodule
     assert(built->design_ir.transactions().size()
         == built->design_ir.drivers().size());
     assert(std::ranges::all_of(
-        built->design_ir.objects(), [](const auto& object) {
-            return object.specialization.valid() && !object.path.empty();
+        built->design_ir.objects(), [&](const auto& object) {
+            return object.specialization.valid()
+                && !built->design_ir.path(object.path).empty();
         }));
     const auto wide_parameter = std::ranges::find_if(
         built->systemverilog_hir.declarations(), [](const auto& declaration) {

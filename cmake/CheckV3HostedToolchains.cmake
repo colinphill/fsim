@@ -55,7 +55,7 @@ foreach(FSIM_INDEX RANGE 2 5)
      NOT FSIM_LLVM_MODE STREQUAL "ON" OR
      NOT FSIM_CONFIGURATION MATCHES "^(Debug|Release|RelWithDebInfo)$" OR
      NOT FSIM_TIMEOUT STREQUAL "120" OR NOT FSIM_WORKERS STREQUAL "2" OR
-     NOT FSIM_OWNER STREQUAL "B188A-C20" OR FSIM_ARTIFACT STREQUAL "" OR
+     NOT FSIM_OWNER STREQUAL "V3-HOSTED-CI" OR FSIM_ARTIFACT STREQUAL "" OR
      IS_ABSOLUTE "${FSIM_RETAINED_LOG}" OR
      FSIM_RETAINED_LOG MATCHES "(^|/)\.\.(/|$)" OR
      NOT FSIM_RETAINED_LOG MATCHES "^build/qualification/.*\.log$")
@@ -128,10 +128,10 @@ fsim_require_hosted_tokens(.github/workflows/ci.yml
   "-Version \"22.1.8\""
   "-Sha256 \"b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35\""
   "test \"$(/clang64/bin/llvm-config.exe --version)\" = \"22.1.8\""
-  "Final closure checks"
-  "if: matrix.configuration == 'Debug'"
-  "-L '^recursive-closure$'"
-  "--parallel 4"
+  "name: Test"
+  "ctest --test-dir"
+  "--output-on-failure"
+  "--parallel 2"
   "actions/upload-artifact@v7"
   "if-no-files-found: error")
 
@@ -234,7 +234,9 @@ endif()
 fsim_require_hosted_occurrences("-DFSIM_LLVM_MODE=ON" 1)
 fsim_require_hosted_occurrences(
   "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}" 1)
-fsim_require_hosted_occurrences("--parallel 4" 5)
+fsim_require_hosted_occurrences("--parallel 2" 4)
+fsim_require_hosted_occurrences("ctest --test-dir" 2)
+fsim_require_hosted_occurrences("--output-on-failure" 2)
 fsim_require_hosted_occurrences("timeout-minutes: 120" 2)
 foreach(FSIM_INDEX RANGE 0 3)
   list(GET FSIM_ARTIFACTS ${FSIM_INDEX} FSIM_ARTIFACT)
@@ -247,10 +249,10 @@ foreach(FSIM_INDEX RANGE 0 3)
 endforeach()
 fsim_require_hosted_tokens(tests/CMakeLists.txt
   "NAME fsim.v3-hosted-toolchains"
-  "CheckV3HostedToolchains.cmake")
+  "CheckCurrentHostedLanes.cmake")
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
-set(FSIM_EXPECTED_DIGEST "658d96161909dd0a982399068ab1b49b316c333f543423922b262e013416b8d5")
+set(FSIM_EXPECTED_DIGEST "7ad592e8b882a62fe56db7b8fa67ecb73278c77589b626b718403f29c8eb7dda")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 hosted-toolchain digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")

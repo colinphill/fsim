@@ -5,6 +5,7 @@
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <algorithm>
@@ -740,6 +741,16 @@ public:
 
     [[nodiscard]] const std::string& top() const noexcept;
     [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
+    [[nodiscard]] const semantic::HierarchyPathTable&
+    hierarchy_paths() const noexcept;
+    /// Accept an extended table only when every existing ID still names the
+    /// same path. DesignIR may append derived paths after elaboration.
+    [[nodiscard]] bool rebind_path_table(
+        semantic::HierarchyPathTable paths);
+    /// Reassign path-keyed indexes when the destination table has the same
+    /// spellings under different IDs, as in a canonical artifact table.
+    [[nodiscard]] bool remap_path_table(
+        semantic::HierarchyPathTable paths);
     [[nodiscard]] const std::vector<SignalInfo>& signals() const noexcept;
     [[nodiscard]] const std::vector<BoundaryConversionInfo>&
     boundary_conversions() const noexcept;
@@ -815,6 +826,16 @@ private:
         std::vector<runtime::simir::Process>* consumed_processes = nullptr) const;
     friend class HierarchyBuilder;
 
+    struct HierarchyPathHash final {
+        [[nodiscard]] std::size_t operator()(
+            semantic::HierarchyPathId id) const noexcept
+        {
+            return id.value();
+        }
+    };
+
+    void freeze_hierarchy_paths();
+
     std::string top_;
     std::vector<std::string> roots_;
     std::vector<SignalInfo> signal_info_;
@@ -836,6 +857,15 @@ private:
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;
     std::optional<CodeCoverageInventory> code_coverage_inventory_;
+    semantic::HierarchyPathTable hierarchy_paths_;
+    std::unordered_map<semantic::HierarchyPathId,
+        runtime::simir::SignalId, HierarchyPathHash> signal_by_path_;
+    std::unordered_map<semantic::HierarchyPathId,
+        runtime::simir::StringObjectId, HierarchyPathHash> string_by_path_;
+    std::unordered_map<semantic::HierarchyPathId,
+        runtime::simir::ContainerObjectId, HierarchyPathHash>
+        container_by_path_;
+    // Construction drafts. Cleared before the design is published.
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
     std::unordered_map<
         std::string, runtime::simir::StringObjectId>
