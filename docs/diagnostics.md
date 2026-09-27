@@ -228,6 +228,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHSTD-004` | error | A project source attempts to redeclare a compiler-supplied IEEE package. |
 | `FSIM-FE-VHSTD-005` | error | Sources using different VHDL revisions attempt to share one compiler-supplied IEEE package environment; analyze them into separate logical libraries. |
 | `FSIM-FE-VHSTD-006` | error | A requested compiler-supplied non-standard Synopsys compatibility package is unavailable or incompatible with the selected VHDL revision; select a compatible revision or remove its use clause. |
+| `FSIM-FE-VHDL-COMPAT-001` | error | A source set names an unknown or noncanonical VHDL compatibility profile, or selects one for a non-VHDL language. |
 | `FSIM-ELAB-VHSTD-001` | error | A compiler-supplied IEEE intrinsic is unavailable in the owning process's selected VHDL revision and no user-defined overload owns the name. |
 | `FSIM-ELAB-VHPROFILE-001` | error | Direct elaboration attempted to consume VHDL recovery nodes containing a construct unavailable in the selected language revision. |
 | `FSIM-ELAB-VHNUM-001` | error | An IEEE or Synopsys numeric function has the wrong arity or value profile. |
@@ -2247,7 +2248,7 @@ scheduler.
 | `FSIM-ELAB-VHPROTECTED-005` | error | A protected procedure body has no conforming public profile. |
 | `FSIM-ELAB-VHPROTECTED-006` | error | A protected type declaration has no body. |
 | `FSIM-ELAB-VHPROTECTED-007` | error | A protected private variable lacks a bounded supported scalar or packed type. |
-| `FSIM-ELAB-VHPROTECTED-008` | error | A VHDL-2000-or-later shared variable does not have a protected type. |
+| `FSIM-ELAB-VHPROTECTED-008` | error | A VHDL-2000-or-later shared variable does not have a protected type and its declaring unit has not selected legacy-unprotected-shared-variable compatibility. |
 | `FSIM-ELAB-VHPROTECTED-009` | error | A shared protected object lacks one conforming protected body. |
 | `FSIM-ELAB-VHPROTECTED-010` | error | A shared protected object incorrectly carries an object initializer. |
 | `FSIM-ELAB-VHPROTECTED-011` | error | A protected private initializer is nonstatic or incompatible with its member. |
@@ -2262,7 +2263,7 @@ scheduler.
 | `FSIM-ELAB-VHPROTECTED-020` | error | A protected method attempts to suspend. |
 | `FSIM-ELAB-VHPROTECTED-021` | error | A protected method makes a nested procedure call outside the bounded non-reentrant policy. |
 | `FSIM-ELAB-VHPROTECTED-022` | error | A pure VHDL function calls an impure protected function. |
-| `FSIM-ELAB-VHPROTECTED-023` | error | A legacy VHDL-1993 unprotected shared variable lacks bounded executable storage or a compatible static initializer. |
+| `FSIM-ELAB-VHPROTECTED-023` | error | An unprotected shared variable in VHDL-1993 or explicit legacy compatibility mode lacks bounded executable storage or a compatible static initializer. |
 | `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
 | `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
 | `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |

@@ -1201,6 +1201,9 @@ std::optional<Process> Lowerer::lower_hir_process(
     const frontend::Language language,
     const std::string_view hierarchy)
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     const auto source = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_process(process_id)
         : std::nullopt;
@@ -1399,6 +1402,9 @@ std::optional<Process> Lowerer::lower_hir_process(
 bool Lowerer::can_lower_hir_concurrent_statement(
     const semantic::StatementId statement) const
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     const auto source = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_statement(statement)
         : std::nullopt;
@@ -1455,6 +1461,9 @@ bool Lowerer::can_lower_hir_concurrent_statement(
 bool Lowerer::diagnose_hir_vhdl_block_guard(
     const semantic::ExpressionId expression)
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     const auto source = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression)
         : std::nullopt;
@@ -1480,6 +1489,9 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
     const std::size_t order,
     const std::optional<semantic::ExpressionId> enclosing_vhdl_guard)
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     const auto source = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_statement(statement)
         : std::nullopt;
@@ -1624,6 +1636,9 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     const std::size_t order,
     std::optional<semantic::vhdl::SubtypeIndication> vhdl_context)
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     if (specialized_hir_unit_ == nullptr
         || destination >= design_.signal_info_.size()) {
         return std::nullopt;
@@ -1662,6 +1677,9 @@ std::optional<Process> Lowerer::lower_hir_output_actual(
     const std::string_view hierarchy,
     const std::size_t order)
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     if (specialized_hir_unit_ == nullptr
         || source >= design_.signal_info_.size()
         || !specialized_hir_unit_->find_expression(expression)) {
@@ -1842,6 +1860,9 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     const frontend::Language language,
     const std::string_view hierarchy)
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     process_ = Process { };
     generated_processes_.clear();
     implicit_signal_dependencies_.clear();

@@ -15,7 +15,6 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
-#include <poll.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -26,6 +25,7 @@
 #if !defined(_WIN32)
 #include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>

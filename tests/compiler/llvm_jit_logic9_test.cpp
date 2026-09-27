@@ -123,6 +123,94 @@ void test_logic9_at_level(
     assert(runtime.formatted_logic9_values.size() == 1);
     assert(runtime.formatted_logic9_values.front() == planes(source));
 
+    Process wide_case_equal;
+    wide_case_equal.id = 112;
+    wide_case_equal.name = "wide_logic9_case_equal";
+    std::vector<std::uint8_t> expected_case_equal;
+    const auto append_case_equal = [&](const std::uint32_t width,
+                                       const PackedLogic4& lhs,
+                                       const PackedLogic4& rhs,
+                                       const bool expected) {
+        assert(lhs.width() == width);
+        assert(rhs.width() == width);
+        const auto lhs_register = static_cast<RegisterId>(
+            wide_case_equal.register_count);
+        const auto rhs_register = static_cast<RegisterId>(
+            wide_case_equal.register_count + 1U);
+        const auto result_register = static_cast<RegisterId>(
+            wide_case_equal.register_count + 2U);
+        const auto signal = static_cast<SignalId>(
+            expected_case_equal.size());
+        wide_case_equal.register_count += 3U;
+        wide_case_equal.register_value_kinds.insert(
+            wide_case_equal.register_value_kinds.end(),
+            { ValueKind::logic9, ValueKind::logic9, ValueKind::logic4 });
+        wide_case_equal.operations.emplace_back(
+            LoadConstant { lhs_register, lhs });
+        wide_case_equal.operations.emplace_back(
+            LoadConstant { rhs_register, rhs });
+        wide_case_equal.operations.emplace_back(Binary {
+            BinaryOperator::case_equal,
+            result_register,
+            lhs_register,
+            rhs_register });
+        wide_case_equal.operations.emplace_back(
+            WriteBlocking { signal, result_register });
+        expected_case_equal.push_back(expected ? 1U : 0U);
+    };
+    const std::array<Logic9, 4> high_bit_plane_changes {
+        Logic9::x,
+        Logic9::zero,
+        Logic9::z,
+        Logic9::dont_care
+    };
+    for (const auto width : { 65U, 130U }) {
+        const auto high_bit = static_cast<std::size_t>(width - 1U);
+        auto identical = PackedLogic4(width, Logic4::zero);
+        identical.set_logic9(high_bit, Logic9::dont_care);
+        identical.set_logic9(high_bit - 1U, Logic9::h);
+        identical.set_logic9(high_bit - 2U, Logic9::zero);
+        append_case_equal(width, identical, identical, true);
+
+        auto lhs = PackedLogic4(width, Logic4::zero);
+        lhs.set_logic9(high_bit, Logic9::u);
+        for (const auto changed_state : high_bit_plane_changes) {
+            auto rhs = lhs;
+            rhs.set_logic9(high_bit, changed_state);
+            append_case_equal(width, lhs, rhs, false);
+        }
+    }
+    wide_case_equal.operations.emplace_back(Halt { });
+    std::array<std::uint32_t, 10> case_equal_signal_widths { };
+    case_equal_signal_widths.fill(1U);
+    std::array<ValueKind, 10> case_equal_signal_kinds { };
+    case_equal_signal_kinds.fill(ValueKind::logic4);
+    const auto wide_case_equal_symbol
+        = std::string { symbol } + "_wide_case_equal";
+    assert(jit.supports_process(
+        wide_case_equal,
+        case_equal_signal_widths,
+        case_equal_signal_kinds));
+    jit.add_process(
+        wide_case_equal_symbol,
+        wide_case_equal,
+        case_equal_signal_widths,
+        case_equal_signal_kinds);
+    TestRuntime wide_case_equal_runtime;
+    auto wide_case_equal_descriptor = abi(wide_case_equal_runtime);
+    assert(jit.execute(
+               jit.lookup(wide_case_equal_symbol),
+               wide_case_equal_descriptor)
+        == JitExecutionStatus::completed);
+    for (std::size_t index = 0;
+         index < expected_case_equal.size();
+         ++index) {
+        const auto expected = expected_case_equal[index] != 0U
+            ? PackedLogic4::from_msb_string("1")
+            : PackedLogic4::from_msb_string("0");
+        assert(wide_case_equal_runtime.signals[index] == encode(expected));
+    }
+
     Process direct_process;
     direct_process.id = 107;
     direct_process.name = "logic9_direct_update_accumulator";
@@ -390,6 +478,129 @@ void test_logic9_at_level(
     assert(jit.resume(
                wide_handle, wide_descriptor, wide_frame, wide_result)
         == JitResumeStatus::completed);
+
+    Process branch_definitions_across_word;
+    branch_definitions_across_word.id = 109;
+    branch_definitions_across_word.name
+        = "branch_definitions_across_word";
+    branch_definitions_across_word.register_count = 65;
+    branch_definitions_across_word.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+        Branch { 0, 2, 4, UnknownBranchPolicy::when_false },
+        LoadConstant {
+            64, PackedLogic4::from_msb_string("10100101") },
+        Jump { 6 },
+        LoadConstant {
+            64, PackedLogic4::from_msb_string("01011010") },
+        Jump { 6 },
+        CopyRegister { 63, 64 },
+        WriteBlocking { 0, 63 },
+        Pause { },
+        Halt { },
+    };
+    const auto branch_definitions_symbol
+        = std::string { symbol } + "_branch_definitions_word_boundary";
+    const std::array<std::uint32_t, 1> branch_signal_widths { 8U };
+    const std::array<ValueKind, 1> branch_signal_kinds {
+        ValueKind::logic4
+    };
+    const auto verify_branch_definition_output =
+        [&](const Process& branch_process, const std::string& process_symbol) {
+            assert(jit.supports_process(
+                branch_process, branch_signal_widths, branch_signal_kinds));
+            jit.add_process(
+                process_symbol,
+                branch_process,
+                branch_signal_widths,
+                branch_signal_kinds);
+            const auto branch_handle = jit.lookup(process_symbol);
+            const auto branch_layout = jit.frame_layout(branch_handle);
+            std::vector<std::uint64_t> branch_aval(
+                branch_layout.register_count);
+            std::vector<std::uint64_t> branch_bval(
+                branch_layout.register_count);
+            std::vector<std::uint8_t> branch_initialized(
+                branch_layout.register_count);
+            fsim_jit_frame_v1 branch_frame { };
+            jit.initialize_frame(
+                branch_handle,
+                branch_frame,
+                branch_aval,
+                branch_bval,
+                branch_initialized);
+            TestRuntime branch_runtime;
+            auto branch_descriptor = abi(branch_runtime);
+            auto branch_result = new_resume_result();
+            assert(jit.resume(
+                       branch_handle,
+                       branch_descriptor,
+                       branch_frame,
+                       branch_result)
+                == JitResumeStatus::paused);
+            assert(branch_runtime.signals[0]
+                == encode(PackedLogic4::from_msb_string("10100101")));
+            assert(jit.resume(
+                       branch_handle,
+                       branch_descriptor,
+                       branch_frame,
+                       branch_result)
+                == JitResumeStatus::completed);
+        };
+    verify_branch_definition_output(
+        branch_definitions_across_word, branch_definitions_symbol);
+
+    Process branch_definitions_across_two_words;
+    branch_definitions_across_two_words.id = 110;
+    branch_definitions_across_two_words.name
+        = "branch_definitions_across_two_words";
+    branch_definitions_across_two_words.register_count = 133;
+    branch_definitions_across_two_words.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+        Branch { 0, 2, 4, UnknownBranchPolicy::when_false },
+        LoadConstant {
+            132, PackedLogic4::from_msb_string("10100101") },
+        Jump { 6 },
+        LoadConstant {
+            132, PackedLogic4::from_msb_string("10100101") },
+        Jump { 6 },
+        CopyRegister { 131, 132 },
+        WriteBlocking { 0, 131 },
+        Pause { },
+        Halt { },
+    };
+    const auto branch_definitions_two_words_symbol
+        = std::string { symbol } + "_branch_definitions_two_words";
+    verify_branch_definition_output(
+        branch_definitions_across_two_words,
+        branch_definitions_two_words_symbol);
+
+    Process partial_word_path_use;
+    partial_word_path_use.id = 111;
+    partial_word_path_use.name = "partial_word_path_use";
+    partial_word_path_use.register_count = 133;
+    partial_word_path_use.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+        Branch { 0, 2, 4, UnknownBranchPolicy::when_false },
+        LoadConstant {
+            132, PackedLogic4::from_msb_string("10100101") },
+        Jump { 6 },
+        Jump { 6 },
+        Halt { },
+        CopyRegister { 131, 132 },
+        CopyRegister { 130, 132 },
+        Halt { },
+    };
+    const auto partial_word_path_use_symbol
+        = std::string { symbol } + "_partial_word_path_use";
+    LlvmJit invalid_path_jit { LlvmJitOptions { optimization, { } } };
+    expect_fatal_error(
+        [&] {
+            invalid_path_jit.add_process(
+                partial_word_path_use_symbol,
+                partial_word_path_use,
+                no_signals);
+        },
+        "instruction 6: register 132 may be used before definition on a control-flow path");
 }
 
 void test_vital_timing_at_level(
@@ -423,6 +634,31 @@ void test_vital_timing_at_level(
     assert(
         runtime.logic9_signals[1]
         == planes(PackedLogic4::from_logic9_msb_string("X")));
+
+    Process wide_check = process;
+    wide_check.id = 93;
+    wide_check.name = "vital_timing_high_bit";
+    auto* wide_operation = operation_get_if<VitalTimingCheck>(
+        &wide_check.operations[0]);
+    assert(wide_operation);
+    wide_operation->test_offset = 96U;
+    wide_operation->reference_signal = 2U;
+    wide_operation->reference_offset = 127U;
+    const std::array<std::uint32_t, 3> wide_widths { 129U, 1U, 129U };
+    const std::array<ValueKind, 3> wide_kinds {
+        ValueKind::logic9, ValueKind::logic9, ValueKind::logic9
+    };
+    const auto wide_symbol = std::string { symbol } + "_high_bit";
+    assert(jit.supports_process(wide_check, wide_widths, wide_kinds));
+    jit.add_process(wide_symbol, wide_check, wide_widths, wide_kinds);
+    TestRuntime wide_runtime;
+    wide_runtime.vital_timing_result
+        = static_cast<std::uint32_t>(Logic9::h);
+    auto wide_descriptor = abi(wide_runtime);
+    assert(jit.execute(jit.lookup(wide_symbol), wide_descriptor)
+        == JitExecutionStatus::completed);
+    assert(wide_runtime.logic9_signals[1]
+        == planes(PackedLogic4::from_logic9_msb_string("H")));
 }
 
 void test_vital_delay_at_level(
@@ -1717,11 +1953,9 @@ void test_rejections()
     zero_time_cycle.id = 0;
     zero_time_cycle.name = "zero_time_cycle";
     zero_time_cycle.operations = { Jump { 0 }, Halt { } };
-    expect_unsupported(
-        [&] {
-            jit.add_process("zero_time_cycle", zero_time_cycle, no_signals);
-        },
-        "cycle has no suspension safe point");
+    assert(jit.supports_process(zero_time_cycle, no_signals));
+    jit.add_process("zero_time_cycle", zero_time_cycle, no_signals);
+    assert(jit.lookup("zero_time_cycle"));
 
     Process reachable_cycle;
     reachable_cycle.id = 0;
@@ -1732,9 +1966,9 @@ void test_rejections()
         Branch { 0, 1, 2, UnknownBranchPolicy::when_false },
         Halt { },
     };
-    expect_unsupported(
-        [&] { jit.add_process("reachable_cycle", reachable_cycle, no_signals); },
-        "cycle has no suspension safe point");
+    assert(jit.supports_process(reachable_cycle, no_signals));
+    jit.add_process("reachable_cycle", reachable_cycle, no_signals);
+    assert(jit.lookup("reachable_cycle"));
 
     Process debug_safe_cycle;
     debug_safe_cycle.id = 0;

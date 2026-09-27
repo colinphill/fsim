@@ -10,6 +10,7 @@ namespace {
 
     constexpr std::uint64_t maximum_runtime_vhdl_for_iterations
         = 1'000'000U;
+    constexpr std::size_t minimum_static_vhdl_for_runtime_iterations = 8U;
 
     class HirDebugScopeGuard final {
     public:
@@ -8488,7 +8489,9 @@ bool Lowerer::lower_hir_statement(
                 return true;
             }
         }
-        const auto lower_runtime_vhdl_for = [&]() {
+        const auto lower_runtime_vhdl_for = [&](
+            const std::optional<std::pair<std::int64_t, std::int64_t>>
+                static_bounds = std::nullopt) {
             if (!vhdl_loop_declaration
                 || !statement->vhdl->loop_initial
                 || !statement->vhdl->loop_limit) {
@@ -8528,17 +8531,57 @@ bool Lowerer::lower_hir_statement(
                     != frontend::ValueDomain::Integer) {
                 return false;
             }
-            auto initial = lower_hir_expression(
-                initial_id, *initial_width);
-            auto final = lower_hir_expression(final_id, *final_width);
-            if (!initial || !final
-                || register_width(*initial) != *initial_width
-                || register_width(*final) != *final_width
-                || register_domain(*initial)
-                    != frontend::ValueDomain::Integer
-                || register_domain(*final)
-                    != frontend::ValueDomain::Integer) {
+            const auto value_fits_signed_width = [](
+                const std::int64_t value, const std::size_t width) {
+                if (width == 0U || width > 64U) {
+                    return false;
+                }
+                if (width == 64U) {
+                    return true;
+                }
+                const auto limit = std::int64_t { 1 }
+                    << (width - 1U);
+                return value >= -limit && value < limit;
+            };
+            if (static_bounds
+                && (!value_fits_signed_width(
+                        static_bounds->first, *initial_width)
+                    || !value_fits_signed_width(
+                        static_bounds->second, *final_width))) {
                 return false;
+            }
+            // Nested lowering can restore hir_local_registers_, invalidating
+            // the iterator while this loop body is being emitted.
+            const auto parameter_register = parameter->second;
+            std::optional<RegisterId> initial;
+            std::optional<RegisterId> final;
+            if (static_bounds) {
+                initial = allocate_register(
+                    *initial_width, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    *initial,
+                    integer_value(static_bounds->first, *initial_width),
+                });
+                final = allocate_register(
+                    *final_width, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    *final,
+                    integer_value(static_bounds->second, *final_width),
+                });
+            } else {
+                initial = lower_hir_expression(
+                    initial_id, *initial_width);
+                final = lower_hir_expression(
+                    final_id, *final_width);
+                if (!initial || !final
+                    || register_width(*initial) != *initial_width
+                    || register_width(*final) != *final_width
+                    || register_domain(*initial)
+                        != frontend::ValueDomain::Integer
+                    || register_domain(*final)
+                        != frontend::ValueDomain::Integer) {
+                    return false;
+                }
             }
             const auto captured_initial = allocate_register(
                 *initial_width, frontend::ValueDomain::Integer);
@@ -8567,62 +8610,67 @@ bool Lowerer::lower_hir_statement(
                 UnknownBranchPolicy::when_false,
             });
 
-            const auto wide_initial = resize_register(
-                captured_initial, 64U, true);
-            const auto wide_final = resize_register(
-                captured_final, 64U, true);
-            const auto distance = allocate_register(
-                64U, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(Binary {
-                BinaryOperator::subtract_signed,
-                distance,
-                descending ? wide_initial : wide_final,
-                descending ? wide_final : wide_initial,
-            });
-            const auto iteration_limit = allocate_register(
-                64U, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(LoadConstant {
-                iteration_limit,
-                integer_value(
-                    static_cast<std::int64_t>(
-                        maximum_runtime_vhdl_for_iterations),
-                    64U),
-            });
-            const auto exceeds_limit = allocate_register(
-                1U, frontend::ValueDomain::Boolean);
-            process_.operations.emplace_back(Binary {
-                // The distance is nonnegative on this edge. Comparing it
-                // against the limit before adding one avoids overflow even
-                // for the full signed 64-bit endpoint span.
-                BinaryOperator::greater_equal_unsigned,
-                exceeds_limit,
-                distance,
-                iteration_limit,
-            });
-            const auto limit_branch
-                = static_cast<InstructionIndex>(
+            if (!static_bounds) {
+                const auto wide_initial = resize_register(
+                    captured_initial, 64U, true);
+                const auto wide_final = resize_register(
+                    captured_final, 64U, true);
+                const auto distance = allocate_register(
+                    64U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::subtract_signed,
+                    distance,
+                    descending ? wide_initial : wide_final,
+                    descending ? wide_final : wide_initial,
+                });
+                const auto iteration_limit = allocate_register(
+                    64U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    iteration_limit,
+                    integer_value(
+                        static_cast<std::int64_t>(
+                            maximum_runtime_vhdl_for_iterations),
+                        64U),
+                });
+                const auto exceeds_limit = allocate_register(
+                    1U, frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(Binary {
+                    // The distance is nonnegative on this edge. Comparing it
+                    // against the limit before adding one avoids overflow even
+                    // for the full signed 64-bit endpoint span.
+                    BinaryOperator::greater_equal_unsigned,
+                    exceeds_limit,
+                    distance,
+                    iteration_limit,
+                });
+                const auto limit_branch
+                    = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    exceeds_limit, 0U, 0U,
+                    UnknownBranchPolicy::when_false,
+                });
+                const auto failure = static_cast<InstructionIndex>(
                     process_.operations.size());
-            process_.operations.emplace_back(Branch {
-                exceeds_limit, 0U, 0U,
-                UnknownBranchPolicy::when_false,
-            });
-            const auto failure = static_cast<InstructionIndex>(
-                process_.operations.size());
-            process_.operations.emplace_back(Report {
-                "runtime VHDL for-loop exceeds the one-million-iteration limit",
-                runtime::simir::AssertionSeverity::failure,
-                SourceLocation {
-                    span.source_name.str(),
-                    static_cast<std::uint32_t>(span.begin.line),
-                    static_cast<std::uint32_t>(span.begin.column),
-                },
-            });
-            process_.operations.emplace_back(Halt { false });
+                process_.operations.emplace_back(Report {
+                    "runtime VHDL for-loop exceeds the one-million-iteration limit",
+                    runtime::simir::AssertionSeverity::failure,
+                    SourceLocation {
+                        span.source_name.str(),
+                        static_cast<std::uint32_t>(span.begin.line),
+                        static_cast<std::uint32_t>(span.begin.column),
+                    },
+                });
+                process_.operations.emplace_back(Halt { false });
+                process_.operations[limit_branch] = Branch {
+                    exceeds_limit, failure,
+                    static_cast<InstructionIndex>(process_.operations.size()),
+                    UnknownBranchPolicy::when_false,
+                };
+            }
 
-            const auto loop_entry = static_cast<InstructionIndex>(
-                process_.operations.size());
             process_.operations.emplace_back(CopyRegister {
-                parameter->second, captured_initial });
+                parameter_register, captured_initial });
             const auto loop_start = static_cast<InstructionIndex>(
                 process_.operations.size());
             const auto active = allocate_register(
@@ -8631,7 +8679,7 @@ bool Lowerer::lower_hir_statement(
                 descending ? BinaryOperator::greater_equal_signed
                            : BinaryOperator::less_equal_signed,
                 active,
-                parameter->second,
+                parameter_register,
                 captured_final,
             });
             const auto loop_branch
@@ -8663,7 +8711,7 @@ bool Lowerer::lower_hir_statement(
             process_.operations.emplace_back(Binary {
                 BinaryOperator::equal,
                 finished,
-                parameter->second,
+                parameter_register,
                 captured_final,
             });
             const auto finish_branch
@@ -8685,21 +8733,17 @@ bool Lowerer::lower_hir_statement(
                 descending ? BinaryOperator::subtract_signed
                            : BinaryOperator::add_signed,
                 next,
-                parameter->second,
+                parameter_register,
                 one,
             });
             process_.operations.emplace_back(CopyRegister {
-                parameter->second, next });
+                parameter_register, next });
             process_.operations.emplace_back(Jump { loop_start });
 
             const auto end = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations[range_branch] = Branch {
                 in_range, range_branch + 1U, end,
-                UnknownBranchPolicy::when_false,
-            };
-            process_.operations[limit_branch] = Branch {
-                exceeds_limit, failure, loop_entry,
                 UnknownBranchPolicy::when_false,
             };
             process_.operations[loop_branch] = Branch {
@@ -8716,6 +8760,24 @@ bool Lowerer::lower_hir_statement(
             return true;
         };
         const auto iterations = static_loop_iterations;
+        if (vhdl_loop_declaration
+            && statement->vhdl->loop_initial
+            && statement->vhdl->loop_limit
+            && vhdl_first_static && vhdl_last_static
+            && iterations
+            && *iterations >= minimum_static_vhdl_for_runtime_iterations
+            && *iterations <= maximum_runtime_vhdl_for_iterations) {
+            const auto operation_count = process_.operations.size();
+            if (lower_runtime_vhdl_for(std::pair {
+                    *vhdl_first_static, *vhdl_last_static })) {
+                restore_scope();
+                return true;
+            }
+            if (process_.operations.size() != operation_count) {
+                restore_scope();
+                return false;
+            }
+        }
         if (!iterations) {
             if (vhdl_loop_declaration
                 && (!vhdl_first_static || !vhdl_last_static)

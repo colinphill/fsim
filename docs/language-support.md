@@ -51,9 +51,18 @@ same typed open-kind HIR as later declarations. Unavailable features use
 array bounds, direction and arbitrary-width aggregate values are unchanged.
 VHDL-1993 legacy unprotected shared variables execute as one bounded
 scalar/packed shared identity with static initialization and deterministic
-source-ordered process access. VHDL-2000, VHDL-2002 and VHDL-2008 instead
-require a protected type; the legacy form receives
-`FSIM-ELAB-VHPROTECTED-008`. Protected private storage and public method calls
+source-ordered process access. VHDL-2000 and later require a protected type
+by default; the legacy form receives `FSIM-ELAB-VHPROTECTED-008`.
+For existing RTL that needs legacy shared storage, select
+`--vhdl-compatibility legacy-unprotected-shared-variable` when compiling its
+VHDL source, or set
+`vhdl_compatibility = "legacy-unprotected-shared-variable"` in its
+`[[source_set]]`. This option retains the selected language revision and
+reuses the bounded legacy storage and scheduling behavior. It applies to
+declarations in the opted-in unit, including its generated blocks, and is
+recorded in compiled-unit, artifact, and cache identities. It adds no new
+cross-process ordering guarantee. Other protected-type checks remain active.
+Protected private storage and public method calls
 execute under both older protected-type revisions. Methods are atomic because
 the bounded executable profile rejects suspension and reentry, and every fresh
 simulation reconstructs private/shared initial state. Interpreter and LLVM

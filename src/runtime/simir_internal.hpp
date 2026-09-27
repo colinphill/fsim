@@ -149,17 +149,16 @@ void validate_container_value(const ContainerValue& value);
     const PackedLogic4& exponent,
     const bool signed_exponent);
 
-[[nodiscard]] PackedLogic4 divide_known(
-    const PackedLogic4& dividend,
-    const PackedLogic4& divisor,
-    const bool return_remainder);
-
-struct SignedDivision {
+struct KnownDivision {
     PackedLogic4 quotient;
     PackedLogic4 remainder;
 };
 
-[[nodiscard]] SignedDivision divide_known_signed(
+[[nodiscard]] KnownDivision divide_known(
+    const PackedLogic4& dividend,
+    const PackedLogic4& divisor);
+
+[[nodiscard]] KnownDivision divide_known_signed(
     const PackedLogic4& dividend,
     const PackedLogic4& divisor);
 
@@ -248,6 +247,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // until their matching returns.
     struct ProcessColdState {
         Process program;
+        ProcessId design_process { };
         std::optional<ProcessDeferredExecutor> deferred_executor;
         SourceLocation current_source;
         std::string current_scope;
@@ -301,7 +301,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // retain pointers to queued, waiting_on_static, and status for the
         // lifetime of this address-stable deque entry.
         ProcessId id { };
-        ProcessId design_process { };
         InstructionIndex pc { };
         std::shared_ptr<ProcessFrame> frame;
         std::unique_ptr<ProcessExecutor> executor;
@@ -1158,7 +1157,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const SignalId signal,
         PackedLogic4 value) const;
 
-    void remove_dynamic_wait(ProcessState& process);
+    void remove_dynamic_wait(ProcessState& process)
+    {
+        const auto& cold = process.cold();
+        if (!process.waiting_on_signal
+            && !cold.waiting_on_container
+            && cold.dynamic_sensitivity.empty()) {
+            return;
+        }
+        remove_dynamic_wait_nonempty(process);
+    }
+
+    void remove_dynamic_wait_nonempty(ProcessState& process);
 
     void register_dynamic_wait_fanout(ProcessState& process);
 
@@ -1189,7 +1199,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         const ReadSignal& operation);
 
-    void clear_wait_timeout(ProcessState& process);
+    void clear_wait_timeout(ProcessState& process)
+    {
+        if (!process.cold().wait_timeout_origin) {
+            return;
+        }
+        clear_wait_timeout_nonempty(process);
+    }
+
+    void clear_wait_timeout_nonempty(ProcessState& process);
 
     void set_wait_timeout_result(
         ProcessState& process,
@@ -1239,7 +1257,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void snapshot_callable_context(ProcessState& process);
 
-    void restore_callable_context(ProcessState& process);
+    void restore_callable_context(ProcessState& process)
+    {
+        const auto& cold = process.cold();
+        if (cold.escaping_callable_contexts.empty()
+            && !cold.suspended_callable_context) {
+            return;
+        }
+        restore_callable_context_nonempty(process);
+    }
+
+    void restore_callable_context_nonempty(ProcessState& process);
 
     [[nodiscard]] bool dynamic_wait_satisfied(
         ProcessState& process,
@@ -1249,6 +1277,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void handle_boundary(ProcessState& process,
         InstructionIndex instruction,
         InstructionIndex next_instruction);
+    void execute_scope_randomize(
+        ProcessState& process,
+        InstructionIndex instruction,
+        const ScopeRandomize& operation);
     void execute_vhdl_assert_api(
         ProcessState& process, const VhdlAssertApi& operation);
     void execute_vhdl_reflection_api(

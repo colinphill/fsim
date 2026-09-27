@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "../../src/app/application_internal.hpp"
 #include "fsim/app/sdf_vital_reannotation.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -302,9 +304,27 @@ void test_ordering_wildcards_generics_and_rollback()
         "rejected duplicate transaction must not mutate its baseline");
 }
 
-std::size_t run_live_case(
+enum class LiveExecutionMode {
+    interpreter,
+    llvm_o0,
+    llvm_o2,
+};
+
+struct LiveCaseResult {
+    std::size_t reports { };
+    std::vector<std::pair<fsim::runtime::SimulationTick,
+        fsim::runtime::simir::SignalId>> changes;
+    std::size_t safe_point_commit_attempts { };
+    bool safe_point_commit_succeeded { };
+    std::uint64_t safe_point_generation { };
+
+    bool operator==(const LiveCaseResult&) const = default;
+};
+
+LiveCaseResult run_live_case(
     const fsim::app::SdfVitalTimingStatePolicy state_policy,
-    const bool expect_pending_rejection)
+    const bool expect_pending_rejection,
+    const LiveExecutionMode execution = LiveExecutionMode::interpreter)
 {
     using namespace fsim;
     using namespace app;
@@ -323,22 +343,71 @@ std::size_t run_live_case(
     const auto transaction = apply_sdf_vital_reannotation(
         baseline, layers, 11U, policy, state_policy);
     require(transaction.ok(), "live VITAL transaction must publish");
+#if defined(FSIM_HAS_LLVM)
+    std::array<std::uint32_t, 10U> signal_widths { };
+    signal_widths.fill(1U);
+    std::array<runtime::simir::ValueKind, 10U> signal_value_kinds { };
+    signal_value_kinds.fill(runtime::simir::ValueKind::logic9);
+    std::array<runtime::simir::ResolutionKind, 10U>
+        signal_resolutions { };
+    signal_resolutions.fill(runtime::simir::ResolutionKind::none);
+    std::unique_ptr<compiler::LlvmJit> jit;
+#endif
     auto interpreter = baseline->design().create_interpreter();
-    std::vector<std::pair<SimulationTick, runtime::simir::SignalId>> changes;
+    std::array<std::size_t, 5U> operation_counts { };
+    for (std::size_t index = 0U; index < operation_counts.size(); ++index) {
+        const auto process = static_cast<runtime::simir::ProcessId>(index);
+        operation_counts[index]
+            = interpreter->process_program(process).operations.size();
+    }
+#if defined(FSIM_HAS_LLVM)
+    if (execution != LiveExecutionMode::interpreter) {
+        const auto selected_optimization
+            = execution == LiveExecutionMode::llvm_o0
+            ? compiler::JitOptimizationLevel::o0
+            : compiler::JitOptimizationLevel::o2;
+        compiler::LlvmJitOptions options;
+        options.optimization = selected_optimization;
+        jit = std::make_unique<compiler::LlvmJit>(std::move(options));
+        // Native timing checks read the reannotated operation slot. The
+        // delay processes retain interpreted LoadConstant replacements.
+        for (std::size_t index = 4U; index < operation_counts.size(); ++index) {
+            const auto process = static_cast<runtime::simir::ProcessId>(index);
+            const auto& program = interpreter->process_program(process);
+            const auto symbol = std::string { "vital_live_" }
+                + std::string { compiler::to_string(selected_optimization) }
+                + "_" + std::to_string(process);
+            jit->add_process(
+                symbol, program, signal_widths, signal_value_kinds);
+            interpreter->set_process_executor(
+                process,
+                std::make_unique<app::application_detail::LlvmProcessExecutor>(
+                    *jit,
+                    jit->lookup(symbol),
+                    interpreter->process_program(process),
+                    signal_widths,
+                    signal_value_kinds,
+                    signal_resolutions));
+        }
+    }
+#else
+    require(execution == LiveExecutionMode::interpreter,
+        "compiled VITAL checks require the LLVM-enabled target");
+#endif
+    LiveCaseResult result;
     interpreter->set_signal_change_hook([&](const auto signal,
                                             const auto& value,
                                             const auto time) {
         if ((signal == 4U || signal == 5U)
             && value.to_msb_string() == "1") {
-            changes.emplace_back(time, signal);
+            result.changes.emplace_back(time, signal);
         }
     });
-    std::size_t reports { };
     interpreter->set_report_hook([&](auto, const std::string_view message,
                                      auto, const auto&, const auto time,
                                      auto) {
         if (message == "live VITAL period violation" && time >= 6U)
-            ++reports;
+            ++result.reports;
     });
     interpreter->start();
     require_diagnostic(commit_sdf_vital_reannotation(
@@ -351,17 +420,42 @@ std::size_t run_live_case(
                 && phase == runtime::SchedulerPhase::postponed) {
                 const auto first = commit_sdf_vital_reannotation(
                     *transaction.application, *interpreter);
+                ++result.safe_point_commit_attempts;
                 if (expect_pending_rejection) {
                     require_diagnostic(first,
                         "FSIM-SDF-VITAL-REANNOTATION-001");
+                    result.safe_point_commit_succeeded = first.ok();
+                    if (first.ok())
+                        result.safe_point_generation = first.generation;
                 } else {
                     const auto second = commit_sdf_vital_reannotation(
                         *transaction.application, *interpreter);
+                    ++result.safe_point_commit_attempts;
                     require(first.ok() && second.ok()
                             && first.generation == 11U
                             && second.generation == 11U,
                         "same-safe-point observers must see one generation");
+                    result.safe_point_commit_succeeded
+                        = first.ok() && second.ok();
+                    if (result.safe_point_commit_succeeded)
+                        result.safe_point_generation = second.generation;
                 }
+                for (std::size_t index = 0U;
+                     index < operation_counts.size(); ++index) {
+                    const auto process
+                        = static_cast<runtime::simir::ProcessId>(index);
+                    require(interpreter->process_program(process)
+                                    .operations.size()
+                                == operation_counts[index],
+                        "safe-point VITAL replacement must preserve operation count");
+                }
+                const auto* check = runtime::simir::operation_get_if<
+                    runtime::simir::VitalTimingCheck>(
+                    &interpreter->process_program(4U).operations[0]);
+                require(check != nullptr
+                        && check->limits[0]
+                            == (expect_pending_rejection ? 10U : 7U),
+                    "safe-point VITAL check limit must reflect the transaction");
                 committed = true;
             }
         });
@@ -381,31 +475,59 @@ std::size_t run_live_case(
     require(run.status != runtime::RunStatus::stopped && committed,
         "live VITAL reannotation run must reach its safe point");
     if (!expect_pending_rejection) {
-        require(std::ranges::find(changes,
+        require(std::ranges::find(result.changes,
                     std::pair<SimulationTick,
                         runtime::simir::SignalId> { 5U, 4U })
-                    != changes.end()
-                && std::ranges::find(changes,
+                    != result.changes.end()
+                && std::ranges::find(result.changes,
                        std::pair<SimulationTick,
                            runtime::simir::SignalId> { 6U, 5U })
-                    != changes.end(),
+                    != result.changes.end(),
             "pending writes must retain old timing while future writes use new timing");
     }
-    return reports;
+    return result;
 }
 
 void test_safe_point_pending_and_timing_state()
 {
     using namespace fsim::app;
-    require(run_live_case(SdfVitalTimingStatePolicy::PreserveHistory,
-                false)
-            == 1U,
+    const auto preserved = run_live_case(
+        SdfVitalTimingStatePolicy::PreserveHistory, false);
+    require(preserved.reports == 1U
+            && preserved.safe_point_commit_attempts == 2U
+            && preserved.safe_point_commit_succeeded
+            && preserved.safe_point_generation == 11U,
         "preserved VITAL timing history must detect the post-commit period");
-    require(run_live_case(SdfVitalTimingStatePolicy::ResetHistory, false)
-            == 0U,
+    const auto reset = run_live_case(
+        SdfVitalTimingStatePolicy::ResetHistory, false);
+    require(reset.reports == 0U
+            && reset.safe_point_commit_attempts == 2U
+            && reset.safe_point_commit_succeeded
+            && reset.safe_point_generation == 11U,
         "reset VITAL timing history must establish a new first observation");
-    (void)run_live_case(
+    const auto rejected = run_live_case(
         SdfVitalTimingStatePolicy::PreserveHistory, true);
+    require(rejected.safe_point_commit_attempts == 1U
+            && !rejected.safe_point_commit_succeeded
+            && rejected.safe_point_generation == 0U,
+        "pending VITAL reannotation must retain its rejection result");
+#if defined(FSIM_HAS_LLVM)
+    constexpr std::array compiled_modes {
+        LiveExecutionMode::llvm_o0,
+        LiveExecutionMode::llvm_o2,
+    };
+    for (const auto mode : compiled_modes) {
+        require(run_live_case(SdfVitalTimingStatePolicy::PreserveHistory,
+                    false, mode) == preserved,
+            "compiled VITAL timing-check replacement must match the interpreter");
+        require(run_live_case(SdfVitalTimingStatePolicy::ResetHistory,
+                    false, mode) == reset,
+            "compiled VITAL history reset must match the interpreter");
+        require(run_live_case(SdfVitalTimingStatePolicy::PreserveHistory,
+                    true, mode) == rejected,
+            "compiled VITAL pending rejection must match the interpreter");
+    }
+#endif
 }
 } // namespace
 

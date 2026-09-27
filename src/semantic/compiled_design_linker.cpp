@@ -1602,6 +1602,13 @@ std::optional<UnitId> resolve_reference(
 std::string vhdl_architecture_primary_profile_error(
     const CompiledDesign& design)
 {
+    constexpr std::string_view strict_profile {
+        "fsim-synopsys-ieee-compat-v2"
+    };
+    constexpr std::string_view legacy_profile {
+        "fsim-synopsys-ieee-compat-v2,"
+        "legacy-unprotected-shared-variable"
+    };
     for (const auto& reference : design.references()) {
         if (reference.kind != CompiledReferenceKind::entity
             || !reference.target) {
@@ -1614,10 +1621,18 @@ std::string vhdl_architecture_primary_profile_error(
         if (architecture == design.vhdl_hir.units().end()
             || entity == design.vhdl_hir.units().end()
             || architecture->kind != vhdl::UnitKind::architecture
-            || entity->kind != vhdl::UnitKind::entity
-            || (architecture->standard == entity->standard
-                && architecture->compatibility_profile
-                    == entity->compatibility_profile)) {
+            || entity->kind != vhdl::UnitKind::entity) {
+            continue;
+        }
+        const auto compatible_profiles =
+            architecture->compatibility_profile
+                    == entity->compatibility_profile
+            || (entity->compatibility_profile == strict_profile
+                && architecture->compatibility_profile == legacy_profile)
+            || (entity->compatibility_profile == legacy_profile
+                && architecture->compatibility_profile == strict_profile);
+        if (architecture->standard == entity->standard
+            && compatible_profiles) {
             continue;
         }
         return "VHDL entity '"

@@ -5,6 +5,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Intrinsics.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -320,6 +321,89 @@ void ValueOperationLowerer::lower(
       branch_to_next();
       return;
     }
+  }
+  const auto& source_slot = registers[operation.source];
+  if (operation.width == 1U && source_slot.width > 64U) {
+    const auto base = coerce_value_kind(
+        builder,
+        load_register(builder, registers, operation.base),
+        ValueKind::logic4);
+    auto* base_unknown = builder.CreateICmpNE(
+        builder.CreateAnd(
+            base.bval,
+            constant_i64(
+                context,
+                std::numeric_limits<std::uint32_t>::max())),
+        constant_i64(context, 0));
+    auto* selected = builder.CreateSExt(
+        builder.CreateTrunc(base.aval, i32), i64);
+    auto* lower = llvm::ConstantInt::getSigned(
+        i64, std::min(operation.left, operation.right));
+    auto* upper = llvm::ConstantInt::getSigned(
+        i64, std::max(operation.left, operation.right));
+    auto* valid = builder.CreateAnd(
+        builder.CreateNot(base_unknown),
+        builder.CreateAnd(
+            builder.CreateICmpSGE(selected, lower),
+            builder.CreateICmpSLE(selected, upper)));
+    auto* right = llvm::ConstantInt::getSigned(i64, operation.right);
+    auto* offset = builder.CreateSelect(
+        builder.CreateICmpSGE(selected, right),
+        builder.CreateSub(selected, right),
+        builder.CreateSub(right, selected));
+    offset = builder.CreateAdd(
+        offset, constant_i64(context, operation.base_offset));
+    auto* safe_offset = builder.CreateSelect(
+        valid, offset, constant_i64(context, 0));
+    auto* word_index = builder.CreateLShr(
+        safe_offset, constant_i64(context, 6));
+    auto* bit_index = builder.CreateAnd(
+        safe_offset, constant_i64(context, 63));
+    const auto load_plane_word = [&](llvm::Value* plane_base) {
+        auto* absolute_word_index = builder.CreateAdd(
+            constant_i64(context, source_slot.word_offset), word_index);
+        auto* word_pointer = builder.CreateGEP(
+            i64, plane_base, absolute_word_index);
+        auto* word = builder.CreateLoad(i64, word_pointer);
+        word->setAlignment(llvm::Align { 8 });
+        return word;
+    };
+    auto* aval_word = load_plane_word(source_slot.aval_base);
+    auto* bval_word = load_plane_word(source_slot.bval_base);
+    llvm::Value* plane2_word = constant_i64(context, 0);
+    llvm::Value* plane3_word = constant_i64(context, 0);
+    if (source_slot.kind == ValueKind::logic9) {
+        plane2_word = load_plane_word(source_slot.logic9_plane2_base);
+        plane3_word = load_plane_word(source_slot.logic9_plane3_base);
+    }
+    const auto select_plane = [&](llvm::Value* plane_word,
+                                  const bool invalid_one) {
+        auto* extracted = builder.CreateAnd(
+            builder.CreateLShr(plane_word, bit_index),
+            constant_i64(context, 1));
+        auto* selected_plane = builder.CreateSelect(
+            valid,
+            extracted,
+            constant_i64(
+                context,
+                !operation.two_state && invalid_one ? 1U : 0U));
+        return selected_plane;
+    };
+    const auto source_kind = source_slot.kind;
+    store_register(
+        builder,
+        registers,
+        operation.destination,
+        EncodedValue {
+            select_plane(aval_word, true),
+            select_plane(
+                bval_word, source_kind != ValueKind::logic9),
+            1,
+            select_plane(plane2_word, false),
+            select_plane(plane3_word, false),
+            source_kind });
+    branch_to_next();
+    return;
   }
   const auto source = load_register(
       builder, registers, operation.source);
@@ -824,8 +908,7 @@ void ValueOperationLowerer::lower(
                 } else if (
                     operation.operation
                     == BinaryOperator::case_equal) {
-                  auto* mask = constant_i64(
-                      context, width_mask(lhs.width));
+                  auto* mask = packed_mask(context, lhs.width);
                   auto* mismatch = builder.CreateAnd(
                       builder.CreateOr(
                           builder.CreateOr(
@@ -842,7 +925,7 @@ void ValueOperationLowerer::lower(
                                   rhs.logic9_plane3))),
                       mask);
                   auto* equal = builder.CreateICmpEQ(
-                      mismatch, constant_i64(context, 0));
+                      mismatch, packed_constant(context, lhs.width, 0));
                   value = {
                       builder.CreateZExt(equal, i64),
                       constant_i64(context, 0),

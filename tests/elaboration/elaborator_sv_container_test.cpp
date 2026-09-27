@@ -12,6 +12,7 @@ namespace fsim::tests::elaboration {
 void test_mixed_container_port_rejections(
     const fsim::frontend::ParsedDesign& port_design,
     const fsim::frontend::ParsedDesign& dynamic_port_design);
+void test_systemverilog_static_generated_container_reads();
 
 void test_systemverilog_container_lowering()
 {
@@ -2020,6 +2021,236 @@ endmodule
 
     test_mixed_container_port_rejections(
         port_parsed.design, dynamic_port_parsed.design);
+    test_systemverilog_static_generated_container_reads();
+}
+
+void test_systemverilog_static_generated_container_reads()
+{
+    using namespace fsim::runtime::simir;
+
+    const auto parsed = fsim::frontend::parse_text(
+        "static-generated-container-reads.sv",
+        R"(
+module static_generated_container_reads;
+  logic [7:0] down_source[3:0];
+  logic [7:0] down_observed[3:0];
+  logic [7:0] up_source[-1:2];
+  logic [7:0] up_observed[-1:2];
+
+  for (genvar down_index = 3; down_index >= 0;
+       down_index = down_index - 1) begin: down_read
+    always_comb
+      down_observed[down_index] = down_source[down_index];
+  end
+  for (genvar up_index = -1; up_index <= 2;
+       up_index = up_index + 1) begin: up_read
+    always_comb
+      up_observed[up_index] = up_source[up_index];
+  end
+endmodule
+
+module static_generated_container_read_fallbacks;
+  logic [7:0] values[0:3];
+  int selector;
+  int cursor;
+  logic [7:0] dynamic_result;
+  logic [7:0] out_of_range_result;
+  logic [7:0] side_effect_result;
+
+  function automatic int next_index();
+    next_index = cursor;
+    cursor = cursor + 1;
+  endfunction
+
+  initial begin
+    values = '{8'h10, 8'h20, 8'h30, 8'h40};
+    selector = 1;
+    cursor = 2;
+    dynamic_result = values[selector];
+    out_of_range_result = values[4];
+    side_effect_result = values[next_index()];
+  end
+endmodule
+
+module static_generated_container_read_bit2;
+  bit [7:0] bit_source[0:1];
+  bit [7:0] bit_observed[0:1];
+
+  for (genvar bit_index = 0; bit_index < 2;
+       bit_index = bit_index + 1) begin: bit_read
+    always_comb
+      bit_observed[bit_index] = bit_source[bit_index];
+  end
+
+  initial bit_source = '{8'h35, 8'hca};
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+
+    const auto generated = compile_and_elaborate(
+        parsed.design, "static_generated_container_reads");
+    assert(generated.ok());
+    const auto down_source = generated.design->find_signal("down_source");
+    const auto up_source = generated.design->find_signal("up_source");
+    const auto down_object = generated.design->find_container("down_source");
+    const auto up_object = generated.design->find_container("up_source");
+    assert(down_source && up_source && down_object && up_object);
+
+    const auto expect_extract_offsets =
+        [&](const SignalId signal,
+            const std::vector<std::uint32_t>& expected_offsets) {
+            std::vector<std::uint32_t> offsets;
+            for (const auto& process : generated.design->processes()) {
+                for (std::size_t position = 0;
+                    position + 1U < process.operations.size();
+                    ++position) {
+                    const auto* read = operation_get_if<ReadSignal>(
+                        &process.operations[position]);
+                    if (read == nullptr || read->signal != signal) {
+                        continue;
+                    }
+                    assert(read->kind == SignalReadKind::current);
+                    const auto* extract = operation_get_if<Extract>(
+                        &process.operations[position + 1U]);
+                    assert(extract != nullptr && extract->width == 8U);
+                    offsets.push_back(extract->offset);
+                    assert(std::ranges::any_of(
+                        process.static_sensitivity,
+                        [&](const Sensitivity& sensitivity) {
+                            return sensitivity.signal == signal;
+                        }));
+                }
+            }
+            std::ranges::sort(offsets);
+            assert((offsets == expected_offsets));
+        };
+    const std::vector<std::uint32_t> all_byte_offsets { 0U, 8U, 16U, 24U };
+    expect_extract_offsets(*down_source, all_byte_offsets);
+    expect_extract_offsets(*up_source, all_byte_offsets);
+    for (const auto& process : generated.design->processes()) {
+        for (const auto& operation : process.operations) {
+            const auto* object_read
+                = operation_get_if<ReadContainerObject>(&operation);
+            assert(object_read == nullptr
+                || (object_read->object != *down_object
+                    && object_read->object != *up_object));
+        }
+    }
+
+    auto generated_interpreter = generated.design->create_interpreter();
+    const auto down_observed
+        = generated.design->find_signal("down_observed");
+    const auto up_observed = generated.design->find_signal("up_observed");
+    assert(down_observed && up_observed);
+    generated_interpreter->force_signal(
+        *down_source,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "0001001000XZ01000101011001111000"));
+    generated_interpreter->force_signal(
+        *up_source,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "10000001001000110100010101100111"));
+    const auto generated_result = generated_interpreter->run();
+    assert(generated_result.status == fsim::runtime::RunStatus::completed);
+    assert(generated_interpreter->signal_value(*down_source)
+        .to_msb_string() == "0001001000XZ01000101011001111000");
+    assert(generated_interpreter->signal_value(*down_source)
+        == generated_interpreter->signal_value(*down_observed));
+    assert(generated_interpreter->signal_value(*up_source)
+        .to_msb_string() == "10000001001000110100010101100111");
+    assert(generated_interpreter->signal_value(*up_source)
+        == generated_interpreter->signal_value(*up_observed));
+
+    const auto fallback = compile_and_elaborate(
+        parsed.design, "static_generated_container_read_fallbacks");
+    assert(fallback.ok());
+    const auto values_signal = fallback.design->find_signal("values");
+    const auto values_object = fallback.design->find_container("values");
+    assert(values_signal && values_object);
+    std::size_t legacy_values_reads { };
+    for (const auto& process : fallback.design->processes()) {
+        std::vector<ContainerRegisterId> values_registers;
+        for (const auto& operation : process.operations) {
+            if (const auto* object_read
+                = operation_get_if<ReadContainerObject>(&operation);
+                object_read != nullptr
+                && object_read->object == *values_object) {
+                values_registers.push_back(object_read->destination);
+            }
+        }
+        for (const auto& operation : process.operations) {
+            if (const auto* container_read
+                = operation_get_if<ContainerRead>(&operation);
+                container_read != nullptr
+                && std::ranges::find(
+                    values_registers, container_read->source)
+                    != values_registers.end()) {
+                ++legacy_values_reads;
+            }
+            const auto* signal_read = operation_get_if<ReadSignal>(&operation);
+            assert(signal_read == nullptr
+                || signal_read->signal != *values_signal);
+        }
+    }
+    assert(legacy_values_reads >= 3U);
+    auto fallback_interpreter = fallback.design->create_interpreter();
+    const auto fallback_result = fallback_interpreter->run();
+    assert(fallback_result.status == fsim::runtime::RunStatus::completed);
+    const auto dynamic_result
+        = fallback.design->find_signal("dynamic_result");
+    const auto out_of_range_result
+        = fallback.design->find_signal("out_of_range_result");
+    const auto side_effect_result
+        = fallback.design->find_signal("side_effect_result");
+    const auto cursor_signal = fallback.design->find_signal("cursor");
+    assert(dynamic_result && out_of_range_result
+        && side_effect_result && cursor_signal);
+    assert(fallback_interpreter->signal_value(*dynamic_result)
+        .to_msb_string() == "00100000");
+    assert(fallback_interpreter->signal_value(*out_of_range_result)
+        .to_msb_string() == "XXXXXXXX");
+    assert(fallback_interpreter->signal_value(*side_effect_result)
+        .to_msb_string() == "00110000");
+    assert(fallback_interpreter->signal_value(*cursor_signal)
+        .low_word().aval == 3U);
+
+    const auto bit2 = compile_and_elaborate(
+        parsed.design, "static_generated_container_read_bit2");
+    assert(bit2.ok());
+    const auto bit_source = bit2.design->find_signal("bit_source");
+    const auto bit_object = bit2.design->find_container("bit_source");
+    const auto bit_observed = bit2.design->find_signal("bit_observed");
+    assert(bit_source && bit_object && bit_observed);
+    std::size_t bit2_legacy_reads { };
+    for (const auto& process : bit2.design->processes()) {
+        std::vector<ContainerRegisterId> bit_registers;
+        for (const auto& operation : process.operations) {
+            if (const auto* object_read
+                = operation_get_if<ReadContainerObject>(&operation);
+                object_read != nullptr && object_read->object == *bit_object) {
+                bit_registers.push_back(object_read->destination);
+            }
+            const auto* signal_read = operation_get_if<ReadSignal>(&operation);
+            assert(signal_read == nullptr
+                || signal_read->signal != *bit_source);
+        }
+        for (const auto& operation : process.operations) {
+            if (const auto* container_read
+                = operation_get_if<ContainerRead>(&operation);
+                container_read != nullptr
+                && std::ranges::find(bit_registers, container_read->source)
+                    != bit_registers.end()) {
+                ++bit2_legacy_reads;
+            }
+        }
+    }
+    assert(bit2_legacy_reads >= 2U);
+    auto bit2_interpreter = bit2.design->create_interpreter();
+    const auto bit2_result = bit2_interpreter->run();
+    assert(bit2_result.status == fsim::runtime::RunStatus::completed);
+    assert(bit2_interpreter->signal_value(*bit_source)
+        == bit2_interpreter->signal_value(*bit_observed));
 }
 
 } // namespace fsim::tests::elaboration

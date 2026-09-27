@@ -264,6 +264,48 @@ void FileOperationLowerer::lower(
 
 void FileOperationLowerer::lower(
     const runtime::simir::FileScan& operation) {
+  const auto publish_register = [&](const runtime::simir::RegisterId id_value) {
+    const auto& source = registers.at(id_value);
+    const auto& destination = frame_registers.at(id_value);
+    if (source.aval_base == destination.aval_base
+        && source.bval_base == destination.bval_base
+        && source.logic9_plane2_base == destination.logic9_plane2_base
+        && source.logic9_plane3_base == destination.logic9_plane3_base
+        && source.word_offset == destination.word_offset) {
+      return;
+    }
+    store_register(
+        builder,
+        frame_registers,
+        id_value,
+        load_register(builder, registers, id_value));
+  };
+  const auto reload_register = [&](const runtime::simir::RegisterId id_value) {
+    const auto& source = frame_registers.at(id_value);
+    const auto& destination = registers.at(id_value);
+    if (source.aval_base == destination.aval_base
+        && source.bval_base == destination.bval_base
+        && source.logic9_plane2_base == destination.logic9_plane2_base
+        && source.logic9_plane3_base == destination.logic9_plane3_base
+        && source.word_offset == destination.word_offset) {
+      return;
+    }
+    store_register(
+        builder,
+        registers,
+        id_value,
+        load_register(builder, frame_registers, id_value));
+  };
+  for (const auto& conversion : operation.conversions) {
+    if (!conversion.suppress
+        && conversion.target.kind
+            == runtime::simir::InputScanTargetKind::packed_register) {
+      publish_register(conversion.target.id);
+    }
+  }
+  if (operation.success) {
+    publish_register(*operation.success);
+  }
   auto* zero = constant_i64(context, 0);
   const auto handle = operation.string_source
       ? EncodedValue{zero, zero, 32}
@@ -278,6 +320,16 @@ void FileOperationLowerer::lower(
           {context_pointer, id(i32, process), id(i32, instruction),
            handle.aval, handle.bval, zero, zero, result_aval, result_bval}),
       operation.string_source ? "string.scan" : "file.scan");
+  for (const auto& conversion : operation.conversions) {
+    if (!conversion.suppress
+        && conversion.target.kind
+            == runtime::simir::InputScanTargetKind::packed_register) {
+      reload_register(conversion.target.id);
+    }
+  }
+  if (operation.success) {
+    reload_register(*operation.success);
+  }
   store_register(
       builder, registers, operation.destination,
       {builder.CreateLoad(i64, result_aval),
@@ -287,6 +339,25 @@ void FileOperationLowerer::lower(
 
 void FileOperationLowerer::lower(
     const runtime::simir::FileBinaryRead& operation) {
+  const auto publish_bound = [&](const runtime::simir::RegisterId id_value) {
+    const auto& source = registers.at(id_value);
+    const auto& destination = frame_registers.at(id_value);
+    if (source.aval_base == destination.aval_base
+        && source.word_offset == destination.word_offset) {
+      return;
+    }
+    store_register(
+        builder,
+        frame_registers,
+        id_value,
+        load_register(builder, registers, id_value));
+  };
+  if (operation.has_start) {
+    publish_bound(operation.start);
+  }
+  if (operation.has_count) {
+    publish_bound(operation.count);
+  }
   const auto handle = load_register(builder, registers, operation.handle);
   auto* zero = constant_i64(context, 0);
   auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.binary.aval");
@@ -299,6 +370,14 @@ void FileOperationLowerer::lower(
           {context_pointer, id(i32, process), id(i32, instruction),
            handle.aval, handle.bval, zero, zero, result_aval, result_bval}),
       "file.binary-read");
+  if (operation.target_kind
+      == runtime::simir::FileBinaryTargetKind::packed_register) {
+    store_register(
+        builder,
+        registers,
+        operation.target,
+        load_register(builder, frame_registers, operation.target));
+  }
   store_register(
       builder, registers, operation.destination,
       {builder.CreateLoad(i64, result_aval),

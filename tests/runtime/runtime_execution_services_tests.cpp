@@ -239,6 +239,62 @@ void test_simir_alternate_executor_validation()
     }
 }
 
+void test_simir_external_executor_boundary_validation()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    class FixedExternalExecutor final : public ProcessExecutor {
+    public:
+        explicit FixedExternalExecutor(ProcessResumeResult result)
+            : result_(std::move(result))
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext&,
+            InstructionIndex) override
+        {
+            return result_;
+        }
+
+    private:
+        ProcessResumeResult result_;
+    };
+
+    const auto expect_failure = [](
+        const InstructionIndex instruction,
+        const InstructionIndex next_instruction,
+        const std::string_view message) {
+        Interpreter interpreter;
+        Process process;
+        process.id = 0U;
+        process.name = "invalid_external_boundary";
+        process.operations = { Halt { } };
+        const auto process_id = interpreter.add_process(std::move(process));
+        ProcessResumeResult boundary { instruction, next_instruction };
+        boundary.external.kind = ExternalSuspendKind::halt;
+        interpreter.set_process_executor(process_id,
+            std::make_unique<FixedExternalExecutor>(std::move(boundary)));
+        try {
+            (void)interpreter.run();
+            throw std::runtime_error {
+                "a malformed external executor boundary was accepted"
+            };
+        } catch (const InterpreterError& error) {
+            require(error.instruction() == instruction
+                    && std::string_view { error.what() }.find(message)
+                        != std::string_view::npos,
+                "external executor boundary diagnostic");
+        }
+    };
+
+    expect_failure(
+        1U, 2U, "invalid dynamic boundary instruction");
+    expect_failure(
+        0U, 2U, "non-sequential dynamic boundary resume instruction");
+}
+
 void test_simir_system_command()
 {
     using namespace fsim::runtime;

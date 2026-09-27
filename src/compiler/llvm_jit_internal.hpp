@@ -229,8 +229,7 @@ void validate_process_shape(
     std::span<const std::uint32_t> signal_widths,
     std::span<const runtime::simir::ValueKind> signal_value_kinds);
 [[nodiscard]] bool supports_wide_register_operation(
-    const runtime::simir::Operation& operation,
-    std::span<const std::uint32_t> register_widths);
+    const runtime::simir::Operation& operation);
 [[nodiscard]] std::optional<std::string>
 validate_extract_bounds(
     const runtime::simir::Extract& operation,
@@ -302,6 +301,9 @@ void validate_fork_operation(
     const runtime::simir::Fork& operation);
 [[nodiscard]] bool is_resume_boundary(
     const runtime::simir::Operation& operation) noexcept;
+[[nodiscard]] bool is_resume_boundary(
+    const runtime::simir::Operation& operation,
+    std::span<const std::uint32_t> register_widths) noexcept;
 
 [[nodiscard]] ValidatedProcess validate_process(
     const runtime::simir::Process& process,
@@ -356,6 +358,7 @@ struct ProcessLoweringPlan {
 
 [[nodiscard]] ProcessLoweringPlan make_process_lowering_plan(
     const runtime::simir::Process& process,
+    std::span<const std::uint32_t> register_widths,
     bool debug_instrumentation);
 
 void lower_process(

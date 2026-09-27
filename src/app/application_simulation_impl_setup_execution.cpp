@@ -695,6 +695,7 @@ void Simulation::Impl::setup_execution(
                                 || std::is_same_v<Type, runtime::simir::IntegerCheck>
                                 || std::is_same_v<Type, runtime::simir::LoadConstant>
                                 || std::is_same_v<Type, runtime::simir::DynamicInsert>
+                                || std::is_same_v<Type, runtime::simir::DynamicPartInsert>
                                 || std::is_same_v<Type, runtime::simir::DynamicPartSelect>
                                 || std::is_same_v<Type, runtime::simir::IntegerBinary>
                                 || std::is_same_v<Type, runtime::simir::DynamicExtract>
@@ -704,6 +705,9 @@ void Simulation::Impl::setup_execution(
                                 || std::is_same_v<
                                     Type,
                                     runtime::simir::WriteProjectedSlice>
+                                || std::is_same_v<
+                                    Type,
+                                    runtime::simir::WriteProjectedDynamicSlice>
                                 || std::is_same_v<Type, runtime::simir::WaitSensitivity>
                                 || std::is_same_v<Type, runtime::simir::CallableFramePop>
                                 || std::is_same_v<Type, runtime::simir::CallableFramePush>
@@ -963,6 +967,15 @@ void Simulation::Impl::setup_execution(
                                 && map_signal(left.signal, right->signal);
                         } else if constexpr (std::is_same_v<
                                                  Type,
+                                                 runtime::simir::WriteProjectedDynamicSlice>) {
+                            compatible = left.source == right->source
+                                && left.selection == right->selection
+                                && left.delay == right->delay
+                                && left.rejection == right->rejection
+                                && left.mode == right->mode
+                                && map_signal(left.signal, right->signal);
+                        } else if constexpr (std::is_same_v<
+                                                 Type,
                                                  runtime::simir::WriteBlocking>
                             || std::is_same_v<
                                 Type, runtime::simir::WriteUpdate>) {
@@ -1001,6 +1014,13 @@ void Simulation::Impl::setup_execution(
                         } else if constexpr (std::is_same_v<
                                                  Type,
                                                  runtime::simir::DynamicInsert>) {
+                            compatible = left.destination == right->destination
+                                && left.target == right->target
+                                && left.source == right->source
+                                && left.selection == right->selection;
+                        } else if constexpr (std::is_same_v<
+                                                 Type,
+                                                 runtime::simir::DynamicPartInsert>) {
                             compatible = left.destination == right->destination
                                 && left.target == right->target
                                 && left.source == right->source

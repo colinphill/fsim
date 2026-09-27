@@ -410,7 +410,8 @@ private:
         std::optional<runtime::simir::RegisterId>,
         std::optional<runtime::simir::RegisterId>,
         std::optional<runtime::simir::RegisterId>,
-        std::string_view);
+        std::string_view,
+        bool reload_wide_destination_from_frame = false);
 };
 
 struct ControlFlowOperationLowerer {

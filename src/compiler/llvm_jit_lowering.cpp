@@ -803,8 +803,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     const auto& resume_entries = lowering_plan.entry_points;
     const bool transient_boundaries_safe = std::ranges::all_of(
         process.operations,
-        [](const runtime::simir::Operation& operation) {
-            return !is_resume_boundary(operation)
+        [&validated](const runtime::simir::Operation& operation) {
+            return !is_resume_boundary(
+                       operation, validated.register_widths)
                 || fsim::runtime::simir::operation_holds<WaitSensitivity>(
                     operation)
                 || fsim::runtime::simir::operation_holds<WaitForever>(
@@ -901,6 +902,7 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     llvm::Value* frame_register_logic9_plane2 = nullptr;
     llvm::Value* frame_register_logic9_plane3 = nullptr;
     if ((!transient_register_frame
+            || validated.uses_files
             || validated.uses_exact_signal_operation
             || validated.uses_vital_delay
             || validated.uses_containers
@@ -993,6 +995,52 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             kind,
         };
         register_word_offset += (static_cast<std::uint64_t>(width) + 63U) / 64U;
+    }
+    if ((transient_register_frame || hybrid_transient_register_frame)
+        && validated.uses_strings) {
+        std::vector<bool> file_scan_output_registers(process.register_count);
+        for (const auto& operation : process.operations) {
+            const auto* scan = operation_get_if<FileScan>(&operation);
+            if (scan == nullptr) {
+                continue;
+            }
+            for (const auto& conversion : scan->conversions) {
+                if (!conversion.suppress
+                    && conversion.target.kind
+                        == InputScanTargetKind::packed_register
+                    && conversion.target.id
+                        < file_scan_output_registers.size()) {
+                    file_scan_output_registers[conversion.target.id] = true;
+                }
+            }
+            if (scan->success
+                && *scan->success < file_scan_output_registers.size()) {
+                file_scan_output_registers[*scan->success] = true;
+            }
+        }
+        for (std::size_t index = 0;
+            index < file_scan_output_registers.size(); ++index) {
+            if (!file_scan_output_registers[index]) {
+                continue;
+            }
+            const auto& working = registers[index];
+            const auto& frame = frame_registers[index];
+            if (working.aval_base == frame.aval_base
+                && working.bval_base == frame.bval_base
+                && working.logic9_plane2_base == frame.logic9_plane2_base
+                && working.logic9_plane3_base == frame.logic9_plane3_base
+                && working.word_offset == frame.word_offset) {
+                continue;
+            }
+            store_register(
+                builder,
+                registers,
+                static_cast<RegisterId>(index),
+                load_register(
+                    builder,
+                    frame_registers,
+                    static_cast<RegisterId>(index)));
+        }
     }
     auto* read_bval_slot = builder.CreateAlloca(i64, nullptr, "read.bval");
     auto* logic9_word_slot = builder.CreateAlloca(logic9_word_type, nullptr, "logic9.word");
@@ -1453,7 +1501,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                         }
                     },
                     candidate);
-                if (container_operation || is_resume_boundary(candidate)
+                if (container_operation
+                    || is_resume_boundary(
+                        candidate, validated.register_widths)
                     || fsim::runtime::simir::operation_holds<
                         runtime::simir::Jump>(candidate)
                     || fsim::runtime::simir::operation_holds<
@@ -1513,8 +1563,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             const auto suspended = std::ranges::any_of(
                 process.operations.begin() + first,
                 process.operations.begin() + last + 1U,
-                [](const Operation& operation) {
-                    return is_resume_boundary(operation);
+                [&validated](const Operation& operation) {
+                    return is_resume_boundary(
+                        operation, validated.register_widths);
                 });
             if (!suspended) {
                 ssa_callable_entries.insert(first);

@@ -1377,6 +1377,32 @@ std::string_view vhdl_compatibility_profile() noexcept
     return "fsim-synopsys-ieee-compat-v2";
 }
 
+std::string vhdl_compatibility_profile(
+    const std::string_view source_profile)
+{
+    std::string result { vhdl_compatibility_profile() };
+    if (!source_profile.empty()) {
+        result.push_back(',');
+        result.append(source_profile);
+    }
+    return result;
+}
+
+std::optional<std::string_view> vhdl_source_compatibility_from_profile(
+    const std::string_view profile) noexcept
+{
+    if (profile == vhdl_compatibility_profile()) {
+        return std::string_view { };
+    }
+    constexpr std::string_view legacy_profile {
+        "fsim-synopsys-ieee-compat-v2,legacy-unprotected-shared-variable"
+    };
+    if (profile == legacy_profile) {
+        return "legacy-unprotected-shared-variable";
+    }
+    return std::nullopt;
+}
+
 void inject_vhdl_standard_libraries(
     CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics,

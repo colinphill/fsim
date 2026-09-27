@@ -953,6 +953,7 @@ bool vhdl_environment_time_record_subtype(
 void Lowerer::set_specialized_hir_unit(
     const semantic::SpecializedHirUnit* const unit) noexcept
 {
+    clear_hir_effective_vhdl_subtype_cache();
     specialized_hir_unit_ = unit;
     vhdl_standard_ = frontend::VhdlStandard::Vhdl2008;
     systemverilog_standard_
@@ -3774,6 +3775,163 @@ Lowerer::hir_container_element_binding(
                                  : frontend::ValueDomain::Logic4,
         selected_type->signed_elements,
         object->read_only,
+    };
+}
+
+std::optional<Lowerer::HirStaticContainerSignalExtract>
+Lowerer::hir_static_container_signal_extract(
+    const HirContainerElementBinding& element) const
+{
+    using ElementKind = runtime::simir::ContainerElementKind;
+    if (specialized_hir_unit_ == nullptr
+        || specialized_hir_unit_->language()
+            != semantic::Language::system_verilog
+        || element.local
+        || element.type == nullptr
+        || element.selected_type != element.type
+        || element.indices.size() != 1U) {
+        return std::nullopt;
+    }
+
+    const auto& type = *element.type;
+    if (!type.fixed || type.queue || type.associative
+        || type.string_indices || type.dimensions.size() != 1U
+        || !type.element_types.empty()
+        || type.element_kind != ElementKind::Packed
+        || type.element_width == 0U
+        || element.width != type.element_width
+        || type.two_state
+        || element.domain != frontend::ValueDomain::Logic4
+        || element.signed_value != type.signed_elements) {
+        return std::nullopt;
+    }
+
+    const auto& dimension = type.dimensions.front();
+    if (type.index_left != dimension.first
+        || type.index_right != dimension.second
+        || element.object >= design_.container_objects_.size()) {
+        return std::nullopt;
+    }
+
+    const auto left = static_cast<std::int64_t>(dimension.first);
+    const auto right = static_cast<std::int64_t>(dimension.second);
+    const auto index_id = element.indices.front();
+    const auto index_expression
+        = specialized_hir_unit_->find_expression(index_id);
+    if (!index_expression || index_expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& index_source = *index_expression->systemverilog;
+    if (index_source.kind != semantic::sv::ExpressionKind::name
+        || index_source.text.empty()
+        || !index_source.operands.empty()
+        || hir_referenced_declaration(index_id)
+        || !systemverilog_genvar_identity(
+            *specialized_hir_unit_, index_source.scope, index_source.text)) {
+        return std::nullopt;
+    }
+    const auto index = hir_constant_integer(index_id);
+    const auto low = std::min(left, right);
+    const auto high = std::max(left, right);
+    if (!index
+        || *index < std::numeric_limits<std::int32_t>::min()
+        || *index > std::numeric_limits<std::int32_t>::max()
+        || *index < low || *index > high) {
+        return std::nullopt;
+    }
+
+    const auto extent = static_cast<std::uint64_t>(
+        left >= right ? left - right : right - left) + 1U;
+    const auto element_width = static_cast<std::uint64_t>(
+        type.element_width);
+    const auto maximum_width = static_cast<std::uint64_t>(
+        std::numeric_limits<std::uint32_t>::max());
+    if (element_width == 0U
+        || extent > maximum_width / element_width) {
+        return std::nullopt;
+    }
+    const auto expected_backing_width = extent * element_width;
+    if (expected_backing_width
+        > static_cast<std::uint64_t>(
+            std::numeric_limits<std::size_t>::max())) {
+        return std::nullopt;
+    }
+    const auto ordinal = left >= right ? left - *index : *index - left;
+    if (ordinal < 0
+        || static_cast<std::uint64_t>(ordinal) >= extent) {
+        return std::nullopt;
+    }
+    const auto consumed_width
+        = (static_cast<std::uint64_t>(ordinal) + 1U) * element_width;
+    if (consumed_width > expected_backing_width) {
+        return std::nullopt;
+    }
+
+    const auto& object = design_.container_objects_[element.object];
+    const auto object_info = std::ranges::find_if(
+        design_.container_object_info_,
+        [&](const ContainerObjectInfo& candidate) {
+            return candidate.id == element.object;
+        });
+    if (object.slice_alias
+        || object.initial_value.type != type
+        || object_info == design_.container_object_info_.end()
+        || object_info->is_port
+        || object_info->slice_alias
+        || object_info->type != type) {
+        return std::nullopt;
+    }
+
+    const runtime::simir::ContainerSignalAlias* alias { };
+    for (const auto& candidate : design_.container_signal_aliases_) {
+        if (candidate.object != element.object) {
+            continue;
+        }
+        if (alias != nullptr || !candidate.readable) {
+            return std::nullopt;
+        }
+        alias = &candidate;
+    }
+    if (alias == nullptr) {
+        return std::nullopt;
+    }
+
+    const auto signal_index = static_cast<std::size_t>(alias->signal);
+    if (signal_index >= design_.signal_info_.size()
+        || signal_index >= design_.signals_.size()) {
+        return std::nullopt;
+    }
+    const auto& signal_info = design_.signal_info_[signal_index];
+    const auto& signal = design_.signals_[signal_index];
+    if (signal_info.id != alias->signal
+        || signal_info.name != object_info->name
+        || signal_info.vhdl_array != nullptr
+        || signal_info.vhdl_access != nullptr
+        || signal_info.vhdl_physical != nullptr
+        || !signal_info.vhdl_mode_view_bindings.empty()
+        || signal_info.source_domain != frontend::ValueDomain::Logic4
+        || signal_info.is_signed != type.signed_elements
+        || signal.initial_value.is_logic9()) {
+        return std::nullopt;
+    }
+
+    const auto bridge_width
+        = runtime::simir::container_signal_bridge_width(type);
+    if (!bridge_width
+        || *bridge_width
+            != static_cast<std::size_t>(expected_backing_width)
+        || signal_info.width != *bridge_width
+        || signal.initial_value.width() != *bridge_width) {
+        return std::nullopt;
+    }
+
+    return HirStaticContainerSignalExtract {
+        alias->signal,
+        static_cast<std::uint32_t>(expected_backing_width),
+        static_cast<std::uint32_t>(
+            expected_backing_width - consumed_width),
+        type.element_width,
+        frontend::ValueDomain::Logic4,
     };
 }
 
@@ -12804,6 +12962,9 @@ bool Lowerer::can_lower_hir_statement(
 bool Lowerer::can_lower_hir_process(
     const semantic::ProcessId process_id) const
 {
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }

@@ -486,7 +486,8 @@ void Interpreter::Impl::spawn_fork(
         != operation.branches.size()) {
         fail(parent, "fork branch entry is duplicated");
     }
-    if (fork_spawn_filter && !fork_spawn_filter(parent.design_process)) {
+    if (fork_spawn_filter
+        && !fork_spawn_filter(parent.cold().design_process)) {
         parent.status = ProcessStatus::running;
         queue_current(parent_id);
         return;
@@ -497,7 +498,7 @@ void Interpreter::Impl::spawn_fork(
     const auto group_id = next_fork_group++;
     const auto shared_frame = parent.frame;
     const auto program = parent.program();
-    const auto design_process = parent.design_process;
+    const auto design_process = parent.cold().design_process;
     auto* const executor = parent.executor.get();
     auto inherited_contexts = parent.cold().escaping_callable_contexts;
     if (operation.join == ForkJoinKind::none
@@ -533,7 +534,7 @@ void Interpreter::Impl::spawn_fork(
         child.generation = next_process_generation++;
         child.program() = program;
         child.program().id = child_id;
-        child.design_process = design_process;
+        child.cold().design_process = design_process;
         child.id = child_id;
         child.program().name += ".$fork[" + std::to_string(instruction)
             + "].child[" + std::to_string(children.size()) + "]";
@@ -679,7 +680,7 @@ void Interpreter::Impl::kill_dynamic_processes(
     for (const auto& candidate : processes) {
         if (candidate.halted || !candidate.cold().fork_parent
             || std::ranges::find(
-                   design_processes, candidate.design_process)
+                   design_processes, candidate.cold().design_process)
                 == design_processes.end()) {
             continue;
         }

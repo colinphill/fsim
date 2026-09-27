@@ -157,6 +157,23 @@ static std::optional<CompilationWorkspace> check_project_impl(
   std::size_t systemc_source_count = 0;
   std::size_t hdl_source_count = 0;
   for (const auto& source_set : config.source_sets) {
+    const auto parsed_vhdl_compatibility =
+        project::parse_vhdl_compatibility(source_set.vhdl_compatibility);
+    if (!parsed_vhdl_compatibility
+        || *parsed_vhdl_compatibility != source_set.vhdl_compatibility) {
+      diagnostics.error(
+          "FSIM-FE-VHDL-COMPAT-001",
+          "unsupported VHDL compatibility profile '"
+              + source_set.vhdl_compatibility + "'",
+          { });
+    }
+    if (!source_set.vhdl_compatibility.empty()
+        && source_set.language != project::Language::vhdl) {
+      diagnostics.error(
+          "FSIM-FE-VHDL-COMPAT-001",
+          "VHDL compatibility profiles are valid only for VHDL source sets",
+          { });
+    }
     if (source_set.language == project::Language::vhdl
         && source_set.compilation_unit != "file") {
       diagnostics.warning(
@@ -180,7 +197,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
     const auto standard_revision = frontend_standard_revision(
         source_set.language, source_set.standard);
     const auto compatibility_profile =
-        project::compatibility_profile(source_set.compatibility_switches);
+        source_set.language == project::Language::vhdl
+        ? vhdl_compatibility_profile(source_set.vhdl_compatibility)
+        : project::compatibility_profile(source_set.compatibility_switches);
     auto vhdl_standard = frontend::VhdlStandard::Vhdl2008;
     if (source_set.language == project::Language::vhdl) {
         if (const auto selected = project::parse_vhdl_standard(source_set.standard)) {
@@ -602,8 +621,14 @@ static std::optional<CompilationWorkspace> check_project_impl(
       const auto [known, inserted] = known_units.emplace(
           key,
           UnitProfile { ordered.unit.standard_revision,
-              ordered.unit.verilog_compatibility_profile });
+              ordered.unit.language == frontend::Language::Vhdl2008
+                  ? ordered.unit.vhdl_compatibility_profile
+                  : ordered.unit.verilog_compatibility_profile });
       if (!inserted) {
+          const auto& compatibility_profile =
+              ordered.unit.language == frontend::Language::Vhdl2008
+              ? ordered.unit.vhdl_compatibility_profile
+              : ordered.unit.verilog_compatibility_profile;
           if (known->second.standard != ordered.unit.standard_revision
               && ordered.unit.language == frontend::Language::Vhdl2008) {
               diagnostics.error(
@@ -618,7 +643,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
           } else if (known->second.standard
                          != ordered.unit.standard_revision
                      || known->second.compatibility_profile
-                         != ordered.unit.verilog_compatibility_profile) {
+                         != compatibility_profile) {
               diagnostics.error(
                   "FSIM-FE-STANDARD-002",
                   "design unit '" + key + "' was already analyzed as "
@@ -630,7 +655,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
                       + std::string { frontend::to_string(
                           ordered.unit.standard_revision) }
                       + " with compatibility profile '"
-                      + ordered.unit.verilog_compatibility_profile + "'",
+                      + compatibility_profile + "'",
                   span(ordered.unit.span));
           }
           report_vhdl_duplicate_design_unit(ordered.unit, diagnostics);
@@ -727,7 +752,8 @@ static std::optional<CompilationWorkspace> check_project_impl(
       return std::nullopt;
   }
   for (auto& unit : checked.parsed.units) {
-      if (unit.language == frontend::Language::Vhdl2008) {
+      if (unit.language == frontend::Language::Vhdl2008
+          && unit.vhdl_compatibility_profile.empty()) {
           unit.vhdl_compatibility_profile = vhdl_compatibility_profile();
       }
   }

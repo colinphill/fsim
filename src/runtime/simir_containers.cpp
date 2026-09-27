@@ -284,28 +284,6 @@ namespace {
         return value;
     }
 
-    [[nodiscard]] bool key_less(
-        const ContainerType& type,
-        const PackedLogic4& left,
-        const PackedLogic4& right)
-    {
-        if (type.signed_indices) {
-            const auto lhs_negative = left.get(type.index_width - 1U) == Logic4::one;
-            const auto rhs_negative = right.get(type.index_width - 1U) == Logic4::one;
-            if (lhs_negative != rhs_negative) {
-                return lhs_negative;
-            }
-        }
-        const auto lhs = left.aval_words();
-        const auto rhs = right.aval_words();
-        for (auto index = lhs.size(); index != 0; --index) {
-            if (lhs[index - 1U] != rhs[index - 1U]) {
-                return lhs[index - 1U] < rhs[index - 1U];
-            }
-        }
-        return false;
-    }
-
     [[nodiscard]] std::size_t lower_key(
         const ContainerValue& value,
         const PackedLogic4& key)
@@ -315,7 +293,8 @@ namespace {
                 value.keys.begin(), value.keys.end(), key,
                 [&](const PackedLogic4& candidate,
                     const PackedLogic4& sought) {
-                    return key_less(value.type, candidate, sought);
+                    return associative_index_key_less(
+                        value.type, candidate, sought);
                 })
             - value.keys.begin());
     }

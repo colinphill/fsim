@@ -1241,7 +1241,11 @@ void lower_process_operations(ProcessLoweringContext& state)
                 if constexpr (std::is_same_v<OperationType, LoadConstant>) {
                     signal_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
-                    signal_lowerer.lower(operation);
+                    if (signal_widths[operation.signal] > 64) {
+                        execute_exact_signal();
+                    } else {
+                        signal_lowerer.lower(operation);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
                     if (signal_widths[operation.signal] > 64) {
                         if (operation.delay == 0U
@@ -1283,7 +1287,14 @@ void lower_process_operations(ProcessLoweringContext& state)
                 } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
                     signal_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
-                    signal_lowerer.lower(operation);
+                    if (signal_widths[operation.signal] > 64U) {
+                        return_result(
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            instruction, 0, FSIM_JIT_FRAME_STATE_READY,
+                            next_instruction);
+                    } else {
+                        signal_lowerer.lower(operation);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
                     signal_lowerer.lower(operation);
                 } else if constexpr (
@@ -1310,7 +1321,14 @@ void lower_process_operations(ProcessLoweringContext& state)
                     signal_lowerer.lower(operation);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDrivingValue>) {
-                    signal_lowerer.lower(operation);
+                    if (signal_widths[operation.signal] > 64U) {
+                        return_result(
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            instruction, 0, FSIM_JIT_FRAME_STATE_READY,
+                            next_instruction);
+                    } else {
+                        signal_lowerer.lower(operation);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
                     value_lowerer.lower(operation);
                 } else if constexpr (

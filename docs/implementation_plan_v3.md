@@ -8300,6 +8300,487 @@ hosted-monitoring cadence remains at Batch 190 unless the user changes it.
 This batch has no performance-comparison requirement and creates no release
 tag. Mark each numbered change complete only when its obligations close.
 
+### Cross-simulator performance campaign (2026-09-25)
+
+**In progress.** The user authorized the
+[deterministic performance campaign](performance-campaign.md) before Batch
+189. Establish identical cross-simulator stimulus and a fresh `d11004e4`
+baseline, then use profiles to select bounded improvements toward lower
+single-CPU LLVM O2 JIT end-to-end time than Vivado in all ten reference
+cases. The first deliverable is **complete**: the deterministic reduced corpus,
+verified stimulus parity, and fresh baseline/profile evidence for all five
+reduced cases, with the compatibility-only fifth baseline separately labeled.
+The consolidated evidence is
+`build/performance-campaign/reduced-first-deliverable-report.json`.
+P1/P2/P3/P4/P5/P7/P9/P11 improvements are retained. P6 wide transient storage and
+P10 type-candidate indexing were tested and rejected for insufficient supported
+cold total time savings; their evidence remains
+preserved. P7 bounded session-local subtype memoization saves 26.490 seconds
+overall in the reduced mixed pair, with artifact parity and focused semantic
+gates complete. The full mixed workload passes parity; a controlled full
+elaboration pair saves 42.585 seconds; the full common-object replay now gives
+seven byte-identical snapshot payloads. P9 counted lowering for large static VHDL loops passes eleven
+focused tests and complete wide-copy/suspension interpreter/O0/O2 checks.
+Frozen P9-only cold diagnostic pairs save 26.591 seconds in reduced mixed and
+24.519 seconds in original full mixed. The malformed-body diagnostic control
+passes; P9 plus C1 is reindexed, and all-eight native shape and source-breakpoint
+checks pass. Matched P7/P9 source-body visits are 131/131. Persisted CLI
+coverage remains unavailable before and after P9 because production inventory
+attachment/emission is absent; this is explicitly not a coverage pass. C1's separate wide
+Logic9 comparison repair passes its build, focused tests and the original
+full-width checker in interpreter/O0/O2. P8 operation-count caching remains
+approved and deferred.
+P10's narrow ordered type-candidate lookup is approved after P9 retention,
+with locale, stale-index and malformed-ID fallbacks. Both full codec
+preflights now pass complete canonical comparison and correctness. P11
+threshold 64-to-16 has priority based on remaining LLVM/module evidence, with
+all P9 guards preserved and a five-second cold saving/full-transfer gate; its
+twelve-worker Release build, six focused checks and CLI/source-visit gates
+pass. Its first fresh control/candidate pair saves 9.125 seconds with complete
+parity and identities. Full original mixed saves 34.914 seconds with complete
+128,878-event parity and lower RSS; both named codec regression gates pass.
+The separate profile shows 40.5% fewer optimized LLVM instructions. P11 is
+retained; none of these n1 pairs qualifies a reference case. P10 passed its
+twelve-worker Release build, eight focused checks and real-Lowerer fallback
+fixtures. Its frozen same-object replay reports seven byte-identical payloads
+from 727 common compiled files. Two fresh reduced comparisons save -3.574 and
++0.598 seconds overall, failing its predeclared 1.5-second gate; its isolated
+production and test changes are reverted with evidence preserved. The
+Euclid diagnostic identifies one unsupported operation; P12
+exact-field native sharing is frozen after a twelve-worker Release build and
+five focused passes. Its real application fixture proves actual sharing,
+interpreter/O0/O2 timeline equality and an ascending group; a negative control
+produces 135 modules instead of three. Fresh reduced and original-full cold
+pairs save 4.615064 and 9.179126 seconds overall, with complete independently
+audited stimulus, correctness, identity and empty-cache evidence. These n1
+diagnostics meet initial gain and transfer gates. The subsequent
+width/connected-buffer, full mixed-codec and profile gates close below.
+A direct O0/O2 witness exposes a second remap of candidate-local
+buffer IDs; C3's isolated correctness repair is approved, with disabled-buffer
+controls passing. C3's final seven focused checks and independent audit pass;
+P12+C3 is separately frozen as `712e6356` and reindexed. Width acceptance uses
+documented exact comparator/producer proof and existing executed compiler
+cases; the attempted HDL width fixture did not reach execution and is not
+claimed as a pass. P12 is retained after exact full mixed-codec parity
+(75 passing scenarios) and fresh module profiling: Euclid bodies 15 to one,
+LLVM modules 87 to 60, optimized instructions 758,897 to 431,250. Instrumented
+timings are diagnostic only; 428/1,303 native samples remain unresolved.
+P8 passed its twelve-worker build/eight focused checks but its count cache
+is rejected after two reduced pairs show no supported gain. P8A's isolated
+external-boundary lookup cleanup is retained under the user's new rule for
+performance-neutral simplifications. Its eight focused checks and independent
+parity/identity/cache audit pass; the single isolated pair is 0.449173 seconds
+slower on a roughly 33-second workload, within recent control variation.
+Neutrality is provisional engineering judgment, not statistical equivalence
+or a speedup claim. Correctness and final qualification gates remain unchanged.
+P13 nominal-type result caching is scratch preparation pending fresh profile
+ranking. The fresh all-ten original-workload n1 matrix on frozen P8A
+`ba2d29bf` is complete and independently audited: all parity, correctness,
+input/dependency, workload and cold-cache gates pass. Six Codex cases lead at
+n1; four reference Reed-Solomon cases remain slower, with no qualified case.
+P14 threshold 16-to-8 integration is approved from the large mixed elaboration
+cost and expanded operation volume, preserving P9 guards and requiring
+focused native/interpreter checks, reduced gain, full transfer and profiling.
+Its twelve-worker Release build, seven focused checks and nine CLI phases
+pass; O0/O2 diagnostics prove actual native worker execution, and all three
+simulation outputs match. Candidate `75647d47` is frozen with 22 dependencies
+and reindexed. Fresh reduced cold comparisons are complete and reject raw
+P14: total time rises from 35.432421 to 57.694261 seconds,
+with a 14.145808-second elaboration saving outweighed by a 36.456182-second
+native-phase increase. Correctness/parity/identity/cache gates pass. Full
+transfer is not approved for raw P14. Its explanatory profile finds 364 native
+modules versus 60, including 301 separate multiplier modules, with LLVM
+dominating the native phase. The source-identified likely blocker is the
+redundant static-loop failure Halt. Bounded P14B is approved to remove only
+the cap block for already-proven static bounds, keeping dynamic caps and
+sharing policy unchanged. Focused semantic/native checks, restored sharing,
+fresh reduced gain and full transfer remain open retention gates. See
+`p14-threshold8/architect-static-cap-followup-decision.json`; the current
+hourly checkpoint is `convergence-audit-20260926T130135Z.json`.
+P14B now passes its twelve-worker build, seven focused gates, exact static
+one-million boundary and actual interpreter/O0/O2 CLI checks. Root source
+reconstruction proves the change remains inside its approved cap block.
+Executable `154254ac` is frozen with 22 dependencies, and reindexing is complete
+at 57,168 nodes and 365,808 edges. Fresh reduced P8A/P14B timing passes at
+36.239280 versus 18.180317 seconds; full mixed-throughput transfer passes at
+74.970936 versus 39.955371. Both independent parity, correctness, identity and
+cold-cache audits pass. Full mixed-codec parity and the separate sharing
+profile now pass; P14B is retained. The profile confirms 40 native modules
+and two multiplier templates of 1,360 optimized LLVM instructions each.
+P15 attribution is complete with correct instance object remapping: 11,472
+direct Logic4 alias shapes include 10,570 multiplier reduction sites;
+264 unknown-index sites are excluded. Root independently verifies complete
+parity, correctness, identities and exact P14B restoration. These counts are
+an eligibility upper bound, not read frequency. Bounded P15 integration is
+now approved in `p15-static-container-read/architect-integration-decision.json`,
+with whole-signal sensitivity and strict existing-domain guards preserved.
+Focused semantics, real-gf_mult interpreter/O0/O2/Vivado equivalence, actual
+native execution and optimized-code inspection precede fresh reduced timing.
+The reduced gate passes at 34.160403 versus 23.122525 seconds, with complete
+parity, correctness, identity and cold-cache audits. Full Verilog throughput
+transfer passes at 336.691670 versus 234.590019 seconds, with 128,878 complete
+canonical events and original workload counts verified. Root took over after
+worker service usage limits; full codec parity and separate profiling now pass.
+P15 is retained: the full codec's 117,638 canonical events match preserved P8A
+evidence, and the new profile attributes most native-phase samples to fsim
+runtime work (1,834/2,417), with 60 unresolved LLVM samples and none lost.
+P16 is retained after source, semantic and timing review: enable the existing
+single-process slot batch only with an empty callback update-word vector,
+preserving all domain, profiling, staging and fallback guards. The twelve-worker
+affected-target build, five focused CTests, real O0/O2 callback-word fallback,
+wide update witnesses and manual canonical reindex pass. Two opposite-order
+reduced comparisons favor P16; full throughput falls from 216.505894 to
+207.754424 seconds (4.04%), while Vivado stays near 17.1 seconds. Full canonical
+stimulus, correctness, input/dependency identities and cold-cache audits pass.
+Full codec parity and separate reduced sampling also pass: 2,169 samples,
+71 unresolved, none lost, with 32 modules and 203,697 optimized instructions.
+Projected/callback ordering concerns require comparison with existing behavior;
+P16 does not authorize a wider ordering repair. See
+`p16-single-update-slot-batch/architect-retention-decision.json` and its linked
+execution evidence. All ten seven-pair qualification gates remain open.
+P17 attribution is complete: reduced throughput has 5,542,882 unchanged-input
+resumes out of 28,398,208 attempts (19.52%); full throughput has 41,734,302 out
+of 240,336,855 (17.36%). Complete canonical transcripts, correctness and frozen
+executable/dependency identities pass independent review. Full coverage is
+partial because of the process cap and unsupported shapes; mixed-group
+invalidation is source-reviewed, and no execution or transaction is suppressed.
+These counts do not predict wall-time savings. All six temporary source/test
+files are restored exactly with fresh mtimes and manually reindexed; evidence
+is in `p17-repeated-input-attribution/architect-final-audit.json`,
+`restoration.json` and `manual-restoration-index.json`. P18's subsequent
+affected build removes the diagnostic from configured Release; frozen P16
+remains the retained control. Production activation filtering remains unapproved.
+P18 implements three exact inline empty-state guards for dynamic waits,
+timeouts and callable restoration, plus a direct null-safe operation-count
+accessor, without snapshot, layout, cache or CMake-policy changes. Its
+twelve-worker affected Release build, 11 focused CTests, independent source
+review and manual reindex pass. Two opposite-order reduced pairs pass the
+diagnostic gate; conservative saving is 0.804054 seconds (2.83%). Full
+throughput parity, correctness and identity audits pass, but the 203.897494
+to 198.051612-second change (2.87%) closely matches Vivado's 2.97% fall.
+The P18-specific performance gain and retention remain unresolved.
+The user paused work after this round; no further optimization runs or
+integration may start until user resume. P18 remains live and frozen as a
+trial, with P16
+separately retained. Root's `p18-inline-bookkeeping/architect-pause-audit.json`
+verifies 50 files and closes the deferred identity rehash; final manual
+documentation indexing is recorded in `final-pause-index.json`. Codec parity
+and profiling are conditional pending the attribution decision. Assess the
+separable accessor under the performance-neutral simplification rule.
+P19 reusable cohort buffers are reviewed scratch only, without integration,
+build, test or timing evidence. See the
+[pause checkpoint](performance-campaign.md#p18-measurement-round-and-pause).
+The user's later bounded Callgrind request is complete, with evidence in
+`callgrind-long-throughput-5pct-20260926/` under the campaign root and the
+[diagnostic report](performance-campaign.md#callgrind-diagnostic-of-the-long-throughput-case).
+Full compile/elaborate profiles and a 5–10 microsecond scheduler interval
+within the unchanged long case's 5% cutoff expose repeated process lookup,
+cohort/resume bookkeeping and update staging. The scheduler parent includes
+all callback work; its own self cost is only 2.22% of the interval. Confirmed
+Callgrind SHA-feature masking prevents treating its hashing shares as native
+costs. Raw profiles, JIT map, identity audits and source restoration are
+preserved. The exact pre-diagnostic source and P18 executable are restored
+and manually reindexed; no production change or retention decision follows.
+The user subsequently resumed the optimization goal. The reverse-order full
+P18/P16 attribution pair is complete and independently audited: P18 takes
+220.079873 seconds versus 228.926758 seconds for P16, while contemporaneous
+Vivado moves in the opposite direction. The earlier pair and reverse pair
+both pass original workload, parity, correctness, executable/dependency
+identity and cold-cache gates. Full original-codec parity also passes with
+514 streams, 117,638 events, 117,714 raw records, 75 passing summaries and
+one KAT. P18's five changes are retained in
+`p18-inline-bookkeeping/architect-retention-decision.json`; this is not
+seven-pair all-ten qualification. The next bounded P20/P21 candidate combines
+synchronous process-reference reuse and update-index sorting on live P18.
+Both test hunks pass runtime tests against unchanged P18; the approved source
+integration passes a twelve-worker affected build and 11 focused CTests.
+Manual canonical indexing and candidate freeze precede a reduced cold pair;
+the [combined boundary](performance-campaign.md#p18-retention-and-combined-p20p21-trial)
+defines conditional full transfer, codec parity and profile gates. Its new
+index storage requires supported end-to-end gain; no P20/P21 performance
+benefit is yet claimed. The two opposite-order reduced pairs subsequently
+regress by 1.119354 and 1.803863 seconds versus retained P18, with complete
+mechanical parity, identity and cold-cache audits. P21 production is rejected;
+its useful mixed ordering test remains. P20 reference reuse remains an
+unretained cleanup candidate with no individual timing attribution. The next
+approved source trial combines it with P19's deletion of fixed cohort arrays
+and duplicate path, retaining the existing reusable vector route. The
+[P19/P20 boundary](performance-campaign.md#p21-reduced-result-and-p19p20-trial)
+requires an affected twelve-worker build, 11 focused checks, manual index,
+frozen identities and a reduced cold pair before conditional full transfer,
+codec parity and separate profile. The affected build and all 11 checks pass;
+manual index and freeze are next. No P19/P20 gain is yet claimed. All
+qualification obligations remain open.
+The P19/P20 reduced reverse saves only 0.209239 seconds and does not confirm
+the first pair's gain. Its one complete original-throughput non-regression
+pair is 268.095270 seconds versus 264.944236 seconds for retained P18,
+while Vivado moves in the opposite direction. All 156 streams, 128,878
+events, original workload, correctness, frozen identities and cold-cache
+checks pass. This does not prove a statistical regression, but the full
+neutral non-regression gate remains open. The architect defers the combined
+cleanup without assigning individual effects. Its production hunks are
+restored to recorded P18 bytes, preserving both useful tests; a twelve-worker
+affected Release build reproduces frozen P18 exactly and the focused runtime
+CTest passes. The restoration was manually indexed; one full original
+mixed-codec phase refresh on frozen P18 passed parity and identity, taking
+95.085779 seconds versus Vivado's 28.754060. Its 25.545905-second
+elaboration gap and 41.038745-second native setup/simulation gap led to a
+separate, user-authorized CPU profile. After reporting that profile the user
+paused, then explicitly resumed the active all-ten optimization goal. The
+[phase and profile evidence](performance-campaign.md#p18-full-mixed-codec-phase-refresh-and-cpu-profile)
+preserves the distinct VHDL package/unit lookup and native arithmetic leads.
+The bounded P23A change shares quotient and remainder from one existing
+signed known-value division traversal. Its exact reviewed patch, affected
+Release build and interpreter/LLVM O0/O2 CTests pass. One reduced mixed-codec
+pair favored P23A, but two full opposite-order pairs conflicted. The architect
+provisionally retained it only as a cache-free source simplification, with
+frozen P18 fallback and no measured speedup or proven non-regression.
+[P23A evidence](performance-campaign.md#p23a-shared-known-division-traversal-trial)
+records all pairs. P24 moved private process design identity into existing
+cold state. Its exact reviewed patch, focused Release build and runtime/LLVM
+suites pass; optimized process lookup uses a 64-byte stride and shifts instead
+of P23's 72-byte stride and division-by-seven arithmetic. Reduced throughput
+favored P24 by 2.757221 seconds, while full opposite-order pair directions
+conflicted. Two-pair medians P23A 210.310637 and P24 213.137641 seconds do
+not establish a gain or non-regression. P24 is provisionally retained as a
+bounded field-relocation simplification with P23A/P18 frozen fallbacks. The
+[P24 evidence](performance-campaign.md#p24-process-state-layout-trial)
+records full correctness and identity gates; none of ten cases is qualified.
+
+P25's temporary completed-resume input attribution on current P24 is
+complete. It recovered P17's snapshots, conservatively classified forward
+branches and merged static Extract ranges; the older notification/fanout
+observer proposal remains superseded. Independent source review, affected
+Release build, runtime/LLVM checks, manual index and frozen identity passed.
+Reduced and separately approved full original-throughput preflight-only
+campaigns passed complete canonical fsim/Vivado parity. Actual generated
+reduction plans recorded 9,877,000 and 83,154,246 native completed waits
+respectively, with 8,637,495 and 72,681,776 repeated exact selected inputs.
+Full-classified totals were 200,928,315 successful completed waits and
+120,631,090 repeats across 49,057 plans, with no over-cap processes. These
+snapshots are not publisher fanout, suppression proof or timing gain. No
+instrumented timed pair was run. Restore verification rebuilt the exact
+frozen P24 ELF from byte-equal pre-diagnostic source and both focused CTests
+passed. That diagnostic authorized only a separately bounded P26 trial;
+it did not itself prove safe activation suppression. The latest hourly
+convergence audit is `convergence-audit-20260926T2308Z.json` and records no
+new full end-to-end gain. The
+[P19/P20 decision](performance-campaign.md#p19p20-full-nonregression-and-restoration)
+preserves its deferred evidence and keeps the ten-case gate open.
+
+P26's experimental `FSIM_STATIC_ARRAY_SENSITIVITY=1` mode demonstrated its
+narrow activation mechanism after two architect-reviewed repairs: a fresh
+saved GF artifact had exact ranges for all 21 M8 generated reduction
+assignments, interpreter/O0/O2 output matched the reference, and native
+completions fell from 567 to 108 while narrow M4 stayed at 135. Its one
+reduced original-throughput pair passed full parity, correctness, identity
+and cold-cache gates. Fsim changed from 26.687001 to 25.086094 seconds,
+a 1.600907-second raw saving; Vivado changed from 11.492253 to 10.639702
+seconds. The preapproved two-second full-transfer gate failed, and the
+fsim/Vivado ratio declined. No full repeat, profile or retention is
+authorized. P26 adds source metadata, cohort filtering and runtime artifact
+schema 65, so it is not retained under the user's neutral-simplification
+rule. Its frozen candidate and all raw evidence remain preserved; only its
+14 source/test changes were restored to exact P24 bytes. The affected
+twelve-worker Release rebuild reproduced frozen P24 SHA-256
+`66f691a707b9b0ce84cf0dbaab3675713ea5892c1d47f507dffa87f4a49d5965`,
+and runtime, elaboration, LLVM, runtime-path codec and artifact-phase CTests
+all pass. P26 restoration indexing is complete. P27 is an
+isolated package-member span hoist from the existing full mixed-codec profile;
+root and independent source reviews approved its exact two-file patch. The
+affected twelve-worker Release build and eight focused semantic,
+elaboration and VHDL application CTests pass. P26 restoration was manually
+indexed at 01:31:26 UTC with all 17 changed paths fresh. P27's five-path
+index and direct frozen executable/dependency checks also passed. Its single
+reduced mixed-codec collection passed canonical parity and cold-cache gates:
+raw P24 and P27 fsim totals were 4.329837 and 4.332550 seconds; Vivado
+totals were 7.944026 and 7.941027 seconds. The P27 candidate identity
+incorrectly used `baseline_commit` for its parent, causing the runner to
+label it as the frozen baseline. The architect did not accept a performance
+comparison or claim neutrality. Only P27's production resolver was restored
+to exact P24 bytes, retaining its semantic test. The affected rebuild
+reproduced frozen P24 and the same eight focused CTests pass. P26's raw
+candidate receipt has the same known provenance-label limitation; its failed
+two-second transfer gate and deferral remain unchanged. No second pair, full
+run, profile or retention is authorized. The P27 restoration architect audit
+passes. The then-current
+hourly convergence audit was `convergence-audit-20260927T1107Z.json`; it found
+no all-ten qualification. P28's unchanged-P24 recurring-JIT off/on trial
+passed parity, identity and cold-cache checks, but mode on did not save
+0.2 seconds or native time, so no full run followed. For future source-sensitive modes,
+inspect saved real metadata and normal CLI services before timing; for frozen candidates, use
+the runner's identity reader for both dependency layouts and assert
+`kind == candidate` before launch.
+
+P13 remains
+scratch-only and lower priority.
+The convergence checkpoint at that stage was
+`convergence-audit-20260927T1107Z.json`; P26/P27 closed without a demonstrated
+transferable end-to-end gain. P28's existing recurring-JIT synchronization
+mode also missed its reduced transfer gate: fsim off/on totals were 4.431417
+and 4.432714 seconds, with native time increasing 0.050404 seconds on mode.
+The architect deferred it without a full run or source change. The next
+bounded candidate is P29's known, nonzero, width-at-most-64 unsigned division
+path; its wider/Logic9 fallback and signed wrapper are unchanged. The
+affected twelve-worker build and four focused runtime/LLVM/application
+checks pass after a test-local `const char*` type correction. Manual index
+and frozen ELF/22-dependency identity gates also pass. Automatic approval
+review rejected the outside-sandbox P24/P29 reduced comparison launch before
+any benchmark process or output directory was created. Its stated reason
+applied the user's earlier pause after the separate Callgrind profile and
+treated this benchmark as outside that authorization. The user has now
+explicitly said, “Do not pause. Continue iteration on your own,” resolving
+the conflict. The P29 frozen ELF, source, launcher and 22 dependencies were
+reverified without a redundant build or test run. The reduced P24/P29 pair
+passed correctness and identity gates, and its less-than-0.2-second
+total/native worsening gate opened one full original mixed-codec pair. The
+full candidate-first raw fsim totals were 89.905813 and 100.551358 seconds,
+but Vivado also shifted from 28.118480 to 34.102038 seconds. The architect
+deferred P29 without source gain attribution, reverse pair or profile. Its
+13-line production hunk is restored to exact P24 source; the runtime test
+remains. The combined reviewed P30 elaboration build removed the fast path
+from configured Release, and all ten focused checks pass. The
+user's next priority is full `mixed_codec` elaboration (fresh fsim 45.459693
+versus Vivado 19.529261 seconds), followed by update and scheduler paths.
+P30's guarded primary-unit relation index is retained, with full scanning
+preserved for stale, foreign and ambiguous inputs. The affected eight-target
+Release build, ten focused CTests, manual index and frozen identities pass.
+One reduced and two opposite-order full original mixed-codec pairs pass
+complete stimulus, correctness, identity and cold-cache gates. P30 saves
+2.910066 and 3.958970 seconds in elaboration, while raw fsim totals save
+1.700095 and 4.310114 seconds. Native changes conflict (+1.210618 and
+-0.350672 seconds), and Vivado is roughly 0.7 seconds faster in each P30
+leg. This supports retention for repeated elaboration improvement, not a
+statistical total or native gain. Frozen P24 remains a fallback; zero of ten
+reference cases are qualified. See the two full-pair architect audits and
+`p30-vhdl-primary-unit-index/architect-retention-decision.json`.
+
+Before any further production optimization, collect current phase and
+sampled call-path evidence with actual path frequency, cost and route counts;
+rank credible absolute end-to-end savings. Use bounded Callgrind if sampling
+cannot resolve a material cost, and keep instrumented evidence separate from
+timed comparisons. P31's current frozen-P30 full mixed-codec and long
+original-throughput profiles now pass complete preflight parity, final-summary
+checks and physical input/executable identity. Mixed elaboration has 3,911
+samples, led by subtype evaluation and package/declaration lookup; its native
+phase has 4,295 samples, including 1,433 LLVM and 841 unresolved, mostly on
+compiler workers. Long-throughput simulation has 18,739 samples and native
+update counters record 218,409,742 slots, 165,773,756 unchanged, with
+resume/cohort/dispatch/update paths dominant. Instrumentation is excluded
+from timing claims. The mixed driver required an analysis-only two-instance
+counter-parser correction after collection, with separately labeled manual
+post-run identity verification; no rerun occurred. The independent P31 review
+reconciles both instances and phase reports. P32 then loaded the saved
+throughput and mixed design artifacts without simulation. In throughput,
+9,258 `sv_wire` signals have 78,258 separate process-writer pairs whose
+static bit regions are disjoint and completely cover each signal. A single
+diagnostic-only, full-shape O2 run attributed every one of the 210,885,738
+resolved or unchanged-resolved slots (96.56% of accepted slots) to these
+disjoint signals: 108,866,836 slots on signals at most 64 bits and
+102,018,902 on wider signals. Thus the route's whole-signal DriverRecord
+cardinality, not overlapping per-bit ownership, explains the observed
+classification. These are instrumented frequencies, not saved CPU time.
+The temporary source was restored byte-for-byte and the configured CLI
+reproduces frozen P30 SHA-256 `4d980c0df526e3527e3cd7ebf1b7fa1038773e454f9620491bb41e410895bc45`.
+The current convergence audit is `convergence-audit-20260927T1307Z.json`.
+P33's bounded raw-driver owned-span projection passed the affected Release
+build, four focused CTests, source and independent invariant reviews. A
+separate reduced diagnostic recorded 19,135,652 cached unchanged hits,
+exactly all active unchanged-resolved slots, with complete fsim/Vivado
+stimulus parity. Two opposite-order cold reduced pairs disagreed: P33 was
+1.559105 seconds slower overall in control-first order and 0.455488 seconds
+faster in candidate-first order; Vivado moved about 0.201 seconds in P33's
+favor in both. No repeatable total gain supports retaining this new cache,
+and no full transfer ran. The five production files were restored exactly
+to P30; the useful control-compatible 80-bit raw/visible and out-of-span
+test remains. The affected `-j12` build and four focused CTests pass, and
+the configured CLI reproduces frozen P30 SHA-256
+`4d980c0df526e3527e3cd7ebf1b7fa1038773e454f9620491bb41e410895bc45`.
+Manual restoration reindex completed at 13:31:17 UTC. P34 then read saved
+throughput and mixed-codec artifacts without Interpreter construction and
+ran one full-throughput simulate-only native process/phase count on frozen
+P30. Its six final summaries exactly match P31. The
+[P34 join](../build/performance-campaign/p34-cohort-shape-attribution/cohort-shape-join.json)
+reconciles 236,550,074 native member resumes: 114,600,298 single and
+121,949,776 cohort, across 3,451,363 cohort calls. An aggregate mean of
+35.33 consumed members per call does not reveal the per-call ready set.
+The 541 cohort keys with 64–127 registered members account for 97,135,072
+member resumes (79.7%). All 49,700 mapped active process rows match the
+saved metadata; 12 fork children remain separate. Declared operation counts
+are not dynamic opcode counts, and the 200-second instrumented run is not
+performance evidence. The [P34 audit](../build/performance-campaign/p34-cohort-shape-attribution/final-audit.json)
+preserves source/artifact/executable identities. The next scheduler/update
+source choice must reach these measured groups and prove its execution
+semantics; mixed-codec elaboration was already the user's first priority. The
+[P33 architect decision](../build/performance-campaign/p33-owned-driver-projection/architect-rejection.json)
+preserves both raw pairs without a statistical regression claim. Active user
+authorization covers continued iteration; this is an internal evidence gate.
+Campaign launchers must run both engines outside the
+sandbox with matching environment and record the sandbox mode; Vivado xsim
+can fail at Tcl startup inside it. A completed runner report may exit 2 for
+`performance_gate_failed` while parity, correctness and identities pass.
+Reuse the [audited P33 reduced-leg launcher](../build/performance-campaign/p33-owned-driver-projection/run_reduced_leg.py)
+and gate on the report, not the
+exit status alone.
+The user next requested closure of valid LLVM capability holes before
+another performance implementation. The
+[bounded LLVM scope](../build/performance-campaign/llvm-capability-closure/architect-scope.json)
+covers `ScopeRandomize`, supported wide-value operations and signal
+attributes, and finite control-flow cycles that currently lack a suspension
+safe point. Interpreter-equivalent native O0/O2 results, reports, seed
+consumption, copyback and error propagation are required. Malformed SimIR
+validation and finite ABI capacity guards remain intact; JIT cost selection
+is a separate policy. The startup JIT tier is already awaited before
+simulation, while optional background materialization may overlap it. This
+work is functional closure with no speedup claim. Both reviewed
+[implementation batches](../build/performance-campaign/llvm-capability-closure/implementation-sequence.json)
+are integrated. The Release `-j12` full build passed; its 454-case test pass
+had 449 passes, followed by a 30/30 targeted and fixture-dependent repair
+gate for four stale catalog/native-container expectations and one blocked
+case. Affected Debug and Tcl-off LLVM builds and 14 focused tests in each
+lane passed. The `fsim.application.vhdl_logic9` witness compares actually
+compiled O0/O2 processes with the interpreter after settled waveform and
+signal-attribute updates; compiler and application tests also cover wide
+mailbox, random, container, FormatDisplay, file and host-boundary paths.
+One reduced `mixed_codec` O2 cross-simulator
+[preflight](../build/performance-campaign/llvm-capability-closure/final-parity-result.json)
+passed outside the sandbox with 48 matching canonical streams, 836 event
+records and seven summaries, frozen identity intact, and no timed results.
+The final manual index remains before the user-authorized commit and push. The
+[test plan](../build/performance-campaign/llvm-capability-closure/focused-validation-plan.json)
+records the exact O0/O2 and typed-negative witnesses. P35's initial
+authoritative disjoint-driver header scaffold was
+[archived](../build/performance-campaign/p35-disjoint-driver-composite/p35-header-scaffold.patch)
+and all eight pre-P35 source/test bytes restored exactly; its production
+implementation and performance gates resume after LLVM closure. Frozen P30
+remains the performance control; the current capability CLI SHA-256 is
+`a77caa06446039a6f441a1cbe5ac58b90bc830a94b92eeda3d48611ce6e2ed2e`.
+No reference case is qualified. The user-requested shorter loop is documented
+in [the campaign guide](performance-campaign.md#shorter-iteration-loop):
+affected-target incremental builds, parallel source audits, explicit conditional
+gates and reduced checks first. Manual reindexing remains mandatory after
+integrated or reverted batches. Versioned preflight reuse is now integrated
+after 38 runner checks, five profiler checks and two configured CTest entries
+pass; live Codex verification also passes with two reused preflights and fresh
+timed caches, reducing this diagnostic campaign from 46.735315 to 27.603072
+seconds. The bounded runner change is retained. Manual canonical reindexing is
+verified at 14:51:01 UTC, with matching changed-script metadata. Fresh timed
+caches and final qualification requirements remain unchanged. The P16 no-op
+build attributes 4.96 seconds to 793 dependency scans and 29 dyndep steps,
+with no compile or link. Defer changing the CMake scanning default until the
+next required broad build and retain explicit user settings. Preserve run logs
+when produced and request existing preflight receipts for follow-up profiles.
+Runner dependency verification enforces both
+existing identity schemas and passes 35 Python checks plus live dependency
+controls; frozen manifests remain unchanged.
+Effective native-cache reporting and empty-cache guards are
+verified; copied-snapshot diagnostics make no cold-cache claim. Actual
+timing samples use fresh whole workspaces. All ten original cases have complete
+untimed stimulus parity. No
+reference case has seven-pair qualification. The linked campaign tracks its
+acceptance obligations. This work does not renumber Batches 189-197 or close
+the separate deferred historical frozen-baseline matrix.
+
 ## v3.1.0
 
 ### Batch 189 - parallel execution foundation and elaboration

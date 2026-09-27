@@ -619,39 +619,7 @@ bool vhdl_unspecified_profile_accepts(
 std::optional<const vhdl::Unit*> primary_vhdl_unit(
     const CompiledDesign& design, const vhdl::Unit& secondary)
 {
-    const auto primary_kind
-        = secondary.kind == vhdl::UnitKind::architecture
-        ? std::optional { vhdl::UnitKind::entity }
-        : secondary.kind == vhdl::UnitKind::package
-                && !secondary.primary_name.empty()
-        ? std::optional { vhdl::UnitKind::package }
-        : std::nullopt;
-    if (!primary_kind) {
-        return std::nullopt;
-    }
-    const vhdl::Unit* selected { };
-    for (const auto& unit : design.vhdl_units()) {
-        const auto package_declaration
-            = *primary_kind == vhdl::UnitKind::package;
-        if (unit.kind != *primary_kind
-            || (package_declaration && !unit.primary_name.empty())
-            || !same_vhdl_identifier(
-                normalized_library(unit.library),
-                normalized_library(secondary.library))
-            || !same_vhdl_identifier(
-                unit.name, package_declaration
-                    ? std::string_view { secondary.name }
-                    : std::string_view { secondary.primary_name })) {
-            continue;
-        }
-        if (selected != nullptr) {
-            return std::nullopt;
-        }
-        selected = &unit;
-    }
-    return selected != nullptr
-        ? std::optional<const vhdl::Unit*> { selected }
-        : std::nullopt;
+    return design.vhdl_primary_unit(secondary);
 }
 
 std::vector<const vhdl::Unit*> vhdl_lookup_units(

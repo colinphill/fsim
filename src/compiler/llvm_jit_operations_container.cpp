@@ -96,7 +96,8 @@ void ContainerOperationLowerer::invoke(
     const std::optional<runtime::simir::RegisterId> input0,
     const std::optional<runtime::simir::RegisterId> input1,
     const std::optional<runtime::simir::RegisterId> destination,
-    const std::string_view label)
+    const std::string_view label,
+    const bool reload_wide_destination_from_frame)
 {
     // Container and mutable-string callbacks own their non-packed state in the
     // executor. Publish exactly the live packed operands they may inspect;
@@ -146,13 +147,22 @@ void ContainerOperationLowerer::invoke(
         JitGeneratedRuntimeErrorReason::container_callback_failure,
         label);
     if (destination) {
-        store_register(
-            builder,
-            registers,
-            *destination,
-            { builder.CreateLoad(i64, result_aval),
-                builder.CreateLoad(i64, result_bval),
-                registers[*destination].width });
+        if (reload_wide_destination_from_frame
+            && registers[*destination].width > 64U) {
+            store_register(
+                builder,
+                registers,
+                *destination,
+                load_register(builder, frame_registers, *destination));
+        } else {
+            store_register(
+                builder,
+                registers,
+                *destination,
+                { builder.CreateLoad(i64, result_aval),
+                    builder.CreateLoad(i64, result_bval),
+                    registers[*destination].width });
+        }
     }
     branch_to_next();
 }
@@ -213,7 +223,7 @@ void ContainerOperationLowerer::lower(
 {
     invoke(
         std::nullopt, std::nullopt, value.destination,
-        "container.reduce");
+        "container.reduce", true);
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::OrderContainer&)
@@ -238,7 +248,11 @@ void ContainerOperationLowerer::lower(
                 == runtime::simir::ContainerElementKind::Packed
             || type.element_kind
                 == runtime::simir::ContainerElementKind::Scalar)
-        && registers[value.index].width <= 64U
+        && registers[value.index].width == 32U
+        && registers[value.index].kind
+            == runtime::simir::ValueKind::logic4
+        && registers[value.destination].kind
+            == runtime::simir::ValueKind::logic4
         && registers[value.destination].width == type.element_width;
     if (packed_fast_path) {
         const auto index = load_register(builder, registers, value.index);
@@ -321,11 +335,7 @@ void ContainerOperationLowerer::lower(
     }
     invoke(
         value.string_index ? std::nullopt : std::optional { value.index },
-        std::nullopt,
-        registers[value.destination].width > 64
-            ? std::nullopt
-            : std::optional { value.destination },
-        "container.read");
+        std::nullopt, value.destination, "container.read", true);
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerWrite& value)
@@ -336,7 +346,11 @@ void ContainerOperationLowerer::lower(
                 == runtime::simir::ContainerElementKind::Packed
             || type.element_kind
                 == runtime::simir::ContainerElementKind::Scalar)
-        && registers[value.index].width <= 64U
+        && registers[value.index].width == 32U
+        && registers[value.index].kind
+            == runtime::simir::ValueKind::logic4
+        && registers[value.source].kind
+            == runtime::simir::ValueKind::logic4
         && registers[value.source].width == type.element_width;
     if (packed_fast_path) {
         const auto index = load_register(builder, registers, value.index);
@@ -446,7 +460,7 @@ void ContainerOperationLowerer::lower(
 {
     invoke(
         value.index, std::nullopt, value.destination,
-        "container.aggregate-read");
+        "container.aggregate-read", true);
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerAggregateWrite& value)
@@ -512,6 +526,53 @@ void ContainerOperationLowerer::lower(
     }
     const auto input = load_register(builder, registers, value.index);
     auto* zero = constant_i64(context, 0);
+    if (registers[value.index].width > 64U) {
+        for (const auto register_id : instruction_uses) {
+            const auto& source = registers[register_id];
+            const auto& frame_destination = frame_registers[register_id];
+            if (source.aval_base == frame_destination.aval_base
+                && source.word_offset == frame_destination.word_offset) {
+                continue;
+            }
+            store_register(
+                builder,
+                frame_registers,
+                register_id,
+                load_register(builder, registers, register_id));
+        }
+        builder.CreateStore(zero, result_aval);
+        builder.CreateStore(zero, result_bval);
+        auto* status = builder.CreateCall(
+            callback_type,
+            callback,
+            { context_pointer,
+                id(i32, process),
+                id(i32, instruction),
+                builder.CreateTrunc(input.aval, i64),
+                builder.CreateTrunc(input.bval, i64),
+                constant_i64(context, 1),
+                zero,
+                result_aval,
+                result_bval });
+        runtime_error_if(
+            builder.CreateICmpNE(status, id(i32, 0)),
+            JitGeneratedRuntimeErrorReason::container_callback_failure,
+            "container.traverse-wide");
+        store_register(
+            builder,
+            registers,
+            value.index,
+            load_register(builder, frame_registers, value.index));
+        store_register(
+            builder,
+            registers,
+            value.destination,
+            { builder.CreateLoad(i64, result_aval),
+                builder.CreateLoad(i64, result_bval),
+                registers[value.destination].width });
+        branch_to_next();
+        return;
+    }
     builder.CreateStore(zero, result_aval);
     builder.CreateStore(zero, result_bval);
     auto* key_status = builder.CreateCall(
@@ -593,7 +654,9 @@ void ContainerOperationLowerer::lower(
 void ContainerOperationLowerer::lower(
     const runtime::simir::PopContainer& value)
 {
-    invoke(std::nullopt, std::nullopt, value.destination, "container.pop");
+    invoke(
+        std::nullopt, std::nullopt, value.destination,
+        "container.pop", true);
 }
 
 } // namespace fsim::compiler::llvm_detail

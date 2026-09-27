@@ -505,7 +505,10 @@ public:
     OperationList& operator=(Storage&& operations);
 
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] size_type size() const noexcept;
+    [[nodiscard]] size_type size() const noexcept
+    {
+        return storage_ ? storage_->size() : 0U;
+    }
     [[nodiscard]] size_type capacity() const noexcept;
     [[nodiscard]] size_type max_size() const noexcept;
 

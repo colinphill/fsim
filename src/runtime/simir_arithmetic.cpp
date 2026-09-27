@@ -160,10 +160,9 @@ namespace fsim::runtime::simir {
   return result;
 }
 
-[[nodiscard]] PackedLogic4 divide_known(
+[[nodiscard]] KnownDivision divide_known(
     const PackedLogic4& dividend,
-    const PackedLogic4& divisor,
-    const bool return_remainder) {
+    const PackedLogic4& divisor) {
   PackedLogic4 quotient(dividend.width(), Logic4::zero);
   PackedLogic4 remainder(dividend.width(), Logic4::zero);
   for (std::size_t dividend_bit = dividend.width();
@@ -177,12 +176,10 @@ namespace fsim::runtime::simir {
       quotient.set(dividend_bit, Logic4::one);
     }
   }
-  return return_remainder ? remainder : quotient;
+  return {std::move(quotient), std::move(remainder)};
 }
 
-
-
-[[nodiscard]] SignedDivision divide_known_signed(
+[[nodiscard]] KnownDivision divide_known_signed(
     const PackedLogic4& dividend,
     const PackedLogic4& divisor) {
   const bool dividend_negative =
@@ -193,17 +190,14 @@ namespace fsim::runtime::simir {
       dividend_negative ? negate_known(dividend) : dividend;
   const auto divisor_magnitude =
       divisor_negative ? negate_known(divisor) : divisor;
-  auto quotient =
-      divide_known(dividend_magnitude, divisor_magnitude, false);
-  auto remainder =
-      divide_known(dividend_magnitude, divisor_magnitude, true);
+  auto divided = divide_known(dividend_magnitude, divisor_magnitude);
   if (dividend_negative != divisor_negative) {
-    quotient = negate_known(quotient);
+    divided.quotient = negate_known(divided.quotient);
   }
   if (dividend_negative) {
-    remainder = negate_known(remainder);
+    divided.remainder = negate_known(divided.remainder);
   }
-  return {std::move(quotient), std::move(remainder)};
+  return divided;
 }
 
 [[nodiscard]] PackedLogic4 binary_value(BinaryOperator operation,
@@ -447,8 +441,11 @@ namespace fsim::runtime::simir {
     if (is_zero(rhs)) {
       return PackedLogic4(lhs.width(), Logic4::x);
     }
-    return divide_known(
-        lhs, rhs, operation == BinaryOperator::modulo_unsigned);
+    auto divided = divide_known(lhs, rhs);
+    if (operation == BinaryOperator::modulo_unsigned) {
+      return std::move(divided.remainder);
+    }
+    return std::move(divided.quotient);
   }
   if (operation == BinaryOperator::divide_signed
       || operation == BinaryOperator::remainder_signed

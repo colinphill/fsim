@@ -332,6 +332,10 @@ void lower_suffix_operation(
                                 context, operation.delays.turnoff) });
                     branch_to_next();
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
+                    if (signal_widths[operation.signal] > 64) {
+                        execute_exact_signal();
+                        return;
+                    }
                     const auto signal_kind = signal_value_kinds.empty()
                         ? ValueKind::logic4
                         : signal_value_kinds[operation.signal];
@@ -393,6 +397,10 @@ void lower_suffix_operation(
                                     operation.mode)) });
                     branch_to_next();
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
+                    if (signal_widths[operation.signal] > 64) {
+                        execute_exact_signal();
+                        return;
+                    }
                     const auto signal_kind = signal_value_kinds.empty()
                         ? ValueKind::logic4
                         : signal_value_kinds[operation.signal];
@@ -736,10 +744,18 @@ void lower_suffix_operation(
                                          WriteInertialDynamicPartSlice>) {
                     execute_exact_signal();
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
-                    emit_dynamic_projected_slice(
-                        operation,
-                        dynamic_offset_i32(operation.selection));
+                    if (signal_widths[operation.signal] > 64) {
+                        execute_exact_signal();
+                    } else {
+                        emit_dynamic_projected_slice(
+                            operation,
+                            dynamic_offset_i32(operation.selection));
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
+                    if (signal_widths[operation.signal] > 64) {
+                        execute_exact_signal();
+                        return;
+                    }
                     const auto signal_kind = signal_value_kinds.empty()
                         ? ValueKind::logic4
                         : signal_value_kinds[operation.signal];
@@ -944,6 +960,15 @@ void lower_suffix_operation(
                 } else if constexpr (std::is_same_v<OperationType, Display>) {
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
+                    if (registers[operation.source].width > 64U) {
+                        return_result(
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            instruction,
+                            0,
+                            FSIM_JIT_FRAME_STATE_READY,
+                            next_instruction);
+                        return;
+                    }
                     const auto value = load_register(builder, registers, operation.source);
                     if (value.kind == ValueKind::logic9) {
                         store_logic9_word(logic9_word_slot, value);
@@ -1107,10 +1132,10 @@ void lower_suffix_operation(
                             context_pointer,
                             llvm::ConstantInt::get(i32, process.id),
                             llvm::ConstantInt::get(i32, instruction),
-                            maximum.aval,
-                            maximum.bval,
-                            minimum.aval,
-                            minimum.bval,
+                            builder.CreateZExtOrTrunc(maximum.aval, i64),
+                            builder.CreateZExtOrTrunc(maximum.bval, i64),
+                            builder.CreateZExtOrTrunc(minimum.aval, i64),
+                            builder.CreateZExtOrTrunc(minimum.bval, i64),
                             read_bval_slot,
                         });
                     auto* bval = builder.CreateLoad(
@@ -1123,6 +1148,14 @@ void lower_suffix_operation(
                     branch_to_next();
                 } else if constexpr (
                     std::is_same_v<OperationType, RandomDistribution>) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        instruction,
+                        0,
+                        FSIM_JIT_FRAME_STATE_READY,
+                        next_instruction);
+                } else if constexpr (
+                    std::is_same_v<OperationType, ScopeRandomize>) {
                     return_result(
                         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
                         instruction,

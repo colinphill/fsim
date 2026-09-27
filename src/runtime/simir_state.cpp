@@ -389,15 +389,9 @@ Interpreter::Impl::get_container_object(
     return normalized;
 }
 
-void Interpreter::Impl::remove_dynamic_wait(ProcessState& process)
+void Interpreter::Impl::remove_dynamic_wait_nonempty(ProcessState& process)
 {
     auto& cold = process.cold();
-    if (!process.waiting_on_signal
-        && !cold.waiting_on_container
-        && cold.dynamic_sensitivity.empty()) {
-        return;
-    }
-
     const auto old_wait_generation = cold.dynamic_wait_generation;
     if (cold.dynamic_wait_generation
         == std::numeric_limits<std::uint64_t>::max()) {
@@ -613,12 +607,9 @@ void Interpreter::Impl::write_process_register(
     get_register(process, destination) = converted;
 }
 
-void Interpreter::Impl::clear_wait_timeout(ProcessState& process)
+void Interpreter::Impl::clear_wait_timeout_nonempty(ProcessState& process)
 {
     auto& cold = process.cold();
-    if (!cold.wait_timeout_origin) {
-        return;
-    }
     if (cold.wait_timeout_generation
         == std::numeric_limits<std::uint64_t>::max()) {
         fail(process, "wait timeout generation overflow");
@@ -1618,7 +1609,7 @@ void Interpreter::Impl::notify_execution_point(
         execution_point_hook(
             scheduler,
             ExecutionPoint {
-                process.id, process.design_process,
+                process.id, process.cold().design_process,
                 instruction, kind, source, std::string { effective_scope },
                 process.program().language_standard,
                 process.program().compatibility_profile });

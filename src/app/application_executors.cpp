@@ -822,11 +822,22 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             runtime::simir::Return>(&operation);
         const auto* read_signal = fsim::runtime::simir::operation_get_if<
             runtime::simir::ReadSignal>(&operation);
+        const auto* last_value = fsim::runtime::simir::operation_get_if<
+            runtime::simir::SignalLastValue>(&operation);
+        const auto* driving_value = fsim::runtime::simir::operation_get_if<
+            runtime::simir::SignalDrivingValue>(&operation);
         const auto* report = fsim::runtime::simir::operation_get_if<
             runtime::simir::Report>(&operation);
+        const auto wide_attribute_boundary = [&](const auto* attribute) {
+            return attribute != nullptr
+                && attribute->signal < signal_widths_.size()
+                && signal_widths_[attribute->signal] > 64U;
+        };
         const auto host_boundary = (read_signal != nullptr
                                        && read_signal->kind
                                            != runtime::simir::SignalReadKind::current)
+            || wide_attribute_boundary(last_value)
+            || wide_attribute_boundary(driving_value)
             || (report != nullptr
                 && report->severity
                     == runtime::simir::AssertionSeverity::failure)
@@ -864,6 +875,10 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 runtime::simir::ProcessSetRandState>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ProcessSrandom>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ScopeRandomize>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::FormatDisplay>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::WaitOrder>(operation)
             || fsim::runtime::simir::operation_holds<
@@ -1877,11 +1892,8 @@ void LlvmProcessExecutor::flush_buffered_updates(
 {
     flush_buffered_logic9_updates(context);
 
-    // Keep this opt-in until it preserves last-assignment-wins behavior for
-    // every combination of whole and sliced writes from one process.
-    static const bool single_update_batches_enabled
-        = std::getenv("FSIM_ENABLE_SINGLE_UPDATE_BATCH") != nullptr;
-    if (allow_slot_batch && single_update_batches_enabled
+    // Keep queued callback words on the existing word-update path.
+    if (allow_slot_batch && pending_update_words_.empty()
         && has_buffered_update_words()
         && !direct_update_slot_views_.empty()
         && callback_state_.supports_direct_word_updates

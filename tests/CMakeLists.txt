@@ -118,6 +118,17 @@ fsim_register_simple_test(
   "fast;application;cache;hir;portability"
 )
 
+fsim_add_single_source_test_target(
+  fsim_compiled_cache_source_mapping_tests
+  app/compiled_cache_source_mappings_test.cpp
+  fsim_application
+)
+fsim_register_simple_test(
+  fsim.application.compiled_cache_source_mappings
+  fsim_compiled_cache_source_mapping_tests
+  "fast;application;cache;paths;portability"
+)
+
 add_executable(
   fsim_frontend_tests
   frontend/frontend_tests.cpp
@@ -1483,6 +1494,25 @@ set_tests_properties(
   PROPERTIES
     LABELS "fast;package;source;manifest;license;notice;sbom;patch;positive;negative;resources;cmake"
 )
+
+find_program(FSIM_PERFORMANCE_PYTHON_EXECUTABLE NAMES python3 python)
+if(FSIM_PERFORMANCE_PYTHON_EXECUTABLE)
+  add_test(
+    NAME fsim.performance-campaign-parser
+    COMMAND "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}"
+      "${PROJECT_SOURCE_DIR}/scripts/test_perf_campaign.py"
+  )
+  add_test(
+    NAME fsim.performance-campaign-profiler
+    COMMAND "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}"
+      "${PROJECT_SOURCE_DIR}/scripts/test_perf_campaign_profile.py"
+  )
+  set_tests_properties(
+    fsim.performance-campaign-parser
+    fsim.performance-campaign-profiler
+    PROPERTIES LABELS "fast;performance;python"
+  )
+endif()
 
 if(WIN32)
   set(FSIM_BINARY_INSTALL_API_DIR "${CMAKE_INSTALL_BINDIR}")
@@ -4036,6 +4066,49 @@ if(TARGET fsim_application)
 
   if(TARGET fsim_llvm)
     add_executable(
+      fsim_wide_associative_container_jit_tests
+      app/wide_associative_container_jit_test.cpp
+    )
+    fsim_configure_test(fsim_wide_associative_container_jit_tests)
+    target_link_libraries(
+      fsim_wide_associative_container_jit_tests
+      PRIVATE fsim_application fsim_llvm)
+    fsim_register_simple_test(
+      fsim.application.wide-associative-container-jit
+      fsim_wide_associative_container_jit_tests
+      "fast;application;compiler;llvm;containers;wide;interpreter;o0;o2"
+    )
+
+    add_executable(
+      fsim_wide_associative_container_numeric_key_jit_tests
+      app/wide_associative_container_numeric_key_jit_test.cpp
+    )
+    fsim_configure_test(
+      fsim_wide_associative_container_numeric_key_jit_tests)
+    target_link_libraries(
+      fsim_wide_associative_container_numeric_key_jit_tests
+      PRIVATE fsim_application fsim_llvm)
+    fsim_register_simple_test(
+      fsim.application.wide-associative-container-numeric-key-jit
+      fsim_wide_associative_container_numeric_key_jit_tests
+      "fast;application;compiler;llvm;containers;wide;interpreter;o0;o2"
+    )
+
+    add_executable(
+      fsim_wide_file_binary_read_jit_tests
+      app/wide_file_binary_read_jit_test.cpp
+    )
+    fsim_configure_test(fsim_wide_file_binary_read_jit_tests)
+    target_link_libraries(
+      fsim_wide_file_binary_read_jit_tests
+      PRIVATE fsim_application fsim_llvm)
+    fsim_register_simple_test(
+      fsim.application.wide-file-binary-read-jit
+      fsim_wide_file_binary_read_jit_tests
+      "fast;application;compiler;llvm;file;wide;interpreter;o0;o2"
+    )
+
+    add_executable(
       fsim_application_unsupported_pack_tests
       app/application_simulation_unsupported_pack_test.cpp
     )
@@ -4558,6 +4631,11 @@ if(TARGET fsim_application)
       app/structural_signal_remap_application_test.cpp
       fsim.application.structural_signal_remap
       fast llvm systemverilog hierarchy)
+    fsim_add_application_case(
+      0 connected_remap_direct
+      app/connected_remap_direct_application_test.cpp
+      fsim.application.connected_remap_direct
+      fast llvm vhdl hierarchy)
     fsim_add_application_case(
       0 sv_hierarchy app/sv_hierarchy_application_test.cpp
       fsim.application.sv_hierarchy fast systemverilog hierarchy)

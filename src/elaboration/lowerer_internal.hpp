@@ -121,6 +121,45 @@ public:
         std::optional<std::uint32_t> owner) noexcept;
 
 private:
+    struct HirEffectiveVhdlSubtypeCacheEntry {
+        semantic::vhdl::SubtypeIndication subtype;
+        semantic::ScopeId scope;
+        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        semantic::vhdl::SubtypeIndication result;
+    };
+
+    class HirEffectiveVhdlSubtypeCacheScope final {
+    public:
+        explicit HirEffectiveVhdlSubtypeCacheScope(
+            const Lowerer& lowerer) noexcept
+            : lowerer_ { &lowerer }
+        {
+            lowerer_->begin_hir_effective_vhdl_subtype_cache_scope();
+        }
+
+        HirEffectiveVhdlSubtypeCacheScope(
+            const HirEffectiveVhdlSubtypeCacheScope&) = delete;
+        HirEffectiveVhdlSubtypeCacheScope& operator=(
+            const HirEffectiveVhdlSubtypeCacheScope&) = delete;
+
+        ~HirEffectiveVhdlSubtypeCacheScope()
+        {
+            lowerer_->end_hir_effective_vhdl_subtype_cache_scope();
+        }
+
+    private:
+        const Lowerer* lowerer_;
+    };
+
+    void begin_hir_effective_vhdl_subtype_cache_scope() const noexcept;
+    void end_hir_effective_vhdl_subtype_cache_scope() const noexcept;
+    void clear_hir_effective_vhdl_subtype_cache() const noexcept;
+
+    mutable std::size_t hir_effective_vhdl_subtype_cache_depth_ { };
+    mutable std::size_t hir_effective_vhdl_subtype_cache_bytes_ { };
+    mutable std::vector<HirEffectiveVhdlSubtypeCacheEntry>
+        hir_effective_vhdl_subtype_cache_;
+
     struct HirProcessDescription {
         semantic::SourceSpanId source;
         semantic::ScopeId scope;
@@ -923,9 +962,19 @@ private:
         bool signed_value { };
         bool read_only { };
     };
+    struct HirStaticContainerSignalExtract {
+        runtime::simir::SignalId signal { };
+        std::uint32_t source_width { };
+        std::uint32_t offset { };
+        std::uint32_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+    };
     [[nodiscard]] std::optional<HirContainerElementBinding>
     hir_container_element_binding(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirStaticContainerSignalExtract>
+    hir_static_container_signal_extract(
+        const HirContainerElementBinding& element) const;
     struct HirContainerAggregateSelection {
         HirContainerElementBinding element;
         std::vector<std::uint32_t> members;

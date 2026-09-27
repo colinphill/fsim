@@ -547,6 +547,7 @@ private:
         std::vector<std::pair<std::string, std::string>>&
             vhdl_port_shape_identities,
         std::string_view standard,
+        std::string_view declaring_unit_compatibility_profile,
         const semantic::vhdl::Declaration& declaration);
 
     // Expression and path inputs borrow from the active binding worklist and
@@ -1257,7 +1258,7 @@ private:
     std::vector<std::string> stack_;
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
-    std::unordered_set<SignalId> vhdl_1993_shared_signals_;
+    std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;

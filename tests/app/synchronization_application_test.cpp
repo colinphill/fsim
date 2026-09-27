@@ -243,7 +243,7 @@ void test_optimization(
   for (const auto* capture : {&reference, &cold, &warm}) {
     if (capture->result.status != fsim::runtime::RunStatus::stopped
         || capture->result.time != 2
-        || capture->value != "11111111111111") {
+        || capture->value != "111111111111111") {
       std::cerr << "synchronization mismatch: status="
                 << static_cast<int>(capture->result.status)
                 << " time=" << capture->result.time
@@ -252,7 +252,7 @@ void test_optimization(
     assert(
         capture->result.status == fsim::runtime::RunStatus::stopped
         && capture->result.time == 2
-        && capture->value == "11111111111111");
+        && capture->value == "111111111111111");
   }
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
@@ -278,9 +278,11 @@ int main() {
     std::ofstream output(source);
     output << R"(
 module synchronization;
-  logic [13:0] result;
+  logic [14:0] result;
+  logic [79:0] wide_value;
   initial begin : root
     mailbox #(byte) mb = new(1);
+    mailbox #(logic [79:0]) wide_mb = new(1);
     semaphore sem = new(0);
     byte value;
     int ok;
@@ -336,6 +338,9 @@ module synchronization;
       signed_sem.put(0);
       result[13] = 1;
     end
+    wide_mb.put(80'hX123456789ABCDEF0123);
+    wide_mb.get(wide_value);
+    result[14] = (wide_value === 80'hX123456789ABCDEF0123);
     $finish;
   end
 endmodule

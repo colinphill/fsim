@@ -193,7 +193,8 @@ void LlvmJit::add_process_module(
         const auto callback_free_read_signals = direct_read_signals(
             *entry.process, signal_widths, signal_value_kinds);
         auto lowering_plan = make_process_lowering_plan(
-            *entry.process, impl_->options.debug_instrumentation);
+            *entry.process, validated.register_widths,
+            impl_->options.debug_instrumentation);
         auto process_info = Impl::ProcessInfo {
             make_frame_layout(
                 cache_key,

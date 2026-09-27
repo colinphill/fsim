@@ -101,12 +101,13 @@ void check_preflight(const fsim::app::BuiltProject& project)
             ++unsupported;
         }
     }
-    assert(supported == supported_processes);
-    assert(unsupported == 1U);
+    assert(supported == supported_processes + 1U);
+    assert(unsupported == 0U);
 }
 
 struct Capture {
     std::array<std::uint32_t, supported_processes> values { };
+    std::vector<std::string> monitor_output;
     std::size_t compiled_processes { };
     std::size_t compiled_modules { };
     fsim::app::NativeCacheStatistics cache;
@@ -119,6 +120,13 @@ Capture execute(fsim::app::BuiltProject project,
     Capture capture;
     capture.compiled_processes = simulation.compiled_process_count();
     capture.compiled_modules = simulation.compiled_module_count();
+    simulation.set_output_hook(
+        [&](const fsim::runtime::simir::ProcessId,
+            const std::string_view text, const bool,
+            const fsim::runtime::SimulationTick,
+            const std::uint64_t) {
+            capture.monitor_output.emplace_back(text);
+        });
     simulation.await_all_native_compilation();
     capture.cache = simulation.native_cache_statistics();
     assert(simulation.run().status == fsim::runtime::RunStatus::completed);
@@ -163,10 +171,13 @@ int main()
     }
     assert(cold.values == reference.values);
     assert(warm.values == reference.values);
+    assert(!reference.monitor_output.empty());
+    assert(cold.monitor_output == reference.monitor_output);
+    assert(warm.monitor_output == reference.monitor_output);
     assert(reference.compiled_processes == 0U);
-    assert(cold.compiled_processes == supported_processes);
+    assert(cold.compiled_processes == supported_processes + 1U);
     assert(cold.compiled_modules > 0U);
-    assert(cold.compiled_modules < supported_processes);
+    assert(cold.compiled_modules < supported_processes + 1U);
     assert(cold.cache.hits == 0U);
     assert(cold.cache.misses == cold.compiled_modules);
     assert(cold.cache.stores == cold.compiled_modules);

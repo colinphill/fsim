@@ -81,6 +81,7 @@ struct Invocation {
   std::optional<project::Language> language;
   std::optional<std::string> standard;
   std::vector<std::string> compatibility_switches;
+  std::optional<std::string> vhdl_compatibility;
   std::optional<std::string> compilation_unit;
   std::optional<project::SystemVerilogUvmRelease> uvm_release;
   // Normalized ordered root selections. `top` remains the one-root

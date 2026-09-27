@@ -621,6 +621,10 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       "fsim-hdl-compilation-unit-v3-relocatable");
   key.add("language", source.language);
   key.add("standard", source.standard);
+  if (group.language == frontend::Language::Vhdl2008
+      && group.compatibility_profile != vhdl_compatibility_profile()) {
+      key.add("compatibility-profile", group.compatibility_profile);
+  }
   key.add(
       "input-path",
       stable_cache_source_name(input.path, group.base_directory));
@@ -634,6 +638,9 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       unit.library = input.library;
       unit.compilation_unit_identity = source.compilation_unit_digest;
       unit.standard_revision = input.standard_revision;
+      if (group.language == frontend::Language::Vhdl2008) {
+          unit.vhdl_compatibility_profile = group.compatibility_profile;
+      }
       for (auto& declaration : unit.systemverilog_classes) {
           assign_class_source_metadata(
               declaration, input.library, source.compilation_unit_digest,

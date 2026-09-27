@@ -785,12 +785,103 @@ void test_simir_event_alias_lifecycle()
         "event alias membership must follow rebinding, reject stale identities, and clear null aliases");
 }
 
+void test_simir_event_alias_static_fanout_order_and_rearm()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    Interpreter interpreter;
+    Signal source_signal {
+        "event_alias_static.source", PackedLogic4::from_msb_string("0")
+    };
+    source_signal.event_variable = true;
+    const auto source = interpreter.add_signal(std::move(source_signal));
+    Signal alias_signal {
+        "event_alias_static.alias", PackedLogic4::from_msb_string("0")
+    };
+    alias_signal.event_variable = true;
+    const auto alias = interpreter.add_signal(std::move(alias_signal));
+
+    struct OutputEvent {
+        ProcessId process { };
+        SimulationTick time { };
+        std::string text;
+    };
+    std::vector<OutputEvent> events;
+    interpreter.set_output_hook(
+        [&events](
+            const ProcessId process,
+            const std::string_view text,
+            const bool,
+            const SimulationTick time,
+            const std::uint64_t) {
+            events.push_back({ process, time, std::string { text } });
+        });
+
+    Process driver;
+    driver.id = 0;
+    driver.name = "event_alias_static_driver";
+    driver.register_count = 2;
+    driver.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+        LoadConstant { 1, PackedLogic4::from_msb_string("0") },
+        EventAlias { alias, source, true },
+        WaitFor { 1 },
+        WriteBlocking { source, 0 },
+        WaitFor { 1 },
+        WriteBlocking { source, 1 },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(driver));
+
+    Process first_waiter;
+    first_waiter.id = 1;
+    first_waiter.name = "event_alias_static_first_waiter";
+    first_waiter.static_sensitivity.push_back({ alias, EdgeKind::any });
+    first_waiter.operations = {
+        WaitSensitivity { },
+        Display { "alias.first.first_wake", true },
+        WaitSensitivity { },
+        Display { "alias.first.second_wake", true },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(first_waiter));
+
+    Process second_waiter;
+    second_waiter.id = 2;
+    second_waiter.name = "event_alias_static_second_waiter";
+    second_waiter.static_sensitivity.push_back({ alias, EdgeKind::any });
+    second_waiter.operations = {
+        WaitSensitivity { },
+        Display { "alias.second.first_wake", true },
+        WaitSensitivity { },
+        Display { "alias.second.second_wake", true },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(second_waiter));
+
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed && result.time == 2
+            && events.size() == 4U
+            && events[0].process == 1U && events[0].time == 1U
+            && events[0].text == "alias.first.first_wake"
+            && events[1].process == 2U && events[1].time == 1U
+            && events[1].text == "alias.second.first_wake"
+            && events[2].process == 1U && events[2].time == 2U
+            && events[2].text == "alias.first.second_wake"
+            && events[3].process == 2U && events[3].time == 2U
+            && events[3].text == "alias.second.second_wake",
+        "event alias commits must wake and rearm static waiters in process order");
+}
+
 void test_simir_wait_order()
 {
     using namespace fsim::runtime;
     using namespace fsim::runtime::simir;
 
     test_simir_event_alias_lifecycle();
+    test_simir_event_alias_static_fanout_order_and_rearm();
 
     {
         Interpreter interpreter;

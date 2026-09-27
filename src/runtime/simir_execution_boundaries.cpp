@@ -325,6 +325,87 @@ constexpr std::size_t vhdl_directory_text_limit = 1024U * 1024U;
 
 } // namespace
 
+void Interpreter::Impl::execute_scope_randomize(
+    ProcessState& process,
+    const InstructionIndex instruction,
+    const ScopeRandomize& operation)
+{
+    SystemVerilogScopeRandomizeRequest request;
+    request.limits.maximum_domain_values = operation.maximum_domain_values;
+    request.selection = (static_cast<std::uint64_t>(next_random(process)) << 32U)
+        | next_random(process);
+    request.variables.reserve(operation.targets.size());
+
+    std::vector<RegisterId> target_registers;
+    target_registers.reserve(operation.targets.size());
+    std::vector<PackedLogic4> staged_targets;
+    staged_targets.reserve(operation.targets.size());
+    for (const auto& target : operation.targets) {
+        const auto found = std::ranges::find(
+            target_registers, target.target);
+        std::size_t target_index { };
+        if (found == target_registers.end()) {
+            target_index = target_registers.size();
+            target_registers.push_back(target.target);
+            staged_targets.push_back(process.executor
+                    ? process.executor->read_register(
+                          target.target, target.width)
+                    : get_register(process, target.target));
+        } else {
+            target_index = static_cast<std::size_t>(
+                std::distance(target_registers.begin(), found));
+        }
+        request.variables.push_back({
+            target.canonical_identity,
+            { target.domain_kind == ScopeRandomizeDomainKind::enumeration
+                    ? SystemVerilogConstraintDomainKind::Enumeration
+                    : target.domain_kind
+                        == ScopeRandomizeDomainKind::integer
+                    ? SystemVerilogConstraintDomainKind::Integer
+                    : SystemVerilogConstraintDomainKind::BitVector,
+                target.width,
+                target.signed_value,
+                target.nominal_type },
+            target.domain,
+            &staged_targets[target_index] });
+    }
+
+    if (!operation.inline_constraints.empty()) {
+        request.inline_constraints = [&process, &operation, instruction](
+                                        auto& solver,
+                                        const auto& variables) {
+            configure_systemverilog_inline_constraints(
+                solver,
+                variables,
+                operation.inline_constraints,
+                process.program().name + "::std::randomize@"
+                    + std::to_string(instruction));
+        };
+    }
+
+    const auto result = randomize_systemverilog_scope(request);
+    if (result.status == SystemVerilogConstraintSolveStatus::Satisfied) {
+        for (std::size_t index = 0; index < target_registers.size(); ++index) {
+            if (process.executor) {
+                process.executor->write_register(
+                    target_registers[index], staged_targets[index]);
+            } else {
+                using std::swap;
+                swap(get_register(process, target_registers[index]),
+                    staged_targets[index]);
+            }
+        }
+    }
+
+    auto result_value = PackedLogic4::from_aval_bval(
+        32U, result.language_result(), 0U);
+    if (process.executor) {
+        process.executor->write_register(operation.destination, result_value);
+    } else {
+        get_register(process, operation.destination) = std::move(result_value);
+    }
+}
+
 void Interpreter::Impl::handle_boundary(
     ProcessState& process,
     const InstructionIndex instruction,
@@ -1126,6 +1207,54 @@ void Interpreter::Impl::handle_boundary(
     const auto read_boundary_handle = [&](const RegisterId id) {
         return process.executor->read_register(id, 64U);
     };
+    if (const auto* randomize
+        = fsim::runtime::simir::operation_get_if<ScopeRandomize>(
+            &operation)) {
+        execute_scope_randomize(process, instruction, *randomize);
+        return;
+    }
+    if (const auto* format_display
+        = fsim::runtime::simir::operation_get_if<FormatDisplay>(
+            &operation)) {
+        const auto value = read_boundary_value(format_display->source);
+        ExecutionContext context { *this, process.id };
+        context.display_formatted(
+            format_display->prefix,
+            format_display->suffix,
+            format_display->format,
+            value,
+            format_display->newline,
+            format_display->postponed,
+            format_display->signed_decimal,
+            format_display->suppress_leading_zero,
+            format_display->minimum_width,
+            format_display->left_justify,
+            format_display->zero_pad,
+            format_display->scalar_kind);
+        return;
+    }
+    if (const auto* last_value
+        = operation_get_if<SignalLastValue>(&operation)) {
+        (void)get_signal(last_value->signal);
+        write_process_register(
+            process, last_value->destination,
+            signal_last_values[last_value->signal]);
+        return;
+    }
+    if (const auto* driving_value
+        = operation_get_if<SignalDrivingValue>(&operation)) {
+        if (!signal_attribute_detail::driving(
+                *this, process.id, driving_value->signal)) {
+            process.pc = instruction;
+            fail(process,
+                "VHDL 'driving_value queried a signal without a driver");
+        }
+        write_process_register(
+            process, driving_value->destination,
+            signal_attribute_detail::driving_value(
+                *this, process.id, driving_value->signal));
+        return;
+    }
     if (const auto* time
         = fsim::runtime::simir::operation_get_if<VhdlEnvironmentTime>(
             &operation)) {

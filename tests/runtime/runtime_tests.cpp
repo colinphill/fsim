@@ -184,6 +184,7 @@ int main(const int argc, const char* const* argv)
         test_simir_alternate_executor_zero_delay_and_frame();
         test_simir_alternate_executor_cpp_exception_containment();
         test_simir_alternate_executor_validation();
+        test_simir_external_executor_boundary_validation();
         test_simir_deferred_executor_state_handoff();
         test_simir_alternate_executor_event_replacement_and_cancel();
         test_simir_alternate_executor_notify_delayed();

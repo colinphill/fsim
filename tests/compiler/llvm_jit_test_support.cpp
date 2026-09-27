@@ -716,14 +716,17 @@ extern "C" std::uint64_t random_value(
         void* opaque,
         const std::uint32_t,
         const std::uint32_t instruction,
-        const std::uint64_t,
-        const std::uint64_t,
-        const std::uint64_t,
-        const std::uint64_t,
+        const std::uint64_t maximum_aval,
+        const std::uint64_t maximum_bval,
+        const std::uint64_t minimum_aval,
+        const std::uint64_t minimum_bval,
         std::uint64_t* result_bval)
     {
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         runtime.random_instructions.push_back(instruction);
+        runtime.random_bounds.push_back({
+            maximum_aval, maximum_bval,
+            minimum_aval, minimum_bval });
         *result_bval = 0;
         return UINT64_C(0x89abcdef);
     }

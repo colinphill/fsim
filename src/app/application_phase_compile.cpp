@@ -99,7 +99,8 @@ bool publish_workspace_object(
   metadata.language = std::string{project::to_string(source_set.language)};
   metadata.standard = source_set.standard;
   metadata.compatibility_profile = source_set.language == project::Language::vhdl
-      ? std::string { application_detail::vhdl_compatibility_profile() }
+      ? application_detail::vhdl_compatibility_profile(
+            source_set.vhdl_compatibility)
       : project::compatibility_profile(source_set.compatibility_switches);
   metadata.library = source_set.library;
   metadata.compilation_unit = source_set.compilation_unit;

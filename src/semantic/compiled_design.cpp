@@ -41,6 +41,61 @@ bool same_vhdl_identifier(
             });
 }
 
+std::optional<vhdl::UnitKind> primary_vhdl_kind(
+    const vhdl::Unit& secondary)
+{
+    if (secondary.kind == vhdl::UnitKind::architecture) {
+        return vhdl::UnitKind::entity;
+    }
+    if (secondary.kind == vhdl::UnitKind::package
+        && !secondary.primary_name.empty()) {
+        return vhdl::UnitKind::package;
+    }
+    return std::nullopt;
+}
+
+bool primary_vhdl_candidate_matches(
+    const vhdl::Unit& secondary,
+    const vhdl::UnitKind primary_kind,
+    const vhdl::Unit& candidate)
+{
+    const bool package_declaration
+        = primary_kind == vhdl::UnitKind::package;
+    return candidate.kind == primary_kind
+        && (!package_declaration || candidate.primary_name.empty())
+        && same_vhdl_identifier(
+            normalized_library(candidate.library),
+            normalized_library(secondary.library))
+        && same_vhdl_identifier(candidate.name,
+            package_declaration
+                ? std::string_view { secondary.name }
+                : std::string_view { secondary.primary_name });
+}
+
+std::optional<const vhdl::Unit*> scan_vhdl_primary_unit(
+    const std::span<const vhdl::Unit> units,
+    const vhdl::Unit& secondary)
+{
+    const auto primary_kind = primary_vhdl_kind(secondary);
+    if (!primary_kind) {
+        return std::nullopt;
+    }
+    const vhdl::Unit* selected { };
+    for (const auto& candidate : units) {
+        if (!primary_vhdl_candidate_matches(
+                secondary, *primary_kind, candidate)) {
+            continue;
+        }
+        if (selected != nullptr) {
+            return std::nullopt;
+        }
+        selected = &candidate;
+    }
+    return selected != nullptr
+        ? std::optional<const vhdl::Unit*> { selected }
+        : std::nullopt;
+}
+
 std::string canonical_vhdl_identifier(const std::string_view value)
 {
     if (extended_vhdl_identifier(value)) {
@@ -655,6 +710,23 @@ void CompiledDesign::refresh_lookup_indexes()
 
     build(rebuilt.units, semantics.units().size(),
         systemverilog_hir.units(), vhdl_hir.units());
+    rebuilt.vhdl_primary_units.assign(
+        rebuilt.units.records.size(), nullptr);
+    for (const auto& secondary : vhdl_hir.units()) {
+        if (!secondary.id.valid()
+            || secondary.id.value() >= rebuilt.vhdl_primary_units.size()) {
+            continue;
+        }
+        const auto& indexed_secondary
+            = rebuilt.units.records[secondary.id.value()];
+        if (indexed_secondary.language != vhdl_record_language
+            || indexed_secondary.address != &secondary) {
+            continue;
+        }
+        rebuilt.vhdl_primary_units[secondary.id.value()]
+            = scan_vhdl_primary_unit(
+                  vhdl_hir.units(), secondary).value_or(nullptr);
+    }
     build(rebuilt.declarations, semantics.declarations().size(),
         systemverilog_hir.declarations(), vhdl_hir.declarations());
     build(rebuilt.types, semantics.types().size(),
@@ -892,6 +964,28 @@ CompiledDesign::systemverilog_units() const noexcept
 std::span<const vhdl::Unit> CompiledDesign::vhdl_units() const noexcept
 {
     return vhdl_hir.units();
+}
+
+std::optional<const vhdl::Unit*> CompiledDesign::vhdl_primary_unit(
+    const vhdl::Unit& secondary) const
+{
+    if (lookup_indexes_current() && secondary.id.valid()
+        && secondary.id.value() < lookup_indexes_.units.records.size()
+        && secondary.id.value()
+            < lookup_indexes_.vhdl_primary_units.size()) {
+        const auto& indexed_secondary
+            = lookup_indexes_.units.records[secondary.id.value()];
+        if (indexed_secondary.language == vhdl_record_language
+            && indexed_secondary.address == &secondary) {
+            const auto* primary
+                = lookup_indexes_.vhdl_primary_units[
+                    secondary.id.value()];
+            return primary != nullptr
+                ? std::optional<const vhdl::Unit*> { primary }
+                : std::nullopt;
+        }
+    }
+    return scan_vhdl_primary_unit(vhdl_hir.units(), secondary);
 }
 
 std::optional<CompiledUnitView>

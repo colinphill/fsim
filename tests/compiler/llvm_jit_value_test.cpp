@@ -302,6 +302,66 @@ void test_wide_signal_read_at_level(
     assert(bval == expected_bval);
 }
 
+void test_wide_signal_attributes_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    for (const auto value_kind : {
+             runtime::simir::ValueKind::logic4,
+             runtime::simir::ValueKind::logic9 }) {
+        Process process;
+        process.id = 97;
+        process.name = "wide_signal_attributes";
+        process.register_count = 2;
+        process.register_value_kinds = { value_kind, value_kind };
+        process.operations = {
+            SignalLastValue { 0, 0 },
+            SignalDrivingValue { 1, 1 },
+            Halt { },
+        };
+        const std::array<std::uint32_t, 2> widths { 129U, 129U };
+        const std::array value_kinds { value_kind, value_kind };
+        const auto suffix = value_kind == runtime::simir::ValueKind::logic9
+            ? "_logic9"
+            : "_logic4";
+        const auto process_symbol = std::string { symbol } + suffix;
+
+        LlvmJit jit { LlvmJitOptions { optimization, { } } };
+        assert(jit.supports_process(process, widths, value_kinds));
+        jit.add_process(process_symbol, process, widths, value_kinds);
+        const auto handle = jit.lookup(process_symbol);
+        const auto layout = jit.frame_layout(handle);
+        assert(layout.register_widths.size() == 2U);
+        assert(layout.register_widths[0] == 129U);
+        assert(layout.register_widths[1] == 129U);
+        assert(layout.uses_logic9
+            == (value_kind == runtime::simir::ValueKind::logic9));
+        std::vector<std::uint64_t> aval(layout.register_word_count);
+        std::vector<std::uint64_t> bval(layout.register_word_count);
+        std::vector<std::uint64_t> plane2(
+            layout.uses_logic9 ? layout.register_word_count : 0U);
+        std::vector<std::uint64_t> plane3(
+            layout.uses_logic9 ? layout.register_word_count : 0U);
+        std::vector<std::uint8_t> initialized(layout.register_count);
+        fsim_jit_frame_v1 frame { };
+        jit.initialize_frame(
+            handle, frame, aval, bval, initialized, plane2, plane3);
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        auto result = new_resume_result();
+        assert(jit.resume(handle, descriptor, frame, result)
+            == JitResumeStatus::simir_boundary);
+        assert(result.instruction == 0U);
+        assert(frame.program_counter == 1U);
+        assert(jit.resume(handle, descriptor, frame, result)
+            == JitResumeStatus::simir_boundary);
+        assert(result.instruction == 1U);
+        assert(frame.program_counter == 2U);
+        assert(jit.resume(handle, descriptor, frame, result)
+            == JitResumeStatus::completed);
+    }
+}
+
 void test_wide_signal_write_at_level(
     const JitOptimizationLevel optimization,
     const std::string_view symbol)
@@ -968,6 +1028,161 @@ void test_fused_dynamic_part_signal_read_at_level(
         "HLWZX-1001UXZWLHHLWZX-1001UXZWLHHLWZX-1001UXZWLHHLWZX-1001UXZWLH");
     assert(runtime.dynamic_part_signal_reads == 2U);
     assert(runtime.packed_signal_reads == 0U);
+}
+
+void test_wide_single_bit_dynamic_part_select_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol)
+{
+    constexpr std::uint32_t source_width = 130U;
+    struct SelectionCase {
+        PackedLogic4 base;
+        std::int64_t left { };
+        std::int64_t right { };
+        std::uint32_t base_offset { };
+        bool increasing { };
+        bool source_descending { };
+        bool two_state { };
+    };
+    const auto known_base = [](const std::int32_t value) {
+        return PackedLogic4::from_aval_bval(
+            32U, static_cast<std::uint32_t>(value), 0U);
+    };
+    const auto unknown_base = PackedLogic4::from_aval_bval(
+        32U, UINT32_C(0x00000040), UINT32_C(0x00000001));
+
+    auto logic4_source = PackedLogic4(source_width, Logic4::zero);
+    constexpr std::array logic4_pattern {
+        Logic4::zero, Logic4::one, Logic4::x, Logic4::z
+    };
+    for (std::uint32_t bit = 0U; bit < source_width; ++bit) {
+        logic4_source.set(bit, logic4_pattern[bit % logic4_pattern.size()]);
+    }
+    const std::vector<SelectionCase> logic4_cases {
+        { known_base(63), 129, 0, 0, true, true, false },
+        { known_base(64), 129, 0, 0, false, true, false },
+        { known_base(127), 129, 0, 0, true, false, false },
+        { known_base(128), 129, 0, 0, false, false, false },
+        { known_base(129), 129, 0, 0, true, true, false },
+        { known_base(65), 0, 129, 0, true, false, false },
+        { known_base(1), 2, 0, 63, false, true, false },
+        { known_base(-1), 0, -128, 1, false, false, false },
+        { unknown_base, 129, 0, 0, true, true, false },
+        { known_base(-1), 129, 0, 0, true, true, false },
+        { known_base(130), 129, 0, 0, false, false, false },
+        { known_base(130), 129, 0, 0, true, true, true },
+    };
+
+    constexpr std::string_view logic9_pattern { "01UXZWLH-" };
+    std::string logic9_text;
+    logic9_text.reserve(source_width);
+    for (std::size_t bit = source_width; bit > 0U; --bit) {
+        logic9_text.push_back(
+            logic9_pattern[(bit - 1U) % logic9_pattern.size()]);
+    }
+    const auto logic9_source =
+        PackedLogic4::from_logic9_msb_string(logic9_text);
+    std::vector<SelectionCase> logic9_cases;
+    logic9_cases.reserve(20U);
+    for (std::int32_t bit = 0; bit < 9; ++bit) {
+        logic9_cases.push_back(
+            { known_base(bit), 129, 0, 0, true, true, false });
+    }
+    for (const auto bit : { 63, 64, 127, 128, 129 }) {
+        logic9_cases.push_back(
+            { known_base(bit), 129, 0, 0, false, false, false });
+    }
+    logic9_cases.push_back(
+        { known_base(65), 0, 129, 0, true, false, false });
+    logic9_cases.push_back(
+        { known_base(1), 2, 0, 63, false, true, false });
+    logic9_cases.push_back(
+        { known_base(-1), 0, -128, 1, false, false, false });
+    logic9_cases.push_back(
+        { known_base(-1), 129, 0, 0, true, true, false });
+    logic9_cases.push_back(
+        { known_base(130), 129, 0, 0, false, false, false });
+    logic9_cases.push_back(
+        { unknown_base, 129, 0, 0, true, true, false });
+
+    const auto run = [&](const std::string_view suffix,
+                         const ValueKind kind,
+                         const PackedLogic4& source,
+                         const std::vector<SelectionCase>& cases) {
+        constexpr std::size_t signal_capacity = 16U;
+        for (std::size_t first = 0; first < cases.size();
+            first += signal_capacity) {
+            const auto last = std::min(first + signal_capacity, cases.size());
+            Process process;
+            process.id = kind == ValueKind::logic9 ? 141U : 140U;
+            process.name = "wide_single_bit_dynamic_part_select";
+            process.register_count = 3U;
+            process.register_value_kinds = { kind, ValueKind::logic4, kind };
+            process.operations.emplace_back(LoadConstant { 0, source });
+            std::vector<PackedLogic4> expected;
+            expected.reserve(last - first);
+            for (std::size_t index = first; index < last; ++index) {
+                const auto& selection = cases[index];
+                process.operations.emplace_back(
+                    LoadConstant { 1, selection.base });
+                process.operations.emplace_back(DynamicPartSelect {
+                    2,
+                    0,
+                    1,
+                    selection.left,
+                    selection.right,
+                    1,
+                    selection.increasing,
+                    selection.source_descending,
+                    selection.two_state,
+                    selection.base_offset });
+                process.operations.emplace_back(WriteBlocking {
+                    static_cast<std::uint32_t>(index - first), 2 });
+                expected.push_back(runtime::simir::dynamic_part_select_value(
+                    source,
+                    selection.base,
+                    selection.left,
+                    selection.right,
+                    selection.base_offset,
+                    1U,
+                    selection.increasing,
+                    selection.source_descending,
+                    selection.two_state));
+            }
+            process.operations.emplace_back(Halt { });
+
+            const std::vector<std::uint32_t> signal_widths(last - first, 1U);
+            const std::vector<ValueKind> signal_kinds(last - first, kind);
+            auto options = LlvmJitOptions { optimization, { } };
+            options.debug_instrumentation = false;
+            LlvmJit jit { options };
+            auto process_symbol = std::string { symbol };
+            process_symbol.append(suffix);
+            process_symbol.append(std::to_string(first));
+            jit.add_process(
+                process_symbol, process, signal_widths, signal_kinds);
+
+            TestRuntime runtime;
+            auto descriptor = abi(runtime);
+            assert(jit.execute(jit.lookup(process_symbol), descriptor)
+                == JitExecutionStatus::completed);
+            for (std::size_t index = 0; index < expected.size(); ++index) {
+                if (kind == ValueKind::logic9) {
+                    assert(runtime.logic9_signals[index]
+                        == expected[index].logic9_low_word().planes);
+                } else {
+                    const auto value = expected[index].low_word();
+                    const EncodedSignal expected_signal {
+                        value.aval, value.bval
+                    };
+                    assert(runtime.signals[index] == expected_signal);
+                }
+            }
+        }
+    };
+
+    run("_logic4", ValueKind::logic4, logic4_source, logic4_cases);
+    run("_logic9", ValueKind::logic9, logic9_source, logic9_cases);
 }
 
 void test_scalar_truth_tables_and_64_bits() {

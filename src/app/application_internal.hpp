@@ -1296,6 +1296,9 @@ frontend::StandardRevision frontend_standard_revision(
     project::Language language,
     std::string_view standard);
 std::string_view vhdl_compatibility_profile() noexcept;
+std::string vhdl_compatibility_profile(std::string_view source_profile);
+std::optional<std::string_view> vhdl_source_compatibility_from_profile(
+    std::string_view profile) noexcept;
 
 struct ParseInput {
     std::filesystem::path path;

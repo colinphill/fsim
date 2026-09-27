@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../../src/app/application_internal.hpp"
 
 #include <array>
 #include <cassert>
@@ -10,7 +11,10 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <ranges>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -42,11 +46,98 @@ struct Report {
 
 struct Capture {
     fsim::runtime::RunResult result;
-    std::array<fsim::runtime::Logic4Word, 58> values { };
+    std::array<fsim::runtime::Logic4Word, 60> values { };
     std::vector<std::string> output;
     std::vector<Report> reports;
     std::size_t compiled_processes { };
+    std::size_t design_processes { };
+    std::size_t wide_format_display_processes { };
+    std::size_t all_wide_format_display_processes { };
+    std::size_t wide_immediate_format_displays { };
+    std::size_t wide_postponed_format_displays { };
 };
+
+#if defined(FSIM_HAS_LLVM)
+
+std::vector<std::string> run_postponed_wide_format(
+    const bool compiled,
+    const fsim::compiler::JitOptimizationLevel level)
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    const std::array<std::uint32_t, 0U> no_signals { };
+    PackedLogic4 wide(137U, Logic4::zero);
+    wide.set(136U, Logic4::one);
+
+    Process process;
+    process.id = 0U;
+    process.name = "postponed_wide_format";
+    process.register_count = 1U;
+    process.operations = {
+        LoadConstant { 0U, wide },
+        FormatDisplay {
+            0U, OutputFormat::binary, "post=", "", true, true },
+        Display { "continued", true, false },
+        Halt { },
+    };
+    const auto* display = operation_get_if<FormatDisplay>(
+        &process.operations[1U]);
+    assert(display != nullptr && display->postponed);
+    assert(operation_get_if<LoadConstant>(&process.operations[0U])
+        ->value.width() == 137U);
+
+    std::unique_ptr<fsim::compiler::LlvmJit> jit;
+    std::optional<fsim::compiler::JitProcessHandle> handle;
+    if (compiled) {
+        fsim::compiler::LlvmJitOptions options;
+        options.optimization = level;
+        options.debug_instrumentation = false;
+        jit = std::make_unique<fsim::compiler::LlvmJit>(
+            std::move(options));
+        jit->add_process(process.name, process, no_signals);
+        handle = jit->lookup(process.name);
+        assert(handle.has_value());
+    }
+
+    Interpreter interpreter;
+    std::vector<std::string> output;
+    interpreter.set_output_hook(
+        [&output](const ProcessId, const std::string_view text,
+            const bool, const SimulationTick, const std::uint64_t) {
+            output.emplace_back(text);
+        });
+    const auto process_id = interpreter.add_process(std::move(process));
+    if (compiled) {
+        interpreter.set_process_executor(
+            process_id,
+            std::make_unique<fsim::app::application_detail::LlvmProcessExecutor>(
+                *jit, *handle, interpreter.process_program(process_id),
+                no_signals,
+                std::span<const ValueKind> { },
+                std::span<const ResolutionKind> { }));
+    }
+    const auto result = interpreter.run();
+    assert(result.status == RunStatus::completed);
+    return output;
+}
+
+void test_postponed_wide_format()
+{
+    using fsim::compiler::JitOptimizationLevel;
+    const auto reference = run_postponed_wide_format(
+        false, JitOptimizationLevel::o0);
+    assert(reference.size() == 2U);
+    assert(reference[0] == "continued");
+    assert(reference[1] == "post=" + std::string("1")
+        + std::string(136U, '0'));
+    for (const auto level : {
+             JitOptimizationLevel::o0, JitOptimizationLevel::o2 }) {
+        assert(run_postponed_wide_format(true, level) == reference);
+    }
+}
+
+#endif
 
 int run_cli(
     const std::vector<std::string>& arguments,
@@ -74,7 +165,7 @@ Capture execute(
     fsim::app::Simulation simulation {
         std::move(project), 1000, engine
     };
-    constexpr std::array<std::string_view, 58> names {
+    constexpr std::array<std::string_view, 60> names {
         "a", "b", "c", "d", "e", "f", "u", "p0", "p1",
         "scope_result", "scope_value", "scope_mode", "wide_nonzero",
         "inline_result", "inline_value", "inline_mode", "srandom_a",
@@ -93,10 +184,59 @@ Capture execute(
         "dist_reversed_seed", "dist_unknown_value", "dist_unknown_seed",
         "dist_resource_value", "dist_resource_seed",
         "dist_negative_deviation_value", "dist_negative_deviation_seed",
-        "dist_zero_mean_erlang_value", "dist_zero_mean_erlang_seed"
+        "dist_zero_mean_erlang_value", "dist_zero_mean_erlang_seed",
+        "scope_failure_result", "scope_failure_unchanged"
     };
     Capture capture;
     capture.compiled_processes = simulation.compiled_process_count();
+    const auto& design_processes = simulation.design_ir().processes();
+    capture.design_processes = design_processes.size();
+    for (const auto& process_info : design_processes) {
+        const auto& program = simulation.process_program(
+            static_cast<fsim::runtime::simir::ProcessId>(
+                process_info.runtime_index));
+        bool process_has_format_display = false;
+        bool process_has_wide_format_display = false;
+        bool process_format_displays_are_all_wide = true;
+        for (std::size_t instruction = 0;
+            instruction < program.operations.size(); ++instruction) {
+            const auto* display
+                = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::FormatDisplay>(
+                    &program.operations[instruction]);
+            if (display == nullptr) {
+                continue;
+            }
+            process_has_format_display = true;
+            const auto source_local = std::ranges::find_if(
+                program.debug_locals,
+                [&](const auto& local) {
+                    return local.register_id == display->source
+                        && local.width > 64U;
+                });
+            if (source_local == program.debug_locals.end()) {
+                process_format_displays_are_all_wide = false;
+                continue;
+            }
+            if (source_local->width <= 64U) {
+                process_format_displays_are_all_wide = false;
+                continue;
+            }
+            process_has_wide_format_display = true;
+            if (display->postponed) {
+                ++capture.wide_postponed_format_displays;
+            } else {
+                ++capture.wide_immediate_format_displays;
+            }
+        }
+        if (process_has_wide_format_display) {
+            ++capture.wide_format_display_processes;
+        }
+        if (process_has_format_display
+            && process_format_displays_are_all_wide) {
+            ++capture.all_wide_format_display_processes;
+        }
+    }
     simulation.set_output_hook(
         [&capture](
             const fsim::runtime::simir::ProcessId,
@@ -192,10 +332,30 @@ void test_random(
     assert(reference.values == compiled.values);
     assert(reference.output == compiled.output);
     assert(reference.reports == compiled.reports);
-    assert(
-        reference.output.size() == 2
-        && reference.output[0].starts_with("cli=")
-        && reference.output[1].starts_with("signed="));
+    assert(reference.wide_format_display_processes == 2U);
+    assert(reference.all_wide_format_display_processes == 1U);
+    assert(reference.wide_immediate_format_displays == 2U);
+    assert(reference.wide_postponed_format_displays == 0U);
+    assert(reference.output.size() == 6);
+    const auto immediate = std::ranges::find_if(
+        reference.output,
+        [](const auto& output) { return output.starts_with("immediate="); });
+    const auto all_wide = std::ranges::find_if(
+        reference.output,
+        [](const auto& output) { return output.starts_with("all-wide="); });
+    const auto continued = std::ranges::find(
+        reference.output, std::string { "continued" });
+    const auto postponed = std::ranges::find_if(
+        reference.output,
+        [](const auto& output) { return output.starts_with("post="); });
+    assert(immediate != reference.output.end());
+    assert(all_wide != reference.output.end());
+    assert(continued != reference.output.end());
+    assert(postponed != reference.output.end());
+    assert(immediate->size() == 10U + 137U && (*immediate)[10] == '1');
+    assert(all_wide->size() == 9U + 137U && (*all_wide)[9] == '1');
+    assert(*postponed == "post=" + immediate->substr(10U));
+    assert(continued < postponed);
     assert(reference.values == repeated.values);
     assert(reference.values[0] != changed_seed.values[0]);
     assert(
@@ -258,6 +418,10 @@ void test_random(
     assert(reference.values[55].aval != 0x2468ace0U);
     assert(reference.values[56].aval == 0U);
     assert(reference.values[57].aval != 0x11223344U);
+    assert(reference.values[58].aval == 0U
+        && reference.values[58].bval == 0U);
+    assert(reference.values[59].aval == 1U
+        && reference.values[59].bval == 0U);
     constexpr std::array<std::string_view, 7> warning_messages {
         "exponential distribution mean must be positive",
         "Poisson distribution mean must be positive",
@@ -279,9 +443,14 @@ void test_random(
     }
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
-    // ScopeRandomize uses the interpreter solver; the value, output, and
-    // report comparisons above verify parity for the mixed-engine run.
-    assert(compiled.compiled_processes == 2);
+    // Both the scope-randomize and wide-format processes remain native across
+    // their resume boundaries.
+    assert(compiled.compiled_processes == 4);
+    assert(compiled.compiled_processes == compiled.design_processes);
+    assert(compiled.wide_format_display_processes == 2U);
+    assert(compiled.all_wide_format_display_processes == 1U);
+    assert(compiled.wide_immediate_format_displays == 2U);
+    assert(compiled.wide_postponed_format_displays == 0U);
 #else
     assert(compiled.compiled_processes == 0);
 #endif
@@ -397,6 +566,9 @@ endmodule
 
 int main()
 {
+#if defined(FSIM_HAS_LLVM)
+    test_postponed_wide_format();
+#endif
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     TemporaryDirectory directory {
         std::filesystem::temp_directory_path()
@@ -444,6 +616,8 @@ module random_test;
   integer dist_negative_deviation_value, dist_negative_deviation_seed;
   integer dist_zero_mean_erlang_value, dist_zero_mean_erlang_seed;
   int scope_result;
+  int scope_failure_result;
+  logic scope_failure_unchanged;
   logic [2:0] scope_value;
   mode_t scope_mode;
   logic wide_nonzero;
@@ -454,10 +628,12 @@ module random_test;
   logic checker_satisfied_unchanged, checker_rejected_unchanged;
   int unique_result, unique_impossible;
   logic unique_values_distinct;
+  logic [136:0] wide_display;
   initial begin
     logic [2:0] scoped;
     mode_t mode;
     logic [136:0] wide;
+    logic [136:0] wide_immediate;
     u = $urandom_range(4'bx);
     a = $urandom;
     b = $urandom();
@@ -544,9 +720,27 @@ module random_test;
         left == right;
       };
     end
+    scoped = 3;
+    scope_failure_result = std::randomize(scoped) with {
+      scoped == 1;
+      scoped == 2;
+    };
+    scope_failure_unchanged = scoped == 3;
+    wide_immediate = {1'b1, wide[135:0]};
+    wide_display = wide_immediate;
+    $display("immediate=%b", wide_immediate);
+    $strobe("post=%b", wide_display);
+    $display("continued");
   end
   initial p0 = $urandom;
   initial p1 = $urandom;
+  initial begin
+    logic [136:0] wide_only;
+    logic [31:0] random_bits;
+    random_bits = $urandom;
+    wide_only = {1'b1, 104'b0, random_bits};
+    $display("all-wide=%b", wide_only);
+  end
 endmodule
 )";
     }

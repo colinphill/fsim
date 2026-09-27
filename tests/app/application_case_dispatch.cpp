@@ -22,6 +22,7 @@ int fsim_application_case_classes();
 int fsim_application_case_systemc_matrix();
 int fsim_application_case_expressions();
 int fsim_application_case_structural_signal_remap();
+int fsim_application_case_connected_remap_direct();
 int fsim_application_case_sv_hierarchy();
 int fsim_application_case_scoped_locals();
 int fsim_application_case_specify();
@@ -59,6 +60,8 @@ constexpr NamedApplicationCase application_cases[] = {
     { "expressions", fsim_application_case_expressions },
     { "structural_signal_remap",
         fsim_application_case_structural_signal_remap },
+    { "connected_remap_direct",
+        fsim_application_case_connected_remap_direct },
     { "sv_hierarchy", fsim_application_case_sv_hierarchy },
     { "scoped_locals", fsim_application_case_scoped_locals },
     { "specify", fsim_application_case_specify },

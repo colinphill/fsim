@@ -13218,6 +13218,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     std::vector<std::pair<std::string, std::string>>&
         vhdl_port_shape_identities,
     const std::string_view standard,
+    const std::string_view declaring_unit_compatibility_profile,
     const semantic::vhdl::Declaration& declaration)
 {
     const auto register_root_relative_signal = [&](
@@ -13600,8 +13601,14 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     const auto shared_variable
         = declaration.form == Form::variable
         && declaration.shared;
+    constexpr std::string_view legacy_compatibility_profile {
+        "fsim-synopsys-ieee-compat-v2,"
+        "legacy-unprotected-shared-variable"
+    };
     if (shared_variable
-        && standard != "1993") {
+        && standard != "1993"
+        && declaring_unit_compatibility_profile
+            != legacy_compatibility_profile) {
         report(
             "FSIM-ELAB-VHPROTECTED-008",
             "shared variable '" + working_path + "."
@@ -13783,6 +13790,9 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     + compiled_vhdl_shape_name(declaration.name),
                 compiled_vhdl_port_shape_identity(*alias_info));
         }
+        if (shared_variable) {
+            vhdl_unprotected_shared_signals_.insert(alias->second);
+        }
         return true;
     }
     if (design_.signals_.size()
@@ -13957,6 +13967,9 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     });
     if (direction == frontend::PortDirection::Input) {
         working_read_only_signals.insert(id);
+    }
+    if (shared_variable) {
+        vhdl_unprotected_shared_signals_.insert(id);
     }
     return true;
 }
@@ -19340,6 +19353,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
                     read_only_signals, declared_signal_names,
                     container_objects, vhdl_port_shape_identities,
                     architecture.standard,
+                    unit.compatibility_profile,
                     *declaration->vhdl)) {
                 return false;
             }
@@ -22645,6 +22659,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 materialization.declared_signal_names,
                 container_objects, vhdl_port_shape_identities,
                 architecture.standard,
+                architecture.compatibility_profile,
                 *port)) {
             return false;
         }
@@ -22689,6 +22704,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 materialization.declared_signal_names,
                 container_objects, vhdl_port_shape_identities,
                 architecture.standard,
+                architecture.compatibility_profile,
                 *declaration->vhdl)) {
             return false;
         }

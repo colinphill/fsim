@@ -178,6 +178,7 @@ docs/changelog-v2.md
 docs/changelog-v3.md
 docs/code-coverage.md
 docs/cross-language-semantics.md
+docs/design-specific-jit-scheduling.md
 docs/diagnostics.md
 docs/feature-matrix.md
 docs/hierarchy-path-audit-disposition.md
@@ -189,6 +190,7 @@ docs/known-issues-v2.md
 docs/known-issues-v3.md
 docs/language-support.md
 docs/legacy-pli.md
+docs/performance-campaign.md
 docs/release-and-post-v2.md
 docs/sdf.md
 docs/simplification-gate-migration.md
@@ -596,10 +598,18 @@ packaging/v3-supply-chain-inventory.tsv
 scripts/audit_msvc_test_strings.py
 scripts/create_deterministic_zip.py
 scripts/measure-debug-footprint.sh
+scripts/perf_campaign.py
+scripts/perf_campaign_profile.py
+scripts/perf_codec_fixture.py
+scripts/perf_codex_fixture.py
+scripts/perf_codex_throughput_fixture.py
+scripts/perf_throughput_fixture.py
 scripts/qualify-batch188a-performance.py
 scripts/qualify-simplification-performance.py
 scripts/simplification_benchmarks.json
 scripts/simplification_benchmarks.json.license
+scripts/test_perf_campaign.py
+scripts/test_perf_campaign_profile.py
 scripts/test_qualify_simplification_performance.py
 src/api/api.cpp
 src/api/api_internal.hpp
@@ -1327,7 +1337,9 @@ tests/app/code_coverage_control_test.cpp
 tests/app/code_coverage_equivalence_test.cpp
 tests/app/code_coverage_metrics_application_test.cpp
 tests/app/code_coverage_metrics_equivalence_test.cpp
+tests/app/compiled_cache_source_mappings_test.cpp
 tests/app/compiled_hir_cache_application_test.cpp
+tests/app/connected_remap_direct_application_test.cpp
 tests/app/coverage_application_test.cpp
 tests/app/coverage_command_test.cpp
 tests/app/coverage_database_psl_test.cpp
@@ -1487,6 +1499,9 @@ tests/app/vhdl_subtype_application_test.cpp
 tests/app/vhdl_type_generic_application_test.cpp
 tests/app/vhdl_vital_delay_application_test.cpp
 tests/app/vpi_application_test.cpp
+tests/app/wide_associative_container_jit_test.cpp
+tests/app/wide_associative_container_numeric_key_jit_test.cpp
+tests/app/wide_file_binary_read_jit_test.cpp
 tests/app/workspace_application_test.cpp
 tests/app/workspace_cli_test.cpp
 tests/app/workspace_controls_test.cpp

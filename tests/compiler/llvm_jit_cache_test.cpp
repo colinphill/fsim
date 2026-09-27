@@ -611,17 +611,20 @@ void test_process_module_grouping_at_level(
                     std::array<std::uint32_t, 0> { });
             },
             "automatic callable frame identity must be nonzero");
-        Process unsupported_wide_attribute;
-        unsupported_wide_attribute.id = 30;
-        unsupported_wide_attribute.name = "unsupported_wide_attribute";
-        unsupported_wide_attribute.register_count = 1;
-        unsupported_wide_attribute.operations = {
-            SignalLastValue { 0, 0 }, Halt { }
+        Process unsupported_register_abi;
+        unsupported_register_abi.id = 30;
+        unsupported_register_abi.name = "unsupported_register_abi";
+        unsupported_register_abi.register_count
+            = static_cast<std::size_t>(
+                  std::numeric_limits<RegisterId>::max())
+            + 1U;
+        unsupported_register_abi.operations = {
+            Halt { }
         };
         const std::array unsupported_entries {
             JitProcessModuleEntry { "eligible", &supported },
             JitProcessModuleEntry {
-                "unsupported", &unsupported_wide_attribute },
+                "unsupported", &unsupported_register_abi },
         };
         expect_unsupported(
             [&] {
@@ -629,7 +632,7 @@ void test_process_module_grouping_at_level(
                     "unsupported-member", unsupported_entries,
                     wide_widths);
             },
-            "LLVM scalar subset");
+            "too many registers for the JIT ABI");
         expect_error(
             [&] { (void)rejected.lookup("eligible"); },
             "was not added");

@@ -8335,6 +8335,267 @@ void test_compiled_design_indexed_lookup_contract()
         == &move_assigned.systemverilog_hir.declarations().front());
 }
 
+void test_vhdl_primary_unit_index_contract()
+{
+    const auto unit_by_id = [](const CompiledDesign& design,
+                                const UnitId id) {
+        const auto unit = std::ranges::find(
+            design.vhdl_units(), id, &vhdl::Unit::id);
+        assert(unit != design.vhdl_units().end());
+        return &*unit;
+    };
+    const auto assert_primary = [&](const CompiledDesign& design,
+                                    const UnitId secondary_id,
+                                    const UnitId expected_id) {
+        const auto result = design.vhdl_primary_unit(
+            *unit_by_id(design, secondary_id));
+        assert(result);
+        assert(*result == unit_by_id(design, expected_id));
+    };
+    const auto assert_no_primary = [&](const CompiledDesign& design,
+                                       const UnitId secondary_id) {
+        assert(!design.vhdl_primary_unit(
+            *unit_by_id(design, secondary_id)));
+    };
+
+    LinkBundleBuilder builder { "primary-vhdl-unit-index" };
+    const auto entity = builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "Entity", {}, "MiXeD_Lib");
+    builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "Entity", {}, "Other_Lib");
+    const auto architecture = builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "RTL", "eNtItY", "mixed_lib");
+    const auto package = builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "Package_Name", {}, "");
+    const auto package_body = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Package_Name", "pAcKaGe_NaMe", "WORK");
+    const auto second_package_body = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Package_Name", "PACKAGE_NAME", "work");
+    builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "\\Case_Sensitive\\", {}, "work");
+    const auto wrong_extended_case = builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "Extended_Case", "\\case_sensitive\\", "work");
+    const auto exact_extended_entity = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "\\Exact_Case\\", {}, "work");
+    const auto exact_extended_architecture = builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "Exact_Case", "\\Exact_Case\\", "work");
+    const auto empty_name_entity = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, {}, {}, "empty_lib");
+    const auto empty_primary_architecture = builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "Empty_Primary", {}, "empty_lib");
+    auto design = builder.finish();
+
+    assert_primary(design, architecture, entity);
+    assert_primary(design, package_body, package);
+    assert_primary(design, second_package_body, package);
+    assert_no_primary(design, wrong_extended_case);
+    assert_primary(design, exact_extended_architecture,
+        exact_extended_entity);
+    assert_primary(design, empty_primary_architecture, empty_name_entity);
+
+    const auto assert_main_relations = [&](const CompiledDesign& current) {
+        assert_primary(current, architecture, entity);
+        assert_primary(current, package_body, package);
+        assert_primary(current, second_package_body, package);
+    };
+    auto copied = design;
+    assert_main_relations(copied);
+    CompiledDesign copy_assigned;
+    copy_assigned = design;
+    assert_main_relations(copy_assigned);
+    auto moved = std::move(copied);
+    assert_main_relations(moved);
+    CompiledDesign move_assigned;
+    move_assigned = std::move(copy_assigned);
+    assert_main_relations(move_assigned);
+
+    LinkBundleBuilder ambiguous_builder { "ambiguous-primary-vhdl-unit" };
+    ambiguous_builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "Duplicate_Entity");
+    ambiguous_builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "duplicate_entity");
+    const auto ambiguous_architecture = ambiguous_builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "RTL", "DUPLICATE_ENTITY");
+    ambiguous_builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "Duplicate_Package");
+    ambiguous_builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "duplicate_package");
+    const auto ambiguous_package_body = ambiguous_builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Duplicate_Package", "DUPLICATE_PACKAGE");
+    const auto ambiguous = ambiguous_builder.finish();
+    assert_no_primary(ambiguous, ambiguous_architecture);
+    assert_no_primary(ambiguous, ambiguous_package_body);
+
+    auto stale = design;
+    auto& stale_units = stale.mutable_vhdl().mutable_units();
+    const auto stale_architecture = std::ranges::find(
+        stale_units, architecture, &vhdl::Unit::id);
+    assert(stale_architecture != stale_units.end());
+    stale_architecture->primary_name = "Missing_Entity";
+    assert(!stale.vhdl_primary_unit(*stale_architecture));
+
+    LinkBundleBuilder owner_builder { "primary-vhdl-unit-owner" };
+    const auto owner_architecture = owner_builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "RTL", "Entity_B");
+    owner_builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "Entity_B");
+    const auto owner_entity_a = owner_builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Entity_A");
+    const auto owner = owner_builder.finish();
+    assert(owner_architecture == UnitId::from_index(0U));
+    LinkBundleBuilder foreign_builder { "foreign-primary-vhdl-unit" };
+    const auto foreign_architecture = foreign_builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "Foreign_RTL", "Entity_A");
+    const auto foreign = foreign_builder.finish();
+    assert(foreign_architecture == owner_architecture);
+    const auto foreign_result = owner.vhdl_primary_unit(
+        *unit_by_id(foreign, foreign_architecture));
+    assert(foreign_result);
+    assert(*foreign_result == unit_by_id(owner, owner_entity_a));
+
+    auto unindexed_secondary = *unit_by_id(foreign, foreign_architecture);
+    unindexed_secondary.id = UnitId { };
+    const auto invalid_id_result
+        = owner.vhdl_primary_unit(unindexed_secondary);
+    assert(invalid_id_result);
+    assert(*invalid_id_result == unit_by_id(owner, owner_entity_a));
+    unindexed_secondary.id = UnitId::from_index(1000U);
+    const auto out_of_range_result
+        = owner.vhdl_primary_unit(unindexed_secondary);
+    assert(out_of_range_result);
+    assert(*out_of_range_result == unit_by_id(owner, owner_entity_a));
+
+    LinkBundleBuilder duplicate_secondary_builder {
+        "duplicate-secondary-primary-vhdl-unit"
+    };
+    duplicate_secondary_builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "Entity_A");
+    duplicate_secondary_builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "Entity_B");
+    const auto first_architecture = duplicate_secondary_builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "RTL_B", "Entity_B");
+    duplicate_secondary_builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "RTL_A", "Entity_A");
+    const auto invalid_secondary_id
+        = duplicate_secondary_builder.add_vhdl_unit(
+            UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+            "RTL_Invalid", "Entity_A");
+    duplicate_secondary_builder.vhdl_unit(invalid_secondary_id).id
+        = UnitId { };
+    auto& duplicate_secondary_units
+        = duplicate_secondary_builder.vhdl_hir.mutable_units();
+    const auto second_architecture = std::ranges::find_if(
+        duplicate_secondary_units, [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::architecture
+                && unit.name == "RTL_A";
+        });
+    assert(second_architecture != duplicate_secondary_units.end());
+    second_architecture->id = first_architecture;
+    const auto duplicate_secondary_design
+        = duplicate_secondary_builder.finish();
+    const auto duplicate_secondary = std::ranges::find_if(
+        duplicate_secondary_design.vhdl_units(),
+        [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::architecture
+                && unit.name == "RTL_A";
+        });
+    assert(duplicate_secondary
+        != duplicate_secondary_design.vhdl_units().end());
+    const auto duplicate_secondary_result
+        = duplicate_secondary_design.vhdl_primary_unit(
+            *duplicate_secondary);
+    assert(duplicate_secondary_result);
+    const auto duplicate_secondary_target = std::ranges::find_if(
+        duplicate_secondary_design.vhdl_units(),
+        [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::entity
+                && unit.name == "Entity_A";
+        });
+    assert(duplicate_secondary_target
+        != duplicate_secondary_design.vhdl_units().end());
+    assert(*duplicate_secondary_result == &*duplicate_secondary_target);
+    const auto invalid_secondary = std::ranges::find_if(
+        duplicate_secondary_design.vhdl_units(),
+        [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::architecture
+                && unit.name == "RTL_Invalid";
+        });
+    assert(invalid_secondary
+        != duplicate_secondary_design.vhdl_units().end());
+    const auto invalid_secondary_result
+        = duplicate_secondary_design.vhdl_primary_unit(
+            *invalid_secondary);
+    assert(invalid_secondary_result);
+    assert(*invalid_secondary_result == &*duplicate_secondary_target);
+
+    LinkBundleBuilder invalid_target_builder {
+        "invalid-target-primary-vhdl-unit"
+    };
+    const auto invalid_target_entity = invalid_target_builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Unique_Entity");
+    const auto invalid_target_architecture
+        = invalid_target_builder.add_vhdl_unit(
+            UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+            "RTL", "Unique_Entity");
+    invalid_target_builder.vhdl_unit(invalid_target_entity).id = UnitId { };
+    const auto invalid_target_design = invalid_target_builder.finish();
+    const auto invalid_target_secondary
+        = unit_by_id(invalid_target_design, invalid_target_architecture);
+    const auto invalid_target_result
+        = invalid_target_design.vhdl_primary_unit(
+            *invalid_target_secondary);
+    assert(invalid_target_result);
+    const auto invalid_target = std::ranges::find_if(
+        invalid_target_design.vhdl_units(), [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::entity
+                && unit.name == "Unique_Entity";
+        });
+    assert(invalid_target != invalid_target_design.vhdl_units().end());
+    assert(*invalid_target_result == &*invalid_target);
+
+    LinkBundleBuilder duplicate_target_builder {
+        "duplicate-target-primary-vhdl-unit"
+    };
+    const auto duplicate_target_entity = duplicate_target_builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Unique_Entity");
+    const auto unrelated_entity = duplicate_target_builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Unrelated_Entity");
+    const auto duplicate_target_architecture
+        = duplicate_target_builder.add_vhdl_unit(
+            UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+            "RTL", "Unique_Entity");
+    duplicate_target_builder.vhdl_unit(unrelated_entity).id
+        = duplicate_target_entity;
+    const auto duplicate_target_design = duplicate_target_builder.finish();
+    const auto duplicate_target_secondary
+        = unit_by_id(duplicate_target_design,
+            duplicate_target_architecture);
+    const auto duplicate_target_result
+        = duplicate_target_design.vhdl_primary_unit(
+            *duplicate_target_secondary);
+    assert(duplicate_target_result);
+    const auto duplicate_target = std::ranges::find_if(
+        duplicate_target_design.vhdl_units(), [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::entity
+                && unit.name == "Unique_Entity";
+        });
+    assert(duplicate_target != duplicate_target_design.vhdl_units().end());
+    assert(*duplicate_target_result == &*duplicate_target);
+}
+
 struct VhdlPackageMemberIndexFixture {
     CompiledDesign design;
     UnitId package;
@@ -8993,6 +9254,165 @@ void test_vhdl_package_member_index_contract()
         = linked.design->vhdl_package_members("MEMBER_NAME");
     assert(linked_members && linked_members->size() == 1U);
     assert(linked_members->front().package == "Package_Index");
+
+    struct VhdlUnqualifiedPackageImportFixture {
+        CompiledDesign design;
+        UnitId owner;
+        ScopeId scope;
+        DeclarationId first_member;
+        DeclarationId second_member;
+    };
+    const auto make_unqualified_package_import_fixture = [] {
+        LinkBundleBuilder builder {
+            "unqualified-package-import-views.vhd"
+        };
+        const auto add_package = [&](const std::string_view name) {
+            const auto package = builder.add_vhdl_unit(
+                UnitKind::vhdl_package, vhdl::UnitKind::package,
+                std::string { name });
+            const auto scope
+                = builder.model.units()[package.value()].scope;
+            const auto member = builder.model.add_declaration(scope,
+                DeclarationKind::constant, "Shared_Item",
+                builder.source, builder.origin);
+            vhdl::Declaration declaration;
+            declaration.id = member;
+            declaration.scope = scope;
+            declaration.form = vhdl::DeclarationForm::constant;
+            declaration.name = "Shared_Item";
+            declaration.source = builder.source;
+            declaration.origin = builder.origin;
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(declaration));
+            builder.vhdl_unit(package).declarations.push_back(member);
+            return std::pair { package, member };
+        };
+        const auto [first_package, first_member]
+            = add_package("Package_First");
+        const auto [second_package, second_member]
+            = add_package("Package_Second");
+        const auto owner = builder.add_vhdl_unit(
+            UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+            "Import_Owner");
+        auto& owner_unit = builder.vhdl_unit(owner);
+        const auto owner_scope
+            = builder.model.units()[owner.value()].scope;
+        const auto add_import = [&](const std::string_view package_name) {
+            vhdl::ContextItem clause;
+            clause.kind = vhdl::ContextKind::use_clause;
+            clause.source = builder.source;
+            clause.selected_names.push_back(vhdl_name(
+                std::string { "work." } + std::string { package_name }
+                    + ".all",
+                builder.source));
+            owner_unit.context.push_back(std::move(clause));
+        };
+        add_import("Package_First");
+        add_import("Package_Second");
+
+        std::vector<CompiledReference> references;
+        references.push_back(CompiledReference {
+            CompiledReferenceKind::package, owner, "work",
+            "Package_First", {}, builder.source, first_package });
+        references.push_back(CompiledReference {
+            CompiledReferenceKind::package, owner, "work",
+            "Package_Second", {}, builder.source, second_package });
+        CompiledDesign design { std::move(builder.model),
+            std::move(builder.systemverilog), std::move(builder.vhdl_hir),
+            {}, std::move(references) };
+        return VhdlUnqualifiedPackageImportFixture {
+            std::move(design), owner, owner_scope,
+            first_member, second_member };
+    };
+
+    auto import_fixture = make_unqualified_package_import_fixture();
+    vhdl::Name unqualified_name;
+    unqualified_name.spelling = "sHaReD_iTeM";
+    unqualified_name.canonical = unqualified_name.spelling;
+    const CompiledDesignResolver import_resolver {
+        import_fixture.design, import_fixture.owner
+    };
+    const auto linked_imports
+        = import_fixture.design.vhdl_linked_imports(import_fixture.owner);
+    assert(linked_imports && linked_imports->size() == 2U);
+    const auto imported = import_resolver.resolve_vhdl_package_members(
+        unqualified_name, import_fixture.scope);
+    assert(imported.status == CompiledResolutionStatus::ambiguous);
+    assert(imported.candidates.size() == 2U);
+    assert(imported.candidates[0].member == import_fixture.first_member);
+    assert(imported.candidates[1].member == import_fixture.second_member);
+    assert(!imported.candidates[0].package_instance);
+    assert(!imported.candidates[1].package_instance);
+
+    const auto filtered = import_resolver.resolve_vhdl_package_members(
+        unqualified_name, import_fixture.scope,
+        [&](const CompiledDeclarationView& candidate) {
+            return candidate.vhdl != nullptr
+                && candidate.vhdl->id == import_fixture.second_member;
+        });
+    const auto filtered_member = filtered.unique();
+    assert(filtered_member
+        && filtered_member->member == import_fixture.second_member);
+
+    auto stale_import_design = import_fixture.design;
+    stale_import_design.mutable_vhdl().mutable_units().front().standard
+        = "2019";
+    assert(!stale_import_design.vhdl_package_members("Shared_Item"));
+    assert(!stale_import_design.vhdl_linked_imports(
+        import_fixture.owner));
+    const CompiledDesignResolver stale_import_resolver {
+        stale_import_design, import_fixture.owner
+    };
+    const auto stale_imported
+        = stale_import_resolver.resolve_vhdl_package_members(
+            unqualified_name, import_fixture.scope);
+    assert(stale_imported.status == CompiledResolutionStatus::ambiguous);
+    assert(stale_imported.candidates.size() == 2U);
+    assert(stale_imported.candidates[0].member
+        == import_fixture.first_member);
+    assert(stale_imported.candidates[1].member
+        == import_fixture.second_member);
+}
+
+void test_vhdl_architecture_compatibility_profile_pairing()
+{
+    constexpr std::string_view strict_profile {
+        "fsim-synopsys-ieee-compat-v2"
+    };
+    constexpr std::string_view legacy_profile {
+        "fsim-synopsys-ieee-compat-v2,"
+        "legacy-unprotected-shared-variable"
+    };
+    const auto make_pair = [](const std::string_view entity_profile,
+                               const std::string_view architecture_profile) {
+        LinkBundleBuilder builder { "vhdl-compatibility-pair.vhd" };
+        const auto entity = builder.add_vhdl_unit(
+            UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+            "Compatibility_Entity");
+        const auto architecture = builder.add_vhdl_unit(
+            UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+            "RTL", "Compatibility_Entity");
+        auto& entity_unit = builder.vhdl_unit(entity);
+        entity_unit.standard = "2008";
+        entity_unit.compatibility_profile = std::string { entity_profile };
+        auto& architecture_unit = builder.vhdl_unit(architecture);
+        architecture_unit.standard = "2008";
+        architecture_unit.compatibility_profile
+            = std::string { architecture_profile };
+        return builder.finish();
+    };
+
+    assert(link_compiled_designs(
+               { make_pair(strict_profile, legacy_profile) })
+        .ok());
+    assert(link_compiled_designs(
+               { make_pair(legacy_profile, strict_profile) })
+        .ok());
+
+    const auto unrelated = link_compiled_designs(
+        { make_pair("unrelated-profile", legacy_profile) });
+    assert(!unrelated.ok());
+    assert(unrelated.diagnostic_code == "FSIM-FE-VHORDER-011");
 }
 
 } // namespace
@@ -9108,6 +9528,7 @@ void run_compiled_design_tests()
     test_compiled_vhdl_resolver_array_shapes();
     test_compiled_vhdl_predefined_subtype_fast_path();
     test_vhdl_builtin_std_logic_1164_provenance();
+    test_vhdl_architecture_compatibility_profile_pairing();
     test_compiled_association_resolution();
     test_specialized_hir_unit();
     test_specialized_hir_parameter_bit_selection();
@@ -9122,5 +9543,6 @@ void run_compiled_design_tests()
     test_specialized_hir_vhdl_packed_array_projection();
     test_compiled_design_normalization();
     test_compiled_design_indexed_lookup_contract();
+    test_vhdl_primary_unit_index_contract();
     test_vhdl_package_member_index_contract();
 }

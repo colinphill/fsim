@@ -82,6 +82,13 @@ struct ContainerValue {
                          const ContainerValue&) = default;
 };
 
+/// Compare valid integral associative-array keys using their declared signed
+/// ordering. Both operands must be known Logic4 values of `type.index_width`.
+[[nodiscard]] bool associative_index_key_less(
+    const ContainerType& type,
+    const PackedLogic4& left,
+    const PackedLogic4& right);
+
 [[nodiscard]] constexpr std::size_t
 maximum_container_elements(const ContainerType& type) noexcept {
   std::size_t bytes_per_element = sizeof(PackedLogic4);

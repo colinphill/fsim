@@ -732,7 +732,7 @@ ProcessId Interpreter::add_process_impl(
     state.id = id;
     state.cold().random_state = Impl::initial_random_state(
         impl_->root_seed, id);
-    state.design_process = id;
+    state.cold().design_process = id;
     state.execution_phase = process_execution_phase(
         process.observed, process.reactive, process.postponed);
     state.static_trigger_mask = process.initialize
@@ -1769,7 +1769,7 @@ PackedLogic4 Interpreter::driver_value(
 
 ProcessId Interpreter::design_process(const ProcessId process) const
 {
-    return impl_->get_process(process).design_process;
+    return impl_->get_process(process).cold().design_process;
 }
 
 const Process& Interpreter::process_program(const ProcessId process) const

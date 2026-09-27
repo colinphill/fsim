@@ -402,6 +402,12 @@ namespace {
                     "--compatibility is available only for Verilog/SystemVerilog");
                 continue;
             }
+            if (invocation.vhdl_compatibility.has_value()
+                && *language != project::Language::vhdl) {
+                argument_error(diagnostics,
+                    "--vhdl-compatibility is available only for VHDL");
+                continue;
+            }
             const auto path = absolute_normalized(input);
             std::error_code file_error;
             if (!std::filesystem::is_regular_file(path, file_error)) {
@@ -432,6 +438,8 @@ namespace {
                 }
                 source_set.standard = *canonical_standard;
                 source_set.compatibility_switches = invocation.compatibility_switches;
+                source_set.vhdl_compatibility =
+                    invocation.vhdl_compatibility.value_or(std::string { });
                 source_set.library = invocation.library;
                 source_set.compilation_unit = invocation.compilation_unit.value_or(
                     invocation.command == Command::compile
@@ -626,6 +634,8 @@ namespace {
             << "      --compatibility NAME Explicit compatibility switch; repeatable\n"
             << "                           keyword-profile, implicit-net, port-connection, sizing,\n"
             << "                           lifetime, scheduler-assertion, configuration\n"
+            << "      --vhdl-compatibility PROFILE\n"
+            << "                           VHDL: legacy-unprotected-shared-variable\n"
             << "      --uvm-release VERSION\n"
             << "                           Governed SystemVerilog UVM release: 1.2 or 2020.3.1\n"
             << "      --compilation-unit file|source-set\n"
@@ -857,6 +867,7 @@ namespace {
             "--lang",
             "--standard",
             "--compatibility",
+            "--vhdl-compatibility",
             "--uvm-release",
             "--compilation-unit",
             "--library",
@@ -1128,6 +1139,26 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.compatibility_switches.emplace_back(*canonical);
+            } else if (is_option(argument, "", "--vhdl-compatibility")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--vhdl-compatibility", diagnostics);
+                const auto canonical = value.has_value()
+                    ? project::parse_vhdl_compatibility(*value)
+                    : std::nullopt;
+                if (!canonical || canonical->empty()) {
+                    argument_error(
+                        diagnostics,
+                        "--vhdl-compatibility requires "
+                        "legacy-unprotected-shared-variable");
+                    return std::nullopt;
+                }
+                if (invocation.vhdl_compatibility.has_value()) {
+                    argument_error(
+                        diagnostics,
+                        "--vhdl-compatibility may be specified only once");
+                    return std::nullopt;
+                }
+                invocation.vhdl_compatibility = std::string { *canonical };
             } else if (is_option(argument, "", "--uvm-release")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--uvm-release", diagnostics);
@@ -1846,6 +1877,7 @@ std::optional<Invocation> parse_arguments(
     const bool hdl_option = invocation.language.has_value()
         || invocation.standard.has_value()
         || !invocation.compatibility_switches.empty()
+        || invocation.vhdl_compatibility.has_value()
         || invocation.compilation_unit.has_value()
         || invocation.uvm_release.has_value();
     if (hdl_option && !source_command) {
@@ -1865,6 +1897,13 @@ std::optional<Invocation> parse_arguments(
         && *invocation.language != project::Language::system_verilog) {
         argument_error(diagnostics,
             "--compatibility is available only for Verilog/SystemVerilog");
+        return std::nullopt;
+    }
+    if (invocation.vhdl_compatibility.has_value()
+        && invocation.language.has_value()
+        && *invocation.language != project::Language::vhdl) {
+        argument_error(diagnostics,
+            "--vhdl-compatibility is available only for VHDL");
         return std::nullopt;
     }
     if ((!invocation.include_directories.empty() || !invocation.defines.empty())

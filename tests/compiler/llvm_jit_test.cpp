@@ -57,6 +57,10 @@ int main() {
       JitOptimizationLevel::o0, "wide_signal_read_o0");
   test_wide_signal_read_at_level(
       JitOptimizationLevel::o2, "wide_signal_read_o2");
+  test_wide_signal_attributes_at_level(
+      JitOptimizationLevel::o0, "wide_signal_attributes_o0");
+  test_wide_signal_attributes_at_level(
+      JitOptimizationLevel::o2, "wide_signal_attributes_o2");
   test_wide_signal_write_at_level(
       JitOptimizationLevel::o0, "wide_signal_write_o0");
   test_wide_signal_write_at_level(
@@ -89,6 +93,10 @@ int main() {
       JitOptimizationLevel::o0, "fused_dynamic_part_signal_read_o0");
   test_fused_dynamic_part_signal_read_at_level(
       JitOptimizationLevel::o2, "fused_dynamic_part_signal_read_o2");
+  test_wide_single_bit_dynamic_part_select_at_level(
+      JitOptimizationLevel::o0, "wide_single_bit_dynamic_part_select_o0");
+  test_wide_single_bit_dynamic_part_select_at_level(
+      JitOptimizationLevel::o2, "wide_single_bit_dynamic_part_select_o2");
   test_conditional_select_at_level(
       JitOptimizationLevel::o0, "conditional_select_o0");
   test_conditional_select_at_level(
@@ -185,6 +193,10 @@ int main() {
       JitOptimizationLevel::o0, "class_boundary_o0");
   test_class_service_boundaries_at_level(
       JitOptimizationLevel::o2, "class_boundary_o2");
+  test_wide_boundary_registers_at_level(
+      JitOptimizationLevel::o0, "wide_boundary_o0");
+  test_wide_boundary_registers_at_level(
+      JitOptimizationLevel::o2, "wide_boundary_o2");
   test_native_service_callbacks_at_level(
       JitOptimizationLevel::o0, "native_services_o0");
   test_native_service_callbacks_at_level(

@@ -121,6 +121,7 @@ struct SourceSet {
   Language language{Language::system_verilog};
   std::string standard;
   std::vector<std::string> compatibility_switches;
+  std::string vhdl_compatibility;
   std::string library{"work"};
   std::vector<std::filesystem::path> file_patterns;
   std::vector<std::filesystem::path> files;
@@ -248,6 +249,8 @@ parse_systemverilog_standard(std::string_view spelling) noexcept;
     Language language,
     std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<std::string_view> parse_compatibility_switch(
+    std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<std::string_view> parse_vhdl_compatibility(
     std::string_view spelling) noexcept;
 [[nodiscard]] std::string compatibility_profile(
     const std::vector<std::string>& switches);

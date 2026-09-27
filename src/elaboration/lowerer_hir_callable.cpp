@@ -3,10 +3,224 @@
 #include "lowerer_internal.hpp"
 
 #include <charconv>
+#include <new>
 #include <unordered_map>
 
 namespace fsim::elaboration {
 namespace {
+
+    constexpr std::size_t maximum_effective_subtype_cache_entries = 64U;
+    constexpr std::size_t maximum_effective_subtype_cache_entry_bytes
+        = 64U * 1024U;
+    constexpr std::size_t maximum_effective_subtype_cache_bytes
+        = 256U * 1024U;
+    constexpr std::size_t maximum_effective_subtype_cache_type_depth = 16U;
+
+    bool add_effective_subtype_cache_bytes(
+        std::size_t& bytes,
+        const std::size_t additional,
+        const std::size_t limit)
+    {
+        if (bytes > limit || additional > limit - bytes) {
+            return false;
+        }
+        bytes += additional;
+        return true;
+    }
+
+    bool add_effective_subtype_cache_sequence(
+        std::size_t& bytes,
+        const std::size_t count,
+        const std::size_t element_size,
+        const std::size_t limit)
+    {
+        constexpr auto allocation_overhead = 2U * sizeof(void*);
+        if (bytes > limit || count > (limit - bytes) / element_size) {
+            return false;
+        }
+        return add_effective_subtype_cache_bytes(
+                   bytes, count * element_size, limit)
+            && add_effective_subtype_cache_bytes(
+                bytes, allocation_overhead, limit);
+    }
+
+    bool add_effective_subtype_cache_string(
+        std::size_t& bytes,
+        const std::string& value,
+        const std::size_t limit)
+    {
+        constexpr auto allocation_overhead = 2U * sizeof(void*);
+        return add_effective_subtype_cache_bytes(
+                   bytes, value.size(), limit)
+            && add_effective_subtype_cache_bytes(
+                bytes, allocation_overhead, limit);
+    }
+
+    bool add_effective_subtype_cache_name(
+        std::size_t& bytes,
+        const semantic::vhdl::Name& name,
+        const std::size_t limit)
+    {
+        return add_effective_subtype_cache_bytes(
+                   bytes, sizeof(name), limit)
+            && add_effective_subtype_cache_string(
+                bytes, name.spelling, limit)
+            && add_effective_subtype_cache_string(
+                bytes, name.canonical, limit)
+            && add_effective_subtype_cache_sequence(
+                bytes,
+                name.overloads.size(),
+                sizeof(semantic::DeclarationId),
+                limit);
+    }
+
+    bool add_effective_subtype_cache_vhdl_type(
+        std::size_t& bytes,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const std::size_t limit)
+    {
+        if (!add_effective_subtype_cache_bytes(
+                bytes, sizeof(subtype), limit)
+            || !add_effective_subtype_cache_bytes(
+                bytes, sizeof(subtype.type_mark), limit)
+            || !add_effective_subtype_cache_string(
+                bytes, subtype.type_mark.spelling, limit)
+            || !add_effective_subtype_cache_name(
+                bytes, subtype.resolution_function, limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                subtype.constraints.size(),
+                sizeof(semantic::vhdl::RangeConstraint),
+                limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                subtype.unspecified_component_classes.size(),
+                sizeof(semantic::vhdl::UnspecifiedTypeClass),
+                limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                subtype.unspecified_component_type_marks.size(),
+                sizeof(std::string),
+                limit)
+            || !add_effective_subtype_cache_string(
+                bytes, subtype.unspecified_inference_identity, limit)) {
+            return false;
+        }
+        for (const auto& type_mark : subtype.unspecified_component_type_marks) {
+            if (!add_effective_subtype_cache_string(
+                    bytes, type_mark, limit)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool add_effective_subtype_cache_sv_type(
+        std::size_t& bytes,
+        const semantic::sv::TypeReference& type,
+        const std::size_t limit,
+        const std::size_t depth)
+    {
+        if (depth > maximum_effective_subtype_cache_type_depth
+            || !add_effective_subtype_cache_bytes(
+                bytes, sizeof(type), limit)
+            || !add_effective_subtype_cache_string(
+                bytes, type.target.spelling, limit)
+            || !add_effective_subtype_cache_string(
+                bytes, type.class_identity, limit)
+            || !add_effective_subtype_cache_string(
+                bytes, type.interface_type, limit)
+            || !add_effective_subtype_cache_string(
+                bytes, type.interface_modport, limit)
+            || !add_effective_subtype_cache_string(
+                bytes, type.systemverilog_net_type, limit)
+            || !add_effective_subtype_cache_string(
+                bytes, type.systemverilog_resolution_function, limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                type.interface_parameter_actuals.size(),
+                sizeof(semantic::sv::ActualAssociation),
+                limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                type.unpacked_dimensions.size(),
+                sizeof(semantic::sv::PackedRange),
+                limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                type.container_element_types.size(),
+                sizeof(semantic::sv::TypeReference),
+                limit)) {
+            return false;
+        }
+        for (const auto& actual : type.interface_parameter_actuals) {
+            if (actual.formal
+                && !add_effective_subtype_cache_string(
+                    bytes, *actual.formal, limit)) {
+                return false;
+            }
+            if (actual.type
+                && !add_effective_subtype_cache_sv_type(
+                    bytes, *actual.type, limit, depth + 1U)) {
+                return false;
+            }
+        }
+        if (type.associative_index
+            && !add_effective_subtype_cache_string(
+                bytes, type.associative_index->spelling, limit)) {
+            return false;
+        }
+        for (const auto& element_type : type.container_element_types) {
+            if (!add_effective_subtype_cache_sv_type(
+                    bytes, element_type, limit, depth + 1U)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool add_effective_subtype_cache_bindings(
+        std::size_t& bytes,
+        const std::span<const semantic::CompiledBindingFrame> frames,
+        const std::size_t limit)
+    {
+        if (!add_effective_subtype_cache_bytes(
+                bytes,
+                sizeof(std::vector<semantic::CompiledBindingFrame>),
+                limit)
+            || !add_effective_subtype_cache_sequence(
+                bytes,
+                frames.size(),
+                sizeof(semantic::CompiledBindingFrame),
+                limit)) {
+            return false;
+        }
+        for (const auto& frame : frames) {
+            if (!add_effective_subtype_cache_sequence(
+                    bytes,
+                    frame.size(),
+                    sizeof(semantic::CompiledActualBinding),
+                    limit)) {
+                return false;
+            }
+            for (const auto& binding : frame) {
+                if (binding.systemverilog_type
+                    && !add_effective_subtype_cache_sv_type(
+                        bytes,
+                        *binding.systemverilog_type,
+                        limit,
+                        0U)) {
+                    return false;
+                }
+                if (binding.vhdl_type
+                    && !add_effective_subtype_cache_vhdl_type(
+                        bytes, *binding.vhdl_type, limit)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     template <typename Container>
     class PopBackGuard final {
@@ -3158,11 +3372,93 @@ std::optional<semantic::vhdl::SubtypeIndication>
 Lowerer::hir_effective_vhdl_subtype(
     const semantic::vhdl::SubtypeIndication& subtype) const
 {
-    return specialized_hir_unit_ != nullptr
-        ? semantic::CompiledDesignResolver {
-              *specialized_hir_unit_, hir_generic_binding_frames_
-          }.effective_vhdl_subtype(subtype, hir_process_scope_)
-        : std::nullopt;
+    const auto resolve = [&] {
+        return specialized_hir_unit_ != nullptr
+            ? semantic::CompiledDesignResolver {
+                  *specialized_hir_unit_, hir_generic_binding_frames_
+              }.effective_vhdl_subtype(subtype, hir_process_scope_)
+            : std::nullopt;
+    };
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        return resolve();
+    }
+
+    const auto scope = hir_process_scope_;
+    for (const auto& entry : hir_effective_vhdl_subtype_cache_) {
+        if (entry.subtype == subtype && entry.scope == scope
+            && entry.binding_frames == hir_generic_binding_frames_) {
+            try {
+                return std::optional<semantic::vhdl::SubtypeIndication> {
+                    entry.result
+                };
+            } catch (const std::bad_alloc&) {
+                break;
+            }
+        }
+    }
+
+    auto result = resolve();
+    if (!result) {
+        return result;
+    }
+    if (hir_effective_vhdl_subtype_cache_.size()
+            >= maximum_effective_subtype_cache_entries
+        || hir_effective_vhdl_subtype_cache_bytes_
+                >= maximum_effective_subtype_cache_bytes) {
+        return result;
+    }
+    auto retained_bytes = sizeof(HirEffectiveVhdlSubtypeCacheEntry);
+    const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
+    if (!add_effective_subtype_cache_vhdl_type(
+            retained_bytes, subtype, entry_limit)
+        || !add_effective_subtype_cache_bindings(
+            retained_bytes, hir_generic_binding_frames_, entry_limit)
+        || !add_effective_subtype_cache_vhdl_type(
+            retained_bytes, *result, entry_limit)
+        || hir_effective_vhdl_subtype_cache_bytes_
+            > maximum_effective_subtype_cache_bytes
+        || retained_bytes
+            > maximum_effective_subtype_cache_bytes
+                - hir_effective_vhdl_subtype_cache_bytes_) {
+        return result;
+    }
+    try {
+        hir_effective_vhdl_subtype_cache_.push_back({
+            subtype,
+            scope,
+            hir_generic_binding_frames_,
+            *result,
+        });
+    } catch (const std::bad_alloc&) {
+        return result;
+    }
+    hir_effective_vhdl_subtype_cache_bytes_ += retained_bytes;
+    return result;
+}
+
+void Lowerer::begin_hir_effective_vhdl_subtype_cache_scope() const noexcept
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        clear_hir_effective_vhdl_subtype_cache();
+    }
+    ++hir_effective_vhdl_subtype_cache_depth_;
+}
+
+void Lowerer::end_hir_effective_vhdl_subtype_cache_scope() const noexcept
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        return;
+    }
+    --hir_effective_vhdl_subtype_cache_depth_;
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        clear_hir_effective_vhdl_subtype_cache();
+    }
+}
+
+void Lowerer::clear_hir_effective_vhdl_subtype_cache() const noexcept
+{
+    hir_effective_vhdl_subtype_cache_.clear();
+    hir_effective_vhdl_subtype_cache_bytes_ = 0U;
 }
 
 std::optional<std::vector<Lowerer::HirGenericBinding>>

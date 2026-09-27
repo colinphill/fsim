@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -271,6 +272,575 @@ Capture run_once(
     vcd.flush();
     capture.vcd = vcd_output.str();
     return capture;
+}
+
+struct SliceSharingCapture {
+    fsim::runtime::RunResult result;
+    std::string values;
+    std::size_t dynamic_part_inserts { };
+    std::size_t selection_shapes { };
+    std::size_t compiled_processes { };
+    std::size_t compiled_modules { };
+};
+
+void write_slice_sharing_source(
+    const std::filesystem::path& source,
+    const bool mixed_directions)
+{
+    std::ofstream output { source };
+    output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity slice_sharing_leaf is
+  generic (ASCENDING : boolean := false);
+  port (
+    clock : in std_logic;
+    payload : in std_logic_vector(1 downto 0);
+    position : in integer range 0 to 6;
+    result : out std_logic_vector(7 downto 0)
+  );
+end entity;
+
+architecture rtl of slice_sharing_leaf is
+begin
+  descending : if not ASCENDING generate
+    writer : process(payload, position)
+      variable local_value : std_logic_vector(7 downto 0) := (others => '0');
+    begin
+      local_value(position + 1 downto position) := payload;
+      result <= local_value;
+    end process;
+  end generate;
+  ascending : if ASCENDING generate
+    writer : process(payload, position)
+      variable local_value : std_logic_vector(0 to 8) := (others => '0');
+    begin
+      local_value(position + 1 to position + 2) := payload;
+      result <= local_value(0 to 7);
+    end process;
+  end generate;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity slice_sharing_top is end entity;
+
+architecture rtl of slice_sharing_top is
+  type payload_array_t is array (0 to 127) of std_logic_vector(1 downto 0);
+  type position_array_t is array (0 to 127) of integer range 0 to 6;
+  type result_array_t is array (0 to 127) of std_logic_vector(7 downto 0);
+  signal clock : std_logic := '0';
+  signal payloads : payload_array_t;
+  signal positions : position_array_t;
+  signal results : result_array_t;
+begin
+  lanes : for lane in 0 to 127 generate
+    descending : if lane < )";
+    output << (mixed_directions ? 64 : 128);
+    output << R"( generate
+      cell : entity work.slice_sharing_leaf(rtl)
+        generic map (ASCENDING => false)
+        port map (
+          clock => clock, payload => payloads(lane),
+          position => positions(lane), result => results(lane));
+    end generate;
+    ascending : if lane >= )";
+    output << (mixed_directions ? 64 : 128);
+    output << R"( generate
+      cell : entity work.slice_sharing_leaf(rtl)
+        generic map (ASCENDING => true)
+        port map (
+          clock => clock, payload => payloads(lane),
+          position => positions(lane), result => results(lane));
+    end generate;
+  end generate;
+
+  stimulus : process
+  begin
+    for lane in 0 to 127 loop
+      positions(lane) <= lane mod 6;
+      if lane mod 4 = 0 then
+        payloads(lane) <= "UX";
+      elsif lane mod 4 = 1 then
+        payloads(lane) <= "Z1";
+      elsif lane mod 4 = 2 then
+        payloads(lane) <= "H0";
+      else
+        payloads(lane) <= "-W";
+      end if;
+    end loop;
+    wait for 1 ns;
+    clock <= '1';
+    wait for 1 ns;
+    clock <= '0';
+    for lane in 0 to 127 loop
+      positions(lane) <= (lane + 2) mod 6;
+      if lane mod 4 = 0 then
+        payloads(lane) <= "W-";
+      elsif lane mod 4 = 1 then
+        payloads(lane) <= "1Z";
+      elsif lane mod 4 = 2 then
+        payloads(lane) <= "0H";
+      else
+        payloads(lane) <= "XU";
+      end if;
+    end loop;
+    wait for 1 ns;
+    clock <= '1';
+    wait for 1 ns;
+    clock <= '0';
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+}
+
+SliceSharingCapture run_slice_sharing(
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine)
+{
+    fsim::project::Config config;
+    config.base_directory = source.parent_path();
+    config.project.name = source.stem().string();
+    config.project.top = "vhdl:work.slice_sharing_top(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = source.parent_path()
+        / (source.stem().string()
+            + (optimization == fsim::project::Optimization::o0
+                    ? "-o0-cache" : "-o2-cache"));
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(project);
+    using SelectionShape = std::tuple<
+        std::int64_t, std::int64_t, std::uint32_t,
+        std::uint32_t, bool, bool>;
+    std::vector<SelectionShape> shapes;
+    SliceSharingCapture capture;
+    for (const auto& process : project->design.processes()) {
+        for (const auto& operation : process.operations) {
+            const auto* insert = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::DynamicPartInsert>(&operation);
+            if (!insert) {
+                continue;
+            }
+            ++capture.dynamic_part_inserts;
+            const auto& selection = insert->selection;
+            const SelectionShape shape {
+                selection.left, selection.right, selection.base_offset,
+                selection.width, selection.increasing,
+                selection.source_descending
+            };
+            if (std::ranges::find(shapes, shape) == shapes.end()) {
+                shapes.push_back(shape);
+            }
+        }
+    }
+    capture.selection_shapes = shapes.size();
+    assert(capture.dynamic_part_inserts >= 128U);
+
+    fsim::app::Simulation simulation {
+        std::move(*project), config.run.max_deltas, engine
+    };
+    const auto results = simulation.find_signal("slice_sharing_top.results");
+    assert(results);
+    capture.compiled_processes = simulation.compiled_process_count();
+    capture.compiled_modules = simulation.compiled_module_count();
+    capture.result = simulation.run();
+    capture.values = simulation.read_signal(*results).to_msb_string();
+    return capture;
+}
+
+void verify_dynamic_part_insert_template_sharing(
+    const std::filesystem::path& directory)
+{
+    const auto mixed_source = directory / "slice-sharing-mixed.vhd";
+    const auto uniform_source = directory / "slice-sharing-uniform.vhd";
+    write_slice_sharing_source(mixed_source, true);
+    write_slice_sharing_source(uniform_source, false);
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        const auto reference = run_slice_sharing(
+            mixed_source, optimization,
+            fsim::app::SimulationEngine::interpreter);
+        const auto compiled = run_slice_sharing(
+            mixed_source, optimization,
+            fsim::app::SimulationEngine::compiled);
+        const auto uniform = run_slice_sharing(
+            uniform_source, optimization,
+            fsim::app::SimulationEngine::compiled);
+        assert(reference.result.status == fsim::runtime::RunStatus::completed);
+        assert(uniform.result.status == fsim::runtime::RunStatus::completed);
+        assert(compiled.result.status == reference.result.status);
+        assert(compiled.result.time == reference.result.time);
+        assert(compiled.result.delta == reference.result.delta);
+        assert(compiled.values == reference.values);
+        assert(compiled.values.size() == 128U * 8U);
+        assert(compiled.values.find('U') != std::string::npos);
+        assert(compiled.values.find('Z') != std::string::npos);
+        assert(compiled.values.find('W') != std::string::npos);
+        assert(compiled.values.find('H') != std::string::npos);
+        assert(compiled.dynamic_part_inserts >= 128U);
+        assert(compiled.selection_shapes > uniform.selection_shapes);
+#if defined(FSIM_HAS_LLVM)
+        assert(compiled.compiled_processes >= 128U);
+        // The same fixture emits nine modules before DynamicPartInsert
+        // template sharing. Two distinct selection shapes need two here.
+        assert(compiled.compiled_modules == 2U);
+        assert(uniform.compiled_modules == 1U);
+        assert(compiled.compiled_modules > uniform.compiled_modules);
+#endif
+    }
+}
+
+struct DynamicProjectedTimelineEvent {
+    fsim::runtime::SimulationTick time { };
+    std::uint64_t delta { };
+    std::string value;
+
+    bool operator==(const DynamicProjectedTimelineEvent&) const = default;
+};
+
+struct DynamicProjectedCapture {
+    fsim::runtime::RunResult result;
+    std::array<std::vector<fsim::runtime::simir::SignalId>, 3>
+        result_signals;
+    std::array<std::vector<std::string>, 3> values;
+    std::array<std::vector<std::vector<DynamicProjectedTimelineEvent>>, 3>
+        timelines;
+    std::array<std::size_t, 3> operation_modes { };
+    std::size_t dynamic_projected_slices { };
+    std::size_t target_width { };
+    std::size_t compiled_processes { };
+    std::size_t compiled_modules { };
+};
+
+void write_dynamic_projected_process(
+    std::ofstream& output,
+    const std::string_view generate_name,
+    const std::string_view condition,
+    const std::string_view assignment)
+{
+    output << "\n  " << generate_name << " : if " << condition
+           << " generate\n    writer : process(payload, position)\n";
+    for (std::size_t index = 0; index < 110U; ++index) {
+        output << "      variable stage_" << index << " : std_logic;\n";
+    }
+    output << "    begin\n      stage_0 := payload;\n";
+    for (std::size_t index = 1; index < 110U; ++index) {
+        output << "      stage_" << index << " := stage_" << index - 1U
+               << ";\n";
+    }
+    output << "      " << assignment
+           << "\n    end process;\n  end generate;\n";
+}
+
+void write_dynamic_projected_sharing_source(
+    const std::filesystem::path& source)
+{
+    std::ofstream output { source };
+    output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity dynamic_projected_leaf is
+  generic (STYLE : natural := 0);
+  port (
+    payload : in std_logic;
+    position : in integer range 0 to 127;
+    result : out std_logic_vector(127 downto 0)
+  );
+end entity;
+
+architecture rtl of dynamic_projected_leaf is
+begin
+)";
+    write_dynamic_projected_process(
+        output,
+        "default_inertial",
+        "STYLE = 0",
+        "result(position) <= stage_109 after 5 ns;");
+    write_dynamic_projected_process(
+        output,
+        "transport_mode",
+        "STYLE = 1",
+        "result(position) <= transport stage_109 after 5 ns;");
+    write_dynamic_projected_process(
+        output,
+        "explicit_rejection",
+        "STYLE = 2",
+        "result(position) <= reject 1 ns inertial stage_109 after 5 ns;");
+    output << R"(
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity dynamic_projected_ascending_leaf is
+  port (
+    payload : in std_logic;
+    position : in integer range 0 to 127;
+    result : out std_logic_vector(0 to 127)
+  );
+end entity;
+
+architecture rtl of dynamic_projected_ascending_leaf is
+begin
+)";
+    write_dynamic_projected_process(
+        output,
+        "ascending_writer",
+        "true",
+        "result(position) <= stage_109 after 5 ns;");
+    output << R"(
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity dynamic_projected_top is end entity;
+
+architecture rtl of dynamic_projected_top is
+  type result_array_t is array (0 to 44) of std_logic_vector(127 downto 0);
+  type ascending_array_t is array (0 to 4) of std_logic_vector(0 to 127);
+  signal payload : std_logic := 'U';
+  signal inertial_results : result_array_t;
+  signal transport_results : result_array_t;
+  signal rejection_results : result_array_t;
+  signal ascending_results : ascending_array_t;
+begin
+  lanes : for lane in 0 to 44 generate
+    signal position : integer range 0 to 127 := lane;
+  begin
+    inertial_cell : entity work.dynamic_projected_leaf(rtl)
+      generic map (STYLE => 0)
+      port map (payload => payload, position => position,
+                result => inertial_results(lane));
+    transport_cell : entity work.dynamic_projected_leaf(rtl)
+      generic map (STYLE => 1)
+      port map (payload => payload, position => position,
+                result => transport_results(lane));
+    rejection_cell : entity work.dynamic_projected_leaf(rtl)
+      generic map (STYLE => 2)
+      port map (payload => payload, position => position,
+                result => rejection_results(lane));
+    ascending_lane : if lane < 5 generate
+      ascending_cell : entity work.dynamic_projected_ascending_leaf(rtl)
+        port map (payload => payload, position => position,
+                  result => ascending_results(lane));
+    end generate;
+  end generate;
+
+  stimulus : process
+  begin
+    payload <= 'H';
+    wait for 2 ns;
+    payload <= 'W';
+    wait for 2 ns;
+    payload <= 'Z';
+    wait for 2 ns;
+    payload <= 'X';
+    wait for 6 ns;
+    payload <= '0';
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+}
+
+DynamicProjectedCapture run_dynamic_projected_sharing(
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine)
+{
+    fsim::project::Config config;
+    config.base_directory = source.parent_path();
+    config.project.name = source.stem().string();
+    config.project.top = "vhdl:work.dynamic_projected_top(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = source.parent_path()
+        / (source.stem().string()
+            + (optimization == fsim::project::Optimization::o0
+                    ? "-o0-cache" : "-o2-cache"));
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(project);
+
+    DynamicProjectedCapture capture;
+    for (const auto& process : project->design.processes()) {
+        for (const auto& operation : process.operations) {
+            const auto* const projected
+                = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::WriteProjectedDynamicSlice>(
+                    &operation);
+            if (!projected) {
+                continue;
+            }
+            ++capture.dynamic_projected_slices;
+            capture.target_width = std::max(
+                capture.target_width,
+                project->design.signals().at(projected->signal).width);
+            std::size_t mode_index { };
+            if (projected->mode
+                == fsim::runtime::simir::ProjectedDelayMode::transport) {
+                mode_index = 1U;
+            } else if (projected->rejection == projected->delay) {
+                mode_index = 0U;
+            } else if (projected->rejection < projected->delay) {
+                mode_index = 2U;
+            } else {
+                assert(false);
+            }
+            ++capture.operation_modes[mode_index];
+            capture.result_signals[mode_index].push_back(projected->signal);
+        }
+    }
+    assert(capture.dynamic_projected_slices == 140U);
+    assert(capture.operation_modes[0] == 50U);
+    assert(capture.operation_modes[1] == 45U);
+    assert(capture.operation_modes[2] == 45U);
+    assert(capture.target_width >= 128U);
+    for (std::size_t index = 0; index < capture.result_signals.size(); ++index) {
+        auto& signals = capture.result_signals[index];
+        assert(signals.size() == (index == 0U ? 50U : 45U));
+        std::ranges::sort(signals);
+        assert(std::ranges::adjacent_find(signals) == signals.end());
+    }
+    for (std::size_t index = 0; index < capture.result_signals.size(); ++index) {
+        capture.timelines[index].resize(capture.result_signals[index].size());
+    }
+
+    fsim::app::Simulation simulation {
+        std::move(*project), config.run.max_deltas, engine
+    };
+    capture.compiled_processes = simulation.compiled_process_count();
+    capture.compiled_modules = simulation.compiled_module_count();
+    simulation.set_signal_change_hook(
+        [&](const fsim::runtime::simir::SignalId signal,
+            const fsim::runtime::PackedLogic4& value,
+            const fsim::runtime::SimulationTick time,
+            const std::uint64_t delta) {
+            for (std::size_t group = 0;
+                group < capture.result_signals.size(); ++group) {
+                const auto found = std::ranges::find(
+                    capture.result_signals[group], signal);
+                if (found == capture.result_signals[group].end()) {
+                    continue;
+                }
+                assert(value.is_logic9());
+                const auto lane = static_cast<std::size_t>(
+                    std::distance(
+                        capture.result_signals[group].begin(), found));
+                capture.timelines[group][lane].push_back({
+                    time, delta, value.to_msb_string()
+                });
+                return;
+            }
+        });
+    capture.result = simulation.run();
+    for (std::size_t group = 0;
+        group < capture.result_signals.size(); ++group) {
+        for (const auto signal : capture.result_signals[group]) {
+            capture.values[group].push_back(
+                simulation.read_signal(signal).to_msb_string());
+        }
+    }
+    return capture;
+}
+
+void verify_dynamic_projected_template_sharing(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "dynamic-projected-sharing.vhd";
+    write_dynamic_projected_sharing_source(source);
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        const auto reference = run_dynamic_projected_sharing(
+            source, optimization,
+            fsim::app::SimulationEngine::interpreter);
+        const auto compiled = run_dynamic_projected_sharing(
+            source, optimization,
+            fsim::app::SimulationEngine::compiled);
+        assert(reference.result.status == fsim::runtime::RunStatus::completed);
+        assert(compiled.result.status == reference.result.status);
+        assert(compiled.result.time == reference.result.time);
+        assert(compiled.result.delta == reference.result.delta);
+        assert(compiled.dynamic_projected_slices == 140U);
+        assert(compiled.target_width >= 128U);
+        for (std::size_t index = 0; index < reference.values.size(); ++index) {
+            assert(compiled.values[index] == reference.values[index]);
+            assert(compiled.timelines[index] == reference.timelines[index]);
+            assert(compiled.values[index].size()
+                == (index == 0U ? 50U : 45U));
+            auto distinct_values = compiled.values[index];
+            std::ranges::sort(distinct_values);
+            assert(std::ranges::adjacent_find(distinct_values)
+                == distinct_values.end());
+            for (std::size_t lane = 0; lane < compiled.values[index].size();
+                ++lane) {
+                assert(std::ranges::count_if(
+                           compiled.values[index][lane],
+                           [](const char value) { return value != 'U'; })
+                    == 1);
+                assert(!compiled.timelines[index][lane].empty());
+            }
+        }
+        assert(compiled.timelines[0] != compiled.timelines[1]);
+        assert(compiled.timelines[0] != compiled.timelines[2]);
+        const auto& transport_timeline = compiled.timelines[1];
+        for (const char value : { 'H', 'W', 'Z', 'X' }) {
+            assert(std::ranges::any_of(
+                transport_timeline,
+                [value](const auto& lane_timeline) {
+                    return std::ranges::any_of(
+                        lane_timeline,
+                        [value](const auto& event) {
+                            return event.value.find(value)
+                                != std::string::npos;
+                        });
+                }));
+        }
+#if defined(FSIM_HAS_LLVM)
+        assert(compiled.compiled_processes >= 140U);
+        assert(compiled.compiled_modules == 4U);
+#endif
+    }
 }
 
 void verify_capture(const Capture& capture)
@@ -592,6 +1162,278 @@ MixedCapture run_mixed(
     }
     assert(capture.vhdl_activity_points > 0U);
     return capture;
+}
+
+void verify_wide_projected_waveforms(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "wide_projected_waveforms.vhd";
+    {
+        std::ofstream output { source };
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity wide_projected_waveforms is
+  port (
+    whole : out std_logic_vector(79 downto 0);
+    sliced : out std_logic_vector(87 downto 0)
+  );
+end entity;
+
+architecture rtl of wide_projected_waveforms is
+  signal source_value : std_logic_vector(79 downto 0);
+begin
+  source_value <= (others => 'H');
+  whole <= transport source_value after 2 ns,
+    (others => 'Z') after 4 ns;
+  sliced(79 downto 8) <= reject 1 ns inertial
+    (others => 'X') after 2 ns,
+    (others => 'L') after 4 ns;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    struct WaveformCapture {
+        fsim::runtime::RunResult result;
+        std::vector<std::tuple<std::string, std::uint64_t, std::string>>
+            changes;
+        std::array<std::string, 2> final_values;
+        std::size_t compiled_processes { };
+        std::size_t process_count { };
+    };
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        auto config = make_config(directory, source, optimization);
+        config.project.name = "wide-projected-waveforms";
+        config.project.top = "vhdl:work.wide_projected_waveforms(rtl)";
+        config.build.cache_path = directory
+            / (optimization == fsim::project::Optimization::o0
+                    ? "wide-projected-o0"
+                    : "wide-projected-o2");
+        const auto run = [&](const fsim::app::SimulationEngine engine) {
+            fsim::diagnostic::Engine diagnostics;
+            auto project = fsim::app::build_project(config, diagnostics);
+            if (!project) {
+                for (const auto& diagnostic : diagnostics.diagnostics()) {
+                    std::cerr << diagnostic.code << ": "
+                              << diagnostic.message << '\n';
+                }
+            }
+            assert(project);
+            bool has_whole_waveform { };
+            bool has_slice_waveform { };
+            for (const auto& process : project->design.processes()) {
+                for (const auto& operation : process.operations) {
+                    has_whole_waveform = has_whole_waveform
+                        || fsim::runtime::simir::operation_holds<
+                            fsim::runtime::simir::WriteProjectedWaveform>(
+                            operation);
+                    has_slice_waveform = has_slice_waveform
+                        || fsim::runtime::simir::operation_holds<
+                            fsim::runtime::simir::WriteProjectedWaveformSlice>(
+                            operation);
+                }
+            }
+            assert(has_whole_waveform && has_slice_waveform);
+            const auto process_count = project->design.processes().size();
+            fsim::app::Simulation simulation {
+                std::move(*project), config.run.max_deltas, engine };
+            const std::array signals {
+                simulation.find_signal("wide_projected_waveforms.whole"),
+                simulation.find_signal("wide_projected_waveforms.sliced")
+            };
+            assert(signals[0] && signals[1]);
+            WaveformCapture capture;
+            capture.process_count = process_count;
+            capture.compiled_processes
+                = simulation.compiled_process_count();
+            simulation.set_signal_change_hook(
+                [&](const fsim::runtime::simir::SignalId signal,
+                    const fsim::runtime::PackedLogic4& value,
+                    const fsim::runtime::SimulationTick time,
+                    const std::uint64_t) {
+                    for (std::size_t index = 0; index < signals.size();
+                        ++index) {
+                        if (signal == *signals[index]) {
+                            capture.changes.emplace_back(
+                                index == 0 ? "whole" : "sliced",
+                                time, value.to_msb_string());
+                        }
+                    }
+                });
+            capture.result = simulation.run();
+            for (std::size_t index = 0; index < signals.size(); ++index) {
+                capture.final_values[index]
+                    = simulation.read_signal(*signals[index]).to_msb_string();
+            }
+            return capture;
+        };
+        const auto reference = run(
+            fsim::app::SimulationEngine::interpreter);
+        const auto compiled = run(
+            fsim::app::SimulationEngine::compiled);
+        assert(reference.result.status
+            == fsim::runtime::RunStatus::completed);
+        assert(reference.result.time == 4U);
+        assert(compiled.result.status == reference.result.status);
+        assert(compiled.result.time == reference.result.time);
+        assert(compiled.changes == reference.changes);
+        assert(compiled.final_values == reference.final_values);
+        assert(reference.final_values[0] == std::string(80U, 'Z'));
+        assert(reference.final_values[1]
+            == std::string(8U, 'Z') + std::string(72U, 'L')
+                + std::string(8U, 'Z'));
+        assert(std::ranges::find(reference.changes,
+            std::tuple { std::string { "whole" }, std::uint64_t { 2U },
+                std::string(80U, 'H') }) != reference.changes.end());
+        assert(std::ranges::find(reference.changes,
+            std::tuple { std::string { "sliced" }, std::uint64_t { 2U },
+                std::string(8U, 'Z') + std::string(72U, 'X')
+                    + std::string(8U, 'Z') })
+            != reference.changes.end());
+#if defined(FSIM_HAS_LLVM)
+        assert(compiled.compiled_processes == compiled.process_count);
+#endif
+    }
+}
+
+void verify_wide_signal_attributes(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "wide_signal_attributes.vhd";
+    {
+        std::ofstream output { source };
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity wide_signal_attributes is
+end entity;
+
+architecture rtl of wide_signal_attributes is
+  signal logic9_source : std_logic_vector(128 downto 0);
+  signal logic9_last : std_logic_vector(128 downto 0);
+  signal logic9_driving : std_logic_vector(128 downto 0);
+  signal logic4_source : bit_vector(128 downto 0);
+  signal logic4_last : bit_vector(128 downto 0);
+  signal logic4_driving : bit_vector(128 downto 0);
+begin
+  probe : process
+  begin
+    logic9_source <= (others => 'H');
+    logic4_source <= (others => '1');
+    wait for 1 ns;
+    logic9_source <= (others => 'W');
+    logic4_source <= (others => '0');
+    wait for 1 ns;
+    logic9_last <= logic9_source'last_value;
+    logic9_driving <= logic9_source'driving_value;
+    logic4_last <= logic4_source'last_value;
+    logic4_driving <= logic4_source'driving_value;
+    wait;
+  end process;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    struct Capture {
+        fsim::runtime::RunResult result;
+        std::array<std::string, 4> values;
+        std::size_t process_count { };
+        std::size_t compiled_processes { };
+    };
+    const auto run = [&](const fsim::project::Config& config,
+                         const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(project);
+        std::size_t last_value_count { };
+        std::size_t driving_value_count { };
+        for (const auto& process : project->design.processes()) {
+            for (const auto& operation : process.operations) {
+                if (const auto* last
+                    = fsim::runtime::simir::operation_get_if<
+                        fsim::runtime::simir::SignalLastValue>(&operation)) {
+                    assert(last->signal < project->design.signals().size());
+                    assert(project->design.signals()[last->signal].width > 64U);
+                    ++last_value_count;
+                }
+                if (const auto* driving
+                    = fsim::runtime::simir::operation_get_if<
+                        fsim::runtime::simir::SignalDrivingValue>(&operation)) {
+                    assert(driving->signal < project->design.signals().size());
+                    assert(
+                        project->design.signals()[driving->signal].width > 64U);
+                    ++driving_value_count;
+                }
+            }
+        }
+        assert(last_value_count == 2U);
+        assert(driving_value_count == 2U);
+        const auto process_count = project->design.processes().size();
+        fsim::app::Simulation simulation {
+            std::move(*project), config.run.max_deltas, engine };
+        constexpr std::array names {
+            "wide_signal_attributes.logic9_last",
+            "wide_signal_attributes.logic9_driving",
+            "wide_signal_attributes.logic4_last",
+            "wide_signal_attributes.logic4_driving"
+        };
+        std::array<fsim::runtime::simir::SignalId, names.size()> signals { };
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto signal = simulation.find_signal(names[index]);
+            assert(signal);
+            signals[index] = *signal;
+        }
+        Capture capture;
+        capture.process_count = process_count;
+        capture.result = simulation.run();
+        capture.compiled_processes = simulation.compiled_process_count();
+        for (std::size_t index = 0; index < signals.size(); ++index) {
+            capture.values[index]
+                = simulation.read_signal(signals[index]).to_msb_string();
+        }
+        return capture;
+    };
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        auto config = make_config(directory, source, optimization);
+        config.project.name = "wide-signal-attributes";
+        config.project.top = "vhdl:work.wide_signal_attributes(rtl)";
+        config.build.cache_path = directory
+            / (optimization == fsim::project::Optimization::o0
+                    ? "wide-attributes-o0"
+                    : "wide-attributes-o2");
+        const auto reference = run(
+            config, fsim::app::SimulationEngine::interpreter);
+        const auto compiled = run(
+            config, fsim::app::SimulationEngine::compiled);
+        assert(reference.result.status == fsim::runtime::RunStatus::completed);
+        assert(compiled.result.status == reference.result.status);
+        assert(compiled.result.time == reference.result.time);
+        assert(compiled.result.delta == reference.result.delta);
+        assert(compiled.values == reference.values);
+        assert(compiled.values[0] == std::string(129U, 'H'));
+        assert(compiled.values[1] == std::string(129U, 'W'));
+        assert(compiled.values[2] == std::string(129U, '1'));
+        assert(compiled.values[3] == std::string(129U, '0'));
+#if defined(FSIM_HAS_LLVM)
+        assert(compiled.process_count == 1U);
+        assert(compiled.compiled_processes == compiled.process_count);
+#endif
+    }
 }
 
 } // namespace
@@ -1266,6 +2108,11 @@ endmodule
 #endif
         }
     }
+
+    verify_dynamic_part_insert_template_sharing(directory.path);
+    verify_dynamic_projected_template_sharing(directory.path);
+    verify_wide_projected_waveforms(directory.path);
+    verify_wide_signal_attributes(directory.path);
 
     std::cout
         << "FSIM-VHDL-OLDER-MODES-PASS "

@@ -66,26 +66,6 @@ namespace {
   return result;
 }
 
-[[nodiscard]] bool key_less(
-    const ContainerType& type,
-    const PackedLogic4& left,
-    const PackedLogic4& right) {
-    if (type.signed_indices) {
-        const auto lhs_negative = left.get(type.index_width - 1U) == Logic4::one;
-        const auto rhs_negative = right.get(type.index_width - 1U) == Logic4::one;
-        if (lhs_negative != rhs_negative)
-            return lhs_negative;
-    }
-    const auto lhs = left.aval_words();
-    const auto rhs = right.aval_words();
-    for (auto index = lhs.size(); index != 0; --index) {
-        if (lhs[index - 1U] != rhs[index - 1U]) {
-            return lhs[index - 1U] < rhs[index - 1U];
-        }
-    }
-    return false;
-}
-
 [[nodiscard]] std::size_t checked_storage_add(
     const std::size_t left,
     const std::size_t right) {
@@ -127,6 +107,29 @@ void append_default_element(ContainerValue& value) {
 }
 
 }  // namespace
+
+bool associative_index_key_less(
+    const ContainerType& type,
+    const PackedLogic4& left,
+    const PackedLogic4& right) {
+  if (type.signed_indices) {
+    const auto lhs_negative
+        = left.get(type.index_width - 1U) == Logic4::one;
+    const auto rhs_negative
+        = right.get(type.index_width - 1U) == Logic4::one;
+    if (lhs_negative != rhs_negative) {
+      return lhs_negative;
+    }
+  }
+  const auto lhs = left.aval_words();
+  const auto rhs = right.aval_words();
+  for (auto index = lhs.size(); index != 0; --index) {
+    if (lhs[index - 1U] != rhs[index - 1U]) {
+      return lhs[index - 1U] < rhs[index - 1U];
+    }
+  }
+  return false;
+}
 
 std::size_t container_value_size(const ContainerValue& value) noexcept {
   return active_element_count(value);
@@ -270,7 +273,8 @@ void validate_container_value(const ContainerValue& value) {
               };
           }
         if (index != 0
-            && !key_less(value.type, value.keys[index - 1], key)) {
+            && !associative_index_key_less(
+                value.type, value.keys[index - 1], key)) {
           throw std::invalid_argument{
               "SimIR associative-array keys must be unique and ordered"};
         }

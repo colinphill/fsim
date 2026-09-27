@@ -4,7 +4,9 @@
 #include "llvm_jit_validation_operation.hpp"
 #include "llvm_jit_validation_class.hpp"
 #include "llvm_jit_validation_signal.hpp"
+#include <llvm/ADT/BitVector.h>
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -1284,6 +1286,13 @@ using namespace runtime::simir;
                                 "simulator status requires an operand no wider than 64 bits");
                         }
                     }
+                } else if constexpr (
+                    std::is_same_v<OperationType, FormatDisplay>) {
+                    const auto width
+                        = result.register_widths[operation.source];
+                    result.uses_formatted_output
+                        = result.uses_formatted_output
+                        || (width > 0U && width <= 64U);
                 }
             },
             process.operations[index]);
@@ -1338,7 +1347,7 @@ using namespace runtime::simir;
             },
             process.operations[index]);
         if (!supports_wide_register_operation(
-                process.operations[index], result.register_widths)) {
+                process.operations[index])) {
             std::string operation_type;
             fsim::runtime::simir::visit_operation(
                 [&](const auto& operation) {
@@ -1476,126 +1485,123 @@ using namespace runtime::simir;
         pending.insert(pending.end(), successors[instruction].begin(),
             successors[instruction].end());
     }
-    const auto is_cycle_safe_point =
-        [&](const Operation& operation) {
-            return is_resume_boundary(operation)
-                || fsim::runtime::simir::operation_holds<DebugPoint>(operation);
-        };
     for (std::size_t index = 0; index < process.operations.size(); ++index) {
         if (reachable[index]
-            && is_resume_boundary(process.operations[index])) {
+            && is_resume_boundary(
+                process.operations[index], result.register_widths)) {
             result.requires_resume = true;
         }
     }
-    std::vector<std::vector<std::size_t>> invocation_successors(
-        process.operations.size());
-    std::vector<std::vector<std::size_t>> invocation_predecessors(
-        process.operations.size());
-    for (std::size_t index = 0; index < process.operations.size(); ++index) {
-        if (!reachable[index] || is_cycle_safe_point(process.operations[index]) || fsim::runtime::simir::operation_holds<Stop>(process.operations[index]) || fsim::runtime::simir::operation_holds<Halt>(process.operations[index])) {
-            continue;
-        }
-        invocation_successors[index] = successors[index];
-        for (const auto successor : invocation_successors[index]) {
-            invocation_predecessors[successor].push_back(index);
-        }
-    }
-    std::vector<std::size_t> remaining_predecessors(
-        process.operations.size());
-    std::vector<std::size_t> acyclic_pending;
-    std::size_t reachable_count = 0;
-    for (std::size_t index = 0; index < process.operations.size(); ++index) {
-        if (!reachable[index]) {
-            continue;
-        }
-        ++reachable_count;
-        remaining_predecessors[index] = static_cast<std::size_t>(std::count_if(
-            invocation_predecessors[index].begin(),
-            invocation_predecessors[index].end(),
-            [&](const std::size_t predecessor) {
-                return reachable[predecessor];
-            }));
-        if (remaining_predecessors[index] == 0) {
-            acyclic_pending.push_back(index);
-        }
-    }
-    std::size_t acyclic_count = 0;
-    while (!acyclic_pending.empty()) {
-        const auto instruction = acyclic_pending.back();
-        acyclic_pending.pop_back();
-        ++acyclic_count;
-        for (const auto successor : invocation_successors[instruction]) {
-            if (!reachable[successor]) {
-                continue;
-            }
-            --remaining_predecessors[successor];
-            if (remaining_predecessors[successor] == 0) {
-                acyclic_pending.push_back(successor);
-            }
-        }
-    }
-    if (acyclic_count != reachable_count) {
-        const auto cycle = std::find_if(
-            remaining_predecessors.begin(), remaining_predecessors.end(),
-            [](const std::size_t count) { return count != 0; });
-        record_unsupported(
-            static_cast<std::size_t>(
-                std::distance(remaining_predecessors.begin(), cycle)),
-            "reachable control-flow cycle has no suspension safe point");
-    }
-    std::vector<std::vector<bool>> definitely_defined_in(
-        process.operations.size(),
-        std::vector<bool>(process.register_count, true));
-    std::vector<std::vector<bool>> definitely_defined_out = definitely_defined_in;
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (std::size_t index = 0; index < process.operations.size(); ++index) {
-            if (!reachable[index]) {
-                continue;
-            }
-            std::vector<bool> incoming(process.register_count, true);
-            if (index == 0) {
-                std::fill(incoming.begin(), incoming.end(), false);
-            } else {
-                bool saw_predecessor = false;
-                for (const auto predecessor : predecessors[index]) {
-                    if (!reachable[predecessor]) {
+    const auto analyze_definite_definitions =
+        [&](auto make_set, auto reset_set, auto intersect_sets,
+            auto set_bit, auto test_bit) {
+            using DefiniteSet = decltype(make_set(true));
+            std::vector<DefiniteSet> definitely_defined_in(
+                process.operations.size(), make_set(true));
+            std::vector<DefiniteSet> definitely_defined_out
+                = definitely_defined_in;
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (std::size_t index = 0;
+                    index < process.operations.size(); ++index) {
+                    if (!reachable[index]) {
                         continue;
                     }
-                    if (!saw_predecessor) {
-                        incoming = definitely_defined_out[predecessor];
-                        saw_predecessor = true;
+                    auto incoming = make_set(true);
+                    if (index == 0) {
+                        reset_set(incoming);
                     } else {
-                        for (std::size_t reg = 0; reg < process.register_count; ++reg) {
-                            incoming[reg] = incoming[reg] && definitely_defined_out[predecessor][reg];
+                        bool saw_predecessor = false;
+                        for (const auto predecessor : predecessors[index]) {
+                            if (!reachable[predecessor]) {
+                                continue;
+                            }
+                            if (!saw_predecessor) {
+                                incoming
+                                    = definitely_defined_out[predecessor];
+                                saw_predecessor = true;
+                            } else {
+                                intersect_sets(
+                                    incoming,
+                                    definitely_defined_out[predecessor]);
+                            }
                         }
+                    }
+                    auto outgoing = incoming;
+                    for (const auto definition :
+                        instruction_definitions[index]) {
+                        set_bit(outgoing, definition);
+                    }
+                    if (incoming != definitely_defined_in[index]
+                        || outgoing != definitely_defined_out[index]) {
+                        definitely_defined_in[index] = std::move(incoming);
+                        definitely_defined_out[index]
+                            = std::move(outgoing);
+                        changed = true;
                     }
                 }
             }
-            auto outgoing = incoming;
-            for (const auto definition : instruction_definitions[index]) {
-                outgoing[definition] = true;
+            for (std::size_t index = 0;
+                index < process.operations.size(); ++index) {
+                if (!reachable[index]) {
+                    continue;
+                }
+                for (const auto used : instruction_uses[index]) {
+                    if (!test_bit(definitely_defined_in[index], used)) {
+                        reject(process, index,
+                            "register " + std::to_string(used)
+                                + " may be used before definition on a control-flow "
+                                  "path");
+                    }
+                }
             }
-            if (incoming != definitely_defined_in[index] || outgoing != definitely_defined_out[index]) {
-                definitely_defined_in[index] = std::move(incoming);
-                definitely_defined_out[index] = std::move(outgoing);
-                changed = true;
-            }
-        }
-    }
-    for (std::size_t index = 0; index < process.operations.size(); ++index) {
-        if (!reachable[index]) {
-            continue;
-        }
-        for (const auto used : instruction_uses[index]) {
-            if (!definitely_defined_in[index][used]) {
-                reject(process, index,
-                    "register " + std::to_string(used)
-                        + " may be used before definition on a control-flow "
-                          "path");
-            }
-        }
+        };
+    constexpr auto bit_vector_word_bits = sizeof(std::uintptr_t)
+        * std::numeric_limits<unsigned char>::digits;
+    // BitVector rounds its unsigned size with S + BITWORD_SIZE - 1.
+    // Keep that addition in range; the fallback preserves valid ABI counts.
+    constexpr auto max_bit_vector_register_count
+        = static_cast<std::size_t>(
+            std::numeric_limits<unsigned>::max())
+        - (bit_vector_word_bits - 1U);
+    if (process.register_count <= max_bit_vector_register_count) {
+        analyze_definite_definitions(
+            [&](const bool value) {
+                return llvm::BitVector(
+                    static_cast<unsigned>(process.register_count), value);
+            },
+            [](llvm::BitVector& set) { set.reset(); },
+            [](llvm::BitVector& set, const llvm::BitVector& predecessor) {
+                set &= predecessor;
+            },
+            [](llvm::BitVector& set, const RegisterId definition) {
+                set.set(static_cast<unsigned>(definition));
+            },
+            [](const llvm::BitVector& set, const RegisterId used) {
+                return set.test(static_cast<unsigned>(used));
+            });
+    } else {
+        analyze_definite_definitions(
+            [&](const bool value) {
+                return std::vector<bool>(process.register_count, value);
+            },
+            [](std::vector<bool>& set) {
+                std::fill(set.begin(), set.end(), false);
+            },
+            [&](std::vector<bool>& set,
+                const std::vector<bool>& predecessor) {
+                for (std::size_t reg = 0;
+                    reg < process.register_count; ++reg) {
+                    set[reg] = set[reg] && predecessor[reg];
+                }
+            },
+            [](std::vector<bool>& set, const RegisterId definition) {
+                set[definition] = true;
+            },
+            [](const std::vector<bool>& set, const RegisterId used) {
+                return set[used];
+            });
     }
     if (unsupported) {
         reject_unsupported(

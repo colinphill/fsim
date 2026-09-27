@@ -465,6 +465,59 @@ void test_projected_callbacks_at_level(
         [&] { (void)jit.execute(handle, missing); },
         "requires write_projected_waveform_slice");
   }
+
+  Process wide;
+  wide.id = 8;
+  wide.name = "wide_projected_callbacks";
+  wide.register_count = 5;
+  wide.operations = {
+      LoadConstant { 0,
+          PackedLogic4::from_msb_string(
+              "1XZ" + std::string(77U, '0')) },
+      LoadConstant { 1,
+          PackedLogic4::from_msb_string(std::string(80U, '1')) },
+      LoadConstant { 2, PackedLogic4::from_aval_bval(32U, 64U, 0U) },
+      LoadConstant { 3, PackedLogic4::from_msb_string("X") },
+      LoadConstant { 4, PackedLogic4::from_msb_string("Z") },
+      WriteProjectedWaveform { 0, { { 0, 2 }, { 1, 4 } },
+          2, ProjectedDelayMode::inertial },
+      WriteProjectedWaveformSlice { 1, { { 0, 3 }, { 1, 5 } },
+          0, 0, ProjectedDelayMode::transport },
+      WriteProjectedSlice { 1, 0, 0, 6, 0,
+          ProjectedDelayMode::transport },
+      WriteProjectedDynamicSlice { 1, 3,
+          DynamicIndex { 2, 79, 0, 0 }, 7, 0,
+          ProjectedDelayMode::transport },
+      WriteProjectedWaveformDynamicSlice { 1,
+          { { 3, 8 }, { 4, 9 } },
+          DynamicIndex { 2, 79, 0, 0 }, 0,
+          ProjectedDelayMode::transport },
+      Halt { }
+  };
+  const std::array<std::uint32_t, 2> wide_widths { 80U, 80U };
+  const auto wide_symbol = std::string { symbol_prefix }
+      + "_wide_projected_callbacks";
+  jit.add_process(wide_symbol, wide, wide_widths);
+  TestRuntime wide_runtime;
+  auto wide_descriptor = abi(wide_runtime);
+  wide_descriptor.execute_signal_operation = [](
+      void* context, const std::uint32_t process,
+      const std::uint32_t instruction,
+      fsim_jit_frame_v1* frame) {
+      auto& runtime = *static_cast<TestRuntime*>(context);
+      assert(process == 8U && frame != nullptr);
+      assert(frame->register_initialized[0] != 0U);
+      assert((frame->register_bval[1] & (UINT64_C(3) << 13U))
+          == (UINT64_C(3) << 13U));
+      runtime.native_service_calls.emplace_back(process, instruction);
+      return std::uint32_t { 0 };
+  };
+  assert(jit.execute(jit.lookup(wide_symbol), wide_descriptor)
+      == JitExecutionStatus::completed);
+  assert((wide_runtime.native_service_calls
+      == std::vector<std::pair<std::uint32_t, std::uint32_t>> {
+          { 8U, 5U }, { 8U, 6U }, { 8U, 7U }, { 8U, 8U },
+          { 8U, 9U } }));
 }
 
 [[nodiscard]] Process make_scheduling_differential_process() {
@@ -795,6 +848,34 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
           EncodedSignal{UINT64_C(0x3c), 0}));
   assert((run_jit(when_false_handle, Logic4::one) ==
           EncodedSignal{UINT64_C(0xa5), 0}));
+
+  Process finite_loop;
+  finite_loop.id = 27;
+  finite_loop.name = "finite_control_flow_loop";
+  finite_loop.register_count = 5;
+  finite_loop.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      LoadConstant{1, PackedLogic4::from_msb_string("00000011")},
+      LoadConstant{2, PackedLogic4::from_msb_string("00000001")},
+      LoadConstant{3, PackedLogic4::from_msb_string("00000000")},
+      LoadConstant{4, PackedLogic4::from_msb_string("00000000")},
+      Branch{0, 6, 10, UnknownBranchPolicy::when_false},
+      Binary{BinaryOperator::add_unsigned, 4, 4, 1},
+      Binary{BinaryOperator::subtract_unsigned, 1, 1, 2},
+      Binary{BinaryOperator::not_equal, 0, 1, 3},
+      Jump{5},
+      WriteBlocking{1, 4},
+      Halt{},
+  };
+  const auto finite_loop_symbol =
+      std::string{symbol_prefix} + "_finite_loop";
+  jit.add_process(finite_loop_symbol, finite_loop, widths);
+  const auto finite_loop_handle = jit.lookup(finite_loop_symbol);
+  TestRuntime finite_loop_runtime;
+  auto finite_loop_descriptor = abi(finite_loop_runtime);
+  assert(jit.execute(finite_loop_handle, finite_loop_descriptor) ==
+         JitExecutionStatus::completed);
+  assert((finite_loop_runtime.signals[1] == EncodedSignal{6, 0}));
 
   // Verilog/SystemVerilog X and Z select the false edge only when the lowering
   // explicitly requested that language policy.
@@ -2125,6 +2206,108 @@ void test_signal_waits_at_level(
       child_result.status == FSIM_JIT_RESUME_STATUS_FORK_END
       && child_result.instruction == 4
       && child_frame.program_counter == 5);
+}
+
+void test_wide_boundary_registers_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol) {
+  constexpr std::uint32_t wide_width = 130U;
+  std::string input_bits(wide_width, '0');
+  input_bits.front() = '1';
+  input_bits[64] = 'X';
+  input_bits.back() = 'Z';
+  const auto input = PackedLogic4::from_msb_string(input_bits);
+  auto method_result = input;
+  method_result.set(0U, Logic4::x);
+  method_result.set(65U, Logic4::one);
+  auto static_result = method_result;
+  static_result.set(129U, Logic4::z);
+  auto pla_result = static_result;
+  pla_result.set(63U, Logic4::zero);
+
+  Process process;
+  process.id = 0U;
+  process.name = std::string { symbol };
+  process.register_count = 5U;
+  process.operations = {
+      LoadConstant { 0U, input },
+      ClassAllocate {
+          1U, "work::WideBoundaryProbe<130>",
+          "work::WideBoundaryProbe", { 0U }, { 0U }, { "payload" } },
+      ClassMethodCall {
+          2U, 1U, "work::WideBoundaryProbe::transform", { 0U },
+          { "value" }, { 0U }, wide_width, false, { 0U }, { } },
+      ClassStaticMethodCall {
+          3U, "work::WideBoundaryProbe::static_transform", { 2U },
+          { "value" }, { 0U }, wide_width, { 0U } },
+      PlaEvaluate {
+          0U, 3U, 4U, wide_width, wide_width,
+          PlaLogicKind::and_logic, false },
+      Halt { },
+  };
+  const std::array<std::uint32_t, 5> widths {
+      wide_width, 64U, wide_width, wide_width, wide_width };
+  LlvmJit jit { LlvmJitOptions { optimization, { } } };
+  assert(jit.supports_process(process, widths));
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+  const auto layout = jit.frame_layout(handle);
+  std::vector<std::uint64_t> register_aval(layout.register_word_count);
+  std::vector<std::uint64_t> register_bval(layout.register_word_count);
+  std::vector<std::uint8_t> register_initialized(layout.register_count);
+  fsim_jit_frame_v1 frame { };
+  jit.initialize_frame(
+      handle, frame, register_aval, register_bval, register_initialized);
+
+  const auto read_register = [&](const RegisterId id) {
+    const auto width = widths[id];
+    const auto word_count = static_cast<std::size_t>((width + 63U) / 64U);
+    const auto offset = layout.register_word_offsets[id];
+    return PackedLogic4::from_word_planes(
+        width,
+        std::span<const std::uint64_t> {
+            register_aval.data() + offset, word_count },
+        std::span<const std::uint64_t> {
+            register_bval.data() + offset, word_count });
+  };
+  const auto write_register = [&](const RegisterId id,
+                                  const PackedLogic4& value) {
+    assert(value.width() == widths[id]);
+    const auto offset = layout.register_word_offsets[id];
+    std::ranges::copy(
+        value.aval_words(), register_aval.begin() + offset);
+    std::ranges::copy(
+        value.bval_words(), register_bval.begin() + offset);
+    register_initialized[id] = 1U;
+  };
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  auto result = new_resume_result();
+  const auto resume_boundary = [&](const std::uint32_t instruction) {
+    assert(jit.resume(handle, descriptor, frame, result)
+           == JitResumeStatus::simir_boundary);
+    assert(result.instruction == instruction);
+    assert(frame.program_counter == instruction + 1U);
+  };
+
+  resume_boundary(1U);
+  assert(read_register(0U) == input);
+  write_register(1U, PackedLogic4::from_aval_bval(64U, 0x1234U, 0U));
+
+  resume_boundary(2U);
+  assert(read_register(0U) == input);
+  write_register(2U, method_result);
+
+  resume_boundary(3U);
+  assert(read_register(2U) == method_result);
+  write_register(3U, static_result);
+
+  resume_boundary(4U);
+  assert(read_register(3U) == static_result);
+  write_register(4U, pla_result);
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::completed);
+  assert(read_register(4U) == pla_result);
 }
 
 } // namespace fsim::tests::compiler

@@ -350,6 +350,23 @@ std::optional<std::string_view> parse_compatibility_switch(
         : std::optional<std::string_view> { *found };
 }
 
+std::optional<std::string_view> parse_vhdl_compatibility(
+    const std::string_view spelling) noexcept
+{
+    auto normalized = lowercase(spelling);
+    std::ranges::replace(normalized, '_', '-');
+    if (normalized.empty()) {
+        return std::string_view { };
+    }
+    constexpr std::string_view legacy_unprotected_shared_variable {
+        "legacy-unprotected-shared-variable"
+    };
+    return normalized == legacy_unprotected_shared_variable
+        ? std::optional<std::string_view> {
+              legacy_unprotected_shared_variable }
+        : std::nullopt;
+}
+
 std::string compatibility_profile(
     const std::vector<std::string>& switches)
 {

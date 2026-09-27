@@ -198,6 +198,7 @@ using namespace runtime::simir;
 [[nodiscard]] std::vector<InstructionIndex> optimized_resume_entries(
     const Process& process,
     const NativeCallablePlan& native_callables,
+    const std::span<const std::uint32_t> register_widths,
     const bool debug_instrumentation)
 {
     std::vector<bool> selected(process.operations.size());
@@ -227,7 +228,8 @@ using namespace runtime::simir;
             = (fsim::runtime::simir::operation_holds<CallableFramePush>(operation)
                   || fsim::runtime::simir::operation_holds<CallableFramePop>(operation))
             && !native_callables.frame_operations[index];
-        const bool host_boundary = is_resume_boundary(operation)
+        const bool host_boundary = is_resume_boundary(
+            operation, register_widths)
             || (debug_instrumentation
                 && fsim::runtime::simir::operation_holds<DebugPoint>(
                     operation))
@@ -280,11 +282,12 @@ using namespace runtime::simir;
 
 ProcessLoweringPlan make_process_lowering_plan(
     const Process& process,
+    const std::span<const std::uint32_t> register_widths,
     const bool debug_instrumentation)
 {
     const auto native_callables = analyze_native_callables(process);
     auto resume_entries = optimized_resume_entries(
-        process, native_callables, debug_instrumentation);
+        process, native_callables, register_widths, debug_instrumentation);
     ProcessLoweringPlan full {
         std::vector<bool>(process.operations.size(), true),
         std::move(resume_entries),
@@ -297,8 +300,8 @@ ProcessLoweringPlan make_process_lowering_plan(
         || full.entry_points.size() < 2U
         || std::ranges::any_of(
             process.operations,
-            [](const Operation& operation) {
-                if (is_resume_boundary(operation)) {
+            [register_widths](const Operation& operation) {
+                if (is_resume_boundary(operation, register_widths)) {
                     return !fsim::runtime::simir::operation_holds<
                                WaitSensitivity>(operation)
                         && !fsim::runtime::simir::operation_holds<
@@ -334,7 +337,7 @@ ProcessLoweringPlan make_process_lowering_plan(
                 pending.push_back(successor);
             }
         };
-        if (is_resume_boundary(operation)
+        if (is_resume_boundary(operation, register_widths)
             || fsim::runtime::simir::operation_holds<Halt>(operation)
             || fsim::runtime::simir::operation_holds<Stop>(operation)
             || fsim::runtime::simir::operation_holds<Return>(operation)

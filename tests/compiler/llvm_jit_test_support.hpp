@@ -144,6 +144,7 @@ namespace llvm_jit_test_detail {
         std::vector<std::uint32_t> monitor_install_instructions;
         std::vector<std::uint32_t> monitor_control_instructions;
         std::vector<std::uint32_t> random_instructions;
+        std::vector<std::array<std::uint64_t, 4>> random_bounds;
         std::vector<InertialWrite> inertial_writes;
         std::vector<ProjectedWrite> projected_writes;
         std::vector<std::array<std::uint32_t, 3>> released_slices;
@@ -703,6 +704,11 @@ template <class Function>
             std::forward<Function>(function)();
         } catch (const LlvmJitError& error) {
             rejected = true;
+            if (std::string_view { error.what() }.find(fragment)
+                == std::string_view::npos) {
+                std::cerr << "expected LLVM rejection: " << fragment
+                          << "\nactual LLVM rejection: " << error.what() << '\n';
+            }
             assert(std::string_view { error.what() }.find(fragment) != std::string_view::npos);
         }
         assert(rejected);
@@ -800,6 +806,9 @@ void test_process_cohort_resume_at_level(
 void test_class_service_boundaries_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_wide_boundary_registers_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_native_service_callbacks_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
@@ -820,6 +829,9 @@ void test_optimized_frame_initialization_elision_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wide_signal_read_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_signal_attributes_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wide_signal_write_at_level(
@@ -844,6 +856,9 @@ void test_affine_dynamic_extract_fusion_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_fused_dynamic_part_signal_read_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_single_bit_dynamic_part_select_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wildcard_case_matching_at_level(

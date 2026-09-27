@@ -222,7 +222,6 @@ OperationList::Storage& OperationList::mutable_storage()
 }
 
 bool OperationList::empty() const noexcept { return storage().empty(); }
-OperationList::size_type OperationList::size() const noexcept { return storage().size(); }
 OperationList::size_type OperationList::capacity() const noexcept { return storage().capacity(); }
 OperationList::size_type OperationList::max_size() const noexcept { return storage().max_size(); }
 const Operation& OperationList::operator[](const size_type index) const noexcept

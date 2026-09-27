@@ -6807,45 +6807,70 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             : std::optional { destination };
     } else if (const auto element
         = hir_container_element_binding(expression_id)) {
-        const auto index = lower_hir_container_element_index(*element);
-        if (!index) {
-            return std::nullopt;
-        }
-        const auto container = element->local
-            ? *element->local
-            : allocate_container_register(*element->type);
-        if (!element->local) {
-            process_.operations.emplace_back(ReadContainerObject {
-                container, element->object });
-        }
-        const auto destination = allocate_register(
-            element->width, element->domain);
-        process_.operations.emplace_back(ContainerRead {
-            destination,
-            container,
-            *index,
-            element->indices.size() > 1U
-                || element->type->signed_indices,
-            element->indices.size() > 1U,
-            element->type->string_indices,
-        });
-        if (!element->local) {
-            const auto alias = std::ranges::find_if(
-                design_.container_signal_aliases_.rbegin(),
-                design_.container_signal_aliases_.rend(),
-                [&](const ContainerSignalAlias& candidate) {
-                    return candidate.object == element->object
-                        && candidate.readable;
-                });
-            if (alias != design_.container_signal_aliases_.rend()) {
-                implicit_signal_dependencies_.push_back(alias->signal);
+        if (const auto extract
+            = hir_static_container_signal_extract(*element)) {
+            const auto source_register = allocate_register(
+                extract->source_width, extract->domain);
+            process_.operations.emplace_back(runtime::simir::ReadSignal {
+                source_register,
+                extract->signal,
+                runtime::simir::SignalReadKind::current,
+            });
+            const auto destination = allocate_register(
+                extract->width, element->domain);
+            process_.operations.emplace_back(runtime::simir::Extract {
+                destination,
+                source_register,
+                extract->offset,
+                extract->width,
+            });
+            implicit_signal_dependencies_.push_back(extract->signal);
+            result = expected_width != 0U
+                    && expected_width != element->width
+                ? std::optional { resize_register(
+                      destination, expected_width, element->signed_value) }
+                : std::optional { destination };
+        } else {
+            const auto index = lower_hir_container_element_index(*element);
+            if (!index) {
+                return std::nullopt;
             }
+            const auto container = element->local
+                ? *element->local
+                : allocate_container_register(*element->type);
+            if (!element->local) {
+                process_.operations.emplace_back(ReadContainerObject {
+                    container, element->object });
+            }
+            const auto destination = allocate_register(
+                element->width, element->domain);
+            process_.operations.emplace_back(ContainerRead {
+                destination,
+                container,
+                *index,
+                element->indices.size() > 1U
+                    || element->type->signed_indices,
+                element->indices.size() > 1U,
+                element->type->string_indices,
+            });
+            if (!element->local) {
+                const auto alias = std::ranges::find_if(
+                    design_.container_signal_aliases_.rbegin(),
+                    design_.container_signal_aliases_.rend(),
+                    [&](const ContainerSignalAlias& candidate) {
+                        return candidate.object == element->object
+                            && candidate.readable;
+                    });
+                if (alias != design_.container_signal_aliases_.rend()) {
+                    implicit_signal_dependencies_.push_back(alias->signal);
+                }
+            }
+            result = expected_width != 0U
+                    && expected_width != element->width
+                ? std::optional { resize_register(
+                      destination, expected_width, element->signed_value) }
+                : std::optional { destination };
         }
-        result = expected_width != 0U
-                && expected_width != element->width
-            ? std::optional { resize_register(
-                  destination, expected_width, element->signed_value) }
-            : std::optional { destination };
     } else if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::string_literal

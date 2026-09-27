@@ -1535,6 +1535,7 @@ endconfig : semantic_hir_configuration
                 == fsim::semantic::sv::ExpressionKind::assignment_pattern
                 && expression.associations.size() == 2;
         }));
+    assert(checked->systemverilog_hir.expressions().size() > 64U);
     assert(checked->semantics.expression_identities().size()
         == checked->systemverilog_hir.expressions().size());
     assert(checked->semantics.statement_identities().size()

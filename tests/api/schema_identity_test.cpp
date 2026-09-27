@@ -33,7 +33,7 @@ static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 7);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
 static_assert(fsim::app::kVhdlHirStateSchema == 6);
 static_assert(fsim::compiler::llvm_detail::kNativeObjectCacheSchema ==
-    std::string_view { "fsim-llvm-native-object-v169" });
+    std::string_view { "fsim-llvm-native-object-v170" });
 
 int main()
 {

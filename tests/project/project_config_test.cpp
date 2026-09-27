@@ -980,6 +980,79 @@ files = ["project_config_test.cpp"]
         "compatibility switches reject cross-family selection");
 }
 
+void test_vhdl_compatibility_selection()
+{
+    const auto base_directory
+        = std::filesystem::path { __FILE__ }.parent_path();
+    fsim::diagnostic::Engine strict_diagnostics;
+    const auto strict = fsim::project::parse(
+        R"(schema = 3
+[project]
+top = "shared_ram"
+[[source_set]]
+language = "vhdl"
+standard = "2008"
+files = ["project_config_test.cpp"]
+)",
+        "strict-vhdl-compatibility.toml", base_directory,
+        strict_diagnostics);
+    check(
+        strict && !strict_diagnostics.has_error()
+            && strict->source_sets.front().vhdl_compatibility.empty(),
+        "VHDL compatibility defaults to strict mode");
+
+    fsim::diagnostic::Engine opted_diagnostics;
+    const auto opted = fsim::project::parse(
+        R"(schema = 3
+[project]
+top = "shared_ram"
+[[source_set]]
+language = "vhdl"
+standard = "2008"
+vhdl_compatibility = "legacy-unprotected-shared-variable"
+files = ["project_config_test.cpp"]
+)",
+        "opted-vhdl-compatibility.toml", base_directory,
+        opted_diagnostics);
+    check(
+        opted && !opted_diagnostics.has_error()
+            && opted->source_sets.front().vhdl_compatibility
+                == "legacy-unprotected-shared-variable",
+        "the named VHDL compatibility mode is retained by project parsing");
+
+    fsim::diagnostic::Engine unknown_diagnostics;
+    const auto unknown = fsim::project::parse(
+        R"(schema = 3
+[project]
+top = "shared_ram"
+[[source_set]]
+language = "vhdl"
+vhdl_compatibility = "future-mode"
+files = ["project_config_test.cpp"]
+)",
+        "unknown-vhdl-compatibility.toml", base_directory,
+        unknown_diagnostics);
+    check(
+        !unknown && unknown_diagnostics.has_error(),
+        "unknown VHDL compatibility modes are rejected");
+
+    fsim::diagnostic::Engine cross_language_diagnostics;
+    const auto cross_language = fsim::project::parse(
+        R"(schema = 3
+[project]
+top = "systemverilog_top"
+[[source_set]]
+language = "systemverilog"
+vhdl_compatibility = "legacy-unprotected-shared-variable"
+files = ["project_config_test.cpp"]
+)",
+        "cross-language-vhdl-compatibility.toml", base_directory,
+        cross_language_diagnostics);
+    check(
+        !cross_language && cross_language_diagnostics.has_error(),
+        "VHDL compatibility modes reject non-VHDL source sets");
+}
+
 } // namespace
 
 int main()
@@ -999,6 +1072,7 @@ int main()
     test_vhdl_standard_values();
     test_verilog_systemverilog_standard_values();
     test_verilog_systemverilog_compatibility_selection();
+    test_vhdl_compatibility_selection();
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
         return 1;

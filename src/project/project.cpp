@@ -870,6 +870,22 @@ class Parser {
       source_has_language_[context_index_] = true;
       return;
     }
+    if (key == "vhdl_compatibility") {
+      if (!require_kind(value, Value::Kind::string, key, "a string")) {
+        return;
+      }
+      const auto canonical = parse_vhdl_compatibility(value.text);
+      if (!canonical) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "unsupported VHDL compatibility profile '" + value.text
+                + "'; expected legacy-unprotected-shared-variable",
+            value.span);
+        return;
+      }
+      source_set.vhdl_compatibility = *canonical;
+      return;
+    }
     if (key == "standard" || key == "library" || key == "compilation_unit"
         || key == "uvm_release") {
       if (!require_kind(value, Value::Kind::string, key, "a string")) {
@@ -1444,6 +1460,14 @@ class Parser {
             std::string(kValueCode),
             "[[source_set]] #" + std::to_string(index + 1)
                 + " compatibility switches are valid only for Verilog/SystemVerilog",
+            document_span);
+      }
+      if (!source_set.vhdl_compatibility.empty()
+          && source_set.language != Language::vhdl) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "[[source_set]] #" + std::to_string(index + 1)
+                + " vhdl_compatibility is valid only for VHDL",
             document_span);
       }
       if (source_set.uvm_release != SystemVerilogUvmRelease::none

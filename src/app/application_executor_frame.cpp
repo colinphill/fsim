@@ -337,9 +337,8 @@ void LlvmProcessExecutor::initialize_buffered_logic9_updates()
     });
     std::ranges::sort(projected_candidates);
     const auto add = [&](const runtime::simir::SignalId signal) {
-        const auto actual = remap_signal(
-            signal_remap_, dense_signal_remap_base_, dense_signal_remap_,
-            signal);
+        // process_ already uses the candidate's signal IDs.
+        const auto actual = signal;
         if (actual >= signal_widths_.size()
             || actual >= signal_value_kinds_.size()
             || signal_value_kinds_[actual]

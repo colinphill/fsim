@@ -89,11 +89,15 @@ void validate_prefix_operation(
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
-                    result.uses_signal_last_value = true;
                     record_definition(operation.destination, index);
+                    const auto width = exact_signal_width(
+                        operation.signal, index);
+                    if (width <= 64U) {
+                        result.uses_signal_last_value = true;
+                    }
                     constrain_width(
                         operation.destination,
-                        signal_width(operation.signal, index),
+                        width,
                         index);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
                     result.uses_signal_last_event = true;
@@ -108,7 +112,7 @@ void validate_prefix_operation(
                 } else if constexpr (
                     std::is_same_v<OperationType, VitalTimingCheck>) {
                     result.uses_vital_timing = true;
-                    const auto test_width = signal_width(
+                    const auto test_width = exact_signal_width(
                         operation.test_signal, index);
                     if (operation.test_offset >= test_width) {
                         reject(
@@ -116,7 +120,7 @@ void validate_prefix_operation(
                             "VitalTimingCheck test offset is outside the signal");
                     }
                     if (operation.reference_signal) {
-                        const auto reference_width = signal_width(
+                        const auto reference_width = exact_signal_width(
                             *operation.reference_signal, index);
                         if (operation.reference_offset >= reference_width) {
                             reject(
@@ -176,11 +180,15 @@ void validate_prefix_operation(
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDrivingValue>) {
-                    result.uses_signal_driving_value = true;
                     record_definition(operation.destination, index);
+                    const auto width = exact_signal_width(
+                        operation.signal, index);
+                    if (width <= 64U) {
+                        result.uses_signal_driving_value = true;
+                    }
                     constrain_width(
                         operation.destination,
-                        signal_width(operation.signal, index),
+                        width,
                         index);
                 } else if constexpr (
                     operation_group_contains_v<OperationType, ClassOperationGroup>) {

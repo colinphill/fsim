@@ -510,6 +510,18 @@ bool load_required_mapped_libraries(
                         + std::string { standard } + "'");
                 return nullptr;
             }
+            const auto vhdl_compatibility =
+                *language == project::Language::vhdl
+                ? application_detail::vhdl_source_compatibility_from_profile(
+                      profile)
+                : std::optional<std::string_view> { std::string_view { } };
+            if (!vhdl_compatibility) {
+                diagnostics.error(
+                    "FSIM-LIB-0008",
+                    "mapped VHDL provenance names an unsupported "
+                    "compatibility profile '" + std::string { profile } + "'");
+                return nullptr;
+            }
             const auto matches = [&](const project::SourceSet& settings) {
                 if (settings.language != *language
                     || settings.standard != *canonical) {
@@ -520,6 +532,10 @@ bool load_required_mapped_libraries(
                     return project::compatibility_profile(
                                settings.compatibility_switches)
                         == profile;
+                }
+                if (*language == project::Language::vhdl) {
+                    return settings.vhdl_compatibility
+                        == *vhdl_compatibility;
                 }
                 return true;
             };
@@ -533,6 +549,9 @@ bool load_required_mapped_libraries(
             settings.standard = *canonical;
             settings.library = library_name;
             settings.compilation_unit = "file";
+            if (*language == project::Language::vhdl) {
+                settings.vhdl_compatibility = *vhdl_compatibility;
+            }
             if ((*language == project::Language::verilog
                     || *language == project::Language::system_verilog)
                 && profile != "none") {

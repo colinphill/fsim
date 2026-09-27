@@ -2056,6 +2056,117 @@ end architecture;
     assert(wide_value.aval == 22 && wide_value.bval == 0);
 }
 
+void test_vhdl_effective_subtype_cache_binding_and_cap()
+{
+    std::string source = R"(
+package narrow_word_scope is
+  subtype word_t is bit_vector(7 downto 0);
+  function word_width(source_value : integer) return integer;
+end package;
+package body narrow_word_scope is
+  function word_width(source_value : integer) return integer is
+    variable value : word_t;
+  begin
+    return value'length + source_value;
+  end function;
+end package body;
+
+package wide_word_scope is
+  subtype word_t is bit_vector(12 downto 0);
+  function word_width(source_value : integer) return integer;
+end package;
+package body wide_word_scope is
+  function word_width(source_value : integer) return integer is
+    variable value : word_t;
+  begin
+    return value'length + source_value;
+  end function;
+end package body;
+
+entity effective_subtype_cache_contexts is end entity;
+architecture rtl of effective_subtype_cache_contexts is
+  signal source_value : integer := 0;
+  signal narrow_result : integer;
+  signal wide_result : integer;
+  signal accumulated_widths : integer;
+
+  generic (width_value : positive)
+  function vector_width_probe(source_value : integer) return integer is
+    variable value : bit_vector(width_value - 1 downto 0);
+  begin
+    return value'length + source_value;
+  end function;
+)";
+
+    for (std::uint32_t width = 1U; width <= 65U; ++width) {
+        source += "  function vector_width_probe_"
+            + std::to_string(width)
+            + " is new vector_width_probe generic map (width_value => "
+            + std::to_string(width) + ");\n";
+    }
+
+    source += R"(
+begin
+  worker : process (source_value)
+    variable total : integer;
+  begin
+    total := 0;
+    narrow_result <= narrow_word_scope.word_width(source_value);
+    wide_result <= wide_word_scope.word_width(source_value);
+)";
+    for (const auto width : { 8U, 13U }) {
+        source += "    total := total + vector_width_probe_"
+            + std::to_string(width) + "(source_value);\n";
+    }
+    for (std::uint32_t width = 1U; width <= 65U; ++width) {
+        source += "    total := total + vector_width_probe_"
+            + std::to_string(width) + "(source_value);\n";
+    }
+    source += R"(
+    accumulated_widths <= total;
+  end process;
+end architecture;
+)";
+
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-effective-subtype-cache-contexts.vhd",
+        source,
+        fsim::frontend::Language::Vhdl2008);
+    if (!parsed.ok()) {
+        for (const auto& diagnostic : parsed.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(parsed.ok());
+
+    const auto elaborated = compile_and_elaborate(
+        parsed.design,
+        "vhdl:work.effective_subtype_cache_contexts(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+
+    const auto narrow = elaborated.design->find_signal("narrow_result");
+    const auto wide = elaborated.design->find_signal("wide_result");
+    const auto accumulated
+        = elaborated.design->find_signal("accumulated_widths");
+    assert(narrow && wide && accumulated);
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    assert(interpreter->signal_value(*narrow).low_word().aval == 8U);
+    assert(interpreter->signal_value(*wide).low_word().aval == 13U);
+    // The first two helper calls verify distinct bindings for the same
+    // formal subtype. The following 65 widths force the bounded Lowerer
+    // cache to fall back after its 64-entry limit while retaining results.
+    assert(interpreter->signal_value(*accumulated).low_word().aval == 2166U);
+}
+
 void test_vhdl_dynamic_width_formal_remains_unresolved()
 {
     const auto parsed = fsim::frontend::parse_text(
@@ -2301,6 +2412,499 @@ void test_vhdl_runtime_for_loop_iteration_cap()
     assert(saw_iteration_limit);
 }
 
+void test_vhdl_large_static_for_loops_use_counted_lowering()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-large-static-for-loops.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity large_static_for_loops is end entity;
+architecture rtl of large_static_for_loops is
+  signal trigger : integer := 0;
+  signal ascending_result : integer;
+  signal descending_result : integer;
+  signal high_endpoint_count : integer;
+  signal low_endpoint_count : integer;
+  signal nested_result : integer;
+  signal short_result : integer;
+  signal null_result : integer;
+  signal formal_result : integer;
+  signal logic9_result : std_logic_vector(64 downto 0);
+
+  constant INT_MAX_VALUE : integer := 2147483647;
+  constant INT_MIN_VALUE : integer := -2147483647 - 1;
+
+  function counted_width_sum(width : integer) return integer is
+    variable total : integer := 0;
+  begin
+    for i in 0 to width - 1 loop
+      total := total + 1;
+    end loop;
+    return total;
+  end function;
+begin
+  worker : process (trigger)
+    variable ascending_total : integer := 0;
+    variable descending_total : integer := 0;
+    variable high_total : integer := 0;
+    variable low_total : integer := 0;
+    variable nested_total : integer := 0;
+    variable short_total : integer := 0;
+    variable null_total : integer := 0;
+    variable logic_source : std_logic_vector(64 downto 0) := (others => '0');
+    variable logic_copy : std_logic_vector(64 downto 0) := (others => '0');
+  begin
+    for i in -65 to 65 loop
+      ascending_total := ascending_total + i + 1;
+    end loop;
+    ascending_result <= ascending_total;
+
+    for i in 65 downto -65 loop
+      descending_total := descending_total + i + 1;
+    end loop;
+    descending_result <= descending_total;
+
+    for i in INT_MAX_VALUE - 63 to INT_MAX_VALUE loop
+      high_total := high_total + 1;
+    end loop;
+    high_endpoint_count <= high_total;
+
+    for i in INT_MIN_VALUE + 63 downto INT_MIN_VALUE loop
+      low_total := low_total + 1;
+    end loop;
+    low_endpoint_count <= low_total;
+
+    outer_loop : for i in -70 to 70 loop
+      inner_loop : for j in 0 to 0 loop
+        if i = -69 then
+          next outer_loop;
+        end if;
+        if i = 3 then
+          exit outer_loop;
+        end if;
+        nested_total := nested_total + i;
+      end loop inner_loop;
+    end loop outer_loop;
+    nested_result <= nested_total;
+
+    for i in 0 to 2 loop
+      short_total := short_total + i + 1;
+    end loop;
+    short_result <= short_total;
+
+    for i in 2 to 1 loop
+      null_total := null_total + 1;
+    end loop;
+    null_result <= null_total;
+
+    logic_source(64 downto 56) := "UX01ZWLH-";
+    for i in 0 to 64 loop
+      logic_copy(i) := logic_source(i);
+    end loop;
+    logic9_result <= logic_copy;
+    formal_result <= counted_width_sum(65);
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design, "vhdl:work.large_static_for_loops(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+
+    std::size_t redundant_cap_reports { };
+    std::size_t backward_jumps { };
+    for (const auto& process : elaborated.design->processes()) {
+        for (std::size_t index { }; index < process.operations.size(); ++index) {
+            const auto& operation = process.operations[index];
+            const auto* report = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Report>(&operation);
+            redundant_cap_reports += report != nullptr
+                && report->message
+                    == "runtime VHDL for-loop exceeds the "
+                       "one-million-iteration limit";
+            const auto* jump = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Jump>(&operation);
+            backward_jumps += jump != nullptr && jump->target < index;
+        }
+    }
+    // The pure formal call is folded before runtime process lowering.
+    assert(redundant_cap_reports == 0U);
+    assert(backward_jumps >= 6U);
+
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto ascending
+        = elaborated.design->find_signal("ascending_result");
+    const auto descending
+        = elaborated.design->find_signal("descending_result");
+    const auto high_endpoint
+        = elaborated.design->find_signal("high_endpoint_count");
+    const auto low_endpoint
+        = elaborated.design->find_signal("low_endpoint_count");
+    const auto nested = elaborated.design->find_signal("nested_result");
+    const auto short_range
+        = elaborated.design->find_signal("short_result");
+    const auto null_range
+        = elaborated.design->find_signal("null_result");
+    const auto formal = elaborated.design->find_signal("formal_result");
+    const auto logic9 = elaborated.design->find_signal("logic9_result");
+    assert(ascending && descending && high_endpoint && low_endpoint
+        && nested && short_range && null_range && formal && logic9);
+    assert(interpreter->signal_value(*ascending).low_word().aval == 131U);
+    assert(interpreter->signal_value(*descending).low_word().aval == 131U);
+    assert(interpreter->signal_value(*high_endpoint).low_word().aval == 64U);
+    assert(interpreter->signal_value(*low_endpoint).low_word().aval == 64U);
+    assert(interpreter->signal_value(*nested).low_word().aval
+        == static_cast<std::uint32_t>(-2413));
+    assert(interpreter->signal_value(*short_range).low_word().aval == 6U);
+    assert(interpreter->signal_value(*null_range).low_word().aval == 0U);
+    assert(interpreter->signal_value(*formal).low_word().aval == 65U);
+    assert(interpreter->signal_value(*logic9).to_msb_string()
+        == std::string { "UX01ZWLH-" } + std::string(56U, '0'));
+    const auto logic9_info = std::ranges::find(
+        elaborated.design->signals(), *logic9,
+        &fsim::elaboration::SignalInfo::id);
+    assert(logic9_info != elaborated.design->signals().end());
+    assert(logic9_info->source_domain
+        == fsim::frontend::ValueDomain::Logic9);
+
+    const auto suspended = fsim::frontend::parse_text(
+        "vhdl-large-static-for-loop-suspend.vhd",
+        R"(
+entity large_static_for_loop_suspend is end entity;
+architecture rtl of large_static_for_loop_suspend is
+  signal result_value : integer := -1;
+begin
+  worker : process
+    variable total : integer := 0;
+  begin
+    for i in -32 to 32 loop
+      total := total + i + 1;
+      wait for 1 ns;
+    end loop;
+    result_value <= total;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(suspended.ok());
+    const auto suspended_elaboration = compile_and_elaborate(
+        suspended.design,
+        "vhdl:work.large_static_for_loop_suspend(rtl)");
+    assert(suspended_elaboration.ok());
+    const auto result
+        = suspended_elaboration.design->find_signal("result_value");
+    assert(result);
+    const auto suspended_loop_shape = [&] {
+        std::pair<std::size_t, std::size_t> counts { };
+        for (const auto& process : suspended_elaboration.design->processes()) {
+            for (std::size_t index { }; index < process.operations.size(); ++index) {
+                const auto& operation = process.operations[index];
+                const auto* report = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::Report>(&operation);
+                counts.first += report != nullptr
+                    && report->message
+                        == "runtime VHDL for-loop exceeds the "
+                           "one-million-iteration limit";
+                const auto* jump = fsim::runtime::simir::operation_get_if<
+                    fsim::runtime::simir::Jump>(&operation);
+                counts.second += jump != nullptr && jump->target < index;
+            }
+        }
+        return counts;
+    }();
+    assert(suspended_loop_shape.first == 0U);
+    assert(suspended_loop_shape.second >= 1U);
+    auto suspended_interpreter
+        = suspended_elaboration.design->create_interpreter();
+    assert(suspended_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    assert(suspended_interpreter->signal_value(*result).low_word().aval
+        == 65U);
+
+    const auto at_limit = fsim::frontend::parse_text(
+        "vhdl-large-static-for-loop-at-limit.vhd",
+        R"(
+entity large_static_for_loop_at_limit is end entity;
+architecture rtl of large_static_for_loop_at_limit is
+begin
+  worker : process
+  begin
+    for i in 0 to 999999 loop
+      null;
+    end loop;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(at_limit.ok());
+    const auto at_limit_elaboration = compile_and_elaborate(
+        at_limit.design,
+        "vhdl:work.large_static_for_loop_at_limit(rtl)");
+    assert(at_limit_elaboration.ok());
+    std::size_t at_limit_reports { };
+    std::size_t at_limit_backward_jumps { };
+    for (const auto& process : at_limit_elaboration.design->processes()) {
+        for (std::size_t index { }; index < process.operations.size(); ++index) {
+            const auto& operation = process.operations[index];
+            const auto* report = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Report>(&operation);
+            at_limit_reports += report != nullptr
+                && report->message
+                    == "runtime VHDL for-loop exceeds the "
+                       "one-million-iteration limit";
+            const auto* jump = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Jump>(&operation);
+            at_limit_backward_jumps += jump != nullptr
+                && jump->target < index;
+        }
+    }
+    assert(at_limit_reports == 0U);
+    assert(at_limit_backward_jumps >= 1U);
+
+    const auto over_limit = fsim::frontend::parse_text(
+        "vhdl-large-static-for-loop-over-limit.vhd",
+        R"(
+entity large_static_for_loop_over_limit is end entity;
+architecture rtl of large_static_for_loop_over_limit is
+begin
+  worker : process
+  begin
+    for i in 0 to 1000000 loop
+      null;
+    end loop;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(over_limit.ok());
+    const auto over_limit_elaboration = compile_and_elaborate(
+        over_limit.design,
+        "vhdl:work.large_static_for_loop_over_limit(rtl)");
+    assert(has_diagnostic(over_limit_elaboration, "FSIM-ELAB-073"));
+}
+
+void test_vhdl_static_for_threshold_preserves_array_values_and_visits()
+{
+    constexpr std::string_view source_text = R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity static_for_threshold is end entity;
+architecture rtl of static_for_threshold is
+  signal copied : std_logic_vector(15 downto 0);
+  signal fallback_copied : std_logic_vector(7 downto 0);
+  signal ascending_count : integer;
+  signal descending_count : integer;
+  signal short_count : integer;
+  signal seven_count : integer;
+  signal eight_count : integer;
+  signal nested_count : integer;
+begin
+  worker : process
+    variable source_value : std_logic_vector(15 downto 0)
+      := "UX01ZWLH-UX01ZWL";
+    variable result_value : std_logic_vector(15 downto 0)
+      := (others => '0');
+    variable fallback_source : std_logic_vector(7 downto 0)
+      := "10110010";
+    variable fallback_value : std_logic_vector(7 downto 0)
+      := (others => '0');
+    variable ascending_total : integer := 0;
+    variable descending_total : integer := 0;
+    variable short_total : integer := 0;
+    variable seven_total : integer := 0;
+    variable eight_total : integer := 0;
+    variable nested_total : integer := 0;
+  begin
+    -- Seven trips remain expanded below the candidate threshold.
+    for i in 0 to 6 loop
+      seven_total := seven_total + 1;
+    end loop;
+    seven_count <= seven_total;
+
+    -- Eight trips exercise the candidate threshold.
+    for i in 0 to 7 loop
+      eight_total := eight_total + 1;
+    end loop;
+    eight_count <= eight_total;
+
+    for i in 0 to 15 loop
+      result_value(i) := source_value(i);
+    end loop;
+    copied <= result_value;
+    for i in 1 to 32 loop
+      ascending_total := ascending_total + 1;
+    end loop;
+    ascending_count <= ascending_total;
+    for i in 31 downto 1 loop
+      descending_total := descending_total + 1;
+    end loop;
+    descending_count <= descending_total;
+    for i in 0 to 14 loop
+      short_total := short_total + 1;
+    end loop;
+    short_count <= short_total;
+
+    -- Attribute-range loops remain on their existing static path.
+    for i in fallback_source'range loop
+      fallback_value(i) := fallback_source(i);
+    end loop;
+    fallback_copied <= fallback_value;
+
+    -- Exercise nested 15-by-8 bounds with labeled loop control.
+    outer_loop : for i in 0 to 14 loop
+      inner_loop : for j in 0 to 7 loop
+        if i = 3 and j = 2 then
+          next outer_loop;
+        end if;
+        if i = 7 and j = 4 then
+          exit outer_loop;
+        end if;
+        nested_total := nested_total + 1;
+      end loop inner_loop;
+    end loop outer_loop;
+    nested_count <= nested_total;
+    wait;
+  end process;
+end architecture;
+)";
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-static-for-threshold.vhd", source_text,
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design, "vhdl:work.static_for_threshold(rtl)");
+    assert(elaborated.ok());
+
+    const auto source_line = [&](const std::string_view statement) {
+        const auto offset = source_text.find(statement);
+        assert(offset != std::string_view::npos);
+        return 1U + static_cast<std::uint32_t>(
+            std::ranges::count(source_text.substr(0U, offset), '\n'));
+    };
+    const auto body_line = source_line(
+        "result_value(i) := source_value(i);");
+    const auto seven_body_line = source_line(
+        "seven_total := seven_total + 1;");
+    const auto eight_body_line = source_line(
+        "eight_total := eight_total + 1;");
+    const auto short_body_line = source_line(
+        "short_total := short_total + 1;");
+    const auto fallback_body_line = source_line(
+        "fallback_value(i) := fallback_source(i);");
+    const auto nested_body_line = source_line(
+        "nested_total := nested_total + 1;");
+    const std::array<std::uint32_t, 6U> shape_lines {
+        seven_body_line, eight_body_line, body_line, short_body_line,
+        fallback_body_line, nested_body_line,
+    };
+    std::array<std::size_t, 6U> emitted_body_points { };
+    std::size_t redundant_cap_reports { };
+    std::size_t backward_jumps { };
+    for (const auto& process : elaborated.design->processes()) {
+        for (std::size_t operation_index { };
+             operation_index < process.operations.size(); ++operation_index) {
+            const auto& operation = process.operations[operation_index];
+            const auto* report = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Report>(&operation);
+            redundant_cap_reports += report != nullptr
+                && report->message
+                    == "runtime VHDL for-loop exceeds the "
+                       "one-million-iteration limit";
+            const auto* jump = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::Jump>(&operation);
+            backward_jumps += jump != nullptr
+                && jump->target < operation_index;
+            const auto* point = fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::DebugPoint>(&operation);
+            if (point == nullptr
+                || point->kind
+                    != fsim::runtime::simir::DebugPointKind::statement) {
+                continue;
+            }
+            for (std::size_t index { }; index < shape_lines.size(); ++index) {
+                emitted_body_points[index]
+                    += point->source.line == shape_lines[index];
+            }
+        }
+    }
+    // The seven-trip and attribute loops expand, while eligible loops
+    // retain one emitted body and jump back to it at runtime.
+    const std::array<std::size_t, 6U> expected_body_points {
+        7U, 1U, 1U, 1U, 8U, 1U,
+    };
+    assert(emitted_body_points == expected_body_points);
+    assert(redundant_cap_reports == 0U);
+    assert(backward_jumps >= 7U);
+    auto interpreter = elaborated.design->create_interpreter();
+    std::size_t body_visits { };
+    std::size_t seven_body_visits { };
+    std::size_t eight_body_visits { };
+    std::size_t short_body_visits { };
+    std::size_t fallback_body_visits { };
+    std::size_t nested_body_visits { };
+    interpreter->set_execution_point_hook(
+        [&](fsim::runtime::Scheduler&,
+            const fsim::runtime::simir::ExecutionPoint& point) {
+            if (point.kind
+                != fsim::runtime::simir::ExecutionPointKind::statement) {
+                return;
+            }
+            body_visits += point.source.line == body_line;
+            seven_body_visits += point.source.line == seven_body_line;
+            eight_body_visits += point.source.line == eight_body_line;
+            short_body_visits += point.source.line == short_body_line;
+            fallback_body_visits
+                += point.source.line == fallback_body_line;
+            nested_body_visits += point.source.line == nested_body_line;
+        });
+    assert(interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(body_visits == 16U);
+    assert(seven_body_visits == 7U);
+    assert(eight_body_visits == 8U);
+    assert(short_body_visits == 15U);
+    assert(fallback_body_visits == 8U);
+    assert(nested_body_visits == 54U);
+
+    const auto copied = elaborated.design->find_signal("copied");
+    const auto fallback_copied = elaborated.design->find_signal(
+        "fallback_copied");
+    const auto ascending = elaborated.design->find_signal(
+        "ascending_count");
+    const auto descending = elaborated.design->find_signal(
+        "descending_count");
+    const auto short_range = elaborated.design->find_signal("short_count");
+    const auto seven = elaborated.design->find_signal("seven_count");
+    const auto eight = elaborated.design->find_signal("eight_count");
+    const auto nested = elaborated.design->find_signal("nested_count");
+    assert(copied && fallback_copied && ascending && descending
+        && short_range && seven && eight && nested);
+    assert(interpreter->signal_value(*copied).to_msb_string()
+        == "UX01ZWLH-UX01ZWL");
+    assert(interpreter->signal_value(*fallback_copied).to_msb_string()
+        == "10110010");
+    assert(interpreter->signal_value(*ascending).low_word().aval == 32U);
+    assert(interpreter->signal_value(*descending).low_word().aval == 31U);
+    assert(interpreter->signal_value(*short_range).low_word().aval == 15U);
+    assert(interpreter->signal_value(*seven).low_word().aval == 7U);
+    assert(interpreter->signal_value(*eight).low_word().aval == 8U);
+    assert(interpreter->signal_value(*nested).low_word().aval == 54U);
+}
+
 void test_vhdl_interface_function_generics()
 {
     test_vhdl_pure_packed_function_fold();
@@ -2317,10 +2921,13 @@ void test_vhdl_interface_function_generics()
     test_vhdl_noninteger_named_constant_is_not_generate_iterator();
     test_vhdl_unconstrained_unsigned_conversion_preserves_operand_width();
     test_vhdl_static_width_formal_specializes_callable_frame();
+    test_vhdl_effective_subtype_cache_binding_and_cap();
     test_vhdl_dynamic_width_formal_remains_unresolved();
     test_vhdl_dynamic_exponent_formal_remains_unresolved();
     test_vhdl_dynamic_integer_for_loop_bounds();
     test_vhdl_runtime_for_loop_iteration_cap();
+    test_vhdl_large_static_for_loops_use_counted_lowering();
+    test_vhdl_static_for_threshold_preserves_array_values_and_visits();
     const auto parsed = fsim::frontend::parse_text(
         "interface-function-generics.vhd",
         R"(

@@ -110,6 +110,102 @@ void record_scheduler_task_timing_probe(
       + std::to_string(probe.value));
 }
 
+class OwnedSpanUpdateExecutor final : public fsim::runtime::simir::ProcessExecutor {
+public:
+  using SlotSegment = std::pair<std::uint32_t, std::uint32_t>;
+
+  OwnedSpanUpdateExecutor(
+      const fsim::runtime::simir::SignalId signal,
+      const fsim::runtime::simir::ProcessId process,
+      const std::uint32_t width,
+      std::vector<std::vector<SlotSegment>> segments,
+      std::vector<std::string> values)
+      : signal_{signal}
+      , process_{process}
+      , width_{width}
+      , segments_{std::move(segments)}
+      , values_{std::move(values)} {
+    if (segments_.size() != values_.size() || values_.empty()
+        || width_ == 0U || width_ > 128U) {
+      throw std::invalid_argument("invalid owned-span update fixture");
+    }
+  }
+
+  [[nodiscard]] fsim::runtime::simir::ProcessResumeResult resume(
+      fsim::runtime::simir::ProcessExecutionContext &context,
+      const fsim::runtime::simir::InstructionIndex start) override {
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    require(
+        start == next_phase_ && next_phase_ < values_.size(),
+        "owned-span writer resumes at its next slot phase");
+    const auto value = PackedLogic4::from_msb_string(values_[next_phase_]);
+    require(value.width() == width_, "owned-span slot has its target width");
+    const auto& segments = segments_[next_phase_];
+    require(!segments.empty() && segments.size() <= 3U,
+            "owned-span phase has a bounded slot set");
+
+    struct SlotStorage {
+      std::uint32_t active{};
+      std::array<std::uint64_t, 2U> aval{};
+      std::array<std::uint64_t, 2U> bval{};
+      std::array<std::uint64_t, 2U> mask{};
+    };
+    std::array<SlotStorage, 3U> storage{};
+    std::array<ProcessUpdateSlotView, 3U> slots{};
+    const auto value_aval = value.aval_words();
+    const auto value_bval = value.bval_words();
+    const auto word_count = static_cast<std::uint32_t>(
+        (static_cast<std::size_t>(width_) + 63U) / 64U);
+    for (std::size_t index = 0U; index < segments.size(); ++index) {
+      const auto [offset, segment_width] = segments[index];
+      require(
+          offset <= width_ && segment_width != 0U
+              && segment_width <= width_ - offset,
+          "owned-span slot segment is inside its target");
+      storage[index].active = 1U;
+      std::copy_n(value_aval.begin(), word_count, storage[index].aval.begin());
+      std::copy_n(value_bval.begin(), word_count, storage[index].bval.begin());
+      for (std::uint32_t bit = offset; bit < offset + segment_width; ++bit) {
+        storage[index].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+      }
+      slots[index] = ProcessUpdateSlotView{
+          signal_, width_, word_count, &storage[index].active,
+          storage[index].aval.data(), storage[index].bval.data(),
+          storage[index].mask.data()};
+    }
+
+    const auto active_mask
+        = (UINT64_C(1) << segments.size()) - UINT64_C(1);
+    std::array<std::uint64_t, 1U> active_words{active_mask};
+    const ProcessUpdateSlotBatch batch{
+        process_,
+        std::span<const ProcessUpdateSlotView>{
+            slots.data(), segments.size()},
+        active_words};
+    const std::array batches{batch};
+    require(
+        context.write_validated_update_slot_batches(batches),
+        "owned-span slot batch is accepted by the native update path");
+
+    ++next_phase_;
+    ProcessResumeResult result{start, start + 1U};
+    result.external.kind = next_phase_ == values_.size()
+        ? ExternalSuspendKind::halt
+        : ExternalSuspendKind::wait_sensitivity;
+    return result;
+  }
+
+private:
+  fsim::runtime::simir::SignalId signal_{};
+  fsim::runtime::simir::ProcessId process_{};
+  std::uint32_t width_{};
+  std::vector<std::vector<SlotSegment>> segments_;
+  std::vector<std::string> values_;
+  std::size_t next_phase_{};
+};
+
 } // namespace
 
 void test_scheduler_phase_order() {
@@ -1104,6 +1200,41 @@ void test_simir_update_coalescing() {
       changes == std::vector<std::string>{"1"},
       "one update phase must publish only the final value per signal");
 
+  Interpreter reverse_order;
+  const auto lower_id = reverse_order.add_signal(
+      { "top.reverse_low",
+          PackedLogic4::from_msb_string("Z"),
+          ResolutionKind::sv_wire });
+  const auto higher_id = reverse_order.add_signal(
+      { "top.reverse_high", PackedLogic4::from_msb_string("X") });
+  Process reverse_writer;
+  reverse_writer.id = 0;
+  reverse_writer.name = "reverse_signal_update_order";
+  reverse_writer.register_count = 1;
+  reverse_writer.operations = {
+      LoadConstant { 0, PackedLogic4::from_msb_string("1") },
+      WriteUpdate { higher_id, 0 },
+      WriteUpdate { lower_id, 0 },
+      Halt { },
+  };
+  (void)reverse_order.add_process(std::move(reverse_writer));
+  std::vector<SignalId> published_order;
+  reverse_order.set_signal_change_hook(
+      [&](const SignalId changed,
+          const PackedLogic4&,
+          const SimulationTick) {
+        published_order.push_back(changed);
+      });
+  const auto reverse_result = reverse_order.run();
+  require(
+      reverse_result.status == RunStatus::completed
+          && published_order
+              == std::vector<SignalId> { lower_id, higher_id }
+          && reverse_order.signal_value(lower_id).to_msb_string() == "1"
+          && reverse_order.signal_value(higher_id).to_msb_string() == "1",
+      "distinct signal commits publish in ascending ID despite reverse "
+      "staging");
+
   Interpreter ordered;
   const auto cross_process = ordered.add_signal(
       {"top.cross_process", PackedLogic4::from_msb_string("X")});
@@ -1310,6 +1441,78 @@ void test_simir_diagnostic_environment_snapshot() {
       disabled_diagnostics.find("fsim-profile: static-cohorts")
           == std::string::npos,
       "static-cohort profiling stays disabled for the constructed simulation");
+}
+
+void test_owned_span_native_updates() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  {
+    Interpreter interpreter;
+    const auto initial = std::string(80U, 'Z');
+    auto high_written = initial;
+    std::fill_n(high_written.begin(), 20U, '1');
+    auto outside_written = high_written;
+    outside_written.back() = '0';
+    const auto target = interpreter.add_signal(
+        {"top.owned_span", PackedLogic4::from_msb_string(initial),
+         ResolutionKind::sv_wire});
+    const auto trigger = interpreter.add_signal(
+        {"top.owned_span_trigger", PackedLogic4::from_msb_string("0")});
+
+    Process low_writer;
+    low_writer.id = 0U;
+    low_writer.name = "owned_span_low_writer";
+    low_writer.driver_regions.push_back({target, 0U, 60U, false});
+    low_writer.operations = {Halt{}};
+    low_writer.initialize = false;
+    const auto low_id = interpreter.add_process(std::move(low_writer));
+
+    Process high_writer;
+    high_writer.id = 1U;
+    high_writer.name = "owned_span_high_writer";
+    high_writer.static_sensitivity.push_back({trigger, EdgeKind::any});
+    high_writer.driver_regions.push_back({target, 60U, 20U, false});
+    high_writer.operations = {
+        WaitSensitivity{}, WaitSensitivity{}, WaitSensitivity{}, Halt{}};
+    high_writer.initialize = false;
+    const auto high_id = interpreter.add_process(std::move(high_writer));
+    using Segment = OwnedSpanUpdateExecutor::SlotSegment;
+    interpreter.set_process_executor(
+        high_id,
+        std::make_unique<OwnedSpanUpdateExecutor>(
+            target, high_id, 80U,
+            std::vector<std::vector<Segment>>{
+                {{60U, 20U}}, {{60U, 20U}},
+                {{60U, 20U}, {0U, 1U}}},
+            std::vector<std::string>{
+                high_written, high_written, outside_written}));
+
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("1"), 1U, 0U);
+    interpreter.schedule_signal_at(
+        target, PackedLogic4::from_msb_string(std::string(80U, 'X')),
+        2U, 0U);
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("0"), 3U, 0U);
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("1"), 4U, 0U);
+
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed && result.time == 4U,
+            "cross-word owned-span native updates complete");
+    require(interpreter.driver_value(low_id, target).to_msb_string()
+                == initial,
+            "the other disjoint writer retains its raw value");
+    require(interpreter.driver_value(high_id, target).to_msb_string()
+                == outside_written,
+            "the high writer refreshes raw bits and an out-of-span slot falls back");
+    require(interpreter.signal_value(target).to_msb_string()
+                == std::string(80U, 'X')
+            && interpreter.stored_signal_value(target).to_msb_string()
+                == std::string(80U, 'X'),
+            "an external drive changes the visible value without replacing raw driver bits");
+  }
 }
 
 void test_resolved_driver_slots() {
@@ -2035,6 +2238,7 @@ void test_resolved_driver_slots() {
       "FSIM_DISABLE_DIRECT_WORD_COMMIT=1 partial writes preserve the current, stored, and driver values after native publication");
   test_mixed_signal_id_alignment();
   test_force_release_word_boundary();
+  test_owned_span_native_updates();
 }
 
 void test_mixed_signal_id_alignment() {
@@ -3745,7 +3949,7 @@ void test_simir_wide_signed_arithmetic() {
       };
 
   Interpreter interpreter;
-  std::array<SignalId, 10> outputs{};
+  std::array<SignalId, 21> outputs{};
   for (std::size_t index = 0; index < 6; ++index) {
     outputs[index] = interpreter.add_signal(
         {"top.signed_" + std::to_string(index),
@@ -3759,16 +3963,23 @@ void test_simir_wide_signed_arithmetic() {
       {"top.signed_overflow", PackedLogic4(65, Logic4::zero)});
   outputs[9] = interpreter.add_signal(
       {"top.signed_unknown", PackedLogic4(65, Logic4::zero)});
+  for (std::size_t index = 10; index < outputs.size(); ++index) {
+    outputs[index] = interpreter.add_signal(
+        {"top.signed_division_" + std::to_string(index),
+         PackedLogic4(65, Logic4::zero)});
+  }
 
   auto minimum = PackedLogic4(65, Logic4::zero);
   minimum.set(64, Logic4::one);
   auto unknown = PackedLogic4(65, Logic4::zero);
   unknown.set(37, Logic4::x);
+  auto high_z = PackedLogic4(65, Logic4::zero);
+  high_z.set(64, Logic4::z);
 
   Process process;
   process.id = 0;
   process.name = "wide_signed_arithmetic";
-  process.register_count = 15;
+  process.register_count = 30;
   process.operations = {
       LoadConstant{0, signed_value(-5, 65)},
       LoadConstant{1, signed_value(3, 65)},
@@ -3795,6 +4006,32 @@ void test_simir_wide_signed_arithmetic() {
       LoadConstant{13, std::move(unknown)},
       Binary{BinaryOperator::divide_signed, 14, 13, 1},
       WriteBlocking{outputs[9], 14},
+      LoadConstant{15, signed_value(5, 65)},
+      LoadConstant{16, signed_value(-3, 65)},
+      Binary{BinaryOperator::divide_signed, 17, 15, 16},
+      WriteBlocking{outputs[10], 17},
+      Binary{BinaryOperator::remainder_signed, 18, 15, 16},
+      WriteBlocking{outputs[11], 18},
+      Binary{BinaryOperator::modulo_signed, 19, 15, 16},
+      WriteBlocking{outputs[12], 19},
+      Binary{BinaryOperator::divide_signed, 20, 0, 16},
+      WriteBlocking{outputs[13], 20},
+      Binary{BinaryOperator::remainder_signed, 21, 0, 16},
+      WriteBlocking{outputs[14], 21},
+      Binary{BinaryOperator::modulo_signed, 22, 0, 16},
+      WriteBlocking{outputs[15], 22},
+      Binary{BinaryOperator::divide_signed, 27, 15, 1},
+      WriteBlocking{outputs[16], 27},
+      Binary{BinaryOperator::remainder_signed, 28, 15, 1},
+      WriteBlocking{outputs[17], 28},
+      Binary{BinaryOperator::modulo_signed, 29, 15, 1},
+      WriteBlocking{outputs[18], 29},
+      LoadConstant{23, PackedLogic4(65, Logic4::zero)},
+      Binary{BinaryOperator::divide_signed, 24, 15, 23},
+      WriteBlocking{outputs[19], 24},
+      LoadConstant{25, std::move(high_z)},
+      Binary{BinaryOperator::divide_signed, 26, 25, 1},
+      WriteBlocking{outputs[20], 26},
       Halt{},
   };
   (void)interpreter.add_process(std::move(process));
@@ -3828,6 +4065,253 @@ void test_simir_wide_signed_arithmetic() {
       interpreter.signal_value(outputs[9]).to_msb_string()
           == std::string(65, 'X'),
       "unknown signed arithmetic produces an all-X result");
+  const std::array signed_division_expected{
+      signed_value(-1, 65),
+      signed_value(2, 65),
+      signed_value(-1, 65),
+      signed_value(1, 65),
+      signed_value(-2, 65),
+      signed_value(-2, 65),
+      signed_value(1, 65),
+      signed_value(2, 65),
+      signed_value(2, 65)};
+  for (std::size_t index = 0;
+       index < signed_division_expected.size(); ++index) {
+    require(
+        interpreter.signal_value(outputs[index + 10])
+            == signed_division_expected[index],
+        "wide signed division preserves quotient, remainder, and modulo "
+        "signs");
+  }
+  require(
+      interpreter.signal_value(outputs[19]).to_msb_string()
+              == std::string(65, 'X')
+          && interpreter.signal_value(outputs[20]).to_msb_string()
+              == std::string(65, 'X'),
+      "signed division by zero and with Z produce all-X results");
+
+  const auto evaluate_divisions = [](
+      const std::string_view name,
+      const PackedLogic4& lhs,
+      const PackedLogic4& rhs) {
+    constexpr std::array operations{
+        BinaryOperator::divide_unsigned,
+        BinaryOperator::modulo_unsigned,
+        BinaryOperator::divide_signed,
+        BinaryOperator::remainder_signed,
+        BinaryOperator::modulo_signed};
+    Interpreter division_interpreter;
+    std::array<SignalId, operations.size()> outputs { };
+    for (std::size_t index = 0; index < outputs.size(); ++index) {
+      outputs[index] = division_interpreter.add_signal({
+          "top.word_division." + std::string { name } + ".result_"
+              + std::to_string(index),
+          PackedLogic4(lhs.width(), Logic4::zero)});
+    }
+
+    Process division_process;
+    division_process.id = 0U;
+    division_process.name = std::string { name };
+    division_process.register_count
+        = static_cast<std::uint32_t>(2U + operations.size());
+    division_process.register_value_kinds.assign(
+        division_process.register_count, ValueKind::logic4);
+    if (lhs.is_logic9()) {
+      division_process.register_value_kinds[0U] = ValueKind::logic9;
+    }
+    if (rhs.is_logic9()) {
+      division_process.register_value_kinds[1U] = ValueKind::logic9;
+    }
+    division_process.operations.emplace_back(LoadConstant { 0U, lhs });
+    division_process.operations.emplace_back(LoadConstant { 1U, rhs });
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+      const auto destination = static_cast<RegisterId>(index + 2U);
+      division_process.operations.emplace_back(
+          Binary { operations[index], destination, 0U, 1U });
+      division_process.operations.emplace_back(
+          WriteBlocking { outputs[index], destination });
+    }
+    division_process.operations.emplace_back(Halt { });
+    (void)division_interpreter.add_process(std::move(division_process));
+
+    const auto division_result = division_interpreter.run();
+    require(
+        division_result.status == RunStatus::completed,
+        "word-sized division interpreter process completes");
+    return std::array {
+        division_interpreter.signal_value(outputs[0U]),
+        division_interpreter.signal_value(outputs[1U]),
+        division_interpreter.signal_value(outputs[2U]),
+        division_interpreter.signal_value(outputs[3U]),
+        division_interpreter.signal_value(outputs[4U])};
+  };
+  const auto packed_word = [](
+      const std::size_t width, const std::uint64_t value) {
+    return PackedLogic4::from_aval_bval(width, value, 0U);
+  };
+  const auto expect_result = [](
+      const std::array<PackedLogic4, 5U>& results,
+      const std::size_t index,
+      const PackedLogic4& expected,
+      const char* message) {
+    require(results[index] == expected, message);
+  };
+  struct UnsignedWordDivisionCase {
+    std::size_t width;
+    std::uint64_t quotient_by_three;
+    std::uint64_t remainder_by_three;
+  };
+  const std::array unsigned_word_cases{
+      UnsignedWordDivisionCase { 1U, 1U, 0U },
+      UnsignedWordDivisionCase { 8U, 42U, 2U },
+      UnsignedWordDivisionCase { 32U, UINT64_C(0x2aaaaaaa), 2U },
+      UnsignedWordDivisionCase {
+          63U, UINT64_C(0x1555555555555555), 1U },
+      UnsignedWordDivisionCase {
+          64U, UINT64_C(0x2aaaaaaaaaaaaaaa), 2U }};
+  for (const auto& test : unsigned_word_cases) {
+    const auto high_bit = UINT64_C(1) << (test.width - 1U);
+    const auto all_ones = test.width == 64U
+        ? std::numeric_limits<std::uint64_t>::max()
+        : (UINT64_C(1) << test.width) - 1U;
+    const auto divisor = test.width == 1U ? UINT64_C(1) : UINT64_C(3);
+    const auto high_dividend = evaluate_divisions(
+        "unsigned_high_dividend_" + std::to_string(test.width),
+        packed_word(test.width, high_bit),
+        packed_word(test.width, divisor));
+    expect_result(
+        high_dividend,
+        0U,
+        packed_word(test.width, test.quotient_by_three),
+        "word-sized unsigned high-bit quotient matches its fixed-width value");
+    expect_result(
+        high_dividend,
+        1U,
+        packed_word(test.width, test.remainder_by_three),
+        "word-sized unsigned high-bit remainder matches its fixed-width value");
+
+    const auto high_divisor = evaluate_divisions(
+        "unsigned_high_divisor_" + std::to_string(test.width),
+        packed_word(test.width, all_ones),
+        packed_word(test.width, high_bit));
+    expect_result(
+        high_divisor,
+        0U,
+        packed_word(test.width, 1U),
+        "word-sized unsigned high divisor produces a unit quotient");
+    expect_result(
+        high_divisor,
+        1U,
+        packed_word(test.width, high_bit - 1U),
+        "word-sized unsigned high divisor preserves the lower remainder");
+  }
+
+  const auto signed_word_cases = [&](const std::size_t width) {
+    const auto high_bit = UINT64_C(1) << (width - 1U);
+    const auto all_ones = width == 64U
+        ? std::numeric_limits<std::uint64_t>::max()
+        : (UINT64_C(1) << width) - 1U;
+    const auto check = [&](const std::string_view name,
+                           const std::uint64_t lhs,
+                           const std::uint64_t rhs,
+                           const std::uint64_t quotient,
+                           const std::uint64_t remainder,
+                           const std::uint64_t modulo) {
+      const auto results = evaluate_divisions(
+          name, packed_word(width, lhs), packed_word(width, rhs));
+      expect_result(
+          results,
+          2U,
+          packed_word(width, quotient),
+          "word-sized signed quotient matches its fixed-width value");
+      expect_result(
+          results,
+          3U,
+          packed_word(width, remainder),
+          "word-sized signed remainder keeps the dividend sign");
+      expect_result(
+          results,
+          4U,
+          packed_word(width, modulo),
+          "word-sized signed modulo keeps the divisor sign");
+    };
+
+    if (width == 1U) {
+      check("signed_minimum_over_negative_one_1", high_bit, all_ones,
+          high_bit, 0U, 0U);
+      return;
+    }
+    check("signed_positive_positive_" + std::to_string(width), 5U, 3U,
+        1U, 2U, 2U);
+    check(
+        "signed_negative_positive_" + std::to_string(width),
+        static_cast<std::uint64_t>(-5), 3U, all_ones, all_ones - 1U, 1U);
+    check(
+        "signed_positive_negative_" + std::to_string(width),
+        5U, static_cast<std::uint64_t>(-3), all_ones, 2U, all_ones);
+    check(
+        "signed_negative_negative_" + std::to_string(width),
+        static_cast<std::uint64_t>(-5),
+        static_cast<std::uint64_t>(-3),
+        1U,
+        all_ones - 1U,
+        all_ones - 1U);
+    check(
+        "signed_minimum_over_negative_one_" + std::to_string(width),
+        high_bit,
+        all_ones,
+        high_bit,
+        0U,
+        0U);
+  };
+  for (const auto width : { 1U, 8U, 32U, 63U, 64U }) {
+    signed_word_cases(width);
+  }
+
+  const auto zero_divisor = evaluate_divisions(
+      "unsigned_zero_divisor",
+      packed_word(64U, UINT64_C(0x8000000000000001)),
+      PackedLogic4(64U, Logic4::zero));
+  require(
+      std::ranges::all_of(zero_divisor, [](const PackedLogic4& value) {
+        return value.to_msb_string() == std::string(value.width(), 'X');
+      }),
+      "word-sized division by zero produces all-X results");
+  const auto x_dividend = evaluate_divisions(
+      "unknown_x_dividend",
+      PackedLogic4::from_msb_string("10X01000"),
+      PackedLogic4::from_msb_string("00000111"));
+  const auto z_divisor = evaluate_divisions(
+      "unknown_z_divisor",
+      PackedLogic4::from_msb_string("11001000"),
+      PackedLogic4::from_msb_string("00000Z11"));
+  const auto all_unknown_8 = PackedLogic4(8U, Logic4::x);
+  require(
+      std::ranges::all_of(x_dividend, [&](const PackedLogic4& value) {
+        return value == all_unknown_8;
+      })
+          && std::ranges::all_of(z_divisor, [&](const PackedLogic4& value) {
+               return value == all_unknown_8;
+             }),
+      "word-sized division with X or Z produces all-X results");
+
+  const auto logic9_high = PackedLogic4::from_logic9_msb_string("H");
+  const auto logic9_low = PackedLogic4::from_logic9_msb_string("L");
+  const auto logic9_unknown = PackedLogic4::from_logic9_msb_string("U");
+  const auto logic9_known_result = evaluate_divisions(
+      "logic9_known_fallback", logic9_high, logic9_high);
+  require(
+      logic9_known_result[0U].to_msb_string() == "1"
+          && !logic9_known_result[0U].is_logic9(),
+      "known Logic9 division stays on the generic fallback");
+  const auto logic9_weak_zero_result = evaluate_divisions(
+      "logic9_weak_zero_fallback", logic9_high, logic9_low);
+  const auto logic9_unknown_result = evaluate_divisions(
+      "logic9_unknown_fallback", logic9_unknown, logic9_high);
+  require(
+      logic9_weak_zero_result[0U].to_msb_string() == "X"
+          && logic9_unknown_result[0U].to_msb_string() == "X",
+      "weak-zero and unknown Logic9 divisions retain generic results");
 }
 
 } // namespace fsim::tests::runtime

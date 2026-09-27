@@ -749,6 +749,98 @@ void ApplicationTestFixture::test_non_project_cli()
         == 0);
     assert(standard_calls == 4);
     assert(error.str().empty());
+
+    bool vhdl_compatibility_check_called = false;
+    cli::Services vhdl_compatibility_services;
+    vhdl_compatibility_services.compile =
+        [&](const cli::Invocation&, const project::Config& config,
+            diagnostic::Engine&, std::ostream&, std::ostream&) {
+            vhdl_compatibility_check_called = true;
+            assert(config.source_sets.size() == 1U);
+            assert(config.source_sets.front().language == project::Language::vhdl);
+            assert(config.source_sets.front().vhdl_compatibility
+                == "legacy-unprotected-shared-variable");
+            return 0;
+        };
+    const std::vector<const char*> vhdl_compatibility_arguments {
+        "fsim",
+        "compile",
+        "--lang",
+        "vhdl",
+        "--standard",
+        "2008",
+        "--vhdl-compatibility",
+        "legacy-unprotected-shared-variable",
+        source_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(vhdl_compatibility_arguments.size()),
+               vhdl_compatibility_arguments.data(),
+               vhdl_compatibility_services, output, error)
+        == 0);
+    assert(vhdl_compatibility_check_called);
+    assert(error.str().empty());
+
+    const std::vector<const char*> unknown_vhdl_compatibility_arguments {
+        "fsim",
+        "compile",
+        "--lang",
+        "vhdl",
+        "--vhdl-compatibility",
+        "future-mode",
+        source_text.c_str()
+    };
+    vhdl_compatibility_check_called = false;
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(unknown_vhdl_compatibility_arguments.size()),
+               unknown_vhdl_compatibility_arguments.data(),
+               vhdl_compatibility_services, output, error)
+        != 0);
+    assert(!vhdl_compatibility_check_called);
+    assert(!error.str().empty());
+
+    const std::vector<const char*> cross_language_vhdl_compatibility_arguments {
+        "fsim",
+        "compile",
+        "--lang",
+        "systemverilog",
+        "--vhdl-compatibility",
+        "legacy-unprotected-shared-variable",
+        source_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(cross_language_vhdl_compatibility_arguments.size()),
+               cross_language_vhdl_compatibility_arguments.data(),
+               vhdl_compatibility_services, output, error)
+        != 0);
+    assert(!vhdl_compatibility_check_called);
+    assert(!error.str().empty());
+
+    const std::vector<const char*> generic_compatibility_vhdl_arguments {
+        "fsim",
+        "compile",
+        "--lang",
+        "vhdl",
+        "--compatibility",
+        "sizing",
+        source_text.c_str()
+    };
+    output.str({ });
+    error.str({ });
+    assert(cli::run(
+               static_cast<int>(generic_compatibility_vhdl_arguments.size()),
+               generic_compatibility_vhdl_arguments.data(),
+               vhdl_compatibility_services, output, error)
+        != 0);
+    assert(!vhdl_compatibility_check_called);
+    assert(!error.str().empty());
+
     const std::vector<const char*> help_arguments { "fsim", "--help" };
     output.str({ });
     error.str({ });
@@ -758,6 +850,8 @@ void ApplicationTestFixture::test_non_project_cli()
     assert(output.str().find("Verilog: 95/1995") != std::string::npos);
     assert(output.str().find("19/2019") != std::string::npos);
     assert(output.str().find("SystemVerilog: 05/2005") != std::string::npos);
+    assert(output.str().find("--vhdl-compatibility PROFILE")
+        != std::string::npos);
     assert(error.str().empty());
     output.str({ });
     error.str({ });
@@ -2303,6 +2397,305 @@ end architecture;
     assert(vhdl_metadata->units[0].name == "sharedpkg");
     assert(vhdl_metadata->units[1].name == "mixedcase");
     assert(vhdl_metadata->units[2].primary_name == "mixedcase");
+
+    const auto profile_source = directory / "compatibility_profile.vhd";
+    const auto strict_profile_object
+        = directory / "strict-compatibility-profile.fsimobj";
+    const auto legacy_profile_object
+        = directory / "legacy-compatibility-profile.fsimobj";
+    const auto profile_source_text = support::path_to_utf8(profile_source);
+    const auto strict_profile_object_text
+        = support::path_to_utf8(strict_profile_object);
+    const auto legacy_profile_object_text
+        = support::path_to_utf8(legacy_profile_object);
+    {
+        std::ofstream profile_output(profile_source);
+        profile_output << R"(
+entity Compatibility_Profile is end entity;
+architecture rtl of compatibility_profile is
+begin
+  process begin
+    wait;
+  end process;
+end architecture;
+)";
+        assert(profile_output.good());
+    }
+    const auto compile_vhdl_profile = [&](const std::string& object_text,
+                                          const bool legacy) {
+        std::vector<const char*> arguments {
+            "fsim",
+            "compile",
+            "--lang",
+            "vhdl",
+            "--standard",
+            "2008",
+            "--library",
+            "work",
+            "--compilation-unit",
+            "file"
+        };
+        if (legacy) {
+            arguments.push_back("--vhdl-compatibility");
+            arguments.push_back("legacy-unprotected-shared-variable");
+        }
+        arguments.push_back("--output");
+        arguments.push_back(object_text.c_str());
+        arguments.push_back(profile_source_text.c_str());
+        output.str({ });
+        error.str({ });
+        const auto status = run_fixture_command(
+            static_cast<int>(arguments.size()), arguments.data(),
+            production_services, output, error);
+        if (status != 0) {
+            std::cerr << error.str();
+        }
+        assert(status == 0);
+        assert(error.str().empty());
+    };
+    compile_vhdl_profile(strict_profile_object_text, false);
+    compile_vhdl_profile(legacy_profile_object_text, true);
+    diagnostic::Engine strict_profile_diagnostics;
+    const auto strict_profile_metadata = artifact::load_object_metadata(
+        strict_profile_object, strict_profile_diagnostics);
+    diagnostic::Engine legacy_profile_diagnostics;
+    const auto legacy_profile_metadata = artifact::load_object_metadata(
+        legacy_profile_object, legacy_profile_diagnostics);
+    assert(strict_profile_metadata && !strict_profile_diagnostics.has_error());
+    assert(legacy_profile_metadata && !legacy_profile_diagnostics.has_error());
+    assert(strict_profile_metadata->compatibility_profile
+        == "fsim-synopsys-ieee-compat-v2");
+    assert(legacy_profile_metadata->compatibility_profile
+        == "fsim-synopsys-ieee-compat-v2,legacy-unprotected-shared-variable");
+    assert(strict_profile_metadata->compilation_digest
+        != legacy_profile_metadata->compilation_digest);
+    assert(std::filesystem::remove(profile_source));
+    for (const auto& [object_path, expected_profile] : {
+             std::pair {
+                 strict_profile_object,
+                 std::string_view { "fsim-synopsys-ieee-compat-v2" } },
+             std::pair {
+                 legacy_profile_object,
+                 std::string_view {
+                     "fsim-synopsys-ieee-compat-v2,legacy-unprotected-shared-variable" } } }) {
+        diagnostic::Engine hidden_source_diagnostics;
+        const std::vector inputs { object_path };
+        const auto hidden_source_objects
+            = app::load_objects(inputs, hidden_source_diagnostics);
+        assert(hidden_source_objects && !hidden_source_diagnostics.has_error());
+        assert(hidden_source_objects->objects.size() == 1U);
+        assert(hidden_source_objects->objects.front().compatibility_profile
+            == expected_profile);
+    }
+
+    const auto shared_ram_entity_source
+        = directory / "artifact_shared_ram_entity.vhd";
+    const auto shared_ram_architecture_source
+        = directory / "artifact_shared_ram_architecture.vhd";
+    const auto shared_ram_entity_object
+        = directory / "artifact_shared_ram_entity.fsimobj";
+    const auto shared_ram_architecture_object
+        = directory / "artifact_shared_ram_architecture.fsimobj";
+    const auto shared_ram_entity_source_text
+        = support::path_to_utf8(shared_ram_entity_source);
+    const auto shared_ram_architecture_source_text
+        = support::path_to_utf8(shared_ram_architecture_source);
+    const auto shared_ram_entity_object_text
+        = support::path_to_utf8(shared_ram_entity_object);
+    const auto shared_ram_architecture_object_text
+        = support::path_to_utf8(shared_ram_architecture_object);
+    {
+        std::ofstream entity_output(shared_ram_entity_source);
+        entity_output << R"(
+entity Artifact_Shared_Ram is end entity;
+)";
+        assert(entity_output.good());
+    }
+    {
+        std::ofstream architecture_output(shared_ram_architecture_source);
+        architecture_output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of artifact_shared_ram is
+  type ram_t is array (0 to 3) of std_logic_vector(7 downto 0);
+  shared variable ram : ram_t;
+  signal clock : std_logic := '0';
+  signal write_first : std_logic := '0';
+  signal write_second : std_logic := '0';
+  signal read_after_first_write : std_logic_vector(7 downto 0);
+  signal read_before_second_write : std_logic_vector(7 downto 0);
+  signal read_after_second_write : std_logic_vector(7 downto 0);
+  signal observed_first : std_logic_vector(7 downto 0);
+  signal observed_second : std_logic_vector(7 downto 0);
+  signal observed_disjoint_first : std_logic_vector(7 downto 0);
+  signal observed_disjoint_second : std_logic_vector(7 downto 0);
+begin
+  writer_zero : process(clock)
+  begin
+    if clock'event and clock = '1' then
+      if write_first = '1' then
+        ram(0) := x"AA";
+        read_after_first_write <= ram(0);
+        ram(1) := x"3C";
+      end if;
+    end if;
+  end process;
+
+  writer_one : process(clock)
+  begin
+    if clock'event and clock = '1' then
+      if write_second = '1' then
+        read_before_second_write <= ram(0);
+        ram(0) := x"55";
+        read_after_second_write <= ram(0);
+      end if;
+    end if;
+  end process;
+
+  reader : process
+  begin
+    wait until clock'event and clock = '0';
+    observed_first <= ram(0);
+    observed_disjoint_first <= ram(1);
+    wait until clock'event and clock = '0';
+    observed_second <= ram(0);
+    observed_disjoint_second <= ram(1);
+    wait;
+  end process;
+
+  stimulus : process
+  begin
+    write_first <= '1';
+    wait for 5 ns;
+    clock <= '1';
+    wait for 5 ns;
+    clock <= '0';
+    write_first <= '0';
+    write_second <= '1';
+    wait for 5 ns;
+    clock <= '1';
+    wait for 5 ns;
+    clock <= '0';
+    wait;
+  end process;
+end architecture;
+)";
+        assert(architecture_output.good());
+    }
+    const auto compile_vhdl_object = [&](const std::string& source_path,
+                                         const std::string& object_path,
+                                         const bool legacy) {
+        std::vector<const char*> arguments {
+            "fsim",
+            "compile",
+            "--lang",
+            "vhdl",
+            "--standard",
+            "2008",
+            "--library",
+            "work",
+            "--compilation-unit",
+            "file"
+        };
+        if (legacy) {
+            arguments.push_back("--vhdl-compatibility");
+            arguments.push_back("legacy-unprotected-shared-variable");
+        }
+        arguments.push_back("--output");
+        arguments.push_back(object_path.c_str());
+        arguments.push_back(source_path.c_str());
+        output.str({ });
+        error.str({ });
+        const auto status = run_fixture_command(
+            static_cast<int>(arguments.size()), arguments.data(),
+            production_services, output, error);
+        if (status != 0) {
+            std::cerr << error.str();
+        }
+        assert(status == 0);
+        assert(error.str().empty());
+    };
+    compile_vhdl_object(
+        shared_ram_entity_source_text, shared_ram_entity_object_text, false);
+    compile_vhdl_object(shared_ram_architecture_source_text,
+        shared_ram_architecture_object_text, true);
+    assert(std::filesystem::remove(shared_ram_entity_source));
+    assert(std::filesystem::remove(shared_ram_architecture_source));
+    project::Config shared_ram_object_config;
+    shared_ram_object_config.base_directory = directory;
+    shared_ram_object_config.project.name = "source-hidden-shared-ram";
+    shared_ram_object_config.project.top = "vhdl:work.artifact_shared_ram(rtl)";
+    shared_ram_object_config.project.time_resolution = "1ns";
+    shared_ram_object_config.build.optimization = project::Optimization::o2;
+    shared_ram_object_config.build.cache_path
+        = directory / "source-hidden-shared-ram-cache";
+    shared_ram_object_config.run.max_deltas = 1000;
+    const std::vector shared_ram_objects {
+        shared_ram_entity_object, shared_ram_architecture_object
+    };
+    for (const auto engine : {
+             app::SimulationEngine::interpreter,
+             app::SimulationEngine::compiled }) {
+        diagnostic::Engine shared_ram_build_diagnostics;
+        auto shared_ram_build = app::build_objects(
+            shared_ram_object_config, shared_ram_objects,
+            shared_ram_build_diagnostics);
+        if (!shared_ram_build) {
+            diagnostic::print_text(std::cerr, shared_ram_build_diagnostics);
+        }
+        assert(shared_ram_build && !shared_ram_build_diagnostics.has_error());
+        app::Simulation shared_ram_simulation {
+            std::move(*shared_ram_build),
+            shared_ram_object_config.run.max_deltas,
+            engine
+        };
+        const auto read_after_first_write
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.read_after_first_write");
+        const auto read_before_second_write
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.read_before_second_write");
+        const auto read_after_second_write
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.read_after_second_write");
+        const auto observed_first
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.observed_first");
+        const auto observed_second
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.observed_second");
+        const auto observed_disjoint_first
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.observed_disjoint_first");
+        const auto observed_disjoint_second
+            = shared_ram_simulation.find_signal(
+                "artifact_shared_ram.observed_disjoint_second");
+        assert(read_after_first_write
+            && read_before_second_write && read_after_second_write
+            && observed_first && observed_second
+            && observed_disjoint_first && observed_disjoint_second);
+        const auto result = shared_ram_simulation.run();
+        assert(result.status == runtime::RunStatus::completed);
+        assert(shared_ram_simulation.read_signal(*read_after_first_write)
+            .to_msb_string() == "10101010");
+        assert(shared_ram_simulation.read_signal(*read_before_second_write)
+            .to_msb_string() == "10101010");
+        assert(shared_ram_simulation.read_signal(*read_after_second_write)
+            .to_msb_string() == "01010101");
+        assert(shared_ram_simulation.read_signal(*observed_first)
+            .to_msb_string() == "10101010");
+        assert(shared_ram_simulation.read_signal(*observed_second)
+            .to_msb_string() == "01010101");
+        assert(shared_ram_simulation.read_signal(*observed_disjoint_first)
+            .to_msb_string() == "00111100");
+        assert(shared_ram_simulation.read_signal(*observed_disjoint_second)
+            .to_msb_string() == "00111100");
+#if defined(FSIM_HAS_LLVM)
+        if (engine == app::SimulationEngine::compiled) {
+            assert(shared_ram_simulation.compiled_process_count() > 0U);
+        }
+#endif
+    }
 
     auto package_metadata = *vhdl_metadata;
     package_metadata.units = { vhdl_metadata->units[0] };

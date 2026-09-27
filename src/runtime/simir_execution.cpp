@@ -968,7 +968,7 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     process.cold().suspended_callable_context = std::move(context);
 }
 
-void Interpreter::Impl::restore_callable_context(ProcessState& process)
+void Interpreter::Impl::restore_callable_context_nonempty(ProcessState& process)
 {
     for (const auto& context : process.cold().escaping_callable_contexts) {
         if (!context) {
@@ -1074,10 +1074,6 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 [[nodiscard]] bool Interpreter::Impl::handle_executor_resume(
     ProcessState& process, const ProcessResumeResult& boundary)
 {
-    const auto* operation
-        = boundary.instruction < process.program().operations.size()
-        ? &std::as_const(process.program().operations)[boundary.instruction]
-        : nullptr;
     if (boundary.external.kind != ExternalSuspendKind::simir_boundary) {
         handle_external_boundary(
             process,
@@ -1087,6 +1083,10 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
         snapshot_callable_context(process);
         return false;
     }
+    const auto* operation
+        = boundary.instruction < process.program().operations.size()
+        ? &std::as_const(process.program().operations)[boundary.instruction]
+        : nullptr;
     if (native_process_count_profile_enabled && operation) {
         ++native_process_simir_boundary_groups[operation->storage.index()];
         if (const auto* scheduling = std::get_if<SchedulingOperationGroup>(

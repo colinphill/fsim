@@ -24,10 +24,10 @@ template <typename OperationType, typename ExactSignalWidth,
     ValidatedProcess& result,
     ExactSignalWidth&& exact_signal_width,
     ReferencedSignalWidth&& referenced_signal_width,
-    SignalWidth&& signal_width,
+    SignalWidth&&,
     RecordUse&& record_use,
     ConstrainWidth&& constrain_width,
-    RecordUnsupported&& record_unsupported,
+    RecordUnsupported&&,
     ValidateTarget&& validate_target,
     ValidateCallStack&& validate_call_stack,
     RecordDefinition&& record_definition,
@@ -64,7 +64,6 @@ template <typename OperationType, typename ExactSignalWidth,
             reject(process, index, "FormatDisplay scalar metadata is inconsistent");
         if (*width != 0)
             constrain_width(operation.source, *width, index);
-        result.uses_formatted_output = true;
     } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
         result.uses_time_output = true;
     } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
@@ -74,7 +73,8 @@ template <typename OperationType, typename ExactSignalWidth,
         }
         for (const auto& value : operation.values) {
             if (value.kind == MonitorValueKind::signal) {
-                const auto signal_value_width = signal_width(value.signal, index);
+                const auto signal_value_width = exact_signal_width(
+                    value.signal, index);
                 const auto width = formatted_value_width(value.format, value.scalar_kind);
                 if (!width || (*width != 0 && *width != signal_value_width))
                     reject(process, index, "MonitorInstall scalar metadata is inconsistent");
@@ -139,7 +139,6 @@ template <typename OperationType, typename ExactSignalWidth,
         }
         validate_constraint_templates(
             process, index, operation.inline_constraints);
-        record_unsupported(index, "scope randomize uses the interpreter solver service");
     } else if constexpr (std::is_same_v<OperationType, Report>) {
         result.uses_report = true;
     } else if constexpr (std::is_same_v<OperationType, Jump>) {
@@ -321,7 +320,7 @@ template <typename OperationType, typename ExactSignalWidth,
             result.uses_write_projected = true;
         }
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
-        const auto target_width = signal_width(operation.signal, index);
+        const auto target_width = exact_signal_width(operation.signal, index);
         if (operation.elements.size() < 2) {
             reject(
                 process,
@@ -376,7 +375,11 @@ template <typename OperationType, typename ExactSignalWidth,
                 index,
                 "projected waveform has an invalid delay mode");
         }
-        result.uses_write_projected_waveform = true;
+        if (target_width > 64) {
+            result.uses_exact_signal_operation = true;
+        } else {
+            result.uses_write_projected_waveform = true;
+        }
     } else if constexpr (std::is_same_v<OperationType, WriteBlockingSlice>) {
         const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
@@ -411,7 +414,8 @@ template <typename OperationType, typename ExactSignalWidth,
         }
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
         record_use(operation.source, index);
-        (void)referenced_signal_width(operation.signal, index);
+        const auto target_width = exact_signal_width(
+            operation.signal, index);
         switch (operation.mode) {
         case runtime::simir::ProjectedDelayMode::transport:
         case runtime::simir::ProjectedDelayMode::inertial:
@@ -438,9 +442,14 @@ template <typename OperationType, typename ExactSignalWidth,
                 index,
                 "transport projected slice has a rejection limit");
         }
-        result.uses_write_projected_slice = true;
+        if (target_width > 64) {
+            result.uses_exact_signal_operation = true;
+        } else {
+            result.uses_write_projected_slice = true;
+        }
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
-        (void)referenced_signal_width(operation.signal, index);
+        const auto target_width = exact_signal_width(
+            operation.signal, index);
         if (operation.elements.size() < 2) {
             reject(
                 process,
@@ -502,7 +511,11 @@ template <typename OperationType, typename ExactSignalWidth,
                 index,
                 "projected slice waveform has an invalid delay mode");
         }
-        result.uses_write_projected_waveform_slice = true;
+        if (target_width > 64) {
+            result.uses_exact_signal_operation = true;
+        } else {
+            result.uses_write_projected_waveform_slice = true;
+        }
     } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
         const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
@@ -632,7 +645,7 @@ template <typename OperationType, typename ExactSignalWidth,
             operation.selection, target_width, index);
         result.uses_exact_signal_operation = true;
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
-        const auto target_width = referenced_signal_width(operation.signal, index);
+        const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
         validate_dynamic_selection(
             operation.selection, target_width, index);
@@ -661,9 +674,13 @@ template <typename OperationType, typename ExactSignalWidth,
                 index,
                 "projected dynamic slice has an invalid delay mode");
         }
-        result.uses_write_projected_slice = true;
+        if (target_width > 64) {
+            result.uses_exact_signal_operation = true;
+        } else {
+            result.uses_write_projected_slice = true;
+        }
     } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
-        const auto target_width = referenced_signal_width(operation.signal, index);
+        const auto target_width = exact_signal_width(operation.signal, index);
         validate_dynamic_selection(
             operation.selection, target_width, index);
         if (operation.elements.size() < 2) {
@@ -728,7 +745,11 @@ template <typename OperationType, typename ExactSignalWidth,
                 "projected dynamic-slice waveform has an invalid delay "
                 "mode");
         }
-        result.uses_write_projected_waveform_slice = true;
+        if (target_width > 64) {
+            result.uses_exact_signal_operation = true;
+        } else {
+            result.uses_write_projected_waveform_slice = true;
+        }
 
     } else {
         return false;

@@ -1348,6 +1348,18 @@ std::uint32_t LlvmProcessExecutor::execute_signal_operation(
                 state.executor->read_register(selection.index, 32),
                 selection);
         };
+        const auto waveform_values = [&](const auto& elements) {
+            std::vector<runtime::simir::ProjectedWaveformValue> values;
+            values.reserve(elements.size());
+            for (const auto& element : elements) {
+                values.push_back({
+                    state.executor->read_register(
+                        element.source,
+                        runtime::simir::ProcessExecutor::native_register_width),
+                    element.delay });
+            }
+            return values;
+        };
         if (const auto* read = runtime::simir::operation_get_if<runtime::simir::ReadSignal>(
                 &stored)) {
             state.executor->write_register(
@@ -1505,16 +1517,62 @@ std::uint32_t LlvmProcessExecutor::execute_signal_operation(
                 state.executor->read_register(dynamic_inertial->source, 1),
                 dynamic_offset(dynamic_inertial->selection),
                 dynamic_inertial->delays);
-        } else if (const auto* projected = runtime::simir::operation_get_if<
+        } else if (const auto* projected_whole = runtime::simir::operation_get_if<
                        runtime::simir::WriteProjected>(&stored)) {
             state.context->write_projected(
-                projected->signal,
+                projected_whole->signal,
                 state.executor->read_register(
-                    projected->source,
+                    projected_whole->source,
                     runtime::simir::ProcessExecutor::native_register_width),
-                projected->delay,
-                projected->rejection,
-                projected->mode);
+                projected_whole->delay,
+                projected_whole->rejection,
+                projected_whole->mode);
+        } else if (const auto* projected_slice = runtime::simir::operation_get_if<
+                       runtime::simir::WriteProjectedSlice>(&stored)) {
+            state.context->write_projected_slice(
+                projected_slice->signal,
+                state.executor->read_register(
+                    projected_slice->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                projected_slice->offset,
+                projected_slice->delay,
+                projected_slice->rejection,
+                projected_slice->mode);
+        } else if (const auto* whole_waveform = runtime::simir::operation_get_if<
+                       runtime::simir::WriteProjectedWaveform>(&stored)) {
+            state.context->write_projected_waveform(
+                whole_waveform->signal,
+                waveform_values(whole_waveform->elements),
+                whole_waveform->rejection,
+                whole_waveform->mode);
+        } else if (const auto* slice_waveform = runtime::simir::operation_get_if<
+                       runtime::simir::WriteProjectedWaveformSlice>(&stored)) {
+            state.context->write_projected_waveform_slice(
+                slice_waveform->signal,
+                waveform_values(slice_waveform->elements),
+                slice_waveform->offset,
+                slice_waveform->rejection,
+                slice_waveform->mode);
+        } else if (const auto* dynamic_projected = runtime::simir::operation_get_if<
+                       runtime::simir::WriteProjectedDynamicSlice>(&stored)) {
+            state.context->write_projected_slice(
+                dynamic_projected->signal,
+                state.executor->read_register(
+                    dynamic_projected->source,
+                    runtime::simir::ProcessExecutor::native_register_width),
+                dynamic_offset(dynamic_projected->selection),
+                dynamic_projected->delay,
+                dynamic_projected->rejection,
+                dynamic_projected->mode);
+        } else if (const auto* dynamic_waveform = runtime::simir::operation_get_if<
+                       runtime::simir::WriteProjectedWaveformDynamicSlice>(
+                       &stored)) {
+            state.context->write_projected_waveform_slice(
+                dynamic_waveform->signal,
+                waveform_values(dynamic_waveform->elements),
+                dynamic_offset(dynamic_waveform->selection),
+                dynamic_waveform->rejection,
+                dynamic_waveform->mode);
         } else if (const auto* force = runtime::simir::operation_get_if<
                        runtime::simir::ForceSignalSlice>(&stored)) {
             const auto offset = force->selection

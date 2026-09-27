@@ -443,6 +443,256 @@ end architecture;
     }
 }
 
+void verify_vhdl_2008_shared_ram_compatibility(
+    const std::filesystem::path& directory)
+{
+    const auto ram_directory = directory / "legacy-2008-shared-ram";
+    std::filesystem::create_directories(ram_directory);
+    const auto entity_source = ram_directory / "shared_ram_entity.vhd";
+    {
+        std::ofstream output { entity_source };
+        output << R"(
+entity Shared_Ram_Compatibility is end entity;
+)";
+        assert(output.good());
+    }
+    {
+        std::ofstream architecture_output {
+            ram_directory / "shared_ram_architecture.vhd" };
+        architecture_output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of shared_ram_compatibility is
+  type ram_t is array (0 to 3) of std_logic_vector(7 downto 0);
+  shared variable ram : ram_t;
+  shared variable shared_bit : std_logic;
+  signal clock : std_logic := '0';
+  signal write_first : std_logic := '0';
+  signal write_second : std_logic := '0';
+  signal bit_after_first_write : std_logic;
+  signal bit_before_second_write : std_logic;
+  signal bit_after_second_write : std_logic;
+  signal bit_observed_first : std_logic;
+  signal bit_observed_second : std_logic;
+  signal read_after_first_write : std_logic_vector(7 downto 0);
+  signal read_before_second_write : std_logic_vector(7 downto 0);
+  signal read_after_second_write : std_logic_vector(7 downto 0);
+  signal observed_first : std_logic_vector(7 downto 0);
+  signal observed_second : std_logic_vector(7 downto 0);
+  signal observed_disjoint_first : std_logic_vector(7 downto 0);
+  signal observed_disjoint_second : std_logic_vector(7 downto 0);
+begin
+  writer_zero : process(clock)
+  begin
+    if clock'event and clock = '1' then
+      if write_first = '1' then
+        shared_bit := '0';
+        bit_after_first_write <= shared_bit;
+        ram(0) := x"AA";
+        read_after_first_write <= ram(0);
+        ram(1) := x"3C";
+      end if;
+    end if;
+  end process;
+
+  writer_one : process(clock)
+  begin
+    if clock'event and clock = '1' then
+      if write_second = '1' then
+        bit_before_second_write <= shared_bit;
+        shared_bit := '1';
+        bit_after_second_write <= shared_bit;
+        read_before_second_write <= ram(0);
+        ram(0) := x"55";
+        read_after_second_write <= ram(0);
+      end if;
+    end if;
+  end process;
+
+  reader : process
+  begin
+    wait until clock'event and clock = '0';
+    bit_observed_first <= shared_bit;
+    observed_first <= ram(0);
+    observed_disjoint_first <= ram(1);
+    wait until clock'event and clock = '0';
+    bit_observed_second <= shared_bit;
+    observed_second <= ram(0);
+    observed_disjoint_second <= ram(1);
+    wait;
+  end process;
+
+  stimulus : process
+  begin
+    write_first <= '1';
+    wait for 5 ns;
+    clock <= '1';
+    wait for 5 ns;
+    clock <= '0';
+    write_first <= '0';
+    write_second <= '1';
+    wait for 5 ns;
+    clock <= '1';
+    wait for 5 ns;
+    clock <= '0';
+    wait;
+  end process;
+end architecture;
+)";
+        assert(architecture_output.good());
+    }
+
+    const auto make_config = [&](const fsim::project::Optimization optimization,
+                                  const bool entity_compatibility,
+                                  const bool architecture_compatibility) {
+        fsim::project::Config config;
+        config.base_directory = ram_directory;
+        config.project.name = "vhdl-2008-shared-ram";
+        config.project.top = "vhdl:work.shared_ram_compatibility(rtl)";
+        config.project.time_resolution = "1ns";
+        config.build.optimization = optimization;
+        config.build.cache_path = ram_directory
+            / (optimization == fsim::project::Optimization::o0
+                    ? "cache-o0"
+                    : "cache-o2");
+        config.run.max_deltas = 1000;
+        fsim::project::SourceSet entity_sources;
+        entity_sources.language = fsim::project::Language::vhdl;
+        entity_sources.standard = "2008";
+        entity_sources.library = "work";
+        if (entity_compatibility) {
+            entity_sources.vhdl_compatibility
+                = "legacy-unprotected-shared-variable";
+        }
+        entity_sources.files.push_back(entity_source);
+        config.source_sets.push_back(std::move(entity_sources));
+        fsim::project::SourceSet architecture_sources;
+        architecture_sources.language = fsim::project::Language::vhdl;
+        architecture_sources.standard = "2008";
+        architecture_sources.library = "work";
+        if (architecture_compatibility) {
+            architecture_sources.vhdl_compatibility
+                = "legacy-unprotected-shared-variable";
+        }
+        architecture_sources.files.push_back(
+            ram_directory / "shared_ram_architecture.vhd");
+        config.source_sets.push_back(std::move(architecture_sources));
+        return config;
+    };
+
+    for (const auto optimization : {
+             fsim::project::Optimization::o0,
+             fsim::project::Optimization::o2 }) {
+        auto config = make_config(optimization, false, true);
+
+        for (const auto engine : {
+                 fsim::app::SimulationEngine::interpreter,
+                 fsim::app::SimulationEngine::compiled }) {
+            fsim::diagnostic::Engine diagnostics;
+            auto project = fsim::app::build_project(config, diagnostics);
+            if (!project) {
+                for (const auto& diagnostic : diagnostics.diagnostics()) {
+                    std::cerr << diagnostic.code << ": "
+                              << diagnostic.message << '\n';
+                }
+            }
+            assert(project);
+            fsim::app::Simulation simulation {
+                std::move(*project), config.run.max_deltas, engine
+            };
+            const auto bit_after_first_write
+                = simulation.find_signal(
+                    "shared_ram_compatibility.bit_after_first_write");
+            const auto bit_before_second_write
+                = simulation.find_signal(
+                    "shared_ram_compatibility.bit_before_second_write");
+            const auto bit_after_second_write
+                = simulation.find_signal(
+                    "shared_ram_compatibility.bit_after_second_write");
+            const auto bit_observed_first
+                = simulation.find_signal(
+                    "shared_ram_compatibility.bit_observed_first");
+            const auto bit_observed_second
+                = simulation.find_signal(
+                    "shared_ram_compatibility.bit_observed_second");
+            const auto read_after_first_write
+                = simulation.find_signal(
+                    "shared_ram_compatibility.read_after_first_write");
+            const auto read_before_second_write
+                = simulation.find_signal(
+                    "shared_ram_compatibility.read_before_second_write");
+            const auto read_after_second_write
+                = simulation.find_signal(
+                    "shared_ram_compatibility.read_after_second_write");
+            const auto observed_first
+                = simulation.find_signal(
+                    "shared_ram_compatibility.observed_first");
+            const auto observed_second
+                = simulation.find_signal(
+                    "shared_ram_compatibility.observed_second");
+            const auto observed_disjoint_first
+                = simulation.find_signal(
+                    "shared_ram_compatibility.observed_disjoint_first");
+            const auto observed_disjoint_second
+                = simulation.find_signal(
+                    "shared_ram_compatibility.observed_disjoint_second");
+            assert(bit_after_first_write && bit_before_second_write
+                && bit_after_second_write && bit_observed_first
+                && bit_observed_second && read_after_first_write
+                && read_before_second_write && read_after_second_write
+                && observed_first && observed_second
+                && observed_disjoint_first && observed_disjoint_second);
+            const auto result = simulation.run();
+            assert(result.status == fsim::runtime::RunStatus::completed);
+            assert(simulation.read_signal(*bit_after_first_write)
+                .to_msb_string() == "0");
+            assert(simulation.read_signal(*bit_before_second_write)
+                .to_msb_string() == "0");
+            assert(simulation.read_signal(*bit_after_second_write)
+                .to_msb_string() == "1");
+            assert(simulation.read_signal(*bit_observed_first)
+                .to_msb_string() == "0");
+            assert(simulation.read_signal(*bit_observed_second)
+                .to_msb_string() == "1");
+            assert(simulation.read_signal(*read_after_first_write)
+                .to_msb_string() == "10101010");
+            assert(simulation.read_signal(*read_before_second_write)
+                .to_msb_string() == "10101010");
+            assert(simulation.read_signal(*read_after_second_write)
+                .to_msb_string() == "01010101");
+            assert(simulation.read_signal(*observed_first)
+                .to_msb_string() == "10101010");
+            assert(simulation.read_signal(*observed_second)
+                .to_msb_string() == "01010101");
+            assert(simulation.read_signal(*observed_disjoint_first)
+                .to_msb_string() == "00111100");
+            assert(simulation.read_signal(*observed_disjoint_second)
+                .to_msb_string() == "00111100");
+#if defined(FSIM_HAS_LLVM)
+            if (engine == fsim::app::SimulationEngine::compiled) {
+                assert(simulation.compiled_process_count() > 0U);
+            }
+#endif
+        }
+
+        for (const auto& [entity_compatibility, architecture_compatibility] : {
+                 std::pair { false, false }, std::pair { true, false } }) {
+            const auto rejected_config = make_config(
+                optimization, entity_compatibility,
+                architecture_compatibility);
+            fsim::diagnostic::Engine rejected_diagnostics;
+            const auto rejected_project = fsim::app::build_project(
+                rejected_config, rejected_diagnostics);
+            assert(!rejected_project);
+            assert(std::ranges::any_of(
+                rejected_diagnostics.diagnostics(),
+                [](const auto& diagnostic) {
+                    return diagnostic.code == "FSIM-ELAB-VHPROTECTED-008";
+                }));
+        }
+    }
+}
+
 void verify_vhdl_2019_access_lifetime(
     const std::filesystem::path& directory)
 {
@@ -885,6 +1135,7 @@ int main()
     verify_vhdl_2019_reflection(directory.path);
     verify_protected_revision_execution(directory.path);
     verify_vhdl_1993_shared_execution(directory.path);
+    verify_vhdl_2008_shared_ram_compatibility(directory.path);
     verify_vhdl_1987_declaration_execution(directory.path);
     std::cout << "VHDL advanced type application tests passed\n";
     return 0;

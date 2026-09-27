@@ -2,6 +2,11 @@
 #include "application_systemverilog_hir_internal.hpp"
 
 #include <concepts>
+#include <cstdint>
+#include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -39,6 +44,40 @@ namespace {
         }
 
     private:
+        using ExpressionCandidateIndex
+            = std::unordered_map<std::uint64_t, std::vector<std::size_t>>;
+
+        static constexpr std::size_t expression_candidate_index_threshold { 64U };
+
+        [[nodiscard]] static std::uint64_t expression_candidate_key(
+            const semantic::ScopeId scope,
+            const semantic::SourceSpanId source) noexcept
+        {
+            return (static_cast<std::uint64_t>(scope.value()) << 32U)
+                | static_cast<std::uint64_t>(source.value());
+        }
+
+        template<typename CandidateRange>
+        void index_expression_candidates(
+            std::optional<ExpressionCandidateIndex>& index,
+            const CandidateRange& candidates) const
+        {
+            if (index || candidates.size() < expression_candidate_index_threshold) {
+                return;
+            }
+
+            ExpressionCandidateIndex ordered_index;
+            ordered_index.reserve(candidates.size());
+            for (std::size_t candidate_index = 0;
+                candidate_index < candidates.size(); ++candidate_index) {
+                const auto& candidate = candidates[candidate_index];
+                ordered_index[expression_candidate_key(
+                    candidate.scope, candidate.source)]
+                    .push_back(candidate_index);
+            }
+            index.emplace(std::move(ordered_index));
+        }
+
         [[nodiscard]] semantic::SourceSpanId source(
             const frontend::SourceSpan& span)
         {
@@ -229,22 +268,50 @@ namespace {
             const semantic::SourceSpanId expression_source,
             const semantic::OriginId parent)
         {
-            for (const auto& identity : model_.expression_identities()) {
+            const auto& identities = model_.expression_identities();
+            index_expression_candidates(
+                expression_identity_candidate_index_, identities);
+            const auto candidate_key
+                = expression_candidate_key(scope, expression_source);
+            const auto matching_identity = [&](const auto& identity)
+                -> std::optional<std::pair<semantic::ExpressionId,
+                    semantic::OriginId>> {
                 if (identity.scope != scope || identity.source != expression_source
                     || claimed_expressions_.contains(identity.id.value())) {
-                    continue;
+                    return std::nullopt;
                 }
                 const auto& candidate_origin = model_.origins()[identity.origin.value()];
                 if (candidate_origin.parent == parent
                     && candidate_origin.detail == "SystemVerilog expression") {
                     claimed_expressions_.insert(identity.id.value());
-                    return { identity.id, identity.origin };
+                    return std::pair { identity.id, identity.origin };
+                }
+                return std::nullopt;
+            };
+            if (expression_identity_candidate_index_) {
+                const auto found = expression_identity_candidate_index_->find(
+                    candidate_key);
+                if (found != expression_identity_candidate_index_->end()) {
+                    for (const auto candidate_index : found->second) {
+                        if (const auto match = matching_identity(
+                                identities[candidate_index])) {
+                            return *match;
+                        }
+                    }
+                }
+            } else {
+                for (const auto& identity : identities) {
+                    if (const auto match = matching_identity(identity)) {
+                        return *match;
+                    }
                 }
             }
             const auto expression_origin = origin(
                 expression_source, parent, "SystemVerilog expression");
             const auto id = model_.add_expression_identity(
                 scope, expression_source, expression_origin);
+            // This new ID is claimed immediately and never unclaimed, so it
+            // cannot become a reusable candidate in the one-time index.
             claimed_expressions_.insert(id.value());
             return { id, expression_origin };
         }
@@ -379,32 +446,55 @@ namespace {
                 ? edge_kind(static_cast<frontend::EdgeKind>(
                       input.call_result_width))
                 : sv::EdgeKind::any;
-            const auto existing = std::ranges::find_if(
-                hir_.expressions(), [&](const sv::Expression& candidate) {
-                    if (claimed_expressions_.contains(candidate.id.value())
-                        || candidate.scope != scope
-                        || candidate.source != expression_source
-                        || candidate.kind != kind
-                        || candidate.text != input.text
-                        || candidate.nominal_type != input.nominal_type
-                        || candidate.decoded_string != input.decoded_string
-                        || candidate.signed_value != signed_value
-                        || candidate.clocking_edge != clocking_edge
-                        || candidate.scalar_kind
-                            != static_cast<sv::ScalarKind>(
-                                input.systemverilog_scalar_kind)
-                        || candidate.generated_text
-                            != static_cast<sv::GeneratedTextKind>(
-                                input.generated_text)) {
-                        return false;
+            const auto& expressions = hir_.expressions();
+            index_expression_candidates(
+                hir_expression_candidate_index_, expressions);
+            const auto candidate_key
+                = expression_candidate_key(scope, expression_source);
+            const auto matches_expression = [&](const sv::Expression& candidate) {
+                if (claimed_expressions_.contains(candidate.id.value())
+                    || candidate.scope != scope
+                    || candidate.source != expression_source
+                    || candidate.kind != kind
+                    || candidate.text != input.text
+                    || candidate.nominal_type != input.nominal_type
+                    || candidate.decoded_string != input.decoded_string
+                    || candidate.signed_value != signed_value
+                    || candidate.clocking_edge != clocking_edge
+                    || candidate.scalar_kind
+                        != static_cast<sv::ScalarKind>(
+                            input.systemverilog_scalar_kind)
+                    || candidate.generated_text
+                        != static_cast<sv::GeneratedTextKind>(
+                            input.generated_text)) {
+                    return false;
+                }
+                const auto& candidate_origin
+                    = model_.origins()[candidate.origin.value()];
+                return candidate_origin.parent == parent
+                    && candidate_origin.detail == "SystemVerilog expression";
+            };
+            const sv::Expression* existing { nullptr };
+            if (hir_expression_candidate_index_) {
+                const auto found = hir_expression_candidate_index_->find(
+                    candidate_key);
+                if (found != hir_expression_candidate_index_->end()) {
+                    for (const auto candidate_index : found->second) {
+                        const auto& candidate = expressions[candidate_index];
+                        if (matches_expression(candidate)) {
+                            existing = &candidate;
+                            break;
+                        }
                     }
-                    const auto& candidate_origin
-                        = model_.origins()[candidate.origin.value()];
-                    return candidate_origin.parent == parent
-                        && candidate_origin.detail
-                        == "SystemVerilog expression";
-                });
-            if (existing != hir_.expressions().end()) {
+                }
+            } else {
+                const auto found = std::ranges::find_if(
+                    expressions, matches_expression);
+                if (found != expressions.end()) {
+                    existing = &*found;
+                }
+            }
+            if (existing != nullptr) {
                 claimed_expressions_.insert(existing->id.value());
                 return existing->id;
             }
@@ -543,6 +633,9 @@ namespace {
                     }
                 }
             }
+            // The expression identity was claimed above. Keeping this append
+            // out of the one-time candidate index therefore preserves the
+            // original claimed-ID predicate for every later lookup.
             hir_.mutable_expressions().push_back(std::move(output));
             return id;
         }
@@ -1810,6 +1903,8 @@ namespace {
         semantic::Model& model_;
         sv::Hir& hir_;
         std::set<std::uint32_t> claimed_expressions_;
+        std::optional<ExpressionCandidateIndex> expression_identity_candidate_index_;
+        std::optional<ExpressionCandidateIndex> hir_expression_candidate_index_;
     };
 
 } // namespace

@@ -155,6 +155,16 @@ application_detail::load_object_workspace(
       return std::nullopt;
     }
     if (*source_language == project::Language::vhdl) {
+      const auto source_profile =
+          application_detail::vhdl_source_compatibility_from_profile(
+              metadata->compatibility_profile);
+      if (!source_profile) {
+        diagnostics.error(
+            "FSIM-ART-0005",
+            ".fsimobj metadata names an unsupported VHDL compatibility profile");
+        return std::nullopt;
+      }
+      provenance.source_settings.vhdl_compatibility = *source_profile;
       if (vhdl_object_standard
           && *vhdl_object_standard != metadata->standard) {
         diagnostics.error(

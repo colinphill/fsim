@@ -166,6 +166,10 @@ std::string make_cache_key(
         key.add(
             "compatibility-profile",
             project::compatibility_profile(set.compatibility_switches));
+        if (set.language == project::Language::vhdl
+            && !set.vhdl_compatibility.empty()) {
+            key.add("vhdl-source-compatibility", set.vhdl_compatibility);
+        }
         key.add("library", set.library);
         key.add("compilation-unit", set.compilation_unit);
         key.add("uvm-release", project::to_string(set.uvm_release));
@@ -654,6 +658,12 @@ make_specialization_cache_keys(
         key.add("unit", specialization.name);
         key.add("selected-unit-identity", specialization.name);
         key.add("selected-logical-library", specialization.library);
+        if (settings->source_set->language == project::Language::vhdl
+            && !settings->source_set->vhdl_compatibility.empty()) {
+            key.add(
+                "vhdl-source-compatibility",
+                settings->source_set->vhdl_compatibility);
+        }
         key.add(
             "uvm-release",
             project::to_string(checked.systemverilog_uvm_provenance.release));
@@ -802,6 +812,14 @@ make_specialization_cache_keys(
                         && dependency_compiled_source->library == "ieee"
                     ? vhdl_compatibility_profile()
                     : dependency_compiled_source->compatibility_profile);
+            if (dependency_settings->source_set->language
+                    == project::Language::vhdl
+                && !dependency_settings->source_set
+                        ->vhdl_compatibility.empty()) {
+                key.add(
+                    "semantic-dependency-vhdl-compatibility",
+                    dependency_settings->source_set->vhdl_compatibility);
+            }
             key.add(
                 "semantic-dependency-library",
                 dependency_compiled_source->library);
@@ -832,6 +850,12 @@ make_specialization_cache_keys(
             "compatibility-profile",
             project::compatibility_profile(
                 settings->source_set->compatibility_switches));
+        if (settings->source_set->language == project::Language::vhdl
+            && !settings->source_set->vhdl_compatibility.empty()) {
+            key.add(
+                "vhdl-source-compatibility",
+                settings->source_set->vhdl_compatibility);
+        }
         key.add("library", settings->source_set->library);
         key.add(
             "compilation-unit",

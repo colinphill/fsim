@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace fsim::tests::runtime {
 
@@ -507,8 +508,14 @@ void test_simir_fork_process_lifecycle()
 
     {
         Interpreter interpreter;
+        Process root;
+        root.id = 0;
+        root.name = "nested_attempt_identity_root";
+        root.operations = { Halt { } };
+        (void)interpreter.add_process(std::move(root));
+
         Process process;
-        process.id = 0;
+        process.id = 1;
         process.name = "nested_attempt_identity";
         process.operations = {
             Fork { { 4 }, ForkJoinKind::none },
@@ -522,12 +529,19 @@ void test_simir_fork_process_lifecycle()
             ForkEnd { },
         };
         (void)interpreter.add_process(std::move(process));
+        std::vector<ProcessId> filtered_owners;
+        interpreter.set_fork_spawn_filter([&](const ProcessId owner) {
+            filtered_owners.push_back(owner);
+            return true;
+        });
         const auto result = interpreter.run();
         require(
             result.status == RunStatus::completed
-                && interpreter.design_process(2) == 0
-                && interpreter.dynamic_process_root(1) == 1
-                && interpreter.dynamic_process_root(2) == 1,
+                && filtered_owners == std::vector<ProcessId> { 1, 1 }
+                && interpreter.design_process(2) == 1
+                && interpreter.design_process(3) == 1
+                && interpreter.dynamic_process_root(2) == 2
+                && interpreter.dynamic_process_root(3) == 2,
             "nested dynamic descendants retain one stable attempt root");
     }
 

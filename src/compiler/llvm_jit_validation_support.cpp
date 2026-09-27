@@ -59,8 +59,7 @@ void validate_process_shape(
 }
 
 bool supports_wide_register_operation(
-    const runtime::simir::Operation& stored,
-    const std::span<const std::uint32_t> register_widths)
+    const runtime::simir::Operation& stored)
 {
     using namespace runtime::simir;
     return visit_operation(
@@ -109,14 +108,21 @@ bool supports_wide_register_operation(
                     VhdlEnvironmentGetCallPath>
                 || std::is_same_v<OperationType, FileScan>
                 || std::is_same_v<OperationType, FileWriteFormatted>
+                || std::is_same_v<OperationType, FileBinaryRead>
                 || std::is_same_v<OperationType, CallableFramePush>
                 || std::is_same_v<OperationType, CallableFramePop>
+                || std::is_same_v<OperationType, ClassAllocate>
                 || std::is_same_v<OperationType, ClassPropertyRead>
                 || std::is_same_v<OperationType, ClassPropertyWrite>
                 || std::is_same_v<OperationType, ClassStaticPropertyRead>
                 || std::is_same_v<OperationType, ClassStaticPropertyWrite>
+                || std::is_same_v<OperationType, ClassMethodCall>
+                || std::is_same_v<OperationType, ClassStaticMethodCall>
                 || std::is_same_v<OperationType, CoverageSample>
                 || std::is_same_v<OperationType, CoverageQuery>
+                || std::is_same_v<OperationType, RandomValue>
+                || std::is_same_v<OperationType, MailboxPut>
+                || std::is_same_v<OperationType, MailboxGet>
                 || std::is_same_v<OperationType, VhdlPslApi>
                 || std::is_same_v<OperationType, VhdlAssertApi>
                 || std::is_same_v<OperationType, VhdlReflectionApi>
@@ -126,6 +132,13 @@ bool supports_wide_register_operation(
                 || std::is_same_v<
                     OperationType,
                     WriteContainerObjectElement>
+                || std::is_same_v<OperationType, ContainerStringRead>
+                || std::is_same_v<OperationType, ContainerStringWrite>
+                || std::is_same_v<OperationType, CopyContainerAggregateElement>
+                || std::is_same_v<OperationType, DeleteContainer>
+                || std::is_same_v<OperationType, ContainerExists>
+                || std::is_same_v<OperationType, TraverseContainer>
+                || std::is_same_v<OperationType, PlaEvaluate>
                 || std::is_same_v<OperationType, ReadSignal>
                 || std::is_same_v<OperationType, WriteBlocking>
                 || std::is_same_v<OperationType, WriteBlockingSlice>
@@ -153,15 +166,30 @@ bool supports_wide_register_operation(
                     WriteInertialDynamicPartSlice>
                 || std::is_same_v<OperationType, WriteProjected>
                 || std::is_same_v<OperationType, WriteProjectedSlice>
+                || std::is_same_v<OperationType, WriteProjectedWaveform>
+                || std::is_same_v<OperationType, WriteProjectedWaveformSlice>
+                || std::is_same_v<OperationType, WriteProjectedDynamicSlice>
+                || std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>
+                || std::is_same_v<OperationType, SignalLastValue>
+                || std::is_same_v<OperationType, SignalDrivingValue>
+                || std::is_same_v<OperationType, FormatDisplay>
                 || std::is_same_v<OperationType, ForceSignalSlice>
-                || std::is_same_v<OperationType, ReleaseSignalSlice>) {
+                || std::is_same_v<OperationType, ReleaseSignalSlice>
+                || std::is_same_v<OperationType, ScopeRandomize>) {
                 return true;
             } else if constexpr (std::is_same_v<OperationType, ContainerRead>) {
-                return operation.string_index
-                    || register_widths[operation.index] <= 64;
+                return true;
             } else if constexpr (std::is_same_v<OperationType, ContainerWrite>) {
-                return operation.string_index
-                    || register_widths[operation.index] <= 64;
+                return true;
+            } else if constexpr (
+                std::is_same_v<OperationType, ContainerReduction>
+                || std::is_same_v<OperationType, ContainerElementRead>
+                || std::is_same_v<OperationType, ContainerElementWrite>
+                || std::is_same_v<OperationType, ContainerAggregateRead>
+                || std::is_same_v<OperationType, ContainerAggregateWrite>
+                || std::is_same_v<OperationType, PushContainer>
+                || std::is_same_v<OperationType, PopContainer>) {
+                return true;
             }
             return false;
         },
@@ -261,6 +289,7 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<ProcessGetRandState>(operation)
         || fsim::runtime::simir::operation_holds<ProcessSetRandState>(operation)
         || fsim::runtime::simir::operation_holds<ProcessSrandom>(operation)
+        || fsim::runtime::simir::operation_holds<ScopeRandomize>(operation)
         || fsim::runtime::simir::operation_holds<MailboxCreate>(operation)
         || fsim::runtime::simir::operation_holds<MailboxPut>(operation)
         || fsim::runtime::simir::operation_holds<MailboxGet>(operation)
@@ -286,6 +315,33 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<ClassMethodCall>(operation)
         || fsim::runtime::simir::operation_holds<ClassStaticMethodCall>(
             operation);
+}
+
+[[nodiscard]] bool is_resume_boundary(
+    const runtime::simir::Operation& operation,
+    const std::span<const std::uint32_t> register_widths) noexcept
+{
+    using namespace runtime::simir;
+    if (is_resume_boundary(operation)) {
+        return true;
+    }
+    const auto is_wide_destination = [&](const RegisterId destination) {
+        return destination < register_widths.size()
+            && register_widths[destination] > 64U;
+    };
+    if (const auto* last_value = operation_get_if<SignalLastValue>(&operation)) {
+        return is_wide_destination(last_value->destination);
+    }
+    if (const auto* driving_value
+        = operation_get_if<SignalDrivingValue>(&operation)) {
+        return is_wide_destination(driving_value->destination);
+    }
+    if (const auto* format_display
+        = operation_get_if<FormatDisplay>(&operation)) {
+        return format_display->source < register_widths.size()
+            && register_widths[format_display->source] > 64U;
+    }
+    return false;
 }
 
 [[nodiscard]] bool valid_symbol(const std::string_view symbol) noexcept

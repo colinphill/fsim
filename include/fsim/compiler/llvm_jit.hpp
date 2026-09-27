@@ -283,10 +283,11 @@ private:
 /// blocking/update/delayed writes, assertions, control flow, waits, yields,
 /// stop/halt, and source-bearing DebugPoint operations. Control flow is lowered
 /// to LLVM basic blocks backed by a versioned caller-owned frame. DebugPoint
-/// boundaries are returned only when the runtime enables them. Values crossing
-/// the native ABI must be between 1 and 64 bits;
-/// sensitivity-only signals may be wider. Control-flow cycles without a
-/// suspension safe point are rejected during module addition.
+/// boundaries are returned only when the runtime enables them. Scalar runtime
+/// callbacks accept values up to 64 bits; wider values use the process frame
+/// and packed or exact-width callbacks. Control-flow cycles are supported;
+/// the backend does not insert scheduler safe points on backedges, so an
+/// unbounded loop without an existing boundary can remain in one resume call.
 ///
 /// Persistent caching is opt-in through LlvmJitOptions::cache_directory.
 /// Cached native objects are checksummed and keyed to the complete supported

@@ -1860,38 +1860,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     boundary = true;
                 } else if constexpr (
                     std::is_same_v<OperationType, ScopeRandomize>) {
-                    SystemVerilogScopeRandomizeRequest request;
-                    request.limits.maximum_domain_values = op.maximum_domain_values;
-                    request.selection = (static_cast<std::uint64_t>(next_random(process)) << 32U)
-                        | next_random(process);
-                    request.variables.reserve(op.targets.size());
-                    for (const auto& target : op.targets) {
-                        request.variables.push_back({ target.canonical_identity,
-                            { target.domain_kind == ScopeRandomizeDomainKind::enumeration
-                                    ? SystemVerilogConstraintDomainKind::Enumeration
-                                    : target.domain_kind
-                                        == ScopeRandomizeDomainKind::integer
-                                    ? SystemVerilogConstraintDomainKind::Integer
-                                    : SystemVerilogConstraintDomainKind::BitVector,
-                                target.width,
-                                target.signed_value,
-                                target.nominal_type },
-                            target.domain,
-                            &get_register(process, target.target) });
-                    }
-                    if (!op.inline_constraints.empty()) {
-                        request.inline_constraints = [&](auto& solver, const auto& variables) {
-                            configure_systemverilog_inline_constraints(
-                                solver,
-                                variables,
-                                op.inline_constraints,
-                                process.program().name + "::std::randomize@"
-                                    + std::to_string(process.pc));
-                        };
-                    }
-                    const auto result = randomize_systemverilog_scope(request);
-                    get_register(process, op.destination) = PackedLogic4::from_aval_bval(
-                        32, result.language_result(), 0);
+                    execute_scope_randomize(process, instruction, op);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
                     if (process.program().language_standard == "2019") {

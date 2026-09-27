@@ -104,13 +104,20 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         == runtime::simir::ContainerElementKind::Scalar)
                 && value.type.element_width <= 64U;
         };
+        const auto register_is_logic9 = [&](const runtime::simir::RegisterId id) {
+            return id < state.process->register_value_kinds.size()
+                && state.process->register_value_kinds[id]
+                    == runtime::simir::ValueKind::logic9;
+        };
         if (const auto* read = fsim::runtime::simir::operation_get_if<
                 runtime::simir::ContainerRead>(&operation)) {
             const auto& source = *state.executor->container_registers_.at(
                 read->source);
             if (!read->string_index && fast_packed_type(source)
                 && state.executor->layout_.register_widths.at(read->index)
-                    <= 64U) {
+                    == 32U
+                && !register_is_logic9(read->index)
+                && !register_is_logic9(read->destination)) {
                 const auto publish = [&](const PackedLogic4& value) {
                     const auto word = value.low_word();
                     *result_aval = word.aval;
@@ -156,9 +163,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 write->target, *state.context);
             if (!write->string_index && fast_packed_type(target)
                 && state.executor->layout_.register_widths.at(write->index)
-                    <= 64U
+                    == 32U
                 && state.executor->layout_.register_widths.at(write->source)
-                    <= 64U) {
+                    <= 64U
+                && !register_is_logic9(write->index)
+                && !register_is_logic9(write->source)) {
                 const auto selected = fast_offset(
                     target, write->linear_index,
                     target.type.fixed || write->signed_index);
@@ -489,6 +498,118 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 }
                 return static_cast<std::size_t>(aval);
             };
+        const auto container_index =
+            [&](const runtime::simir::RegisterId index_register,
+                const std::uint64_t aval,
+                const std::uint64_t bval,
+                const bool signed_index,
+                const std::string_view role) {
+                const auto& layout = state.executor->layout_;
+                const auto width
+                    = layout.register_widths.at(index_register);
+                if (width != 0U && width <= 32U
+                    && !register_is_logic9(index_register)) {
+                    const auto mask = (UINT64_C(1) << width) - 1U;
+                    if ((bval & mask) != 0U) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            std::string { role }
+                                + " must be a known integral value"
+                        };
+                    }
+                    const auto bits = aval & mask;
+                    if (signed_index) {
+                        const auto sign = UINT64_C(1) << (width - 1U);
+                        const auto converted = (bits & sign) != 0U
+                            ? static_cast<std::int64_t>(bits)
+                                - static_cast<std::int64_t>(mask + 1U)
+                            : static_cast<std::int64_t>(bits);
+                        if (converted < 0) {
+                            throw runtime::simir::InterpreterError {
+                                process, instruction,
+                                std::string { role } + " cannot be negative"
+                            };
+                        }
+                        return static_cast<std::size_t>(converted);
+                    }
+                    return static_cast<std::size_t>(bits);
+                }
+                const auto value = width <= 64U
+                        && !register_is_logic9(index_register)
+                    ? PackedLogic4::from_aval_bval(width, aval, bval)
+                    : state.executor->read_register(index_register, width);
+                if (signed_index) {
+                    const auto converted = value.known_signed_value();
+                    if (!converted) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            std::string { role }
+                                + " must be a known integral value"
+                        };
+                    }
+                    if (*converted < 0) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            std::string { role } + " cannot be negative"
+                        };
+                    }
+                    if (static_cast<std::uint64_t>(*converted)
+                        > static_cast<std::uint64_t>(
+                            std::numeric_limits<std::size_t>::max())) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            std::string { role } + " is too large"
+                        };
+                    }
+                    return static_cast<std::size_t>(*converted);
+                }
+                const auto converted = value.known_unsigned_value();
+                if (!converted) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        std::string { role }
+                            + " must be a known integral value"
+                    };
+                }
+                if (*converted
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::size_t>::max())) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        std::string { role } + " is too large"
+                    };
+                }
+                return static_cast<std::size_t>(*converted);
+            };
+        const auto packed_register_value =
+            [&](const runtime::simir::RegisterId register_id,
+                const std::uint64_t aval,
+                const std::uint64_t bval) {
+                const auto width
+                    = state.executor->layout_.register_widths.at(register_id);
+                return width <= 64U
+                        && !register_is_logic9(register_id)
+                    ? PackedLogic4::from_aval_bval(width, aval, bval)
+                    : state.executor->read_register(register_id, width);
+            };
+        const auto has_unknown_bit = [](const PackedLogic4& value) {
+            if (value.is_logic9()) {
+                for (std::size_t bit = 0; bit < value.width(); ++bit) {
+                    const auto bit_value = value.get(bit);
+                    if (bit_value != runtime::Logic4::zero
+                        && bit_value != runtime::Logic4::one) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            for (const auto word : value.bval_words()) {
+                if (word != 0U) {
+                    return true;
+                }
+            }
+            return false;
+        };
         const auto fixed_offset =
             [&](const runtime::simir::ContainerValue& target,
                 const std::uint64_t aval,
@@ -525,7 +646,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 const std::uint64_t aval,
                 const std::uint64_t bval) {
                 const auto& layout = state.executor->layout_;
-                if (layout.register_widths.at(index_register) <= 64) {
+                if (layout.register_widths.at(index_register) <= 32U
+                    && !register_is_logic9(index_register)) {
                     return fixed_offset(target, aval, bval);
                 }
                 const auto value = state.executor->read_register(
@@ -579,47 +701,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 return PackedLogic4::from_aval_bval(
                     target.type.element_width, aval, bval);
             };
-        const auto key =
-            [&](const runtime::simir::ContainerValue& target,
-                const std::uint64_t aval,
-                const std::uint64_t bval) {
-                if (!target.type.associative) {
-                    throw runtime::simir::InterpreterError {
-                        process, instruction,
-                        "associative-array method used on another container"
-                    };
-                }
-                if (target.type.string_indices) {
-                    throw runtime::simir::InterpreterError {
-                        process, instruction,
-                        "string-indexed associative array requires a string index"
-                    };
-                }
-                if (bval != 0) {
-                    throw runtime::simir::InterpreterError {
-                        process, instruction,
-                        "associative-array index must be a known integral value"
-                    };
-                }
-                return PackedLogic4::from_aval_bval(
-                    target.type.index_width, aval, 0);
-            };
         const auto key_less =
             [](const runtime::simir::ContainerValue& target,
                 const PackedLogic4& left,
                 const PackedLogic4& right) {
-                const auto lhs = left.low_word().aval;
-                const auto rhs = right.low_word().aval;
-                if (target.type.signed_indices) {
-                    const auto sign = UINT64_C(1)
-                        << (target.type.index_width - 1U);
-                    const auto lhs_negative = (lhs & sign) != 0;
-                    const auto rhs_negative = (rhs & sign) != 0;
-                    if (lhs_negative != rhs_negative) {
-                        return lhs_negative;
-                    }
-                }
-                return lhs < rhs;
+                return runtime::simir::associative_index_key_less(
+                    target.type, left, right);
             };
         const auto lower_key =
             [&](const runtime::simir::ContainerValue& target,
@@ -636,8 +723,46 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         const auto key_equal =
             [](const PackedLogic4& left,
                 const PackedLogic4& right) {
-                return left.low_word().aval
-                    == right.low_word().aval;
+                return left == right;
+            };
+        const auto container_operation_key =
+            [&](const runtime::simir::ContainerValue& target,
+                const runtime::simir::RegisterId index_register,
+                const std::uint64_t aval,
+                const std::uint64_t bval) {
+                if (!target.type.associative) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "associative-array method used on another container"
+                    };
+                }
+                if (target.type.string_indices) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "string-indexed associative array requires a string index"
+                    };
+                }
+                if (register_is_logic9(index_register)) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "associative-array index must be a known integral value"
+                    };
+                }
+                auto value = packed_register_value(
+                    index_register, aval, bval);
+                const auto unknown = value.is_logic9()
+                    || std::ranges::any_of(
+                        value.bval_words(),
+                        [](const auto word) { return word != 0U; });
+                if (value.width() != target.type.index_width || unknown) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        unknown
+                            ? "associative-array index must be a known integral value"
+                            : "associative-array index type mismatch"
+                    };
+                }
+                return value;
             };
         const auto string_key =
             [&](const runtime::simir::ContainerValue& target,
@@ -791,8 +916,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         : "new[size] cannot resize a static array"
                 };
             }
-            const auto size = index(
-                input0_aval, input0_bval, false,
+            const auto size = container_index(
+                resize->size, input0_aval, input0_bval, false,
                 "dynamic-array size");
             const runtime::simir::ContainerValue* initializer { };
             if (resize->initializer) {
@@ -902,9 +1027,14 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 read_container(reduction->source),
                 reduction->operation,
                 reduction->transformation);
-            const auto word = result.low_word();
-            *result_aval = word.aval;
-            *result_bval = word.bval;
+            if (result.width() > 64U) {
+                state.executor->write_register(
+                    reduction->destination, result);
+            } else {
+                const auto word = result.low_word();
+                *result_aval = word.aval;
+                *result_bval = word.bval;
+            }
         } else if (const auto* ordering = fsim::runtime::simir::operation_get_if<runtime::simir::OrderContainer>(
                        &operation)) {
             runtime::simir::order_container_value(
@@ -955,7 +1085,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                                   runtime::Logic4::zero));
                     return 0;
                 }
-                const auto sought = key(source, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    source, read->index, input0_aval, input0_bval);
                 const auto at = lower_key(source, sought);
                 publish(
                     at < source.keys.size()
@@ -970,8 +1101,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             if (source.type.fixed) {
                 try {
                     selected_offset = read->linear_index
-                        ? index(
-                              input0_aval, input0_bval, true,
+                        ? container_index(
+                              read->index, input0_aval, input0_bval, true,
                               "multidimensional linear index")
                         : packed_fixed_offset(
                               source, read->index,
@@ -985,8 +1116,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     return 0;
                 }
             } else {
-                selected_offset = index(
-                    input0_aval, input0_bval, read->signed_index,
+                selected_offset = container_index(
+                    read->index, input0_aval, input0_bval,
+                    read->signed_index,
                     "container index");
             }
             const auto at = *selected_offset;
@@ -1050,7 +1182,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     }
                     return 0;
                 }
-                const auto sought = key(target, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    target, write->index, input0_aval, input0_bval);
                 const auto source = source_element();
                 const auto at = lower_key(target, sought);
                 if (at < target.keys.size()
@@ -1076,18 +1209,21 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             }
             const auto at = target.type.fixed
                 ? write->linear_index
-                    ? index(
-                          input0_aval, input0_bval, true,
+                    ? container_index(
+                          write->index, input0_aval, input0_bval, true,
                           "multidimensional linear index")
                     : packed_fixed_offset(
                           target, write->index, input0_aval, input0_bval)
-                : index(
-                      input0_aval, input0_bval, write->signed_index,
+                : container_index(
+                      write->index, input0_aval, input0_bval,
+                      write->signed_index,
                       "container index");
             if (at >= target.elements.size()) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
-                    "container index is out of range"
+                    target.type.fixed && write->linear_index
+                        ? "multidimensional linear index is out of range"
+                        : "container index is out of range"
                 };
             }
             target.elements[at] = source_element();
@@ -1109,8 +1245,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                               input0_aval, input0_bval, true,
                               "multidimensional linear index")
                         : fixed_offset(source, input0_aval, input0_bval)
-                    : index(
-                          input0_aval, input0_bval,
+                    : container_index(
+                          string_read->index, input0_aval, input0_bval,
                           string_read->signed_index, "container index");
                 if (at >= source.nested_elements.size()) {
                     throw runtime::simir::InterpreterError {
@@ -1163,7 +1299,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             : std::string { });
                     return 0;
                 }
-                const auto sought = key(source, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    source, string_read->index, input0_aval, input0_bval);
                 const auto at = lower_key(source, sought);
                 state.executor->write_string_register(
                     string_read->destination,
@@ -1179,9 +1316,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                           input0_aval, input0_bval, true,
                           "multidimensional linear index")
                     : fixed_offset(source, input0_aval, input0_bval)
-                : index(
-                      input0_aval, input0_bval, string_read->signed_index,
-                      "container index");
+                : container_index(
+                      string_read->index, input0_aval, input0_bval,
+                      string_read->signed_index, "container index");
             if (at >= source.string_elements.size()) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
@@ -1235,7 +1372,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     }
                     return 0;
                 }
-                const auto sought = key(target, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    target, string_write->index, input0_aval, input0_bval);
                 const auto at = lower_key(target, sought);
                 if (at < target.keys.size()
                     && key_equal(target.keys[at], sought)) {
@@ -1264,9 +1402,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                           input0_aval, input0_bval, true,
                           "multidimensional linear index")
                     : fixed_offset(target, input0_aval, input0_bval)
-                : index(
-                      input0_aval, input0_bval, string_write->signed_index,
-                      "container index");
+                : container_index(
+                      string_write->index, input0_aval, input0_bval,
+                      string_write->signed_index, "container index");
             if (at >= target.string_elements.size()) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
@@ -1288,7 +1426,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const runtime::simir::ContainerValue* selected = nullptr;
             std::optional<runtime::simir::ContainerValue> missing;
             if (source.type.associative) {
-                const auto sought = key(source, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    source, element_read->index,
+                    input0_aval, input0_bval);
                 const auto at = lower_key(source, sought);
                 if (at < source.keys.size()
                     && key_equal(source.keys[at], sought)) {
@@ -1301,7 +1441,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             } else {
                 const auto at = source.type.fixed
                     ? fixed_offset(source, input0_aval, input0_bval)
-                    : index(
+                    : container_index(
+                          element_read->index,
                           input0_aval, input0_bval,
                           element_read->signed_index, "container index");
                 if (at >= source.nested_elements.size()) {
@@ -1335,7 +1476,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             }
             std::size_t at { };
             if (target.type.associative) {
-                const auto sought = key(target, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    target, element_write->index,
+                    input0_aval, input0_bval);
                 at = lower_key(target, sought);
                 if (at >= target.keys.size()
                     || !key_equal(target.keys[at], sought)) {
@@ -1359,7 +1502,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             } else {
                 at = target.type.fixed
                     ? fixed_offset(target, input0_aval, input0_bval)
-                    : index(
+                    : container_index(
+                          element_write->index,
                           input0_aval, input0_bval,
                           element_write->signed_index, "container index");
                 if (at >= target.nested_elements.size()) {
@@ -1389,7 +1533,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 && source.type.aggregate_value) {
                 selected = &source;
             } else if (source.type.associative) {
-                const auto sought = key(source, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    source, aggregate_read->index,
+                    input0_aval, input0_bval);
                 const auto at = lower_key(source, sought);
                 if (at < source.keys.size()
                     && key_equal(source.keys[at], sought)) {
@@ -1402,11 +1548,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             } else {
                 const auto at = source.type.fixed
                     ? aggregate_read->linear_index
-                        ? index(
+                        ? container_index(
+                              aggregate_read->index,
                               input0_aval, input0_bval, true,
                               "multidimensional linear index")
                         : fixed_offset(source, input0_aval, input0_bval)
-                    : index(
+                    : container_index(
+                          aggregate_read->index,
                           input0_aval, input0_bval,
                           aggregate_read->signed_index,
                           "container index");
@@ -1436,9 +1584,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     "aggregate member read requires a packed or scalar leaf"
                 };
             }
-            const auto word = selected->elements.front().low_word();
-            *result_aval = word.aval;
-            *result_bval = word.bval;
+            const auto& value = selected->elements.front();
+            if (value.width() > 64U) {
+                state.executor->write_register(
+                    aggregate_read->destination, value);
+            } else {
+                const auto word = value.low_word();
+                *result_aval = word.aval;
+                *result_bval = word.bval;
+            }
         } else if (const auto* aggregate_write = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerAggregateWrite>(&operation)) {
             auto& target = mutable_container(aggregate_write->target);
@@ -1461,7 +1615,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 // Direct aggregate objects do not have an outer array
                 // element to select before their member path is applied.
             } else if (target.type.associative) {
-                const auto sought = key(target, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    target, aggregate_write->index,
+                    input0_aval, input0_bval);
                 at = lower_key(target, sought);
                 if (at >= target.keys.size()
                     || !key_equal(target.keys[at], sought)) {
@@ -1484,11 +1640,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             } else {
                 at = target.type.fixed
                     ? aggregate_write->linear_index
-                        ? index(
+                        ? container_index(
+                              aggregate_write->index,
                               input0_aval, input0_bval, true,
                               "multidimensional linear index")
                         : fixed_offset(target, input0_aval, input0_bval)
-                    : index(
+                    : container_index(
+                          aggregate_write->index,
                           input0_aval, input0_bval,
                           aggregate_write->signed_index,
                           "container index");
@@ -1521,11 +1679,14 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 }
                 selected = &selected->nested_elements[member];
             }
-            const auto value = runtime::PackedLogic4::from_aval_bval(
-                selected->type.element_width, input1_aval, input1_bval);
+            const auto value = packed_register_value(
+                aggregate_write->source, input1_aval, input1_bval);
             if (!selected->type.fixed
                 || selected->elements.size() != 1U
-                || (selected->type.two_state && input1_bval != 0)) {
+                || value.width() != selected->type.element_width
+                || value.is_logic9()
+                || (selected->type.two_state
+                    && has_unknown_bit(value))) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
                     "aggregate member write leaf type mismatch"
@@ -1556,7 +1717,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             std::optional<runtime::simir::ContainerValue> missing;
             const runtime::simir::ContainerValue* source_element = nullptr;
             if (source.type.associative) {
-                const auto sought = key(source, input1_aval, input1_bval);
+                const auto sought = container_operation_key(
+                    source, aggregate_copy->source_index,
+                    input1_aval, input1_bval);
                 const auto source_at = lower_key(source, sought);
                 if (source_at < source.keys.size()
                     && key_equal(source.keys[source_at], sought)) {
@@ -1569,7 +1732,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             } else {
                 const auto source_at = source.type.fixed
                     ? fixed_offset(source, input1_aval, input1_bval)
-                    : index(
+                    : container_index(
+                          aggregate_copy->source_index,
                           input1_aval, input1_bval,
                           aggregate_copy->source_signed_index,
                           "source container index");
@@ -1584,7 +1748,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const auto snapshot = *source_element;
             std::size_t target_at { };
             if (target.type.associative) {
-                const auto sought = key(target, input0_aval, input0_bval);
+                const auto sought = container_operation_key(
+                    target, aggregate_copy->target_index,
+                    input0_aval, input0_bval);
                 target_at = lower_key(target, sought);
                 if (target_at >= target.keys.size()
                     || !key_equal(target.keys[target_at], sought)) {
@@ -1608,7 +1774,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             } else {
                 target_at = target.type.fixed
                     ? fixed_offset(target, input0_aval, input0_bval)
-                    : index(
+                    : container_index(
+                          aggregate_copy->target_index,
                           input0_aval, input0_bval,
                           aggregate_copy->target_signed_index,
                           "target container index");
@@ -1635,8 +1802,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 == runtime::simir::ContainerElementKind::String;
             if (erase->index) {
                 if (target.type.queue) {
-                    const auto at = index(
-                        input0_aval, input0_bval, true,
+                    const auto at = container_index(
+                        *erase->index, input0_aval, input0_bval, true,
                         "queue delete index");
                     const auto element_count = runtime::simir::container_value_size(target);
                     if (at >= element_count) {
@@ -1683,7 +1850,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         }
                         return 0;
                     }
-                    const auto sought = key(target, input0_aval, input0_bval);
+                    const auto sought = container_operation_key(
+                        target, *erase->index, input0_aval, input0_bval);
                     const auto at = lower_key(target, sought);
                     if (at < target.keys.size()
                         && key_equal(target.keys[at], sought)) {
@@ -1693,6 +1861,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         if (aggregate) {
                             target.nested_elements.erase(
                                 target.nested_elements.begin()
+                                    + static_cast<std::ptrdiff_t>(at));
+                        } else if (string_element) {
+                            target.string_elements.erase(
+                                target.string_elements.begin()
                                     + static_cast<std::ptrdiff_t>(at));
                         } else {
                             target.elements.erase(
@@ -1801,7 +1973,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     : 0U;
                 return 0;
             }
-            const auto sought = key(source, input0_aval, input0_bval);
+            const auto sought = container_operation_key(
+                source, exists->index, input0_aval, input0_bval);
             const auto at = lower_key(source, sought);
             *result_aval = at < source.keys.size()
                     && key_equal(source.keys[at], sought)
@@ -1858,7 +2031,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     == runtime::simir::ContainerTraversal::last) {
                     selected = source.keys.size() - 1U;
                 } else {
-                    const auto sought = key(source, input0_aval, input0_bval);
+                    const auto sought = container_operation_key(
+                        source, traverse->index, input0_aval, input0_bval);
                     const auto at = lower_key(source, sought);
                     if (traverse->traversal
                         == runtime::simir::ContainerTraversal::next) {
@@ -1873,6 +2047,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         selected = at - 1U;
                     }
                 }
+            }
+            if (input1_aval == 1U
+                && state.executor->layout_.register_widths.at(
+                       traverse->index) > 64U
+                && selected) {
+                state.executor->write_register(
+                    traverse->index, source.keys[*selected]);
             }
             if (input1_aval == 0) {
                 if (selected) {
@@ -1897,10 +2078,22 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         : "queue method used on a dynamic array"
                 };
             }
-            const auto source = element(target, input0_aval, input0_bval);
+            const auto source = target.type.element_width > 64U
+                    || register_is_logic9(push->source)
+                ? packed_register_value(
+                      push->source, input0_aval, input0_bval)
+                : element(target, input0_aval, input0_bval);
+            if (source.width() != target.type.element_width
+                || source.is_logic9()
+                || (target.type.two_state && has_unknown_bit(source))) {
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "queue element write type mismatch"
+                };
+            }
             if (push->index) {
-                const auto at = index(
-                    input1_aval, input1_bval, true,
+                const auto at = container_index(
+                    *push->index, input1_aval, input1_bval, true,
                     "queue insert index");
                 if (at > target.elements.size()) {
                     throw runtime::simir::InterpreterError {
@@ -1946,9 +2139,14 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const auto source = pop->front
                 ? target.elements.front()
                 : target.elements.back();
-            const auto word = source.low_word();
-            *result_aval = word.aval;
-            *result_bval = word.bval;
+            if (source.width() > 64U) {
+                state.executor->write_register(
+                    pop->destination, source);
+            } else {
+                const auto word = source.low_word();
+                *result_aval = word.aval;
+                *result_bval = word.bval;
+            }
             if (pop->front) {
                 target.elements.erase(target.elements.begin());
             } else {

@@ -161,6 +161,7 @@ void test_simir_alternate_executor_native_blocking_then_update_slice();
 void test_simir_alternate_executor_zero_delay_and_frame();
 void test_simir_alternate_executor_cpp_exception_containment();
 void test_simir_alternate_executor_validation();
+void test_simir_external_executor_boundary_validation();
 void test_simir_alternate_executor_event_replacement_and_cancel();
 void test_simir_deferred_executor_state_handoff();
 void test_simir_alternate_executor_notify_delayed();

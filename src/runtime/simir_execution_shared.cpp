@@ -136,6 +136,9 @@ namespace fsim::runtime::simir {
     const auto* report = operation_get_if<Report>(&operation);
     const auto* disable_fork = operation_get_if<DisableFork>(&operation);
     return (read && read->kind != SignalReadKind::current)
+        || operation_holds<SignalLastValue>(operation)
+        || operation_holds<SignalDrivingValue>(operation)
+        || operation_holds<FormatDisplay>(operation)
         || (report && report->severity == AssertionSeverity::failure)
         || (disable_fork && disable_fork->site)
         || operation_holds<ProcessSelf>(operation)
@@ -145,6 +148,7 @@ namespace fsim::runtime::simir {
         || operation_holds<ProcessGetRandState>(operation)
         || operation_holds<ProcessSetRandState>(operation)
         || operation_holds<ProcessSrandom>(operation)
+        || operation_holds<ScopeRandomize>(operation)
         || operation_holds<SystemCommand>(operation)
         || operation_holds<VcdControl>(operation)
         || operation_holds<CoverageDatabaseControl>(operation)

@@ -520,6 +520,12 @@ void HierarchyBuilder::validate_process_drivers()
     for (SignalId signal = 0;
         signal < design_.signal_info_.size();
         ++signal) {
+        if (vhdl_unprotected_shared_signals_.contains(signal)) {
+            // Shared variables have one immediately updated storage value,
+            // even when their VHDL element type is ordinarily resolved.
+            set_resolution(signal, ResolutionKind::none);
+            continue;
+        }
         const auto selected = explicit_resolution(signal);
         set_resolution(
             signal,
@@ -533,7 +539,7 @@ void HierarchyBuilder::validate_process_drivers()
         if (process_drivers.size() <= 1
             || (boundary_drivers != boundary_driver_paths_.end()
                 && boundary_drivers->second.size() > 1U)
-            || vhdl_1993_shared_signals_.contains(signal)
+            || vhdl_unprotected_shared_signals_.contains(signal)
             || info.resolution != ResolutionKind::none
             || (info.type_name == "reg"
                 && !variable_container_signals.contains(signal))

@@ -996,6 +996,7 @@ compiled_cache_source_mappings(
 {
     std::vector<library::SourceNameMapping> result;
     std::vector<std::filesystem::path> producers;
+    std::set<std::string> producer_keys;
     std::set<std::string> logical_names;
     bool valid = true;
     const auto add = [&](const std::filesystem::path& path,
@@ -1003,13 +1004,16 @@ compiled_cache_source_mappings(
         if (path.empty()) {
             return;
         }
-        const auto producer = support::path_to_utf8(path.lexically_normal());
-        if (std::ranges::any_of(producers, [&](const auto& producer) {
-                return same_source_path(producer, path);
-            })) {
+        const auto producer_key = source_path_key(path);
+        if (producer_keys.contains(producer_key)
+            || std::ranges::any_of(producers, [&](const auto& producer) {
+                   return same_source_path(producer, path);
+               })) {
             return;
         }
+        const auto producer = support::path_to_utf8(path.lexically_normal());
         producers.push_back(path);
+        producer_keys.insert(producer_key);
         auto logical = support::path_to_utf8(
             std::filesystem::path { make_logical() }.lexically_normal());
         if (logical.empty()

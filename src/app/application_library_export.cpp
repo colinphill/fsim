@@ -477,7 +477,8 @@ bool export_library(
             source_compatibility_profiles.emplace(
                 absolute,
                 source_set.language == project::Language::vhdl
-                    ? std::string { application_detail::vhdl_compatibility_profile() }
+                    ? application_detail::vhdl_compatibility_profile(
+                          source_set.vhdl_compatibility)
                     : project::compatibility_profile(
                           source_set.compatibility_switches));
         }
