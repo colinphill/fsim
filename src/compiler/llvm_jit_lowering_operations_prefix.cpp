@@ -26,6 +26,7 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& direct_read_signals = state.direct_read_signals;
     [[maybe_unused]] auto&& direct_update_signals = state.direct_update_signals;
     [[maybe_unused]] auto&& validated = state.validated;
+    [[maybe_unused]] auto&& bound_literal_sites = state.bound_literal_sites;
     [[maybe_unused]] auto&& debug_instrumentation = state.debug_instrumentation;
     [[maybe_unused]] auto&& require_direct_update_slots = state.require_direct_update_slots;
     [[maybe_unused]] auto&& context = state.context;
@@ -195,6 +196,8 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& static_trigger_region_entries = state.static_trigger_region_entries;
     [[maybe_unused]] auto&& ssa_callable_returns = state.ssa_callable_returns;
     [[maybe_unused]] auto&& invalid_pc = state.invalid_pc;
+    [[maybe_unused]] auto&& constant_plane_forwarding =
+        state.constant_plane_forwarding;
     auto return_targets = static_return_targets(process);
     std::erase_if(return_targets, [&](const InstructionIndex target) {
         return target >= lowering_plan.operations.size()
@@ -225,6 +228,52 @@ void lower_process_operations(ProcessLoweringContext& state)
             || elided_operations[index]) {
             continue;
         }
+        struct InstructionForwardingScope {
+            std::vector<ConstantPlaneForwarding>& states;
+            const std::vector<RegisterId>& definitions;
+            std::size_t index;
+
+            InstructionForwardingScope(
+                std::vector<ConstantPlaneForwarding>& states,
+                const std::vector<RegisterId>& definitions,
+                const std::size_t index)
+                : states(states), definitions(definitions), index(index)
+            {
+                for (const auto id : definitions) {
+                    if (id < states.size()
+                        && states[id].definition == index) {
+                        states[id].active = true;
+                        states[id].stores = 0;
+                    }
+                }
+            }
+
+            ~InstructionForwardingScope()
+            {
+                for (const auto id : definitions) {
+                    if (id >= states.size()
+                        || !states[id].active) {
+                        continue;
+                    }
+                    auto& forwarding = states[id];
+                    forwarding.active = false;
+                    if (forwarding.stores != 1U) {
+                        continue;
+                    }
+                    for (std::size_t plane = 0;
+                         plane < forwarding.published.size(); ++plane) {
+                        forwarding.published[plane]
+                            = forwarding.pending[plane];
+                        forwarding.published_planes
+                            += forwarding.pending[plane] != nullptr;
+                    }
+                }
+            }
+        } forwarding_scope {
+            constant_plane_forwarding,
+            validated.instruction_definitions[index],
+            index
+        };
         const auto instruction = static_cast<InstructionIndex>(index);
         const auto next_instruction = static_cast<InstructionIndex>(index + 1U);
         builder.SetInsertPoint(instruction_blocks[index]);
@@ -254,6 +303,13 @@ void lower_process_operations(ProcessLoweringContext& state)
             [&](llvm::Value* condition,
                 const JitGeneratedRuntimeErrorReason reason,
                 const std::string_view label) {
+                if (const auto* literal =
+                        llvm::dyn_cast_or_null<llvm::ConstantInt>(condition);
+                    !constant_plane_forwarding.empty()
+                    && literal != nullptr && literal->isZero()) {
+                    ++state.suppressed_false_guards;
+                    return;
+                }
                 auto* error_block = llvm::BasicBlock::Create(
                     context,
                     std::string { label } + ".error."
@@ -1239,7 +1295,32 @@ void lower_process_operations(ProcessLoweringContext& state)
             [&](const auto& operation) {
                 using OperationType = std::decay_t<decltype(operation)>;
                 if constexpr (std::is_same_v<OperationType, LoadConstant>) {
-                    signal_lowerer.lower(operation);
+                    if (std::ranges::binary_search(
+                            bound_literal_sites, instruction)) {
+                        ContainerOperationLowerer container_lowerer {
+                            builder,
+                            registers,
+                            frame_registers,
+                            validated.instruction_uses[index],
+                            context,
+                            i32,
+                            i64,
+                            context_pointer,
+                            process.id,
+                            instruction,
+                            runtime_type,
+                            runtime_argument,
+                            process.container_register_types,
+                            container_result_aval_slot,
+                            container_result_bval_slot,
+                            fused_container_object_reads[index],
+                            runtime_error_if,
+                            branch_to_next
+                        };
+                        container_lowerer.lower_bound_literal(operation);
+                    } else {
+                        signal_lowerer.lower(operation);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
                     if (signal_widths[operation.signal] > 64) {
                         execute_exact_signal();

@@ -3,6 +3,8 @@
 #include "lowerer_internal.hpp"
 
 #include <charconv>
+#include <cstdlib>
+#include <iostream>
 #include <new>
 #include <unordered_map>
 
@@ -10,11 +12,27 @@ namespace fsim::elaboration {
 namespace {
 
     constexpr std::size_t maximum_effective_subtype_cache_entries = 64U;
+    constexpr std::size_t maximum_expression_resolution_cache_entries
+        = 1024U;
+    constexpr std::size_t maximum_vhdl_subtype_name_cache_entries = 512U;
+    constexpr std::size_t maximum_pure_integral_attempt_cache_entries
+        = 1024U;
+    constexpr std::size_t maximum_vhdl_subtype_name_cache_entry_bytes
+        = 4U * 1024U;
+    constexpr std::size_t maximum_vhdl_subtype_name_cache_bytes
+        = 64U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_entry_bytes
         = 64U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_bytes
         = 256U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_type_depth = 16U;
+
+    bool profile_expression_resolution_cache() noexcept
+    {
+        static const bool enabled
+            = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+        return enabled;
+    }
 
     bool add_effective_subtype_cache_bytes(
         std::size_t& bytes,
@@ -3436,10 +3454,108 @@ Lowerer::hir_effective_vhdl_subtype(
     return result;
 }
 
+const semantic::CompiledDeclarationResolution*
+Lowerer::find_hir_expression_resolution_cache(
+    const semantic::ExpressionId expression) const noexcept
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U
+        || !expression.valid()) {
+        return nullptr;
+    }
+    const auto found = hir_expression_resolution_cache_.find(expression);
+    if (found == hir_expression_resolution_cache_.end()) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_expression_resolution_cache_misses_;
+        }
+        return nullptr;
+    }
+    const auto entry = std::ranges::find_if(
+        found->second, [&](const auto& candidate) {
+            return candidate.binding_frames == hir_generic_binding_frames_;
+        });
+    if (profile_expression_resolution_cache()) {
+        if (entry == found->second.end()) {
+            ++hir_expression_resolution_cache_misses_;
+        } else {
+            ++hir_expression_resolution_cache_hits_;
+        }
+    }
+    return entry == found->second.end() ? nullptr : &entry->resolution;
+}
+
+void Lowerer::cache_hir_expression_resolution(
+    const semantic::ExpressionId expression,
+    const semantic::CompiledDeclarationResolution& resolution) const noexcept
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U
+        || !expression.valid()) {
+        return;
+    }
+    if (hir_expression_resolution_cache_entries_
+            >= maximum_expression_resolution_cache_entries
+        || hir_expression_resolution_cache_bytes_
+            >= maximum_effective_subtype_cache_bytes) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_expression_resolution_cache_cap_drops_;
+        }
+        return;
+    }
+
+    auto retained_bytes
+        = sizeof(semantic::ExpressionId)
+        + sizeof(HirExpressionResolutionCacheEntry)
+        + sizeof(std::vector<HirExpressionResolutionCacheEntry>)
+        + 4U * sizeof(void*);
+    const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
+    if (!add_effective_subtype_cache_bindings(
+            retained_bytes, hir_generic_binding_frames_, entry_limit)
+        || !add_effective_subtype_cache_bytes(
+            retained_bytes, sizeof(resolution), entry_limit)
+        || !add_effective_subtype_cache_sequence(
+            retained_bytes,
+            resolution.candidates.size(),
+            sizeof(semantic::DeclarationId),
+            entry_limit)
+        || hir_expression_resolution_cache_bytes_
+            > maximum_effective_subtype_cache_bytes
+        || retained_bytes
+            > maximum_effective_subtype_cache_bytes
+                - hir_expression_resolution_cache_bytes_) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_expression_resolution_cache_cap_drops_;
+        }
+        return;
+    }
+
+    auto found = hir_expression_resolution_cache_.end();
+    bool inserted { };
+    try {
+        const auto result
+            = hir_expression_resolution_cache_.try_emplace(expression);
+        found = result.first;
+        inserted = result.second;
+        found->second.push_back({ hir_generic_binding_frames_, resolution });
+    } catch (const std::bad_alloc&) {
+        if (inserted && found != hir_expression_resolution_cache_.end()
+            && found->second.empty()) {
+            hir_expression_resolution_cache_.erase(found);
+        }
+        if (profile_expression_resolution_cache()) {
+            ++hir_expression_resolution_cache_cap_drops_;
+        }
+        return;
+    }
+    ++hir_expression_resolution_cache_entries_;
+    hir_expression_resolution_cache_bytes_ += retained_bytes;
+}
+
 void Lowerer::begin_hir_effective_vhdl_subtype_cache_scope() const noexcept
 {
     if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
         clear_hir_effective_vhdl_subtype_cache();
+        clear_hir_expression_resolution_cache();
+        clear_hir_vhdl_subtype_name_cache();
+        clear_hir_pure_integral_attempt_cache();
     }
     ++hir_effective_vhdl_subtype_cache_depth_;
 }
@@ -3451,14 +3567,199 @@ void Lowerer::end_hir_effective_vhdl_subtype_cache_scope() const noexcept
     }
     --hir_effective_vhdl_subtype_cache_depth_;
     if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        if (profile_expression_resolution_cache()
+            && (hir_expression_resolution_cache_hits_ != 0U
+                || hir_expression_resolution_cache_misses_ != 0U)) {
+            std::cerr << "fsim-profile: hir-expression-resolution-cache"
+                      << " hits=" << hir_expression_resolution_cache_hits_
+                      << " misses=" << hir_expression_resolution_cache_misses_
+                      << " cap_drops="
+                      << hir_expression_resolution_cache_cap_drops_
+                      << " entries="
+                      << hir_expression_resolution_cache_entries_
+                      << " bytes="
+                      << hir_expression_resolution_cache_bytes_ << '\n';
+        }
+        if (profile_expression_resolution_cache()
+            && (hir_vhdl_subtype_name_cache_hits_ != 0U
+                || hir_vhdl_subtype_name_cache_misses_ != 0U)) {
+            std::cerr << "fsim-profile: hir-vhdl-subtype-name-cache"
+                      << " hits=" << hir_vhdl_subtype_name_cache_hits_
+                      << " misses=" << hir_vhdl_subtype_name_cache_misses_
+                      << " cap_drops="
+                      << hir_vhdl_subtype_name_cache_cap_drops_
+                      << " entries="
+                      << hir_vhdl_subtype_name_cache_entries_
+                      << " bytes=" << hir_vhdl_subtype_name_cache_bytes_
+                      << '\n';
+        }
+        if (profile_expression_resolution_cache()
+            && (hir_pure_integral_attempt_hits_ != 0U
+                || hir_pure_integral_attempt_misses_ != 0U)) {
+            std::cerr << "fsim-profile: hir-pure-integral-attempt-cache"
+                      << " hits=" << hir_pure_integral_attempt_hits_
+                      << " misses=" << hir_pure_integral_attempt_misses_
+                      << " cap_drops="
+                      << hir_pure_integral_attempt_cap_drops_
+                      << " entries="
+                      << hir_pure_integral_attempt_cache_.size() << '\n';
+        }
         clear_hir_effective_vhdl_subtype_cache();
+        clear_hir_expression_resolution_cache();
+        clear_hir_vhdl_subtype_name_cache();
+        clear_hir_pure_integral_attempt_cache();
     }
+}
+
+std::optional<std::int64_t> Lowerer::hir_pure_integral_attempt(
+    const semantic::ExpressionId expression) const
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        return specialized_hir_unit_->evaluate_integral_expression(expression);
+    }
+    const auto found = hir_pure_integral_attempt_cache_.find(expression);
+    if (found != hir_pure_integral_attempt_cache_.end()) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_pure_integral_attempt_hits_;
+        }
+        return found->second;
+    }
+    if (profile_expression_resolution_cache()) {
+        ++hir_pure_integral_attempt_misses_;
+    }
+    const auto result
+        = specialized_hir_unit_->evaluate_integral_expression(expression);
+    if (hir_pure_integral_attempt_cache_.size()
+        >= maximum_pure_integral_attempt_cache_entries) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_pure_integral_attempt_cap_drops_;
+        }
+        return result;
+    }
+    try {
+        hir_pure_integral_attempt_cache_.emplace(expression, result);
+    } catch (const std::bad_alloc&) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_pure_integral_attempt_cap_drops_;
+        }
+    }
+    return result;
+}
+
+void Lowerer::clear_hir_pure_integral_attempt_cache() const noexcept
+{
+    hir_pure_integral_attempt_cache_.clear();
+    hir_pure_integral_attempt_hits_ = 0U;
+    hir_pure_integral_attempt_misses_ = 0U;
+    hir_pure_integral_attempt_cap_drops_ = 0U;
 }
 
 void Lowerer::clear_hir_effective_vhdl_subtype_cache() const noexcept
 {
     hir_effective_vhdl_subtype_cache_.clear();
     hir_effective_vhdl_subtype_cache_bytes_ = 0U;
+}
+
+void Lowerer::clear_hir_expression_resolution_cache() const noexcept
+{
+    hir_expression_resolution_cache_.clear();
+    hir_expression_resolution_cache_entries_ = 0U;
+    hir_expression_resolution_cache_bytes_ = 0U;
+    hir_expression_resolution_cache_hits_ = 0U;
+    hir_expression_resolution_cache_misses_ = 0U;
+    hir_expression_resolution_cache_cap_drops_ = 0U;
+}
+
+const std::optional<semantic::TypeId>*
+Lowerer::find_hir_vhdl_subtype_name_cache(
+    const semantic::ScopeId scope,
+    const std::string_view spelling) const noexcept
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        return nullptr;
+    }
+    const auto scope_entry
+        = hir_vhdl_subtype_name_cache_.find(scope.value());
+    if (scope_entry == hir_vhdl_subtype_name_cache_.end()) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_vhdl_subtype_name_cache_misses_;
+        }
+        return nullptr;
+    }
+    const auto name_entry = scope_entry->second.find(spelling);
+    if (name_entry == scope_entry->second.end()) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_vhdl_subtype_name_cache_misses_;
+        }
+        return nullptr;
+    }
+    if (profile_expression_resolution_cache()) {
+        ++hir_vhdl_subtype_name_cache_hits_;
+    }
+    return &name_entry->second;
+}
+
+void Lowerer::cache_hir_vhdl_subtype_name(
+    const semantic::ScopeId scope,
+    const std::string_view spelling,
+    const std::optional<semantic::TypeId> result) const noexcept
+{
+    if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+        return;
+    }
+    const auto retained_bytes
+        = sizeof(std::uint32_t) + sizeof(std::string) + spelling.size()
+        + sizeof(std::optional<semantic::TypeId>) + 4U * sizeof(void*);
+    if (hir_vhdl_subtype_name_cache_entries_
+            >= maximum_vhdl_subtype_name_cache_entries
+        || spelling.size() > maximum_vhdl_subtype_name_cache_entry_bytes
+        || retained_bytes > maximum_vhdl_subtype_name_cache_entry_bytes
+        || hir_vhdl_subtype_name_cache_bytes_
+            > maximum_vhdl_subtype_name_cache_bytes
+        || retained_bytes
+            > maximum_vhdl_subtype_name_cache_bytes
+                - hir_vhdl_subtype_name_cache_bytes_) {
+        if (profile_expression_resolution_cache()) {
+            ++hir_vhdl_subtype_name_cache_cap_drops_;
+        }
+        return;
+    }
+
+    auto scope_entry = hir_vhdl_subtype_name_cache_.end();
+    bool inserted_scope { };
+    try {
+        const auto scope_result
+            = hir_vhdl_subtype_name_cache_.try_emplace(scope.value());
+        scope_entry = scope_result.first;
+        inserted_scope = scope_result.second;
+        const auto name_result = scope_entry->second.try_emplace(
+            std::string { spelling }, result);
+        if (!name_result.second) {
+            return;
+        }
+    } catch (const std::bad_alloc&) {
+        if (inserted_scope
+            && scope_entry != hir_vhdl_subtype_name_cache_.end()
+            && scope_entry->second.empty()) {
+            hir_vhdl_subtype_name_cache_.erase(scope_entry);
+        }
+        if (profile_expression_resolution_cache()) {
+            ++hir_vhdl_subtype_name_cache_cap_drops_;
+        }
+        return;
+    }
+    ++hir_vhdl_subtype_name_cache_entries_;
+    hir_vhdl_subtype_name_cache_bytes_ += retained_bytes;
+}
+
+void Lowerer::clear_hir_vhdl_subtype_name_cache() const noexcept
+{
+    hir_vhdl_subtype_name_cache_.clear();
+    hir_vhdl_subtype_name_cache_bytes_ = 0U;
+    hir_vhdl_subtype_name_cache_entries_ = 0U;
+    hir_vhdl_subtype_name_cache_hits_ = 0U;
+    hir_vhdl_subtype_name_cache_misses_ = 0U;
+    hir_vhdl_subtype_name_cache_cap_drops_ = 0U;
 }
 
 std::optional<std::vector<Lowerer::HirGenericBinding>>

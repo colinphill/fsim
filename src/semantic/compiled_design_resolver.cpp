@@ -3,8 +3,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <ranges>
@@ -14,6 +18,31 @@
 
 namespace fsim::semantic {
 namespace {
+
+const bool semantic_profile_diagnostics_enabled
+    = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+
+void profile_vhdl_package_member_lookup(const bool indexed_empty)
+{
+    struct LookupProfile {
+        ~LookupProfile()
+        {
+            std::fprintf(stderr,
+                "FSIM_VHDL_PACKAGE_MEMBER_LOOKUP total=%llu "
+                "indexed_empty=%llu\n",
+                static_cast<unsigned long long>(total.load()),
+                static_cast<unsigned long long>(indexed_empty.load()));
+        }
+
+        std::atomic<std::uint64_t> total { };
+        std::atomic<std::uint64_t> indexed_empty { };
+    };
+    static LookupProfile profile;
+    profile.total.fetch_add(1U, std::memory_order_relaxed);
+    if (indexed_empty) {
+        profile.indexed_empty.fetch_add(1U, std::memory_order_relaxed);
+    }
+}
 
 std::string_view normalized_library(const std::string_view library)
 {
@@ -62,10 +91,56 @@ std::string_view vhdl_spelling(const vhdl::Name& name)
         : std::string_view { name.canonical };
 }
 
-std::vector<std::string_view> vhdl_name_parts(
-    const std::string_view name)
+class VhdlNameParts {
+public:
+    void push_back(const std::string_view part)
+    {
+        if (inline_size_ < inline_parts_.size()) {
+            inline_parts_[inline_size_++] = part;
+        } else {
+            overflow_.push_back(part);
+        }
+    }
+
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return inline_size_ == 0U;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return inline_size_ + overflow_.size();
+    }
+
+    [[nodiscard]] std::string_view front() const noexcept
+    {
+        return inline_parts_.front();
+    }
+
+    [[nodiscard]] std::string_view back() const noexcept
+    {
+        return overflow_.empty()
+            ? inline_parts_[inline_size_ - 1U]
+            : overflow_.back();
+    }
+
+    [[nodiscard]] std::string_view operator[](
+        const std::size_t index) const noexcept
+    {
+        return index < inline_size_
+            ? inline_parts_[index]
+            : overflow_[index - inline_size_];
+    }
+
+private:
+    std::array<std::string_view, 3U> inline_parts_ { };
+    std::size_t inline_size_ { };
+    std::vector<std::string_view> overflow_;
+};
+
+VhdlNameParts vhdl_name_parts(const std::string_view name)
 {
-    std::vector<std::string_view> result;
+    VhdlNameParts result;
     std::size_t begin { };
     while (begin < name.size()) {
         const auto end = name.find('.', begin);
@@ -144,8 +219,22 @@ void visit_systemverilog_declarations_in_scope(
 template <typename Visitor>
 void visit_vhdl_declarations_in_scope(const CompiledDesign& design,
     const SpecializedHirUnit* const effective, const ScopeId scope,
+    const std::string_view name,
     Visitor&& visitor)
 {
+    if (effective == nullptr || effective->vhdl_declarations().empty()) {
+        if (const auto indexed
+            = design.vhdl_declarations_named_in_scope(scope, name)) {
+            for (const auto id : *indexed) {
+                const auto declaration = find_declaration(
+                    design, effective, id);
+                if (declaration && declaration->vhdl != nullptr) {
+                    visitor(*declaration->vhdl);
+                }
+            }
+            return;
+        }
+    }
     if (const auto indexed = design.vhdl_declarations_in_scope(scope)) {
         for (const auto id : *indexed) {
             const auto declaration = find_declaration(
@@ -656,8 +745,9 @@ std::vector<const vhdl::Unit*> vhdl_lookup_units(
     // owners in the lookup set because a projected specialization can retain
     // a process scope owned by one side of the pair while its context clauses
     // were attached to the other side during compilation.
-    const auto direct = result;
-    for (const auto* unit : direct) {
+    const auto direct_count = result.size();
+    for (std::size_t index { }; index < direct_count; ++index) {
+        const auto* unit = result[index];
         if (const auto primary = primary_vhdl_unit(design, *unit)) {
             append(*primary);
         }
@@ -3399,6 +3489,17 @@ CompiledDesignResolver::resolve_vhdl_package_members(
     const auto* owner = lookup_units.front();
 
     std::vector<CompiledVhdlPackageMember> candidates;
+    // Every template path searches the requested final name component.
+    const auto indexed_members
+        = design_->vhdl_package_members(parts.back());
+    const bool indexed_empty
+        = indexed_members && indexed_members->empty();
+    if (semantic_profile_diagnostics_enabled) {
+        profile_vhdl_package_member_lookup(indexed_empty);
+    }
+    if (indexed_empty) {
+        return { CompiledResolutionStatus::not_found, { } };
+    }
     const auto append_template = [&](const std::string_view library,
                                      const std::string_view package_name,
                                      const std::string_view member,
@@ -3421,8 +3522,8 @@ CompiledDesignResolver::resolve_vhdl_package_members(
             }
             candidates.push_back(std::move(candidate));
         };
-        if (const auto indexed = design_->vhdl_package_members(member)) {
-            for (const auto& entry : *indexed) {
+        if (indexed_members) {
+            for (const auto& entry : *indexed_members) {
                 if (!same_vhdl_identifier(entry.library, library)
                     || !same_vhdl_identifier(
                         entry.package, package_name)) {
@@ -3531,7 +3632,8 @@ CompiledDesignResolver::resolve_vhdl_package_members(
              scope.valid() && depth <= design_->semantics.scopes().size();
              ++depth) {
             std::vector<DeclarationId> instances;
-            visit_vhdl_declarations_in_scope(*design_, effective_, scope,
+            visit_vhdl_declarations_in_scope(
+                *design_, effective_, scope, parts.front(),
                 [&](const vhdl::Declaration& declaration) {
                     if (declaration.form
                             == vhdl::DeclarationForm::package_instance
@@ -3642,12 +3744,20 @@ CompiledDesignResolver::resolve_vhdl_package_members(
         return { status_for(candidates.size()), std::move(candidates) };
     }
 
-    std::unordered_set<std::uint32_t> active_contexts;
+    struct ContextAncestor {
+        UnitId unit;
+        const ContextAncestor* parent;
+    };
     const auto visit_context = [&](const auto& self,
-                                   const vhdl::Unit& context_owner) -> void {
-        if (!active_contexts.insert(context_owner.id.value()).second) {
-            return;
+                                   const vhdl::Unit& context_owner,
+                                   const ContextAncestor* parent) -> void {
+        for (auto* ancestor = parent; ancestor != nullptr;
+             ancestor = ancestor->parent) {
+            if (ancestor->unit == context_owner.id) {
+                return;
+            }
         }
+        const ContextAncestor active { context_owner.id, parent };
         for (const auto& item : context_owner.context) {
             for (const auto& selected : item.selected_names) {
                 const auto selected_parts = vhdl_name_parts(
@@ -3689,15 +3799,14 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                             normalized_library(context.library), library)
                         && same_vhdl_identifier(
                             context.name, selected_parts.back())) {
-                        self(self, context);
+                        self(self, context, &active);
                     }
                 }
             }
         }
-        active_contexts.erase(context_owner.id.value());
     };
     for (const auto* context_owner : lookup_units) {
-        visit_context(visit_context, *context_owner);
+        visit_context(visit_context, *context_owner, nullptr);
     }
     // Link metadata is the canonical, relocation-stable record of package
     // edges. Use it as a second view of use clauses so a projected unit whose
@@ -3987,13 +4096,14 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
 
     const auto in_scope = [&](const ScopeId scope) {
         std::vector<DeclarationId> candidates;
-        visit_vhdl_declarations_in_scope(*design_, effective_, scope,
+        visit_vhdl_declarations_in_scope(
+            *design_, effective_, scope, parts.back(),
             [&](const vhdl::Declaration& declaration) {
-                const auto view = find_declaration(
-                    *design_, effective_, declaration.id);
                 if (same_vhdl_identifier(
                         declaration.name, parts.back())
-                    && view && (!predicate || predicate(*view))) {
+                    && (!predicate || predicate(
+                        CompiledDeclarationView { nullptr,
+                            &declaration }))) {
                     candidates.push_back(declaration.id);
                 }
             });

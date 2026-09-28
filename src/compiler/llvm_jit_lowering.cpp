@@ -46,7 +46,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     const ProcessLoweringPlan& lowering_plan,
     const JitOptimizationLevel optimization,
     const bool debug_instrumentation,
-    const bool require_direct_update_slots)
+    const bool require_direct_update_slots,
+    const std::span<const runtime::simir::InstructionIndex>
+        bound_literal_sites)
 {
     auto& context = module.getContext();
     auto* i32 = llvm::Type::getInt32Ty(context);
@@ -867,6 +869,85 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     const bool split_transient_register_frame = transient_register_frame
         && process.operations.size()
             < split_transient_register_operation_threshold;
+    if (std::getenv("FSIM_PROFILE_JIT_REGISTERS") != nullptr) {
+        std::vector<std::size_t> definition_counts(process.register_count);
+        for (const auto& definitions : validated.instruction_definitions) {
+            for (const auto register_id : definitions) {
+                if (register_id < definition_counts.size()) {
+                    ++definition_counts[register_id];
+                }
+            }
+        }
+        std::vector<bool> non_elided_frame_registers(
+            process.register_count);
+        for (std::size_t index = 0;
+             index < process.operations.size(); ++index) {
+            const auto* push = operation_get_if<CallableFramePush>(
+                &process.operations[index]);
+            if (push == nullptr
+                || (index < native_callables.frame_operations.size()
+                    && native_callables.frame_operations[index])) {
+                continue;
+            }
+            for (const auto register_id : push->packed) {
+                if (register_id < non_elided_frame_registers.size()) {
+                    non_elided_frame_registers[register_id] = true;
+                }
+            }
+        }
+        std::size_t registers_le64 { };
+        std::size_t single_definition_registers { };
+        std::size_t single_definition_le64 { };
+        std::size_t frame_restore_excluded_le64 { };
+        std::size_t candidate_upper_bound_le64 { };
+        const auto register_count = std::min(
+            validated.register_widths.size(), definition_counts.size());
+        for (std::size_t index = 0; index < register_count; ++index) {
+            const bool narrow = validated.register_widths[index] <= 64U;
+            const bool single_definition = definition_counts[index] == 1U;
+            if (narrow) {
+                ++registers_le64;
+            }
+            if (single_definition) {
+                ++single_definition_registers;
+            }
+            if (!narrow || !single_definition) {
+                continue;
+            }
+            ++single_definition_le64;
+            if (non_elided_frame_registers[index]) {
+                ++frame_restore_excluded_le64;
+            } else {
+                ++candidate_upper_bound_le64;
+            }
+        }
+        std::string profile_line;
+        llvm::raw_string_ostream profile(profile_line);
+        profile << "fsim-profile: jit-register-candidates process_id="
+                << process.id
+                << " operations=" << process.operations.size()
+                << " restartable=" << restartable_register_frame
+                << " transient=" << transient_register_frame
+                << " split_transient=" << split_transient_register_frame
+                << " hybrid_transient=" << hybrid_transient_register_frame
+                << " debug=" << debug_instrumentation
+                << " partial=" << lowering_plan.partial
+                << " registers=" << process.register_count
+                << " validated_widths=" << validated.register_widths.size()
+                << " registers_le64=" << registers_le64
+                << " single_definition_registers="
+                << single_definition_registers
+                << " single_definition_le64="
+                << single_definition_le64
+                << " frame_restore_excluded_le64="
+                << frame_restore_excluded_le64
+                << " candidate_upper_bound_le64="
+                << candidate_upper_bound_le64
+                << " frame_exclusions_only=1 escape_analysis=0"
+                << " dominance_proof=0\n";
+        profile.flush();
+        llvm::errs() << profile_line;
+    }
     std::uint64_t register_word_count { };
     for (const auto width : validated.register_widths) {
         register_word_count += (static_cast<std::uint64_t>(width) + 63U) / 64U;
@@ -929,6 +1010,8 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     auto* i8 = llvm::Type::getInt8Ty(context);
     std::vector<RegisterSlot> registers(process.register_count);
     std::vector<RegisterSlot> frame_registers(process.register_count);
+    std::vector<ConstantPlaneForwarding> constant_plane_forwarding;
+    std::size_t suppressed_false_guards { };
     std::uint64_t register_word_offset { };
     for (std::size_t index = 0; index < process.register_count; ++index) {
         const auto width = validated.register_widths[index];
@@ -995,6 +1078,110 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             kind,
         };
         register_word_offset += (static_cast<std::uint64_t>(width) + 63U) / 64U;
+    }
+    const bool allow_constant_planes =
+        optimization == JitOptimizationLevel::o2
+        && !debug_instrumentation
+        && !lowering_plan.partial
+        && split_transient_register_frame
+        && process.static_trigger_regions.empty()
+        && !validated.uses_exact_signal_operation
+        && !validated.uses_files
+        && !validated.uses_strings
+        && !validated.uses_containers
+        && !validated.uses_vital_delay
+        && !validated.uses_coverage_sample
+        && !validated.uses_class_property_operation
+        && !validated.uses_event_triggered;
+    // A bound site is an instance-local dynamic value, even when the
+    // representative SimIR carries a literal for ordinary lowering.
+    const bool allow_unbound_constant_planes = allow_constant_planes
+        && bound_literal_sites.empty();
+    if (allow_unbound_constant_planes) {
+        constant_plane_forwarding.resize(process.register_count);
+        std::vector<std::size_t> definition_counts(process.register_count);
+        std::vector<std::size_t> definition_indexes(process.register_count);
+        std::vector<std::size_t> earliest_uses(
+            process.register_count, process.operations.size());
+        std::vector<bool> excluded(process.register_count);
+        for (std::size_t index = 0;
+             index < process.operations.size(); ++index) {
+            for (const auto id : validated.instruction_definitions[index]) {
+                ++definition_counts[id];
+                definition_indexes[id] = index;
+            }
+            for (const auto id : validated.instruction_uses[index]) {
+                earliest_uses[id] = std::min(earliest_uses[id], index);
+            }
+            const auto* push = operation_get_if<CallableFramePush>(
+                &process.operations[index]);
+            if (push != nullptr
+                && !native_callables.frame_operations[index]) {
+                for (const auto id : push->packed) {
+                    excluded[id] = true;
+                }
+            }
+            const auto exclude_stack = [&](const CallStack& stack) {
+                if (stack.capacity == 0U) {
+                    return;
+                }
+                excluded[stack.pointer] = true;
+                for (std::size_t id = stack.entries;
+                     id < process.register_count
+                         && id - stack.entries < stack.capacity;
+                     ++id) {
+                    excluded[id] = true;
+                }
+            };
+            if (const auto* call = operation_get_if<Call>(
+                    &process.operations[index])) {
+                exclude_stack(call->stack);
+            }
+            if (const auto* ret = operation_get_if<Return>(
+                    &process.operations[index])) {
+                exclude_stack(ret->stack);
+            }
+        }
+        for (std::size_t id = 0; id < process.register_count; ++id) {
+            if (excluded[id] || definition_counts[id] != 1U
+                || registers[id].width == 0U
+                || registers[id].width > 64U) {
+                continue;
+            }
+            const auto definition = definition_indexes[id];
+            if (earliest_uses[id] <= definition) {
+                continue;
+            }
+            const auto& defining_operation = process.operations[definition];
+            const bool guaranteed_store =
+                operation_holds<LoadConstant>(defining_operation)
+                || operation_holds<CopyRegister>(defining_operation)
+                || operation_holds<ConvertToTwoState>(defining_operation)
+                || operation_holds<UnaryNot>(defining_operation)
+                || operation_holds<LogicalNot>(defining_operation)
+                || operation_holds<LogicalBinary>(defining_operation)
+                || operation_holds<Reduction>(defining_operation)
+                || operation_holds<CountOnes>(defining_operation)
+                || operation_holds<CountBits>(defining_operation)
+                || operation_holds<Shift>(defining_operation)
+                || operation_holds<Extract>(defining_operation)
+                || operation_holds<Insert>(defining_operation)
+                || operation_holds<DynamicInsert>(defining_operation)
+                || operation_holds<DynamicPartInsert>(defining_operation)
+                || operation_holds<Concatenate>(defining_operation)
+                || operation_holds<Binary>(defining_operation)
+                || operation_holds<IntegerUnary>(defining_operation)
+                || operation_holds<IntegerBinary>(defining_operation)
+                || operation_holds<IntegerCheck>(defining_operation)
+                || operation_holds<ConditionalSelect>(defining_operation)
+                || operation_holds<DynamicExtract>(defining_operation)
+                || operation_holds<DynamicPartSelect>(defining_operation);
+            if (!guaranteed_store) {
+                continue;
+            }
+            constant_plane_forwarding[id].definition = definition;
+            registers[id].constant_planes = &constant_plane_forwarding[id];
+        }
     }
     if ((transient_register_frame || hybrid_transient_register_frame)
         && validated.uses_strings) {
@@ -1171,7 +1358,9 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             const auto* initial
                 = runtime::simir::operation_get_if<LoadConstant>(
                     &process.operations[start]);
-            if (initial == nullptr || initial->value.width() < 128U) {
+            if (initial == nullptr || initial->value.width() < 128U
+                || std::ranges::binary_search(bound_literal_sites,
+                    static_cast<InstructionIndex>(start))) {
                 continue;
             }
             const auto zero_words = [](const auto words) {
@@ -1235,7 +1424,13 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                 if (base_constant == nullptr || scale_constant == nullptr
                     || multiply == nullptr || add_base == nullptr
                     || element_constant == nullptr || add_element == nullptr
-                    || extract == nullptr || insert == nullptr) {
+                    || extract == nullptr || insert == nullptr
+                    || std::ranges::binary_search(bound_literal_sites,
+                        static_cast<InstructionIndex>(cursor))
+                    || std::ranges::binary_search(bound_literal_sites,
+                        static_cast<InstructionIndex>(cursor + 1U))
+                    || std::ranges::binary_search(bound_literal_sites,
+                        static_cast<InstructionIndex>(cursor + 4U))) {
                     break;
                 }
                 const auto base_value
@@ -1382,6 +1577,8 @@ void lower_process(llvm::Module& module, const std::string& symbol,
                 = runtime::simir::operation_get_if<LoadConstant>(
                     &process.operations[index - 1U]);
             if (select == nullptr || constant == nullptr
+                || std::ranges::binary_search(bound_literal_sites,
+                    static_cast<InstructionIndex>(index - 1U))
                 || constant->destination != select->source
                 || select->width > 64U
                 || constant->value.width()
@@ -1648,6 +1845,7 @@ ProcessLoweringContext lowering_context {
         direct_read_signals,
         direct_update_signals,
         validated,
+        bound_literal_sites,
         debug_instrumentation,
         require_direct_update_slots,
         context,
@@ -1820,9 +2018,29 @@ ProcessLoweringContext lowering_context {
         instruction_regions,
         static_trigger_region_entries,
         ssa_callable_returns,
-        invalid_pc
+        invalid_pc,
+        constant_plane_forwarding,
+        suppressed_false_guards
     };
     lower_process_operations(lowering_context);
+    if (std::getenv("FSIM_PROFILE_JIT_REGISTERS") != nullptr
+        && allow_unbound_constant_planes) {
+        std::size_t eligible { };
+        std::size_t published { };
+        std::size_t forwarded { };
+        for (std::size_t id = 0; id < constant_plane_forwarding.size(); ++id) {
+            eligible += registers[id].constant_planes != nullptr;
+            published += constant_plane_forwarding[id].published_planes;
+            forwarded += constant_plane_forwarding[id].forwarded_loads;
+        }
+        llvm::errs() << "fsim-profile: jit-constant-planes process_id="
+                     << process.id
+                     << " eligible=" << eligible
+                     << " published_planes=" << published
+                     << " forwarded_loads=" << forwarded
+                     << " suppressed_false_guards="
+                     << suppressed_false_guards << '\n';
+    }
 
     if (!lowering_plan.partial
         && optimization == JitOptimizationLevel::o1

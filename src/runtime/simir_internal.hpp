@@ -286,7 +286,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::vector<std::optional<SignalId>> wait_order_events;
         std::size_t wait_order_index { };
         std::optional<RegisterId> wait_order_result;
-        std::optional<InstructionIndex> wait_timeout_origin;
         std::optional<SimulationTick> wait_timeout_deadline;
         std::optional<RegisterId> wait_timeout_result;
         std::uint64_t wait_timeout_generation { };
@@ -302,6 +301,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // lifetime of this address-stable deque entry.
         ProcessId id { };
         InstructionIndex pc { };
+        std::optional<InstructionIndex> wait_timeout_origin;
         std::shared_ptr<ProcessFrame> frame;
         std::unique_ptr<ProcessExecutor> executor;
         std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
@@ -316,6 +316,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool suspended_wake { };
         bool halted { };
         bool killed { };
+        bool has_callable_frame_push { };
 
         // The sidecar is allocated with its program at process creation and
         // remains heap-stable if this small deque record is moved.
@@ -520,6 +521,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         {
             return (flags & has_packed_value) != 0U;
         }
+
     };
 
     static_assert(sizeof(PendingUpdate) <= 48U);
@@ -527,6 +529,26 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct PendingDriverCommit {
         std::optional<ProcessId> driver;
         PackedLogic4 value;
+        bool owned_composite { };
+    };
+
+    struct OwnedDriverSpan {
+        SignalId signal { std::numeric_limits<SignalId>::max() };
+        std::uint32_t offset { };
+        std::uint32_t width { };
+    };
+
+    struct OwnedDriverComposite {
+        PackedLogic4 committed;
+        PackedLogic4 phase;
+        bool active { };
+        bool phase_active { };
+    };
+
+    enum class OwnedDriverStage : std::uint8_t {
+        unsupported,
+        unchanged,
+        changed,
     };
 
     struct DirectSingleDriverRoute {
@@ -535,11 +557,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
 
     struct DirectSingleDriverLogic9WordUpdate {
+        static constexpr std::uint32_t unlisted = 0U;
+        static constexpr std::uint32_t native = 1U;
+        static constexpr std::uint32_t generic_blocked = 2U;
         std::array<std::uint64_t, 4U> planes { };
         std::uint64_t mask { };
         std::uint32_t width { };
         ProcessId process { };
-        std::uint32_t active { };
+        std::uint32_t active { unlisted };
     };
 
     enum class PendingEventKind : std::uint8_t {
@@ -705,6 +730,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::uint64_t signal_writer_revision { };
     std::vector<PackedLogic4> driven_values;
     std::vector<DriverTable> driver_values;
+    // Certified disjoint owners use this as their raw-driver authority.
+    // Their DriverRecord values are restored on cold demotion.
+    std::vector<OwnedDriverComposite> owned_driver_composites;
+    std::vector<OwnedDriverSpan> owned_driver_spans;
     using ForcedDriverMap = std::map<ProcessId, PackedLogic4>;
     std::vector<std::unique_ptr<ForcedDriverMap>> forced_driver_values;
     std::vector<std::unique_ptr<ForcedDriverMap>> forced_driver_masks;
@@ -947,10 +976,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::uint64_t native_update_profile_unchanged_direct_packed { };
     std::uint64_t native_update_profile_unchanged_unresolved { };
     std::uint64_t native_update_profile_unchanged_resolved { };
+    std::uint64_t native_update_profile_unchanged_owned { };
     std::uint64_t native_update_profile_direct_word { };
     std::uint64_t native_update_profile_direct_packed { };
     std::uint64_t native_update_profile_unresolved { };
     std::uint64_t native_update_profile_resolved { };
+    std::uint64_t native_update_profile_changed_owned { };
     std::uint64_t native_update_profile_schedule_requests { };
     std::uint64_t native_update_profile_schedule_coalesced { };
     std::uint64_t native_update_profile_commits { };
@@ -970,7 +1001,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool profile_processes_all_enabled { };
     bool fanout_cohort_grouping_enabled { true };
     bool static_phase_batches_enabled { true };
-    bool inline_cohort_buffers_enabled { true };
     bool direct_word_commit_disabled { };
     bool logic9_batch_profile_enabled { };
     std::set<std::uint32_t> program_owners;
@@ -1201,7 +1231,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void clear_wait_timeout(ProcessState& process)
     {
-        if (!process.cold().wait_timeout_origin) {
+        if (!process.wait_timeout_origin) {
             return;
         }
         clear_wait_timeout_nonempty(process);
@@ -1259,6 +1289,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void restore_callable_context(ProcessState& process)
     {
+        if (!process.has_callable_frame_push) {
+            return;
+        }
         const auto& cold = process.cold();
         if (cold.escaping_callable_contexts.empty()
             && !cold.suspended_callable_context) {
@@ -1448,7 +1481,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void build_native_signal_dependency_masks() noexcept;
     [[nodiscard]] bool can_publish_native_word_prevalidated(
         SignalId signal_id, ProcessId process) noexcept;
-    [[nodiscard]] bool can_publish_native_logic9_word(
+    [[nodiscard]] bool can_publish_native_logic9_word_prevalidated(
         SignalId signal_id, ProcessId process) noexcept;
     [[nodiscard]] bool can_publish_blocking_word(SignalId signal_id) noexcept;
     void publish_native_word(SignalId signal_id, Logic4Word value);
@@ -1500,6 +1533,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] PackedLogic4 initial_driver_value(
         const SignalId signal_id) const;
+
+    void build_owned_driver_composites();
+    void demote_owned_driver(SignalId signal_id);
+    void demote_all_owned_drivers();
+    [[nodiscard]] bool owned_driver_active(SignalId signal_id) const noexcept;
+    [[nodiscard]] PackedLogic4 owned_driver_value(
+        ProcessId process, SignalId signal_id) const;
+    [[nodiscard]] OwnedDriverStage stage_owned_driver_slot(
+        ProcessId process, const ProcessUpdateSlotView& slot);
+    [[nodiscard]] bool stage_owned_driver_pending(PendingUpdate& pending);
+    void commit_owned_driver(SignalId signal_id);
 
     PackedLogic4& driver_slot(
         const ProcessId process,
@@ -1564,6 +1608,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const std::size_t offset);
 
     void schedule_update_commit();
+    void block_native_logic9_update_before_generic(SignalId signal);
 
     void stage_update_unrouted(
         std::optional<ProcessId> driver,

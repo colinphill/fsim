@@ -97,6 +97,10 @@ int main() {
       JitOptimizationLevel::o0, "wide_single_bit_dynamic_part_select_o0");
   test_wide_single_bit_dynamic_part_select_at_level(
       JitOptimizationLevel::o2, "wide_single_bit_dynamic_part_select_o2");
+  test_wide_dynamic_part_select_at_level(
+      JitOptimizationLevel::o0, "wide_dynamic_part_select_o0");
+  test_wide_dynamic_part_select_at_level(
+      JitOptimizationLevel::o2, "wide_dynamic_part_select_o2");
   test_conditional_select_at_level(
       JitOptimizationLevel::o0, "conditional_select_o0");
   test_conditional_select_at_level(
@@ -159,6 +163,8 @@ int main() {
   test_control_flow_at_level(JitOptimizationLevel::o0, "control_flow_o0");
   test_control_flow_at_level(JitOptimizationLevel::o2, "control_flow_o2");
   test_native_callable_regions();
+  test_constant_plane_forwarding();
+  test_bound_literal_binding();
   test_checked_integer_at_level(
       JitOptimizationLevel::o0, "checked_integer_o0");
   test_checked_integer_at_level(

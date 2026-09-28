@@ -2193,6 +2193,246 @@ void test_simir_alternate_executor_validated_update_word_batch()
         "validated whole and overlapping slice updates preserve source order");
 }
 
+void test_simir_alternate_executor_validated_logic9_std_logic_batch()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    enum class Mode {
+        disjoint_masks,
+        generic_before_native,
+        native_before_generic,
+        blocking_after_native,
+        same_value_before_blocking,
+        same_value_after_staged,
+        forced_fallback,
+        force_after_native,
+        second_driver_fallback,
+        dynamic_observer,
+        transaction_observer,
+    };
+    struct Probe {
+        bool consumed { };
+        bool rejected_with_mask { };
+    };
+    class Executor final : public ProcessExecutor {
+    public:
+        Executor(const SignalId output, const ProcessId process,
+            const Mode mode, std::shared_ptr<Probe> probe)
+            : output_ { output }
+            , process_ { process }
+            , mode_ { mode }
+            , probe_ { std::move(probe) }
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext& context,
+            const InstructionIndex start) override
+        {
+            require(start == 0U, "Logic9 batch initial PC");
+            const auto zero
+                = PackedLogic4::from_logic9_msb_string("000000000");
+            const auto target
+                = PackedLogic4::from_logic9_msb_string("UX01ZWLH-");
+            context.write_blocking(output_, zero);
+            const auto stage = [&](std::uint64_t mask,
+                                   const PackedLogic4& candidate) {
+                const auto requested_mask = mask;
+                auto planes = candidate.logic9_low_word().planes;
+                const ProcessLogic9UpdateSlotView slot {
+                    output_, 9U, planes.data(), &mask
+                };
+                const ProcessLogic9UpdateBatch batch {
+                    process_, std::span { &slot, 1U }
+                };
+                const bool consumed
+                    = context.write_validated_logic9_update_batch(batch);
+                if (consumed) {
+                    require(mask == 0U,
+                        "consumed Logic9 batch must clear its mask");
+                } else {
+                    require(mask == requested_mask,
+                        "rejected Logic9 batch must retain its mask");
+                }
+                return consumed;
+            };
+            switch (mode_) {
+            case Mode::disjoint_masks:
+                probe_->consumed = stage(0x0fU, target)
+                    && stage(0x1f0U, target);
+                break;
+            case Mode::generic_before_native:
+                context.write_update(output_, zero);
+                probe_->rejected_with_mask = !stage(0x1ffU, target);
+                context.write_update(output_, target);
+                break;
+            case Mode::native_before_generic:
+                probe_->consumed = stage(0x1ffU, target);
+                context.write_update(output_, zero);
+                break;
+            case Mode::blocking_after_native:
+                probe_->consumed = stage(0x0fU, target);
+                context.write_blocking(output_,
+                    PackedLogic4::from_logic9_msb_string("HHHHH0000"));
+                break;
+            case Mode::same_value_before_blocking:
+                probe_->consumed = stage(0x01U, zero);
+                context.write_blocking(output_,
+                    PackedLogic4::from_logic9_msb_string("000000001"));
+                break;
+            case Mode::same_value_after_staged:
+                probe_->consumed = stage(0x01U,
+                    PackedLogic4::from_logic9_msb_string("000000001"));
+                probe_->consumed = stage(0x02U, zero)
+                    && probe_->consumed;
+                context.write_blocking(output_,
+                    PackedLogic4::from_logic9_msb_string("000000010"));
+                break;
+            case Mode::forced_fallback:
+            case Mode::second_driver_fallback:
+                probe_->rejected_with_mask = !stage(0x1ffU, target);
+                context.write_update(output_, target);
+                break;
+            case Mode::force_after_native:
+                probe_->consumed = stage(0x1ffU, target);
+                context.force_signal_slice(output_,
+                    PackedLogic4::from_logic9_msb_string("111111111"),
+                    0U);
+                break;
+            case Mode::dynamic_observer:
+            case Mode::transaction_observer:
+                probe_->consumed = stage(0x1ffU, target);
+                break;
+            }
+            return { 0U, 1U };
+        }
+
+    private:
+        SignalId output_ { };
+        ProcessId process_ { };
+        Mode mode_;
+        std::shared_ptr<Probe> probe_;
+    };
+
+    for (const auto mode : { Mode::disjoint_masks,
+             Mode::generic_before_native, Mode::native_before_generic,
+             Mode::blocking_after_native,
+             Mode::same_value_before_blocking,
+             Mode::same_value_after_staged,
+             Mode::forced_fallback, Mode::force_after_native,
+             Mode::second_driver_fallback,
+             Mode::dynamic_observer,
+             Mode::transaction_observer }) {
+        Interpreter interpreter;
+        const auto output = interpreter.add_signal(
+            { "top.logic9_output",
+                PackedLogic4::from_logic9_msb_string(
+                    mode == Mode::dynamic_observer
+                        || mode == Mode::transaction_observer
+                        ? "000000000" : "UUUUUUUUU"),
+                ResolutionKind::std_logic, ValueKind::logic9 });
+        const auto observed = interpreter.add_signal(
+            { "top.observed", PackedLogic4::from_msb_string("0") });
+        if (mode == Mode::dynamic_observer
+            || mode == Mode::transaction_observer) {
+            Process observer;
+            observer.id = 0U;
+            observer.name = "logic9_update_observer";
+            observer.register_count = 1U;
+            if (mode == Mode::dynamic_observer) {
+                observer.operations = {
+                    WaitOn { { output } },
+                    LoadConstant { 0U,
+                        PackedLogic4::from_msb_string("1") },
+                    WriteBlocking { observed, 0U },
+                    Halt { },
+                };
+            } else {
+                observer.static_sensitivity = {
+                    { output, EdgeKind::transaction }
+                };
+                observer.operations = {
+                    WaitSensitivity { },
+                    LoadConstant { 0U,
+                        PackedLogic4::from_msb_string("1") },
+                    WriteBlocking { observed, 0U },
+                    Halt { },
+                };
+            }
+            (void)interpreter.add_process(std::move(observer));
+        }
+        if (mode == Mode::second_driver_fallback) {
+            Process other;
+            other.name = "second_logic9_driver";
+            other.register_count = 1U;
+            other.register_value_kinds = { ValueKind::logic9 };
+            other.operations = {
+                LoadConstant { 0U,
+                    PackedLogic4::from_logic9_msb_string("000000000") },
+                WriteBlocking { output, 0U },
+                Halt { },
+            };
+            (void)interpreter.add_process(std::move(other));
+        }
+        Process process;
+        process.id = mode == Mode::second_driver_fallback
+                || mode == Mode::dynamic_observer
+                || mode == Mode::transaction_observer
+            ? 1U : 0U;
+        process.name = "validated_logic9_std_logic_batch";
+        process.operations = { Halt { } };
+        const auto process_id = interpreter.add_process(std::move(process));
+        auto probe = std::make_shared<Probe>();
+        interpreter.set_process_executor(process_id,
+            std::make_unique<Executor>(
+                output, process_id, mode, probe));
+        if (mode == Mode::forced_fallback) {
+            interpreter.force_signal(output,
+                PackedLogic4::from_logic9_msb_string("111111111"));
+        }
+        const auto result = interpreter.run();
+        require(result.status == RunStatus::completed,
+            "validated Logic9 batch did not complete");
+        if (mode == Mode::forced_fallback
+            || mode == Mode::force_after_native) {
+            interpreter.release_signal(output);
+        }
+        if (mode == Mode::generic_before_native
+            || mode == Mode::forced_fallback
+            || mode == Mode::second_driver_fallback) {
+            require(probe->rejected_with_mask,
+                "ordered or invalidated Logic9 batch must fall back");
+        } else {
+            require(probe->consumed,
+                "sole-driver std_logic Logic9 batch was not consumed");
+        }
+        const auto value = interpreter.signal_value(output).to_msb_string();
+        if (mode == Mode::dynamic_observer
+            || mode == Mode::transaction_observer) {
+            require(interpreter.signal_value(observed).to_msb_string()
+                    == "1",
+                "Logic9 update must notify its signal observer");
+        }
+        if (mode == Mode::native_before_generic) {
+            require(value == "000000000",
+                "later generic Logic9 update must win");
+        } else if (mode == Mode::blocking_after_native) {
+            require(value == "HHHHHWLH-",
+                "later blocking write must preserve untouched bits");
+        } else if (mode == Mode::same_value_before_blocking) {
+            require(value == "000000000",
+                "same-value native write must override later blocking bit");
+        } else if (mode == Mode::same_value_after_staged) {
+            require(value == "000000001",
+                "staged same-value mask must survive later blocking write");
+        } else if (mode != Mode::second_driver_fallback) {
+            require(value == "UX01ZWLH-",
+                "Logic9 batch must preserve all nine states and ordering");
+        }
+    }
+}
+
 void test_simir_alternate_executor_native_blocking_then_update_slice()
 {
     using namespace fsim::runtime;

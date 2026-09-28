@@ -729,6 +729,7 @@ add_library(
       src/runtime/simir_random_distribution.cpp
       src/runtime/simir_module_path.cpp
     src/runtime/simir_scheduling.cpp
+    src/runtime/simir_owned_driver.cpp
     src/runtime/simir_scheduling_commit.cpp
     src/runtime/simir_scheduling_stage.cpp
     src/runtime/simir_synchronization.cpp

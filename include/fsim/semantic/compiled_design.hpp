@@ -6,6 +6,7 @@
 #include "fsim/semantic/vhdl_hir.hpp"
 
 #include <optional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -199,6 +200,13 @@ public:
     systemverilog_declarations_in_scope(ScopeId scope) const noexcept;
     [[nodiscard]] std::optional<std::span<const DeclarationId>>
     vhdl_declarations_in_scope(ScopeId scope) const noexcept;
+    /// Return VHDL declaration identities with this identifier in one scope,
+    /// preserving HIR declaration order. A disengaged result means the
+    /// non-owning lookup indexes are stale or the scope is invalid; an
+    /// engaged empty span means a current index found no declarations.
+    [[nodiscard]] std::optional<std::span<const DeclarationId>>
+    vhdl_declarations_named_in_scope(
+        ScopeId scope, std::string_view name) const noexcept;
     /// Return every VHDL type, subtype, or generic-type declaration with this
     /// identifier. An engaged empty span proves that no lexical or imported
     /// lookup can attach nominal type identity for the name.
@@ -281,6 +289,11 @@ private:
             systemverilog_declarations_by_scope;
         std::vector<std::vector<DeclarationId>>
             vhdl_declarations_by_scope;
+        using VhdlDeclarationsByName = std::unordered_map<
+            std::string_view, std::vector<DeclarationId>,
+            VhdlIdentifierHash, VhdlIdentifierEqual>;
+        std::vector<VhdlDeclarationsByName>
+            vhdl_declarations_by_scope_and_name;
         std::unordered_map<std::string_view,
             std::vector<DeclarationId>,
             VhdlIdentifierHash, VhdlIdentifierEqual>
@@ -364,9 +377,18 @@ private:
 /// validation with current lookup indexes at an elaboration boundary. The
 /// token borrows the design and is intentionally constructible only through
 /// validate_compiled_design().
+namespace detail {
+struct VhdlInitializerMemoContext;
+[[nodiscard]] std::shared_ptr<VhdlInitializerMemoContext>
+make_vhdl_initializer_memo_context(const CompiledDesign& design);
+}
+
 class ValidatedCompiledDesign final {
 public:
     [[nodiscard]] const CompiledDesign& design() const noexcept;
+    /// Shared only by validated specializations derived from this design token.
+    [[nodiscard]] const std::shared_ptr<detail::VhdlInitializerMemoContext>&
+    initializer_memo_context() const noexcept;
 
 private:
     friend std::optional<ValidatedCompiledDesign>
@@ -377,6 +399,8 @@ private:
     explicit ValidatedCompiledDesign(const CompiledDesign&) noexcept;
 
     const CompiledDesign* design_ { };
+    std::shared_ptr<detail::VhdlInitializerMemoContext>
+        initializer_memo_context_;
 };
 
 [[nodiscard]] std::optional<ValidatedCompiledDesign>

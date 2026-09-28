@@ -751,6 +751,8 @@ void CompiledDesign::refresh_lookup_indexes()
             declaration.scope.value()].push_back(declaration.id);
     }
     rebuilt.vhdl_declarations_by_scope.resize(semantics.scopes().size());
+    rebuilt.vhdl_declarations_by_scope_and_name.resize(
+        semantics.scopes().size());
     for (const auto& declaration : vhdl_hir.declarations()) {
         if (declaration.form == vhdl::DeclarationForm::type
             || declaration.form == vhdl::DeclarationForm::subtype
@@ -764,8 +766,12 @@ void CompiledDesign::refresh_lookup_indexes()
                 >= rebuilt.vhdl_declarations_by_scope.size()) {
             continue;
         }
-        rebuilt.vhdl_declarations_by_scope[declaration.scope.value()]
+        const auto scope_index = declaration.scope.value();
+        rebuilt.vhdl_declarations_by_scope[scope_index]
             .push_back(declaration.id);
+        rebuilt.vhdl_declarations_by_scope_and_name[scope_index]
+            [declaration.name]
+                .push_back(declaration.id);
     }
     rebuilt.vhdl_imports_by_unit.resize(semantics.units().size());
     std::vector<std::vector<const CompiledReference*>>
@@ -1210,6 +1216,25 @@ CompiledDesign::vhdl_declarations_in_scope(
 }
 
 std::optional<std::span<const DeclarationId>>
+CompiledDesign::vhdl_declarations_named_in_scope(
+    const ScopeId scope, const std::string_view name) const noexcept
+{
+    if (!lookup_indexes_current() || !scope.valid()
+        || scope.value()
+            >= lookup_indexes_.vhdl_declarations_by_scope_and_name.size()) {
+        return std::nullopt;
+    }
+    const auto& declarations
+        = lookup_indexes_.vhdl_declarations_by_scope_and_name[
+            scope.value()];
+    const auto found = declarations.find(name);
+    if (found == declarations.end()) {
+        return std::span<const DeclarationId> { };
+    }
+    return std::span<const DeclarationId> { found->second };
+}
+
+std::optional<std::span<const DeclarationId>>
 CompiledDesign::vhdl_type_declarations_named(
     const std::string_view name) const noexcept
 {
@@ -1315,6 +1340,12 @@ const CompiledDesign& ValidatedCompiledDesign::design() const noexcept
     return *design_;
 }
 
+const std::shared_ptr<detail::VhdlInitializerMemoContext>&
+ValidatedCompiledDesign::initializer_memo_context() const noexcept
+{
+    return initializer_memo_context_;
+}
+
 bool ValidatedCompiledDesign::can_validate(
     const CompiledDesign& design) noexcept
 {
@@ -1324,9 +1355,13 @@ bool ValidatedCompiledDesign::can_validate(
 std::optional<ValidatedCompiledDesign>
 validate_compiled_design(const CompiledDesign& design)
 {
-    return ValidatedCompiledDesign::can_validate(design) && design.valid()
-        ? std::optional { ValidatedCompiledDesign { design } }
-        : std::nullopt;
+    if (!ValidatedCompiledDesign::can_validate(design) || !design.valid()) {
+        return std::nullopt;
+    }
+    ValidatedCompiledDesign validated { design };
+    validated.initializer_memo_context_
+        = detail::make_vhdl_initializer_memo_context(design);
+    return validated;
 }
 
 Model& CompiledDesign::mutable_semantics() noexcept

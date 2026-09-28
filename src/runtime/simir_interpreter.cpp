@@ -730,6 +730,10 @@ ProcessId Interpreter::add_process_impl(
     }
     state.generation = impl_->next_process_generation++;
     state.id = id;
+    state.has_callable_frame_push = std::ranges::any_of(
+        std::as_const(process.operations), [](const Operation& operation) {
+            return operation_holds<CallableFramePush>(operation);
+        });
     state.cold().random_state = Impl::initial_random_state(
         impl_->root_seed, id);
     state.cold().design_process = id;
@@ -1455,6 +1459,7 @@ void Interpreter::start()
         }
     }
     impl_->build_native_static_regions();
+    impl_->build_owned_driver_composites();
     std::vector<bool> prearmed_static_waits(
         impl_->processes.size(), false);
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
@@ -1944,6 +1949,9 @@ void Interpreter::set_stored_signal_change_hook(StoredSignalChangeHook hook)
 
 void Interpreter::set_driver_change_hook(DriverChangeHook hook)
 {
+    if (hook) {
+        impl_->demote_all_owned_drivers();
+    }
     impl_->driver_change_hook = std::move(hook);
 }
 

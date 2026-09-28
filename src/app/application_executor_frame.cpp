@@ -84,6 +84,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     : jit_(jit)
     , binding_(jit.bind(handle))
     , process_(process)
+    , operation_count_(jit_.operation_count(binding_))
     , signal_widths_(signal_widths)
     , signal_value_kinds_(signal_value_kinds)
     , signal_resolutions_(signal_resolutions)
@@ -103,6 +104,10 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , active_container_object_aliases_(
           storage_->active_container_object_aliases)
 {
+    if (operation_count_ != process_.operations.size()) {
+        throw compiler::LlvmJitError(
+            "compiled process operation count differs from its binding");
+    }
     register_aval_.resize(layout_.register_word_count);
     register_bval_.resize(layout_.register_word_count);
     if (layout_.uses_logic9) {
@@ -149,6 +154,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     : jit_(jit)
     , binding_(binding)
     , process_(process)
+    , operation_count_(jit_.operation_count(binding_))
     , signal_widths_(signal_widths)
     , signal_value_kinds_(signal_value_kinds)
     , signal_resolutions_(signal_resolutions)
@@ -169,6 +175,10 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , active_container_object_aliases_(
           storage_->active_container_object_aliases)
 {
+    if (operation_count_ != process_.operations.size()) {
+        throw compiler::LlvmJitError(
+            "compiled process operation count differs from its binding");
+    }
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
     initialize_direct_read_signals();

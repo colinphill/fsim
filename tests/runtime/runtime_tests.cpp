@@ -180,6 +180,7 @@ int main(const int argc, const char* const* argv)
         test_systemverilog_constraint_solver();
         test_simir_alternate_executor_scheduled_word_writes();
         test_simir_alternate_executor_validated_update_word_batch();
+        test_simir_alternate_executor_validated_logic9_std_logic_batch();
         test_simir_alternate_executor_native_blocking_then_update_slice();
         test_simir_alternate_executor_zero_delay_and_frame();
         test_simir_alternate_executor_cpp_exception_containment();

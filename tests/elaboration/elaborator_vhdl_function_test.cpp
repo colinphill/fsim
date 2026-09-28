@@ -341,6 +341,19 @@ end architecture;
 library ieee;
 use ieee.std_logic_1164.all;
 use work.local_integer_array_pkg.all;
+entity local_integer_huge_array_rejected is
+end entity;
+architecture rtl of local_integer_huge_array_rejected is
+  constant init : std_logic_vector(7 downto 0)
+    := integer_array_tail(2000000);
+begin
+  child: entity work.local_integer_array_leaf(rtl)
+    generic map (init => init);
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use work.local_integer_array_pkg.all;
 entity local_integer_alias_array_rejected is
 end entity;
 architecture rtl of local_integer_alias_array_rejected is
@@ -522,6 +535,11 @@ end architecture;
     assert(packed_init != child->parameter_identity_values.end());
     assert(packed_init->second.find(";value=00001000")
         != std::string::npos);
+
+    const auto huge_array = fsim::elaboration::elaborate(
+        *linked.design,
+        "vhdl:work.local_integer_huge_array_rejected(rtl)");
+    assert(!huge_array.ok());
 
     const auto pattern_fold = fsim::elaboration::elaborate(
         *linked.design, "vhdl:work.local_integer_pattern_fold(rtl)");
@@ -1537,12 +1555,20 @@ architecture rtl of package_generic_call_fold is
   begin
     return value + 1;
   end function;
+  function add_bias(value : integer; bias : integer) return integer is
+  begin
+    return value + bias;
+  end function;
+  signal source_value : integer := 2;
+  signal combined_value : integer;
 begin
   worker : process
     variable local_value : integer;
   begin
     local_value := increment(selected_math.apply(2));
     result_value <= local_value;
+    combined_value <= add_bias(source_value, 3) * 10
+      + add_bias(source_value, 7);
     wait;
   end process;
 end architecture;
@@ -1560,12 +1586,15 @@ end architecture;
     assert(elaborated.ok());
 
     const auto result = elaborated.design->find_signal("result_value");
-    assert(result);
+    const auto combined = elaborated.design->find_signal("combined_value");
+    assert(result && combined);
     auto interpreter = elaborated.design->create_interpreter();
     assert(interpreter->run().status
            == fsim::runtime::RunStatus::completed);
     const auto value = interpreter->signal_value(*result).low_word();
+    const auto paired = interpreter->signal_value(*combined).low_word();
     assert(value.aval == 6 && value.bval == 0);
+    assert(paired.aval == 59 && paired.bval == 0);
 }
 
 void test_vhdl_callable_formal_preserves_actual_packed_range()
@@ -2905,8 +2934,146 @@ end architecture;
     assert(interpreter->signal_value(*nested).low_word().aval == 54U);
 }
 
+void test_vhdl_concurrent_pure_process_reuse()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "concurrent-pure-process-reuse.vhd",
+        R"(
+entity reuse_leaf is
+  generic (mode_value : integer := 1);
+  port (
+    left_value : in bit_vector(3 downto 0);
+    right_value : in bit_vector(3 downto 0);
+    result_value : out bit_vector(3 downto 0);
+    secondary_result : out bit_vector(3 downto 0));
+end entity;
+
+architecture rtl of reuse_leaf is
+  function combine_values(
+      left_arg : bit_vector; right_arg : bit_vector; mode_arg : integer)
+      return bit_vector is
+    variable combined : bit_vector(3 downto 0) := (others => '0');
+    variable position : integer := 0;
+  begin
+    while position < 4 loop
+      if mode_arg = 1 then
+        combined(position) := left_arg(position) xor right_arg(position);
+      else
+        combined(position) := left_arg(position) and right_arg(position);
+      end if;
+      position := position + 1;
+    end loop;
+    return combined;
+  end function;
+begin
+  result_value <= combine_values(left_value, right_value, mode_value);
+  secondary_result <= combine_values(right_value, left_value, mode_value)
+    when mode_value = 1 else
+      combine_values(left_value, right_value, mode_value);
+end architecture;
+
+entity reuse_top is end entity;
+architecture rtl of reuse_top is
+  signal left_value : bit_vector(3 downto 0) := "1010";
+  signal right_value : bit_vector(3 downto 0) := "1100";
+  signal same_first : bit_vector(3 downto 0);
+  signal same_second : bit_vector(3 downto 0);
+  signal different_generic : bit_vector(3 downto 0);
+  signal aliased_inputs : bit_vector(3 downto 0);
+  signal secondary_first : bit_vector(3 downto 0);
+  signal secondary_second : bit_vector(3 downto 0);
+  signal secondary_different : bit_vector(3 downto 0);
+  signal secondary_aliased : bit_vector(3 downto 0);
+begin
+  first_leaf : entity work.reuse_leaf(rtl)
+    generic map (mode_value => 1)
+    port map (left_value, right_value, same_first, secondary_first);
+  second_leaf : entity work.reuse_leaf(rtl)
+    generic map (mode_value => 1)
+    port map (left_value, right_value, same_second, secondary_second);
+  different_leaf : entity work.reuse_leaf(rtl)
+    generic map (mode_value => 2)
+    port map (left_value, right_value, different_generic,
+      secondary_different);
+  aliased_leaf : entity work.reuse_leaf(rtl)
+    generic map (mode_value => 1)
+    port map (left_value, left_value, aliased_inputs, secondary_aliased);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design, "vhdl:work.reuse_top(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+    bool dynamic_part_insert { };
+    for (const auto& process : elaborated.design->processes()) {
+        if (!std::string_view { process.name }.starts_with(
+                "reuse_top.first_leaf.")) {
+            continue;
+        }
+        for (const auto& operation : process.operations) {
+            const auto* values = fsim::runtime::simir::operation_group_if<
+                fsim::runtime::simir::ValueOperationGroup>(&operation);
+            dynamic_part_insert |= values != nullptr
+                && std::holds_alternative<
+                    fsim::runtime::simir::DynamicPartInsert>(
+                    values->storage);
+        }
+    }
+    assert(dynamic_part_insert);
+    const auto secondary_process = [&](const std::string_view name) {
+        return std::ranges::find_if(
+            elaborated.design->processes(),
+            [&](const auto& process) {
+                return process.name == name;
+            });
+    };
+    const auto first_secondary = secondary_process(
+        "reuse_top.first_leaf.concurrent_1");
+    const auto second_secondary = secondary_process(
+        "reuse_top.second_leaf.concurrent_1");
+    assert(first_secondary != elaborated.design->processes().end());
+    assert(second_secondary != elaborated.design->processes().end());
+    assert(!first_secondary->debug_locals.empty());
+    assert(first_secondary->debug_locals.size()
+           == second_secondary->debug_locals.size());
+    for (std::size_t index { };
+         index < first_secondary->debug_locals.size(); ++index) {
+        const auto& original = first_secondary->debug_locals[index];
+        const auto& replayed = second_secondary->debug_locals[index];
+        assert(original.name == replayed.name);
+        assert(original.register_id == replayed.register_id);
+        assert(original.type_name == replayed.type_name);
+    }
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto check_value = [&](const std::string_view name,
+                                 const std::string_view expected) {
+        const auto signal = elaborated.design->find_signal(name);
+        assert(signal);
+        assert(interpreter->signal_value(*signal).to_msb_string()
+               == expected);
+    };
+    check_value("same_first", "0110");
+    check_value("same_second", "0110");
+    check_value("different_generic", "1000");
+    check_value("aliased_inputs", "0000");
+    check_value("secondary_first", "0110");
+    check_value("secondary_second", "0110");
+    check_value("secondary_different", "1000");
+    check_value("secondary_aliased", "0000");
+}
+
 void test_vhdl_interface_function_generics()
 {
+    test_vhdl_concurrent_pure_process_reuse();
     test_vhdl_pure_packed_function_fold();
     test_vhdl_local_integer_array_callable_generic_fold();
     test_vhdl_constant_initializer_preserves_mismatched_packed_bounds();

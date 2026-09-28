@@ -934,6 +934,29 @@ private:
     void set_resolution(SignalId signal, ResolutionKind resolution);
     void validate_process_drivers();
     void canonicalize_process_operations(Process& process);
+    [[nodiscard]] std::optional<Process>
+    lower_cached_vhdl_concurrent_statement(
+        const semantic::vhdl::Unit& entity,
+        const semantic::vhdl::Unit& owner,
+        const semantic::SpecializedHirUnit& specialized,
+        Lowerer& lowerer,
+        semantic::StatementId statement,
+        std::string_view path,
+        std::size_t order);
+
+    struct ConcurrentProcessTemplate {
+        semantic::UnitId unit;
+        semantic::StatementId statement;
+        semantic::SpecializedHirOverlay overlay;
+        std::string language_standard;
+        std::string compatibility_profile;
+        std::string hierarchy;
+        Process process;
+        std::uint32_t callable_invocation_before { };
+        std::uint32_t callable_invocation_after { };
+        std::vector<std::pair<semantic::DeclarationId, SignalId>> formals;
+        std::vector<bool> read_only_roles;
+    };
 
     struct ProcessOperationGroupingKey {
         std::size_t operation_count { };
@@ -1281,6 +1304,11 @@ private:
     std::map<ProcessOperationGroupingKey, std::vector<ProcessId>>
         process_operation_representatives_;
     OperationList::Storage operation_scratch_;
+    std::vector<ConcurrentProcessTemplate> concurrent_process_templates_;
+    std::size_t concurrent_template_misses_ { };
+    std::size_t concurrent_template_hits_ { };
+    std::size_t concurrent_template_rejections_ { };
+    std::uint64_t concurrent_template_lower_cpu_ns_ { };
 };
 
 } // namespace fsim::elaboration

@@ -4,19 +4,27 @@
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -284,6 +292,102 @@ struct LinkBundleBuilder {
         return CompiledDesign { std::move(model),
             std::move(systemverilog), std::move(vhdl_hir) };
     }
+};
+
+class ScopedEnvironment final {
+public:
+    ScopedEnvironment(const std::string& name, const std::string& value)
+        : name_ { name }
+    {
+        if (const auto* previous = std::getenv(name_.c_str())) {
+            previous_ = previous;
+        }
+#if defined(_WIN32)
+        assert(::_putenv_s(name_.c_str(), value.c_str()) == 0);
+#else
+        assert(::setenv(name_.c_str(), value.c_str(), 1) == 0);
+#endif
+    }
+
+    ScopedEnvironment(const ScopedEnvironment&) = delete;
+    ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
+
+    ~ScopedEnvironment()
+    {
+        if (previous_) {
+#if defined(_WIN32)
+            (void)::_putenv_s(name_.c_str(), previous_->c_str());
+#else
+            (void)::setenv(name_.c_str(), previous_->c_str(), 1);
+#endif
+        } else {
+#if defined(_WIN32)
+            (void)::_putenv_s(name_.c_str(), "");
+#else
+            (void)::unsetenv(name_.c_str());
+#endif
+        }
+    }
+
+private:
+    std::string name_;
+    std::optional<std::string> previous_;
+};
+
+class ScopedStderrCapture final {
+public:
+    ScopedStderrCapture()
+        : output_ { std::tmpfile() }
+    {
+        assert(output_ != nullptr);
+        assert(std::fflush(stderr) == 0);
+#if defined(_WIN32)
+        descriptor_ = ::_fileno(stderr);
+        saved_descriptor_ = ::_dup(descriptor_);
+        assert(saved_descriptor_ >= 0);
+        assert(::_dup2(::_fileno(output_), descriptor_) == 0);
+#else
+        descriptor_ = ::fileno(stderr);
+        saved_descriptor_ = ::dup(descriptor_);
+        assert(saved_descriptor_ >= 0);
+        assert(::dup2(::fileno(output_), descriptor_) >= 0);
+#endif
+    }
+
+    ScopedStderrCapture(const ScopedStderrCapture&) = delete;
+    ScopedStderrCapture& operator=(const ScopedStderrCapture&) = delete;
+
+    ~ScopedStderrCapture()
+    {
+        assert(std::fflush(stderr) == 0);
+#if defined(_WIN32)
+        (void)::_dup2(saved_descriptor_, descriptor_);
+        (void)::_close(saved_descriptor_);
+#else
+        (void)::dup2(saved_descriptor_, descriptor_);
+        (void)::close(saved_descriptor_);
+#endif
+        std::fclose(output_);
+    }
+
+    [[nodiscard]] std::string contents()
+    {
+        assert(std::fflush(stderr) == 0);
+        assert(std::fflush(output_) == 0);
+        assert(std::fseek(output_, 0, SEEK_SET) == 0);
+        std::string result;
+        std::array<char, 256> buffer { };
+        while (const auto count = std::fread(
+                   buffer.data(), 1U, buffer.size(), output_)) {
+            result.append(buffer.data(), count);
+        }
+        return result;
+    }
+
+private:
+    std::FILE* output_ { };
+    int descriptor_ { -1 };
+    int saved_descriptor_ { -1 };
 };
 
 CompiledDesign make_compiled_design()
@@ -7318,6 +7422,9 @@ void test_specialized_hir_vhdl_packed_array_projection()
         "wrong_outer_t", 2, 0, 3);
     const auto wrong_element_type = array_type(
         "wrong_element_t", 1, 0, 2);
+    const auto memo_array_type = array_type("memo_array_t", 127, 0, 3);
+    const auto budget_array_type = array_type(
+        "budget_array_t", 4095, 0, 3);
     const auto subtype = [&](const TypeId type, const std::string& name) {
         vhdl::SubtypeIndication result;
         result.type_mark.target = type;
@@ -7434,6 +7541,15 @@ void test_specialized_hir_vhdl_packed_array_projection()
     const auto incomplete_call = add_array_function(
         "make_incomplete", packed_array_type, "rom_t",
         packed_array_type, 4, false, false);
+    const auto memo_array_call = add_array_function(
+        "make_memo_array", memo_array_type, "memo_array_t",
+        memo_array_type, 4, true, false);
+    const auto memo_incomplete_call = add_array_function(
+        "make_memo_incomplete", memo_array_type, "memo_array_t",
+        memo_array_type, 4, false, false);
+    const auto budget_array_call = add_array_function(
+        "make_budget_array", budget_array_type, "budget_array_t",
+        budget_array_type, 4, true, false);
 
     const auto rom = add_declaration(DeclarationKind::constant,
         vhdl::DeclarationForm::constant, "ROM", packed_array_call);
@@ -7457,6 +7573,54 @@ void test_specialized_hir_vhdl_packed_array_projection()
         &vhdl::Declaration::id);
     incomplete_rom_record->declared_type = packed_array_type;
     builder.vhdl_unit(unit).declarations.push_back(incomplete_rom);
+    const auto memo_rom = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "MEMO_ROM", memo_array_call);
+    auto memo_rom_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), memo_rom,
+        &vhdl::Declaration::id);
+    memo_rom_record->declared_type = memo_array_type;
+    builder.vhdl_unit(unit).declarations.push_back(memo_rom);
+    const auto memo_incomplete_rom = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "MEMO_INCOMPLETE_ROM", memo_incomplete_call);
+    auto memo_incomplete_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), memo_incomplete_rom,
+        &vhdl::Declaration::id);
+    memo_incomplete_record->declared_type = memo_array_type;
+    builder.vhdl_unit(unit).declarations.push_back(memo_incomplete_rom);
+    const auto budget_rom = add_declaration(
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        "BUDGET_ROM", budget_array_call);
+    auto budget_rom_record = std::ranges::find(
+        builder.vhdl_hir.mutable_declarations(), budget_rom,
+        &vhdl::Declaration::id);
+    budget_rom_record->declared_type = budget_array_type;
+    builder.vhdl_unit(unit).declarations.push_back(budget_rom);
+
+    const auto budget_array_read = [&]() {
+        const auto name = add_expression(vhdl::ExpressionKind::name,
+            "BUDGET_ROM", { }, budget_rom);
+        return add_expression(vhdl::ExpressionKind::index, "index",
+            { name, literal(0) });
+    };
+    std::vector<ExpressionId> budget_terms;
+    budget_terms.reserve(256U);
+    for (std::size_t index { }; index < 256U; ++index) {
+        budget_terms.push_back(budget_array_read());
+    }
+    while (budget_terms.size() > 1U) {
+        std::vector<ExpressionId> next_terms;
+        next_terms.reserve(budget_terms.size() / 2U);
+        for (std::size_t index { }; index < budget_terms.size();
+             index += 2U) {
+            next_terms.push_back(add_expression(
+                vhdl::ExpressionKind::binary, "xor",
+                { budget_terms[index], budget_terms[index + 1U] }));
+        }
+        budget_terms = std::move(next_terms);
+    }
+    const auto budget_expression = budget_terms.front();
 
     auto design = builder.finish();
     assert(design.valid());
@@ -7495,6 +7659,125 @@ void test_specialized_hir_vhdl_packed_array_projection()
         incomplete_call));
     assert(!specialized->evaluate_vhdl_constant_expression(
         packed_array_call));
+
+    std::optional<SpecializedHirVhdlPackedArrayValue> first_memoized;
+    std::optional<SpecializedHirVhdlPackedArrayValue> second_memoized;
+    std::optional<SpecializedHirVhdlPackedArrayValue> overlay_memoized;
+    std::optional<SpecializedHirVhdlPackedArrayValue> guarded_memoized;
+    bool validated_ok { };
+    bool units_ok { };
+    bool replacement_guard_exercised { };
+    bool incomplete_result_rejected { };
+    bool budget_warm_succeeded { };
+    bool memoized_budget_failed { };
+    bool uncached_budget_failed { };
+    std::string memo_profile;
+    {
+        ScopedStderrCapture capture;
+        {
+            ScopedEnvironment profile {
+                "FSIM_PROFILE_PHASES", "p96-test"
+            };
+            {
+                const auto validated = validate_compiled_design(design);
+                validated_ok = validated.has_value();
+                if (validated) {
+                    const auto first = make_specialized_hir_unit(
+                        *validated, unit, actuals);
+                    const auto second = make_specialized_hir_unit(
+                        *validated, unit, actuals);
+                    units_ok = first.has_value() && second.has_value();
+                    if (first && second) {
+                        first_memoized
+                            = first->evaluate_vhdl_packed_array_declaration(
+                                memo_rom);
+                        second_memoized
+                            = second->evaluate_vhdl_packed_array_declaration(
+                                memo_rom);
+
+                        const std::array<SpecializedHirNamedIdentity, 1>
+                            hierarchy_identities {{
+                                { "memo-scope", "1" }
+                            }};
+                        const auto different_overlay
+                            = second->with_hierarchy_identities(
+                                hierarchy_identities);
+                        overlay_memoized
+                            = different_overlay
+                                  .evaluate_vhdl_packed_array_declaration(
+                                      memo_rom);
+
+                        auto replacement_unit
+                            = make_specialized_hir_unit(
+                                *validated, unit, actuals);
+                        const auto original
+                            = design.find_declaration(incomplete_rom);
+                        if (replacement_unit && original
+                            && original->vhdl != nullptr) {
+                            auto replacement = *original->vhdl;
+                            if (replacement_unit->replace(
+                                    std::move(replacement))) {
+                                replacement_guard_exercised = true;
+                                guarded_memoized
+                                    = replacement_unit
+                                          ->evaluate_vhdl_packed_array_declaration(
+                                              memo_rom);
+                            }
+                        }
+
+                        incomplete_result_rejected
+                            = !first->evaluate_vhdl_packed_array_declaration(
+                                memo_incomplete_rom)
+                            && !first->evaluate_vhdl_packed_array_declaration(
+                                memo_incomplete_rom);
+                        const auto budget_array
+                            = first->evaluate_vhdl_packed_array_declaration(
+                                budget_rom);
+                        budget_warm_succeeded = budget_array
+                            && budget_array->elements.size() == 4096U;
+                        if (budget_warm_succeeded) {
+                            memoized_budget_failed
+                                = !first->evaluate_vhdl_constant_expression(
+                                    budget_expression);
+                            const auto uncached
+                                = make_specialized_hir_unit(
+                                    design, unit, actuals);
+                            uncached_budget_failed = uncached
+                                && !uncached->evaluate_vhdl_constant_expression(
+                                    budget_expression);
+                        }
+                    }
+                }
+            }
+        }
+        memo_profile = capture.contents();
+    }
+    assert(validated_ok && units_ok && replacement_guard_exercised
+        && incomplete_result_rejected && budget_warm_succeeded
+        && memoized_budget_failed && uncached_budget_failed);
+    assert(first_memoized && second_memoized && overlay_memoized
+        && guarded_memoized);
+    assert(first_memoized->elements.size() == 128U);
+    assert(*second_memoized == *first_memoized);
+    assert(*overlay_memoized == *first_memoized);
+    assert(*guarded_memoized == *first_memoized);
+    const auto memo_summary = memo_profile.find(
+        "FSIM_VHDL_INITIALIZER_MEMO hits=");
+    assert(memo_summary != std::string::npos);
+    unsigned long long memo_hits { };
+    unsigned long long memo_misses { };
+    unsigned long long memo_admitted { };
+    unsigned long long replayed_work { };
+    std::size_t memo_entries { };
+    assert(std::sscanf(memo_profile.c_str() + memo_summary,
+               "FSIM_VHDL_INITIALIZER_MEMO hits=%llu misses=%llu "
+               "admitted=%llu replayed_work=%llu entries=%zu",
+               &memo_hits, &memo_misses, &memo_admitted,
+               &replayed_work, &memo_entries)
+        == 5);
+    assert(memo_hits > 1U && memo_misses > 6U);
+    assert(memo_admitted == 3U && memo_entries == 3U);
+    assert(replayed_work >= 60U * 1024U * 1024U);
 }
 
 void test_compiled_design_normalization()
@@ -8246,6 +8529,44 @@ void test_compiled_design_indexed_lookup_contract()
     assert(scoped_vhdl);
     assert(std::ranges::find(*scoped_vhdl, vhdl_declaration.id)
         != scoped_vhdl->end());
+    const auto named_vhdl = design.vhdl_declarations_named_in_scope(
+        vhdl_declaration.scope, "PAYLOAD");
+    assert(named_vhdl && named_vhdl->size() == 1U);
+    assert(named_vhdl->front() == vhdl_declaration.id);
+    const auto missing_named_vhdl
+        = design.vhdl_declarations_named_in_scope(
+            vhdl_declaration.scope, "missing");
+    assert(missing_named_vhdl && missing_named_vhdl->empty());
+    auto overlay = make_specialized_hir_unit(
+        *validated, vhdl_unit,
+        std::span<const SpecializedHirActualIdentity> { });
+    assert(overlay);
+    auto renamed_declaration = vhdl_declaration;
+    renamed_declaration.name = "Renamed_Payload";
+    assert(overlay->replace(std::move(renamed_declaration)));
+    const CompiledDesignResolver overlay_resolver {
+        design, vhdl_unit, &*overlay
+    };
+    vhdl::Name renamed_name;
+    renamed_name.spelling = "rEnAmEd_pAyLoAd";
+    renamed_name.canonical = renamed_name.spelling;
+    const auto immutable_index_miss
+        = design.vhdl_declarations_named_in_scope(
+            vhdl_declaration.scope, renamed_name.spelling);
+    assert(immutable_index_miss && immutable_index_miss->empty());
+    assert(overlay_resolver.resolve_vhdl(
+        renamed_name, vhdl_declaration.scope).unique()
+        == vhdl_declaration.id);
+    vhdl::Name original_name;
+    original_name.spelling = "payload";
+    original_name.canonical = original_name.spelling;
+    assert(overlay_resolver.resolve_vhdl(
+        original_name, vhdl_declaration.scope).status
+        == CompiledResolutionStatus::not_found);
+    assert(!design.vhdl_declarations_named_in_scope(
+        ScopeId { }, "payload"));
+    assert(!design.vhdl_declarations_named_in_scope(
+        ScopeId::from_index(1000U), "payload"));
     assert(!design.vhdl_declarations_in_scope(ScopeId { }));
     assert(!design.vhdl_declarations_in_scope(
         ScopeId::from_index(1000)));
@@ -8311,13 +8632,25 @@ void test_compiled_design_indexed_lookup_contract()
     auto copied = design;
     const auto copied_id = copied.systemverilog_hir.declarations().front().id;
     const auto copied_vhdl_scope = vhdl_declaration.scope;
+    const auto copied_vhdl_declaration_id = vhdl_declaration.id;
     assert(copied.vhdl_declarations_in_scope(copied_vhdl_scope));
+    const auto copied_named_vhdl
+        = copied.vhdl_declarations_named_in_scope(
+            copied_vhdl_scope, "payload");
+    assert(copied_named_vhdl
+        && copied_named_vhdl->front() == copied_vhdl_declaration_id);
     assert(copied.find_declaration(copied_id)->systemverilog
         == &copied.systemverilog_hir.declarations().front());
     CompiledDesign copy_assigned;
     copy_assigned = design;
     assert(copy_assigned.vhdl_declarations_in_scope(
         copied_vhdl_scope));
+    const auto copy_assigned_named_vhdl
+        = copy_assigned.vhdl_declarations_named_in_scope(
+            copied_vhdl_scope, "payload");
+    assert(copy_assigned_named_vhdl
+        && copy_assigned_named_vhdl->front()
+            == copied_vhdl_declaration_id);
     assert(copy_assigned.find_declaration(copied_id)->systemverilog
         == &copy_assigned.systemverilog_hir.declarations().front());
     design = CompiledDesign { };
@@ -8325,12 +8658,23 @@ void test_compiled_design_indexed_lookup_contract()
         == &copied.systemverilog_hir.declarations().front());
     auto moved = std::move(copied);
     assert(moved.vhdl_declarations_in_scope(copied_vhdl_scope));
+    const auto moved_named_vhdl
+        = moved.vhdl_declarations_named_in_scope(
+            copied_vhdl_scope, "payload");
+    assert(moved_named_vhdl
+        && moved_named_vhdl->front() == copied_vhdl_declaration_id);
     assert(moved.find_declaration(copied_id)->systemverilog
         == &moved.systemverilog_hir.declarations().front());
     CompiledDesign move_assigned;
     move_assigned = std::move(copy_assigned);
     assert(move_assigned.vhdl_declarations_in_scope(
         copied_vhdl_scope));
+    const auto move_assigned_named_vhdl
+        = move_assigned.vhdl_declarations_named_in_scope(
+            copied_vhdl_scope, "payload");
+    assert(move_assigned_named_vhdl
+        && move_assigned_named_vhdl->front()
+            == copied_vhdl_declaration_id);
     assert(move_assigned.find_declaration(copied_id)->systemverilog
         == &move_assigned.systemverilog_hir.declarations().front());
 }
@@ -9135,6 +9479,24 @@ void test_vhdl_builtin_std_logic_1164_provenance()
 void test_vhdl_package_member_index_contract()
 {
     auto fixture = make_vhdl_package_member_index_fixture();
+    const auto scoped_member
+        = fixture.design.vhdl_declarations_named_in_scope(
+            fixture.scope, "mEmBeR_nAmE");
+    assert(scoped_member && scoped_member->size() == 1U);
+    assert(scoped_member->front() == fixture.direct_member);
+    const auto scoped_extended
+        = fixture.design.vhdl_declarations_named_in_scope(
+            fixture.scope, "\\Case_Sensitive\\");
+    assert(scoped_extended && scoped_extended->size() == 1U);
+    assert(scoped_extended->front() == fixture.extended_member);
+    const auto wrong_scoped_extended
+        = fixture.design.vhdl_declarations_named_in_scope(
+            fixture.scope, "\\case_sensitive\\");
+    assert(wrong_scoped_extended && wrong_scoped_extended->empty());
+    const auto missing_scoped_member
+        = fixture.design.vhdl_declarations_named_in_scope(
+            fixture.scope, "missing");
+    assert(missing_scoped_member && missing_scoped_member->empty());
     const auto named_types
         = fixture.design.vhdl_type_declarations_named("sTaTe_TyPe");
     assert(named_types && named_types->size() == 1U);
@@ -9177,17 +9539,40 @@ void test_vhdl_package_member_index_contract()
     const auto indexed = indexed_resolver.resolve_vhdl_package_members(
         qualified_name, fixture.scope).unique();
     assert(indexed && indexed->member == fixture.direct_member);
+    vhdl::Name absent_member_name;
+    absent_member_name.spelling = "Package_Index.missing";
+    absent_member_name.canonical = absent_member_name.spelling;
+    std::size_t predicate_calls { };
+    const auto absent_member = indexed_resolver.resolve_vhdl_package_members(
+        absent_member_name, fixture.scope,
+        [&](const CompiledDeclarationView&) {
+            ++predicate_calls;
+            return true;
+        });
+    assert(absent_member.status == CompiledResolutionStatus::not_found);
+    assert(absent_member.candidates.empty() && predicate_calls == 0U);
 
     auto stale = fixture.design;
     stale.mutable_vhdl().mutable_units().front().standard = "2019";
+    assert(!stale.vhdl_declarations_named_in_scope(
+        fixture.scope, "Member_Name"));
     assert(!stale.vhdl_package_members("Member_Name"));
     assert(!stale.vhdl_type_declarations_named("State_Type"));
     const CompiledDesignResolver fallback_resolver {
         stale, fixture.package
     };
+    vhdl::Name stale_scope_name;
+    stale_scope_name.spelling = "mEmBeR_nAmE";
+    stale_scope_name.canonical = stale_scope_name.spelling;
+    const auto stale_scope_fallback
+        = fallback_resolver.resolve_vhdl(stale_scope_name, fixture.scope);
+    assert(stale_scope_fallback.unique() == fixture.direct_member);
     const auto fallback = fallback_resolver.resolve_vhdl_package_members(
         qualified_name, fixture.scope).unique();
     assert(fallback && fallback->member == fixture.direct_member);
+    const auto absent_fallback = fallback_resolver.resolve_vhdl_package_members(
+        absent_member_name, fixture.scope);
+    assert(absent_fallback.status == CompiledResolutionStatus::not_found);
     stale.refresh_lookup_indexes();
     assert_member(stale, "MEMBER_NAME", fixture.direct_member);
 
@@ -9372,6 +9757,203 @@ void test_vhdl_package_member_index_contract()
         == import_fixture.first_member);
     assert(stale_imported.candidates[1].member
         == import_fixture.second_member);
+
+    // A context diamond must visit its shared child once per branch, while
+    // the back edge to the active root must not recurse indefinitely.
+    LinkBundleBuilder context_builder { "context-diamond.vhd" };
+    const auto diamond_package = context_builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Diamond_Package");
+    const auto package_scope
+        = context_builder.model.units()[diamond_package.value()].scope;
+    const auto diamond_member = context_builder.model.add_declaration(
+        package_scope, DeclarationKind::constant, "Diamond_Item",
+        context_builder.source, context_builder.origin);
+    vhdl::Declaration diamond_declaration;
+    diamond_declaration.id = diamond_member;
+    diamond_declaration.scope = package_scope;
+    diamond_declaration.form = vhdl::DeclarationForm::constant;
+    diamond_declaration.name = "Diamond_Item";
+    diamond_declaration.source = context_builder.source;
+    diamond_declaration.origin = context_builder.origin;
+    context_builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(diamond_declaration));
+    context_builder.vhdl_unit(diamond_package).declarations.push_back(
+        diamond_member);
+    const auto root_context = context_builder.add_vhdl_unit(
+        UnitKind::vhdl_context, vhdl::UnitKind::context, "Root_Context");
+    const auto left_context = context_builder.add_vhdl_unit(
+        UnitKind::vhdl_context, vhdl::UnitKind::context, "Left_Context");
+    const auto right_context = context_builder.add_vhdl_unit(
+        UnitKind::vhdl_context, vhdl::UnitKind::context, "Right_Context");
+    const auto shared_context = context_builder.add_vhdl_unit(
+        UnitKind::vhdl_context, vhdl::UnitKind::context, "Shared_Context");
+    const auto diamond_owner = context_builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Diamond_Owner");
+    const auto add_context_reference = [&](const UnitId from,
+                                           const std::string_view to) {
+        vhdl::ContextItem reference;
+        reference.kind = vhdl::ContextKind::context_reference;
+        reference.source = context_builder.source;
+        reference.selected_names.push_back(vhdl_name(
+            "work." + std::string { to }, context_builder.source));
+        context_builder.vhdl_unit(from).context.push_back(
+            std::move(reference));
+    };
+    add_context_reference(diamond_owner, "Root_Context");
+    add_context_reference(root_context, "Left_Context");
+    add_context_reference(root_context, "Right_Context");
+    add_context_reference(left_context, "Shared_Context");
+    add_context_reference(right_context, "Shared_Context");
+    add_context_reference(shared_context, "Root_Context");
+    vhdl::ContextItem diamond_use;
+    diamond_use.kind = vhdl::ContextKind::use_clause;
+    diamond_use.source = context_builder.source;
+    diamond_use.selected_names.push_back(vhdl_name(
+        "work.Diamond_Package.all", context_builder.source));
+    context_builder.vhdl_unit(shared_context).context.push_back(
+        std::move(diamond_use));
+    const auto diamond_scope
+        = context_builder.model.units()[diamond_owner.value()].scope;
+    const auto diamond_design = context_builder.finish();
+    const CompiledDesignResolver diamond_resolver {
+        diamond_design, diamond_owner
+    };
+    vhdl::Name diamond_name;
+    diamond_name.spelling = "Diamond_Item";
+    diamond_name.canonical = diamond_name.spelling;
+    std::size_t diamond_visits { };
+    const auto diamond_result = diamond_resolver.resolve_vhdl_package_members(
+        diamond_name, diamond_scope,
+        [&](const CompiledDeclarationView& candidate) {
+            assert(candidate.vhdl != nullptr);
+            ++diamond_visits;
+            return true;
+        });
+    assert(diamond_visits == 2U);
+    const auto unique_diamond = diamond_result.unique();
+    assert(unique_diamond && unique_diamond->member == diamond_member);
+}
+
+void test_compiled_vhdl_scope_name_index_resolution()
+{
+    LinkBundleBuilder builder { "resolver-vhdl-scope-name-index.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Scope_Names");
+    const auto root_scope = builder.model.units()[unit.value()].scope;
+    const auto nested_scope = builder.model.add_scope(
+        unit, root_scope, "nested", builder.source, builder.origin);
+    const auto add_declaration = [&](const ScopeId scope,
+                                     const std::string_view name,
+                                     const DeclarationKind kind,
+                                     const vhdl::DeclarationForm form) {
+        const auto id = builder.model.add_declaration(
+            scope, kind, std::string { name }, builder.source,
+            builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = form;
+        declaration.name = name;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        if (scope == root_scope) {
+            builder.vhdl_unit(unit).declarations.push_back(id);
+        }
+        return id;
+    };
+    const auto first_overload = add_declaration(root_scope,
+        "Overloaded", DeclarationKind::function,
+        vhdl::DeclarationForm::function);
+    const auto second_overload = add_declaration(root_scope,
+        "OVERLOADED", DeclarationKind::function,
+        vhdl::DeclarationForm::function);
+    const auto ancestor = add_declaration(root_scope, "Ancestor",
+        DeclarationKind::constant, vhdl::DeclarationForm::constant);
+    const auto nested_overload = add_declaration(nested_scope,
+        "overloaded", DeclarationKind::constant,
+        vhdl::DeclarationForm::constant);
+    const auto extended = add_declaration(root_scope,
+        "\\CaseSensitive\\", DeclarationKind::constant,
+        vhdl::DeclarationForm::constant);
+    auto design = builder.finish();
+
+    const auto overloads = design.vhdl_declarations_named_in_scope(
+        root_scope, "oVeRlOaDeD");
+    assert(overloads && overloads->size() == 2U);
+    assert((*overloads)[0] == first_overload);
+    assert((*overloads)[1] == second_overload);
+    const auto nested_overloads = design.vhdl_declarations_named_in_scope(
+        nested_scope, "OVERLOADED");
+    assert(nested_overloads && nested_overloads->size() == 1U);
+    assert(nested_overloads->front() == nested_overload);
+    const auto exact_extended = design.vhdl_declarations_named_in_scope(
+        root_scope, "\\CaseSensitive\\");
+    assert(exact_extended && exact_extended->size() == 1U);
+    assert(exact_extended->front() == extended);
+    const auto wrong_extended = design.vhdl_declarations_named_in_scope(
+        root_scope, "\\casesensitive\\");
+    assert(wrong_extended && wrong_extended->empty());
+
+    const CompiledDesignResolver resolver { design, unit };
+    vhdl::Name overload_name;
+    overload_name.spelling = "oVeRlOaDeD";
+    overload_name.canonical = overload_name.spelling;
+    const auto ambiguous = resolver.resolve_vhdl(
+        overload_name, root_scope);
+    assert(ambiguous.status == CompiledResolutionStatus::ambiguous);
+    assert((ambiguous.candidates
+        == std::vector<DeclarationId> {
+            first_overload, second_overload }));
+    std::vector<DeclarationId> predicate_order;
+    const auto filtered = resolver.resolve_vhdl(
+        overload_name, root_scope,
+        [&](const CompiledDeclarationView& candidate) {
+            assert(candidate.vhdl != nullptr);
+            predicate_order.push_back(candidate.vhdl->id);
+            return candidate.vhdl->id == second_overload;
+        });
+    assert((predicate_order
+        == std::vector<DeclarationId> {
+            first_overload, second_overload }));
+    assert(filtered.unique() == second_overload);
+    const auto nested = resolver.resolve_vhdl(
+        overload_name, nested_scope);
+    assert(nested.unique() == nested_overload);
+
+    vhdl::Name ancestor_name;
+    ancestor_name.spelling = "aNcEsToR";
+    ancestor_name.canonical = ancestor_name.spelling;
+    const auto inherited = resolver.resolve_vhdl(
+        ancestor_name, nested_scope);
+    assert(inherited.unique() == ancestor);
+
+    vhdl::Name extended_name;
+    extended_name.spelling = "\\CaseSensitive\\";
+    extended_name.canonical = extended_name.spelling;
+    assert(resolver.resolve_vhdl(extended_name, root_scope).unique()
+        == extended);
+    extended_name.spelling = "\\casesensitive\\";
+    extended_name.canonical = extended_name.spelling;
+    assert(resolver.resolve_vhdl(extended_name, root_scope).status
+        == CompiledResolutionStatus::not_found);
+
+    auto stale = design;
+    stale.mutable_vhdl().mutable_declarations().front().name
+        = "Renamed_Overload";
+    assert(!stale.vhdl_declarations_named_in_scope(
+        root_scope, "renamed_overload"));
+    const CompiledDesignResolver stale_resolver { stale, unit };
+    vhdl::Name renamed_name;
+    renamed_name.spelling = "rEnAmEd_oVeRlOaD";
+    renamed_name.canonical = renamed_name.spelling;
+    assert(stale_resolver.resolve_vhdl(renamed_name, root_scope).unique()
+        == first_overload);
+    const auto stale_original = stale_resolver.resolve_vhdl(
+        overload_name, root_scope);
+    assert(stale_original.unique() == second_overload);
 }
 
 void test_vhdl_architecture_compatibility_profile_pairing()
@@ -9545,4 +10127,5 @@ void run_compiled_design_tests()
     test_compiled_design_indexed_lookup_contract();
     test_vhdl_primary_unit_index_contract();
     test_vhdl_package_member_index_contract();
+    test_compiled_vhdl_scope_name_index_resolution();
 }

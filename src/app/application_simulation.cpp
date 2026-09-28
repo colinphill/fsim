@@ -233,15 +233,25 @@ runtime::RunResult Simulation::run(
     if (until && *until < now()) {
         throw std::invalid_argument("run time limit is before the current time");
     }
+    const bool profile_phase_split
+        = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    const auto profile_run_begin = profile_phase_split
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point { };
+    auto background_barrier_elapsed
+        = std::chrono::steady_clock::duration { };
 #if defined(FSIM_HAS_LLVM)
     if (!impl_->jit_overlap_startup) {
         await_native_compilation();
     }
     // A bounded run that cannot amortize large-kernel lowering should finish
     // without launching it (or waiting for it during destruction). Unbounded
-    // and longer runs promote the background tier while simulation advances.
+    // and longer runs request the background tier. Wait for its unconditional
+    // jobs below; adaptive jobs can still promote while simulation advances.
     constexpr SimulationTick minimum_background_jit_run_ticks = 2'000'000U;
-    if (!until || *until - now() > minimum_background_jit_run_ticks) {
+    const bool long_run = !until
+        || *until - now() > minimum_background_jit_run_ticks;
+    if (long_run) {
         impl_->request_background_jit_compilation();
     }
     // Diagnostic gate for measuring the warm-cache cost of publishing every
@@ -258,7 +268,40 @@ runtime::RunResult Simulation::run(
         impl_->start_vpi();
         impl_->start_systemc();
         impl_->refresh_observation_hooks();
+#if defined(FSIM_HAS_LLVM)
+        if (long_run) {
+            const auto barrier_begin = profile_phase_split
+                ? std::chrono::steady_clock::now()
+                : std::chrono::steady_clock::time_point { };
+            for (const auto& compilation
+                : impl_->jit_nonadaptive_background_compilations) {
+                static_cast<void>(compilation.get());
+            }
+            impl_->interpreter->materialize_ready_process_executors();
+            if (profile_phase_split) {
+                background_barrier_elapsed
+                    = std::chrono::steady_clock::now() - barrier_begin;
+            }
+        }
+#endif
+        const auto interpreter_begin = profile_phase_split
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point { };
         auto result = impl_->interpreter->run(until);
+        if (profile_phase_split) {
+            const auto milliseconds = [](const auto duration) {
+                return std::chrono::duration<double, std::milli> { duration }
+                    .count();
+            };
+            const auto interpreter_end = std::chrono::steady_clock::now();
+            std::cerr << "fsim-profile: run pre_interpreter_ms="
+                      << milliseconds(interpreter_begin - profile_run_begin)
+                      << " background_barrier_ms="
+                      << milliseconds(background_barrier_elapsed)
+                      << " interpreter_ms="
+                      << milliseconds(interpreter_end - interpreter_begin)
+                      << '\n';
+        }
         if (impl_->vpi_control->state()
             == runtime::SystemVerilogVpiControlState::Finished) {
             const auto final_result = impl_->interpreter->finish();

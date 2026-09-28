@@ -929,11 +929,12 @@ namespace {
         const semantic::CompiledDesign& design,
         const semantic::ScopeId id)
     {
-        const auto scope = std::ranges::find(
-            design.semantics.scopes(), id, &semantic::Scope::id);
-        return scope == design.semantics.scopes().end()
-            ? nullptr
-            : &*scope;
+        const auto& scopes = design.semantics.scopes();
+        if (!id.valid() || id.value() >= scopes.size()) {
+            return nullptr;
+        }
+        const auto& candidate = scopes[id.value()];
+        return candidate.id == id ? &candidate : nullptr;
     }
 
     std::string_view compiled_vhdl_simple_name(
@@ -20140,11 +20141,13 @@ bool HierarchyBuilder::validate_compiled_vhdl_generated_callables(
             expression_span);
         generated_callable_visibility_valid = false;
     };
-    for (const auto& expression : specialization.vhdl_expressions()) {
-        inspect_expression(expression);
-    }
-    for (const auto& expression : compiled_->vhdl_hir.expressions()) {
-        inspect_expression(expression);
+    if (!generated_callables.empty()) {
+        for (const auto& expression : specialization.vhdl_expressions()) {
+            inspect_expression(expression);
+        }
+        for (const auto& expression : compiled_->vhdl_hir.expressions()) {
+            inspect_expression(expression);
+        }
     }
     for (const auto declaration_id : declarations) {
         const auto declaration
@@ -20382,11 +20385,9 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                           lowerer, statement_id)) {
                       return false;
                   }
-                  auto lowered = lowerer.lower_hir_concurrent_statement(
-                      statement_id,
-                      frontend::Language::Vhdl2008,
-                      path,
-                      concurrent_order++);
+                  auto lowered = lower_cached_vhdl_concurrent_statement(
+                      entity, owner, specialized, lowerer,
+                      statement_id, path, concurrent_order++);
                   if (!lowered) {
                       report(
                           "FSIM-ELAB-HIR-001",

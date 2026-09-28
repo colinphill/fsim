@@ -6,6 +6,7 @@
 #include <llvm/IR/IRBuilder.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string_view>
@@ -27,6 +28,16 @@ struct EncodedValue {
     };
 };
 
+struct ConstantPlaneForwarding {
+    std::size_t definition { static_cast<std::size_t>(-1) };
+    bool active { };
+    unsigned stores { };
+    std::array<llvm::ConstantInt*, 4> pending { };
+    std::array<llvm::ConstantInt*, 4> published { };
+    std::size_t published_planes { };
+    std::size_t forwarded_loads { };
+};
+
 struct RegisterSlot {
     llvm::Value* aval_base { };
     llvm::Value* bval_base { };
@@ -39,6 +50,7 @@ struct RegisterSlot {
     runtime::simir::ValueKind kind {
         runtime::simir::ValueKind::logic4
     };
+    ConstantPlaneForwarding* constant_planes { };
 };
 
 struct EncodedBit {
@@ -389,6 +401,7 @@ struct ContainerOperationLowerer {
     void lower(const runtime::simir::ContainerRead&);
     void lower(const runtime::simir::ContainerWrite&);
     void lower(const runtime::simir::WriteContainerObjectElement&);
+    void lower_bound_literal(const runtime::simir::LoadConstant&);
     void lower(const runtime::simir::ContainerStringRead&);
     void lower(const runtime::simir::ContainerStringWrite&);
     void lower(const runtime::simir::ContainerElementRead&);

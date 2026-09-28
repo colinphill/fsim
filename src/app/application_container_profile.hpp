@@ -17,6 +17,7 @@ struct ContainerCallbackProfile {
     std::uint64_t copy_registers { };
     std::uint64_t read_objects { };
     std::uint64_t write_objects { };
+    std::uint64_t bound_literals { };
 
     ~ContainerCallbackProfile()
     {
@@ -29,6 +30,8 @@ struct ContainerCallbackProfile {
                       << " copy_registers=" << copy_registers
                       << " read_objects=" << read_objects
                       << " write_objects=" << write_objects << '\n';
+            std::cerr << "fsim-profile: container bound_literals="
+                      << bound_literals << '\n';
         }
     }
 };

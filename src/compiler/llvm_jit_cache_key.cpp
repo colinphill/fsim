@@ -302,7 +302,8 @@ void add_container_type_key(
     const std::string_view code_coverage_identity,
     const llvm::Triple& target_triple, const llvm::DataLayout& data_layout,
     const std::string_view target_cpu,
-    const std::span<const std::string> target_features)
+    const std::span<const std::string> target_features,
+    const std::span<const runtime::simir::InstructionIndex> bound_literal_sites)
 {
     CacheKeyBuilder builder;
     builder.add("llvm-object-schema", kNativeObjectCacheSchema);
@@ -333,6 +334,10 @@ void add_container_type_key(
     }
 
     builder.add("symbol", symbol);
+    add_key_u64(builder, "bound-literal-count", bound_literal_sites.size());
+    for (const auto instruction : bound_literal_sites) {
+        add_key_u64(builder, "bound-literal-instruction", instruction);
+    }
     add_key_u64(builder, "process-id", process.id);
     builder.add("process-name", process.name);
     builder.add("language-standard", process.language_standard);
@@ -526,7 +531,8 @@ void add_container_type_key(
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     const std::string_view target_cpu,
-    const std::span<const std::string> target_features)
+    const std::span<const std::string> target_features,
+    const std::span<const runtime::simir::InstructionIndex> bound_literal_sites)
 {
     CacheKeyBuilder builder;
     builder.add("llvm-object-schema", kNativeObjectCacheSchema);
@@ -558,6 +564,10 @@ void add_container_type_key(
     builder.add("immutable-design-identity", design_identity);
     builder.add("module-identity", module_identity);
     builder.add("symbol", symbol);
+    add_key_u64(builder, "bound-literal-count", bound_literal_sites.size());
+    for (const auto instruction : bound_literal_sites) {
+        add_key_u64(builder, "bound-literal-instruction", instruction);
+    }
     return builder.finish();
 }
 

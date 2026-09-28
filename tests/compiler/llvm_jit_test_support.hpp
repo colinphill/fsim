@@ -156,6 +156,10 @@ namespace llvm_jit_test_detail {
         std::array<std::uint64_t, 5> container_write_bval { };
         std::uint32_t container_packed_reads { };
         std::uint32_t container_packed_writes { };
+        EncodedSignal bound_literal_value;
+        std::uint32_t bound_literal_process { };
+        std::uint32_t bound_literal_instruction { };
+        std::uint32_t bound_literal_calls { };
         std::uint32_t dynamic_part_signal_reads { };
         std::uint32_t code_coverage_checked_calls { };
         std::uint32_t code_coverage_callback_status { };
@@ -181,6 +185,11 @@ namespace llvm_jit_test_detail {
     };
 
 extern "C" std::uint32_t container_operation_stub(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+        std::uint64_t*, std::uint64_t*);
+
+extern "C" std::uint32_t bound_literal_operation(
         void*, std::uint32_t, std::uint32_t,
         std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
         std::uint64_t*, std::uint64_t*);
@@ -793,6 +802,7 @@ void test_scheduling_differential_at_level(
 void test_control_flow_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_constant_plane_forwarding();
 void test_native_callable_regions();
 void test_checked_integer_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
@@ -815,6 +825,7 @@ void test_native_service_callbacks_at_level(
 void test_signal_waits_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_bound_literal_binding();
 void test_scalar_truth_tables_and_64_bits();
 void test_systemverilog_scalar_transport_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
@@ -859,6 +870,9 @@ void test_fused_dynamic_part_signal_read_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wide_single_bit_dynamic_part_select_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_dynamic_part_select_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wildcard_case_matching_at_level(

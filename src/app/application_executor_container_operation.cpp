@@ -14,7 +14,7 @@ namespace fsim::app::application_detail {
 
 std::uint32_t LlvmProcessExecutor::container_operation(
     void* context,
-    const std::uint32_t process,
+    const std::uint32_t generated_process,
     const std::uint32_t instruction,
     const std::uint64_t input0_aval,
     const std::uint64_t input0_bval,
@@ -36,7 +36,31 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         }
         *result_aval = 0;
         *result_bval = 0;
-        const auto& operation = callback_operation(state, process, instruction);
+        const auto& operation = callback_operation(
+            state, generated_process, instruction);
+        const auto process = state.process->id;
+        if (const auto* literal = fsim::runtime::simir::operation_get_if<
+                runtime::simir::LoadConstant>(&operation)) {
+            const auto known = literal->value.known_unsigned_value();
+            const auto destination = literal->destination;
+            if (!known || literal->value.width() > 64U
+                || destination >= state.executor->layout_.register_widths.size()
+                || state.executor->layout_.register_widths[destination]
+                    != literal->value.width()
+                || (destination < state.process->register_value_kinds.size()
+                    && state.process->register_value_kinds[destination]
+                        != runtime::simir::ValueKind::logic4)) {
+                throw compiler::LlvmJitError {
+                    "compiled bound literal has incompatible instance metadata"
+                };
+            }
+            *result_aval = *known;
+            auto& profile = container_callback_profile();
+            if (profile.enabled) {
+                ++profile.bound_literals;
+            }
+            return 0;
+        }
         if (!fsim::runtime::simir::operation_holds<
                 runtime::simir::ReadContainerObject>(operation)
             && !fsim::runtime::simir::operation_holds<
@@ -998,7 +1022,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     element_value,
                     base,
                     selection,
-                    state.generated_process,
+                    process,
                     instruction,
                     write_element->nonblocking);
             } else {
@@ -1008,7 +1032,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     write_element->signed_index,
                     write_element->linear_index,
                     element_value,
-                    state.generated_process,
+                    process,
                     instruction,
                     write_element->nonblocking);
             }

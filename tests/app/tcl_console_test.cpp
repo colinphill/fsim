@@ -603,7 +603,7 @@ void forced_color_does_not_add_ansi_to_redirected_diagnostics()
 
 } // namespace
 
-int main(const int argc, char** argv)
+int main([[maybe_unused]] const int argc, [[maybe_unused]] char** argv)
 {
 #if !defined(_WIN32)
     if (argc >= 4 && std::string_view { argv[1] } == "--pty-child") {

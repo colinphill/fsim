@@ -3,6 +3,33 @@
 
 namespace fsim::tests::compiler {
 
+namespace llvm_jit_test_detail {
+
+extern "C" std::uint32_t bound_literal_operation(
+    void* opaque,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    std::uint64_t,
+    std::uint64_t,
+    std::uint64_t,
+    std::uint64_t,
+    std::uint64_t* result_aval,
+    std::uint64_t* result_bval)
+{
+  if (opaque == nullptr || result_aval == nullptr || result_bval == nullptr) {
+    return 1U;
+  }
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  *result_aval = runtime.bound_literal_value.aval;
+  *result_bval = runtime.bound_literal_value.bval;
+  runtime.bound_literal_process = process;
+  runtime.bound_literal_instruction = instruction;
+  ++runtime.bound_literal_calls;
+  return 0U;
+}
+
+} // namespace llvm_jit_test_detail
+
 void run_at_level(const JitOptimizationLevel optimization,
                   const std::string_view symbol) {
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
@@ -1235,6 +1262,75 @@ void test_checked_integer_at_level(
       JitGeneratedRuntimeErrorReason::integer_operand_unknown,
       "instruction 1: VHDL integer operand contains an unknown or "
       "high-impedance value");
+
+  const auto make_nested_loop = [&](const std::int32_t initial,
+                                    const std::int64_t upper) {
+    Process process;
+    process.id = 33;
+    process.name = "checked_integer_nested_loop";
+    process.register_count = 6;
+    process.operations = {
+        LoadConstant{0, integer(2)},
+        LoadConstant{2, integer(1)},
+        LoadConstant{3, integer(0)},
+        LoadConstant{4, integer(initial)},
+        Binary{BinaryOperator::not_equal, 5, 0, 3},
+        Branch{5, 6, 15, UnknownBranchPolicy::when_false},
+        ReadSignal{1, 0},
+        Binary{BinaryOperator::not_equal, 5, 1, 3},
+        Branch{5, 9, 13, UnknownBranchPolicy::when_false},
+        IntegerBinary{IntegerBinaryOperator::add, 4, 4, 2},
+        IntegerCheck{4, 0, upper},
+        IntegerBinary{IntegerBinaryOperator::subtract, 1, 1, 2},
+        Jump{7},
+        IntegerBinary{IntegerBinaryOperator::subtract, 0, 0, 2},
+        Jump{4},
+        WriteBlocking{1, 4},
+        Halt{},
+    };
+    return process;
+  };
+  const std::array<std::uint32_t, 2> loop_widths{32, 32};
+  const auto loop_symbol = std::string{symbol_prefix} + "_nested_loop";
+  jit.add_process(loop_symbol, make_nested_loop(0, 5), loop_widths);
+  TestRuntime loop_runtime;
+  loop_runtime.signals[0] = EncodedSignal{2, 0};
+  auto loop_descriptor = abi(loop_runtime);
+  assert(jit.execute(jit.lookup(loop_symbol), loop_descriptor)
+         == JitExecutionStatus::completed);
+  assert((loop_runtime.signals[1] == EncodedSignal{4, 0}));
+
+  const auto range_symbol = std::string{symbol_prefix} + "_loop_range";
+  jit.add_process(range_symbol, make_nested_loop(0, 5), loop_widths);
+  TestRuntime range_runtime;
+  range_runtime.signals[0] = EncodedSignal{3, 0};
+  auto range_descriptor = abi(range_runtime);
+  expect_generated_runtime_error(
+      [&] {
+        (void)jit.execute(jit.lookup(range_symbol), range_descriptor);
+      },
+      10,
+      JitGeneratedRuntimeErrorReason::integer_subtype_range,
+      "instruction 10: VHDL integer subtype range check failed");
+
+  const auto overflow_symbol =
+      std::string{symbol_prefix} + "_loop_overflow";
+  jit.add_process(
+      overflow_symbol,
+      make_nested_loop(std::numeric_limits<std::int32_t>::max() - 1,
+                       std::numeric_limits<std::int32_t>::max()),
+      loop_widths);
+  TestRuntime overflow_runtime;
+  overflow_runtime.signals[0] = EncodedSignal{2, 0};
+  auto overflow_descriptor = abi(overflow_runtime);
+  expect_generated_runtime_error(
+      [&] {
+        (void)jit.execute(jit.lookup(overflow_symbol),
+                          overflow_descriptor);
+      },
+      9,
+      JitGeneratedRuntimeErrorReason::integer_overflow,
+      "instruction 9: VHDL integer arithmetic overflow");
 }
 
 [[nodiscard]] Process make_resumable_process() {
@@ -2308,6 +2404,279 @@ void test_wide_boundary_registers_at_level(
   assert(jit.resume(handle, descriptor, frame, result)
          == JitResumeStatus::completed);
   assert(read_register(4U) == pla_result);
+}
+
+void test_constant_plane_forwarding()
+{
+  LlvmJit jit { LlvmJitOptions { JitOptimizationLevel::o2, { } } };
+  const std::array<std::uint32_t, 3> widths { 1, 8, 8 };
+  const std::array<ValueKind, 3> kinds {
+      ValueKind::logic4, ValueKind::logic4, ValueKind::logic9
+  };
+
+  Process conditional;
+  conditional.id = 1001;
+  conditional.name = "constant_plane_conditional_definitions";
+  conditional.register_count = 2;
+  conditional.operations = {
+      ReadSignal { 0, 0 },
+      Branch { 0, 2, 4, UnknownBranchPolicy::when_false },
+      LoadConstant { 1, PackedLogic4::from_msb_string("00111100") },
+      Jump { 5 },
+      LoadConstant { 1, PackedLogic4::from_msb_string("10100101") },
+      WriteBlocking { 1, 1 },
+      Halt { },
+  };
+  jit.add_process("constant_plane_conditional", conditional, widths, kinds);
+  const auto conditional_handle = jit.lookup("constant_plane_conditional");
+  for (const auto [condition, expected] :
+      { std::pair { 0U, 0xa5U }, std::pair { 1U, 0x3cU } }) {
+    TestRuntime runtime;
+    runtime.signals[0] = { condition, 0 };
+    auto descriptor = abi(runtime);
+    assert(jit.execute(conditional_handle, descriptor)
+        == JitExecutionStatus::completed);
+    assert((runtime.signals[1] == EncodedSignal { expected, 0 }));
+  }
+
+  Process backward;
+  backward.id = 1002;
+  backward.name = "constant_plane_backward_use";
+  backward.register_count = 1;
+  backward.operations = {
+      Jump { 3 },
+      WriteBlocking { 1, 0 },
+      Halt { },
+      LoadConstant { 0, PackedLogic4::from_msb_string("01111110") },
+      Jump { 1 },
+  };
+  jit.add_process("constant_plane_backward", backward, widths, kinds);
+  TestRuntime backward_runtime;
+  auto backward_descriptor = abi(backward_runtime);
+  assert(jit.execute(jit.lookup("constant_plane_backward"),
+      backward_descriptor) == JitExecutionStatus::completed);
+  assert((backward_runtime.signals[1] == EncodedSignal { 0x7e, 0 }));
+
+  Process logic9;
+  logic9.id = 1003;
+  logic9.name = "constant_plane_logic9";
+  logic9.register_count = 1;
+  logic9.register_value_kinds = { ValueKind::logic9 };
+  const auto nine_states = PackedLogic4::from_logic9_msb_string(
+      "U01ZWLH-");
+  logic9.operations = {
+      LoadConstant { 0, nine_states },
+      WriteBlocking { 2, 0 },
+      Halt { },
+  };
+  jit.add_process("constant_plane_logic9", logic9, widths, kinds);
+  TestRuntime logic9_runtime;
+  auto logic9_descriptor = abi(logic9_runtime);
+  assert(jit.execute(jit.lookup("constant_plane_logic9"),
+      logic9_descriptor) == JitExecutionStatus::completed);
+  assert(logic9_runtime.logic9_signals[2] == planes(nine_states));
+}
+
+void test_bound_literal_binding()
+{
+  LlvmJitOptions options { JitOptimizationLevel::o2, { } };
+  options.debug_instrumentation = false;
+  const std::array<std::uint32_t, 1> signal_widths { 8U };
+
+  Process process;
+  process.id = 71U;
+  process.name = "bound_literal_wait_resume";
+  process.register_count = 1U;
+  process.operations = {
+      LoadConstant { 0U, PackedLogic4::from_aval_bval(8U, 0U, 0U) },
+      WaitFor { 3U },
+      WriteBlocking { 0U, 0U },
+      Halt { },
+  };
+  const std::array entry {
+      JitProcessModuleEntry { "bound_literal_wait_resume", &process, { 0U } }
+  };
+
+  LlvmJit jit { options };
+  jit.add_process_module("bound-literal-wait-resume", entry, signal_widths);
+  const auto handle = jit.lookup("bound_literal_wait_resume");
+  const auto layout = jit.frame_layout(handle);
+  assert(layout.register_count == 1U);
+
+  for (const auto [literal, expected] :
+      { std::pair { EncodedSignal { 0xa5U, 0U }, 0xa5U },
+          std::pair { EncodedSignal { 0x3cU, 0U }, 0x3cU } }) {
+    TestRuntime runtime;
+    runtime.bound_literal_value = literal;
+    auto descriptor = abi(runtime);
+    descriptor.container_operation = &bound_literal_operation;
+    std::vector<std::uint64_t> register_aval(layout.register_word_count);
+    std::vector<std::uint64_t> register_bval(layout.register_word_count);
+    std::vector<std::uint8_t> register_initialized(layout.register_count);
+    fsim_jit_frame_v1 frame { };
+    jit.initialize_frame(
+        handle, frame, register_aval, register_bval, register_initialized);
+    auto result = new_resume_result();
+
+    assert(jit.resume(handle, descriptor, frame, result)
+           == JitResumeStatus::wait_for);
+    assert(result.instruction == 1U && frame.program_counter == 2U);
+    assert(runtime.bound_literal_calls == 1U);
+    assert(runtime.bound_literal_process == process.id);
+    assert(runtime.bound_literal_instruction == 0U);
+
+    runtime.bound_literal_value = { 0U, 0U };
+    assert(jit.resume(handle, descriptor, frame, result)
+           == JitResumeStatus::completed);
+    assert(result.instruction == 3U);
+    assert(runtime.bound_literal_calls == 1U);
+    assert((runtime.signals[0] == EncodedSignal { expected, 0U }));
+  }
+
+  const std::array<std::uint32_t, 0> no_signals { };
+  const auto reject_mask = [&](const std::string_view identity,
+                               Process& rejected_process,
+                               std::vector<InstructionIndex> sites,
+                               const std::string_view error) {
+    LlvmJit rejected { options };
+    const std::array rejected_entry { JitProcessModuleEntry {
+        identity, &rejected_process, std::move(sites) } };
+    expect_fatal_error(
+        [&] {
+          rejected.add_process_module(identity, rejected_entry, no_signals);
+        },
+        error);
+  };
+
+  const auto make_literal_process = [](const std::string_view name,
+                                       const PackedLogic4& value) {
+    Process value_process;
+    value_process.id = 72U;
+    value_process.name = name;
+    value_process.register_count = 1U;
+    value_process.operations = { LoadConstant { 0U, value }, Halt { } };
+    return value_process;
+  };
+
+  Process not_a_literal;
+  not_a_literal.id = 73U;
+  not_a_literal.name = "bound_literal_not_load_constant";
+  not_a_literal.operations = { Halt { } };
+  reject_mask("bound_literal_not_load_constant", not_a_literal, { 0U },
+      "bound literal must be a known narrow Logic4 value");
+
+  Process out_of_range;
+  out_of_range.id = 74U;
+  out_of_range.name = "bound_literal_out_of_range";
+  out_of_range.operations = { Halt { } };
+  reject_mask("bound_literal_out_of_range", out_of_range, { 1U },
+      "bound-literal instruction is out of range");
+
+  auto unknown = make_literal_process(
+      "bound_literal_unknown",
+      PackedLogic4::from_aval_bval(8U, 0U, 1U));
+  reject_mask("bound_literal_unknown", unknown, { 0U },
+      "bound literal must be a known narrow Logic4 value");
+
+  auto logic9 = make_literal_process(
+      "bound_literal_logic9", PackedLogic4::from_logic9_msb_string("0"));
+  logic9.register_value_kinds = { ValueKind::logic9 };
+  reject_mask("bound_literal_logic9", logic9, { 0U },
+      "bound literal must be a known narrow Logic4 value");
+
+  auto too_wide = make_literal_process(
+      "bound_literal_too_wide",
+      PackedLogic4::from_msb_string(std::string(65U, '0')));
+  reject_mask("bound_literal_too_wide", too_wide, { 0U },
+      "bound literal must be a known narrow Logic4 value");
+
+  auto malformed_kinds = make_literal_process(
+      "bound_literal_malformed_kinds",
+      PackedLogic4::from_aval_bval(8U, 0U, 0U));
+  malformed_kinds.register_count = 2U;
+  malformed_kinds.register_value_kinds = { ValueKind::logic4 };
+  reject_mask("bound_literal_malformed_kinds", malformed_kinds, { 0U },
+      "bound literal must be a known narrow Logic4 value");
+
+  Process unordered;
+  unordered.id = 75U;
+  unordered.name = "bound_literal_unordered_sites";
+  unordered.register_count = 1U;
+  unordered.operations = {
+      LoadConstant { 0U, PackedLogic4::from_aval_bval(8U, 0U, 0U) },
+      LoadConstant { 0U, PackedLogic4::from_aval_bval(8U, 1U, 0U) },
+      Halt { },
+  };
+  reject_mask("bound_literal_unordered_sites", unordered, { 1U, 0U },
+      "invalid bound-literal module entry");
+  reject_mask("bound_literal_duplicate_sites", unordered, { 0U, 0U },
+      "invalid bound-literal module entry");
+
+  const auto cache_serial = std::chrono::steady_clock::now()
+      .time_since_epoch().count();
+  const auto cache_directory = std::filesystem::temp_directory_path()
+      / ("fsim-bound-literal-cache-" + std::to_string(cache_serial));
+  Process cache_process;
+  cache_process.id = 76U;
+  cache_process.name = "bound_literal_cache_identity";
+  cache_process.register_count = 1U;
+  cache_process.operations = {
+      LoadConstant { 0U, PackedLogic4::from_aval_bval(8U, 0x2bU, 0U) },
+      WriteBlocking { 0U, 0U },
+      Halt { },
+  };
+  const auto verify_cache_identity = [&](
+      const std::filesystem::path& directory,
+      const bool immutable_design_identity) {
+    const auto set_identity = [&](LlvmJit& cache_jit) {
+      if (immutable_design_identity) {
+        cache_jit.set_immutable_design_identity(
+            "bound-literal-cache-design");
+      }
+    };
+    {
+      auto cache_options = options;
+      cache_options.cache_directory = directory;
+      LlvmJit bound_cached { cache_options };
+      set_identity(bound_cached);
+      const std::array bound_cache_entry { JitProcessModuleEntry {
+          "bound_literal_cache_identity", &cache_process, { 0U } } };
+      bound_cached.add_process_module(
+          "bound-literal-cache-identity", bound_cache_entry, signal_widths);
+      TestRuntime runtime;
+      runtime.bound_literal_value = { 0x74U, 0U };
+      auto descriptor = abi(runtime);
+      descriptor.container_operation = &bound_literal_operation;
+      assert(bound_cached.execute(
+                 bound_cached.lookup("bound_literal_cache_identity"),
+                 descriptor)
+             == JitExecutionStatus::completed);
+      assert((runtime.signals[0] == EncodedSignal { 0x74U, 0U }));
+    }
+    {
+      auto cache_options = options;
+      cache_options.cache_directory = directory;
+      LlvmJit ordinary_cached { cache_options };
+      set_identity(ordinary_cached);
+      const std::array ordinary_cache_entry { JitProcessModuleEntry {
+          "bound_literal_cache_identity", &cache_process, { } } };
+      ordinary_cached.add_process_module(
+          "bound-literal-cache-identity", ordinary_cache_entry,
+          signal_widths);
+      TestRuntime runtime;
+      auto descriptor = abi(runtime);
+      assert(ordinary_cached.execute(
+                 ordinary_cached.lookup("bound_literal_cache_identity"),
+                 descriptor)
+             == JitExecutionStatus::completed);
+      assert((runtime.signals[0] == EncodedSignal { 0x2bU, 0U }));
+    }
+  };
+  verify_cache_identity(cache_directory / "ordinary-key", false);
+  verify_cache_identity(cache_directory / "immutable-key", true);
+  std::error_code cache_error;
+  std::filesystem::remove_all(cache_directory, cache_error);
+  assert(!cache_error);
 }
 
 } // namespace fsim::tests::compiler

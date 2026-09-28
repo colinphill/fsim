@@ -187,15 +187,17 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
     runtime::simir::ProcessExecutionContext& context,
     const runtime::simir::InstructionIndex start_instruction)
 {
-    JitProcessProfileScope process_profile {
-        process_, generated_process_, direct_read_signals_.size(),
-        direct_update_slots_.size()
-    };
+    std::optional<JitProcessProfileScope> process_profile;
+    if (jit_process_profile().enabled) {
+        process_profile.emplace(
+            process_, generated_process_, direct_read_signals_.size(),
+            direct_update_slots_.size());
+    }
     const bool consuming_cohort
         = cohort_resume_mode_ == CohortResumeMode::consume;
     if (!consuming_cohort
         && frame_.program_counter != start_instruction) {
-        const bool kernel_owned_callable_boundary = frame_.program_counter < process_.operations.size()
+        const bool kernel_owned_callable_boundary = frame_.program_counter < operation_count_
             && [&] {
                    const auto& operation = process_.operations[frame_.program_counter];
                    const auto* call = fsim::runtime::simir::operation_get_if<
@@ -689,7 +691,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
     if (!active_container_object_aliases_.empty()) {
         discard_container_object_aliases();
     }
-    if (result.instruction >= process_.operations.size()) {
+    if (result.instruction >= operation_count_) {
         throw compiler::LlvmJitError(
             "compiled process returned an invalid boundary instruction");
     }
@@ -1218,8 +1220,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                     executor.discard_container_object_aliases();
                 }
                 const auto& result = executor.cohort_resume_result_;
-                if (result.instruction
-                    >= executor.process_.operations.size()) {
+                if (result.instruction >= executor.operation_count_) {
                     throw compiler::LlvmJitError(
                         "compiled cohort process returned an invalid "
                         "boundary instruction");
@@ -1458,7 +1459,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                     executor.discard_container_object_aliases();
                 }
                 const auto& result = executor.cohort_resume_result_;
-                if (result.instruction >= executor.process_.operations.size()
+                if (result.instruction >= executor.operation_count_
                     || executor.frame_.program_counter
                         != result.instruction + 1U) {
                     throw compiler::LlvmJitError(
@@ -1957,13 +1958,6 @@ void LlvmProcessExecutor::flush_buffered_logic9_updates(
             process_.id, buffered_logic9_update_views_ })) {
         return;
     }
-    const auto direct_owners = context.direct_single_driver_processes();
-    const auto stable_owners = context.stable_single_writer_processes();
-    const bool direct_comparison_safe
-        = context.direct_update_domain() != nullptr
-        && stable_direct_update_suppression_allowed_
-        && std::getenv("FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION")
-            == nullptr;
     for (const auto& slot : buffered_logic9_update_views_) {
         if (slot.mask == nullptr || slot.planes == nullptr) {
             continue;
@@ -1976,22 +1970,6 @@ void LlvmProcessExecutor::flush_buffered_logic9_updates(
             ? std::numeric_limits<std::uint64_t>::max()
             : (UINT64_C(1) << slot.width) - UINT64_C(1);
         remaining &= full_mask;
-        if (direct_comparison_safe && slot.signal < direct_owners.size()
-            && slot.signal < stable_owners.size()
-            && direct_owners[slot.signal] == process_.id
-            && stable_owners[slot.signal] == process_.id) {
-            const auto current = context.read_signal_logic9_word(slot.signal);
-            if (current.width == slot.width) {
-                std::uint64_t changed { };
-                for (std::size_t plane = 0; plane < 4U; ++plane) {
-                    changed |= current.planes[plane] ^ slot.planes[plane];
-                }
-                remaining &= changed;
-                if (remaining == 0U) {
-                    continue;
-                }
-            }
-        }
         if (remaining == full_mask) {
             context.write_update(
                 slot.signal,

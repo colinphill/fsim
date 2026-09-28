@@ -954,6 +954,9 @@ void Lowerer::set_specialized_hir_unit(
     const semantic::SpecializedHirUnit* const unit) noexcept
 {
     clear_hir_effective_vhdl_subtype_cache();
+    clear_hir_expression_resolution_cache();
+    clear_hir_vhdl_subtype_name_cache();
+    clear_hir_pure_integral_attempt_cache();
     specialized_hir_unit_ = unit;
     vhdl_standard_ = frontend::VhdlStandard::Vhdl2008;
     systemverilog_standard_
@@ -1149,8 +1152,7 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
         }
         if (!frame_sensitive_package_constant) {
             if (const auto specialized
-                = specialized_hir_unit_->evaluate_integral_expression(
-                    candidate)) {
+                = hir_pure_integral_attempt(candidate)) {
                 return finish(specialized);
             }
         }
@@ -2731,8 +2733,18 @@ Lowerer::hir_referenced_declaration(
         ? std::string_view { reference.spelling }
         : std::string_view { reference.canonical };
     const auto overloaded = !reference.overloads.empty();
-    const auto resolved = resolver.resolve_expression_name(expression_id);
-    if (const auto declaration = resolved.unique()) {
+    std::optional<semantic::CompiledDeclarationResolution>
+        uncached_resolution;
+    const semantic::CompiledDeclarationResolution* resolved
+        = find_hir_expression_resolution_cache(expression_id);
+    if (resolved == nullptr) {
+        uncached_resolution.emplace(
+            resolver.resolve_expression_name(expression_id));
+        cache_hir_expression_resolution(
+            expression_id, *uncached_resolution);
+        resolved = &*uncached_resolution;
+    }
+    if (const auto declaration = resolved->unique()) {
         // Callable input formals with constant actuals also participate in
         // the generic-binding overlay so dependent subtype expressions can
         // be folded while the body is lowered.  Once a formal has runtime
@@ -2749,8 +2761,8 @@ Lowerer::hir_referenced_declaration(
         return resolver.actual_declaration(*declaration)
             .value_or(*declaration);
     }
-    if (resolved.status == semantic::CompiledResolutionStatus::ambiguous
-        || resolved.status == semantic::CompiledResolutionStatus::invalid) {
+    if (resolved->status == semantic::CompiledResolutionStatus::ambiguous
+        || resolved->status == semantic::CompiledResolutionStatus::invalid) {
         return std::nullopt;
     }
     // The VHDL frontend retains the root object in both `selected` and the
@@ -3382,75 +3394,92 @@ Lowerer::hir_runtime_binding(
                     if (separator != std::string_view::npos) {
                         spelling.remove_prefix(separator + 1U);
                     }
-                    std::optional<semantic::TypeId> matched;
-                    std::optional<std::size_t> matched_distance;
-                    bool ambiguous { };
-                    const auto lexical_distance = [&](semantic::ScopeId scope)
-                        -> std::optional<std::size_t> {
-                        const auto& scopes = specialized_hir_unit_
-                                                 ->design()
-                                                 .semantics.scopes();
-                        auto candidate = source.scope;
-                        std::size_t distance { };
-                        while (candidate.valid()
-                            && candidate.value() < scopes.size()) {
-                            if (candidate == scope) {
-                                return distance;
+                    const auto cached_type
+                        = find_hir_vhdl_subtype_name_cache(
+                            source.scope, spelling);
+                    std::optional<semantic::TypeId> matched_type;
+                    if (cached_type != nullptr) {
+                        matched_type = *cached_type;
+                    } else {
+                        std::optional<semantic::TypeId> matched;
+                        std::optional<std::size_t> matched_distance;
+                        bool ambiguous { };
+                        const auto lexical_distance = [&](
+                            const semantic::ScopeId scope)
+                            -> std::optional<std::size_t> {
+                            const auto& scopes = specialized_hir_unit_
+                                                     ->design()
+                                                     .semantics.scopes();
+                            auto candidate = source.scope;
+                            std::size_t distance { };
+                            while (candidate.valid()
+                                && candidate.value() < scopes.size()) {
+                                if (candidate == scope) {
+                                    return distance;
+                                }
+                                if (!scopes[candidate.value()].parent) {
+                                    break;
+                                }
+                                candidate = *scopes[candidate.value()].parent;
+                                ++distance;
                             }
-                            if (!scopes[candidate.value()].parent) {
-                                break;
-                            }
-                            candidate = *scopes[candidate.value()].parent;
-                            ++distance;
+                            return std::nullopt;
+                        };
+                        const auto consider_candidate =
+                            [&](const auto& candidate) {
+                                if ((candidate.form
+                                            != semantic::vhdl::DeclarationForm::type
+                                        && candidate.form
+                                            != semantic::vhdl::DeclarationForm::subtype)
+                                    || !candidate.declared_type
+                                    || !same_hir_identifier(
+                                        candidate.name, spelling, true)) {
+                                    return;
+                                }
+                                const auto distance = lexical_distance(
+                                    candidate.scope);
+                                if (distance
+                                    && (!matched_distance
+                                        || *distance < *matched_distance)) {
+                                    matched = candidate.declared_type;
+                                    matched_distance = distance;
+                                    ambiguous = false;
+                                    return;
+                                }
+                                if (matched_distance) {
+                                    if (distance
+                                        && *distance == *matched_distance
+                                        && matched
+                                        && *matched
+                                            != *candidate.declared_type) {
+                                        ambiguous = true;
+                                    }
+                                    return;
+                                }
+                                if (matched
+                                    && *matched != *candidate.declared_type) {
+                                    ambiguous = true;
+                                } else {
+                                    matched = candidate.declared_type;
+                                }
+                            };
+                        for (const auto& candidate :
+                            specialized_hir_unit_->vhdl_declarations()) {
+                            consider_candidate(candidate);
                         }
-                        return std::nullopt;
-                    };
-                    const auto consider_candidate = [&](const auto& candidate) {
-                        if ((candidate.form
-                                    != semantic::vhdl::DeclarationForm::type
-                                && candidate.form
-                                    != semantic::vhdl::DeclarationForm::subtype)
-                            || !candidate.declared_type
-                            || !same_hir_identifier(
-                                candidate.name, spelling, true)) {
-                            return;
+                        for (const auto& candidate :
+                            specialized_hir_unit_->design().vhdl_hir
+                                .declarations()) {
+                            consider_candidate(candidate);
                         }
-                        const auto distance = lexical_distance(
-                            candidate.scope);
-                        if (distance
-                            && (!matched_distance
-                                || *distance < *matched_distance)) {
-                            matched = candidate.declared_type;
-                            matched_distance = distance;
-                            ambiguous = false;
-                            return;
+                        if (matched && !ambiguous) {
+                            matched_type = matched;
                         }
-                        if (matched_distance) {
-                            if (distance
-                                && *distance == *matched_distance
-                                && matched
-                                && *matched != *candidate.declared_type) {
-                                ambiguous = true;
-                            }
-                            return;
-                        }
-                        if (matched && *matched != *candidate.declared_type) {
-                            ambiguous = true;
-                        } else {
-                            matched = candidate.declared_type;
-                        }
-                    };
-                    for (const auto& candidate :
-                        specialized_hir_unit_->vhdl_declarations()) {
-                        consider_candidate(candidate);
+                        cache_hir_vhdl_subtype_name(
+                            source.scope, spelling, matched_type);
                     }
-                    for (const auto& candidate :
-                        specialized_hir_unit_->design().vhdl_hir
-                            .declarations()) {
-                        consider_candidate(candidate);
-                    }
-                    if (matched && !ambiguous) {
-                        local_subtype->type_mark.target = *matched;
+                    if (matched_type) {
+                        local_subtype->type_mark.target = *matched_type;
                     }
                 }
                 auto effective = local_subtype

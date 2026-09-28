@@ -540,8 +540,7 @@ namespace fsim::runtime::simir {
 
 [[nodiscard]] std::int64_t checked_integer_operand(
     const PackedLogic4& value) {
-  if ((value.width() != 32 && value.width() != 64)
-      || has_unknown(value)) {
+  if (value.width() != 32 && value.width() != 64) {
     throw std::invalid_argument(
         "VHDL integer operand contains an unknown or "
         "high-impedance value");

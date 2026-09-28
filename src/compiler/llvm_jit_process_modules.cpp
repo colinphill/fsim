@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_impl.hpp"
+#include "../diagnostic/thread_cpu_clock.hpp"
 
+#include <algorithm>
 #include <optional>
 
 namespace fsim::compiler {
@@ -24,18 +26,54 @@ void LlvmJit::add_process_module(
     if (entries.empty()) {
         throw LlvmJitError("LLVM process module cannot be empty");
     }
+    const auto validate_bound_literals = [&](
+        const JitProcessModuleEntry& entry) {
+        const auto& sites = entry.bound_literal_sites;
+        if (sites.empty()) {
+            return;
+        }
+        if (impl_->options.optimization != JitOptimizationLevel::o2
+            || impl_->options.debug_instrumentation
+            || !std::ranges::is_sorted(sites)
+            || std::adjacent_find(sites.begin(), sites.end()) != sites.end()) {
+            throw LlvmJitError("invalid bound-literal module entry");
+        }
+        for (const auto instruction : sites) {
+            if (instruction >= entry.process->operations.size()) {
+                throw LlvmJitError("bound-literal instruction is out of range");
+            }
+            const auto* literal = runtime::simir::operation_get_if<
+                runtime::simir::LoadConstant>(
+                &entry.process->operations[instruction]);
+            if (literal == nullptr || literal->destination
+                    >= entry.process->register_count
+                || literal->value.width() == 0U
+                || literal->value.width() > 64U
+                || !literal->value.known_unsigned_value()
+                || (!entry.process->register_value_kinds.empty()
+                    && entry.process->register_value_kinds.size()
+                        != entry.process->register_count)
+                || (!entry.process->register_value_kinds.empty()
+                    && entry.process->register_value_kinds[
+                        literal->destination] != ValueKind::logic4)) {
+                throw LlvmJitError(
+                    "bound literal must be a known narrow Logic4 value");
+            }
+        }
+    };
     const auto make_process_key = [&](const std::string_view symbol,
-                                      const Process& process) {
+                                      const JitProcessModuleEntry& entry) {
         return impl_->immutable_design_identity.empty()
             ? make_native_object_cache_key(
-                  symbol, process, signal_widths, signal_value_kinds,
+                  symbol, *entry.process, signal_widths, signal_value_kinds,
                   impl_->options.optimization,
                   impl_->options.debug_instrumentation,
                   impl_->options.require_direct_update_slots,
                   impl_->options.code_coverage_identity,
                   impl_->jit->getTargetTriple(),
                   impl_->jit->getDataLayout(), impl_->target_cpu,
-                  impl_->target_features)
+                  impl_->target_features,
+                  entry.bound_literal_sites)
             : make_immutable_design_object_cache_key(
                   impl_->immutable_design_identity,
                   owned_module_identity,
@@ -46,7 +84,8 @@ void LlvmJit::add_process_module(
                   impl_->options.code_coverage_identity,
                   impl_->jit->getTargetTriple(),
                   impl_->jit->getDataLayout(), impl_->target_cpu,
-                  impl_->target_features);
+                  impl_->target_features,
+                  entry.bound_literal_sites);
     };
     std::unique_ptr<llvm::MemoryBuffer> preflight_object;
     bool object_preflight_attempted { };
@@ -62,6 +101,7 @@ void LlvmJit::add_process_module(
                 throw LlvmJitError(
                     "LLVM process module entry has no SimIR process");
             }
+            validate_bound_literals(entry);
             if (!valid_symbol(entry.symbol)) {
                 throw LlvmJitError(
                     "LLVM process symbol must be a non-empty C identifier");
@@ -73,7 +113,7 @@ void LlvmJit::add_process_module(
                     + cached_symbols.back() + "'");
             }
             process_keys.push_back(
-                make_process_key(cached_symbols.back(), *entry.process));
+                make_process_key(cached_symbols.back(), entry));
         }
         preflight_module_key = make_native_module_cache_key(
             owned_module_identity, process_keys);
@@ -140,6 +180,7 @@ void LlvmJit::add_process_module(
     struct PreparedProcess {
         std::string symbol;
         const Process* process { };
+        std::vector<runtime::simir::InstructionIndex> bound_literal_sites;
         ValidatedProcess validated;
         std::string cache_key;
         ProcessLoweringPlan lowering_plan;
@@ -157,6 +198,7 @@ void LlvmJit::add_process_module(
             throw LlvmJitError(
                 "LLVM process symbol must be a non-empty C identifier");
         }
+        validate_bound_literals(entry);
         std::string owned_symbol { entry.symbol };
         if (!module_symbols.insert(owned_symbol).second) {
             throw LlvmJitError(
@@ -181,7 +223,7 @@ void LlvmJit::add_process_module(
         }
         auto cache_key = impl_->object_cache
             ? process_keys[prepared.size()]
-            : make_process_key(owned_symbol, *entry.process);
+            : make_process_key(owned_symbol, entry);
         const bool uses_native_call_stack = std::ranges::any_of(
             entry.process->operations,
             [](const runtime::simir::Operation& operation) {
@@ -245,7 +287,7 @@ void LlvmJit::add_process_module(
             validated.uses_random_value,
             validated.uses_strings,
             validated.uses_files,
-            validated.uses_containers,
+            validated.uses_containers || !entry.bound_literal_sites.empty(),
             validated.uses_wide_container_operation,
             validated.uses_exact_signal_operation,
             validated.uses_wide_signal_read,
@@ -261,7 +303,8 @@ void LlvmJit::add_process_module(
             process_keys.push_back(cache_key);
         }
         prepared.push_back(
-            { std::move(owned_symbol), entry.process, std::move(validated),
+            { std::move(owned_symbol), entry.process,
+                entry.bound_literal_sites, std::move(validated),
                 std::move(cache_key), std::move(lowering_plan),
                 std::move(process_info) });
     }
@@ -321,7 +364,11 @@ void LlvmJit::add_process_module(
             owned_module_identity + ".module", *context);
         module->setDataLayout(impl_->jit->getDataLayout());
         module->setTargetTriple(impl_->jit->getTargetTriple());
+        const bool profile_cpu
+            = std::getenv("FSIM_PROFILE_LLVM_MODULES") != nullptr;
         const auto lowering_begin = std::chrono::steady_clock::now();
+        const auto lowering_cpu_begin = profile_cpu
+            ? diagnostic::thread_cpu_now() : std::nullopt;
         for (const auto& item : prepared) {
             lower_process(
                 *module, item.symbol, *item.process, signal_widths,
@@ -332,15 +379,26 @@ void LlvmJit::add_process_module(
                 item.lowering_plan,
                 impl_->options.optimization,
                 impl_->options.debug_instrumentation,
-                impl_->options.require_direct_update_slots);
+                impl_->options.require_direct_update_slots,
+                item.bound_literal_sites);
         }
         const auto lowering_end = std::chrono::steady_clock::now();
-        if (auto message = verify_error(*module); !message.empty()) {
+        const auto lowering_cpu = profile_cpu
+            ? diagnostic::thread_cpu_elapsed(
+                lowering_cpu_begin, diagnostic::thread_cpu_now())
+            : std::nullopt;
+        const auto raw_verify_cpu_begin = profile_cpu
+            ? diagnostic::thread_cpu_now() : std::nullopt;
+        const auto raw_verify_error = verify_error(*module);
+        const auto raw_verify_cpu = profile_cpu
+            ? diagnostic::thread_cpu_elapsed(
+                raw_verify_cpu_begin, diagnostic::thread_cpu_now())
+            : std::nullopt;
+        if (!raw_verify_error.empty()) {
             throw LlvmJitError(
                 "generated invalid LLVM IR for module '"
-                + owned_module_identity + "': " + message);
+                + owned_module_identity + "': " + raw_verify_error);
         }
-        const auto raw_shape = ir_shape(*module);
         const auto* const dump_process = std::getenv("FSIM_DUMP_LLVM_PROCESS");
         const bool dump_selected = dump_process != nullptr
             && std::any_of(
@@ -353,6 +411,17 @@ void LlvmJit::add_process_module(
         if (dump_selected) {
             dump_ir(*module, "/tmp/fsim-selected-raw.ll");
         }
+        const bool report_shape = profile_cpu
+            && (dump_process == nullptr || dump_selected);
+        const auto raw_shape_cpu_begin = report_shape
+            ? diagnostic::thread_cpu_now() : std::nullopt;
+        const auto raw_shape = report_shape
+            ? std::optional<IrShape> { ir_shape(*module) }
+            : std::nullopt;
+        const auto raw_shape_cpu = report_shape
+            ? diagnostic::thread_cpu_elapsed(
+                raw_shape_cpu_begin, diagnostic::thread_cpu_now())
+            : std::nullopt;
         if (impl_->object_cache) {
             module->setModuleIdentifier(module_cache_key);
             std::vector<Impl::ProcessInfo> metadata_processes;
@@ -365,19 +434,40 @@ void LlvmJit::add_process_module(
                 Impl::encode_module_metadata(metadata_processes));
         }
         const auto optimization_begin = std::chrono::steady_clock::now();
-        optimize_module(*module, impl_->options.optimization);
+        const auto optimization_cpu_begin = profile_cpu
+            ? diagnostic::thread_cpu_now() : std::nullopt;
+        optimize_module(*module, impl_->options.optimization,
+            owned_module_identity, prepared.size());
         const auto optimization_end = std::chrono::steady_clock::now();
-        if (auto message = verify_error(*module); !message.empty()) {
+        const auto optimization_cpu = profile_cpu
+            ? diagnostic::thread_cpu_elapsed(
+                optimization_cpu_begin, diagnostic::thread_cpu_now())
+            : std::nullopt;
+        const auto optimized_verify_cpu_begin = profile_cpu
+            ? diagnostic::thread_cpu_now() : std::nullopt;
+        const auto optimized_verify_error = verify_error(*module);
+        const auto optimized_verify_cpu = profile_cpu
+            ? diagnostic::thread_cpu_elapsed(
+                optimized_verify_cpu_begin, diagnostic::thread_cpu_now())
+            : std::nullopt;
+        if (!optimized_verify_error.empty()) {
             throw LlvmJitError(
                 "LLVM optimization produced invalid IR for module '"
-                + owned_module_identity + "': " + message);
+                + owned_module_identity + "': " + optimized_verify_error);
         }
-        const auto optimized_shape = ir_shape(*module);
+        const auto optimized_shape_cpu_begin = report_shape
+            ? diagnostic::thread_cpu_now() : std::nullopt;
+        const auto optimized_shape = report_shape
+            ? std::optional<IrShape> { ir_shape(*module) }
+            : std::nullopt;
+        const auto optimized_shape_cpu = report_shape
+            ? diagnostic::thread_cpu_elapsed(
+                optimized_shape_cpu_begin, diagnostic::thread_cpu_now())
+            : std::nullopt;
         if (dump_selected) {
             dump_ir(*module, "/tmp/fsim-selected-optimized.ll");
         }
-        if (std::getenv("FSIM_PROFILE_LLVM_MODULES") != nullptr
-            && (dump_process == nullptr || dump_selected)) {
+        if (report_shape) {
             const auto milliseconds = [](const auto duration) {
                 return std::chrono::duration<double, std::milli>(duration)
                     .count();
@@ -437,11 +527,47 @@ void LlvmJit::add_process_module(
                     << " optimization_ms="
                     << milliseconds(
                            optimization_end - optimization_begin);
-            print_ir_shape(profile, "raw", raw_shape);
-            print_ir_shape(profile, "optimized", optimized_shape);
+            print_ir_shape(profile, "raw", *raw_shape);
+            print_ir_shape(profile, "optimized", *optimized_shape);
             profile << '\n';
             profile.flush();
             llvm::errs() << profile_line;
+        }
+        if (profile_cpu) {
+            const auto write_cpu = [](llvm::raw_ostream& output,
+                                       const auto& duration) {
+                if (!duration) {
+                    output << "unavailable";
+                    return;
+                }
+                output << std::chrono::duration<double, std::milli> {
+                    *duration
+                }.count();
+            };
+            const auto summed_cpu = [](const auto& first,
+                                        const auto& second)
+                -> std::optional<diagnostic::ThreadCpuTime> {
+                if (!first || !second) {
+                    return std::nullopt;
+                }
+                return *first + *second;
+            };
+            std::string cpu_line;
+            llvm::raw_string_ostream profile(cpu_line);
+            profile << "fsim-profile: llvm-module-cpu identity='"
+                    << owned_module_identity << "' lower_cpu_ms=";
+            write_cpu(profile, lowering_cpu);
+            profile << " optimize_cpu_ms=";
+            write_cpu(profile, optimization_cpu);
+            profile << " verify_cpu_ms=";
+            write_cpu(profile,
+                summed_cpu(raw_verify_cpu, optimized_verify_cpu));
+            profile << " shape_cpu_ms=";
+            write_cpu(profile,
+                summed_cpu(raw_shape_cpu, optimized_shape_cpu));
+            profile << '\n';
+            profile.flush();
+            llvm::errs() << cpu_line;
         }
 
         if (auto error = impl_->jit->addIRModule(llvm::orc::ThreadSafeModule(
@@ -583,6 +709,20 @@ LlvmJit::frame_layout(const JitProcessBinding process) const
     const auto& entry
         = *static_cast<const Impl::NativeEntry*>(process.entry_);
     return entry.info.frame_layout;
+}
+
+std::uint32_t LlvmJit::operation_count(
+    const JitProcessBinding process) const
+{
+    if (!impl_) {
+        throw LlvmJitError("cannot use a moved-from LlvmJit");
+    }
+    if (process.owner_ != impl_.get() || process.entry_ == nullptr) {
+        throw LlvmJitError("invalid LLVM process binding");
+    }
+    const auto& entry
+        = *static_cast<const Impl::NativeEntry*>(process.entry_);
+    return entry.info.operation_count;
 }
 
 void LlvmJit::initialize_frame(

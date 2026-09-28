@@ -2,6 +2,7 @@
 #include "fsim/app/application.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -234,6 +236,271 @@ void test_level(
 #endif
 }
 
+void test_large_bound_literal_sharing(
+    const std::filesystem::path& directory)
+{
+#if defined(FSIM_HAS_LLVM)
+  const auto require = [](const bool condition, const char* message) {
+    if (!condition) {
+      throw std::runtime_error(message);
+    }
+  };
+  const auto source = directory / "bound_literal_sharing.sv";
+  {
+    std::ofstream output(source);
+    output << R"(
+module bound_literal_leaf #(parameter integer VALUE = 0)(
+  output logic [7:0] result
+);
+  logic [7:0] memory [0:1];
+  initial begin
+    memory[0] = VALUE;
+    result = memory[0];
+  end
+endmodule
+
+module bound_literal_dummy;
+  logic done;
+  initial done = 1'b1;
+endmodule
+
+module bound_literal_sharing_top;
+  wire [7:0] result_a;
+  wire [7:0] result_b;
+  bound_literal_leaf #(.VALUE(8'h21)) a(result_a);
+  bound_literal_leaf #(.VALUE(8'hd4)) b(result_b);
+)";
+    for (std::size_t index = 0; index < 126U; ++index) {
+      output << "  bound_literal_dummy dummy_" << index << "();\n";
+    }
+    output << "endmodule\n";
+    require(output.good(), "cannot write bound-literal fixture");
+  }
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "bound-literal-sharing-test";
+  config.project.top = "sv:work.bound_literal_sharing_top";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = fsim::project::Optimization::o2;
+  config.build.cache_path = directory / "bound-literal-cache";
+  config.run.max_deltas = 1000U;
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2017";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    print_diagnostics(diagnostics);
+  }
+  require(project.has_value(), "cannot build bound-literal fixture");
+  auto state = std::move(project->design).state();
+  std::size_t padded = 0U;
+  for (auto& process : state.processes) {
+    const auto has_container_write = std::ranges::any_of(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return fsim::runtime::simir::operation_holds<
+              fsim::runtime::simir::WriteContainerObjectElement>(operation);
+        });
+    if (!has_container_write) {
+      continue;
+    }
+    require(process.container_register_count != 0U,
+        "bound-literal fixture has no container registers");
+    require(process.static_sensitivity.empty(),
+        "bound-literal fixture is recurring");
+    while (process.operations.size() < 8191U) {
+      process.operations.push_back(fsim::runtime::simir::DebugPoint{});
+    }
+    process.operations.push_back(fsim::runtime::simir::Halt{});
+    ++padded;
+  }
+  require(padded == 2U, "bound-literal fixture did not select two leaves");
+  auto restored = fsim::elaboration::ElaboratedDesign::from_state(
+      std::move(state));
+  require(restored.has_value(), "cannot restore bound-literal fixture");
+  project->design = std::move(*restored);
+
+  const auto run = [&](fsim::app::BuiltProject built,
+                      const fsim::app::SimulationEngine engine) {
+    fsim::app::Simulation simulation(std::move(built), 1000U, engine);
+    require(simulation.design_ir().processes().size() >= 128U,
+        "bound-literal fixture did not enable selective compilation");
+    if (engine == fsim::app::SimulationEngine::compiled) {
+      require(simulation.compiled_process_count() == 2U,
+          "bound-literal fixture did not select both large processes");
+    }
+    const auto modules = simulation.compiled_module_count();
+    simulation.await_all_native_compilation();
+    const auto result = simulation.run();
+    require(result.status == fsim::runtime::RunStatus::completed,
+        "bound-literal fixture did not complete");
+    const auto a = simulation.find_signal(
+        "bound_literal_sharing_top.a.result");
+    const auto b = simulation.find_signal(
+        "bound_literal_sharing_top.b.result");
+    require(a.has_value() && b.has_value(),
+        "bound-literal result signals are missing");
+    return std::pair { std::array {
+        simulation.read_signal(*a).to_msb_string(),
+        simulation.read_signal(*b).to_msb_string() }, modules };
+  };
+  const auto reference = run(*project,
+      fsim::app::SimulationEngine::interpreter);
+  const auto compiled = run(std::move(*project),
+      fsim::app::SimulationEngine::compiled);
+  require(reference.first == compiled.first,
+      "bound-literal shared instance values differ from interpreter");
+  require((compiled.first == std::array<std::string, 2>{
+      "00100001", "11010100"}),
+      "bound-literal shared instance values are wrong");
+  require(compiled.second == 1U,
+      "bound-literal instances did not share one large native module");
+#endif
+}
+
+void test_shared_container_error_process_identity(
+    const std::filesystem::path& directory)
+{
+#if defined(FSIM_HAS_LLVM)
+  const auto require = [](const bool condition, const char* message) {
+    if (!condition) {
+      throw std::runtime_error(message);
+    }
+  };
+  const auto source = directory / "shared_container_error.sv";
+  {
+    std::ofstream output(source);
+    output << R"(
+module shared_error_leaf(input logic [31:0] index);
+  logic [7:0] memory [0:1];
+  logic [7:0] result;
+  initial begin
+    memory[index] = 8'h5a;
+    result = memory[0];
+  end
+endmodule
+
+module shared_error_dummy;
+  logic done;
+  initial done = 1'b1;
+endmodule
+
+module shared_container_error_top;
+  logic [31:0] index_a = 32'd0;
+  logic [31:0] index_b = 32'bx;
+  shared_error_leaf a(index_a);
+  shared_error_leaf b(index_b);
+)";
+    for (std::size_t index = 0; index < 126U; ++index) {
+      output << "  shared_error_dummy dummy_" << index << "();\n";
+    }
+    output << "endmodule\n";
+    require(output.good(), "cannot write shared-container-error fixture");
+  }
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "shared-container-error-test";
+  config.project.top = "sv:work.shared_container_error_top";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = fsim::project::Optimization::o2;
+  config.build.cache_path = directory / "shared-container-error-cache";
+  config.run.max_deltas = 1000U;
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2017";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    print_diagnostics(diagnostics);
+  }
+  require(project.has_value(), "cannot build shared-container-error fixture");
+  auto state = std::move(project->design).state();
+  std::optional<fsim::runtime::simir::ProcessId> representative_process;
+  std::optional<fsim::runtime::simir::ProcessId> failing_process;
+  std::size_t padded = 0U;
+  for (auto& process : state.processes) {
+    for (const auto& operation : process.operations) {
+      const auto* write = fsim::runtime::simir::operation_get_if<
+          fsim::runtime::simir::WriteContainerObjectElement>(&operation);
+      if (write == nullptr) {
+        continue;
+      }
+      require(write->object < state.container_objects.size(),
+          "shared-container-error object ID is invalid");
+      const auto& name = state.container_objects[write->object].name;
+      if (name.find(".a.memory") != std::string::npos) {
+        representative_process = process.id;
+      }
+      if (name.find(".b.memory") != std::string::npos) {
+        failing_process = process.id;
+      }
+    }
+    const auto has_container_write = std::ranges::any_of(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return fsim::runtime::simir::operation_holds<
+              fsim::runtime::simir::WriteContainerObjectElement>(operation);
+        });
+    if (!has_container_write) {
+      continue;
+    }
+    require(process.static_sensitivity.empty(),
+        "shared-container-error process is recurring");
+    while (process.operations.size() < 8191U) {
+      process.operations.push_back(fsim::runtime::simir::DebugPoint{});
+    }
+    process.operations.push_back(fsim::runtime::simir::Halt{});
+    ++padded;
+  }
+  require(padded == 2U && representative_process.has_value()
+          && failing_process.has_value()
+          && *representative_process < *failing_process,
+      "shared-container-error fixture did not identify two leaves");
+  auto restored = fsim::elaboration::ElaboratedDesign::from_state(
+      std::move(state));
+  require(restored.has_value(), "cannot restore shared-container-error fixture");
+  project->design = std::move(*restored);
+
+  const auto run = [&](fsim::app::BuiltProject built,
+                      const fsim::app::SimulationEngine engine) {
+    fsim::app::Simulation simulation(std::move(built), 1000U, engine);
+    require(simulation.design_ir().processes().size() >= 128U,
+        "shared-container-error fixture did not enable selective compilation");
+    if (engine == fsim::app::SimulationEngine::compiled) {
+      require(simulation.compiled_process_count() == 2U,
+          "shared-container-error fixture did not select both leaves");
+      if (simulation.compiled_module_count() != 1U) {
+        throw std::runtime_error(
+            "shared-container-error module count "
+            + std::to_string(simulation.compiled_module_count()));
+      }
+      simulation.await_all_native_compilation();
+    }
+    try {
+      (void)simulation.run();
+    } catch (const fsim::runtime::simir::InterpreterError& error) {
+      return error.process();
+    }
+    throw std::runtime_error("shared-container-error fixture did not fail");
+  };
+  require(run(*project, fsim::app::SimulationEngine::interpreter)
+          == *failing_process,
+      "interpreted container error has the wrong process ID");
+  require(run(std::move(*project), fsim::app::SimulationEngine::compiled)
+          == *failing_process,
+      "shared compiled container error has the wrong process ID");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -388,5 +655,7 @@ end architecture;
       directory.path, vhdl_source, fsim::project::Optimization::o0);
   test_vhdl_projected_slice_level(
       directory.path, vhdl_source, fsim::project::Optimization::o2);
+  test_large_bound_literal_sharing(directory.path);
+  test_shared_container_error_process_identity(directory.path);
   return 0;
 }

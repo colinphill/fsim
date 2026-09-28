@@ -114,7 +114,7 @@ def _run(command: list[str], cwd: Path, environment: dict[str, str],
 
 def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
                    cpu: int, stem: Path, timeout: float = 7200,
-                   frequency: int = 99) -> dict[str, Any]:
+                   frequency: int = 99, dwarf_stack_bytes: int = 8192) -> dict[str, Any]:
     """Run a fresh-workspace phase with sampling and retained JIT attribution.
 
     The caller creates the fresh workspace, checks HDL results against its
@@ -125,8 +125,8 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
     perf_name = shutil.which('perf', path=environment.get('PATH'))
     if perf_name is None:
         raise SamplingError('perf is required for CPU sampling')
-    if frequency <= 0 or timeout <= 0:
-        raise SamplingError('sampling frequency and timeout must be positive')
+    if frequency <= 0 or timeout <= 0 or dwarf_stack_bytes <= 0:
+        raise SamplingError('frequency, timeout, and DWARF stack size must be positive')
     if cpu not in os.sched_getaffinity(0):
         raise SamplingError(f'CPU {cpu} is outside the permitted affinity')
     perf = Path(perf_name).resolve()
@@ -144,10 +144,14 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
         'FSIM_PERF_MAP': '1', 'LC_ALL': 'C', 'DEBUGINFOD_URLS': '',
     })
     record_command = [
-        '/usr/bin/time', '-f', 'PROFILE_RSS_KIB=%M', '-o', str(rss_path),
+        '/usr/bin/time', '-f',
+        'PROFILE_RSS_KIB=%M USER_SECONDS=%U SYSTEM_SECONDS=%S '
+        'ELAPSED_SECONDS=%e VOLUNTARY_CONTEXT_SWITCHES=%w '
+        'INVOLUNTARY_CONTEXT_SWITCHES=%c',
+        '-o', str(rss_path),
         '--', str(perf), 'record', '--no-buildid-cache',
         '-e', 'cpu-clock:u', '-F', str(frequency),
-        '--call-graph', 'dwarf,8192', '-o', str(data_path), '--', *command,
+        '--call-graph', f'dwarf,{dwarf_stack_bytes}', '-o', str(data_path), '--', *command,
     ]
     try:
         return_code, elapsed = _run(
@@ -160,7 +164,8 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
         raise SamplingError(
             f'sampled command exited {return_code}; inspect {stdout_path} and {stderr_path}'
         )
-    rss_match = re.search(r'^PROFILE_RSS_KIB=(\d+)$', rss_path.read_text(), re.MULTILINE)
+    rss_match = re.search(r'^PROFILE_RSS_KIB=(\d+)(?:\s|$)',
+                          rss_path.read_text(), re.MULTILINE)
     if rss_match is None:
         raise SamplingError(f'missing profile RSS record: {rss_path}')
 
@@ -233,7 +238,7 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
         'sampling': {
             **attribution,
             'event': 'cpu-clock:u', 'frequency_hz': frequency,
-            'call_graph': 'dwarf,8192', 'cpu_affinity': [cpu],
+            'call_graph': f'dwarf,{dwarf_stack_bytes}', 'cpu_affinity': [cpu],
             'perf': str(perf), 'perf_sha256': _hash_file(perf),
             'perf_data': str(data_path), 'self_report': str(report_path),
             'call_paths': str(chain_path), 'loss_report': str(loss_path),
@@ -245,7 +250,7 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
                 'RSS includes the sampler; JIT scheduling can change during sampling.',
                 'User CPU samples exclude kernel CPU and off-CPU waits or I/O latency.',
                 'Unresolved counts describe sampled instruction pointers; call stacks may be incomplete.',
-                'DWARF stack capture is limited to 8192 bytes; JIT map names do not provide unwind metadata.',
+                f'DWARF stack capture is limited to {dwarf_stack_bytes} bytes; JIT map names do not provide unwind metadata.',
                 'Self overhead percentages are weighted by sampled periods, not sample counts.',
             ],
         },

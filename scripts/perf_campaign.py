@@ -768,7 +768,11 @@ def invoke_timed(command: list[str], cwd: Path, environment: dict[str, str], cpu
     stdout_path = stem.with_suffix(".stdout")
     stderr_path = stem.with_suffix(".stderr")
     time_path = stem.with_suffix(".time")
-    timed_command = [str(TIME_PROGRAM), "-f", "FSIM_CAMPAIGN_RSS_KIB=%M",
+    timed_command = [str(TIME_PROGRAM), "-f",
+                     "FSIM_CAMPAIGN_RSS_KIB=%M "
+                     "USER_SECONDS=%U SYSTEM_SECONDS=%S ELAPSED_SECONDS=%e "
+                     "VOLUNTARY_CONTEXT_SWITCHES=%w "
+                     "INVOLUNTARY_CONTEXT_SWITCHES=%c",
                      "-o", str(time_path), "--", *command]
     started = time.perf_counter()
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:

@@ -214,6 +214,9 @@ struct JitProcessFrameLayout {
 struct JitProcessModuleEntry {
   std::string_view symbol;
   const runtime::simir::Process* process{};
+  /// Sorted instruction indexes whose known narrow literals are loaded from
+  /// the embedding's instance-local container_operation callback.
+  std::vector<runtime::simir::InstructionIndex> bound_literal_sites { };
 };
 
 class LlvmJitError : public std::runtime_error {
@@ -366,6 +369,10 @@ public:
   frame_layout(JitProcessHandle process) const;
   [[nodiscard]] JitProcessFrameLayout
   frame_layout(JitProcessBinding process) const;
+
+  /// Operation-stream bound validated when this native entry was compiled.
+  [[nodiscard]] std::uint32_t
+  operation_count(JitProcessBinding process) const;
 
   /// Initialize a caller-owned v1 frame, zero its value storage, and mark
   /// every register unavailable until generated code first writes it.

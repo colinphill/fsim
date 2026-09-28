@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "application_design_artifact_codec_internal.hpp"
+#include "../diagnostic/thread_cpu_clock.hpp"
 
 #include <map>
 #include <string_view>
 #include <tuple>
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 namespace fsim::app {
 void Simulation::Impl::setup_execution(
@@ -133,6 +139,8 @@ void Simulation::Impl::setup_execution(
             std::string identity;
             std::vector<const runtime::simir::Process*> processes;
             std::vector<std::string> symbols;
+            std::vector<std::vector<runtime::simir::InstructionIndex>>
+                bound_literal_sites;
             std::vector<Executor> executors;
             std::shared_ptr<AdaptiveCompilationGate> adaptive_gate;
             bool startup { true };
@@ -173,25 +181,29 @@ void Simulation::Impl::setup_execution(
         constexpr std::uint64_t adaptive_compilation_operation_threshold
             = 50'000U;
         constexpr std::size_t minimum_nonrecurring_jit_operations = 1024U;
-        // LLVM's ORC layer compiles synchronously in this bounded pool. Keep
-        // eight independent lowering/backend workers: controlled cold runs
-        // show that reducing the pool lengthens the materialization tail more
-        // than it helps concurrent scheduler progress.
+        // LLVM's ORC layer compiles synchronously in this bounded pool.
+        // The host CPU count can exceed the CPUs allowed to this thread;
+        // avoid scheduling more workers than the current affinity permits.
         constexpr std::size_t maximum_materialization_jobs = 8U;
-        // Background modules are still part of the cold result: Simulation
-        // owns their futures and must join them before the JIT can be
-        // destroyed. Limiting this tail to two workers serialized several
-        // independent large specializations after an otherwise short run.
-        // Keep one common eight-worker bound for both tiers; on hosts with
-        // fewer CPUs materialization_job_limit already scales this down.
         const auto detected_materialization_jobs
             = std::thread::hardware_concurrency();
-        const auto materialization_job_limit = std::min(
+        auto materialization_job_limit = std::min(
             maximum_materialization_jobs,
             detected_materialization_jobs == 0U
                 ? std::size_t { 8 }
                 : static_cast<std::size_t>(
                       detected_materialization_jobs));
+#if defined(__linux__)
+        cpu_set_t affinity { };
+        if (::sched_getaffinity(0, sizeof(affinity), &affinity) == 0) {
+            const auto allowed_cpus = CPU_COUNT(&affinity);
+            if (allowed_cpus > 0) {
+                materialization_job_limit = std::min(
+                    materialization_job_limit,
+                    static_cast<std::size_t>(allowed_cpus));
+            }
+        }
+#endif
         std::optional<std::set<runtime::simir::ProcessId>> process_filter;
         if (!compile_all_processes) {
             if (const auto* const value = std::getenv("FSIM_JIT_PROCESS_IDS")) {
@@ -235,11 +247,16 @@ void Simulation::Impl::setup_execution(
                 std::string identity;
                 std::vector<const runtime::simir::Process*> processes;
                 std::vector<std::string> symbols;
+                std::vector<std::vector<runtime::simir::InstructionIndex>>
+                    bound_literal_sites;
                 std::shared_ptr<std::promise<CompilationResult>> completion;
                 std::shared_ptr<std::atomic_uint8_t> availability;
                 std::size_t operation_count { };
                 std::uint64_t execution_weight { };
                 std::chrono::steady_clock::duration materialization_time { };
+                std::optional<diagnostic::ThreadCpuTime> materialization_cpu;
+                std::optional<diagnostic::ThreadCpuTime> add_cpu;
+                std::optional<diagnostic::ThreadCpuTime> lookup_cpu;
                 std::size_t materialization_worker { };
                 std::shared_ptr<AdaptiveCompilationGate> adaptive_gate;
                 bool materialized { };
@@ -248,6 +265,31 @@ void Simulation::Impl::setup_execution(
             std::vector<MaterializationJob> jobs;
             jobs.reserve(pending_modules.size());
             for (auto& module : pending_modules) {
+                module.bound_literal_sites.resize(module.processes.size());
+                if (module.adaptive_gate
+                    && std::getenv("FSIM_PROFILE_JIT_MODULES") != nullptr) {
+                    std::cerr << "fsim jit adaptive group: identity="
+                              << module.identity << " representative_ids=";
+                    for (std::size_t index = 0;
+                        index < module.processes.size(); ++index) {
+                        if (index != 0U) {
+                            std::cerr << ',';
+                        }
+                        std::cerr << module.processes[index]->id;
+                    }
+                    std::cerr << " executor_ids=";
+                    for (std::size_t index = 0;
+                        index < module.executors.size(); ++index) {
+                        if (index != 0U) {
+                            std::cerr << ',';
+                        }
+                        std::cerr << module.executors[index].process->id;
+                    }
+                    std::cerr << " minimum_operations_per_activation="
+                              << module.adaptive_gate
+                                     ->minimum_operations_per_activation
+                              << '\n';
+                }
                 auto executors = std::move(module.executors);
                 std::uint64_t execution_weight = 0;
                 for (const auto* const process : module.processes) {
@@ -264,6 +306,9 @@ void Simulation::Impl::setup_execution(
                 jit_compilations.push_back(compilation);
                 if (module.startup) {
                     jit_startup_compilations.push_back(compilation);
+                } else if (!module.adaptive_gate) {
+                    jit_nonadaptive_background_compilations.push_back(
+                        compilation);
                 }
                 for (auto& executor : executors) {
                     const auto* const process = executor.process;
@@ -360,9 +405,11 @@ void Simulation::Impl::setup_execution(
                     { std::move(module.identity),
                         std::move(module.processes),
                         std::move(module.symbols),
+                        std::move(module.bound_literal_sites),
                         std::move(completion), std::move(availability),
                         0U, execution_weight,
-                        { }, { }, std::move(module.adaptive_gate), false,
+                        { }, { }, { }, { }, { },
+                        std::move(module.adaptive_gate), false,
                         module.startup });
                 std::size_t module_operation_count = 0;
                 for (const auto* const process : jobs.back().processes) {
@@ -415,6 +462,16 @@ void Simulation::Impl::setup_execution(
                                                  const std::size_t worker) {
                         const auto materialization_begin
                             = std::chrono::steady_clock::now();
+                        const bool profile_cpu
+                            = std::getenv("FSIM_PROFILE_JIT_MODULES")
+                            != nullptr;
+                        const auto materialization_cpu_begin = profile_cpu
+                            ? diagnostic::thread_cpu_now()
+                            : std::nullopt;
+                        if (profile_cpu) {
+                            job.add_cpu = diagnostic::ThreadCpuTime::zero();
+                            job.lookup_cpu = diagnostic::ThreadCpuTime::zero();
+                        }
                         job.materialization_worker = worker;
                         try {
                             std::vector<compiler::JitProcessModuleEntry>
@@ -424,16 +481,25 @@ void Simulation::Impl::setup_execution(
                                 process < job.processes.size(); ++process) {
                                 entries.push_back(
                                     { job.symbols[process],
-                                        job.processes[process] });
+                                        job.processes[process],
+                                        job.bound_literal_sites[process] });
                             }
                             CompilationResult handles(job.symbols.size());
                             try {
-                                jit_pointer->add_process_module(
-                                    job.identity, entries,
-                                    this->signal_widths,
-                                    this->signal_value_kinds);
+                                {
+                                    diagnostic::ThreadCpuAccumulation cpu {
+                                        job.add_cpu, profile_cpu
+                                    };
+                                    jit_pointer->add_process_module(
+                                        job.identity, entries,
+                                        this->signal_widths,
+                                        this->signal_value_kinds);
+                                }
                                 for (std::size_t process = 0;
                                     process < job.symbols.size(); ++process) {
+                                    diagnostic::ThreadCpuAccumulation cpu {
+                                        job.lookup_cpu, profile_cpu
+                                    };
                                     handles[process] = jit_pointer->lookup(
                                         job.symbols[process]);
                                 }
@@ -454,14 +520,23 @@ void Simulation::Impl::setup_execution(
                                     const std::array member {
                                         compiler::JitProcessModuleEntry {
                                             job.symbols[process],
-                                            job.processes[process] }
+                                            job.processes[process],
+                                            job.bound_literal_sites[process] }
                                     };
                                     try {
-                                        jit_pointer->add_process_module(
-                                            job.identity + "#member="
-                                                + std::to_string(process),
-                                            member, this->signal_widths,
-                                            this->signal_value_kinds);
+                                        {
+                                            diagnostic::ThreadCpuAccumulation cpu {
+                                                job.add_cpu, profile_cpu
+                                            };
+                                            jit_pointer->add_process_module(
+                                                job.identity + "#member="
+                                                    + std::to_string(process),
+                                                member, this->signal_widths,
+                                                this->signal_value_kinds);
+                                        }
+                                        diagnostic::ThreadCpuAccumulation cpu {
+                                            job.lookup_cpu, profile_cpu
+                                        };
                                         handles[process] = jit_pointer->lookup(
                                             job.symbols[process]);
                                     } catch (const compiler::LlvmJitUnsupportedError&) {
@@ -504,6 +579,12 @@ void Simulation::Impl::setup_execution(
                         job.materialization_time
                             = std::chrono::steady_clock::now()
                             - materialization_begin;
+                        if (profile_cpu) {
+                            job.materialization_cpu
+                                = diagnostic::thread_cpu_elapsed(
+                                    materialization_cpu_begin,
+                                    diagnostic::thread_cpu_now());
+                        }
                         job.materialized = true;
                     };
                     const auto run_jobs = [&](const std::size_t first,
@@ -664,6 +745,56 @@ void Simulation::Impl::setup_execution(
                                 << " materialization_ms="
                                 << milliseconds(job.materialization_time)
                                 << '\n';
+                            const auto write_cpu = [&](const auto& value) {
+                                if (!value) {
+                                    std::cerr << "unavailable";
+                                    return;
+                                }
+                                std::cerr << milliseconds(*value);
+                            };
+                            std::cerr << "fsim jit module cpu: identity="
+                                      << job.identity << " worker="
+                                      << job.materialization_worker
+                                      << " add_cpu_ms=";
+                            write_cpu(job.add_cpu);
+                            std::cerr << " lookup_cpu_ms=";
+                            write_cpu(job.lookup_cpu);
+                            std::cerr << " total_cpu_ms=";
+                            write_cpu(job.materialization_cpu);
+                            std::cerr << " process_ids=";
+                            for (std::size_t index = 0;
+                                index < job.processes.size(); ++index) {
+                                if (index != 0U) {
+                                    std::cerr << ',';
+                                }
+                                std::cerr << job.processes[index]->id;
+                            }
+                            if (job.adaptive_gate) {
+                                // These are gate-observed operations through
+                                // eligibility, not lifetime process totals.
+                                std::cerr
+                                    << " adaptive_interpreted_operations="
+                                    << job.adaptive_gate
+                                           ->interpreted_operations.load(
+                                               std::memory_order_relaxed)
+                                    << " adaptive_interpreted_activations="
+                                    << job.adaptive_gate
+                                           ->interpreted_activations.load(
+                                               std::memory_order_relaxed)
+                                    << " adaptive_minimum_operations_per_activation="
+                                    << job.adaptive_gate
+                                           ->minimum_operations_per_activation
+                                    << " adaptive_eligible="
+                                    << static_cast<unsigned>(
+                                           job.adaptive_gate->eligible.load(
+                                               std::memory_order_relaxed))
+                                    << " settled=" << job.materialized
+                                    << " native_available="
+                                    << (job.availability->load(
+                                            std::memory_order_acquire)
+                                        == 1U);
+                            }
+                            std::cerr << '\n';
                         }
                     }
                 }).share();
@@ -671,13 +802,16 @@ void Simulation::Impl::setup_execution(
                 += std::chrono::steady_clock::now()
                 - materialization_launch_begin;
         };
-        const auto shareable_process = [&](const runtime::simir::Process& process) {
+        const auto shareable_process = [&]
+            (const runtime::simir::Process& process,
+             const bool large_nonrecurring_binding_group) {
             if (options.debug_instrumentation) {
                 return false;
             }
             return std::ranges::all_of(
                 process.operations,
-                [](const runtime::simir::Operation& operation) {
+                [large_nonrecurring_binding_group](
+                    const runtime::simir::Operation& operation) {
                     bool shareable = false;
                     runtime::simir::visit_operation(
                         [&](const auto& value) {
@@ -727,6 +861,29 @@ void Simulation::Impl::setup_execution(
                                 || std::is_same_v<Type, runtime::simir::Insert>
                                 || std::is_same_v<Type, runtime::simir::Return>
                                 || std::is_same_v<Type, runtime::simir::Extract>;
+                            if (large_nonrecurring_binding_group) {
+                                shareable = shareable
+                                    || std::is_same_v<Type,
+                                        runtime::simir::ContainerWrite>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::Display>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::Fork>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::ForkEnd>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::FormatDisplay>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::Halt>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::LoadStringConstant>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::PlusArgSelect>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::WaitOn>
+                                    || std::is_same_v<Type,
+                                        runtime::simir::WriteContainerObjectElement>;
+                            }
                             if (!shareable
                                 && std::getenv("FSIM_PROFILE_JIT_OPERATIONS")
                                     != nullptr) {
@@ -753,6 +910,7 @@ void Simulation::Impl::setup_execution(
             compiler::JitOptimizationLevel optimization { };
             bool debug_instrumentation { };
             bool require_direct_update_slots { };
+            bool large_nonrecurring_binding_group { };
             std::size_t register_count { };
             std::size_t string_register_count { };
             std::size_t container_register_count { };
@@ -779,6 +937,7 @@ void Simulation::Impl::setup_execution(
                            optimization,
                            debug_instrumentation,
                            require_direct_update_slots,
+                           large_nonrecurring_binding_group,
                            register_count,
                            string_register_count,
                            container_register_count,
@@ -798,6 +957,7 @@ void Simulation::Impl::setup_execution(
                         other.optimization,
                         other.debug_instrumentation,
                         other.require_direct_update_slots,
+                        other.large_nonrecurring_binding_group,
                         other.register_count,
                         other.string_register_count,
                         other.container_register_count,
@@ -808,7 +968,8 @@ void Simulation::Impl::setup_execution(
             }
         };
         const auto process_sharing_key = [&](const auto& specialization,
-                                             const runtime::simir::Process& process) {
+                                             const runtime::simir::Process& process,
+                                             const bool large_nonrecurring_binding_group) {
             ProcessSharingKey key;
             key.design_identity = built.artifact_identity.empty()
                 ? std::string_view { built.cache_key }
@@ -829,6 +990,8 @@ void Simulation::Impl::setup_execution(
             key.debug_instrumentation = options.debug_instrumentation;
             key.require_direct_update_slots
                 = options.require_direct_update_slots;
+            key.large_nonrecurring_binding_group
+                = large_nonrecurring_binding_group;
             key.register_count = process.register_count;
             key.string_register_count = process.string_register_count;
             key.container_register_count = process.container_register_count;
@@ -855,8 +1018,22 @@ void Simulation::Impl::setup_execution(
             }
             return key;
         };
+        const auto exact_operation_bytes = [](
+            const runtime::simir::Operation& left,
+            const runtime::simir::Operation& right) {
+            codec_detail::Writer left_writer;
+            codec_detail::Writer right_writer;
+            left_writer.write(left);
+            right_writer.write(right);
+            return left_writer.complete() && right_writer.complete()
+                && std::move(left_writer).finish()
+                    == std::move(right_writer).finish();
+        };
         const auto signal_remap = [&](const runtime::simir::Process& representative,
-                                      const runtime::simir::Process& candidate)
+                                      const runtime::simir::Process& candidate,
+                                      const bool large_nonrecurring_binding_group,
+                                      std::vector<runtime::simir::InstructionIndex>&
+                                          bound_literal_sites)
             -> std::shared_ptr<const LlvmProcessExecutor::SignalRemap> {
             if (representative.operations.size() != candidate.operations.size()
                 || representative.register_count != candidate.register_count
@@ -1000,6 +1177,26 @@ void Simulation::Impl::setup_execution(
                                                  runtime::simir::LoadConstant>) {
                             compatible = left.destination == right->destination
                                 && left.value == right->value;
+                            if (!compatible && large_nonrecurring_binding_group
+                                && left.destination == right->destination
+                                && left.value.width() == right->value.width()
+                                && left.value.width() != 0U
+                                && left.value.width() <= 64U
+                                && left.value.known_unsigned_value()
+                                && right->value.known_unsigned_value()
+                                && left.destination
+                                    < representative.register_count
+                                && (representative.register_value_kinds.empty()
+                                    || (left.destination
+                                            < representative.register_value_kinds.size()
+                                        && representative.register_value_kinds[
+                                            left.destination]
+                                            == runtime::simir::ValueKind::logic4))) {
+                                compatible = true;
+                                bound_literal_sites.push_back(
+                                    static_cast<runtime::simir::InstructionIndex>(
+                                        index));
+                            }
                         } else if constexpr (std::is_same_v<
                                                  Type,
                                                  runtime::simir::CopyRegister>) {
@@ -1181,6 +1378,31 @@ void Simulation::Impl::setup_execution(
                                 && left.source == right->source
                                 && left.offset == right->offset
                                 && left.width == right->width;
+                        } else if constexpr (std::is_same_v<
+                                                 Type,
+                                                 runtime::simir::WriteContainerObjectElement>) {
+                            if (!left.nonblocking && !right->nonblocking) {
+                                auto normalized_left = left_operation;
+                                auto normalized_right = right_operation;
+                                runtime::simir::operation_get_if<Type>(
+                                    &normalized_left)->object = 0U;
+                                runtime::simir::operation_get_if<Type>(
+                                    &normalized_right)->object = 0U;
+                                compatible = exact_operation_bytes(
+                                    normalized_left, normalized_right);
+                            }
+                        } else if constexpr (
+                            std::is_same_v<Type, runtime::simir::ContainerWrite>
+                            || std::is_same_v<Type, runtime::simir::Display>
+                            || std::is_same_v<Type, runtime::simir::Fork>
+                            || std::is_same_v<Type, runtime::simir::ForkEnd>
+                            || std::is_same_v<Type, runtime::simir::FormatDisplay>
+                            || std::is_same_v<Type, runtime::simir::Halt>
+                            || std::is_same_v<Type, runtime::simir::LoadStringConstant>
+                            || std::is_same_v<Type, runtime::simir::PlusArgSelect>
+                            || std::is_same_v<Type, runtime::simir::WaitOn>) {
+                            compatible = exact_operation_bytes(
+                                left_operation, right_operation);
                         }
                     },
                     left_operation);
@@ -1191,7 +1413,12 @@ void Simulation::Impl::setup_execution(
             auto result
                 = std::make_shared<LlvmProcessExecutor::SignalRemap>();
             result->reserve(assigned.size());
+            std::set<runtime::simir::SignalId> mapped_targets;
             for (const auto& [source, target] : assigned) {
+                if (large_nonrecurring_binding_group
+                    && !mapped_targets.insert(target).second) {
+                    return { };
+                }
                 if (source != target) {
                     result->emplace_back(source, target);
                 }
@@ -1416,7 +1643,24 @@ void Simulation::Impl::setup_execution(
                     retained_operation_count += process.operations.size();
                     continue;
                 }
-                const bool shareable = shareable_process(process);
+                const bool large_nonrecurring_binding_group
+                    = selective_large_design_compilation
+                    && options.optimization
+                        == compiler::JitOptimizationLevel::o2
+                    && !options.debug_instrumentation
+                    && !recurring_process
+                    && process.operations.size() >= 8192U
+                    && process.container_register_count != 0U
+                    && std::ranges::none_of(
+                        process.operations,
+                        [](const runtime::simir::Operation& operation) {
+                            const auto* write = runtime::simir::operation_get_if<
+                                runtime::simir::WriteContainerObjectElement>(
+                                &operation);
+                            return write != nullptr && write->nonblocking;
+                        });
+                const bool shareable = shareable_process(
+                    process, large_nonrecurring_binding_group);
                 if (std::getenv("FSIM_PROFILE_JIT_OPERATIONS") != nullptr) {
                     std::cerr << "fsim-profile: jit-shareable id=" << process.id
                               << " value=" << shareable << '\n';
@@ -1435,12 +1679,30 @@ void Simulation::Impl::setup_execution(
                     continue;
                 }
                 if (shareable && selective_large_design_compilation) {
-                    auto key = process_sharing_key(specialization, process);
+                    auto key = process_sharing_key(
+                        specialization, process,
+                        large_nonrecurring_binding_group);
                     auto& candidates = shared_process_modules[key];
                     bool reused = false;
                     for (auto& shared : candidates) {
+                        std::vector<runtime::simir::InstructionIndex>
+                            new_bound_sites;
                         if (auto remap = signal_remap(
-                                *shared.processes.front(), process)) {
+                                *shared.processes.front(), process,
+                                large_nonrecurring_binding_group,
+                                new_bound_sites)) {
+                            auto& bound_sites
+                                = shared.bound_literal_sites.front();
+                            bound_sites.insert(
+                                bound_sites.end(),
+                                new_bound_sites.begin(),
+                                new_bound_sites.end());
+                            std::ranges::sort(bound_sites);
+                            bound_sites.erase(
+                                std::unique(
+                                    bound_sites.begin(),
+                                    bound_sites.end()),
+                                bound_sites.end());
                             shared.executors.push_back(
                                 { &process, 0U, std::move(remap),
                                     shared.processes.front()->id });
@@ -1458,6 +1720,7 @@ void Simulation::Impl::setup_execution(
                         shared.processes.push_back(&process);
                         shared.symbols.push_back(
                             "fsim_process_" + std::to_string(process.id));
+                        shared.bound_literal_sites.emplace_back();
                         shared.executors.push_back(
                             { &process, 0U, { }, process.id });
                         shared.startup
@@ -1504,7 +1767,7 @@ void Simulation::Impl::setup_execution(
                     { module_identity
                             + (startup ? "#tier=startup" : "#tier=background"),
                         std::move(selected[tier]), std::move(symbols[tier]),
-                        std::move(executors[tier]), { }, startup });
+                        { }, std::move(executors[tier]), { }, startup });
             }
         }
         for (auto& [key, modules] : shared_process_modules) {
@@ -1575,6 +1838,8 @@ void Simulation::Impl::setup_execution(
                 ++pack_index;
             };
             for (auto& module : pending_modules) {
+                module.bound_literal_sites.resize(
+                    module.processes.size());
                 std::size_t module_operations = 0;
                 for (const auto* const process : module.processes) {
                     module_operations += process->operations.size();
@@ -1612,6 +1877,12 @@ void Simulation::Impl::setup_execution(
                     packed.symbols.end(),
                     std::make_move_iterator(module.symbols.begin()),
                     std::make_move_iterator(module.symbols.end()));
+                packed.bound_literal_sites.insert(
+                    packed.bound_literal_sites.end(),
+                    std::make_move_iterator(
+                        module.bound_literal_sites.begin()),
+                    std::make_move_iterator(
+                        module.bound_literal_sites.end()));
                 packed.executors.insert(
                     packed.executors.end(),
                     std::make_move_iterator(module.executors.begin()),

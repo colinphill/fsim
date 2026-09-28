@@ -553,7 +553,9 @@ typedef struct fsim_jit_runtime_v1 {
    * Append-only bounded-container helper. instruction identifies immutable
    * SimIR operation metadata. Dynamic storage and container registers remain
    * embedding-owned; only scalar operands and an optional scalar result cross
-   * the ABI.
+   * the ABI. An opt-in compiled LoadConstant site uses the same indexed
+   * callback: the embedding reads that instance's known narrow Logic4 value
+   * and returns its aval and zero bval before any container state is touched.
    */
   uint32_t (*container_operation)(
       void* context,

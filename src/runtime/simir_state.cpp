@@ -615,7 +615,7 @@ void Interpreter::Impl::clear_wait_timeout_nonempty(ProcessState& process)
         fail(process, "wait timeout generation overflow");
     }
     ++cold.wait_timeout_generation;
-    cold.wait_timeout_origin.reset();
+    process.wait_timeout_origin.reset();
     cold.wait_timeout_deadline.reset();
     cold.wait_timeout_result.reset();
 }
@@ -656,7 +656,7 @@ void Interpreter::Impl::begin_wait_timeout(
     }
     const auto generation = ++cold.wait_timeout_generation;
     const auto deadline = scheduler.now() + delay;
-    cold.wait_timeout_origin = origin;
+    process.wait_timeout_origin = origin;
     cold.wait_timeout_deadline = deadline;
     cold.wait_timeout_result = result;
     set_wait_timeout_result(process, false);
@@ -676,12 +676,12 @@ void Interpreter::Impl::begin_wait_timeout(
                 auto& timeout = state.cold();
                 if (timeout.wait_timeout_generation
                         != scheduled.generation
-                    || timeout.wait_timeout_origin
+                    || state.wait_timeout_origin
                         != std::optional { scheduled.origin }) {
                     return;
                 }
                 scheduled.owner->set_wait_timeout_result(state, true);
-                timeout.wait_timeout_origin.reset();
+                state.wait_timeout_origin.reset();
                 timeout.wait_timeout_deadline.reset();
                 timeout.wait_timeout_result.reset();
                 scheduled.owner->queue_active_current(
@@ -709,7 +709,7 @@ void Interpreter::Impl::rearm_wait_timeout(
     const std::optional<RegisterId> result)
 {
     const auto& cold = process.cold();
-    if (cold.wait_timeout_origin
+    if (process.wait_timeout_origin
             != std::optional { origin }
         || !cold.wait_timeout_deadline) {
         process.pc = instruction;
@@ -2163,7 +2163,7 @@ bool Interpreter::Impl::can_publish_native_word_prevalidated(
     return true;
 }
 
-bool Interpreter::Impl::can_publish_native_logic9_word(
+bool Interpreter::Impl::can_publish_native_logic9_word_prevalidated(
     const SignalId signal_id,
     const ProcessId process) noexcept
 {
@@ -2174,15 +2174,6 @@ bool Interpreter::Impl::can_publish_native_logic9_word(
         || native_signal_has_runtime_dependency(signal_id)
         || has_dynamic_waits(signal_id)
         || !signal_container_aliases[signal_id].empty()) {
-        return false;
-    }
-    if (native_signal_observation_required_hook) {
-        if (native_signal_observation_required_hook(signal_id)) {
-            return false;
-        }
-    } else if (signal_change_hook || stored_signal_change_hook
-        || driver_change_hook || scalar_signal_change_hook
-        || container_object_change_hook) {
         return false;
     }
     const auto& signal = signals[signal_id];

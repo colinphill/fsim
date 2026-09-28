@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -119,12 +120,16 @@ public:
       const fsim::runtime::simir::ProcessId process,
       const std::uint32_t width,
       std::vector<std::vector<SlotSegment>> segments,
-      std::vector<std::string> values)
+      std::vector<std::string> values,
+      std::function<void(
+          fsim::runtime::simir::ProcessExecutionContext&,
+          std::size_t)> after_stage = {})
       : signal_{signal}
       , process_{process}
       , width_{width}
       , segments_{std::move(segments)}
-      , values_{std::move(values)} {
+      , values_{std::move(values)}
+      , after_stage_{std::move(after_stage)} {
     if (segments_.size() != values_.size() || values_.empty()
         || width_ == 0U || width_ > 128U) {
       throw std::invalid_argument("invalid owned-span update fixture");
@@ -189,6 +194,9 @@ public:
         context.write_validated_update_slot_batches(batches),
         "owned-span slot batch is accepted by the native update path");
 
+    if (after_stage_)
+      after_stage_(context, next_phase_);
+
     ++next_phase_;
     ProcessResumeResult result{start, start + 1U};
     result.external.kind = next_phase_ == values_.size()
@@ -203,6 +211,9 @@ private:
   std::uint32_t width_{};
   std::vector<std::vector<SlotSegment>> segments_;
   std::vector<std::string> values_;
+  std::function<void(
+      fsim::runtime::simir::ProcessExecutionContext&,
+      std::size_t)> after_stage_;
   std::size_t next_phase_{};
 };
 
@@ -1447,11 +1458,13 @@ void test_owned_span_native_updates() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
 
-  {
+  for (const bool external_early : {true, false}) {
     Interpreter interpreter;
     const auto initial = std::string(80U, 'Z');
     auto high_written = initial;
     std::fill_n(high_written.begin(), 20U, '1');
+    high_written[15U] = 'X';
+    high_written[16U] = 'Z';
     auto outside_written = high_written;
     outside_written.back() = '0';
     const auto target = interpreter.add_signal(
@@ -1488,18 +1501,41 @@ void test_owned_span_native_updates() {
             std::vector<std::string>{
                 high_written, high_written, outside_written}));
 
+    std::size_t reconstructed_reads { };
+    interpreter.set_stored_signal_change_hook(
+        [&](SignalId changed, SimulationTick time) {
+            if (changed != target || time != 1U)
+                return;
+            require(interpreter.driver_value(low_id, target).to_msb_string()
+                    == initial
+                    && interpreter.driver_value(high_id, target)
+                           .to_msb_string() == high_written,
+                "active owned raw values reconstruct each writer exactly");
+            ++reconstructed_reads;
+        });
+
     interpreter.schedule_signal_at(
         trigger, PackedLogic4::from_msb_string("1"), 1U, 0U);
+    if (external_early) {
+      interpreter.schedule_signal_at(
+          target, PackedLogic4::from_msb_string(std::string(80U, 'X')),
+          2U, 0U);
+    }
     interpreter.schedule_signal_at(
-        target, PackedLogic4::from_msb_string(std::string(80U, 'X')),
-        2U, 0U);
+        trigger, PackedLogic4::from_msb_string("0"),
+        external_early ? 3U : 2U, 0U);
     interpreter.schedule_signal_at(
-        trigger, PackedLogic4::from_msb_string("0"), 3U, 0U);
-    interpreter.schedule_signal_at(
-        trigger, PackedLogic4::from_msb_string("1"), 4U, 0U);
+        trigger, PackedLogic4::from_msb_string("1"),
+        external_early ? 4U : 3U, 0U);
+    if (!external_early) {
+      interpreter.schedule_signal_at(
+          target, PackedLogic4::from_msb_string(std::string(80U, 'X')),
+          4U, 0U);
+    }
 
     const auto result = interpreter.run();
-    require(result.status == RunStatus::completed && result.time == 4U,
+    require(result.status == RunStatus::completed && result.time == 4U
+            && reconstructed_reads == 1U,
             "cross-word owned-span native updates complete");
     require(interpreter.driver_value(low_id, target).to_msb_string()
                 == initial,
@@ -1513,6 +1549,391 @@ void test_owned_span_native_updates() {
                 == std::string(80U, 'X'),
             "an external drive changes the visible value without replacing raw driver bits");
   }
+
+  {
+    Interpreter interpreter;
+    const auto source = interpreter.add_signal(
+        {"top.switch_source", PackedLogic4 {80U, Logic4::one}});
+    const auto target = interpreter.add_signal(
+        {"top.switch_target", PackedLogic4 {80U, Logic4::z},
+         ResolutionKind::sv_wire});
+    const auto trigger = interpreter.add_signal(
+        {"top.switch_trigger", PackedLogic4::from_msb_string("0")});
+
+    Process low_writer;
+    low_writer.id = 0U;
+    low_writer.name = "switch_low_writer";
+    low_writer.driver_regions.push_back({target, 0U, 60U, false});
+    low_writer.operations = {Halt{}};
+    low_writer.initialize = false;
+    (void)interpreter.add_process(std::move(low_writer));
+
+    Process high_writer;
+    high_writer.id = 1U;
+    high_writer.name = "resistive_switch_high_writer";
+    high_writer.static_sensitivity.push_back({trigger, EdgeKind::any});
+    high_writer.driver_regions.push_back({target, 60U, 20U, false});
+    high_writer.switch_source = source;
+    high_writer.switch_target = target;
+    high_writer.switch_resistive = true;
+    high_writer.operations = {WaitSensitivity{}, Halt{}};
+    high_writer.initialize = false;
+    const auto high_id = interpreter.add_process(std::move(high_writer));
+    using Segment = OwnedSpanUpdateExecutor::SlotSegment;
+    auto high_written = std::string(80U, 'Z');
+    std::fill_n(high_written.begin(), 20U, '1');
+    interpreter.set_process_executor(high_id,
+        std::make_unique<OwnedSpanUpdateExecutor>(
+            target, high_id, 80U,
+            std::vector<std::vector<Segment>> {{{60U, 20U}}},
+            std::vector<std::string> {high_written}));
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("1"), 1U, 0U);
+
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed && result.time == 1U,
+        "resistive partial switch owner completes the native update");
+    require(interpreter.signal_strength(target).one == StrengthRank::pull,
+        "partial switch owner retains dynamically reduced drive strength");
+  }
+}
+
+void test_owned_span_pending_transitions() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  for (const bool force_pending : {true, false}) {
+    Interpreter interpreter;
+    const auto initial = std::string(80U, 'Z');
+    auto high_written = initial;
+    std::fill_n(high_written.begin(), 20U, '1');
+    const auto target = interpreter.add_signal(
+        {"top.pending_owned", PackedLogic4::from_msb_string(initial),
+         ResolutionKind::sv_wire});
+    const auto trigger = interpreter.add_signal(
+        {"top.pending_trigger", PackedLogic4::from_msb_string("0")});
+
+    Process low_writer;
+    low_writer.id = 0U;
+    low_writer.name = "pending_low_writer";
+    low_writer.driver_regions.push_back({target, 0U, 60U, false});
+    low_writer.operations = {Halt{}};
+    low_writer.initialize = false;
+    (void)interpreter.add_process(std::move(low_writer));
+
+    Process high_writer;
+    high_writer.id = 1U;
+    high_writer.name = "pending_high_writer";
+    high_writer.static_sensitivity.push_back({trigger, EdgeKind::any});
+    high_writer.driver_regions.push_back({target, 60U, 20U, false});
+    high_writer.operations = force_pending
+        ? OperationList {WaitSensitivity{}, Halt{}}
+        : OperationList {WaitSensitivity{}, WaitSensitivity{}, Halt{}};
+    high_writer.initialize = false;
+    const auto high_id = interpreter.add_process(std::move(high_writer));
+    bool deposit_seen { };
+    const auto after_stage = [&](ProcessExecutionContext& context,
+                                 const std::size_t phase) {
+      if (force_pending) {
+        context.force_signal_slice(target,
+            PackedLogic4::from_msb_string(std::string(80U, 'X')), 0U);
+      } else if (phase == 1U) {
+        interpreter.deposit_signal(target,
+            PackedLogic4::from_msb_string(std::string(80U, 'X')));
+        deposit_seen = interpreter.signal_value(target).to_msb_string()
+            == std::string(80U, 'X');
+        context.write_update_slice(target,
+            PackedLogic4::from_msb_string(high_written)
+                .extract_bits(60U, 20U), 60U);
+      }
+    };
+    using Segment = OwnedSpanUpdateExecutor::SlotSegment;
+    interpreter.set_process_executor(high_id,
+        std::make_unique<OwnedSpanUpdateExecutor>(
+            target, high_id, 80U,
+            force_pending
+                ? std::vector<std::vector<Segment>> {{{60U, 20U}}}
+                : std::vector<std::vector<Segment>> {
+                    {{60U, 20U}}, {{60U, 20U}}},
+            force_pending
+                ? std::vector<std::string> {high_written}
+                : std::vector<std::string> {high_written, high_written},
+            after_stage));
+    interpreter.schedule_signal_at(trigger,
+        PackedLogic4::from_msb_string("1"), 1U, 0U);
+    if (!force_pending) {
+      interpreter.schedule_signal_at(trigger,
+          PackedLogic4::from_msb_string("0"), 2U, 0U);
+    }
+
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed
+            && result.time == (force_pending ? 1U : 2U),
+        "pending owned-driver transition completes");
+    require(interpreter.driver_value(high_id, target).to_msb_string()
+            == high_written,
+        "pending transition preserves the committed raw driver");
+    if (force_pending) {
+      require(interpreter.signal_value(target).to_msb_string()
+              == std::string(80U, 'X'),
+          "force after native staging overrides the published value");
+      interpreter.release_signal(target);
+      require(interpreter.signal_value(target).to_msb_string()
+              == high_written,
+          "release reveals the staged raw driver after demotion");
+    } else {
+      require(deposit_seen
+              && interpreter.signal_value(target).to_msb_string()
+                  == high_written,
+          "equal queued slice restores the raw value after deposit");
+    }
+  }
+
+  {
+    Interpreter interpreter;
+    const auto initial = std::string(8U, 'Z');
+    const auto target = interpreter.add_signal(
+        {"top.fork_owned", PackedLogic4::from_msb_string(initial),
+         ResolutionKind::sv_wire});
+    Process low_writer;
+    low_writer.id = 0U;
+    low_writer.name = "fork_low_writer";
+    low_writer.driver_regions.push_back({target, 0U, 4U, false});
+    low_writer.operations = {Halt{}};
+    low_writer.initialize = false;
+    (void)interpreter.add_process(std::move(low_writer));
+
+    Process fork_parent;
+    fork_parent.id = 1U;
+    fork_parent.name = "fork_high_writer";
+    fork_parent.register_count = 1U;
+    fork_parent.driver_regions.push_back({target, 4U, 4U, false});
+    fork_parent.operations = {
+        Fork {{3U}, ForkJoinKind::none},
+        LoadConstant {0U, PackedLogic4::from_msb_string("0000")},
+        Halt {},
+        LoadConstant {0U, PackedLogic4::from_msb_string("1111")},
+        WriteUpdateSlice {target, 0U, 4U},
+        ForkEnd {},
+    };
+    (void)interpreter.add_process(std::move(fork_parent));
+
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed,
+        "forked owned writer finishes its queued slice");
+    require(interpreter.driver_value(1U, target).to_msb_string()
+            == initial
+            && interpreter.driver_value(2U, target).to_msb_string()
+                == "1111ZZZZ",
+        "the dynamic child obtains its own raw driver after demotion");
+    require(interpreter.signal_value(target).to_msb_string()
+            == "1111ZZZZ",
+        "lazy fork driver publishes the child-owned selected bits");
+  }
+}
+
+void test_disjoint_driver_update_order_baseline() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  class MixedWriter final : public ProcessExecutor {
+  public:
+    MixedWriter(Interpreter& interpreter, SignalId signal,
+                ProcessId process, bool native_first, bool late_hook,
+                std::size_t& observed_changes)
+        : interpreter_{interpreter}
+        , signal_{signal}
+        , process_{process}
+        , native_first_{native_first}
+        , late_hook_{late_hook}
+        , observed_changes_{observed_changes}
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context, InstructionIndex start) override
+    {
+      require(start == 0U, "mixed writer starts at its initial entry");
+      const auto stage_native = [&] {
+        const std::array slots {
+            ProcessUpdateSlotView {
+                signal_, 8U, 1U, &active_, &aval_, &bval_, &mask_ }
+        };
+        std::array<std::uint64_t, 1U> active_words { 1U };
+        const std::array batches {
+            ProcessUpdateSlotBatch { process_, slots, active_words }
+        };
+        require(context.write_validated_update_slot_batches(batches),
+                "the disjoint native slot is accepted before Update");
+      };
+      const auto stage_queued = [&] {
+        context.write_update_slice(
+            signal_, PackedLogic4::from_msb_string("10"), 0U);
+      };
+      if (native_first_) {
+        stage_native();
+        stage_queued();
+      } else {
+        stage_queued();
+        stage_native();
+      }
+      if (late_hook_) {
+        interpreter_.set_driver_change_hook(
+            [this](ProcessId process, SignalId signal, SimulationTick) {
+              if (process == process_ && signal == signal_) {
+                ++observed_changes_;
+              }
+            });
+      }
+      ProcessResumeResult result { 0U, 1U };
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    Interpreter& interpreter_;
+    SignalId signal_ { };
+    ProcessId process_ { };
+    bool native_first_ { };
+    bool late_hook_ { };
+    std::size_t& observed_changes_;
+    std::uint32_t active_ { 1U };
+    std::uint64_t aval_ { 0b0011U };
+    std::uint64_t bval_ { };
+    std::uint64_t mask_ { 0b1111U };
+  };
+
+  for (const auto native_first : { false, true }) {
+    for (const auto late_hook : { false, true }) {
+      Interpreter interpreter;
+      const auto signal = interpreter.add_signal(
+          { "top.mixed_order", PackedLogic4::from_msb_string("ZZZZZZZZ"),
+            ResolutionKind::sv_wire });
+      Process low;
+      low.id = 0U;
+      low.name = "mixed_order_low";
+      low.driver_regions.push_back({ signal, 0U, 4U, false });
+      low.operations = { Halt { } };
+      const auto low_id = interpreter.add_process(std::move(low));
+      Process high;
+      high.id = 1U;
+      high.name = "mixed_order_high";
+      high.driver_regions.push_back({ signal, 4U, 4U, false });
+      high.operations = { Halt { } };
+      high.initialize = false;
+      const auto high_id = interpreter.add_process(std::move(high));
+      std::size_t observed_changes { };
+      interpreter.set_process_executor(
+          low_id, std::make_unique<MixedWriter>(
+              interpreter, signal, low_id, native_first, late_hook,
+              observed_changes));
+
+      const auto result = interpreter.run();
+      require(result.status == RunStatus::completed,
+              "both submission orders complete the shared Update route");
+      require(interpreter.driver_value(low_id, signal).to_msb_string()
+                  == "ZZZZ0010"
+                  && interpreter.driver_value(high_id, signal)
+                         .to_msb_string() == "ZZZZZZZZ"
+                  && interpreter.signal_value(signal).to_msb_string()
+                         == "ZZZZ0010",
+              "queued low bits override native bits in both API orders");
+      require(!late_hook || observed_changes == 1U,
+              "a hook installed after native staging sees the committed driver");
+    }
+  }
+
+  class DirectWordWriter final : public ProcessExecutor {
+  public:
+    explicit DirectWordWriter(SignalId signal)
+        : signal_ { signal }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context, InstructionIndex start) override
+    {
+      require(start == 0U, "direct writer starts at its initial entry");
+      const std::array updates {
+          ProcessUpdateWord {
+              signal_, Logic4Word { 1U, 1U, 0U }, 0U, true }
+      };
+      context.write_validated_update_words(updates);
+      ProcessResumeResult result { 0U, 1U };
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    SignalId signal_ { };
+  };
+
+  Interpreter cross_signal;
+  const auto direct = cross_signal.add_signal(
+      { "top.direct", PackedLogic4::from_msb_string("0"),
+        ResolutionKind::sv_wire });
+  const auto first = cross_signal.add_signal(
+      { "top.first", PackedLogic4::from_msb_string("ZZZZZZZZ"),
+        ResolutionKind::sv_wire });
+  const auto second = cross_signal.add_signal(
+      { "top.second", PackedLogic4::from_msb_string("ZZZZZZZZ"),
+        ResolutionKind::sv_wire });
+  Process direct_owner;
+  direct_owner.id = 0U;
+  direct_owner.name = "direct_owner";
+  direct_owner.driver_regions.push_back({ direct, 0U, 0U, true });
+  direct_owner.operations = { Halt { } };
+  const auto direct_id = cross_signal.add_process(std::move(direct_owner));
+  cross_signal.set_process_executor(
+      direct_id, std::make_unique<DirectWordWriter>(direct));
+  const auto add_owner = [&](SignalId signal, ProcessId id,
+                             std::string name, bool active) {
+    Process owner;
+    owner.id = id;
+    owner.name = std::move(name);
+    owner.register_count = active ? 1U : 0U;
+    owner.driver_regions.push_back(
+        { signal, active ? 0U : 4U, 4U, false });
+    owner.initialize = active;
+    owner.operations = active
+        ? std::vector<Operation> {
+              LoadConstant { 0U, PackedLogic4::from_msb_string("0101") },
+              WriteUpdateSlice { signal, 0U, 0U }, Halt { } }
+        : std::vector<Operation> { Halt { } };
+    (void)cross_signal.add_process(std::move(owner));
+  };
+  add_owner(first, 1U, "first_low", true);
+  add_owner(first, 2U, "first_high", false);
+  add_owner(second, 3U, "second_low", true);
+  add_owner(second, 4U, "second_high", false);
+  bool observed_early_direct_order { };
+  bool observed_cross_signal_order { };
+  cross_signal.set_stored_signal_change_hook(
+      [&](SignalId signal, SimulationTick) {
+        if (signal == direct) {
+          observed_early_direct_order
+              = cross_signal.driver_value(3U, second).to_msb_string()
+                      == "ZZZZZZZZ"
+                  && cross_signal.stored_signal_value(second)
+                         .to_msb_string() == "ZZZZZZZZ"
+                  && cross_signal.signal_value(second).to_msb_string()
+                         == "ZZZZZZZZ";
+        }
+        if (signal == first) {
+          observed_cross_signal_order
+              = cross_signal.driver_value(3U, second).to_msb_string()
+                      == "ZZZZ0101"
+                  && cross_signal.stored_signal_value(second)
+                         .to_msb_string() == "ZZZZZZZZ"
+                  && cross_signal.signal_value(second).to_msb_string()
+                         == "ZZZZZZZZ";
+        }
+      });
+  require(cross_signal.run().status == RunStatus::completed
+              && observed_early_direct_order
+              && observed_cross_signal_order,
+          "the first publication sees the later signal's new raw driver"
+          " and old stored value after an earlier native callback saw old raw");
 }
 
 void test_resolved_driver_slots() {
@@ -2239,6 +2660,8 @@ void test_resolved_driver_slots() {
   test_mixed_signal_id_alignment();
   test_force_release_word_boundary();
   test_owned_span_native_updates();
+  test_owned_span_pending_transitions();
+  test_disjoint_driver_update_order_baseline();
 }
 
 void test_mixed_signal_id_alignment() {

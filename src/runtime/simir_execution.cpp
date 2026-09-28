@@ -45,8 +45,6 @@ Interpreter::Impl::Impl(
           std::getenv("FSIM_DISABLE_FANOUT_COHORT_GROUPING") == nullptr)
     , static_phase_batches_enabled(
           std::getenv("FSIM_DISABLE_STATIC_PHASE_BATCH") == nullptr)
-    , inline_cohort_buffers_enabled(
-          std::getenv("FSIM_DISABLE_INLINE_COHORT_BUFFERS") == nullptr)
     , direct_word_commit_disabled(
           std::getenv("FSIM_DISABLE_DIRECT_WORD_COMMIT") != nullptr)
     , logic9_batch_profile_enabled(
@@ -874,6 +872,9 @@ void Interpreter::Impl::pop_callable_frame(
 
 void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
 {
+    if (!process.has_callable_frame_push) {
+        return;
+    }
     std::set<RegisterId> shadowed_packed;
     std::set<StringRegisterId> shadowed_strings;
     std::set<ContainerRegisterId> shadowed_containers;
@@ -1169,11 +1170,6 @@ void Interpreter::Impl::execute_static_cohort(
         }
     }
 
-    constexpr std::size_t inline_cohort_capacity = 512U;
-    std::array<std::optional<ExecutionContext>, inline_cohort_capacity>
-        inline_contexts;
-    std::array<ProcessCohortResumeEntry, inline_cohort_capacity>
-        inline_entries;
     std::vector<ExecutionContext> nested_overflow_contexts;
     std::vector<ProcessCohortResumeEntry> nested_overflow_entries;
     const bool use_shared_overflow_scratch
@@ -1261,53 +1257,28 @@ void Interpreter::Impl::execute_static_cohort(
             }
             pending.next = end;
         }
-        std::span<ProcessCohortResumeEntry> entries;
-        if (inline_cohort_buffers_enabled
-            && count <= inline_cohort_capacity) {
-            for (std::size_t offset = 0U; offset < count; ++offset) {
-                auto& member = get_process(process_ids[begin + offset]);
-                if (!state_aware_cohort) {
-                    member.status = ProcessStatus::running;
-                }
-                inline_contexts[offset].emplace(*this, member.id);
-                inline_entries[offset] = {
-                    member.executor.get(),
-                    &*inline_contexts[offset],
-                    member.pc,
-                    { },
-                    { },
-                    &member.queued,
-                    &member.waiting_on_static,
-                    &member.status
-                };
+        overflow_contexts.clear();
+        overflow_entries.clear();
+        overflow_contexts.reserve(count);
+        overflow_entries.reserve(count);
+        for (auto index = begin; index < end; ++index) {
+            auto& member = get_process(process_ids[index]);
+            if (!state_aware_cohort) {
+                member.status = ProcessStatus::running;
             }
-            entries = std::span<ProcessCohortResumeEntry> {
-                inline_entries.data(), count
-            };
-        } else {
-            overflow_contexts.clear();
-            overflow_entries.clear();
-            overflow_contexts.reserve(count);
-            overflow_entries.reserve(count);
-            for (auto index = begin; index < end; ++index) {
-                auto& member = get_process(process_ids[index]);
-                if (!state_aware_cohort) {
-                    member.status = ProcessStatus::running;
-                }
-                overflow_contexts.emplace_back(*this, member.id);
-                overflow_entries.push_back({
-                    member.executor.get(),
-                    &overflow_contexts.back(),
-                    member.pc,
-                    { },
-                    { },
-                    &member.queued,
-                    &member.waiting_on_static,
-                    &member.status
-                });
-            }
-            entries = overflow_entries;
+            overflow_contexts.emplace_back(*this, member.id);
+            overflow_entries.push_back({
+                member.executor.get(),
+                &overflow_contexts.back(),
+                member.pc,
+                { },
+                { },
+                &member.queued,
+                &member.waiting_on_static,
+                &member.status
+            });
         }
+        std::span<ProcessCohortResumeEntry> entries = overflow_entries;
 
         const auto executed
             = entries.front().executor->resume_cohort(entries);

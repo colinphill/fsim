@@ -190,5 +190,5 @@ endforeach()
 
 list(LENGTH FSIM_MANIFEST_FILES FSIM_FILE_COUNT)
 message(STATUS
-  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 26 exclusions, "
+  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 27 exclusions, "
   "five negative classes")

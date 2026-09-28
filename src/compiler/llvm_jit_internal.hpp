@@ -322,7 +322,8 @@ void validate_fork_operation(
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     std::string_view target_cpu,
-    std::span<const std::string> target_features);
+    std::span<const std::string> target_features,
+    std::span<const runtime::simir::InstructionIndex> bound_literal_sites = { });
 
 [[nodiscard]] std::string make_immutable_design_object_cache_key(
     std::string_view design_identity,
@@ -335,7 +336,8 @@ void validate_fork_operation(
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
     std::string_view target_cpu,
-    std::span<const std::string> target_features);
+    std::span<const std::string> target_features,
+    std::span<const runtime::simir::InstructionIndex> bound_literal_sites = { });
 
 [[nodiscard]] std::string make_native_module_cache_key(
     std::string_view module_identity,
@@ -373,11 +375,14 @@ void lower_process(
     const ProcessLoweringPlan& lowering_plan,
     JitOptimizationLevel optimization,
     bool debug_instrumentation,
-    bool require_direct_update_slots);
+    bool require_direct_update_slots,
+    std::span<const runtime::simir::InstructionIndex> bound_literal_sites);
 
 void optimize_module(
     llvm::Module& module,
-    JitOptimizationLevel optimization);
+    JitOptimizationLevel optimization,
+    std::string_view profile_identity = { },
+    std::size_t process_count = 0);
 
 [[nodiscard]] std::string verify_error(llvm::Module& module);
 

@@ -1171,6 +1171,7 @@ private:
     const std::uint64_t instance_generation_ { next_instance_generation() };
     compiler::JitProcessBinding binding_;
     const runtime::simir::Process& process_;
+    const std::uint32_t operation_count_;
     std::span<const std::uint32_t> signal_widths_;
     std::span<const runtime::simir::ValueKind> signal_value_kinds_;
     std::span<const runtime::simir::ResolutionKind> signal_resolutions_;

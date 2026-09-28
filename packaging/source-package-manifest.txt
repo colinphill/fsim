@@ -191,6 +191,7 @@ docs/known-issues-v3.md
 docs/language-support.md
 docs/legacy-pli.md
 docs/performance-campaign.md
+docs/performance-matrix-2026-09-28.md
 docs/release-and-post-v2.md
 docs/sdf.md
 docs/simplification-gate-migration.md
@@ -856,6 +857,7 @@ src/diagnostic/artifact_identity.hpp
 src/diagnostic/compiled_hir_compatibility_codes.cpp
 src/diagnostic/compiled_hir_compatibility_codes.inc
 src/diagnostic/diagnostic.cpp
+src/diagnostic/thread_cpu_clock.hpp
 src/elaboration/coverage_exclusion_persistence.cpp
 src/elaboration/coverage_external_exclusions.cpp
 src/elaboration/coverage_fsm_validation.cpp
@@ -1120,6 +1122,7 @@ src/runtime/simir_interpreter.cpp
 src/runtime/simir_interpreter_profiles.cpp
 src/runtime/simir_logic.cpp
 src/runtime/simir_module_path.cpp
+src/runtime/simir_owned_driver.cpp
 src/runtime/simir_process_execution_context.cpp
 src/runtime/simir_random_distribution.cpp
 src/runtime/simir_sampled_values.cpp

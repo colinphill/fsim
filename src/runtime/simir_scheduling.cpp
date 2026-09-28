@@ -19,6 +19,7 @@ void Interpreter::Impl::stage_update_unrouted(
     }
     const auto value_index = pending_update_values.size();
     pending_update_values.push_back(std::move(value));
+    block_native_logic9_update_before_generic(signal);
     pending_updates.push_back(PendingUpdate {
         signal,
         driver,

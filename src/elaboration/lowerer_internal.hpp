@@ -6,6 +6,8 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <map>
+
 namespace fsim::elaboration {
 
 using frontend::ProcessKind;
@@ -100,6 +102,16 @@ public:
         std::size_t order,
         std::optional<semantic::ExpressionId> enclosing_vhdl_guard
         = std::nullopt);
+    [[nodiscard]] std::optional<SignalId>
+    hir_concurrent_port_signal(semantic::DeclarationId declaration) const;
+    [[nodiscard]] bool hir_concurrent_signal_read_only(
+        SignalId signal) const noexcept;
+    [[nodiscard]] bool has_generated_processes() const noexcept;
+    [[nodiscard]] std::uint32_t next_hir_callable_invocation_identity()
+        const noexcept;
+    [[nodiscard]] bool advance_hir_callable_invocation_identity(
+        std::uint32_t expected_before,
+        std::uint32_t after) noexcept;
     [[nodiscard]] std::optional<Process> lower_hir_input_actual(
         semantic::ExpressionId expression,
         SignalId destination,
@@ -128,6 +140,11 @@ private:
         semantic::vhdl::SubtypeIndication result;
     };
 
+    struct HirExpressionResolutionCacheEntry {
+        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        semantic::CompiledDeclarationResolution resolution;
+    };
+
     class HirEffectiveVhdlSubtypeCacheScope final {
     public:
         explicit HirEffectiveVhdlSubtypeCacheScope(
@@ -154,11 +171,51 @@ private:
     void begin_hir_effective_vhdl_subtype_cache_scope() const noexcept;
     void end_hir_effective_vhdl_subtype_cache_scope() const noexcept;
     void clear_hir_effective_vhdl_subtype_cache() const noexcept;
+    [[nodiscard]] const semantic::CompiledDeclarationResolution*
+    find_hir_expression_resolution_cache(
+        semantic::ExpressionId expression) const noexcept;
+    void cache_hir_expression_resolution(
+        semantic::ExpressionId expression,
+        const semantic::CompiledDeclarationResolution& resolution) const noexcept;
+    void clear_hir_expression_resolution_cache() const noexcept;
+    [[nodiscard]] const std::optional<semantic::TypeId>*
+    find_hir_vhdl_subtype_name_cache(
+        semantic::ScopeId scope,
+        std::string_view spelling) const noexcept;
+    void cache_hir_vhdl_subtype_name(
+        semantic::ScopeId scope,
+        std::string_view spelling,
+        std::optional<semantic::TypeId> result) const noexcept;
+    void clear_hir_vhdl_subtype_name_cache() const noexcept;
+    [[nodiscard]] std::optional<std::int64_t>
+    hir_pure_integral_attempt(semantic::ExpressionId expression) const;
+    void clear_hir_pure_integral_attempt_cache() const noexcept;
 
     mutable std::size_t hir_effective_vhdl_subtype_cache_depth_ { };
     mutable std::size_t hir_effective_vhdl_subtype_cache_bytes_ { };
     mutable std::vector<HirEffectiveVhdlSubtypeCacheEntry>
         hir_effective_vhdl_subtype_cache_;
+    mutable std::size_t hir_expression_resolution_cache_bytes_ { };
+    mutable std::size_t hir_expression_resolution_cache_entries_ { };
+    mutable std::size_t hir_expression_resolution_cache_hits_ { };
+    mutable std::size_t hir_expression_resolution_cache_misses_ { };
+    mutable std::size_t hir_expression_resolution_cache_cap_drops_ { };
+    mutable std::map<semantic::ExpressionId,
+        std::vector<HirExpressionResolutionCacheEntry>>
+        hir_expression_resolution_cache_;
+    mutable std::size_t hir_vhdl_subtype_name_cache_bytes_ { };
+    mutable std::size_t hir_vhdl_subtype_name_cache_entries_ { };
+    mutable std::size_t hir_vhdl_subtype_name_cache_hits_ { };
+    mutable std::size_t hir_vhdl_subtype_name_cache_misses_ { };
+    mutable std::size_t hir_vhdl_subtype_name_cache_cap_drops_ { };
+    mutable std::map<std::uint32_t,
+        std::map<std::string, std::optional<semantic::TypeId>, std::less<>>>
+        hir_vhdl_subtype_name_cache_;
+    mutable std::map<semantic::ExpressionId, std::optional<std::int64_t>>
+        hir_pure_integral_attempt_cache_;
+    mutable std::size_t hir_pure_integral_attempt_hits_ { };
+    mutable std::size_t hir_pure_integral_attempt_misses_ { };
+    mutable std::size_t hir_pure_integral_attempt_cap_drops_ { };
 
     struct HirProcessDescription {
         semantic::SourceSpanId source;

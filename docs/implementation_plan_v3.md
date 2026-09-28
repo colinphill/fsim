@@ -1,9 +1,384 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # fsim v3 implementation plan
 
+**Current campaign direction, 2026-09-28:** Further optimization is paused at
+retained P96 (32.579 seconds on the original full mixed case). Cleanup and
+local qualification passed: Release 454/454, focused Debug 7/7, and Tcl-off
+6/6. The [ten-case wall/RSS matrix](performance-matrix-2026-09-28.md) passed
+fsim/Vivado stimulus and correctness parity in every case; its single timed
+sample per engine is not seven-pair performance qualification. Matched
+short-case controls reproduced roughly 0.55–0.65 seconds more native
+setup/simulation time than frozen P8A. The user accepted those small
+regressions and requested publication and commit preparation. The under-15-
+second target remains open. Do not commit or push yet.
+
 This is the authoritative batch and status record for fsim v3. Development
 starts on branch codex/v3 from clean v2 checkpoint
 22d5e2ba43b5e7711db6fe0b27d7e9e0d5345095.
+
+**Historical full mixed direction, 2026-09-28.** The user superseded the P38
+pause. Optimize only the full original mixed-codec case from retained P37,
+targeting under 15 seconds across compile, elaborate, native setup, and
+simulation. Profile all phases, select the largest measured host path, and
+repeat with one cold uninstrumented CPU-0/O2 run per candidate. Preserve the
+external RTL, VHDL compatibility option, final fingerprints and correctness;
+waves/debug stay off. No Vivado or paired/reduced gate belongs to this loop.
+The prior all-ten seven-pair program is deferred at 0/10 qualified cases.
+See the [current campaign loop](performance-campaign.md) and evidence under
+`build/performance-campaign/mixed-long-fast-loop/`.
+
+At the current checkpoint, the single full-case wall sample fell from
+86.894 seconds on retained P37 to 62.682 seconds after P39–P41; correctness
+matched on every iteration and the under-15-second target is still open.
+P42's scoped Lowerer resolution cache and resolver cleanup passed the
+affected Release build and focused semantic/elaboration/VHDL generic checks.
+Its one cold full-case sample took 59.767 seconds with all 75 saved final
+summaries matching. P43's wide dynamic word selection passed affected
+Release/LLVM/cache checks. Its one full-case wall sample took 53.900 seconds
+with exact final-summary and correctness parity. The next change must follow
+the fresh all-phase profile. P44's literal shortcut was rejected after a
+53.804-second cold sample and unchanged selected optimized LLVM shapes; its
+source/test additions were removed. P45's scoped static VHDL subtype-name
+cache passed the affected Release build and seven focused checks. Two cold
+samples took 56.150 and 52.644 seconds; elaboration consistently improved
+from P43's 21.438 seconds to 20.032 and 19.732 seconds, while native time
+varied. Both passed the saved 75 final summaries and 87 correctness lines.
+P46's scoped pure no-binding integral-attempt cache passed the affected
+Release build and seven focused checks. Its one full-case wall sample took
+51.489 seconds (1.344 compile, 18.829 elaborate, 31.314 native), with all
+75 final summaries and 87 correctness lines matching; the P46 profile
+counted 939,713 hits, 86,875 misses and no cap drops. The latest total
+remains above 15 seconds, without a statistical claim. The next change must
+follow the fresh P46 all-phase profile, where package resolution remains a
+prominent overlapping elaboration path. No older ten-case performance
+qualification is implied by these single samples.
+
+P47's package-context ancestor guard passed the affected Release build and
+focused semantic/elaboration checks, including a cycle-and-diamond witness.
+Its one cold full-case sample took 50.937 seconds (1.343 compile, 17.977
+elaborate, 31.615 native), with all 75 final summaries and 87 correctness
+lines matching. This is a 0.552-second single-sample total improvement from
+P46; the under-15-second target remains open. A profiling-only LLVM worker
+CPU breakdown is the next evidence gate before another native compiler edit.
+P48's profile-only CPU clocks then measured 15.327 seconds of materialized
+LLVM worker CPU across 312 modules: 6.913 seconds in IR optimization and
+5.832 in lookup/materialization were the largest labeled stages. The
+instrumented full case matched all 75 summaries and 87 correctness lines;
+this is attribution, not a new wall-time result. P47 remains the current
+50.937-second cold wall observation and the under-15-second target is open.
+P49's diagnostic-only pass clocks ranked InstCombine at 3.641 seconds of
+process-module CPU, followed by EarlyCSE 1.272, SROA 1.043, and SimplifyCFG
+1.024. Its saved-artifact native run passed the full 75-summary and
+87-correctness-line oracle; no optimizer edit or new cold wall result is
+implied. The next change needs source proof and an end-to-end wall check.
+P50's offline current-IR comparison did not support replacing InstCombine:
+the hot multiplier's code grew materially, and an InstSimplify prepass gave
+no optimizer gain. The pipeline remains unchanged.
+P51's short scheduler Callgrind window found 0.49% Scheduler self and 1.33%
+static-cohort self, with much larger generated `gf_mult` and packed-value
+work below those inclusive paths. Its Valgrind-native cache key differed from
+the regular host, so the instruction profile is partial diagnostic evidence,
+not a new cold wall observation.
+P52's broad bounded O1 pipeline selected 42 packed/cohort modules and did
+not show a supported native gain. P52B gates the extra pipeline to a single
+prepared process with bounded IR and a natural loop. Its affected Release
+build and profiled LLVM test passed; one cold full mixed-codec run took
+48.782 seconds (1.344 compile, 17.425 elaborate, 30.011 native), matching
+all 75 saved summaries and 87 correctness lines. This is a 2.155-second
+single-run total reduction from P47, including 1.605 seconds in native work;
+the elaboration difference is not attributed to P52B. Schema v174 and P52B
+are retained. The under-15-second target remains open. Next quantify actual
+interpreter owners with route-neutral existing counters before choosing a
+runtime helper change; no Vivado or multi-sample gate is selected here.
+P53 counters subsequently found heavy interpreted owners and repeated Logic9
+slot visits. P54's ordered compact Logic9 pending update trial passed its
+affected build and focused correctness checks, but one cold full-case run was
+50.037 seconds versus P52B's 48.782 seconds; a separate profile confirmed
+6.535 million consumed compact snapshots. P54 is rejected, not retained.
+Its exact source/test changes were reverted in the P55 batch. P55 defers a
+VHDL lvalue subtype query until an aggregate RHS needs it and moves an owned
+optional value. Six focused tests and the full 75 summaries/87 correctness
+lines passed. One cold sample took 50.636 seconds versus P52B's 48.782;
+retain P55 as a neutral simplification without a performance claim. P52B
+was the prior best observed timing control. P56 shares immutable array subtype
+metadata in private VHDL constant values and charges metadata allocation to
+the existing work budget. Its affected Release build, six focused tests, and
+full 75-summary/87-correctness-line run passed. One cold sample took 48.429
+seconds, with 16.019 elaboration, 1.355 seconds below P55's one sample.
+Native variation is not attributed to P56. Retain P56 as the lowest observed
+full sample; the under-15-second goal remains open. A separately gated
+initializer/lookup diagnostic is next.
+P57 then skipped the generated-callable expression traversal when the callable
+set is empty, retaining duplicate and generic-instance validation. Its
+affected Release build and four focused checks passed. One cold full-case
+run matched all 75 summaries and 87 correctness lines at 47.181 seconds,
+including 14.917 elaboration, 1.102 below P56's single sample. P57 is the
+lowest observed full run; the under-15-second target remains open. A separate
+elaboration-only profile showed fewer allocator samples and unchanged
+initializer/lookup work, with no simulation result.
+The elaboration Callgrind reached its 900-second bound before completion but
+left a 188.245-billion-instruction partial dump. It created no snapshot,
+native objects, or simulation result. Rank the partial evaluator/lookup/copy
+arcs against current native elaboration sampling; do not infer a wall-time
+gain from the instrumented count or repeat this expensive run by default.
+P58 retained a private VHDL name splitter with three inline views and overflow
+storage and removed a copied direct unit-lookup prefix. Six focused checks and
+the full 75/87 correctness gate passed. Its single cold full run took 46.275
+seconds, with 14.065 elaborate, 0.852 less than P57's single sample; native
+was essentially flat. This is the lowest observed full sample, still above
+15 seconds. A separate diagnostic interpreted eleven large nonshareable
+processes from the verified snapshot: 94,936 static operations and 17,835,229
+executed interpreted operations, with no timing claim. Compare the resulting
+JIT work saved against added interpreter work before considering any policy
+change; next refresh the elaboration-only profile for the remaining 14 seconds.
+P59 indexed immutable VHDL declarations by scope and name and kept the
+existing overlay and stale-index resolver fallbacks. Its affected Release
+build, seven focused checks, and 75/87 full correctness gate passed. One cold
+full sample took 45.274 seconds with 13.362 elaborate, 0.703 less than P58's
+single sample; P59 is retained as the lowest observed full run. The full
+under-15-second target remains 30.274 seconds away. Profile-only adaptive
+gate and SSA-register readouts found eight selected adaptive jobs with
+11.918 million interpreted operations across nine members. P60 promoted them
+through a cumulative-work threshold but was rejected after a 54.530-second
+cold sample with unexplained all-phase slowdown; its source was restored.
+P61 awaited all selected long-run jobs before simulation, then took 46.524
+seconds in one correct cold run and was also rejected/restored. P59 remains
+the best observed full sample at 45.274 seconds. P62 removes zero-offset
+register GEP construction before LLVM optimization, preserving all nonzero
+addressing and bumping the native cache schema to v175. Its affected Release
+build and four focused checks passed; one correct cold full sample took 45.824
+seconds, 0.550 above P59. Retain this emitter simplification without a
+speedup claim. An external native profile with internal counters off placed
+43.39% of 2,938 CPU samples in LLVM, 36.26% in fsim, 11.74% in mapped JIT,
+and 7.95% in libc; all 756 unresolved LLVM samples belong to the installed
+libLLVM.so.22.1. The matching local debug file is absent. The next change
+must remove a larger measured compiler or runtime cost; the historical
+worker-count note alone does not justify a pool change. No result from P60/P61
+qualifies the older ten-case program.
+Fresh external-only elaboration sampling of the current ELF and 19 inputs
+found expression lookup, allocation, and package-member resolution as top
+self paths across 1,307 lossless samples; its inclusive paths overlap and
+do not imply a speedup. The next candidate remains unselected pending a
+bounded source proof.
+P63 then removed the static-cohort interpreter's 512 inline context/entry
+arrays, reusing its existing vector and nested fallback. The affected Release
+build and three focused tests passed; the ELF cohort local frame fell from
+86,424 to 392 bytes. One correct cold full sample took 44.716 seconds, the
+lowest observed, 0.558 below P59; this is a retained simplification with no
+dispersion claim. External-only native sampling recovered scheduler ancestry
+across the cohort frame. The target remains 29.716 seconds away. A bounded
+diagnostic of repeated HIR lowering followed; no lowering cache was approved.
+The resulting profile-gated census recorded 7,355 complete VHDL entry rows
+and 6.574 seconds of summed thread CPU. Strict observed keys never repeat;
+path-omitting groups offer only an unsafe 4.246-second after-first CPU bound.
+No lowering cache is selected without hierarchy and binding remapping proof.
+P65 then collected a bounded first-5%-of-ticks scheduler Callgrind window on
+the frozen P63 runtime with P64's diagnostic disabled. The separate
+[content-corrected analysis](../build/performance-campaign/mixed-long-fast-loop/p65-scheduler-callgrind/logs/analysis.json)
+retains the launcher's timestamp-only false cache failure: 312 native object
+paths, sizes, and hashes were unchanged, and no run was repeated. The 22.611
+billion-instruction window includes 135 lazy cohort wrapper compilations;
+early instruction shares are not full-run CPU shares or wall savings. P66's
+broad packed-word patch remains scratch-only. P67 restored P64's diagnostic
+source and removed the redundant checked-integer unknown guard. Its bounded
+constant-plane forwarding passed the Release fsim and focused LLVM/runtime
+checks. A diagnostic native-only run recorded 91,588 forwarded plane loads
+and 21,450 suppressed false guards; one correct cold full run took 44.222
+seconds (1.345 compile, 13.613 elaborate, 29.261 native), 0.494 below P63's
+best observation. Retain this targeted change provisionally: P59-to-P67 raw
+LLVM instructions fell by 1.014 million, but intervening changes confound
+that comparison and one wall sample does not establish dispersion. The full
+target remains 29.222 seconds away. P62 external elaboration call paths remain
+applicable after byte-exact restoration of the HIR source.
+P68's serialized giant-process census proved two compatible groups and a
+four-body sharing opportunity. P69 binds only differing known narrow Logic4
+literals through the existing instance-indexed callback in large nonrecurring
+O2 groups; it preserves the default path and keys the binding mask in both
+native-cache routes. Focused LLVM and application tests pass. One diagnostic
+native run matched 75 fingerprints and 87 correctness lines, with 308 objects
+instead of 312 and 428 bound callbacks. One correct cold full run took 42.209
+seconds (1.343 compile, 13.663 elaborate, 27.202 native), 2.012 below P67.
+Retain P69 on that targeted evidence while treating the one wall observation
+as a single sample. The under-15 target remains 27.209 seconds away; select
+the next largest host path from the current native profile and applicable P62
+elaboration profile. P70's current-index empty package-member exit applied to
+8,163,191 of 8,406,959 valid resolver calls in a diagnostic compile and
+elaboration. The independent P69 shared-container callback repair now reports
+the actual candidate process ID on errors; a large shared-module fixture
+checks it against interpretation. Semantic, elaboration, and application
+checks pass. One correct cold full run took 41.810 seconds (1.344 compile,
+12.709 elaborate, 27.755 native), 0.399 below P69; elaboration fell 0.954
+seconds, while the native segment rose 0.554 in one sample. Retain P70 on the
+targeted phase gain, with the under-15 target still 26.810 seconds away.
+
+P74's diagnostic owner census found 34,348,337 Logic9 direct-owner slots
+rejected by the old `std_logic` gate. P75 activates the narrow single-driver
+word route with an ordered generic fallback and preserved equal-value write
+intent. Its affected Release build and focused runtime/application checks
+pass; the native diagnostic consumed 20,632,218 slots with full 75/87
+correctness. One cold full run took 40.405 seconds (1.344 compile, 12.709
+elaborate, 26.350 native), 1.406 below P70 in the native segment. Retain
+P75. The under-15 goal remains 25.405 seconds away; choose the next change
+from current host-path evidence.
+
+P76 caches one strictly guarded VHDL pure-call concurrent process template
+per semantic scalar generic identity and remaps whole-signal formal bindings.
+The target family recorded 1,143 hits and 30 misses in a diagnostic run with
+full 75/87 parity. The affected Release build and focused elaboration test
+pass, including dynamic indexed insertion and a later ordinary callable body
+after replay. One cold full run took 37.495 seconds (1.343 compile, 8.946
+elaborate, 27.204 native), 2.910 below P75. The elaboration segment fell
+3.763 seconds; the native segment's 0.854-second rise is single-sample
+variation without attribution. Retain P76; the under-15 goal remains 22.495
+seconds away. P77 recovered compiler call chains from the frozen P75 native
+profile by decoding each TID separately, with no source or workload rerun.
+Use the [P76 receipt](../build/performance-campaign/mixed-long-fast-loop/p76-concurrent-process-reuse/retention-receipt.json)
+and [P77 profile receipt](../build/performance-campaign/mixed-long-fast-loop/p77-static-llvm-profile/profile-receipt.json)
+to rank the next measured host path.
+
+P79's diagnostic typed VHDL census found its costliest exact initializer
+groups repeat only across fresh evaluator instances. P80's read-only audit
+did not establish a safe shared-cache key or unit-lifetime hit count, so it
+is deferred. P81's disjoint-class Boolean lowering simplification passed the
+focused LLVM suite and full 75/87 diagnostic parity. One cold full run took
+36.344 seconds (1.344 compile, 8.997 elaborate, 26.002 native), 1.150 below
+P76. The compatible profiles show 2,469 fewer raw IR instructions and 0.030
+seconds less summed LLVM optimize CPU; the larger native-wall difference is
+one-sample variation without full attribution. Retain P81. The under-15 goal
+remains 21.344 seconds away. See the [P81 receipt](../build/performance-campaign/mixed-long-fast-loop/p81-logic-aval-simplification/retention-receipt.json).
+
+P82 bounds LLVM materialization workers by Linux calling-thread CPU affinity,
+with the existing hardware-concurrency fallback elsewhere. Focused app/LLVM
+tests and full diagnostic 75/87 parity pass. All 316 profiled module rows use
+one worker on the CPU0 campaign, and summed JIT worker CPU falls from 12.650
+to 10.163 seconds. One cold full run took 35.292 seconds (1.344 compile,
+8.949 elaborate, 24.997 native), 1.053 below P81, with peak RSS down
+193,844 KiB. Retain P82; the under-15 goal remains 20.292 seconds away.
+The [P82 receipt](../build/performance-campaign/mixed-long-fast-loop/p82-affinity-jit-workers/retention-receipt.json)
+separates diagnostic attribution from the single wall observation.
+
+P84 preserves the P82 source and uses isolated Release Clang 22 ThinLTO
+for the host executable, with the canonical non-IPO binary retained as a
+control. Five focused tests passed, and the full diagnostic case matched
+75 fingerprints and 87 correctness lines. One cold full run took 34.385
+seconds (1.344 compile, 8.646 elaborate, 24.394 native), 0.906 below
+P82. Retain this as the preferred host build configuration, subject to
+the single-sample attribution limit. The under-15 goal remains 19.385
+seconds away. See the [P84 receipt](../build/performance-campaign/mixed-long-fast-loop/p84-thinlto-host-config/retention-receipt.json).
+
+P85's artifact-only [owner-sharing census](../build/performance-campaign/mixed-long-fast-loop/p85-native-sharing-audit/README.md)
+compared all 1,731 P82 compiled functions. The existing strict comparator
+admits only 80 cross-owner pairs; at most five singleton native modules
+could disappear, representing 176 ms of instrumented compiler CPU.
+No source change follows this small upper bound.
+
+P85 also counted 650 native-compiled Logic9 XOR sites. P86 tried a
+stateless XOR lowering identity: the focused exhaustive raw-state JIT test
+passed and optimized IR fell by 7,096 instructions, but one cold full run
+took 37.149 seconds, 2.764 above P84. Unaffected phases also slowed, so
+the sample is not a causal attribution. Reject P86 and restore exact P84
+source/binary. See the [P86 rejection receipt](../build/performance-campaign/mixed-long-fast-loop/p86-logic9-xor-lowering/decision-receipt.json).
+
+P87's isolated Clang 22 ThinLTO host IR-PGO trial trained on the unchanged
+full case, passed 19/75/87 diagnostic parity and focused semantic/elaboration
+tests, then took one cold full wall: 36.351 seconds, 1.966 above P84. The
+observed elaboration improvement of 0.701 seconds was outweighed by 2.564
+seconds more native setup/simulation; one sample cannot causally assign
+those phase changes. Reject P87 as a configuration and retain P84's
+34.385-second binary. The configuration-only measured-first screen skipped
+the three large remaining test links after P87 lost; a winning candidate
+would require them before qualification. See the [P87 decision receipt](../build/performance-campaign/mixed-long-fast-loop/p87-host-pgo/decision-receipt.json).
+
+P88 screened the existing synchronize-recurring flag on the exact P84
+binary. A scratch-runner branch error left the first profile/wall untreated;
+that incidental control-like wall took 36.546 seconds, 2.160 above P84's
+historical sample. After correcting the runner, a valid diagnostic compiled
+eight additional modules and removed 13.481 million adaptive interpreted
+operations, with full 19/75/87 parity. Its one valid cold wall took 38.352
+seconds, 1.806 above the incidental untreated run. Reject forced recurring
+synchronization for this workload and keep P84. The [P88 receipt](../build/performance-campaign/mixed-long-fast-loop/p88-sync-effective/decision-receipt.json)
+preserves the invalid attempt and treatment proof. The control variation
+reinforces the single-sample attribution limit for P86 and P87.
+
+P89 replaces `compiled_semantic_scope`'s linear scan with bounds-checked
+indexing under the existing validated zero-based ScopeId invariant. The
+initial local vector-copy bug was repaired before profiling; semantic and
+elaboration tests then passed 2/2, and the full diagnostic matched
+19/75/87. Its one cold wall took 36.440 seconds, 0.105 below the recent
+untreated control-like run but 2.055 above historical P84. Retain the
+source change as a neutral simplification under the user's rule, without
+claiming speedup. The [P89 receipt](../build/performance-campaign/mixed-long-fast-loop/p89-scope-index-scout/retention-receipt.json)
+holds the A/B repair and evidence. P84 ThinLTO remains the preferred host
+build configuration.
+
+P91's [artifact-only second-window Callgrind report](../build/performance-campaign/mixed-long-fast-loop/p91-second-window-callgrind/report.json)
+verified the full retained P89 case with 75 exact summaries and 87 exact
+correctness lines. The four hottest GF multiplier JIT processes contributed
+21.6% of second-window instruction self cost, but only 63 of 2,322 full-run
+native CPU samples; the six-module equal-shape family accounts for about
+0.66 sampled CPU seconds. Defer a complex GF-only specialization.
+`PackedLogic4::insert_bits` is the larger inclusive update/commit path to
+audit, without adding overlapping Callgrind arcs or treating instruction
+counts as wall-time estimates.
+
+P94's [scratch exact-key initializer census](../build/performance-campaign/mixed-long-fast-loop/p94-initializer-exact-census/analysis.json)
+found 176 repeated successful calls in four disjoint hot families, totaling
+1.193 seconds of instrumented inclusive CPU. Exact overlay and selected
+generate equality preserved typed results and work deltas in all 177
+classes, while 32 classes had different incoming work counters. This
+supports a bounded work-budget-preserving memo experiment, not an
+end-to-end gain claim. The [P94 receipt](../build/performance-campaign/mixed-long-fast-loop/p94-initializer-exact-census/receipt.json)
+confirms the temporary diagnostic source and P89 ThinLTO binary were
+restored byte-identically. No new cold wall was taken.
+
+P96 implements the bounded exact-key initializer memo with per-validation
+ownership, full overlay and selected-generate equality, complete-result and
+work-budget guards, and a finite 4096-entry cap. The diagnostic full case
+observed 205 hits and preserved all 19 source inputs, 75 fingerprints, and
+87 correctness lines. The sole cold full wall was 32.579 seconds, with
+elaboration 1.355 seconds lower than P89. Native-phase differences between
+single samples are not attributable to the memo. Focused semantic and
+elaboration tests passed 2/2. The cap does not strictly bound retained array
+bytes; broad Release, Debug, and Tcl-off qualification remains pending. See
+the [P96 receipt](../build/performance-campaign/mixed-long-fast-loop/p96-exact-initializer-memo/retention-receipt.json).
+
+P97's [native-only call-path diagnostic](../build/performance-campaign/mixed-long-fast-loop/p97-simulation-attribution/report.json)
+used the exact P96 binary and design, passed 19/75/87 parity, and made no
+production change or cold wall measurement. The 13.479-second diagnostic
+interpreter interval includes adaptive LLVM work on CPU 0. Of 603 recovered
+Scheduler caller samples, 262 belong to static-cohort tasks, 144 to update
+commit, 140 to single-process execution, and 57 to other/self; 294 native
+JIT leaf samples lack callers. Existing adaptive, cohort, and packed-value
+audits do not establish a greater-than-one-second removable runtime path.
+Investigate aggregate LLVM lowering/code generation next.
+
+P98's [offline giant-IR scout](../build/performance-campaign/mixed-long-fast-loop/p98-giant-call-ir/report.json)
+removed 8,017 optimized IR instructions under app-vector alias assumptions,
+but production-pipeline optimization CPU rose from 0.24 to 0.30 seconds and
+O0/FastISel backend CPU stayed 0.19 seconds for the captured representative.
+The generic JIT frame ABI also lacks the required disjointness proof. Reject
+the annotation; the 19/75/87 capture was diagnostic only, with no source
+change or cold wall.
+
+P99's [strict and Fork-interval register census](../build/performance-campaign/mixed-long-fast-loop/p99-register-lifetime-census/report.json)
+found zero candidates under whole-process Fork exclusion and only 641
+single-use narrow registers under an optimistic app-private bound. That
+bound admits potentially failing operations and is too small to justify a
+compiler rewrite; the public JIT frame ABI remains unchanged. P100's
+[exact 11-body admission screen](../build/performance-campaign/mixed-long-fast-loop/p100-giant-admission-screen/rejection-receipt.json)
+removed seven giant native modules, but interpreted 17.835 million extra
+operations. One cold full wall passed 19/75/87 parity and took 39.153
+seconds, 6.574 seconds slower than retained P96. Reject the skip; restore
+the P96 source and binary exactly. Rebuild the one diagnostic app object
+before later qualification. Rank the remaining interpreted opcode/owner
+costs before selecting the next host change; the under-15-second target
+remains open. P101's [count-only opcode receipt](../build/performance-campaign/mixed-long-fast-loop/p101-vm-opcode-census/diagnostic-receipt.json)
+reconciles 31.531 million no-executor VM-loop operations against existing
+per-process totals, with 19/75/87 parity and 308 native objects. DebugPoint
+and Jump together account for 8.241 million dispatches, but their frequency
+does not establish removable CPU time or permit dropping source/scope
+semantics. Its temporary source and retained executable are restored; no
+P101 cold wall or optimization was made.
 
 ## Governing contract
 
@@ -8746,14 +9121,115 @@ One reduced `mixed_codec` O2 cross-simulator
 [preflight](../build/performance-campaign/llvm-capability-closure/final-parity-result.json)
 passed outside the sandbox with 48 matching canonical streams, 836 event
 records and seven summaries, frozen identity intact, and no timed results.
-The final manual index remains before the user-authorized commit and push. The
+The qualified checkpoint was committed and pushed as `220e0c05`. The
 [test plan](../build/performance-campaign/llvm-capability-closure/focused-validation-plan.json)
 records the exact O0/O2 and typed-negative witnesses. P35's initial
 authoritative disjoint-driver header scaffold was
 [archived](../build/performance-campaign/p35-disjoint-driver-composite/p35-header-scaffold.patch)
-and all eight pre-P35 source/test bytes restored exactly; its production
-implementation and performance gates resume after LLVM closure. Frozen P30
-remains the performance control; the current capability CLI SHA-256 is
+and all eight pre-P35 source/test bytes restored exactly before closure.
+P35's authoritative disjoint-driver composite is retained on the committed
+capability baseline. Baseline semantic witnesses pin early and later callback
+snapshots plus queued-over-native overlap; the affected Release `-j12` build
+and five focused runtime/LLVM/application checks pass. Its frozen candidate
+CLI SHA-256 is
+`64e37033496fabc060f56843fce7d3668b95f00d69ad8cd3a2e37581d6c3ee8c`.
+The [mechanism audit](../build/performance-campaign/p35-disjoint-driver-composite/mechanism-architect-verification.json)
+shows 24,412,354 owned-composite updates, 95.89% of accepted reduced slots.
+Two opposite-order reduced pairs saved 3.310587 and 2.355714 seconds;
+[full pairs](../build/performance-campaign/p35-disjoint-driver-composite/full-architect-verification.json)
+saved 24.709797 and 33.149822 seconds on original throughput. Full median
+fsim time fell 197.634035 to 168.704225 seconds (14.638%), almost entirely
+in the native phase. Both full preflights matched 128,878 event records and
+six summaries across fsim/Vivado; all timed summaries, phase exits, cold
+caches and frozen identities passed. Vivado moved +0.001761/+1.256913
+seconds in the candidate legs, opposite the fsim gain. RSS is recorded in
+the [full raw audit](../build/performance-campaign/p35-disjoint-driver-composite/full-two-pair-audit.json).
+The [retention decision](../build/performance-campaign/p35-disjoint-driver-composite/retention-decision.json)
+does not claim fsim:Vivado victory or seven-pair qualification. The first
+full control launcher falsely rejected its valid sample by expecting the
+reduced four-summary count; its original receipt and [post-collection
+analysis](../build/performance-campaign/p35-disjoint-driver-composite/full-control-v1-analysis-recovery.json)
+are preserved without a rerun. P35 remains dirty and unpushed. Hosted Ubuntu
+Release and Debug passed; Windows Debug and Release only reported unused Tcl-console
+`argc`/`argv`. The one-line `[[maybe_unused]]` repair passes local Release
+targeted build and focused CTest; hosted confirmation is pending. The
+[18:00 convergence audit](../build/performance-campaign/convergence-audit-20260927T1800Z.json)
+records the checkpoint before current attribution. The
+[P35 current-ELF profiles](../build/performance-campaign/p35-disjoint-driver-composite/current-elf-profile-analysis.json)
+passed exact final-summary and identity checks. Original throughput simulation
+had 15,565 samples with 0.69% unresolved; exclusive self overhead in native
+resume, static cohort execution, cohort resume and queueing was 11.15%,
+8.06%, 6.39% and 5.27%. Mixed elaboration had 3,962 samples and only two
+unresolved; overlapping inclusive subtype and package-resolution paths
+remain material. Mixed native had 746/4,121 unresolved libLLVM samples,
+limiting exact attribution. These are period-weighted instrumented profiles,
+not timing evidence.
+
+The [P36 count audit](../build/performance-campaign/p36-cohort-readiness/count-architect-verification.json)
+verified all six original-throughput final summaries and physical identities
+after a single separate diagnostic run. All 3,104,730 ready spans had their
+full registered membership (124,664,605 ready members), with no partial
+or mixed cohorts. The adapter completed 121,949,776 members across
+3,451,363 full-prefix calls, all at static wait; 2,714,829 ready members
+used existing singleton routes. Registered 64–127-member cohorts contributed
+97,233,024 ready members (78.0%). Three source-identified 64-member CFG
+probes were identical and always started at PC 9, but cover just 4.46% of
+adapter members. All selected `program_owner` fields were null, so their
+scratch reader's owner traversal is not a broader alias proof. P36's original
+launcher false rejection (`failures=0` matched `FAIL`) and analysis-only
+correctness recovery are both archived; no simulator rerun was needed.
+Temporary instrumentation was restored byte-for-byte and the configured CLI
+again hashes to frozen P35. Manual source reindex passed. The architect
+selected a narrower hot-metadata candidate while reusable structural-cohort
+specialization remains a separate, unproven opportunity.
+The [current 64-member static-shape join](../build/performance-campaign/p36-cohort-readiness/current-64-cohort-static-shape.json)
+found 540/541 uniform declared ten-operation cohorts but does not prove
+complete CFG eligibility. P37 is a narrower, [reviewable hot-metadata candidate](../build/performance-campaign/p37-hot-execution-metadata/candidate.patch)
+with an affected Release build and seven focused CTests passing. Its JIT
+operation-count scalar, authoritative hot timeout origin, immutable
+CallableFramePush admission fact, and disabled-profile lazy arguments retain
+existing behavior in source review. The hot ProcessState grew 64 to 72 bytes
+while its cold sidecar shrank 1584 to 1576 bytes. Frozen source/ELF/dependency
+identities and manual indexing passed. The
+[reduced audit](../build/performance-campaign/p37-hot-execution-metadata/reduced-architect-verification.json)
+and [full audit](../build/performance-campaign/p37-hot-execution-metadata/full-architect-verification.json)
+accepted opposite-order cold pairs with complete canonical transcript,
+correctness, input, identity and empty native-cache gates. Full
+original-throughput fsim control/candidate totals were
+170.535054/168.019559 and 171.552432/167.972414 seconds, saving
+2.515495 and 3.580018 seconds; median saving was 3.047757 seconds
+(1.782%). Native setup/simulation savings were 2.516139 and 3.429941
+seconds; RSS direction was mixed. The [retention decision](../build/performance-campaign/p37-hot-execution-metadata/retention-decision.json)
+keeps P37; its CLI SHA-256 is
+`fa610df375a14affec578cd53aa4c5f7d5eedff1f671053cfc2a9258d3e81bd1`.
+Fsim remains slower than Vivado, so no case is qualified. A separate
+current-P37-ELF full-throughput CPU profile then ranked the remaining
+native call paths before P38. The
+retained P35 mixed-elaboration profile remains current for that phase;
+P37 does not change the elaborator. Instrumented phase time is not speed
+evidence, and the prior sampled clusters do not imply additive savings.
+The [19:58 convergence audit](../build/performance-campaign/convergence-audit-20260927T1958Z.json)
+sets the current evidence dependency.
+The [P38 source/layout trial](../build/performance-campaign/p38-operation-extent/candidate.patch)
+cached the immutable external-boundary operation extent in the hot runtime
+record. It passed an affected Release build and four focused tests. Two
+opposite-order reduced pairs favored the candidate, but the
+[full audit](../build/performance-campaign/p38-operation-extent/full-architect-verification.json)
+found only 0.737246 seconds saved in the first order and 6.632113 seconds
+lost in the reverse. Candidate median was 2.947433 seconds (1.62%) slower
+and RSS rose in both pairs; the added state is not a demonstrated neutral
+simplification. The [rejection decision](../build/performance-campaign/p38-operation-extent/rejection-decision.json)
+restored only P38's four files. The configured CLI again matches frozen P37
+SHA-256 above with the same 22 physical dependencies; a quick runtime sanity
+test passes. All raw P38 evidence remains archived. The
+[20:58 convergence audit](../build/performance-campaign/convergence-audit-20260927T2058Z.json)
+records this bounded round. The user then supplied the full mixed-codec
+direction above, superseding that pause. The former program remains at 0/10
+qualified cases.
+The [update-order refinement](../build/performance-campaign/p35-disjoint-driver-composite/update-order-architecture-refinement.json)
+and [correction](../build/performance-campaign/p35-disjoint-driver-composite/update-order-audit-correction-1.json)
+remain authoritative. Frozen P30 is the historical pre-closure control;
+P35 uses the qualified `220e0c05` capability baseline. The control CLI SHA-256 is
 `a77caa06446039a6f441a1cbe5ac58b90bc830a94b92eeda3d48611ce6e2ed2e`.
 No reference case is qualified. The user-requested shorter loop is documented
 in [the campaign guide](performance-campaign.md#shorter-iteration-loop):

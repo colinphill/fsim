@@ -510,6 +510,12 @@ struct Simulation::Impl {
         std::vector<compiler::JitProcessHandle>>>
         jit_startup_compilations;
 
+    // These jobs are already selected for every long run. Await only this
+    // subset before HDL execution, leaving adaptive selection unchanged.
+    std::vector<std::shared_future<
+        std::vector<compiler::JitProcessHandle>>>
+        jit_nonadaptive_background_compilations;
+
     std::mutex jit_background_mutex;
 
     std::condition_variable jit_background_condition;

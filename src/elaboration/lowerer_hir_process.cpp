@@ -1458,6 +1458,43 @@ bool Lowerer::can_lower_hir_concurrent_statement(
         && specialized_hir_unit_->find_expression(*input.value).has_value();
 }
 
+std::optional<SignalId> Lowerer::hir_concurrent_port_signal(
+    const semantic::DeclarationId declaration) const
+{
+    const auto binding = hir_runtime_binding(
+        declaration, semantic::ScopeId { }, false);
+    return binding && binding->kind == HirRuntimeBindingKind::signal
+        ? binding->signal : std::nullopt;
+}
+
+bool Lowerer::has_generated_processes() const noexcept
+{
+    return !generated_processes_.empty();
+}
+
+std::uint32_t Lowerer::next_hir_callable_invocation_identity() const noexcept
+{
+    return next_callable_invocation_identity_;
+}
+
+bool Lowerer::advance_hir_callable_invocation_identity(
+    const std::uint32_t expected_before,
+    const std::uint32_t after) noexcept
+{
+    if (next_callable_invocation_identity_ != expected_before
+        || after < expected_before) {
+        return false;
+    }
+    next_callable_invocation_identity_ = after;
+    return true;
+}
+
+bool Lowerer::hir_concurrent_signal_read_only(
+    const SignalId signal) const noexcept
+{
+    return read_only_signals_.contains(signal);
+}
+
 bool Lowerer::diagnose_hir_vhdl_block_guard(
     const semantic::ExpressionId expression)
 {

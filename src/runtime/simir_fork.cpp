@@ -536,6 +536,7 @@ void Interpreter::Impl::spawn_fork(
         child.program().id = child_id;
         child.cold().design_process = design_process;
         child.id = child_id;
+        child.has_callable_frame_push = parent.has_callable_frame_push;
         child.program().name += ".$fork[" + std::to_string(instruction)
             + "].child[" + std::to_string(children.size()) + "]";
         child.program().initialize = false;

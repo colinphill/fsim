@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "../diagnostic/thread_cpu_clock.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -23,6 +29,161 @@
 #include <vector>
 
 namespace fsim::semantic {
+
+namespace detail {
+
+struct VhdlInitializerValue {
+    enum class Kind : std::uint8_t {
+        invalid,
+        integer,
+        packed,
+        array,
+    };
+
+    Kind kind { Kind::invalid };
+    std::int64_t integer { };
+    SpecializedHirVhdlPackedValue packed;
+    std::int64_t array_left { };
+    std::int64_t array_right { };
+    std::shared_ptr<const vhdl::SubtypeIndication> array_element_subtype;
+    std::vector<VhdlInitializerValue> elements;
+};
+
+struct VhdlInitializerMemoContext {
+    using Site = std::tuple<UnitId, DeclarationId, ExpressionId>;
+
+    struct Entry {
+        SpecializedHirOverlay overlay;
+        std::vector<DeclarationId> selected_generates;
+        VhdlInitializerValue value;
+        std::uint64_t work_delta { };
+    };
+
+    explicit VhdlInitializerMemoContext(const CompiledDesign& design)
+        : design_ { &design }
+        , profile_enabled_ {
+              std::getenv("FSIM_PROFILE_PHASES") != nullptr
+          }
+    {
+    }
+
+    [[nodiscard]] bool find(const CompiledDesign& design,
+        const UnitId unit, const DeclarationId declaration,
+        const ExpressionId expression, const SpecializedHirOverlay& overlay,
+        const std::span<const DeclarationId> selected_generates,
+        VhdlInitializerValue& value, std::uint64_t& work_delta)
+    {
+        if (&design != design_) {
+            return false;
+        }
+        std::lock_guard lock { mutex_ };
+        const auto site = entries_.find({ unit, declaration, expression });
+        if (site == entries_.end()) {
+            return false;
+        }
+        for (const auto& entry : site->second) {
+            if (entry.overlay == overlay
+                && std::ranges::equal(
+                    entry.selected_generates, selected_generates)) {
+                value = entry.value;
+                work_delta = entry.work_delta;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void insert(const CompiledDesign& design, const UnitId unit,
+        const DeclarationId declaration, const ExpressionId expression,
+        const SpecializedHirOverlay& overlay,
+        const std::span<const DeclarationId> selected_generates,
+        const VhdlInitializerValue& value, const std::uint64_t work_delta)
+    {
+        if (&design != design_) {
+            return;
+        }
+        std::lock_guard lock { mutex_ };
+        const Site key { unit, declaration, expression };
+        const auto existing = entries_.find(key);
+        if (existing != entries_.end()) {
+            for (const auto& entry : existing->second) {
+                if (entry.overlay == overlay
+                    && std::ranges::equal(
+                        entry.selected_generates, selected_generates)) {
+                    return;
+                }
+            }
+        }
+        if (entry_count_ >= maximum_entries) {
+            return;
+        }
+        Entry entry;
+        entry.overlay = overlay;
+        entry.selected_generates.assign(
+            selected_generates.begin(), selected_generates.end());
+        entry.value = value;
+        entry.work_delta = work_delta;
+        entries_[key].push_back(std::move(entry));
+        ++entry_count_;
+        if (profile_enabled_) {
+            ++admitted_entries_;
+        }
+    }
+
+    void record_miss()
+    {
+        if (!profile_enabled_) {
+            return;
+        }
+        std::lock_guard lock { mutex_ };
+        ++misses_;
+    }
+
+    void record_hit(const std::uint64_t work_delta)
+    {
+        if (!profile_enabled_) {
+            return;
+        }
+        std::lock_guard lock { mutex_ };
+        ++hits_;
+        replayed_work_ += work_delta;
+    }
+
+    ~VhdlInitializerMemoContext()
+    {
+        if (!profile_enabled_) {
+            return;
+        }
+        std::fprintf(stderr,
+            "FSIM_VHDL_INITIALIZER_MEMO hits=%llu misses=%llu "
+            "admitted=%llu replayed_work=%llu entries=%zu\n",
+            static_cast<unsigned long long>(hits_),
+            static_cast<unsigned long long>(misses_),
+            static_cast<unsigned long long>(admitted_entries_),
+            static_cast<unsigned long long>(replayed_work_), entry_count_);
+    }
+
+    static constexpr std::size_t maximum_entries { 4096U };
+
+private:
+    const CompiledDesign* design_ { };
+    bool profile_enabled_ { };
+    std::mutex mutex_;
+    std::map<Site, std::vector<Entry>> entries_;
+    std::size_t entry_count_ { };
+    std::uint64_t hits_ { };
+    std::uint64_t misses_ { };
+    std::uint64_t admitted_entries_ { };
+    std::uint64_t replayed_work_ { };
+};
+
+std::shared_ptr<VhdlInitializerMemoContext>
+make_vhdl_initializer_memo_context(const CompiledDesign& design)
+{
+    return std::make_shared<VhdlInitializerMemoContext>(design);
+}
+
+} // namespace detail
 
 std::string systemverilog_string_identity(const std::string_view bytes)
 {
@@ -39,6 +200,9 @@ std::string systemverilog_string_identity(const std::string_view bytes)
 }
 
 namespace {
+
+const bool semantic_profile_diagnostics_enabled
+    = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
 
 std::optional<std::string> parse_systemverilog_string_identity(
     const std::string_view identity)
@@ -381,11 +545,93 @@ template <typename Record, typename Id>
 const Record* find_replacement(
     const std::vector<Record>& records, const Id id)
 {
+    if (semantic_profile_diagnostics_enabled) {
+        struct LookupProfile {
+            explicit LookupProfile(const char* record_kind)
+                : record_kind { record_kind }
+            {
+            }
+
+            ~LookupProfile()
+            {
+                std::fprintf(stderr,
+                    "FSIM_REPLACEMENT_LOOKUP type=%s empty=%llu "
+                    "below_front=%llu above_back=%llu inside_hit=%llu "
+                    "inside_miss=%llu dense_candidate_hit=%llu "
+                    "dense_candidate_miss=%llu\n",
+                    record_kind,
+                    static_cast<unsigned long long>(empty),
+                    static_cast<unsigned long long>(below_front),
+                    static_cast<unsigned long long>(above_back),
+                    static_cast<unsigned long long>(inside_hit),
+                    static_cast<unsigned long long>(inside_miss),
+                    static_cast<unsigned long long>(dense_candidate_hit),
+                    static_cast<unsigned long long>(dense_candidate_miss));
+            }
+
+            const char* record_kind;
+            std::uint64_t empty { };
+            std::uint64_t below_front { };
+            std::uint64_t above_back { };
+            std::uint64_t inside_hit { };
+            std::uint64_t inside_miss { };
+            std::uint64_t dense_candidate_hit { };
+            std::uint64_t dense_candidate_miss { };
+        };
+
+        const auto record_kind = [] {
+            if constexpr (std::is_same_v<Id, DeclarationId>) {
+                return "declaration";
+            } else if constexpr (std::is_same_v<Id, ExpressionId>) {
+                return "expression";
+            } else {
+                return "other";
+            }
+        };
+        static thread_local LookupProfile profile { record_kind() };
+        const auto increment = [](std::uint64_t& counter) { ++counter; };
+        if (records.empty()) {
+            increment(profile.empty);
+        } else {
+            const auto first_id = records.front().id;
+            const auto last_id = records.back().id;
+            if (id.value() >= first_id.value()) {
+                const auto offset = static_cast<std::size_t>(
+                    id.value() - first_id.value());
+                if (offset < records.size()) {
+                    increment(records[offset].id == id
+                            ? profile.dense_candidate_hit
+                            : profile.dense_candidate_miss);
+                }
+            }
+            if (id < first_id) {
+                increment(profile.below_front);
+            } else if (last_id < id) {
+                increment(profile.above_back);
+            }
+        }
+
+        const auto found = std::ranges::lower_bound(
+            records, id, { }, &Record::id);
+        const auto matched = found != records.end() && found->id == id;
+        if (!records.empty() && !(id < records.front().id)
+            && !(records.back().id < id)) {
+            increment(matched ? profile.inside_hit : profile.inside_miss);
+        }
+        return matched ? &*found : nullptr;
+    }
+
     const auto found = std::ranges::lower_bound(
         records, id, { }, &Record::id);
     return found != records.end() && found->id == id
         ? &*found
         : nullptr;
+}
+
+std::uint64_t next_vhdl_initializer_profile_id() noexcept
+{
+    static std::atomic<std::uint64_t> next_id { 1U };
+    return next_id.fetch_add(1U, std::memory_order_relaxed);
 }
 
 template <typename Record>
@@ -1094,22 +1340,7 @@ std::optional<std::int64_t> evaluate_binary(
 }
 
 class HirIntegralEvaluator {
-    struct VhdlConstantValue {
-        enum class Kind : std::uint8_t {
-            invalid,
-            integer,
-            packed,
-            array,
-        };
-
-        Kind kind { Kind::invalid };
-        std::int64_t integer { };
-        SpecializedHirVhdlPackedValue packed;
-        std::int64_t array_left { };
-        std::int64_t array_right { };
-        vhdl::SubtypeIndication array_element_subtype;
-        std::vector<VhdlConstantValue> elements;
-    };
+    using VhdlConstantValue = detail::VhdlInitializerValue;
 
     struct CallFrame {
         DeclarationId callable;
@@ -1119,6 +1350,22 @@ class HirIntegralEvaluator {
         std::map<std::string, std::optional<std::int64_t>> pattern_values;
         std::optional<std::int64_t> result;
         std::optional<VhdlConstantValue> vhdl_result;
+    };
+
+    struct VhdlInitializerProfile {
+        ExpressionId expression;
+        std::uint64_t calls { };
+        std::uint64_t successes { };
+        std::uint64_t work_units { };
+        std::uint64_t cpu_ns { };
+        bool cpu_unavailable { };
+        std::size_t min_frame_depth { std::numeric_limits<std::size_t>::max() };
+        std::size_t max_frame_depth { };
+        std::size_t min_active_declarations {
+            std::numeric_limits<std::size_t>::max()
+        };
+        std::size_t max_active_declarations { };
+        bool binding_present { };
     };
 
     struct VhdlNumericStdIntegerProfile {
@@ -1147,12 +1394,25 @@ public:
         std::vector<SpecializedHirConstantEffect>* effects = nullptr,
         const std::string_view effect_code = "FSIM-ELAB-SVCONST-002",
         const std::string_view effect_context = "constant evaluation",
-        const SpecializedHirIntegralBinding* binding = nullptr)
+        const SpecializedHirIntegralBinding* binding = nullptr,
+        std::shared_ptr<detail::VhdlInitializerMemoContext>
+            initializer_memo_context = { })
         : unit_ { unit }
         , effects_ { effects }
         , effect_code_ { effect_code }
         , effect_context_ { effect_context }
         , binding_ { binding }
+        , initializer_memo_context_ {
+              std::move(initializer_memo_context)
+          }
+        , profile_vhdl_initializers_ {
+              semantic_profile_diagnostics_enabled
+          }
+        , vhdl_initializer_profile_id_ {
+              profile_vhdl_initializers_
+                  ? next_vhdl_initializer_profile_id()
+                  : 0U
+          }
     {
         for (const auto& actual :
             unit.specialization().actual_identities) {
@@ -1175,6 +1435,34 @@ public:
             unit.specialization().hierarchy_identities) {
             hierarchy_identities_.insert_or_assign(identity.name,
                 parse_integral_identity(identity.identity));
+        }
+    }
+
+    ~HirIntegralEvaluator()
+    {
+        for (const auto& [declaration, profile]
+            : vhdl_initializer_profiles_) {
+            std::fprintf(stderr,
+                "FSIM_VHDL_INITIALIZER evaluator=%llu unit=%u "
+                "declaration=%u expression=%u calls=%llu successes=%llu "
+                "work_units=%llu cpu_ns=%lld min_frame_depth=%zu "
+                "max_frame_depth=%zu min_active_declarations=%zu "
+                "max_active_declarations=%zu binding=%u "
+                "nested_inclusive=1\n",
+                static_cast<unsigned long long>(
+                    vhdl_initializer_profile_id_),
+                static_cast<unsigned int>(unit_.unit().value()),
+                static_cast<unsigned int>(declaration.value()),
+                static_cast<unsigned int>(profile.expression.value()),
+                static_cast<unsigned long long>(profile.calls),
+                static_cast<unsigned long long>(profile.successes),
+                static_cast<unsigned long long>(profile.work_units),
+                profile.cpu_unavailable
+                    ? -1LL : static_cast<long long>(profile.cpu_ns),
+                profile.min_frame_depth, profile.max_frame_depth,
+                profile.min_active_declarations,
+                profile.max_active_declarations,
+                profile.binding_present ? 1U : 0U);
         }
     }
 
@@ -1353,6 +1641,44 @@ public:
     }
 
 private:
+    [[nodiscard]] static bool vhdl_initializer_value_complete(
+        const VhdlConstantValue& value)
+    {
+        if (value.kind == VhdlConstantValue::Kind::integer
+            || value.kind == VhdlConstantValue::Kind::packed) {
+            return true;
+        }
+        if (value.kind != VhdlConstantValue::Kind::array
+            || value.array_element_subtype == nullptr) {
+            return false;
+        }
+        return std::ranges::all_of(value.elements,
+            [](const VhdlConstantValue& element) {
+                return vhdl_initializer_value_complete(element);
+            });
+    }
+
+    [[nodiscard]] bool vhdl_initializer_memo_eligible() const
+    {
+        return initializer_memo_context_ != nullptr
+            && unit_.language() == Language::vhdl
+            && call_frames_.empty() && binding_ == nullptr
+            && effects_ == nullptr
+            && active_vhdl_declarations_.size() == 1U
+            && unit_.systemverilog_declarations().empty()
+            && unit_.vhdl_declarations().empty()
+            && unit_.systemverilog_types().empty()
+            && unit_.vhdl_types().empty()
+            && unit_.systemverilog_expressions().empty()
+            && unit_.vhdl_expressions().empty()
+            && unit_.systemverilog_statements().empty()
+            && unit_.vhdl_statements().empty()
+            && unit_.systemverilog_processes().empty()
+            && unit_.vhdl_processes().empty()
+            && unit_.systemverilog_instances().empty()
+            && unit_.vhdl_instances().empty();
+    }
+
     [[nodiscard]] bool consume_constant_work_unit(
         const std::uint64_t amount = 1U)
     {
@@ -1927,11 +2253,16 @@ private:
                 static_cast<std::uint64_t>(*width) * *element_work)) {
             return std::nullopt;
         }
+        if (!consume_constant_work_unit(sizeof(vhdl::SubtypeIndication))) {
+            return std::nullopt;
+        }
         VhdlConstantValue result;
         result.kind = VhdlConstantValue::Kind::array;
         result.array_left = bounds->first;
         result.array_right = bounds->second;
-        result.array_element_subtype = *element_subtype;
+        result.array_element_subtype
+            = std::make_shared<const vhdl::SubtypeIndication>(
+                std::move(*element_subtype));
         result.elements.resize(*width);
         return result;
     }
@@ -1949,24 +2280,24 @@ private:
             }
             const bool expected_integer_element
                 = vhdl_integer_array_element_subtype(
-                    expected->array_element_subtype);
+                    *expected->array_element_subtype);
             const bool actual_integer_element
                 = vhdl_integer_array_element_subtype(
-                    value.array_element_subtype);
+                    *value.array_element_subtype);
             const auto expected_element_bounds = expected_integer_element
                 ? std::nullopt
-                : vhdl_packed_bounds(expected->array_element_subtype);
+                : vhdl_packed_bounds(*expected->array_element_subtype);
             const auto actual_element_bounds = actual_integer_element
                 ? std::nullopt
-                : vhdl_packed_bounds(value.array_element_subtype);
+                : vhdl_packed_bounds(*value.array_element_subtype);
             const bool same_packed_element
                 = expected_element_bounds && actual_element_bounds
                 && *expected_element_bounds == *actual_element_bounds;
             const bool same_integer_element
                 = expected_integer_element && actual_integer_element
                 && vhdl_same_integer_array_element_subtype(
-                       expected->array_element_subtype,
-                       value.array_element_subtype);
+                       *expected->array_element_subtype,
+                       *value.array_element_subtype);
             if (!same_packed_element && !same_integer_element) {
                 return std::nullopt;
             }
@@ -1979,7 +2310,7 @@ private:
                     return std::nullopt;
                 }
                 auto coerced = vhdl_coerce_packed(
-                    std::move(element), expected->array_element_subtype);
+                    std::move(element), *expected->array_element_subtype);
                 if (!coerced) {
                     return std::nullopt;
                 }
@@ -1997,13 +2328,13 @@ private:
     {
         if (value.kind != VhdlConstantValue::Kind::array
             || !vhdl_packed_domain(
-                value.array_element_subtype.domain)) {
+                value.array_element_subtype->domain)) {
             return std::nullopt;
         }
         const auto outer_width = vhdl_range_width(
             value.array_left, value.array_right);
         const auto element_bounds = vhdl_packed_bounds(
-            value.array_element_subtype);
+            *value.array_element_subtype);
         const auto element_width = element_bounds
             ? vhdl_range_width(element_bounds->first,
                   element_bounds->second)
@@ -2024,7 +2355,7 @@ private:
         SpecializedHirVhdlPackedArrayValue result;
         result.left_bound = value.array_left;
         result.right_bound = value.array_right;
-        result.element_domain = value.array_element_subtype.domain;
+        result.element_domain = value.array_element_subtype->domain;
         result.elements.reserve(value.elements.size());
         for (const auto& element : value.elements) {
             if (element.kind != VhdlConstantValue::Kind::packed
@@ -2196,7 +2527,7 @@ private:
             const auto base = evaluate_vhdl_value(
                 expression.operands.front());
             return base && base->kind == VhdlConstantValue::Kind::array
-                ? std::optional { base->array_element_subtype }
+                ? std::optional { *base->array_element_subtype }
                 : std::nullopt;
         }
         return std::nullopt;
@@ -2314,7 +2645,67 @@ private:
                 || view->vhdl->form
                     == vhdl::DeclarationForm::generic_constant)) {
             if (view->vhdl->initializer) {
-                result = evaluate_vhdl_value(*view->vhdl->initializer);
+                const auto initializer = *view->vhdl->initializer;
+                const bool memo_eligible
+                    = vhdl_initializer_memo_eligible();
+                if (memo_eligible) {
+                    VhdlConstantValue cached;
+                    std::uint64_t work_delta { };
+                    if (initializer_memo_context_->find(unit_.design(),
+                            unit_.unit(), declaration, initializer,
+                            unit_.specialization(), unit_.selected_generates(),
+                            cached, work_delta)) {
+                        if (consume_constant_work_unit(work_delta)) {
+                            initializer_memo_context_->record_hit(work_delta);
+                            active_vhdl_declarations_.erase(declaration);
+                            return cached;
+                        }
+                        // Re-run the evaluator when the saved work would
+                        // cross this evaluator's budget. It must consume the
+                        // same partial work and fail at the original point.
+                    }
+                    initializer_memo_context_->record_miss();
+                }
+                const auto work_before = constant_work_units_;
+                if (profile_vhdl_initializers_) {
+                    const auto begin = diagnostic::thread_cpu_now();
+                    result = evaluate_vhdl_value(initializer);
+                    const auto elapsed = diagnostic::thread_cpu_elapsed(
+                        begin, diagnostic::thread_cpu_now());
+                    auto& profile = vhdl_initializer_profiles_[declaration];
+                    profile.expression = initializer;
+                    ++profile.calls;
+                    profile.successes += result ? 1U : 0U;
+                    profile.work_units += constant_work_units_ - work_before;
+                    if (elapsed) {
+                        profile.cpu_ns += static_cast<std::uint64_t>(
+                            elapsed->count());
+                    } else {
+                        profile.cpu_unavailable = true;
+                    }
+                    profile.min_frame_depth = std::min(
+                        profile.min_frame_depth, call_frames_.size());
+                    profile.max_frame_depth = std::max(
+                        profile.max_frame_depth, call_frames_.size());
+                    profile.min_active_declarations = std::min(
+                        profile.min_active_declarations,
+                        active_vhdl_declarations_.size());
+                    profile.max_active_declarations = std::max(
+                        profile.max_active_declarations,
+                        active_vhdl_declarations_.size());
+                    profile.binding_present |= binding_ != nullptr;
+                } else {
+                    result = evaluate_vhdl_value(initializer);
+                }
+                const auto work_delta = constant_work_units_ - work_before;
+                if (memo_eligible && result
+                    && vhdl_initializer_value_complete(*result)
+                    && work_delta >= 4096U) {
+                    initializer_memo_context_->insert(unit_.design(),
+                        unit_.unit(), declaration, initializer,
+                        unit_.specialization(), unit_.selected_generates(),
+                        *result, work_delta);
+                }
             } else if (view->vhdl->deferred && view->vhdl->completion) {
                 result = evaluate_vhdl_declaration(*view->vhdl->completion);
             }
@@ -2399,6 +2790,7 @@ private:
     }
 
     [[nodiscard]] std::optional<VhdlConstantValue> evaluate_vhdl_binary(
+        const ExpressionId expression_id,
         const vhdl::Expression& expression)
     {
         const auto left = evaluate_vhdl_value(expression.operands[0]);
@@ -2469,8 +2861,19 @@ private:
             || operation == "nor" || operation == "xor"
             || operation == "xnor";
         if (packed_bitwise_operation) {
-            const auto target = vhdl_packed_bitwise_target(
-                expression, operation);
+            auto target = VhdlPackedBitwiseTarget::none;
+            // The target depends on immutable HIR, so reuse it across call frames.
+            // Operand values remain frame-specific and are evaluated above.
+            if (const auto cached
+                = vhdl_packed_bitwise_targets_.find(expression_id);
+                cached != vhdl_packed_bitwise_targets_.end()) {
+                target = cached->second;
+            } else {
+                target = vhdl_packed_bitwise_target(
+                    expression, operation);
+                vhdl_packed_bitwise_targets_.emplace(
+                    expression_id, target);
+            }
             if (target != VhdlPackedBitwiseTarget::none
                 && left->packed.bits.size()
                     == right->packed.bits.size()
@@ -2798,7 +3201,7 @@ private:
             return evaluate_vhdl_concatenation(source);
         }
         if (source.kind == Kind::binary && source.operands.size() == 2U) {
-            return evaluate_vhdl_binary(source);
+            return evaluate_vhdl_binary(expression_id, source);
         }
         if (source.kind == Kind::index && source.operands.size() == 2U) {
             const auto base = evaluate_vhdl_value(source.operands.front());
@@ -3143,16 +3546,30 @@ private:
     }
 
     [[nodiscard]] bool vhdl_bitwise_has_callable_candidate(
-        const vhdl::Expression& expression) const
+        const vhdl::Expression& expression)
     {
-        const auto name = vhdl_operator_name(expression);
-        if (name.selected || !name.overloads.empty()) {
-            return true;
+        if (expression.id.valid()) {
+            if (const auto cached
+                = vhdl_bitwise_callable_candidates_.find(expression.id);
+                cached != vhdl_bitwise_callable_candidates_.end()) {
+                return cached->second;
+            }
         }
-        const auto resolved = CompiledDesignResolver { unit_ }
-                                  .resolve_vhdl_callables(
-                                      name, expression.scope);
-        return !resolved.candidates.empty();
+        const auto name = vhdl_operator_name(expression);
+        const auto found = [&]() {
+            if (name.selected || !name.overloads.empty()) {
+                return true;
+            }
+            const auto resolved = CompiledDesignResolver { unit_ }
+                                      .resolve_vhdl_callables(
+                                          name, expression.scope);
+            return !resolved.candidates.empty();
+        }();
+        if (expression.id.valid()) {
+            vhdl_bitwise_callable_candidates_.emplace(
+                expression.id, found);
+        }
+        return found;
     }
 
     [[nodiscard]] std::optional<vhdl::SubtypeIndication>
@@ -3714,14 +4131,19 @@ private:
             ? call_frames_.back().vhdl_result
             : std::nullopt;
         if (result && declaration.callable->return_type) {
-            const auto return_subtype
-                = CompiledDesignResolver { unit_ }.effective_vhdl_subtype(
-                    *declaration.callable->return_type, declaration.scope);
-            if (!return_subtype) {
+            auto cached = vhdl_callable_return_subtypes_.find(*callable_id);
+            if (cached == vhdl_callable_return_subtypes_.end()) {
+                cached = vhdl_callable_return_subtypes_.emplace(
+                    *callable_id,
+                    CompiledDesignResolver { unit_ }.effective_vhdl_subtype(
+                        *declaration.callable->return_type,
+                        declaration.scope)).first;
+            }
+            if (!cached->second) {
                 result.reset();
             } else {
                 result = vhdl_coerce_callable_return(
-                    std::move(*result), *return_subtype);
+                    std::move(*result), *cached->second);
             }
         }
         call_frames_.pop_back();
@@ -3840,7 +4262,7 @@ private:
                         return false;
                     }
                     const auto& element_subtype
-                        = stored->second.array_element_subtype;
+                        = *stored->second.array_element_subtype;
                     if (integer_element_subtype
                         && !vhdl_same_integer_array_element_subtype(
                             *integer_element_subtype,
@@ -3880,7 +4302,7 @@ private:
             if (updated.kind == VhdlConstantValue::Kind::array) {
                 const auto offset = vhdl_array_offset(updated, *index);
                 auto element = vhdl_coerce_packed(
-                    std::move(value), updated.array_element_subtype);
+                    std::move(value), *updated.array_element_subtype);
                 if (!offset || !element
                     || !consume_constant_work_unit(
                         static_cast<std::uint64_t>(
@@ -4056,12 +4478,12 @@ private:
                 return fail();
             }
             const auto source = unit_.find_expression(*statement.value);
-            const auto target_subtype = vhdl_lvalue_subtype(
-                *statement.target);
-            const auto value = source && source->vhdl != nullptr
-                    && source->vhdl->kind
-                        == vhdl::ExpressionKind::aggregate
-                    && target_subtype
+            const bool aggregate_source = source && source->vhdl != nullptr
+                && source->vhdl->kind == vhdl::ExpressionKind::aggregate;
+            const auto target_subtype = aggregate_source
+                ? vhdl_lvalue_subtype(*statement.target)
+                : std::nullopt;
+            auto value = aggregate_source && target_subtype
                 ? evaluate_vhdl_aggregate(
                       *statement.value, *target_subtype)
                 : evaluate_vhdl_value(*statement.value);
@@ -5788,25 +6210,40 @@ private:
     }
 
     [[nodiscard]] std::optional<DeclarationId> callable_declaration(
-        const vhdl::Expression& expression) const
+        const vhdl::Expression& expression)
     {
-        if (!expression.referenced_name) {
-            return std::nullopt;
+        if (expression.id.valid()) {
+            if (const auto cached
+                = vhdl_callable_declarations_.find(expression.id);
+                cached != vhdl_callable_declarations_.end()) {
+                return cached->second;
+            }
         }
-        const auto resolved = CompiledDesignResolver { unit_ }
-                                  .resolve_vhdl_callables(
-                                      *expression.referenced_name,
-                                      expression.scope)
-                                  .unique();
-        if (!resolved) {
-            return std::nullopt;
+        const auto resolved = [&]() -> std::optional<DeclarationId> {
+            if (!expression.referenced_name) {
+                return std::nullopt;
+            }
+            const auto candidate = CompiledDesignResolver { unit_ }
+                                       .resolve_vhdl_callables(
+                                           *expression.referenced_name,
+                                           expression.scope)
+                                       .unique();
+            if (!candidate) {
+                return std::nullopt;
+            }
+            const auto declaration
+                = unit_.find_declaration(candidate->body);
+            return declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->callable
+                    && declaration->vhdl->callable->function
+                ? std::optional<DeclarationId> { candidate->body }
+                : std::nullopt;
+        }();
+        // Resolution uses immutable HIR; call-frame values stay live.
+        if (expression.id.valid()) {
+            vhdl_callable_declarations_.emplace(expression.id, resolved);
         }
-        const auto declaration = unit_.find_declaration(resolved->body);
-        return declaration && declaration->vhdl != nullptr
-                && declaration->vhdl->callable
-                && declaration->vhdl->callable->function
-            ? std::optional<DeclarationId> { resolved->body }
-            : std::nullopt;
+        return resolved;
     }
 
     [[nodiscard]] StatementFlow execute_vhdl_statement(
@@ -6804,6 +7241,13 @@ private:
         hierarchy_identities_;
     std::map<DeclarationId, std::optional<std::int64_t>> declarations_;
     std::map<ExpressionId, std::optional<std::int64_t>> expressions_;
+    std::map<ExpressionId, VhdlPackedBitwiseTarget>
+        vhdl_packed_bitwise_targets_;
+    std::map<ExpressionId, bool> vhdl_bitwise_callable_candidates_;
+    std::map<ExpressionId, std::optional<DeclarationId>>
+        vhdl_callable_declarations_;
+    std::map<DeclarationId, std::optional<vhdl::SubtypeIndication>>
+        vhdl_callable_return_subtypes_;
     std::map<DeclarationId, std::optional<std::string>>
         string_declarations_;
     std::map<ExpressionId, std::optional<std::string>> string_expressions_;
@@ -6822,6 +7266,12 @@ private:
     std::string effect_code_;
     std::string effect_context_;
     const SpecializedHirIntegralBinding* binding_ { };
+    std::shared_ptr<detail::VhdlInitializerMemoContext>
+        initializer_memo_context_;
+    bool profile_vhdl_initializers_ { };
+    std::uint64_t vhdl_initializer_profile_id_ { };
+    std::map<DeclarationId, VhdlInitializerProfile>
+        vhdl_initializer_profiles_;
 };
 
 struct GenerateSelection {
@@ -7135,10 +7585,13 @@ void select_vhdl_generate(const vhdl::GenerateRegion& generate,
 }
 
 GenerateSelection select_generates(SpecializedHirUnit& specialization,
-    const std::span<const UnitId> units)
+    const std::span<const UnitId> units,
+    const std::shared_ptr<detail::VhdlInitializerMemoContext>& memo_context)
 {
     GenerateSelection result;
-    HirIntegralEvaluator evaluator { specialization };
+    HirIntegralEvaluator evaluator { specialization, nullptr,
+        "FSIM-ELAB-SVCONST-002", "constant evaluation", nullptr,
+        memo_context };
     for (const auto unit : units) {
         const auto view = specialization.design().find_unit(unit);
         if (!view) {
@@ -7166,10 +7619,12 @@ struct SpecializedHirUnitFactory {
     static SpecializedHirUnit make(const CompiledDesign& design,
         SpecializedHirOverlay specialization,
         std::vector<UnitId> replacement_units,
-        const bool validated_lookup_indexes)
+        const bool validated_lookup_indexes,
+        std::shared_ptr<detail::VhdlInitializerMemoContext> memo_context)
     {
         return SpecializedHirUnit { design, std::move(specialization),
-            std::move(replacement_units), validated_lookup_indexes };
+            std::move(replacement_units), validated_lookup_indexes,
+            std::move(memo_context) };
     }
 };
 
@@ -7178,7 +7633,8 @@ namespace {
 std::optional<SpecializedHirUnit> working_specialization(
     const CompiledDesign& design,
     std::optional<SpecializedHirOverlay> specialization,
-    const bool validated_lookup_indexes)
+    const bool validated_lookup_indexes,
+    std::shared_ptr<detail::VhdlInitializerMemoContext> memo_context)
 {
     if (!specialization) {
         return std::nullopt;
@@ -7196,7 +7652,7 @@ std::optional<SpecializedHirUnit> working_specialization(
     }
     return SpecializedHirUnitFactory::make(design,
         std::move(*specialization), std::move(replacement_units),
-        validated_lookup_indexes);
+        validated_lookup_indexes, std::move(memo_context));
 }
 
 struct AssociationFormal {
@@ -9731,8 +10187,10 @@ resolve_specialized_hir_vhdl_block_associations(
 SpecializedHirUnit::SpecializedHirUnit(const CompiledDesign& design,
     SpecializedHirOverlay specialization,
     std::vector<UnitId> replacement_units,
-    const bool validated_lookup_indexes)
+    const bool validated_lookup_indexes,
+    std::shared_ptr<detail::VhdlInitializerMemoContext> memo_context)
     : design_ { &design }
+    , initializer_memo_context_ { std::move(memo_context) }
     , validated_lookup_indexes_ { validated_lookup_indexes }
     , specialization_ { std::move(specialization) }
     , replacement_units_ { std::move(replacement_units) }
@@ -9766,7 +10224,8 @@ SpecializedHirUnit::SpecializedHirUnit(const CompiledDesign& design,
         }
     }
     canonicalize(active_instance_ids_);
-    auto generate_selection = select_generates(*this, replacement_units_);
+    auto generate_selection = select_generates(
+        *this, replacement_units_, initializer_memo_context_);
     for (const auto declaration : generate_selection.selected) {
         static_cast<void>(select_generate(declaration));
     }
@@ -9810,7 +10269,10 @@ SpecializedHirUnit::evaluate_integral_expression(
             *this, expression)) {
         return std::nullopt;
     }
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate(expression);
 }
 
@@ -9825,7 +10287,7 @@ SpecializedHirUnit::evaluate_integral_expression(
     }
     HirIntegralEvaluator evaluator {
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
-        &binding
+        &binding, initializer_memo_context_
     };
     return evaluator.evaluate(expression);
 }
@@ -9837,7 +10299,10 @@ SpecializedHirUnit::evaluate_vhdl_constant_expression(
     if (language() != Language::vhdl) {
         return std::nullopt;
     }
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_vhdl_constant(expression);
 }
 
@@ -9848,7 +10313,10 @@ SpecializedHirUnit::evaluate_vhdl_packed_array_expression(
     if (language() != Language::vhdl) {
         return std::nullopt;
     }
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_vhdl_packed_array_expression(expression);
 }
 
@@ -9859,7 +10327,10 @@ SpecializedHirUnit::evaluate_vhdl_packed_value_declaration(
     if (language() != Language::vhdl) {
         return std::nullopt;
     }
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_vhdl_packed_value_declaration(declaration);
 }
 
@@ -9870,7 +10341,10 @@ SpecializedHirUnit::evaluate_vhdl_packed_array_declaration(
     if (language() != Language::vhdl) {
         return std::nullopt;
     }
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_vhdl_packed_array_declaration(declaration);
 }
 
@@ -9878,7 +10352,10 @@ std::optional<bool>
 SpecializedHirUnit::evaluate_systemverilog_truth_expression(
     const ExpressionId expression) const
 {
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_truth(expression);
 }
 
@@ -9886,7 +10363,10 @@ std::optional<std::string>
 SpecializedHirUnit::evaluate_systemverilog_bits_expression(
     const ExpressionId expression) const
 {
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_systemverilog_bits(expression);
 }
 
@@ -9899,7 +10379,9 @@ SpecializedHirUnit::evaluate_integral_expression_with_effects(
             *this, expression)) {
         return result;
     }
-    HirIntegralEvaluator evaluator { *this, &result.effects };
+    HirIntegralEvaluator evaluator { *this, &result.effects,
+        "FSIM-ELAB-SVCONST-002", "constant evaluation", nullptr,
+        initializer_memo_context_ };
     result.value = evaluator.evaluate(expression);
     return result;
 }
@@ -9910,7 +10392,8 @@ SpecializedHirUnit::evaluate_systemverilog_program_statements(
 {
     std::vector<SpecializedHirConstantEffect> effects;
     HirIntegralEvaluator evaluator { *this, &effects,
-        "FSIM-ELAB-SVPROGRAM-002", "program elaboration" };
+        "FSIM-ELAB-SVPROGRAM-002", "program elaboration", nullptr,
+        initializer_memo_context_ };
     if (!evaluator.execute_program_statements(statements)) {
         return std::nullopt;
     }
@@ -9921,7 +10404,10 @@ std::optional<std::int64_t>
 SpecializedHirUnit::evaluate_integral_declaration(
     const DeclarationId declaration) const
 {
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_declaration(declaration);
 }
 
@@ -9929,7 +10415,10 @@ std::optional<std::string>
 SpecializedHirUnit::evaluate_string_expression(
     const ExpressionId expression) const
 {
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_string(expression);
 }
 
@@ -9937,7 +10426,10 @@ std::optional<std::string>
 SpecializedHirUnit::evaluate_string_declaration(
     const DeclarationId declaration) const
 {
-    HirIntegralEvaluator evaluator { *this };
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
     return evaluator.evaluate_string_declaration(declaration);
 }
 
@@ -10110,9 +10602,21 @@ SpecializedHirUnit SpecializedHirUnit::with_hierarchy_identities(
     auto overlay = specialization_;
     overlay.hierarchy_identities.assign(
         identities.begin(), identities.end());
+    const bool replacements_empty
+        = systemverilog_declarations_.empty()
+        && vhdl_declarations_.empty()
+        && systemverilog_types_.empty() && vhdl_types_.empty()
+        && systemverilog_expressions_.empty()
+        && vhdl_expressions_.empty()
+        && systemverilog_statements_.empty() && vhdl_statements_.empty()
+        && systemverilog_processes_.empty() && vhdl_processes_.empty()
+        && systemverilog_instances_.empty() && vhdl_instances_.empty();
     auto result = SpecializedHirUnit {
         *design_, std::move(overlay), replacement_units_,
-        validated_lookup_indexes_
+        validated_lookup_indexes_,
+        replacements_empty ? initializer_memo_context_
+                           : std::shared_ptr<
+                                 detail::VhdlInitializerMemoContext> { }
     };
     result.systemverilog_declarations_ = systemverilog_declarations_;
     result.vhdl_declarations_ = vhdl_declarations_;
@@ -10143,9 +10647,21 @@ SpecializedHirUnit SpecializedHirUnit::with_local_actual_identities(
             *existing = actual;
         }
     }
+    const bool replacements_empty
+        = systemverilog_declarations_.empty()
+        && vhdl_declarations_.empty()
+        && systemverilog_types_.empty() && vhdl_types_.empty()
+        && systemverilog_expressions_.empty()
+        && vhdl_expressions_.empty()
+        && systemverilog_statements_.empty() && vhdl_statements_.empty()
+        && systemverilog_processes_.empty() && vhdl_processes_.empty()
+        && systemverilog_instances_.empty() && vhdl_instances_.empty();
     auto result = SpecializedHirUnit {
         *design_, std::move(overlay), replacement_units_,
-        validated_lookup_indexes_
+        validated_lookup_indexes_,
+        replacements_empty ? initializer_memo_context_
+                           : std::shared_ptr<
+                                 detail::VhdlInitializerMemoContext> { }
     };
     result.systemverilog_declarations_ = systemverilog_declarations_;
     result.vhdl_declarations_ = vhdl_declarations_;
@@ -10706,7 +11222,7 @@ std::optional<SpecializedHirUnit> make_specialized_hir_unit(
 {
     return working_specialization(design,
         make_specialized_hir_overlay(
-            design, selected_unit, actuals), false);
+            design, selected_unit, actuals), false, { });
 }
 
 std::optional<SpecializedHirUnit> make_specialized_hir_unit(
@@ -10716,7 +11232,7 @@ std::optional<SpecializedHirUnit> make_specialized_hir_unit(
 {
     return working_specialization(design,
         make_specialized_hir_overlay(design, selected_unit,
-            canonical_actuals, fallback_actuals), false);
+            canonical_actuals, fallback_actuals), false, { });
 }
 
 std::optional<SpecializedHirUnit> make_specialized_hir_unit(
@@ -10727,7 +11243,8 @@ std::optional<SpecializedHirUnit> make_specialized_hir_unit(
     const auto& design = validated.design();
     return working_specialization(design,
         make_specialized_hir_overlay_from_validated_design(
-            design, selected_unit, actuals), true);
+            design, selected_unit, actuals), true,
+        validated.initializer_memo_context());
 }
 
 std::optional<SpecializedHirUnit> make_specialized_hir_unit(

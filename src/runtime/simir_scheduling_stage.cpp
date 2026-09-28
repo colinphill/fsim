@@ -39,6 +39,75 @@ void for_each_active_update_slot(
 
 } // namespace
 
+void Interpreter::Impl::block_native_logic9_update_before_generic(
+    const SignalId signal)
+{
+    if (signal >= signals.size()
+        || signal >= direct_single_driver_logic9_word_scratch.size()
+        || signals[signal].value_kind != ValueKind::logic9
+        || signals[signal].resolution != ResolutionKind::std_logic
+        || signals[signal].initial_value.width() == 0U
+        || signals[signal].initial_value.width() > 64U) {
+        return;
+    }
+    auto& staged = direct_single_driver_logic9_word_scratch[signal];
+    using Stage = DirectSingleDriverLogic9WordUpdate;
+    if (staged.active == Stage::generic_blocked) {
+        return;
+    }
+    if (staged.active == Stage::native) {
+        // Native writes preceding this generic update must enter the same
+        // ordered pending queue. Preserve only their written bits.
+        std::uint32_t bit { };
+        while (bit < staged.width) {
+            while (bit < staged.width
+                && ((staged.mask >> bit) & UINT64_C(1)) == 0U) {
+                ++bit;
+            }
+            if (bit == staged.width) {
+                break;
+            }
+            const auto offset = bit;
+            while (bit < staged.width
+                && ((staged.mask >> bit) & UINT64_C(1)) != 0U) {
+                ++bit;
+            }
+            const auto width = bit - offset;
+            const auto mask = width == 64U
+                ? std::numeric_limits<std::uint64_t>::max()
+                : (UINT64_C(1) << width) - UINT64_C(1);
+            const auto value_index = pending_update_values.size();
+            pending_update_values.push_back(
+                PackedLogic4::from_logic9_word({
+                    width,
+                    { (staged.planes[0] >> offset) & mask,
+                        (staged.planes[1] >> offset) & mask,
+                        (staged.planes[2] >> offset) & mask,
+                        (staged.planes[3] >> offset) & mask }
+                }));
+            pending_updates.push_back(PendingUpdate {
+                signal,
+                staged.process,
+                width == staged.width
+                    ? std::nullopt
+                    : std::optional<std::size_t> { offset },
+                { },
+                value_index });
+        }
+    } else {
+        if (native_logic9_word_update_count
+            >= native_logic9_word_update_signals.size()) {
+            throw std::logic_error {
+                "native Logic9 update phase exceeded its signal capacity"
+            };
+        }
+        native_logic9_word_update_signals[
+            native_logic9_word_update_count++] = signal;
+    }
+    staged.active = Stage::generic_blocked;
+    staged.mask = 0U;
+}
+
 void Interpreter::Impl::schedule_update_commit()
 {
     if (native_update_profile_enabled) {
@@ -60,6 +129,54 @@ void Interpreter::Impl::schedule_update_commit()
             }
             if (update_profile_enabled) {
                 ++update_profile_commits;
+            }
+            // Drain the old native Logic9 phase before processing the ordered
+            // generic queue. A generic ingress already moved prior writes
+            // into that queue and blocked later native writes for its signal.
+            const bool hook_free_publication
+                = native_word_publication_phase_eligible();
+            const auto logic9_count
+                = std::exchange(native_logic9_word_update_count, 0U);
+            using Logic9Stage = DirectSingleDriverLogic9WordUpdate;
+            for (std::uint32_t index = 0U; index < logic9_count; ++index) {
+                const auto signal
+                    = native_logic9_word_update_signals[index];
+                auto& staged
+                    = direct_single_driver_logic9_word_scratch[signal];
+                if (staged.active == Logic9Stage::generic_blocked) {
+                    staged.active = Logic9Stage::unlisted;
+                    staged.mask = 0U;
+                    continue;
+                }
+                if (staged.active != Logic9Stage::native) {
+                    continue;
+                }
+                const auto process = staged.process;
+                const bool can_publish = hook_free_publication
+                    && can_publish_native_logic9_word_prevalidated(
+                        signal, process);
+                if (!can_publish) {
+                    block_native_logic9_update_before_generic(signal);
+                    staged.active = Logic9Stage::unlisted;
+                    staged.mask = 0U;
+                    continue;
+                }
+                auto value = Logic9Word {
+                    staged.width,
+                    { direct_signal_logic9_plane0[signal],
+                        direct_signal_logic9_plane1[signal],
+                        direct_signal_logic9_plane2[signal],
+                        direct_signal_logic9_plane3[signal] }
+                };
+                for (std::size_t plane = 0U;
+                    plane < value.planes.size(); ++plane) {
+                    value.planes[plane]
+                        = (value.planes[plane] & ~staged.mask)
+                        | (staged.planes[plane] & staged.mask);
+                }
+                staged.active = Logic9Stage::unlisted;
+                staged.mask = 0U;
+                publish_native_logic9_word(signal, value);
             }
             if (has_bidirectional_switches) {
                 for (const auto& update : pending_updates) {
@@ -169,6 +286,10 @@ void Interpreter::Impl::schedule_update_commit()
                     if (connection.switch_target) {
                         mark_resolved(*connection.switch_target);
                     }
+                    continue;
+                }
+                if (stage_owned_driver_pending(pending)) {
+                    mark_resolved(pending.signal);
                     continue;
                 }
                 PackedLogic4* destination { };
@@ -340,43 +461,6 @@ void Interpreter::Impl::schedule_update_commit()
             }
             native_word_update_count = 0U;
 
-            for (std::uint32_t index = 0U;
-                index < native_logic9_word_update_count; ++index) {
-                const auto signal
-                    = native_logic9_word_update_signals[index];
-                auto& staged
-                    = direct_single_driver_logic9_word_scratch[signal];
-                const auto process = staged.process;
-                const auto value = Logic9Word {
-                    staged.width, staged.planes
-                };
-                const auto written_mask = staged.mask;
-                staged.active = 0U;
-                staged.mask = 0U;
-                if (!can_publish_native_logic9_word(signal, process)
-                    || direct_single_driver_record(signal) == nullptr) {
-                    auto* record = driver_values[signal].find(process);
-                    auto merged = value;
-                    if (record != nullptr && written_mask != 0U) {
-                        const auto previous
-                            = record->value.logic9_low_word();
-                        for (std::size_t plane = 0U;
-                            plane < merged.planes.size(); ++plane) {
-                            merged.planes[plane]
-                                = (previous.planes[plane] & ~written_mask)
-                                | (merged.planes[plane] & written_mask);
-                        }
-                    }
-                    set_driver(
-                        process, signal,
-                        PackedLogic4::from_logic9_word(merged));
-                    mark_resolved(signal);
-                    continue;
-                }
-                publish_native_logic9_word(signal, value);
-            }
-            native_logic9_word_update_count = 0U;
-
             for (const auto signal : direct_single_driver_update_signals) {
                 auto& staged = unresolved_update_scratch[signal];
                 auto& values = driver_values[signal];
@@ -407,6 +491,11 @@ void Interpreter::Impl::schedule_update_commit()
 
             for (const auto signal : driver_update_signals) {
                 auto& staged = driver_update_scratch[signal];
+                if (owned_driver_active(signal)) {
+                    commit_owned_driver(signal);
+                    staged.clear();
+                    continue;
+                }
                 for (auto& update : staged) {
                     if (update.driver) {
                         set_driver(
@@ -596,6 +685,7 @@ void Interpreter::Impl::stage_update_words(
             }
             const auto value_index = pending_update_values.size();
             pending_update_values.push_back(std::move(value));
+            block_native_logic9_update_before_generic(update.signal);
             pending_updates.push_back(PendingUpdate {
                 update.signal,
                 process,
@@ -603,6 +693,7 @@ void Interpreter::Impl::stage_update_words(
                 { },
                 value_index });
         } else {
+            block_native_logic9_update_before_generic(update.signal);
             pending_updates.push_back(PendingUpdate {
                 update.signal, process, offset, update.value, std::nullopt });
         }
@@ -663,6 +754,9 @@ void Interpreter::Impl::stage_validated_update_words(
     pending_updates.reserve(pending_updates.size() + updates.size());
     bool staged_any { };
     for (const auto& update : updates) {
+        // The word callback uses per-driver Packed scratch. Restore that
+        // representation before it can inspect a composite first-touch entry.
+        demote_owned_driver(update.signal);
         const auto& signal = signals[update.signal];
         const auto offset = update.slice
             ? std::optional<std::size_t> { update.offset }
@@ -700,6 +794,7 @@ void Interpreter::Impl::stage_validated_update_words(
                 : normalize_signal_value(update.signal, std::move(value));
             const auto value_index = pending_update_values.size();
             pending_update_values.push_back(std::move(value));
+            block_native_logic9_update_before_generic(update.signal);
             pending_updates.push_back(PendingUpdate {
                 update.signal,
                 process,
@@ -1285,6 +1380,30 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
                 return;
             }
 
+            const auto owned_result
+                = stage_owned_driver_slot(batch.process, slot);
+            if (owned_result != OwnedDriverStage::unsupported) {
+                if (owned_result == OwnedDriverStage::unchanged) {
+                    if (native_update_profile_enabled) {
+                        ++native_update_profile_unchanged;
+                        ++native_update_profile_unchanged_resolved;
+                        ++native_update_profile_unchanged_owned;
+                    }
+                } else {
+                    if (!resolved_update_marked[signal]) {
+                        resolved_update_marked[signal] = true;
+                        resolved_update_signals.push_back(signal);
+                    }
+                    if (native_update_profile_enabled) {
+                        ++native_update_profile_resolved;
+                        ++native_update_profile_changed_owned;
+                    }
+                    staged_any = true;
+                }
+                consume_slot(slot);
+                return;
+            }
+
             auto& staged = driver_update_scratch[signal];
             auto found = std::ranges::find(
                 staged,
@@ -1358,9 +1477,14 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         std::uint64_t active_slots { };
         std::uint64_t rejected_runtime { };
         std::uint64_t rejected_slot { };
+        std::uint64_t rejected_layout { };
+        std::uint64_t rejected_resolution { };
+        std::uint64_t rejected_std_logic_direct_owner { };
+        std::uint64_t rejected_record { };
+        std::uint64_t rejected_owner { };
+        std::uint64_t rejected_ordering { };
         std::uint64_t accepted { };
-        std::uint64_t unchanged_current { };
-        std::uint64_t unchanged_staged { };
+        std::uint64_t consumed_slots { };
         std::uint64_t changed_slots { };
 
         ~Logic9BatchProfile()
@@ -1369,16 +1493,26 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
                 std::fprintf(
                     stderr,
                     "fsim-profile: logic9-batch calls=%llu active_slots=%llu "
-                    "rejected_runtime=%llu rejected_slot=%llu accepted=%llu "
-                    "unchanged_current=%llu unchanged_staged=%llu "
+                    "rejected_runtime=%llu rejected_slot=%llu "
+                    "rejected_layout=%llu rejected_resolution=%llu "
+                    "rejected_std_logic_direct_owner=%llu "
+                    "rejected_record=%llu rejected_owner=%llu "
+                    "rejected_ordering=%llu accepted=%llu "
+                    "consumed_slots=%llu "
                     "changed_slots=%llu\n",
                     static_cast<unsigned long long>(calls),
                     static_cast<unsigned long long>(active_slots),
                     static_cast<unsigned long long>(rejected_runtime),
                     static_cast<unsigned long long>(rejected_slot),
+                    static_cast<unsigned long long>(rejected_layout),
+                    static_cast<unsigned long long>(rejected_resolution),
+                    static_cast<unsigned long long>(
+                        rejected_std_logic_direct_owner),
+                    static_cast<unsigned long long>(rejected_record),
+                    static_cast<unsigned long long>(rejected_owner),
+                    static_cast<unsigned long long>(rejected_ordering),
                     static_cast<unsigned long long>(accepted),
-                    static_cast<unsigned long long>(unchanged_current),
-                    static_cast<unsigned long long>(unchanged_staged),
+                    static_cast<unsigned long long>(consumed_slots),
                     static_cast<unsigned long long>(changed_slots));
             }
         }
@@ -1452,20 +1586,46 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         }
         const auto* direct_record
             = direct_single_driver_record(slot.signal);
+        const bool ordering_blocked
+            = slot.signal < direct_single_driver_logic9_word_scratch.size()
+            && direct_single_driver_logic9_word_scratch[slot.signal].active
+                == DirectSingleDriverLogic9WordUpdate::generic_blocked;
+        const bool wrong_staged_owner
+            = slot.signal < direct_single_driver_logic9_word_scratch.size()
+            && direct_single_driver_logic9_word_scratch[slot.signal].active
+                == DirectSingleDriverLogic9WordUpdate::native
+            && direct_single_driver_logic9_word_scratch[slot.signal].process
+                != batch.process;
         if (slot.planes == nullptr || slot.signal >= signals.size()
             || slot.signal >= direct_single_driver_routes.size()
             || slot.width == 0U || slot.width > 64U
             || signals[slot.signal].value_kind != ValueKind::logic9
-            // Resolved drivers must enter the ordinary staged-update path so
-            // their signal is marked before the resolution phase begins.
-            // Adding it from inside the direct-word commit is one phase late.
-            || signals[slot.signal].resolution != ResolutionKind::none
+            || signals[slot.signal].resolution != ResolutionKind::std_logic
             || signals[slot.signal].initial_value.width() != slot.width
             || direct_record == nullptr
-            || direct_record->process != batch.process) {
+            || direct_record->process != batch.process
+            || ordering_blocked || wrong_staged_owner) {
             consumed_all = false;
             if (logic9_batch_profile_enabled) {
                 ++profile.rejected_slot;
+                if (slot.planes == nullptr || slot.signal >= signals.size()
+                    || slot.signal >= direct_single_driver_routes.size()
+                    || slot.width == 0U || slot.width > 64U
+                    || signals[slot.signal].value_kind != ValueKind::logic9) {
+                    ++profile.rejected_layout;
+                } else if (signals[slot.signal].resolution
+                           != ResolutionKind::std_logic) {
+                    ++profile.rejected_resolution;
+                } else if (signals[slot.signal].initial_value.width()
+                           != slot.width) {
+                    ++profile.rejected_layout;
+                } else if (direct_record == nullptr) {
+                    ++profile.rejected_record;
+                } else if (ordering_blocked) {
+                    ++profile.rejected_ordering;
+                } else {
+                    ++profile.rejected_owner;
+                }
             }
             continue;
         }
@@ -1475,47 +1635,19 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         const auto mask = *slot.mask & full_mask;
         if (mask == 0U) {
             *slot.mask = 0U;
+            if (logic9_batch_profile_enabled) {
+                ++profile.consumed_slots;
+            }
             continue;
         }
         auto& staged = direct_single_driver_logic9_word_scratch[slot.signal];
-        Logic9Word current;
-        if (staged.active != 0U) {
-            current = Logic9Word { staged.width, staged.planes };
-        } else {
-            current = Logic9Word {
-                slot.width,
-                { direct_signal_logic9_plane0[slot.signal],
-                    direct_signal_logic9_plane1[slot.signal],
-                    direct_signal_logic9_plane2[slot.signal],
-                    direct_signal_logic9_plane3[slot.signal] }
-            };
-        }
         const auto value = Logic9Word {
             slot.width,
             { slot.planes[0], slot.planes[1],
                 slot.planes[2], slot.planes[3] }
         };
-        std::uint64_t changed { };
-        for (std::size_t plane = 0; plane < staged.planes.size(); ++plane) {
-            changed |= current.planes[plane] ^ value.planes[plane];
-        }
-        if (!signal_transaction_observed[slot.signal]
-            && (changed & mask) == 0U && staged.active == 0U) {
-            if (logic9_batch_profile_enabled) {
-                ++profile.unchanged_current;
-            }
-            *slot.mask = 0U;
-            continue;
-        }
-        if (!signal_transaction_observed[slot.signal]
-            && (changed & mask) == 0U) {
-            if (logic9_batch_profile_enabled) {
-                ++profile.unchanged_staged;
-            }
-            *slot.mask = 0U;
-            continue;
-        }
-        if (staged.active == 0U) {
+        if (staged.active
+            == DirectSingleDriverLogic9WordUpdate::unlisted) {
             if (native_logic9_word_update_count
                 >= native_logic9_word_update_signals.size()) {
                 throw std::logic_error {
@@ -1526,9 +1658,9 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
                 native_logic9_word_update_count++] = slot.signal;
             staged.process = batch.process;
             staged.width = slot.width;
-            staged.planes = current.planes;
+            staged.planes = { };
             staged.mask = 0U;
-            staged.active = 1U;
+            staged.active = DirectSingleDriverLogic9WordUpdate::native;
         }
         for (std::size_t plane = 0; plane < staged.planes.size(); ++plane) {
             staged.planes[plane] = (staged.planes[plane] & ~mask)
@@ -1538,6 +1670,7 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         staged_any = true;
         if (logic9_batch_profile_enabled) {
             ++profile.changed_slots;
+            ++profile.consumed_slots;
         }
         *slot.mask = 0U;
       }

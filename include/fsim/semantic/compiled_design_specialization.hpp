@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -471,11 +472,15 @@ private:
     SpecializedHirUnit(const CompiledDesign& design,
         SpecializedHirOverlay specialization,
         std::vector<UnitId> replacement_units,
-        bool validated_lookup_indexes);
+        bool validated_lookup_indexes,
+        std::shared_ptr<detail::VhdlInitializerMemoContext>
+            initializer_memo_context = { });
 
     friend struct SpecializedHirUnitFactory;
 
     const CompiledDesign* design_ { };
+    std::shared_ptr<detail::VhdlInitializerMemoContext>
+        initializer_memo_context_;
     // True only when construction received ValidatedCompiledDesign's proof
     // that the immutable design's non-owning indexes are current.
     bool validated_lookup_indexes_ { };

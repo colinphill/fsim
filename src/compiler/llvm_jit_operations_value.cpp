@@ -117,6 +117,9 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const DynamicPartSelect& operation) {
+  const auto source_kind = registers[operation.source].kind;
+  const bool effective_two_state = operation.two_state
+      && source_kind != ValueKind::logic9;
   if (dynamic_part_signal_source) {
     const auto base = coerce_value_kind(
         builder,
@@ -132,7 +135,7 @@ void ValueOperationLowerer::lower(
         "dynamic.part.signal.callback");
     const auto flags = (operation.increasing ? UINT32_C(1) : UINT32_C(0))
         | (operation.source_descending ? UINT32_C(2) : UINT32_C(0))
-        | (operation.two_state ? UINT32_C(4) : UINT32_C(0));
+        | (effective_two_state ? UINT32_C(4) : UINT32_C(0));
     auto* status = builder.CreateCall(
         read_signal_dynamic_part_type,
         read_signal_dynamic_part_callback,
@@ -190,13 +193,12 @@ void ValueOperationLowerer::lower(
         table_max - table_min + 1);
     constexpr std::uint64_t maximum_constant_select_entries = 65536U;
     if (entry_count <= maximum_constant_select_entries) {
-      const auto source_kind = registers[operation.source].kind;
       const auto width_mask = operation.width == 64U
           ? std::numeric_limits<std::uint64_t>::max()
           : (UINT64_C(1) << operation.width) - 1U;
       const std::array invalid_planes {
-          operation.two_state ? UINT64_C(0) : width_mask,
-          !operation.two_state && source_kind != ValueKind::logic9
+          effective_two_state ? UINT64_C(0) : width_mask,
+          !effective_two_state && source_kind != ValueKind::logic9
               ? width_mask : UINT64_C(0),
           UINT64_C(0),
           UINT64_C(0)
@@ -323,7 +325,8 @@ void ValueOperationLowerer::lower(
     }
   }
   const auto& source_slot = registers[operation.source];
-  if (operation.width == 1U && source_slot.width > 64U) {
+  if (source_slot.width > 64U && operation.width <= 64U
+      && (operation.width == 1U || source_slot.width % 64U == 0U)) {
     const auto base = coerce_value_kind(
         builder,
         load_register(builder, registers, operation.base),
@@ -335,72 +338,101 @@ void ValueOperationLowerer::lower(
                 context,
                 std::numeric_limits<std::uint32_t>::max())),
         constant_i64(context, 0));
-    auto* selected = builder.CreateSExt(
+    auto* signed_base = builder.CreateSExt(
         builder.CreateTrunc(base.aval, i32), i64);
     auto* lower = llvm::ConstantInt::getSigned(
         i64, std::min(operation.left, operation.right));
     auto* upper = llvm::ConstantInt::getSigned(
         i64, std::max(operation.left, operation.right));
-    auto* valid = builder.CreateAnd(
-        builder.CreateNot(base_unknown),
-        builder.CreateAnd(
+    const auto edge_distance =
+        static_cast<std::int64_t>(operation.width - 1U);
+    const auto right_delta = operation.increasing
+        ? (operation.source_descending ? 0 : edge_distance)
+        : (operation.source_descending ? -edge_distance : 0);
+    auto* selected_right = builder.CreateAdd(
+        signed_base,
+        llvm::ConstantInt::getSigned(i64, right_delta));
+    llvm::Value* aval = packed_constant(context, operation.width, 0);
+    llvm::Value* bval = packed_constant(context, operation.width, 0);
+    llvm::Value* plane2 = packed_constant(context, operation.width, 0);
+    llvm::Value* plane3 = packed_constant(context, operation.width, 0);
+    const auto append = [&](llvm::Value* result, llvm::Value* value,
+                            const std::uint32_t bit) {
+        return builder.CreateOr(
+            result,
+            builder.CreateShl(
+                value, packed_constant(context, operation.width, bit)));
+    };
+    for (std::uint32_t bit = 0; bit < operation.width; ++bit) {
+        const auto delta = operation.source_descending
+            ? static_cast<std::int64_t>(bit)
+            : -static_cast<std::int64_t>(bit);
+        auto* selected = builder.CreateAdd(
+            selected_right, llvm::ConstantInt::getSigned(i64, delta));
+        auto* in_range = builder.CreateAnd(
             builder.CreateICmpSGE(selected, lower),
-            builder.CreateICmpSLE(selected, upper)));
-    auto* right = llvm::ConstantInt::getSigned(i64, operation.right);
-    auto* offset = builder.CreateSelect(
-        builder.CreateICmpSGE(selected, right),
-        builder.CreateSub(selected, right),
-        builder.CreateSub(right, selected));
-    offset = builder.CreateAdd(
-        offset, constant_i64(context, operation.base_offset));
-    auto* safe_offset = builder.CreateSelect(
-        valid, offset, constant_i64(context, 0));
-    auto* word_index = builder.CreateLShr(
-        safe_offset, constant_i64(context, 6));
-    auto* bit_index = builder.CreateAnd(
-        safe_offset, constant_i64(context, 63));
-    const auto load_plane_word = [&](llvm::Value* plane_base) {
-        auto* absolute_word_index = builder.CreateAdd(
-            constant_i64(context, source_slot.word_offset), word_index);
-        auto* word_pointer = builder.CreateGEP(
-            i64, plane_base, absolute_word_index);
-        auto* word = builder.CreateLoad(i64, word_pointer);
-        word->setAlignment(llvm::Align { 8 });
-        return word;
-    };
-    auto* aval_word = load_plane_word(source_slot.aval_base);
-    auto* bval_word = load_plane_word(source_slot.bval_base);
-    llvm::Value* plane2_word = constant_i64(context, 0);
-    llvm::Value* plane3_word = constant_i64(context, 0);
-    if (source_slot.kind == ValueKind::logic9) {
-        plane2_word = load_plane_word(source_slot.logic9_plane2_base);
-        plane3_word = load_plane_word(source_slot.logic9_plane3_base);
+            builder.CreateICmpSLE(selected, upper));
+        auto* valid = builder.CreateAnd(
+            builder.CreateNot(base_unknown), in_range);
+        auto* right = llvm::ConstantInt::getSigned(i64, operation.right);
+        auto* offset = builder.CreateSelect(
+            builder.CreateICmpSGE(selected, right),
+            builder.CreateSub(selected, right),
+            builder.CreateSub(right, selected));
+        offset = builder.CreateAdd(
+            offset, constant_i64(context, operation.base_offset));
+        auto* safe_offset = builder.CreateSelect(
+            valid, offset, constant_i64(context, 0));
+        auto* word_index = builder.CreateLShr(
+            safe_offset, constant_i64(context, 6));
+        auto* bit_index = builder.CreateAnd(
+            safe_offset, constant_i64(context, 63));
+        const auto load_selected_plane = [&](llvm::Value* plane_base,
+                                             const bool invalid_one) {
+            auto* absolute_word_index = builder.CreateAdd(
+                constant_i64(context, source_slot.word_offset), word_index);
+            auto* word_pointer = builder.CreateGEP(
+                i64, plane_base, absolute_word_index);
+            auto* word = builder.CreateLoad(i64, word_pointer);
+            word->setAlignment(llvm::Align { 8 });
+            auto* selected_bit = builder.CreateAnd(
+                builder.CreateLShr(word, bit_index),
+                constant_i64(context, 1));
+            return builder.CreateSelect(
+                valid,
+                selected_bit,
+                constant_i64(
+                    context,
+                    !effective_two_state && invalid_one ? 1U : 0U));
+        };
+        aval = append(
+            aval, load_selected_plane(source_slot.aval_base, true), bit);
+        bval = append(
+            bval,
+            load_selected_plane(
+                source_slot.bval_base, source_kind != ValueKind::logic9),
+            bit);
+        if (source_kind == ValueKind::logic9) {
+            plane2 = append(
+                plane2,
+                load_selected_plane(source_slot.logic9_plane2_base, false),
+                bit);
+            plane3 = append(
+                plane3,
+                load_selected_plane(source_slot.logic9_plane3_base, false),
+                bit);
+        }
     }
-    const auto select_plane = [&](llvm::Value* plane_word,
-                                  const bool invalid_one) {
-        auto* extracted = builder.CreateAnd(
-            builder.CreateLShr(plane_word, bit_index),
-            constant_i64(context, 1));
-        auto* selected_plane = builder.CreateSelect(
-            valid,
-            extracted,
-            constant_i64(
-                context,
-                !operation.two_state && invalid_one ? 1U : 0U));
-        return selected_plane;
-    };
-    const auto source_kind = source_slot.kind;
     store_register(
         builder,
         registers,
         operation.destination,
         EncodedValue {
-            select_plane(aval_word, true),
-            select_plane(
-                bval_word, source_kind != ValueKind::logic9),
-            1,
-            select_plane(plane2_word, false),
-            select_plane(plane3_word, false),
+            aval,
+            bval,
+            operation.width,
+            plane2,
+            plane3,
             source_kind });
     branch_to_next();
     return;
@@ -472,7 +504,7 @@ void ValueOperationLowerer::lower(
                                              packed_constant(
                                                  context,
                                                  source.width,
-                                                 !operation.two_state && unknown_one ? 1U : 0U)),
+                                                 !effective_two_state && unknown_one ? 1U : 0U)),
             packed_integer_type(context, operation.width));
     };
     const auto append = [&](llvm::Value* result, llvm::Value* value) {

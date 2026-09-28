@@ -49,6 +49,7 @@ struct ProcessLoweringContext {
     std::span<const runtime::simir::SignalId> direct_read_signals;
     std::span<const runtime::simir::SignalId> direct_update_signals;
     const ValidatedProcess & validated;
+    std::span<const runtime::simir::InstructionIndex> bound_literal_sites;
     bool debug_instrumentation;
     bool require_direct_update_slots;
     llvm::LLVMContext& context;
@@ -222,6 +223,8 @@ struct ProcessLoweringContext {
     std::vector<const runtime::simir::Process::StaticTriggerRegion *>& static_trigger_region_entries;
     std::map<runtime::simir::InstructionIndex, llvm::AllocaInst *>& ssa_callable_returns;
     llvm::BasicBlock* invalid_pc;
+    std::vector<ConstantPlaneForwarding>& constant_plane_forwarding;
+    std::size_t& suppressed_false_guards;
 };
 
 struct OperationLoweringContext {

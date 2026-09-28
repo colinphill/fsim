@@ -54,6 +54,27 @@ Interpreter::~Interpreter()
                   << '\n';
     }
     if (impl_->native_process_count_profile_enabled) {
+        for (std::size_t id = 0; id < impl_->processes.size(); ++id) {
+            const auto& process = impl_->processes[id];
+            const auto interpreted = process.cold().interpreter_operations;
+            if (interpreted == 0U) {
+                continue;
+            }
+            const auto native_resumes
+                = id < impl_->native_process_resume_counts.size()
+                    ? impl_->native_process_resume_counts[id] : 0U;
+            std::cerr << "fsim-profile: interpreted-process id=" << id
+                      << " operations=" << interpreted
+                      << " native_resumes=" << native_resumes
+                      << " executor=" << static_cast<bool>(process.executor)
+                      << " deferred="
+                      << static_cast<bool>(process.cold().deferred_executor)
+                      << " halted=" << process.halted
+                      << " suspended=" << process.suspended
+                      << " program_operations="
+                      << process.program().operations.size()
+                      << " name='" << process.program().name << "'\n";
+        }
         const auto total = std::accumulate(
             impl_->native_process_resume_counts.begin(),
             impl_->native_process_resume_counts.end(),
@@ -503,6 +524,10 @@ Interpreter::~Interpreter()
                   << " unresolved="
                   << impl_->native_update_profile_unresolved
                   << " resolved=" << impl_->native_update_profile_resolved
+                  << " unchanged_owned="
+                  << impl_->native_update_profile_unchanged_owned
+                  << " changed_owned="
+                  << impl_->native_update_profile_changed_owned
                   << " schedule_requests="
                   << impl_->native_update_profile_schedule_requests
                   << " schedule_coalesced="

@@ -24,6 +24,9 @@ namespace fsim::runtime::simir {
 void Interpreter::Impl::execute(ProcessId id)
 {
     auto& process = get_process(id);
+    if (native_process_count_profile_enabled) {
+        process.cold().track_interpreter_operations = true;
+    }
     std::uint64_t interpreted_operations = 0U;
     struct ProcessProfileScope {
         ProcessState& process;

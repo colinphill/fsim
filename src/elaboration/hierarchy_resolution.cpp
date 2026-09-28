@@ -2,6 +2,8 @@
 #include "hierarchy_builder_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <cstdlib>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <type_traits>
@@ -121,6 +123,15 @@ bool compiled_resolver_returns_first(
 
 void HierarchyBuilder::finish()
 {
+    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+        std::cerr << "fsim-profile: concurrent-process-template"
+                  << " misses=" << concurrent_template_misses_
+                  << " hits=" << concurrent_template_hits_
+                  << " rejected=" << concurrent_template_rejections_
+                  << " lowered_cpu_ns="
+                  << concurrent_template_lower_cpu_ns_
+                  << '\n';
+    }
     validate_process_drivers();
     std::stable_sort(
         design_.systemc_objects_.begin(),

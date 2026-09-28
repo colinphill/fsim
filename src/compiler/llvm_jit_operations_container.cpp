@@ -208,6 +208,13 @@ void ContainerOperationLowerer::lower(
 {
     invoke(std::nullopt, std::nullopt, std::nullopt, "container.read-object");
 }
+void ContainerOperationLowerer::lower_bound_literal(
+    const runtime::simir::LoadConstant& value)
+{
+    // A bound literal has no packed register inputs. The ordinary indexed
+    // callback resolves the value from this executor's actual process.
+    invoke(std::nullopt, std::nullopt, value.destination, "bound.literal");
+}
 void ContainerOperationLowerer::lower(
     const runtime::simir::WriteContainerObject&)
 {
