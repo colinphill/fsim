@@ -11628,6 +11628,9 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     const auto source_language = compiled_frontend_language(
         root.language);
     specialization.language = source_language;
+    lowerer.set_hir_code_coverage_context(coverage_,
+        unit.kind == semantic::sv::UnitKind::module
+            && source_language == frontend::Language::SystemVerilog2017);
     specialization.library = unit.library.empty()
         ? "work"
         : unit.library;

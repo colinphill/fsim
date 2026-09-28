@@ -499,6 +499,7 @@ namespace {
                     }
                     if (record.kind == workspace::ArtifactKind::Hdl) {
                         WorkspaceObjectSelection object { *path, { } };
+                        object.catalog_rank = library;
                         for (const auto& owned : record.units) {
                             object.active_units.push_back(owned.unit);
                         }

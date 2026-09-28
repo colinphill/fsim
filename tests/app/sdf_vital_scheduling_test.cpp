@@ -1,32 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/application.hpp"
+#include "application_test_support.hpp"
+#include "../support/test_helpers.hpp"
 #include "fsim/app/sdf_vital_scheduling.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace {
-void require(const bool condition, const std::string_view message)
-{
-    if (!condition)
-        throw std::runtime_error(std::string { message });
-}
+using fsim::test::require;
 
 fsim::frontend::SourceSpan span(const std::size_t offset)
 {
@@ -240,10 +235,8 @@ void require_diagnostic(const fsim::app::SdfVitalSchedulingResult& result,
     const std::string_view code)
 {
     require(!result.ok()
-            && std::ranges::any_of(result.diagnostics,
-                [&](const auto& diagnostic) {
-                    return diagnostic.code == code;
-                }),
+            && fsim::test::find_diagnostic(result.diagnostics, code)
+                != nullptr,
         "expected VITAL scheduling diagnostic was not emitted");
 }
 
@@ -291,15 +284,6 @@ void test_publication_modes_and_atomic_rejection()
                            { 0U, 1U, 1024U }),
         "FSIM-SDF-VITAL-SCHEDULING-001");
 }
-
-struct TemporaryDirectory {
-    std::filesystem::path path;
-    ~TemporaryDirectory()
-    {
-        std::error_code error;
-        std::filesystem::remove_all(path, error);
-    }
-};
 
 fsim::project::Config make_config(const std::filesystem::path& directory,
     const std::filesystem::path& source)
@@ -353,15 +337,9 @@ EngineCapture run_engine(fsim::app::BuiltProject project,
 void test_interpreter_llvm_logic9_differential()
 {
     using namespace fsim;
-    const auto unique = std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    TemporaryDirectory directory { std::filesystem::temp_directory_path()
-        / ("fsim-sdf-vital-scheduling-" + unique) };
-    std::filesystem::create_directories(directory.path);
+    fsim::test::TemporaryDirectory directory { "fsim-sdf-vital-scheduling" };
     const auto source = directory.path / "vital_sched.vhd";
-    {
-        std::ofstream output(source);
-        output << R"(library ieee;
+    fsim::test::write_text(source, R"(library ieee;
 use ieee.std_logic_1164.all;
 use ieee.vital_timing.all;
 
@@ -397,9 +375,7 @@ begin
         XOn => false);
   end process;
 end architecture;
-)";
-        require(output.good(), "VITAL scheduling source must be retained");
-    }
+)");
     diagnostic::Engine diagnostics;
     auto project = app::build_project(
         make_config(directory.path, source), diagnostics);
@@ -412,11 +388,9 @@ end architecture;
     require(scheduled.ok() && scheduled.application->delays().size() == 1U,
         "compiled VITAL delay annotation must publish");
     project->design = scheduled.application->design();
-    auto compiled_project = *project;
-    const auto reference
-        = run_engine(std::move(*project), app::SimulationEngine::interpreter);
-    const auto compiled = run_engine(
-        std::move(compiled_project), app::SimulationEngine::compiled);
+    const auto [reference, compiled]
+        = fsim::test::run_interpreter_compiled_pair(
+            std::move(*project), run_engine);
 #if defined(FSIM_HAS_LLVM)
     const bool compiled_process_count_ok = compiled.compiled_processes > 0U;
 #else

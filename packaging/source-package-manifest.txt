@@ -162,6 +162,7 @@ cmake/RunSdfApplicationClosure.cmake
 cmake/RunSdfClosure.cmake
 cmake/RunSdfVitalClosure.cmake
 cmake/RunSystemVerilogClosureMatrix.cmake
+cmake/RunTclDebuggerTest.cmake
 cmake/RunUvmPhaseTlmExample.cmake
 cmake/RunVerilogClosureMatrix.cmake
 cmake/RunVerilogSystemVerilogStandardModeClosureMatrix.cmake
@@ -192,9 +193,12 @@ docs/language-support.md
 docs/legacy-pli.md
 docs/performance-campaign.md
 docs/performance-matrix-2026-09-28.md
+docs/performance-resume.md
 docs/release-and-post-v2.md
 docs/sdf.md
+docs/simplification-disposition.md
 docs/simplification-gate-migration.md
+docs/simplification-implementation-plan.md
 docs/systemc-subset.md
 docs/systemverilog-2023.md
 docs/systemverilog-dpi.md
@@ -341,6 +345,7 @@ include/fsim/elaboration/coverage_external_exclusions.hpp
 include/fsim/elaboration/coverage_fsm_hints.hpp
 include/fsim/elaboration/coverage_fsm_inference.hpp
 include/fsim/elaboration/coverage_fsm_validation.hpp
+include/fsim/elaboration/coverage_hir_points.hpp
 include/fsim/elaboration/coverage_instance_identity.hpp
 include/fsim/elaboration/coverage_inventory.hpp
 include/fsim/elaboration/coverage_memory_toggle.hpp
@@ -692,6 +697,8 @@ src/app/application_sdf_pulse_timing.cpp
 src/app/application_sdf_reannotation.cpp
 src/app/application_sdf_schema.cpp
 src/app/application_sdf_secondary_timing_checks.cpp
+src/app/application_sdf_session.cpp
+src/app/application_sdf_session.hpp
 src/app/application_sdf_target_plan.cpp
 src/app/application_sdf_value_policy.cpp
 src/app/application_sdf_vital_archive.cpp
@@ -861,6 +868,7 @@ src/diagnostic/thread_cpu_clock.hpp
 src/elaboration/coverage_exclusion_persistence.cpp
 src/elaboration/coverage_external_exclusions.cpp
 src/elaboration/coverage_fsm_validation.cpp
+src/elaboration/coverage_hir_points.cpp
 src/elaboration/coverage_instance_identity.cpp
 src/elaboration/coverage_inventory.cpp
 src/elaboration/coverage_memory_toggle.cpp
@@ -1099,6 +1107,7 @@ src/runtime/simir_callable_context.cpp
 src/runtime/simir_cohort_snapshot_pool.hpp
 src/runtime/simir_container_algorithms.cpp
 src/runtime/simir_container_bridge.cpp
+src/runtime/simir_container_helpers.hpp
 src/runtime/simir_container_values.cpp
 src/runtime/simir_containers.cpp
 src/runtime/simir_containers_part2.cpp
@@ -1972,6 +1981,7 @@ tests/semantic/systemverilog_class_specialization_test.cpp
 tests/support/bounded_bytes_test.cpp
 tests/support/ctype_whitespace_test.cpp
 tests/support/identity128_test.cpp
+tests/support/test_helpers.hpp
 tests/systemc/accellera_systemc_corpus_test.cpp
 tests/systemc/accellera_upstream_sc_main.cpp
 tests/systemc/empty_plugin.cpp

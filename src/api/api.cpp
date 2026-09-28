@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_internal.hpp"
+#include "../app/application_sdf_session.hpp"
 #include "fsim/support/path.hpp"
 
 using namespace fsim::api::detail;
@@ -15,6 +16,18 @@ std::string sdf_string(const fsim_string_view_t value)
 {
     return value.data == nullptr ? std::string { }
                                  : std::string { value.data, value.size };
+}
+
+void reset_sdf_effective(Session& session)
+{
+    if (!session.sdf_control || !session.sdf_control->summary().effective)
+        return;
+    auto request = session.sdf_control->request();
+    request.generation = 0U;
+    auto pending = fsim::app::apply_sdf_control(std::move(request));
+    if (!pending.ok())
+        throw std::logic_error("effective SDF control cannot be reset");
+    session.sdf_control = std::move(pending.application);
 }
 
 std::optional<fsim::app::SdfDelaySelection> sdf_selection(
@@ -310,12 +323,14 @@ fsim_status_t fsim_session_load_project(
         if (mutation_forbidden(value)) {
             return FSIM_STATUS_UNAVAILABLE;
         }
+        reset_sdf_effective(value);
         value.trace_runtime.reset();
         value.diagnostics.clear();
         value.project.reset();
         value.trace_control.reset();
         value.trace_lifecycle_override.reset();
         value.simulation.reset();
+        value.sdf_baseline_design.reset();
         value.scopes.clear();
         value.process_names.clear();
         value.variables.clear();
@@ -375,10 +390,12 @@ fsim_status_t fsim_session_build(const fsim_session_t session)
         if (mutation_forbidden(value)) {
             return FSIM_STATUS_UNAVAILABLE;
         }
+        reset_sdf_effective(value);
         value.trace_runtime.reset();
         value.trace_lifecycle_override.reset();
         value.diagnostics.clear();
         value.simulation.reset();
+        value.sdf_baseline_design.reset();
         value.scopes.clear();
         value.process_names.clear();
         value.variables.clear();
@@ -395,6 +412,20 @@ fsim_status_t fsim_session_build(const fsim_session_t session)
             *value.project, value.diagnostics);
         if (!built) {
             return FSIM_STATUS_COMPILE_ERROR;
+        }
+        if (value.sdf_control
+            && !value.sdf_control->request().inputs.empty()) {
+            value.sdf_baseline_design = built->design;
+            auto planned = fsim::app::plan_sdf_session_inputs(
+                built->design, built->time_resolution, built->cache_key,
+                value.sdf_control->request(), value.sdf_resolved_paths,
+                value.diagnostics);
+            if (!planned)
+                return FSIM_STATUS_COMPILE_ERROR;
+            built->design = std::move(planned->design);
+            fsim::app::apply_sdf_session_cache_identity(
+                *built, *planned->control);
+            value.sdf_control = std::move(planned->control);
         }
         value.simulation = std::make_unique<fsim::app::Simulation>(
             std::move(*built), value.max_deltas);
@@ -457,8 +488,13 @@ fsim_status_t fsim_session_configure_sdf(
     if (!selection || !phase) {
         return FSIM_STATUS_INVALID_ARGUMENT;
     }
+    if (options->input_count
+        > fsim::app::SdfControlLimits { }.max_inputs)
+        return FSIM_STATUS_INVALID_ARGUMENT;
     return with_session(session, [&](Session& value) {
-        if (mutation_forbidden(value)) {
+        if (mutation_forbidden(value)
+            && (!value.simulation
+                || !value.simulation->at_sdf_reannotation_safe_point())) {
             return FSIM_STATUS_UNAVAILABLE;
         }
         fsim::app::SdfControlRequest request;
@@ -467,6 +503,8 @@ fsim_status_t fsim_session_configure_sdf(
         request.selection = *selection;
         request.report_limit = options->report_limit;
         request.inputs.reserve(options->input_count);
+        std::vector<std::filesystem::path> resolved_paths;
+        resolved_paths.reserve(options->input_count);
         for (std::size_t index = 0; index < options->input_count; ++index) {
             const auto& input = options->inputs[index];
             if (!valid_struct_header(
@@ -476,8 +514,11 @@ fsim_status_t fsim_session_configure_sdf(
                 || !valid_sdf_view(input.cell_pattern)) {
                 return FSIM_STATUS_INCOMPATIBLE_ABI;
             }
+            auto source = sdf_string(input.source_identity);
+            resolved_paths.push_back(std::filesystem::absolute(
+                fsim::support::path_from_utf8(source)).lexically_normal());
             request.inputs.push_back(fsim::app::SdfControlInput {
-                sdf_string(input.source_identity),
+                std::move(source),
                 sdf_string(input.root),
                 sdf_string(input.cell_pattern),
                 input.file_precedence,
@@ -491,8 +532,35 @@ fsim_status_t fsim_session_configure_sdf(
             }
             return FSIM_STATUS_INVALID_ARGUMENT;
         }
+        if (value.simulation) {
+            if (!value.sdf_baseline_design) {
+                value.sdf_baseline_design = value.simulation->design();
+            }
+            auto effective_request = configured.application->request();
+            effective_request.generation = value.sdf_control
+                ? value.sdf_control->summary().generation + 1U : 1U;
+            value.diagnostics.clear();
+            auto planned = fsim::app::plan_sdf_session_inputs(
+                *value.sdf_baseline_design,
+                value.simulation->time_resolution(), "c-api-sdf-session",
+                std::move(effective_request), resolved_paths,
+                value.diagnostics);
+            if (!planned)
+                return FSIM_STATUS_INVALID_ARGUMENT;
+            auto committed = value.simulation->commit_sdf_reannotation(
+                *planned->control->effective());
+            if (!committed.ok()) {
+                for (const auto& entry : committed.diagnostics)
+                    value.diagnostics.error(entry.code, entry.message);
+                return FSIM_STATUS_RUNTIME_ERROR;
+            }
+            value.sdf_control = std::move(planned->control);
+            value.sdf_resolved_paths = std::move(resolved_paths);
+            return FSIM_STATUS_OK;
+        }
         value.diagnostics.clear();
         value.sdf_control = std::move(configured.application);
+        value.sdf_resolved_paths = std::move(resolved_paths);
         return FSIM_STATUS_OK;
     });
 }

@@ -64,7 +64,8 @@ public:
         std::span<const Binding> bindings,
         std::span<const SystemCInstanceDescription> systemc_instances,
         SystemCFactoryProvider* systemc_provider,
-        std::span<const std::string> search_libraries);
+        std::span<const std::string> search_libraries,
+        const CoverageHirContext* coverage);
 
     void build(const SystemCInstanceDescription& root);
     void add_root(semantic::CompiledUnitView root, std::string path);
@@ -1212,6 +1213,7 @@ private:
     semantic::ValidatedCompiledDesign validated_compiled_;
     const semantic::CompiledDesign* compiled_ { };
     ElaboratedDesign& design_;
+    const CoverageHirContext* coverage_ { };
     std::vector<Diagnostic>& diagnostics_;
     std::unordered_map<std::string, const Binding*> bindings_;
     std::unordered_set<std::string> used_bindings_;

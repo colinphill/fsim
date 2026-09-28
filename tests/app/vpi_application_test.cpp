@@ -1043,7 +1043,11 @@ void test_systemverilog_metadata(
     const std::filesystem::path& directory,
     const std::filesystem::path& source)
 {
-    const auto config = make_systemverilog_metadata_config(directory, source);
+    auto config = make_systemverilog_metadata_config(directory, source);
+    const auto instrumented = build_project(config);
+    const auto& discovered = instrumented.design.code_coverage_inventory();
+    assert(discovered && discovered->total_points == 9U);
+    config.coverage.enabled = false;
     auto project = build_project(config);
     std::ifstream source_input(source, std::ios::binary);
     const std::string source_text(
@@ -1053,7 +1057,7 @@ void test_systemverilog_metadata(
         = fsim::frontend::make_code_coverage_source_identity(
             directory, source,
             std::as_bytes(std::span { source_text.data(), source_text.size() }));
-    assert(project.code_coverage_enabled && source_identity.ok()
+    assert(!project.code_coverage_enabled && source_identity.ok()
         && !project.design.specializations().empty());
     const std::array inventory_sources {
         fsim::elaboration::CoverageInventorySource {
@@ -1077,6 +1081,7 @@ void test_systemverilog_metadata(
     assert(project.design
             .attach_code_coverage_inventory(inventory_sources, drafts)
             .ok());
+    project.code_coverage_enabled = true;
     fsim::app::Simulation simulation { std::move(project),
         config.run.max_deltas, fsim::app::SimulationEngine::interpreter };
     auto& registry = simulation.systemverilog_vpi_objects();

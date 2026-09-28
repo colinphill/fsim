@@ -47,6 +47,10 @@ struct TclContext {
     std::shared_ptr<const SdfControlApplication> sdf_control;
     std::unique_ptr<TclReferenceTable> references;
     TclTranscript* transcript { };
+    std::vector<std::filesystem::path> sdf_resolved_paths { };
+    std::optional<elaboration::ElaboratedDesign> sdf_baseline_design { };
+    std::string sdf_base_cache_key { };
+    std::vector<std::string> sdf_base_specialization_keys { };
 };
 
 Tcl_Size tcl_size(std::size_t value);

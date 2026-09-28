@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <new>
 #include <ranges>
 #include <stdexcept>
@@ -372,6 +373,55 @@ ElaboratedDesign::attach_code_coverage_inventory(
             return { built.error, built.index };
         }
         code_coverage_inventory_ = std::move(*built.inventory);
+        return { };
+    } catch (const std::bad_alloc&) {
+        return { Error::ResourceLimit, 0U };
+    } catch (const std::length_error&) {
+        return { Error::ResourceLimit, 0U };
+    }
+}
+
+CoverageInventoryValidationResult
+ElaboratedDesign::bind_hir_code_coverage_hits() noexcept
+{
+    if (!code_coverage_inventory_) {
+        return { Error::MissingInstance, 0U };
+    }
+    try {
+        for (std::size_t index = 0U;
+            index < specializations_.size(); ++index) {
+            const auto& specialization = specializations_[index];
+            const auto& instance = code_coverage_inventory_->instances[index];
+            std::map<std::pair<std::uint64_t, std::uint64_t>,
+                runtime::CodeCoveragePoint> points;
+            for (const auto& point : instance.points) {
+                points.emplace(
+                    std::pair { point.point.id.high, point.point.id.low },
+                    point.point);
+            }
+            for (const auto process_id : specialization.processes) {
+                if (process_id >= processes_.size()) {
+                    return { Error::InvalidProcess, index };
+                }
+                auto& process = processes_[process_id];
+                for (std::size_t instruction = 0U;
+                    instruction < process.operations.size(); ++instruction) {
+                    auto* hit = runtime::simir::operation_get_if<
+                        runtime::simir::CodeCoverageHit>(
+                        &process.operations[instruction]);
+                    if (hit == nullptr) {
+                        continue;
+                    }
+                    const auto found = points.find(
+                        { hit->point.high, hit->point.low });
+                    if (found == points.end()
+                        || found->second.metric != hit->metric) {
+                        return { Error::UnboundHit, index };
+                    }
+                    hit->counter = found->second.counter;
+                }
+            }
+        }
         return { };
     } catch (const std::bad_alloc&) {
         return { Error::ResourceLimit, 0U };

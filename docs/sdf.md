@@ -2,10 +2,10 @@
 # Standard Delay Format support
 
 Fsim accepts SDF 4.0 directly and SDF 2.1 and 3.0 through explicit revision
-adapters. The current v2 implementation preserves exact normalization,
-hierarchy resolution and portable source identity, applies that immutable
+adapters. The source-tree SDF layers preserve exact normalization,
+hierarchy resolution and portable source identity, apply that immutable
 representation to Verilog-1995/2001/2001-noconfig/2005 and
-SystemVerilog-2005/2009/2012/2017 timing, and covers VHDL/VITAL targets plus
+SystemVerilog-2005/2009/2012/2017 timing, and cover VHDL/VITAL targets plus
 timing that crosses a VHDL boundary without widening the selected SDF or HDL
 revision.
 
@@ -70,6 +70,44 @@ Debugger, callbacks, internal trace and VCD share deterministic effective,
 pending-transaction and violation events. Disabled observation returns before
 object lookup and cannot perturb scheduling.
 
+## Session file-input boundary
+
+The CLI, Tcl and C session adapters connect file input to the existing parser,
+resolver, planner and timing application. Their connected target kinds are
+Verilog/SystemVerilog specify paths (`IOPATH`) and timing checks. They reject
+other planned target kinds with `FSIM-SDF-SESSION-003` before publication or
+live commit. The broader interconnect, drive, pulse, VITAL and mixed-language
+APIs described above retain their separate source-tree contracts and tests;
+those tests do not establish file-input integration for every family.
+
+Relative file inputs resolve against the process current directory when the
+request is configured. The adapter freezes that I/O path; later directory
+changes or project loading do not reinterpret it. Reports retain the request's
+source identity; CLI paths are normalized to absolute paths during parsing.
+That identity participates in session/native keys, so freshly annotating from
+a different filename or checkout path can produce different keys. Reloading a
+copied annotated snapshot preserves its stored timing and identities without
+reading the original file. File bodies are bounded to 64 MiB in aggregate per
+request, alongside
+the parser's per-file limit. The separate 1-MiB control source-byte limit counts
+source/root/cell strings, not file contents.
+
+Before a design is loaded, session configuration may register a pending request
+without opening its files. Its summary has no effective annotation. Applying
+that request to a design validates and plans all inputs before publishing timing.
+A live update uses the existing scheduler safe-point commit and preserves queued
+events and timing-check history. After execution starts, a stopped run is not
+itself a safe point: live configuration is permitted only while the scheduler
+is executing a safe-point callback. Other callback mutation restrictions remain
+unchanged. Configuration never advances simulation implicitly. Failed application
+retains the prior effective annotation and control state.
+
+Initial annotation contributes to native-cache identity before simulation setup.
+Live path/check reannotation updates runtime timing tables and the effective
+control generation while preserving process topology and instructions. Existing
+and deferred native modules keep their captured code/cache identities; their
+compilation inputs do not contain those mutable timing tables.
+
 ## Command-line control
 
 SDF options are accepted only by phases that elaborate or simulate. `--sdf` is
@@ -91,11 +129,16 @@ SDF input and SDF options on compile-only phases are rejected.
 ## Tcl control
 
 `fsim::sdf configure SOURCE ROOT CELL_GLOB min|typ|max REPORT_LIMIT` appends one
-input and atomically publishes the resulting control request. `fsim::sdf
-summary` returns the effective input/file/path/check counts, generation,
+file input and atomically publishes the resulting pending or effective control.
+With a loaded design, configuration applies the selected timing before success.
+`fsim::sdf summary` returns the effective input/file/path/check counts, generation,
 truncation state and semantic identity. `fsim::sdf report` returns the bounded
 input/path/timing-check detail list. Summary and report reads are safe inside a
-simulation callback; mutation remains phase checked.
+simulation callback. After execution starts, configure is allowed inside a
+callback only at an actual scheduler safe point; direct post-run configuration
+is rejected without replacing the effective annotation. Tcl uses the
+`fsim::on safe_point` callback with `{time delta phase}` arguments; the scheduler
+must actually be in its safe-point dispatch.
 
 ```tcl
 set summary [fsim::sdf configure cells.sdf tb {tb.dut.*} max 256]
@@ -117,7 +160,14 @@ The installed C API in `fsim/api.h` adds append-only
 `fsim_session_get_sdf_summary`, and enumerate bounded report entries with
 `fsim_session_get_sdf_report_entry`. Callers advertise every structure prefix
 with `struct_size` and `FSIM_API_VERSION`; invalid prefixes, enums, views,
-indices and phase transitions fail without replacing prior state.
+indices and phase transitions fail without replacing prior state. At this session
+boundary, `fsim_sdf_input_t.source_identity` is a file name. It follows the
+configuration-time current-directory rule above; pending registration preserves
+the supplied identity and defers reading until a design is available. The
+low-level C++ control and IR APIs continue to accept their own source identities.
+For live updates, `fsim_callbacks_t.safe_point_info` at
+`FSIM_SCHEDULER_PHASE_POSTPONED` provides the scheduler-safe callback boundary.
+Other mutation APIs retain their existing running/callback restrictions.
 
 The source-tree C++ surface is split by ownership:
 
@@ -159,7 +209,7 @@ preallocated records without changing scheduling.
 
 ## Governed evidence
 
-The seventeen-row
+The retained source-tree application corpus is governed by the seventeen-row
 [`sdf_application_inventory.tsv`](../tests/feature_matrix/sdf_application_inventory.tsv)
 maps Changes 2-18 one-to-one and is checked by
 `fsim.sdf-application-inventory`. The `fsim.sdf-application-closure` test runs

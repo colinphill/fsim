@@ -475,6 +475,9 @@ HierarchyBuilder::lower_cached_vhdl_concurrent_statement(
 
 void HierarchyBuilder::canonicalize_process_operations(Process& process)
 {
+    if (coverage_ != nullptr) {
+        return;
+    }
     if (!process_operations_shareable(process)) {
         return;
     }
@@ -528,10 +531,12 @@ HierarchyBuilder::HierarchyBuilder(
     const std::span<const Binding> bindings,
     const std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider,
-    const std::span<const std::string> search_libraries)
+    const std::span<const std::string> search_libraries,
+    const CoverageHirContext* coverage)
     : validated_compiled_(compiled),
       compiled_(&compiled.design()),
       design_(design),
+      coverage_(coverage),
       diagnostics_(diagnostics),
       systemc_provider_(systemc_provider),
       systemc_candidates_(

@@ -148,7 +148,8 @@ ElaborationResult elaborate_impl(
     const std::span<const SystemCInstanceDescription>
         systemc_instances,
     SystemCFactoryProvider* systemc_provider,
-    const std::span<const std::string> search_libraries) {
+    const std::span<const std::string> search_libraries,
+    const CoverageHirContext* coverage) {
     ElaborationResult result;
     const auto validated = semantic::validate_compiled_design(compiled);
     if (!validated) {
@@ -419,7 +420,7 @@ ElaborationResult elaborate_impl(
 
     auto builder = std::make_unique<HierarchyBuilder>(
         *validated, design, result.diagnostics, bindings,
-        systemc_instances, systemc_provider, search_libraries);
+        systemc_instances, systemc_provider, search_libraries, coverage);
     std::vector<const ResolvedRoot*> elaboration_roots;
     elaboration_roots.reserve(resolved_roots.size());
     for (const auto& root : resolved_roots) {
@@ -549,7 +550,8 @@ ElaborationResult elaborate(
     const std::span<const Binding> bindings,
     const std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider,
-    const std::span<const std::string> search_libraries)
+    const std::span<const std::string> search_libraries,
+    const CoverageHirContext* coverage)
 {
     return elaborate_impl(
         compiled,
@@ -557,7 +559,8 @@ ElaborationResult elaborate(
         bindings,
         systemc_instances,
         systemc_provider,
-        search_libraries);
+        search_libraries,
+        coverage);
 }
 
 } // namespace fsim::elaboration

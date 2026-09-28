@@ -26,6 +26,12 @@ std::optional<BuiltProject> load_workspace_snapshot(const cli::Invocation& invoc
     if (!metadata) {
         return std::nullopt;
     }
+    if (config.coverage.enabled && !metadata->code_coverage.enabled) {
+        workspace_error(diagnostics,
+            "snapshot '" + invocation.snapshot
+                + "' has no code-coverage instrumentation; elaborate a new snapshot with --code-coverage");
+        return std::nullopt;
+    }
     if (invocation.delay_mode && metadata->delay_mode != project::to_string(*invocation.delay_mode)) {
         workspace_error(diagnostics, "requested delay mode differs from snapshot '"
             + invocation.snapshot + "'; elaborate a new snapshot with that delay mode");

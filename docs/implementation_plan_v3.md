@@ -1,16 +1,53 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # fsim v3 implementation plan
 
-**Current campaign direction, 2026-09-28:** Further optimization is paused at
-retained P96 (32.579 seconds on the original full mixed case). Cleanup and
-local qualification passed: Release 454/454, focused Debug 7/7, and Tcl-off
-6/6. The [ten-case wall/RSS matrix](performance-matrix-2026-09-28.md) passed
-fsim/Vivado stimulus and correctness parity in every case; its single timed
-sample per engine is not seven-pair performance qualification. Matched
-short-case controls reproduced roughly 0.55–0.65 seconds more native
-setup/simulation time than frozen P8A. The user accepted those small
-regressions and requested publication and commit preparation. The under-15-
-second target remains open. Do not commit or push yet.
+**CI repair publication, 2026-09-28:** the user authorized committing and
+pushing the completed simplification work with fixes for the Windows failures
+in CI run `36437357263`. The cumulative Release suite passes 454/454 and fresh
+affected Debug passes 7/7; the performance parser passes 40 tests. The repair
+and evidence scope are recorded in [the resume checkpoint](v3-resume.md).
+Do not monitor the new CI run. Batch 189 remains unstarted.
+
+**Simplification implementation complete, 2026-09-28:** the full
+[simplification plan](simplification-implementation-plan.md) has an explicit
+disposition for every selected requirement.
+S2 and S3 are locally closed. S3 SDF request integration has 454 distinct Release
+cases qualified (451 in the full run plus three corrected audit reruns), fresh
+Debug 8/8 and Tcl-off 7/7. Native O0/O2 producer execution and saved-snapshot
+replay without the source SDF are verified. Final docs/package gates pass 24/24,
+and index/identity closure is archived in `build/simplification-packet-3/`.
+S4 cache reproducibility passes final Release 454/454 and fresh Debug/Tcl-off
+16/16 each, including SDF relative-path and body-limit follow-up witnesses.
+Final replay and docs/package 24/24 pass; graph and identity receipt closure
+are independently verified under `build/simplification-packet-4/`. S4 is
+locally closed. S5 retains only T3's small executor-configuration simplification;
+DCO-7 and T9 are rejected, and F2 is rejected and restored. Fresh attribution,
+compatibility evidence and single cold screens are archived; no speedup is
+claimed. Final cumulative Release passes 454/454, fresh Debug and Tcl-off
+21/21 each. The S5 closure receipt records final documentation/package gates,
+index coverage and exact identities. Batch 189
+numbering and the staged performance handoff remain preserved.
+
+**Maintenance checkpoint, 2026-09-28:**
+[simplification packet S1](simplification-implementation-plan.md) retains
+verified dead-code removal, shared runtime/test helpers and bounded cache
+accounting. Release 454/454, focused Debug 9/9, Tcl-off 8/8 and fixed-input
+artifact comparison passed. [The disposition](simplification-disposition.md)
+records rejected/deferred items and the separate repair scopes. Batch 189
+remains unstarted; the performance loop remains paused. Changes are uncommitted
+and the existing staged performance handoff is preserved.
+
+**Current checkpoint, 2026-09-28:** The performance change set and ten-case
+matrix were committed and pushed as `6efa4c35` to `origin/codex/v3`.
+Release 454/454, focused Debug 7/7, Tcl-off 6/6, and final packaging/docs
+24/24 passed. All ten matrix cases passed stimulus and correctness parity;
+the user accepted the small short-case timing regressions. CI was not
+monitored, as requested. The under-15-second full mixed-codec loop remains
+paused and its target unmet (fresh matrix Wall 32.933 seconds; earlier P96
+32.579 seconds). Read the self-contained
+[performance resume instructions](performance-resume.md) for worker setup,
+exact commands, evidence, accepted/rejected work, and the next bounded action.
+Saving the handoff does not restart the loop or authorize another push.
 
 This is the authoritative batch and status record for fsim v3. Development
 starts on branch codex/v3 from clean v2 checkpoint

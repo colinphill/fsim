@@ -489,6 +489,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-CONTROL-002` | error | SDF control repeats or conflicts on one source/root/cell input scope. |
 | `FSIM-SDF-CONTROL-003` | error | Annotation is requested during compile, or effective annotation phase, generation, or source/object provenance does not match the control request. |
 | `FSIM-SDF-CONTROL-004` | error | SDF control inputs, source bytes, bounded report entries, or immutable semantic identity exceed the configured resource limit. |
+| `FSIM-SDF-SESSION-001` | error | A session SDF input cannot be read within the file-body limit, or the design, time resolution or retained baseline is invalid. |
+| `FSIM-SDF-SESSION-002` | error | Session SDF selection contains no applicable annotations or an invalid selected target scope. |
+| `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path and timing-check support. |
 | `FSIM-SDF-EFFECTIVE-001` | error | Effective SDF persistence receives incomplete identities, generation, policy, exact-value records, or producer-relative provenance. |
 | `FSIM-SDF-EFFECTIVE-002` | error | An effective SDF object, design, library, native-cache, or checkpoint archive has a stale schema, wrong artifact kind, malformed/truncated envelope, trailing data, or checksum corruption. |
 | `FSIM-SDF-EFFECTIVE-003` | error | Effective SDF persistence finds duplicate target ownership or a producer, policy, generation, target, or provenance identity incompatible with the consumer. |

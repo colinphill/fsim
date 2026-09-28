@@ -410,6 +410,7 @@ if {[dict get $provenance library] ne "work" ||
         assert(text.find("error[FSIM-WS-") != std::string::npos);
         assert(text.find("after-stop") == std::string::npos);
         assert(text.find("\x1b[") == std::string::npos);
+        assert(text.find('\r') == std::string::npos);
         const auto first_command = text.find("> puts transcript-stdout");
         const auto first_command_end = text.find('\n', first_command);
         assert(first_command != std::string::npos);

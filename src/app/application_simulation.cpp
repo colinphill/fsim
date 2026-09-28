@@ -3,6 +3,7 @@
 #include "application_simulation_internal.hpp"
 #include "application_uvm_registry.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/app/sdf_reannotation.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/artifact/coverage_database_merge.hpp"
 #include "fsim/support/path.hpp"
@@ -21,6 +22,7 @@
 #include <set>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 
 namespace fsim::app {
 using namespace application_detail;
@@ -585,6 +587,27 @@ std::uint64_t Simulation::add_safe_point_hook(SafePointHook hook)
 void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept
 {
     impl_->safe_point_observers.erase(token);
+}
+
+SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
+    const SdfReannotationApplication& application)
+{
+    static_assert(std::is_nothrow_move_assignable_v<
+        elaboration::ElaboratedDesign>);
+    auto replacement = elaboration::ElaboratedDesign::from_state(
+        application.design().state());
+    if (!replacement)
+        throw std::invalid_argument("SDF reannotation has invalid design state");
+    auto result = fsim::app::commit_sdf_reannotation(
+        application, *impl_->interpreter);
+    if (result.ok())
+        impl_->built.design = std::move(*replacement);
+    return result;
+}
+
+bool Simulation::at_sdf_reannotation_safe_point() const noexcept
+{
+    return impl_->interpreter->scheduler().at_safe_point();
 }
 
 void Simulation::set_execution_point_hook(ExecutionPointHook hook)

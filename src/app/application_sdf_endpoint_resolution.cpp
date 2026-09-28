@@ -184,12 +184,22 @@ namespace {
     void add_signal_candidates(std::vector<Candidate>& candidates,
         const elaboration::ElaboratedDesign& elaborated)
     {
-        candidates.reserve(elaborated.signals().size()
+        const auto signal_paths = elaborated.signal_paths();
+        candidates.reserve(signal_paths.size()
             + elaborated.systemc_objects().size());
-        for (const auto& signal : elaborated.signals()) {
-            candidates.push_back(Candidate { signal.name, signal.id,
-                signal.width, signal.is_port, signal.direction,
-                signal.is_port ? SdfEndpointObjectKind::HdlPort
+        std::unordered_map<runtime::simir::SignalId,
+            const elaboration::SignalInfo*> signal_info;
+        signal_info.reserve(elaborated.signals().size());
+        for (const auto& signal : elaborated.signals())
+            signal_info.emplace(signal.id, &signal);
+        for (const auto& [name, signal_id] : signal_paths) {
+            const auto found = signal_info.find(signal_id);
+            if (found == signal_info.end())
+                continue;
+            const auto* signal = found->second;
+            candidates.push_back(Candidate { name, signal->id,
+                signal->width, signal->is_port, signal->direction,
+                signal->is_port ? SdfEndpointObjectKind::HdlPort
                                : SdfEndpointObjectKind::HdlNet });
         }
         for (const auto& object : elaborated.systemc_objects()) {
@@ -269,28 +279,21 @@ namespace {
         const std::vector<Candidate>& candidates)
     {
         const auto local = joined_path(spec.segments);
-        std::vector<std::string> alternatives;
-        alternatives.push_back(target.instance_path + '.' + local);
-        if (!equal_under_case_policy(
-                local, target.instance_path, target.case_policy))
-            alternatives.push_back(local);
-        std::vector<const Candidate*> result;
-        for (const auto& candidate : candidates) {
-            if (std::ranges::any_of(alternatives,
-                    [&](const std::string& path) {
-                        return equal_under_case_policy(
-                            candidate.path, path, target.case_policy);
-                    })) {
-                if (!std::ranges::any_of(result,
-                        [&](const Candidate* prior) {
-                            return prior->signal == candidate.signal
-                                && prior->path == candidate.path;
-                        })) {
-                    result.push_back(&candidate);
-                }
+        const auto collect = [&](const std::string_view path) {
+            std::vector<const Candidate*> matches;
+            for (const auto& candidate : candidates) {
+                if (equal_under_case_policy(
+                        candidate.path, path, target.case_policy))
+                    matches.push_back(&candidate);
             }
-        }
-        return result;
+            return matches;
+        };
+        auto scoped = collect(target.instance_path + '.' + local);
+        if (!scoped.empty()
+            || equal_under_case_policy(
+                local, target.instance_path, target.case_policy))
+            return scoped;
+        return collect(local);
     }
 
     [[nodiscard]] std::vector<EndpointSpec> default_device_specs(

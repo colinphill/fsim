@@ -5,13 +5,137 @@
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/elaboration/coverage_external_exclusions.hpp"
+#include "fsim/elaboration/coverage_hir_points.hpp"
+#include "fsim/frontend/coverage_source_identity.hpp"
+#include "fsim/support/path.hpp"
+#include "fsim/support/sha256.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+
+#include <fstream>
+#include <set>
 
 
 namespace fsim::app {
 using namespace application_detail;
 namespace {
+
+    [[nodiscard]] std::optional<std::vector<elaboration::CoverageHirSource>>
+    make_hir_coverage_sources(
+        const CheckedProject& checked,
+        const std::filesystem::path& root,
+        diagnostic::Engine& diagnostics)
+    {
+        std::set<std::uint32_t> required_files;
+        const auto& spans = checked.semantics.source_spans();
+        for (const auto& statement : checked.systemverilog_hir.statements()) {
+            if (statement.source.valid()
+                && statement.source.value() < spans.size()) {
+                required_files.insert(
+                    spans[statement.source.value()].file.value());
+            }
+        }
+        if (required_files.size() > (1U << 16U)) {
+            diagnostics.error("FSIM-COV-008",
+                "code-coverage source count exceeds the supported limit");
+            return std::nullopt;
+        }
+        std::vector<elaboration::CoverageHirSource> result;
+        result.reserve(required_files.size());
+        std::uint64_t total_source_bytes { };
+        const auto mappings = compiled_cache_source_mappings(
+            checked, root, diagnostics);
+        if (!mappings) {
+            return std::nullopt;
+        }
+        const auto& files = checked.semantics.source_files();
+        for (const auto index : required_files) {
+            if (index >= files.size()) {
+                diagnostics.error("FSIM-COV-008",
+                    "code-coverage HIR refers to a missing source file");
+                return std::nullopt;
+            }
+            const auto& file = files[index];
+            const auto logical = support::path_from_utf8(file.physical_name);
+            auto backing = logical;
+            for (const auto& source : checked.hdl_sources) {
+                if (same_source_path(source.path, logical)
+                    && !source.backing_path.empty()) {
+                    backing = source.backing_path;
+                    break;
+                }
+            }
+            if (!backing.is_absolute()) {
+                backing = root / backing;
+            }
+            std::error_code io_error;
+            const auto bytes = std::filesystem::file_size(backing, io_error);
+            if (io_error || bytes > (1U << 30U)
+                || bytes > (1U << 30U) - total_source_bytes) {
+                diagnostics.error("FSIM-COV-008",
+                    "cannot read bounded code-coverage source '"
+                        + file.physical_name + "'");
+                return std::nullopt;
+            }
+            total_source_bytes += bytes;
+            std::ifstream input { backing, std::ios::binary };
+            std::string contents(static_cast<std::size_t>(bytes), '\0');
+            input.read(contents.data(),
+                static_cast<std::streamsize>(contents.size()));
+            if (!input || input.peek() != std::char_traits<char>::eof()
+                || support::Sha256::hex(
+                    support::Sha256::digest(contents))
+                    != file.content_digest) {
+                diagnostics.error("FSIM-COV-008",
+                    "code-coverage source bytes differ from compiled HIR for '"
+                        + file.physical_name + "'");
+                return std::nullopt;
+            }
+            auto identity_path = logical;
+            if (logical.is_absolute()) {
+                const auto relative = logical.lexically_relative(root);
+                const bool outside = relative.empty()
+                    || std::ranges::any_of(relative,
+                        [](const std::filesystem::path& component) {
+                            return component == "..";
+                        });
+                if (outside) {
+                    const auto mapping = std::ranges::find_if(*mappings,
+                        [&](const library::SourceNameMapping& candidate) {
+                            return same_source_path(
+                                support::path_from_utf8(candidate.producer_name),
+                                logical);
+                        });
+                    if (mapping == mappings->end()) {
+                        diagnostics.error("FSIM-COV-008",
+                            "cannot map external code-coverage source '"
+                                + file.physical_name + "'");
+                        return std::nullopt;
+                    }
+                    identity_path = root
+                        / support::path_from_utf8(mapping->logical_name);
+                }
+            }
+            const auto source_bytes = std::span<const std::byte> {
+                reinterpret_cast<const std::byte*>(contents.data()),
+                contents.size() };
+            auto identity = frontend::make_code_coverage_source_identity(
+                root, identity_path, source_bytes);
+            auto controls = frontend::parse_coverage_source_controls(
+                contents, frontend::Language::SystemVerilog2017);
+            if (!identity.ok() || !controls.ok()) {
+                diagnostics.error(controls.ok() ? "FSIM-COV-008"
+                                                : "FSIM-COV-041",
+                    "invalid code-coverage source identity or control in '"
+                        + file.physical_name + "'");
+                return std::nullopt;
+            }
+            result.push_back({
+                { file.physical_name, std::move(*identity.identity) },
+                std::move(controls.exclusions) });
+        }
+        return result;
+    }
 
     constexpr std::string_view kCompiledHirCacheEnvelope
         = "FSIM-COMPILED-HIR-CACHE-V2\n";
@@ -549,6 +673,18 @@ std::optional<BuiltProject> build_checked_project(
         return std::nullopt;
     }
     checked->refresh_lookup_indexes();
+    std::optional<std::vector<elaboration::CoverageHirSource>>
+        coverage_sources;
+    std::optional<elaboration::CoverageHirContext> coverage_context;
+    if (code_coverage_enabled(config)) {
+        coverage_sources = make_hir_coverage_sources(
+            *checked, config.base_directory, diagnostics);
+        if (!coverage_sources) {
+            return std::nullopt;
+        }
+        coverage_context.emplace(std::span<const elaboration::CoverageHirSource> {
+            *coverage_sources });
+    }
     auto systemc_instances = construct_systemc_instances(
         tops, systemc_registries, diagnostics);
     if (!systemc_instances) {
@@ -584,7 +720,8 @@ std::optional<BuiltProject> build_checked_project(
         bindings,
         *systemc_instances,
         systemc_provider.get(),
-        config.elaboration.search_libraries);
+        config.elaboration.search_libraries,
+        coverage_context ? &*coverage_context : nullptr);
     for (const auto& input : elaborated.messages) {
         application_detail::import_diagnostic(diagnostics, input);
     }
@@ -598,6 +735,50 @@ std::optional<BuiltProject> build_checked_project(
     }
     if (!elaborated.design || diagnostics.has_error()) {
         return std::nullopt;
+    }
+    if (coverage_context) {
+        std::vector<elaboration::CoverageInventorySource> sources;
+        sources.reserve(coverage_sources->size());
+        for (const auto& source : *coverage_sources) {
+            sources.push_back(source.inventory);
+        }
+        std::vector<elaboration::CoverageInstanceInventoryDraft> instances;
+        instances.reserve(elaborated.design->specializations().size());
+        const elaboration::CoverageInventoryLimits coverage_limits;
+        std::size_t total_points { };
+        for (const auto& specialization :
+            elaborated.design->specializations()) {
+            auto discovered = elaboration::discover_hir_module_coverage_points(
+                *checked, specialization, *coverage_sources,
+                coverage_limits.maximum_points - total_points);
+            if (!discovered.ok()) {
+                diagnostics.error("FSIM-COV-008",
+                    "cannot discover module-procedural coverage points for '"
+                        + specialization.instance + "' (error "
+                        + std::to_string(static_cast<int>(discovered.error))
+                        + ")");
+                return std::nullopt;
+            }
+            total_points += discovered.draft.points.size();
+            instances.push_back(std::move(discovered.draft));
+        }
+        const auto attached = elaborated.design->attach_code_coverage_inventory(
+            sources, instances);
+        if (!attached.ok()) {
+            diagnostics.error("FSIM-COV-008",
+                "cannot attach module-procedural coverage inventory (error "
+                    + std::to_string(static_cast<int>(attached.error))
+                    + ")");
+            return std::nullopt;
+        }
+        const auto bound = elaborated.design->bind_hir_code_coverage_hits();
+        if (!bound.ok()) {
+            diagnostics.error("FSIM-COV-008",
+                "cannot bind module-procedural coverage hits (error "
+                    + std::to_string(static_cast<int>(bound.error))
+                    + ")");
+            return std::nullopt;
+        }
     }
     const auto generated_class_is_selected =
         [&](const semantic::sv::ClassSpecialization& specialization) {

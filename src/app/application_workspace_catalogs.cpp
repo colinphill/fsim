@@ -195,7 +195,8 @@ std::vector<WorkspaceObjectSelection> workspace_object_selections(
     diagnostic::Engine& diagnostics)
 {
     std::vector<WorkspaceObjectSelection> result;
-    for (const auto& catalog : catalogs) {
+    for (std::size_t rank = 0; rank < catalogs.size(); ++rank) {
+        const auto& catalog = catalogs[rank];
         for (const auto& artifact : catalog.artifacts) {
             if (artifact.kind != workspace::ArtifactKind::Hdl) {
                 continue;
@@ -219,6 +220,7 @@ std::vector<WorkspaceObjectSelection> workspace_object_selections(
                 return { };
             }
             selection.path = std::move(*path);
+            selection.catalog_rank = rank;
             const auto metadata = artifact::load_object_metadata(selection.path, diagnostics);
             if (!metadata || metadata->compilation_digest != artifact.fingerprint) {
                 if (!diagnostics.has_error()) {

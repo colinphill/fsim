@@ -337,10 +337,21 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             && process->systemverilog->concurrent_assertion;
         lowerer.diagnose_hir_systemverilog_file_process(
             process_id);
+        const auto& origins = compiled_->semantics.origins();
+        const bool parsed_process = process
+            && process->systemverilog != nullptr
+            && process->systemverilog->origin.valid()
+            && process->systemverilog->origin.value() < origins.size()
+            && origins[process->systemverilog->origin.value()].kind
+                == semantic::OriginKind::parsed;
+        lowerer.set_hir_code_coverage_active(parsed_process
+            && !concurrent_assertion
+            && source_language == frontend::Language::SystemVerilog2017);
         auto lowered = lowerer.lower_hir_process(
             process_id,
             source_language,
             path);
+        lowerer.set_hir_code_coverage_active(false);
         if (!lowered) {
             report(
                 "FSIM-ELAB-HIR-001",
@@ -377,6 +388,9 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         };
         generated_lowerer.set_specialized_hir_unit(
             &occurrence.specialization);
+        generated_lowerer.set_hir_code_coverage_context(
+            coverage_, unit.kind == semantic::sv::UnitKind::module
+                && source_language == frontend::Language::SystemVerilog2017);
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_);
         generated_lowerer.set_systemverilog_program_owner(
@@ -434,8 +448,19 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             const bool concurrent_assertion = process
                 && process->systemverilog != nullptr
                 && process->systemverilog->concurrent_assertion;
+            const auto& origins = compiled_->semantics.origins();
+            const bool parsed_process = process
+                && process->systemverilog != nullptr
+                && process->systemverilog->origin.valid()
+                && process->systemverilog->origin.value() < origins.size()
+                && origins[process->systemverilog->origin.value()].kind
+                    == semantic::OriginKind::parsed;
+            generated_lowerer.set_hir_code_coverage_active(parsed_process
+                && !concurrent_assertion
+                && source_language == frontend::Language::SystemVerilog2017);
             auto lowered = generated_lowerer.lower_hir_process(
                 process_id, source_language, occurrence.path);
+            generated_lowerer.set_hir_code_coverage_active(false);
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
                     "compiled generated process could not be lowered "

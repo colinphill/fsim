@@ -637,6 +637,16 @@ class PreflightReuseTests(unittest.TestCase):
         document["simulator_binaries"]["fsim"]["sha256"] = "new"
         self.assertEqual(self.key("vivado", self.prior), self.key("vivado", self.current, document))
 
+    def test_fixture_path_aliases_use_the_same_resolved_campaign_root(self) -> None:
+        alias = self.current / "unused" / ".."
+        self.assertEqual(self.key("fsim", self.prior),
+                         self.key("fsim", self.current, self.identities(alias)))
+
+    def test_path_escaping_campaign_keeps_its_external_identity(self) -> None:
+        document = self.identities(self.current / ".." / "external")
+        self.assertNotEqual(self.key("fsim", self.current),
+                            self.key("fsim", self.current, document))
+
     def test_reuse_reparses_evidence_and_keeps_historical_time_out_of_current_time(self) -> None:
         self.create_proof("fsim")
         result, reason = self.reuse()

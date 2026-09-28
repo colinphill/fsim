@@ -46,6 +46,14 @@ namespace {
         return true;
     }
 
+    bool cache_bytes_fit(
+        const std::size_t used,
+        const std::size_t retained,
+        const std::size_t limit) noexcept
+    {
+        return used <= limit && retained <= limit - used;
+    }
+
     bool add_effective_subtype_cache_sequence(
         std::size_t& bytes,
         const std::size_t count,
@@ -2338,74 +2346,6 @@ Lowerer::hir_class_task_profile(
     return result;
 }
 
-bool Lowerer::can_lower_hir_class_task_call(
-    const semantic::StatementId statement,
-    const semantic::ScopeId process_scope,
-    std::unordered_set<std::uint32_t>&) const
-{
-    const auto profile = hir_class_task_profile(statement, process_scope);
-    if (!profile) {
-        return false;
-    }
-    const auto expression_supported = [&](
-                                          const semantic::ExpressionId expression) {
-        std::unordered_set<std::uint32_t> visiting;
-        return can_lower_hir_expression(
-            expression, process_scope, visiting);
-    };
-    if (profile->receiver
-        && !expression_supported(*profile->receiver)) {
-        return false;
-    }
-    return std::ranges::all_of(
-        profile->actuals,
-        [&](const HirClassMethodActual& actual) {
-            if (actual.container) {
-                const auto expression = specialized_hir_unit_->find_expression(
-                    actual.expression);
-                return expression && expression->systemverilog != nullptr
-                    && (expression->systemverilog->kind
-                            == semantic::sv::ExpressionKind::name
-                        || expression->systemverilog->kind
-                            == semantic::sv::ExpressionKind::slice);
-            }
-            if (actual.string) {
-                if (!can_lower_hir_string_expression(
-                        actual.expression, process_scope)) {
-                    return false;
-                }
-                if (!class_method_copy_out(actual.direction)) {
-                    return true;
-                }
-                const auto target = hir_target_declaration(
-                    actual.expression);
-                const auto binding = target
-                    ? hir_string_binding(*target, process_scope, false)
-                    : std::nullopt;
-                return binding
-                    && (binding->kind == HirStringBindingKind::local
-                        || (binding->object
-                            && !read_only_string_objects_.contains(
-                                *binding->object)));
-            }
-            if (callable_copy_in(actual.direction)
-                && !expression_supported(actual.expression)) {
-                return false;
-            }
-            if (!class_method_copy_out(actual.direction)) {
-                return true;
-            }
-            const auto target = hir_target_declaration(actual.expression);
-            const auto binding = target
-                ? hir_runtime_binding(*target, process_scope, false)
-                : std::nullopt;
-            return binding && binding->width == actual.width
-                && (binding->kind == HirRuntimeBindingKind::local
-                    || (binding->signal
-                        && !read_only_signals_.contains(*binding->signal)));
-        });
-}
-
 bool Lowerer::can_lower_hir_class_method_call(
     const semantic::ExpressionId expression,
     const semantic::ScopeId process_scope,
@@ -3433,11 +3373,8 @@ Lowerer::hir_effective_vhdl_subtype(
             retained_bytes, hir_generic_binding_frames_, entry_limit)
         || !add_effective_subtype_cache_vhdl_type(
             retained_bytes, *result, entry_limit)
-        || hir_effective_vhdl_subtype_cache_bytes_
-            > maximum_effective_subtype_cache_bytes
-        || retained_bytes
-            > maximum_effective_subtype_cache_bytes
-                - hir_effective_vhdl_subtype_cache_bytes_) {
+        || !cache_bytes_fit(hir_effective_vhdl_subtype_cache_bytes_,
+            retained_bytes, maximum_effective_subtype_cache_bytes)) {
         return result;
     }
     try {
@@ -3516,11 +3453,8 @@ void Lowerer::cache_hir_expression_resolution(
             resolution.candidates.size(),
             sizeof(semantic::DeclarationId),
             entry_limit)
-        || hir_expression_resolution_cache_bytes_
-            > maximum_effective_subtype_cache_bytes
-        || retained_bytes
-            > maximum_effective_subtype_cache_bytes
-                - hir_expression_resolution_cache_bytes_) {
+        || !cache_bytes_fit(hir_expression_resolution_cache_bytes_,
+            retained_bytes, maximum_effective_subtype_cache_bytes)) {
         if (profile_expression_resolution_cache()) {
             ++hir_expression_resolution_cache_cap_drops_;
         }
@@ -3714,11 +3648,8 @@ void Lowerer::cache_hir_vhdl_subtype_name(
             >= maximum_vhdl_subtype_name_cache_entries
         || spelling.size() > maximum_vhdl_subtype_name_cache_entry_bytes
         || retained_bytes > maximum_vhdl_subtype_name_cache_entry_bytes
-        || hir_vhdl_subtype_name_cache_bytes_
-            > maximum_vhdl_subtype_name_cache_bytes
-        || retained_bytes
-            > maximum_vhdl_subtype_name_cache_bytes
-                - hir_vhdl_subtype_name_cache_bytes_) {
+        || !cache_bytes_fit(hir_vhdl_subtype_name_cache_bytes_,
+            retained_bytes, maximum_vhdl_subtype_name_cache_bytes)) {
         if (profile_expression_resolution_cache()) {
             ++hir_vhdl_subtype_name_cache_cap_drops_;
         }
@@ -3760,18 +3691,6 @@ void Lowerer::clear_hir_vhdl_subtype_name_cache() const noexcept
     hir_vhdl_subtype_name_cache_hits_ = 0U;
     hir_vhdl_subtype_name_cache_misses_ = 0U;
     hir_vhdl_subtype_name_cache_cap_drops_ = 0U;
-}
-
-std::optional<std::vector<Lowerer::HirGenericBinding>>
-Lowerer::bind_hir_vhdl_generics(
-    const std::span<const semantic::DeclarationId> formals,
-    const std::span<const semantic::vhdl::Association> associations) const
-{
-    return specialized_hir_unit_ != nullptr
-        ? semantic::CompiledDesignResolver {
-              *specialized_hir_unit_, hir_generic_binding_frames_ }
-              .bind_vhdl_generics(formals, associations)
-        : std::nullopt;
 }
 
 std::vector<semantic::DeclarationId>
@@ -4764,120 +4683,6 @@ Lowerer::resolve_hir_vhdl_procedure_call(
     return linked_package_call
         ? std::optional { candidates.front() }
         : std::nullopt;
-}
-
-bool Lowerer::can_lower_hir_vhdl_procedure_call(
-    const semantic::StatementId statement_id,
-    const semantic::ScopeId process_scope,
-    std::unordered_set<std::uint32_t>& visiting) const
-{
-    if (specialized_hir_unit_ == nullptr) {
-        return false;
-    }
-    if (is_hir_vhdl_vital_delay_call(statement_id)) {
-        return true;
-    }
-    if (is_hir_vhdl_vital_state_table_call(statement_id)
-        || is_hir_vhdl_vital_timing_call(statement_id)) {
-        return true;
-    }
-    if (is_hir_vhdl_file_statement(statement_id)) {
-        return true;
-    }
-    if (is_hir_vhdl_access_deallocation(statement_id)) {
-        return true;
-    }
-    if (is_hir_vhdl_protected_statement(statement_id)) {
-        return true;
-    }
-    if (is_hir_vhdl_environment_directory_statement(statement_id)) {
-        return true;
-    }
-    if (is_hir_vhdl_assert_statement(statement_id)) {
-        return true;
-    }
-    const auto statement = specialized_hir_unit_->find_statement(
-        statement_id);
-    if (statement && statement->vhdl != nullptr
-        && (same_callable_name(statement->vhdl->procedure.spelling,
-                "std.env.setpslcoverassert", true)
-            || same_callable_name(statement->vhdl->procedure.spelling,
-                "std.env.clearpslstate", true)
-            || same_callable_name(statement->vhdl->procedure.spelling,
-                "std.env.stop", true)
-            || same_callable_name(statement->vhdl->procedure.spelling,
-                "std.env.finish", true))) {
-        return true;
-    }
-    const auto resolution = resolve_hir_vhdl_procedure_call(
-        statement_id, process_scope);
-    if (!resolution) {
-        if (statement && statement->vhdl != nullptr) {
-            const auto candidates = hir_vhdl_callable_candidates(
-                statement->vhdl->procedure,
-                statement->vhdl->scope);
-            if (candidates.size() > 1U) {
-                return true;
-            }
-        }
-        return false;
-    }
-    hir_generic_binding_frames_.push_back(
-        resolution->generic_bindings);
-    const PopBackGuard generic_scope { hir_generic_binding_frames_ };
-    const auto declaration = specialized_hir_unit_->find_declaration(
-        resolution->body);
-    const auto actuals = bind_hir_vhdl_procedure_actuals(
-        statement_id, resolution->body);
-    if (!declaration || declaration->vhdl == nullptr || !actuals
-        || !declaration->vhdl->callable
-        || !declaration->vhdl->nested_scope) {
-        return false;
-    }
-    const auto scope = *declaration->vhdl->nested_scope;
-    const auto& formals = declaration->vhdl->callable->formals;
-    for (std::size_t index { }; index < formals.size(); ++index) {
-        const auto formal = specialized_hir_unit_->find_declaration(
-            formals[index]);
-        const auto binding = hir_callable_formal_binding(
-            formals[index], scope, (*actuals)[index], process_scope);
-        const auto direction = formal
-            ? callable_direction(*formal)
-            : frontend::PortDirection::Unknown;
-        if (!binding
-            || binding->kind != HirRuntimeBindingKind::local
-            || direction == frontend::PortDirection::Unknown
-            || !callable_scalar_domain(binding->domain)) {
-            return false;
-        }
-        if (callable_copy_in(direction)
-            && !can_lower_hir_expression(
-                (*actuals)[index], process_scope, visiting)) {
-            return false;
-        }
-        if (!class_method_copy_out(direction)) {
-            continue;
-        }
-        const auto actual = specialized_hir_unit_->find_expression(
-            (*actuals)[index]);
-        const auto target = hir_target_declaration((*actuals)[index]);
-        const auto target_binding = target
-            ? hir_runtime_binding(*target, process_scope, false)
-            : std::nullopt;
-        const auto writable = target_binding
-            && (target_binding->kind == HirRuntimeBindingKind::local
-                || (target_binding->signal
-                    && !read_only_signals_.contains(
-                        *target_binding->signal)));
-        if (!actual || actual->vhdl == nullptr
-            || actual->vhdl->kind
-                != semantic::vhdl::ExpressionKind::name
-            || !writable || target_binding->width != binding->width
-            || target_binding->domain != binding->domain) {
-            return false;
-        }
-    }
-    return true;
 }
 
 std::optional<Lowerer::HirDpiFunctionProfile>

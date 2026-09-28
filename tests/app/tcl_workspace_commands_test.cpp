@@ -540,12 +540,128 @@ puts workspace-commands-ok
     }
 }
 
+void run_sdf_workspace_commands_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    {
+        std::ofstream source { "top.sv" };
+        source << R"sv(`timescale 1ns/1ps
+module delay_buf(input logic a, output wire z);
+  assign z = a;
+  specify
+    (a => z) = 5;
+  endspecify
+endmodule
+module top;
+  logic a;
+  logic marker;
+  wire z;
+  delay_buf u0(.a(a), .z(z));
+  initial begin
+    #11 marker = 1;
+  end
+  initial begin
+    a = 0;
+    #10 a = 1;
+    #20 a = 0;
+    #20 $finish;
+  end
+endmodule
+)sv";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl SDF source");
+    }
+    const auto write_sdf = [](const char* filename, const int delay) {
+        std::ofstream source { filename };
+        source << "(DELAYFILE\n"
+            "  (SDFVERSION \"4.0\")\n"
+            "  (DESIGN \"top\")\n"
+            "  (TIMESCALE 1 ns)\n"
+            "  (CELL (CELLTYPE \"delay_buf\") (INSTANCE top.u0)\n"
+            "    (DELAY (ABSOLUTE (IOPATH a z ("
+            << delay << "))))))\n";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl SDF input");
+    };
+    write_sdf("first.sdf", 3);
+    write_sdf("second.sdf", 2);
+    write_sdf("third.sdf", 1);
+    const auto invoke = [](const std::vector<std::string>& arguments) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(arguments, input, output, error) != 0)
+            throw std::runtime_error("Tcl SDF setup failed: " + error.str());
+    };
+    invoke({ "fsim", "compile", "--library", "work", "top.sv" });
+    invoke({ "fsim", "elaborate", "work.top", "--snapshot", "timed" });
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load timed]
+if {[dict get $loaded top] ne "top"} {error "wrong SDF top"}
+set first [fsim::sdf configure first.sdf top top.u0 typ]
+if {![dict get $first effective] || [dict get $first paths] != 1 ||
+    [dict get $first timing_checks] != 0 || [dict get $first generation] != 1} {
+  error "loaded Tcl SDF file did not apply: $first"
+}
+set ::sdf_live_committed 0
+proc commit_sdf_at_safe_point {time delta phase} {
+  if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
+    set second [fsim::sdf configure second.sdf top top.u0 typ]
+    if {![dict get $second effective] || [dict get $second generation] != 2 ||
+        [dict get $second paths] != 1} {
+      error "safe-point Tcl SDF file did not apply: $second"
+    }
+    set ::sdf_live_committed 1
+  }
+}
+fsim::on safe_point commit_sdf_at_safe_point
+fsim::run 11ns
+fsim::off safe_point
+if {!$::sdf_live_committed} {error "Tcl SDF safe point was not reached"}
+if {[fsim::read top.z] ne "0"} {error "first path event was early"}
+if {![catch {fsim::sdf configure missing.sdf top top.u0 typ} message]} {
+  error "missing live Tcl SDF file succeeded"
+}
+set committed [fsim::sdf summary]
+if {![dict get $committed effective] || [dict get $committed generation] != 2 ||
+    [dict get $committed identity] eq [dict get $first identity]} {
+  error "failed Tcl SDF apply changed effective control"
+}
+if {![catch {fsim::sdf configure third.sdf top top.u0 typ} message]} {
+  error "outside-safe-point Tcl SDF change succeeded"
+}
+if {[dict get [fsim::sdf summary] identity] ne [dict get $committed identity]} {
+  error "outside-safe-point rejection changed effective control"
+}
+fsim::run 12500ps
+if {[fsim::read top.z] ne "0"} {error "queued path was rescheduled"}
+fsim::run 13500ps
+if {[fsim::read top.z] ne "1"} {error "queued 13 ns event was lost"}
+fsim::run 31500ps
+if {[fsim::read top.z] ne "1"} {error "new path event was early"}
+fsim::run 32500ps
+if {[fsim::read top.z] ne "0"} {error "new path event was not applied"}
+puts sdf-workspace-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+        || output.str().find("sdf-workspace-ok") == std::string::npos) {
+        throw std::runtime_error(
+            "Tcl loaded SDF session failed: " + error.str());
+    }
+}
+
+
 } // namespace
 
 int main()
 {
     try {
         run_workspace_commands_test();
+        run_sdf_workspace_commands_test();
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';
         return 1;

@@ -264,11 +264,12 @@ void test_systemverilog_coverage_control(
     const auto statement_property = vpi_coverage.property(
         fsim::runtime::SystemVerilogVpiCoverageProperty::StatementCoverage,
         top.value->handle);
-    assert(statement_property && statement_property.value == 0);
-    assert(vpi_coverage.target_count() == 0U);
+    assert(statement_property
+        && statement_property.value == (enabled ? 1 : 0));
+    assert(vpi_coverage.target_count() == (enabled ? 1U : 0U));
     const auto result = simulation.run();
     assert(result.status == fsim::runtime::RunStatus::completed);
-    const auto expected = 0U;
+    const auto expected = enabled ? 1U : 0U;
     assert(read_u32(simulation, "start_status") == expected);
     assert(read_u32(simulation, "stop_status") == expected);
     assert(read_u32(simulation, "reset_status") == expected);
@@ -278,9 +279,9 @@ void test_systemverilog_coverage_control(
     assert(read_u32(simulation, "unknown_status") == UINT32_MAX);
     const auto current = read_u32(simulation, "coverage_current");
     const auto maximum = read_u32(simulation, "coverage_maximum");
-    assert(current == 0U);
-    assert(maximum == 0U);
-    assert(read_u32(simulation, "coverage_save") == 0U);
+    assert(current == (enabled ? 5U : 0U));
+    assert(maximum == (enabled ? 27U : 0U));
+    assert(read_u32(simulation, "coverage_save") == expected);
     assert(read_u32(simulation, "unsupported_get") == 0U);
     assert(read_u32(simulation, "constant_start") == 0U);
     assert(read_u32(simulation, "constant_stop") == 1U);
@@ -317,7 +318,8 @@ void test_standard_coverage_selection(
     config.project.tops = { { "sv:work.selector_top", "selector_top" } };
     config.build.optimization = fsim::project::Optimization::o2;
     config.build.cache_path = directory.path / "selector-cache";
-    config.coverage.enabled = true;
+    // This selector fixture attaches a deliberately small manual inventory.
+    config.coverage.enabled = false;
     fsim::project::SourceSet sources;
     sources.language = fsim::project::Language::system_verilog;
     sources.standard = "2005";
@@ -362,6 +364,7 @@ void test_standard_coverage_selection(
     assert(built->design
             .attach_code_coverage_inventory(inventory_sources, drafts)
             .ok());
+    built->code_coverage_enabled = true;
     fsim::app::Simulation simulation {
         std::move(*built), 1000U, engine,
         fsim::app::SystemVerilogVpiRuntimeUpdates::omitted

@@ -1,18 +1,17 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Cross-simulator performance campaign
 
-**Current direction, 2026-09-28:** The under-15-second optimization loop is
-paused with retained P96 at 32.579 seconds. Cleanup and local qualification
-passed: Release 454/454, focused Debug 7/7, and Tcl-off 6/6. The fresh
-[ten-case wall/RSS matrix](performance-matrix-2026-09-28.md) has exact
-fsim/Vivado stimulus and correctness parity in all ten cases. It is one
-sample per engine and does not establish seven-pair performance qualification.
-Matched short-case controls reproduced roughly 0.55–0.65 seconds more native
-setup/simulation time than frozen P8A; the user accepted those small
-regressions and requested publication and commit preparation. No further
-performance trial or repair is planned for this change set. Do not commit or
-push yet. Use the `home-colin-projects-fsim` codebase-memory project for
-manual indexing.
+**Current checkpoint, 2026-09-28:** The performance change set and ten-case
+matrix were committed and pushed as `6efa4c35` to `origin/codex/v3`.
+Release 454/454, focused Debug 7/7, Tcl-off 6/6, and final packaging/docs
+24/24 passed. All ten matrix cases passed stimulus and correctness parity;
+the user accepted the small short-case timing regressions. CI was not
+monitored, as requested. The under-15-second full mixed-codec loop remains
+paused and its target unmet (fresh matrix Wall 32.933 seconds; earlier P96
+32.579 seconds). Read the self-contained
+[performance resume instructions](performance-resume.md) for worker setup,
+exact commands, evidence, accepted/rejected work, and the next bounded action.
+Saving the handoff does not restart the loop or authorize another push.
 
 The user authorized implementation on 2026-09-25. The baseline is
 `d11004e41c929dcbd7ad7934921af722754bbdfa`. This campaign precedes Batch 189
@@ -31,7 +30,7 @@ one wall sample, with no Vivado, reduced transfer, or paired repetitions.
 Keep the saved external RTL and final fingerprints/correctness, VHDL
 compatibility option, CPU 0, O2 JIT, cold caches, and waves/debug off.
 Profile durations are not performance evidence. Build affected targets with
-at least 12 workers and manually reindex canonical `fsim` after each source
+at least 12 workers and manually reindex `home-colin-projects-fsim` after each source
 or documentation batch. Evidence lives under
 `build/performance-campaign/mixed-long-fast-loop/`; the prior all-ten goal
 is deferred at 0/10 qualified, not achieved.
@@ -788,7 +787,7 @@ compatibility decision.
 The September 26 paired-comparison policy below records the original loop.
 The current full mixed-mode loop supersedes its Vivado, reduced-transfer and
 paired-timing steps: build affected Release targets with `-j12`, run focused
-tests, manually reindex `fsim`, then take one full cold fsim wall sample.
+tests, manually reindex `home-colin-projects-fsim`, then take one full cold fsim wall sample.
 Follow with a targeted phase-only profile when attribution is needed, reusing
 a verified elaborated snapshot only where its identity and phase scope permit.
 

@@ -322,7 +322,9 @@ namespace {
             || endpoint.object_kind == SdfEndpointObjectKind::SystemCSignal;
         if (!signal || endpoint.instance_path != mapping.target_instance_path
             || endpoint.instance_path != target.instance_path
-            || (!systemc_kind && endpoint.object_path != signal->name)
+            || (!systemc_kind
+                && elaborated.find_signal(endpoint.object_path)
+                    != endpoint.signal)
             || endpoint.language != target.language) {
             diagnose(diagnostics, "FSIM-SDF-MAP-001",
                 "SDF endpoint mapping is stale relative to the elaborated design",

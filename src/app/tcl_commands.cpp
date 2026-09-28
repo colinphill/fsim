@@ -2,6 +2,7 @@
 #include "tcl_internal.hpp"
 #include "application_workspace.hpp"
 #include "application_workspace_store.hpp"
+#include "application_sdf_session.hpp"
 
 #include "fsim/api.h"
 #include "fsim/support/path.hpp"
@@ -266,6 +267,9 @@ namespace fsim::app::tcl_detail {
         context.simulation.reset();
         context.simulation_engine.reset();
         context.built.reset();
+        context.sdf_baseline_design.reset();
+        context.sdf_base_cache_key.clear();
+        context.sdf_base_specialization_keys.clear();
         context.signal_callback_token = 0;
         context.safe_point_callback_token = 0;
         context.callbacks_attached = false;
@@ -298,6 +302,25 @@ namespace fsim::app::tcl_detail {
             (void)command_diagnostic_error(
                 context, interpreter, "fsim snapshot load failed");
             return false;
+        }
+        if (!context.sdf_request.inputs.empty()) {
+            context.sdf_baseline_design = built->design;
+            context.sdf_base_cache_key = built->cache_key;
+            context.sdf_base_specialization_keys
+                = built->specialization_cache_keys;
+            auto planned = plan_sdf_session_inputs(built->design,
+                built->time_resolution, built->cache_key,
+                context.sdf_request, context.sdf_resolved_paths,
+                context.diagnostics);
+            if (!planned) {
+                (void)command_diagnostic_error(
+                    context, interpreter, "SDF snapshot annotation failed");
+                return false;
+            }
+            built->design = std::move(planned->design);
+            apply_sdf_session_cache_identity(*built, *planned->control);
+            context.sdf_control = std::move(planned->control);
+            context.sdf_request = context.sdf_control->request();
         }
         context.built = std::move(*built);
         return true;
@@ -459,6 +482,30 @@ namespace fsim::app::tcl_detail {
             return command_diagnostic_error(
                 context, interpreter, "fsim snapshot load failed");
         }
+        std::optional<elaboration::ElaboratedDesign> sdf_baseline;
+        std::string sdf_base_cache_key;
+        std::vector<std::string> sdf_base_specialization_keys;
+        std::shared_ptr<const SdfControlApplication> sdf_control;
+        SdfControlRequest sdf_request;
+        if (!context.sdf_request.inputs.empty()) {
+            sdf_baseline = built->design;
+            sdf_base_cache_key = built->cache_key;
+            sdf_base_specialization_keys
+                = built->specialization_cache_keys;
+            auto request = context.sdf_request;
+            request.generation = 1U;
+            auto planned = plan_sdf_session_inputs(built->design,
+                built->time_resolution, built->cache_key,
+                std::move(request), context.sdf_resolved_paths,
+                context.diagnostics);
+            if (!planned)
+                return command_diagnostic_error(
+                    context, interpreter, "SDF snapshot annotation failed");
+            apply_sdf_session_cache_identity(*built, *planned->control);
+            built->design = std::move(planned->design);
+            sdf_request = planned->control->request();
+            sdf_control = std::move(planned->control);
+        }
         reset_session(context);
         if (context.references) {
             context.references->snapshot_load_completed(true);
@@ -466,6 +513,14 @@ namespace fsim::app::tcl_detail {
         context.invocation.snapshot = std::move(selection.snapshot);
         context.config = context.initial_config;
         context.built = std::move(*built);
+        if (sdf_control) {
+            context.sdf_baseline_design = std::move(sdf_baseline);
+            context.sdf_base_cache_key = std::move(sdf_base_cache_key);
+            context.sdf_base_specialization_keys
+                = std::move(sdf_base_specialization_keys);
+            context.sdf_control = std::move(sdf_control);
+            context.sdf_request = std::move(sdf_request);
+        }
         Tcl_Obj* result = Tcl_NewDictObj();
         dict_put(interpreter, result, "snapshot",
             string_object(context.invocation.snapshot));
@@ -896,11 +951,14 @@ namespace fsim::app::tcl_detail {
                 "summary|report|configure source root ?cell? ?min|typ|max? ?reportLimit?");
             return TCL_ERROR;
         }
-        if (context.callback_depth != 0) {
+        if (context.callback_depth != 0
+            && (!context.simulation
+                || !context.simulation->at_sdf_reannotation_safe_point())) {
             return command_error(
                 interpreter, "SDF configuration is not safe inside a callback");
         }
         SdfControlRequest candidate = context.sdf_request;
+        candidate.generation = 0U;
         candidate.phase = context.lifecycle_started ? SdfControlPhase::Simulate
                                                     : SdfControlPhase::Elaborate;
         const auto source = std::string { Tcl_GetString(arguments[2]) };
@@ -929,12 +987,70 @@ namespace fsim::app::tcl_detail {
             cell,
             static_cast<std::uint64_t>(candidate.inputs.size()),
             0 });
+        auto resolved_paths = context.sdf_resolved_paths;
+        resolved_paths.push_back(std::filesystem::absolute(
+            fsim::support::path_from_utf8(source)).lexically_normal());
         auto configured = apply_sdf_control(std::move(candidate));
         if (!configured.ok()) {
             return sdf_control_error(context, interpreter, configured);
         }
-        context.sdf_request = configured.application->request();
-        context.sdf_control = std::move(configured.application);
+        if (context.simulation || context.built) {
+            const auto* design = context.simulation
+                ? &context.simulation->design() : &context.built->design;
+            if (!context.sdf_baseline_design) {
+                context.sdf_baseline_design = *design;
+                if (context.built) {
+                    context.sdf_base_cache_key = context.built->cache_key;
+                    context.sdf_base_specialization_keys
+                        = context.built->specialization_cache_keys;
+                }
+            }
+            auto effective_request = configured.application->request();
+            effective_request.generation = context.sdf_control
+                ? context.sdf_control->summary().generation + 1U : 1U;
+            auto planned = plan_sdf_session_inputs(
+                *context.sdf_baseline_design,
+                context.simulation ? context.simulation->time_resolution()
+                                   : context.built->time_resolution,
+                context.sdf_base_cache_key.empty()
+                    ? std::string_view { "tcl-sdf-session" }
+                    : std::string_view { context.sdf_base_cache_key },
+                std::move(effective_request), resolved_paths,
+                context.diagnostics);
+            if (!planned)
+                return command_diagnostic_error(
+                    context, interpreter, "SDF annotation failed");
+            auto next_request = planned->control->request();
+            std::string next_cache_key;
+            std::vector<std::string> next_specialization_keys;
+            if (context.built) {
+                next_cache_key = context.sdf_base_cache_key;
+                next_specialization_keys = context.sdf_base_specialization_keys;
+                apply_sdf_session_cache_identity(next_cache_key,
+                    next_specialization_keys, *planned->control);
+            }
+            if (context.simulation) {
+                auto committed = context.simulation->commit_sdf_reannotation(
+                    *planned->control->effective());
+                if (!committed.ok()) {
+                    for (const auto& entry : committed.diagnostics)
+                        context.diagnostics.error(entry.code, entry.message);
+                    return command_diagnostic_error(
+                        context, interpreter, "SDF annotation commit failed");
+                }
+            } else {
+                context.built->design = std::move(planned->design);
+                context.built->cache_key = std::move(next_cache_key);
+                context.built->specialization_cache_keys
+                    = std::move(next_specialization_keys);
+            }
+            context.sdf_control = std::move(planned->control);
+            context.sdf_request = std::move(next_request);
+        } else {
+            context.sdf_control = std::move(configured.application);
+            context.sdf_request = context.sdf_control->request();
+        }
+        context.sdf_resolved_paths = std::move(resolved_paths);
         Tcl_Obj* result = Tcl_NewDictObj();
         put_sdf_summary(interpreter, result, context.sdf_control.get());
         Tcl_SetObjResult(interpreter, result);

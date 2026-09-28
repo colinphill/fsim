@@ -415,9 +415,15 @@ namespace tcl_detail {
             Tcl_RegisterChannel(interpreter_, input_);
             Tcl_RegisterChannel(interpreter_, output_);
             Tcl_RegisterChannel(interpreter_, error_);
+            // The C++ streams own platform newline translation. Keep Tcl's
+            // writes consistent with diagnostics and transcript commands.
             if (Tcl_SetChannelOption(interpreter_, output_, "-buffering", "line")
                     != TCL_OK
                 || Tcl_SetChannelOption(interpreter_, error_, "-buffering", "none")
+                    != TCL_OK
+                || Tcl_SetChannelOption(interpreter_, output_, "-translation", "lf")
+                    != TCL_OK
+                || Tcl_SetChannelOption(interpreter_, error_, "-translation", "lf")
                     != TCL_OK) {
                 cleanup();
                 return;
@@ -1018,6 +1024,7 @@ int handle_tcl(
     if (invocation.sdf_report_limit)
         context.sdf_request.report_limit = *invocation.sdf_report_limit;
     for (std::size_t index = 0; index < invocation.sdf_files.size(); ++index) {
+        context.sdf_resolved_paths.push_back(invocation.sdf_files[index]);
         context.sdf_request.inputs.push_back(SdfControlInput {
             fsim::support::path_to_utf8(invocation.sdf_files[index]),
             invocation.sdf_root.value_or("*"),

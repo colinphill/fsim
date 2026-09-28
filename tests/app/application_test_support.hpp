@@ -18,6 +18,18 @@
 
 namespace fsim::test {
 
+template <typename Runner>
+[[nodiscard]] auto run_interpreter_compiled_pair(
+    app::BuiltProject project, Runner runner)
+{
+  auto compiled_project = project;
+  auto reference = runner(
+      std::move(project), app::SimulationEngine::interpreter);
+  auto compiled = runner(
+      std::move(compiled_project), app::SimulationEngine::compiled);
+  return std::pair { std::move(reference), std::move(compiled) };
+}
+
 struct CapturedSimulation {
   runtime::RunResult result;
   std::vector<std::tuple<

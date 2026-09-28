@@ -64,6 +64,37 @@ compile_and_elaborate(
         systemc_instances, systemc_provider, search_libraries);
 }
 
+inline void append_component_design(
+    frontend::ParsedDesign& destination,
+    frontend::ParsedDesign source)
+{
+    for (auto& unit : source.units) {
+        destination.units.push_back(std::move(unit));
+    }
+}
+
+[[nodiscard]] inline const fsim::elaboration::SpecializationInfo&
+component_specialization(
+    const fsim::elaboration::ElaborationResult& result,
+    const std::string_view path)
+{
+    const auto found = std::ranges::find_if(
+        result.design->specializations(),
+        [&](const auto& candidate) { return candidate.instance == path; });
+    assert(found != result.design->specializations().end());
+    return *found;
+}
+
+[[nodiscard]] inline fsim::elaboration::ElaborationResult
+elaborate_vhdl_component_text(const std::string_view name,
+    const std::string_view source, const std::string_view top)
+{
+    const auto parsed = frontend::parse_text(
+        name, source, frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    return compile_and_elaborate(parsed.design, top);
+}
+
 [[nodiscard]] bool has_diagnostic(
     const fsim::elaboration::ElaborationResult& result,
     std::string_view code);

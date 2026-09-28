@@ -2,8 +2,11 @@
 #include "../../src/app/application_workspace_store.hpp"
 
 #include "fsim/app/application.hpp"
+#include "fsim/artifact/coverage_database_codec.hpp"
+#include "fsim/artifact/design.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/support/path.hpp"
+#include "../support/test_helpers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -424,6 +428,431 @@ end architecture;
     assert((mixed.output + mixed.error).find("WORKSPACE_VHDL") != std::string::npos);
 }
 
+void test_module_procedural_coverage()
+{
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("coverage.sv", R"(`timescale 1ns/1ps
+module leaf(input logic gate, output logic [7:0] value);
+  initial begin
+    #2;
+    if (gate) value = 8'd11;
+    else value = 8'd22;
+  end
+endmodule
+module tb;
+  logic gate0 = 1'b1;
+  logic gate1 = 1'b0;
+  logic [7:0] value0;
+  logic [7:0] value1;
+  integer saved;
+  leaf a(.gate(gate0), .value(value0));
+  leaf b(.gate(gate1), .value(value1));
+  initial begin
+    #3;
+    $display("INSTANCE_WITNESS a=%0d b=%0d", value0, value1);
+    saved = $coverage_save(`SV_COV_STATEMENT, "run.fsimcov");
+    $display("COVERAGE_SAVE status=%0d", saved);
+    $finish;
+  end
+endmodule
+)");
+    invoke({ "compile", "--quiet", "--code-coverage", "coverage.sv" });
+    fs::remove("coverage.sv");
+    invoke({ "elaborate", "--quiet", "--no-aot", "--code-coverage",
+        "--snapshot", "cov", "tb" });
+    const auto run = invoke({ "simulate", "--snapshot", "cov",
+        "--engine", "interpreter", "--trace-lifecycle", "disabled" });
+    assert_output(run, "INSTANCE_WITNESS a=11 b=22");
+    assert_output(run, "COVERAGE_SAVE status=1");
+    const auto database = fsim::artifact::read_coverage_database(
+        snapshot(store, "cov").path.parent_path() / "run.fsimcov");
+    assert(database.ok());
+    using Identity = fsim::artifact::CoverageDatabaseIdentity;
+    using Family = fsim::artifact::CoverageDatabaseMetricFamily;
+    using Scope = fsim::artifact::CoverageDatabaseMetricScope;
+    std::map<Identity, std::map<std::uint64_t, std::uint64_t>> branch_hits;
+    std::map<Identity, std::size_t> statement_points;
+    std::map<Identity, std::size_t> covered_statements;
+    for (const auto& metric : database.contents->metrics) {
+        if (metric.scope != Scope::Instance)
+            continue;
+        assert(metric.source_line != 0U);
+        if (metric.family == Family::Branch) {
+            branch_hits[metric.instance_identity][metric.source_line] = metric.hits;
+        } else if (metric.family == Family::Statement) {
+            ++statement_points[metric.instance_identity];
+            covered_statements[metric.instance_identity] += metric.hits != 0U;
+        }
+    }
+    assert(branch_hits.size() == 2U);
+    std::set<std::uint64_t> taken_lines;
+    for (const auto& [identity, lines] : branch_hits) {
+        assert(statement_points.at(identity) == 4U);
+        assert(covered_statements.at(identity) == 3U);
+        assert(lines.size() == 2U);
+        assert(lines.contains(5U) && lines.contains(6U));
+        assert((lines.at(5U) == 1U && lines.at(6U) == 0U)
+            || (lines.at(5U) == 0U && lines.at(6U) == 1U));
+        taken_lines.insert(lines.at(5U) ? 5U : 6U);
+    }
+    assert((taken_lines == std::set<std::uint64_t> { 5U, 6U }));
+    assert(statement_points.size() == 3U);
+    const auto controller = std::ranges::find_if(statement_points,
+        [&](const auto& entry) { return !branch_hits.contains(entry.first); });
+    assert(controller != statement_points.end() && controller->second == 7U);
+    assert(covered_statements.at(controller->first) == 5U);
+#if defined(FSIM_HAS_LLVM)
+    const auto without_run_identity = [](auto metrics) {
+        for (auto& metric : metrics)
+            metric.run_identity = { };
+        return metrics;
+    };
+    const auto expected_metrics = without_run_identity(database.contents->metrics);
+    for (const auto optimization : { "O0", "O2" }) {
+        const auto compiled = invoke({ "simulate", "--snapshot", "cov",
+            "--engine", "compiled", "--compiled-processes", "all", "-O",
+            optimization, "--trace-lifecycle", "disabled" });
+        assert_output(compiled, "INSTANCE_WITNESS a=11 b=22");
+        assert_output(compiled, "COVERAGE_SAVE status=1");
+        const auto native = fsim::artifact::read_coverage_database(
+            snapshot(store, "cov").path.parent_path() / "run.fsimcov");
+        assert(native.ok());
+        assert(without_run_identity(native.contents->metrics) == expected_metrics);
+    }
+#endif
+}
+
+void test_procedural_loop_update_coverage()
+{
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("loop.sv", R"(module tb;
+  integer i;
+  integer j = 0;
+  integer saved;
+  initial begin
+    for (i = 0; i < 2; i = i + 1, j = j + 2, j = j + 1) begin
+      $display("LOOP i=%0d j=%0d", i, j);
+    end
+    saved = $coverage_save(`SV_COV_STATEMENT, "run.fsimcov");
+    $finish;
+  end
+endmodule
+)");
+    invoke({ "compile", "--quiet", "--code-coverage", "loop.sv" });
+    invoke({ "elaborate", "--quiet", "--no-aot", "--code-coverage", "tb" });
+    const auto run = simulate();
+    assert_output(run, "LOOP i=0 j=0");
+    assert_output(run, "LOOP i=1 j=3");
+    const auto database = fsim::artifact::read_coverage_database(
+        snapshot(store).path.parent_path() / "run.fsimcov");
+    assert(database.ok());
+    std::vector<std::uint64_t> loop_line_hits;
+    for (const auto& metric : database.contents->metrics) {
+        if (metric.scope != fsim::artifact::CoverageDatabaseMetricScope::Instance
+            || metric.family != fsim::artifact::CoverageDatabaseMetricFamily::Statement
+            || metric.source_line != 6U) {
+            continue;
+        }
+        loop_line_hits.push_back(metric.hits);
+    }
+    std::ranges::sort(loop_line_hits);
+    assert((loop_line_hits == std::vector<std::uint64_t> { 1U, 2U, 2U }));
+}
+
+void test_coverage_controls_and_callable_boundary()
+{
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("controls.sv", R"(module tb;
+  integer value;
+  integer saved;
+  task automatic update_value;
+    value = 7;
+  endtask
+  initial begin
+    update_value();
+    // fsim coverage off metric=branch reason="conditional arm"
+    if (value == 7) value = 8;
+    // fsim coverage on metric=branch
+    $display("CALLABLE_WITNESS value=%0d", value);
+    saved = $coverage_save(`SV_COV_STATEMENT, "run.fsimcov");
+    $finish;
+  end
+endmodule
+)");
+    invoke({ "compile", "--quiet", "--code-coverage", "controls.sv" });
+    invoke({ "elaborate", "--quiet", "--no-aot", "--code-coverage", "tb" });
+    assert_output(simulate(), "CALLABLE_WITNESS value=8");
+    const auto database = fsim::artifact::read_coverage_database(
+        snapshot(store).path.parent_path() / "run.fsimcov");
+    assert(database.ok());
+    bool call_statement { };
+    bool conditional_statement { };
+    for (const auto& metric : database.contents->metrics) {
+        if (metric.scope != fsim::artifact::CoverageDatabaseMetricScope::Instance)
+            continue;
+        assert(metric.family != fsim::artifact::CoverageDatabaseMetricFamily::Branch);
+        assert(metric.source_line != 5U);
+        call_statement |= metric.source_line == 8U && metric.hits == 1U;
+        conditional_statement |= metric.source_line == 10U && metric.hits == 1U;
+    }
+    assert(call_statement && conditional_statement);
+}
+
+void test_disabled_coverage_snapshot()
+{
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("disabled.sv", R"(module tb;
+  integer saved;
+  initial begin
+    saved = $coverage_save(`SV_COV_STATEMENT, "run.fsimcov");
+    $display("DISABLED_SAVE=%0d", saved);
+    $finish;
+  end
+endmodule
+)");
+    invoke({ "compile", "--quiet", "disabled.sv" });
+    elaborate({ "tb" });
+    assert_output(simulate(), "DISABLED_SAVE=0");
+    assert(!fs::exists(snapshot(store).path.parent_path() / "run.fsimcov"));
+    const auto rejected = invoke({ "simulate", "--code-coverage",
+        "--engine", "interpreter" }, false);
+    assert(rejected.error.find("FSIM-COV-008") != std::string::npos);
+    assert(rejected.error.find("re-elaborat") != std::string::npos);
+}
+
+void test_sdf_session_application()
+{
+    using fsim::test::require;
+    {
+        Directory directory;
+        workspace::Store store { directory.path };
+        write_file("top.sv", R"sv(`timescale 1ns/1ps
+module delay_buf(input logic a, output wire z);
+  assign z = a;
+  specify
+    (a => z) = 5;
+  endspecify
+endmodule
+module top;
+  logic a;
+  wire z;
+  delay_buf u0(.a(a), .z(z));
+  initial begin
+    a = 0;
+    #10 a = 1;
+    #20 a = 0;
+    #20 $finish;
+  end
+  always @(z) $display("SDF_WITNESS t=%0t z=%0d", $time, z);
+endmodule
+)sv");
+        write_file("valid.sdf", R"sdf((DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "top")
+  (TIMESCALE 1 ns)
+  (CELL (CELLTYPE "delay_buf") (INSTANCE top.u0)
+    (DELAY (ABSOLUTE (IOPATH a z (1:3:5)))))
+))sdf");
+        write_file("malformed.sdf", "(DELAYFILE (CELL");
+        invoke({ "compile", "--library", "work", "top.sv" });
+        invoke({ "elaborate", "work.top", "--snapshot", "plain" });
+        const auto plain = simulate("plain");
+        require(plain.output.find("SDF_WITNESS t=15000 z=1")
+                != std::string::npos
+                && plain.output.find("SDF_WITNESS t=35000 z=0")
+                    != std::string::npos,
+            "plain module path must retain its 5 ns delay");
+        const auto failed = [&](const std::string_view name,
+                                const std::string_view source) {
+            const auto result = invoke({ "elaborate", "work.top", "--snapshot",
+                std::string { name }, "--sdf", std::string { source },
+                "--sdf-root", "top", "--sdf-cell", "top.u0" }, false);
+            require(!result.error.empty(),
+                "invalid SDF input must publish a diagnostic");
+            std::string error;
+            require(!store.read_snapshot(name, error),
+                "invalid SDF input must not publish a snapshot");
+        };
+        failed("missing", "missing.sdf");
+        failed("malformed", "malformed.sdf");
+        const auto padded_sdf = [&](const fs::path& path,
+                                    const std::uintmax_t target_bytes) {
+            fs::copy_file("valid.sdf", path);
+            std::ofstream output(path, std::ios::binary | std::ios::app);
+            const std::string spaces(4096U, ' ');
+            auto written = fs::file_size(path);
+            while (written < target_bytes) {
+                const auto count = std::min<std::uintmax_t>(
+                    spaces.size(), target_bytes - written);
+                output.write(spaces.data(), static_cast<std::streamsize>(count));
+                written += count;
+            }
+            output.close();
+            require(output.good() && fs::file_size(path) == target_bytes,
+                "aggregate SDF fixture must have exact bounded size");
+        };
+        padded_sdf("aggregate-first.sdf", 1U << 20U);
+        padded_sdf("aggregate-second.sdf", (63U << 20U) + 1U);
+        const auto aggregate = invoke({ "elaborate", "work.top",
+            "--snapshot", "aggregate-excess", "--sdf", "aggregate-first.sdf",
+            "--sdf", "aggregate-second.sdf", "--sdf-root", "top",
+            "--sdf-cell", "top.u0" }, false);
+        require(aggregate.error.find("FSIM-SDF-SESSION-001")
+                != std::string::npos,
+            "two individually bounded SDF bodies must reject above 64 MiB total");
+        std::string aggregate_error;
+        require(!store.read_snapshot("aggregate-excess", aggregate_error),
+            "aggregate SDF rejection must not publish a snapshot");
+        fs::copy_file("valid.sdf", "single-excess.sdf");
+        fs::resize_file("single-excess.sdf", (64U << 20U) + 1U);
+        const auto oversized = invoke({ "elaborate", "work.top",
+            "--snapshot", "single-excess", "--sdf", "single-excess.sdf",
+            "--sdf-root", "top", "--sdf-cell", "top.u0" }, false);
+        require(oversized.error.find("FSIM-SDF-SESSION-001")
+                != std::string::npos,
+            "one SDF file above 64 MiB must reject before parsing");
+        std::string oversized_error;
+        require(!store.read_snapshot("single-excess", oversized_error),
+            "per-file SDF rejection must not publish a snapshot");
+        const auto annotated = [&](const std::string_view name,
+                                   const std::string_view selection,
+                                   const std::string_view rise,
+                                   const std::string_view fall) {
+            invoke({ "elaborate", "work.top", "--snapshot",
+                std::string { name }, "--sdf", "valid.sdf",
+                "--sdf-root", "top", "--sdf-cell", "top.u0",
+                "--delay-mode", std::string { selection } });
+            const auto result = simulate(name);
+            require(result.output.find(std::string { rise })
+                    != std::string::npos
+                    && result.output.find(std::string { fall })
+                        != std::string::npos,
+                "selected SDF min/typ/max delay must affect real output");
+            fsim::diagnostic::Engine diagnostics;
+            auto metadata = fsim::artifact::load_design_metadata(
+                snapshot(store, name).path, diagnostics);
+            require(metadata && !diagnostics.has_error()
+                    && metadata->sdf_annotations.size() == 1U
+                    && std::ranges::any_of(metadata->payloads,
+                        [](const auto& payload) {
+                            return payload.artifact.generic_string()
+                                .starts_with("sdf/");
+                        }),
+                "annotated snapshot must index its portable SDF payload");
+            return metadata->cache_key;
+        };
+        const auto minimum = annotated("minimum", "min",
+            "SDF_WITNESS t=11000 z=1", "SDF_WITNESS t=31000 z=0");
+        const auto typical = annotated("typical", "typ",
+            "SDF_WITNESS t=13000 z=1", "SDF_WITNESS t=33000 z=0");
+        const auto maximum = annotated("maximum", "max",
+            "SDF_WITNESS t=15000 z=1", "SDF_WITNESS t=35000 z=0");
+        require(minimum != typical && typical != maximum
+                && minimum != maximum,
+            "SDF min/typ/max selections must separate native cache identity");
+        fs::rename("valid.sdf", "valid-hidden.sdf");
+        const auto persisted = simulate("typical");
+        require(persisted.output.find("SDF_WITNESS t=13000 z=1")
+                != std::string::npos
+                && persisted.output.find("SDF_WITNESS t=33000 z=0")
+                    != std::string::npos,
+            "saved timing must replay without the original SDF file");
+    }
+    {
+        Directory directory;
+        workspace::Store store { directory.path };
+        write_file("two.sv", R"sv(`timescale 1ns/1ps
+module delay_buf(input logic a, output wire z);
+  assign z = a;
+  specify
+    (a => z) = 5;
+  endspecify
+endmodule
+module top;
+  logic a;
+  wire z0, z1;
+  delay_buf u0(.a(a), .z(z0));
+  delay_buf u1(.a(a), .z(z1));
+  initial begin
+    a = 0;
+    #10 a = 1;
+    #20 a = 0;
+    #20 $finish;
+  end
+  always @(z0) $display("U0 t=%0t z=%0d", $time, z0);
+  always @(z1) $display("U1 t=%0t z=%0d", $time, z1);
+endmodule
+)sv");
+        const auto sdf_file = [](const std::string_view instance,
+                                  const int delay) {
+            return "(DELAYFILE\n  (SDFVERSION \"4.0\")\n"
+                "  (DESIGN \"top\")\n  (TIMESCALE 1 ns)\n"
+                "  (CELL (CELLTYPE \"delay_buf\") (INSTANCE "
+                + std::string { instance }
+                + ") (DELAY (ABSOLUTE (IOPATH a z ("
+                + std::to_string(delay) + "))))))\n";
+        };
+        write_file("u0-three.sdf", sdf_file("top.u0", 3));
+        write_file("u1-two.sdf", sdf_file("top.u1", 2));
+        write_file("u0-four.sdf", sdf_file("top.u0", 4));
+        write_file("both.sdf", "(DELAYFILE\n"
+            "  (SDFVERSION \"4.0\")\n"
+            "  (DESIGN \"top\")\n"
+            "  (TIMESCALE 1 ns)\n"
+            "  (CELL (CELLTYPE \"delay_buf\") (INSTANCE top.u0)\n"
+            "    (DELAY (ABSOLUTE (IOPATH a z (3)))))\n"
+            "  (CELL (CELLTYPE \"delay_buf\") (INSTANCE top.u1)\n"
+            "    (DELAY (ABSOLUTE (IOPATH a z (2)))))\n)");
+        invoke({ "compile", "--library", "work", "two.sv" });
+        invoke({ "elaborate", "work.top", "--snapshot", "selected",
+            "--sdf", "both.sdf", "--sdf-root", "top",
+            "--sdf-cell", "top.u0" });
+        const auto selected = simulate("selected");
+        require(selected.output.find("U0 t=13000 z=1")
+                != std::string::npos
+                && selected.output.find("U1 t=15000 z=1")
+                    != std::string::npos,
+            "cell selector must annotate u0 without changing u1");
+        invoke({ "elaborate", "work.top", "--snapshot", "all-cells",
+            "--sdf", "both.sdf", "--sdf-root", "top",
+            "--sdf-cell", "top.u*" });
+        const auto all_cells = simulate("all-cells");
+        require(all_cells.output.find("U0 t=13000 z=1")
+                != std::string::npos
+                && all_cells.output.find("U1 t=12000 z=1")
+                    != std::string::npos,
+            "wildcard selector must annotate both matching cells");
+        invoke({ "elaborate", "work.top", "--snapshot", "ordered",
+            "--sdf", "u0-three.sdf", "--sdf", "u1-two.sdf",
+            "--sdf", "u0-four.sdf", "--sdf-root", "top",
+            "--sdf-cell", "top.u*" });
+        const auto ordered = simulate("ordered");
+        require(ordered.output.find("U0 t=14000 z=1")
+                != std::string::npos
+                && ordered.output.find("U1 t=12000 z=1")
+                    != std::string::npos,
+            "ordered files must override u0 without resetting disjoint u1");
+        fsim::diagnostic::Engine diagnostics;
+        const auto selected_metadata = fsim::artifact::load_design_metadata(
+            snapshot(store, "selected").path, diagnostics);
+        const auto all_metadata = fsim::artifact::load_design_metadata(
+            snapshot(store, "all-cells").path, diagnostics);
+        const auto ordered_metadata = fsim::artifact::load_design_metadata(
+            snapshot(store, "ordered").path, diagnostics);
+        require(selected_metadata && all_metadata && ordered_metadata
+                && !diagnostics.has_error()
+                && selected_metadata->cache_key != all_metadata->cache_key
+                && selected_metadata->design_digest
+                    != all_metadata->design_digest
+                && ordered_metadata->sdf_annotations.size() == 3U,
+            "selected cells and ordered files must have distinct portable identities");
+    }
+}
+
 } // namespace
 
 int main(const int argc, const char* const* argv)
@@ -438,6 +867,11 @@ int main(const int argc, const char* const* argv)
         Case { "compiled-packages", test_compiled_packages_and_stale_consumers },
         Case { "mapped-library", test_external_library_mapping_and_current_directory },
         Case { "language-tops", test_language_qualification_and_multiple_roots },
+        Case { "procedural-coverage", test_module_procedural_coverage },
+        Case { "loop-update-coverage", test_procedural_loop_update_coverage },
+        Case { "coverage-controls-callable", test_coverage_controls_and_callable_boundary },
+        Case { "coverage-disabled", test_disabled_coverage_snapshot },
+        Case { "sdf-session", test_sdf_session_application },
     };
     if (argc > 2) {
         std::cerr << "usage: workspace-application [CASE]\n";

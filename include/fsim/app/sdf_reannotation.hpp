@@ -28,6 +28,8 @@ struct SdfReannotationLayer {
     std::string root;
     std::string cell_pattern;
     std::shared_ptr<const SdfDriveTimingApplication> timing;
+    /// Empty preserves the low-level whole-scope reannotation contract.
+    std::vector<std::string> selected_targets { };
 };
 
 struct SdfReannotationRevision {

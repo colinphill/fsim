@@ -23,6 +23,7 @@
 namespace fsim::elaboration {
 
 struct ElaborationResult;
+struct CoverageHirContext;
 class Lowerer;
 class HierarchyBuilder;
 
@@ -358,7 +359,8 @@ public:
     std::span<const Binding> bindings,
     std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider,
-    std::span<const std::string> search_libraries);
+    std::span<const std::string> search_libraries,
+    const CoverageHirContext* coverage = nullptr);
 
 struct Diagnostic {
     std::string code;
@@ -782,6 +784,8 @@ public:
         std::span<const CoverageInventorySource> sources,
         std::span<const CoverageInstanceInventoryDraft> instances,
         CoverageInventoryLimits limits = { }) noexcept;
+    [[nodiscard]] CoverageInventoryValidationResult
+    bind_hir_code_coverage_hits() noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view name) const noexcept;
     /// Return every debug-visible signal path in lexical order. Boundary-port

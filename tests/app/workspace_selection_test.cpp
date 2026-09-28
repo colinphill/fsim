@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/path.hpp"
 
 #include "../../src/app/application_workspace_selection.hpp"
+
+#include "sqlite3.h"
 
 #include <algorithm>
 #include <cassert>
@@ -12,6 +15,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -252,6 +256,147 @@ end;
     assert(selected_names(*selection).contains("design.architecture.other"));
 }
 
+void reverse_catalog_revision_ids(const std::filesystem::path& root,
+    const workspace::LibraryCatalog& catalog)
+{
+    assert(catalog.artifacts.size() == 2U);
+    const auto& first = catalog.artifacts[0].id;
+    const auto& second = catalog.artifacts[1].id;
+    const auto database = root / ".fsim/libraries/work/library.sqlite3";
+    sqlite3* handle { };
+    const auto database_name = fsim::support::path_to_utf8(database);
+    assert(sqlite3_open_v2(database_name.c_str(), &handle,
+               SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK);
+    const auto execute = [&](const std::string& sql) {
+        char* error { };
+        const auto status = sqlite3_exec(handle, sql.c_str(), nullptr, nullptr,
+            &error);
+        if (error) {
+            std::cerr << error << '\n';
+            sqlite3_free(error);
+        }
+        assert(status == SQLITE_OK);
+    };
+    execute("BEGIN IMMEDIATE");
+    for (const auto& [table, column] : {
+             std::pair { "artifacts", "id" },
+             std::pair { "sources", "owner" },
+             std::pair { "units", "owner" },
+             std::pair { "dependencies", "owner" } }) {
+        const auto update = [&](const std::string& old_id,
+                                const std::string& new_id) {
+            execute(std::string { "UPDATE " } + table + " SET " + column
+                + "='" + new_id + "' WHERE " + column + "='" + old_id + "'");
+        };
+        const std::string temporary = "r00000000000000000000000000000000";
+        update(first, temporary);
+        update(second, first);
+        update(temporary, second);
+    }
+    for (const auto& id : { first, second }) {
+        execute("UPDATE artifacts SET path='artifacts/" + id
+            + ".fsimobj' WHERE id='" + id + "'");
+    }
+    execute("COMMIT");
+    assert(sqlite3_close(handle) == SQLITE_OK);
+
+    const auto artifacts = database.parent_path() / "artifacts";
+    const auto temporary = artifacts / "revision-swap-temporary.fsimobj";
+    std::filesystem::rename(artifacts / (first + ".fsimobj"), temporary);
+    std::filesystem::rename(artifacts / (second + ".fsimobj"),
+        artifacts / (first + ".fsimobj"));
+    std::filesystem::rename(temporary, artifacts / (second + ".fsimobj"));
+}
+
+void check_revision_order_independence(const std::filesystem::path& root)
+{
+    publish_source(root, "reversed", "work",
+        fsim::project::Language::system_verilog, "2017", R"(
+module leaf(input logic a, output logic y);
+  assign y = a;
+endmodule
+module tb;
+  logic a, y;
+  leaf child(.a(a), .y(y));
+  initial begin
+    a = 1'b1;
+    #2;
+    $display("REVISION_WITNESS y=%b", y);
+    $finish;
+  end
+endmodule
+)");
+    workspace::Store store(root);
+    std::string error;
+    auto catalog = store.read_library("work", error);
+    assert(catalog && error.empty() && catalog->artifacts.size() == 2U);
+    auto config = top_config(root, "sv:work.tb");
+    fsim::diagnostic::Engine diagnostics;
+    const auto build = [&]() {
+        auto catalogs = detail::workspace_catalogs(store, nullptr, diagnostics);
+        require(catalogs.has_value() && !diagnostics.has_error(), diagnostics);
+        auto selection = detail::select_workspace_design(config, store,
+            *catalogs, diagnostics);
+        require(selection.has_value() && !diagnostics.has_error(), diagnostics);
+        assert(selection->objects.size() == 2U
+            && selection->objects[0].catalog_rank == 0U
+            && selection->objects[1].catalog_rank == 0U);
+        auto built = detail::build_workspace_objects(config,
+            selection->objects, selection->plugins, diagnostics);
+        require(built.has_value() && !diagnostics.has_error(), diagnostics);
+        return *std::move(built);
+    };
+    const auto first = build();
+#if defined(FSIM_HAS_LLVM)
+    auto cold_project = build();
+    fsim::app::Simulation cold {
+        std::move(cold_project), 1000U,
+        fsim::app::SimulationEngine::compiled
+    };
+    const auto cold_result = cold.run();
+    const auto cold_cache = cold.native_cache_statistics();
+    const auto cold_y = cold.find_signal("dut.y");
+    assert(cold_result.status == fsim::runtime::RunStatus::stopped
+        && cold.compiled_process_count() > 0U
+        && cold_cache.misses > 0U && cold_y
+        && cold.read_signal(*cold_y).to_msb_string() == "1");
+#endif
+    reverse_catalog_revision_ids(root, *catalog);
+    auto reversed = store.read_library("work", error);
+    assert(reversed && error.empty() && reversed->artifacts.size() == 2U
+        && reversed->artifacts[0].fingerprint == catalog->artifacts[1].fingerprint
+        && reversed->artifacts[1].fingerprint == catalog->artifacts[0].fingerprint);
+    diagnostics.clear();
+    const auto second = build();
+    assert(first.cache_key == second.cache_key
+        && first.specialization_cache_keys == second.specialization_cache_keys
+        && first.objects.size() == 2U && second.objects.size() == 2U);
+    for (std::size_t index = 0; index < first.objects.size(); ++index) {
+        assert(first.objects[index].metadata_digest
+            == second.objects[index].metadata_digest);
+        assert(first.objects[index].compilation_digest
+            == second.objects[index].compilation_digest);
+    }
+    assert(first.design_ir.specializations().size()
+        == second.design_ir.specializations().size());
+#if defined(FSIM_HAS_LLVM)
+    auto warm_project = build();
+    fsim::app::Simulation warm {
+        std::move(warm_project), 1000U,
+        fsim::app::SimulationEngine::compiled
+    };
+    const auto warm_result = warm.run();
+    const auto warm_cache = warm.native_cache_statistics();
+    const auto warm_y = warm.find_signal("dut.y");
+    assert(warm_result.status == fsim::runtime::RunStatus::stopped
+        && warm.compiled_process_count() == cold.compiled_process_count()
+        && warm_cache.hits > 0U && warm_y
+        && warm.read_signal(*warm_y).to_msb_string() == "1");
+    std::cout << "REVISION_CACHE cold_misses=" << cold_cache.misses
+              << " reversed_warm_hits=" << warm_cache.hits << '\n';
+#endif
+}
+
 } // namespace
 
 int main()
@@ -262,5 +407,6 @@ int main()
     };
     check_hdl_closure(temporary.path / "hdl");
     check_vhdl_companions(temporary.path / "vhdl");
+    check_revision_order_independence(temporary.path / "revision-order");
     return 0;
 }

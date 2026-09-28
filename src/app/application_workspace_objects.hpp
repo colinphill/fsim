@@ -10,6 +10,9 @@ namespace fsim::app::application_detail {
 struct WorkspaceObjectSelection {
     std::filesystem::path path;
     std::vector<library::UnitIndexEntry> active_units;
+    // Present only for managed catalog selections. Manual object spans retain
+    // their caller-specified order.
+    std::optional<std::size_t> catalog_rank { };
 };
 
 struct WorkspaceCompiledObject {

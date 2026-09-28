@@ -97,6 +97,8 @@ struct Session {
   fsim::diagnostic::Engine diagnostics;
   std::optional<fsim::project::Config> project;
   std::shared_ptr<const fsim::app::SdfControlApplication> sdf_control;
+  std::vector<std::filesystem::path> sdf_resolved_paths;
+  std::optional<fsim::elaboration::ElaboratedDesign> sdf_baseline_design;
   std::shared_ptr<const fsim::app::TraceControlApplication> trace_control;
   std::optional<fsim::app::TraceLifecycle> trace_lifecycle_override;
   std::unique_ptr<fsim::app::Simulation> simulation;

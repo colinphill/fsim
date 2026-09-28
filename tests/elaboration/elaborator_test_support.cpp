@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "../support/test_helpers.hpp"
 #include "../../src/app/application_internal.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
@@ -60,8 +61,7 @@ fsim::elaboration::ElaborationResult compile_and_elaborate(
 bool has_diagnostic(const fsim::elaboration::ElaborationResult& result,
     const std::string_view code)
 {
-    return std::ranges::any_of(result.diagnostics,
-        [code](const auto& diagnostic) { return diagnostic.code == code; });
+    return fsim::test::find_diagnostic(result.diagnostics, code) != nullptr;
 }
 
 std::vector<fsim::elaboration::SystemCFactoryCandidate>

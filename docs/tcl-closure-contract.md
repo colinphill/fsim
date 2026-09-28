@@ -71,7 +71,10 @@ Callbacks may read safe object metadata and values at existing safe points.
 Workspace changes, debugger execution, and object mutation inside callbacks
 are rejected. Mutations outside callbacks validate target kind, width, value,
 and runtime state before changing simulation data. Existing
-`fsim::deposit`/`force`/`release` remain supported.
+`fsim::deposit`/`force`/`release` remain supported. SDF timing configuration is a
+narrow exception: `fsim::sdf configure` may commit from an actual scheduler
+safe-point callback. A callback name alone does not make the operation safe,
+and an ordinary stopped run is not a safe point. See [SDF control](sdf.md).
 
 ## Completion and console
 

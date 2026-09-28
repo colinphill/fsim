@@ -480,11 +480,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 = context.stable_single_writer_processes();
             const auto direct_aval = context.direct_signal_aval();
             const auto direct_bval = context.direct_signal_bval();
-            const bool enabled
-                = stable_direct_update_suppression_allowed_
-                && std::getenv(
-                       "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION")
-                    == nullptr;
+            const bool enabled = stable_direct_update_suppression_allowed_;
             for (std::size_t index = 0;
                 index < direct_update_slots_.size(); ++index) {
                 auto& slot = direct_update_slots_[index];
@@ -2028,11 +2024,8 @@ void LlvmProcessExecutor::flush_update_words(
     const auto unchanged_direct_update = [&](
         const runtime::simir::SignalId signal,
         const fsim_jit_update_slot_v1& slot) {
-        const bool suppression_enabled
-            = stable_direct_update_suppression_allowed_
-            && std::getenv("FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION")
-                == nullptr;
-        if (!suppression_enabled || signal >= direct_owners.size()
+        if (!stable_direct_update_suppression_allowed_
+            || signal >= direct_owners.size()
             || signal >= stable_owners.size()
             || direct_owners[signal] != process_.id
             || stable_owners[signal] != process_.id) {

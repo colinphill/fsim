@@ -193,6 +193,8 @@ typedef struct fsim_mapped_library_info {
 typedef struct fsim_sdf_input {
   uint32_t struct_size;
   uint32_t api_version;
+  /* Session input filename; relative paths resolve at configure time against
+     the caller's current working directory. The reported identity stays raw. */
   fsim_string_view_t source_identity;
   fsim_string_view_t root;
   fsim_string_view_t cell_pattern;

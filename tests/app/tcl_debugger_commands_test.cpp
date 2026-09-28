@@ -3,7 +3,6 @@
 #include "fsim/cli/driver.hpp"
 
 #include <cassert>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -90,12 +89,11 @@ void run_script(
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
     // FSIM-CONFORMANCE CF-COMMON-TCL-DEBUG-001 source=SRC-TCL expectation=execute
-    const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto directory = std::filesystem::temp_directory_path()
-        / ("fsim-tcl-debugger-" + std::to_string(suffix));
+    assert(argc == 2);
+    const auto directory = std::filesystem::path(argv[1]);
     std::filesystem::create_directories(directory);
     WorkingDirectory working_directory(directory);
 
@@ -323,8 +321,8 @@ puts "systemc-plugin-provenance-ok"
             iterator->path(), std::filesystem::perms::owner_all,
             std::filesystem::perm_options::add, cleanup_error);
     }
-    cleanup_error.clear();
-    std::filesystem::remove_all(directory, cleanup_error);
     assert(!cleanup_error);
+    // The parent removes the fixture after process-lifetime SystemC DLLs
+    // have been unmapped. Windows cannot unlink those loaded images here.
     return 0;
 }

@@ -1114,6 +1114,7 @@ foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages obj
   )
 endforeach()
 target_link_libraries(fsim_workspace_store_tests PRIVATE fsim_sqlite)
+target_link_libraries(fsim_workspace_selection_tests PRIVATE fsim_sqlite)
 
 fsim_add_single_source_test_target(
   fsim_hierarchy_path_artifact_tests
@@ -4951,12 +4952,6 @@ if(TARGET fsim_application)
         3 tcl app/tcl_application_test.cpp
         fsim.application.tcl fast tcl)
       if(FSIM_WITH_BUNDLED_TCL)
-        set_tests_properties(
-          fsim.application.tcl
-          PROPERTIES
-            ENVIRONMENT
-              "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
-        )
         add_test(
           NAME fsim.tcl.fetched-relocation
           COMMAND
@@ -6052,12 +6047,6 @@ fsim_register_simple_test(
       "fast;tcl"
     )
     if(FSIM_WITH_BUNDLED_TCL)
-      set_tests_properties(
-        fsim.application.tcl
-        PROPERTIES
-          ENVIRONMENT
-            "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
-      )
       add_test(
         NAME fsim.tcl.fetched-relocation
         COMMAND
@@ -6117,14 +6106,20 @@ fsim_register_simple_test(
         target_link_libraries(
           fsim_tcl_completion_adapter_tests PRIVATE fsim_tcl_dependency)
       endif()
-      fsim_register_simple_test(
-        fsim.application.tcl-${tcl_case}
-        fsim_tcl_${tcl_case}_tests
-        "fast;tcl")
-      if(FSIM_WITH_BUNDLED_TCL)
-        set_tests_properties(
+      if(tcl_case STREQUAL "debugger_commands")
+        add_test(
+          NAME fsim.application.tcl-debugger_commands
+          COMMAND "${CMAKE_COMMAND}"
+            "-DFSIM_TEST_EXECUTABLE=$<TARGET_FILE:fsim_tcl_debugger_commands_tests>"
+            "-DFSIM_TEST_WORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/RunTclDebuggerTest.cmake")
+        set_tests_properties(fsim.application.tcl-debugger_commands
+          PROPERTIES LABELS "fast;tcl")
+      else()
+        fsim_register_simple_test(
           fsim.application.tcl-${tcl_case}
-          PROPERTIES ENVIRONMENT "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}")
+          fsim_tcl_${tcl_case}_tests
+          "fast;tcl")
       endif()
     endforeach()
   endif()
@@ -6478,6 +6473,20 @@ fsim_require_fixture_witnesses(
   fsim.artifact.design
   fsim.runtime.fst_reader
   fsim.fst-portability-contract)
+
+# Application cases can create Tcl interpreters directly or launch the CLI
+# from a temporary working directory. Cover both Tcl's native initializer and
+# fsim's override; the separate installed/relocation tests must remain unseeded.
+if(FSIM_WITH_BUNDLED_TCL)
+  get_property(application_tests DIRECTORY PROPERTY TESTS)
+  foreach(application_test IN LISTS application_tests)
+    if(application_test MATCHES "^fsim\\.application(\\.|$)")
+      set_property(TEST "${application_test}" APPEND PROPERTY ENVIRONMENT
+        "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
+        "TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}")
+    endif()
+  endforeach()
+endif()
 
 # Windows does not search sibling build directories for dependent DLLs. Every
 # build-tree executable links the one process-wide fsim bridge, which in turn

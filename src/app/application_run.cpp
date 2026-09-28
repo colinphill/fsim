@@ -129,8 +129,14 @@ std::string make_cache_key(
         return { };
     }
     key.add("code-coverage-identity", coverage_identity.identity.digest);
+    if (code_coverage_enabled(config)) {
+        key.add("code-coverage-hir-instrumentation", "module-procedural-v1");
+    }
     key.add("llvm", production_llvm_version);
     key.add("standard-library", standard_library_cache_version);
+    if (!checked.objects.empty()) {
+        key.add("workspace-object-order", "managed-catalog-content-v1");
+    }
     add_systemverilog_standard_package_identities(key, checked);
     key.add("vhdl-compatibility-profile", vhdl_compatibility_profile());
     key.add(
@@ -647,6 +653,7 @@ make_specialization_cache_keys(
             "fsim-specialization-provenance-v10-compiled-source-identity");
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
+        key.add("workspace-object-order", "managed-catalog-content-v1");
         add_systemverilog_standard_package_identities(key, checked);
         key.add(
             "vhdl-compatibility-profile",

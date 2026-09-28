@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "application_workspace_internal.hpp"
+#include "application_sdf_session.hpp"
 #include "application_hierarchy_path_codec.hpp"
 #include "../systemc/producer_fingerprint.hpp"
 
@@ -803,7 +804,10 @@ static bool publish_design_artifact_impl(
     metadata.design_digest = artifact::compute_design_digest(metadata);
     if (!append_sdf_phase_payloads(project, metadata, payloads, diagnostics))
         return false;
-    if (!project.sdf_phase_artifacts.empty()) {
+    if (!append_sdf_session_payloads(project, metadata, payloads, diagnostics))
+        return false;
+    if (!project.sdf_phase_artifacts.empty()
+        || !project.sdf_session_publications.empty()) {
         uvm_bootstrap.artifact.provenance.content_identity = metadata.cache_key;
         uvm_bootstrap.artifact.provenance.cache_identity = metadata.cache_key
             + ":" + std::string { project::to_string(project.optimization) };
@@ -1224,6 +1228,12 @@ std::optional<BuiltProject> load_design_artifact(
         return std::nullopt;
     built.trace_archive = std::move(trace_archive);
     built.code_coverage_enabled = metadata->code_coverage.enabled;
+    if (built.code_coverage_enabled
+        && !built.design.code_coverage_inventory()) {
+        diagnostics.error("FSIM-COV-008",
+            ".fsimdesign has legacy enabled coverage without a point inventory; re-elaborate with --code-coverage");
+        return std::nullopt;
+    }
     return built;
 }
 
@@ -1589,7 +1599,10 @@ int elaborate_built_workspace(
         return 1;
     }
     const auto root_count = built ? built->design.roots().size() : 0;
-    if (!built || !publish_design_artifact(config, std::move(*built),
+    const auto sdf_request = make_cli_sdf_request(invocation,
+        SdfControlPhase::Elaborate, config.run.delay_mode);
+    if (!built || !apply_sdf_session_inputs(*built, sdf_request, diagnostics)
+        || !publish_design_artifact(config, std::move(*built),
             *invocation.artifact_output, diagnostics)) {
         return 1;
     }
@@ -1689,6 +1702,11 @@ int handle_simulate(
     if (!metadata) {
         return 1;
     }
+    if (config.coverage.enabled && !metadata->code_coverage.enabled) {
+        diagnostics.error("FSIM-COV-008",
+            ".fsimdesign has no code-coverage instrumentation; re-elaborate with --code-coverage");
+        return 1;
+    }
     if (invocation.delay_mode
         && metadata->delay_mode
             != project::to_string(*invocation.delay_mode)) {
@@ -1720,6 +1738,17 @@ int handle_simulate(
     } else if (invocation.seed) {
         built->seed = *invocation.seed;
         built->entropy_seed = false;
+    }
+    const auto sdf_request = make_cli_sdf_request(invocation,
+        SdfControlPhase::Simulate, config.run.delay_mode);
+    if (!sdf_request.inputs.empty()) {
+        auto planned = plan_sdf_session_inputs(
+            built->design, built->time_resolution, built->cache_key,
+            sdf_request, { }, diagnostics);
+        if (!planned)
+            return 1;
+        built->design = std::move(planned->design);
+        apply_sdf_session_cache_identity(*built, *planned->control);
     }
     const auto engine = invocation.engine.value_or("compiled");
     const auto simulation_engine = engine == "interpreter"

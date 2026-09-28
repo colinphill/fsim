@@ -71,6 +71,9 @@ class HierarchyRegistry;
 namespace fsim::app {
 
 class SdfPhaseArtifact;
+class SdfSessionPublication;
+class SdfReannotationApplication;
+struct SdfReannotationCommitResult;
 
 struct CheckedSource {
     std::filesystem::path path;
@@ -264,6 +267,9 @@ struct BuiltProject {
     /// Immutable opt-in capability. Disabled builds do not create coverage
     /// inventories, counters, callbacks, or runtime-operation checks.
     bool code_coverage_enabled { };
+    /// Validated file inputs awaiting the design digest assigned at publication.
+    std::vector<std::shared_ptr<const SdfSessionPublication>>
+        sdf_session_publications { };
 };
 
 [[nodiscard]] bool code_coverage_enabled(
@@ -1009,6 +1015,9 @@ public:
     /// debugger, interrupt, or API control hook.
     [[nodiscard]] std::uint64_t add_safe_point_hook(SafePointHook hook);
     void remove_safe_point_hook(std::uint64_t token) noexcept;
+    [[nodiscard]] SdfReannotationCommitResult commit_sdf_reannotation(
+        const SdfReannotationApplication& application);
+    [[nodiscard]] bool at_sdf_reannotation_safe_point() const noexcept;
     void set_execution_point_hook(ExecutionPointHook hook);
     /// Replace the host executor for IEEE $system calls. The default invokes
     /// C system(); an empty hook makes the service unavailable at execution.

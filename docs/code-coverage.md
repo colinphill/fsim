@@ -16,11 +16,31 @@ fsim elaborate work.tb --code-coverage
 fsim simulate
 ```
 
-The `--code-coverage` option is also accepted by snapshot consumers.
-Statement, branch,
-line, condition, expression, toggle, FSM-state, and FSM-transition results use
-stable source and instance identities. SystemVerilog coverpoints/crosses and
-PSL directives/properties occupy their own namespaces.
+The `--code-coverage` option is also accepted by snapshot consumers, but cannot
+add instrumentation to a snapshot elaborated without coverage. Re-elaborate
+that snapshot with coverage enabled. Older snapshots marked as enabled but
+lacking a point inventory also require re-elaboration.
+
+The managed-workspace instrumentation path currently discovers source-backed
+SystemVerilog module procedural statements, source-written variable
+initializers, and both outcomes of `if`/`else`,
+including the implicit false outcome when there is no `else`. It retains
+unexecuted points, including paths removed by constant specialization, and
+assigns counters separately to each elaborated instance. Callable bodies,
+generated concurrent-assertion monitor code, other synthetic implementation
+statements, and Verilog/VHDL statement discovery are outside this
+SystemVerilog instrumentation path. Immediate assertions within covered
+procedural processes remain statement points.
+
+Discovery rejects ambiguous duplicate point identities, including macro
+expansions whose distinct executable statements share the same physical source
+span. It does not silently combine those execution sites into one counter.
+
+The database and native coverage APIs also represent line, condition,
+expression, toggle, FSM-state and FSM-transition metrics. Their presence in
+the database format does not imply automatic discovery by the workspace CLI.
+SystemVerilog coverpoints/crosses and PSL directives/properties occupy their
+own namespaces.
 
 SystemVerilog writes a unified snapshot with `$coverage_save`, for example
 `$coverage_save(`SV_COV_STATEMENT, "run.fsimcov")`. Database replacement is
@@ -30,9 +50,11 @@ replacing a valid destination.
 Source controls use independently authored comments:
 
 ```systemverilog
-// fsim coverage off metric=statement reason="generated glue"
-assign adapter = input_value;
-// fsim coverage on metric=statement
+initial begin
+  // fsim coverage off metric=statement reason="generated setup"
+  adapter = 0;
+  // fsim coverage on metric=statement
+end
 ```
 
 Source directives remain available in workspace compilation. Native clients
@@ -42,9 +64,15 @@ selectors are conjunctive. Those clients can supply FSM hints naming the
 instance, current/next-state objects, and legal states. Hints supplement
 automatic enum/case inference.
 
+Source directives omit matching statement or conditional-arm points during
+discovery, so those points have neither counters nor exclusion-reason rows in
+the saved report. Statement and branch directives apply independently. External
+exclusion masks use their existing report representation.
+
 The workspace CLI does not load the former `[[coverage.exclude]]` or
-`[[coverage.fsm]]` project tables. Use source directives and automatic FSM
-inference in command-line workflows.
+`[[coverage.fsm]]` project tables. Use source directives for statement and
+conditional-branch exclusions in command-line workflows. Automatic FSM
+discovery is not connected to the module-procedural instrumentation path.
 
 ## Merge, report, and gate CI
 

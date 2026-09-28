@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/app/application_internal.hpp"
+#include "fsim/support/environment.hpp"
 
 #include <array>
 #include <cassert>
+#include <cstdlib>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -25,6 +30,35 @@ struct Snapshot {
     std::string safe_value;
     std::string final_value;
     std::vector<std::tuple<SimulationTick, std::uint64_t, std::string>> timeline;
+};
+
+void set_test_environment(const char* name, const char* value)
+{
+#if defined(_WIN32)
+    assert(::_putenv_s(name, value == nullptr ? "" : value) == 0);
+#else
+    assert((value == nullptr ? ::unsetenv(name) : ::setenv(name, value, 1))
+        == 0);
+#endif
+}
+
+struct MixedUpdateResult {
+    std::string slot;
+    std::string callback;
+    std::uint64_t unchanged_word_updates { };
+};
+
+class ScopedStderrCapture final {
+public:
+    explicit ScopedStderrCapture(std::ostringstream& output)
+        : previous_(std::cerr.rdbuf(output.rdbuf()))
+    {
+    }
+
+    ~ScopedStderrCapture() { std::cerr.rdbuf(previous_); }
+
+private:
+    std::streambuf* previous_;
 };
 
 Process make_writer(const SignalId safe, const SignalId unsafe)
@@ -106,8 +140,9 @@ Snapshot run_case(const compiler::JitOptimizationLevel level, const bool compile
     return snapshot;
 }
 
-std::pair<std::string, std::string> run_mixed_update_case(
-    const compiler::JitOptimizationLevel level, const bool compiled)
+MixedUpdateResult run_mixed_update_case(
+    const compiler::JitOptimizationLevel level, const bool compiled,
+    const std::optional<bool> disable_after_first = std::nullopt)
 {
     auto wide = PackedLogic4(130U, Logic4::zero);
     wide.set(0U, Logic4::one);
@@ -119,6 +154,8 @@ std::pair<std::string, std::string> run_mixed_update_case(
     process.register_count = 2U;
     process.operations = {
         LoadConstant { 0U, PackedLogic4::from_aval_bval(8U, 0xA5U, 0U) },
+        WriteUpdate { 0U, 0U },
+        WaitFor { 1U },
         WriteUpdate { 0U, 0U },
         LoadConstant { 1U, wide },
         WriteProjected { 1U, 1U, 0U, 0U, ProjectedDelayMode::inertial },
@@ -143,23 +180,43 @@ std::pair<std::string, std::string> run_mixed_update_case(
         assert((jit->frame_layout(*handle).direct_update_signals
             == std::vector<SignalId> { 0U, 1U }));
     }
-    Interpreter interpreter;
-    const auto slot = interpreter.add_signal(
-        { "slot", PackedLogic4(8U, Logic4::zero) });
-    const auto callback = interpreter.add_signal(
-        { "callback", PackedLogic4(130U, Logic4::zero) });
-    assert(slot == 0U && callback == 1U);
-    const auto process_id = interpreter.add_process(std::move(process));
-    if (compiled) {
-        interpreter.set_process_executor(process_id,
-            std::make_unique<app::application_detail::LlvmProcessExecutor>(
-                *jit, *handle, interpreter.process_program(process_id),
-                widths, kinds, resolutions));
+    MixedUpdateResult snapshot;
+    std::ostringstream profile;
+    {
+        ScopedStderrCapture capture { profile };
+        Interpreter interpreter;
+        const auto slot = interpreter.add_signal(
+            { "slot", PackedLogic4(8U, Logic4::zero) });
+        const auto callback = interpreter.add_signal(
+            { "callback", PackedLogic4(130U, Logic4::zero) });
+        assert(slot == 0U && callback == 1U);
+        const auto process_id = interpreter.add_process(std::move(process));
+        if (compiled) {
+            interpreter.set_process_executor(process_id,
+                std::make_unique<app::application_detail::LlvmProcessExecutor>(
+                    *jit, *handle, interpreter.process_program(process_id),
+                    widths, kinds, resolutions));
+        }
+        const auto before_second = interpreter.run(0U);
+        assert(before_second.status == RunStatus::time_limit);
+        assert(interpreter.signal_value(slot).to_msb_string() == "10100101");
+        if (disable_after_first) {
+            set_test_environment(
+                "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION",
+                *disable_after_first ? "1" : nullptr);
+        }
+        const auto result = interpreter.run();
+        assert(result.status == RunStatus::completed);
+        snapshot.slot = interpreter.signal_value(slot).to_msb_string();
+        snapshot.callback = interpreter.signal_value(callback).to_msb_string();
     }
-    const auto result = interpreter.run();
-    assert(result.status == RunStatus::completed);
-    return { interpreter.signal_value(0U).to_msb_string(),
-        interpreter.signal_value(1U).to_msb_string() };
+    const auto text = profile.str();
+    constexpr std::string_view marker { " word_unchanged=" };
+    const auto start = text.find(marker);
+    assert(start != std::string::npos);
+    snapshot.unchanged_word_updates = std::stoull(text.substr(
+        start + marker.size()));
+    return snapshot;
 }
 
 #endif
@@ -169,6 +226,10 @@ std::pair<std::string, std::string> run_mixed_update_case(
 int fsim_application_case_connected_remap_direct()
 {
 #if defined(FSIM_HAS_LLVM)
+    const auto previous_profile = support::environment_variable(
+        "FSIM_PROFILE_NATIVE_UPDATES");
+    const auto previous_suppression = support::environment_variable(
+        "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION");
     for (const auto level : { compiler::JitOptimizationLevel::o0,
              compiler::JitOptimizationLevel::o2 }) {
         const auto reference = run_case(level, false);
@@ -192,15 +253,43 @@ int fsim_application_case_connected_remap_direct()
         assert(native.final_value == reference.final_value);
         assert(native.timeline == reference.timeline);
 
+        set_test_environment("FSIM_PROFILE_NATIVE_UPDATES", "1");
+        set_test_environment(
+            "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION", nullptr);
         const auto mixed_reference = run_mixed_update_case(level, false);
         const auto mixed_native = run_mixed_update_case(level, true);
-        assert(mixed_reference.first == "10100101");
-        assert(mixed_reference.second.size() == 130U);
-        assert(mixed_reference.second.front() == 'Z');
-        assert(mixed_reference.second[65U] == 'X');
-        assert(mixed_reference.second.back() == '1');
-        assert(mixed_native == mixed_reference);
+        assert(mixed_reference.slot == "10100101");
+        assert(mixed_reference.callback.size() == 130U);
+        assert(mixed_reference.callback.front() == 'Z');
+        assert(mixed_reference.callback[65U] == 'X');
+        assert(mixed_reference.callback.back() == '1');
+        assert(mixed_native.slot == mixed_reference.slot);
+        assert(mixed_native.callback == mixed_reference.callback);
+        assert(mixed_native.unchanged_word_updates == 0U);
+
+        // The first native segment has run before each switch changes. An
+        // existing executor keeps its construction-time setting; the next
+        // executor observes the new value.
+        const auto enabled_then_disabled
+            = run_mixed_update_case(level, true, true);
+        const auto newly_disabled = run_mixed_update_case(level, true);
+        const auto disabled_then_enabled
+            = run_mixed_update_case(level, true, false);
+        const auto newly_enabled = run_mixed_update_case(level, true);
+        for (const auto& result : { enabled_then_disabled,
+                 newly_disabled, disabled_then_enabled, newly_enabled }) {
+            assert(result.slot == mixed_reference.slot);
+            assert(result.callback == mixed_reference.callback);
+        }
+        assert(enabled_then_disabled.unchanged_word_updates == 0U);
+        assert(newly_disabled.unchanged_word_updates == 1U);
+        assert(disabled_then_enabled.unchanged_word_updates == 1U);
+        assert(newly_enabled.unchanged_word_updates == 0U);
     }
+    set_test_environment("FSIM_PROFILE_NATIVE_UPDATES",
+        previous_profile ? previous_profile->c_str() : nullptr);
+    set_test_environment("FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION",
+        previous_suppression ? previous_suppression->c_str() : nullptr);
 #endif
     return 0;
 }

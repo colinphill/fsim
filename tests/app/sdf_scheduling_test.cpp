@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/application.hpp"
+#include "application_test_support.hpp"
+#include "../support/test_helpers.hpp"
 #include "fsim/app/sdf_precedence.hpp"
 #include "fsim/app/sdf_scheduling.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -16,7 +16,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -25,11 +24,7 @@ namespace {
 constexpr std::string_view path_identity = "sdf:iopath:top.u:A=>Z:path-0";
 constexpr std::string_view check_identity = "sdf:timingcheck:top.u:setup:0";
 
-void require(const bool condition, const std::string_view message)
-{
-    if (!condition)
-        throw std::runtime_error(std::string { message });
-}
+using fsim::test::require;
 
 fsim::frontend::SourceSpan span(const std::size_t offset)
 {
@@ -233,9 +228,8 @@ std::shared_ptr<const fsim::app::SdfPrecedenceApplication> make_precedence(
 const fsim::frontend::Diagnostic& require_diagnostic(
     const fsim::app::SdfSchedulingResult& result, const std::string_view code)
 {
-    const auto found = std::ranges::find(
-        result.diagnostics, code, &fsim::frontend::Diagnostic::code);
-    if (found == result.diagnostics.end())
+    const auto* found = fsim::test::find_diagnostic(result.diagnostics, code);
+    if (found == nullptr)
         throw std::runtime_error(
             "missing scheduling diagnostic " + std::string { code });
     return *found;
@@ -312,16 +306,6 @@ void test_disabled_and_no_annotation_behavior()
         "disabled scheduling domains must leave source runtime state untouched");
 }
 
-struct TemporaryDirectory {
-    std::filesystem::path path;
-
-    ~TemporaryDirectory()
-    {
-        std::error_code error;
-        std::filesystem::remove_all(path, error);
-    }
-};
-
 struct EngineCapture {
     std::vector<std::tuple<
         fsim::runtime::SimulationTick, std::string, std::string>>
@@ -380,17 +364,9 @@ EngineCapture run_engine(
 void test_interpreter_llvm_differential()
 {
     using namespace fsim;
-    const auto unique = std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    TemporaryDirectory directory {
-        std::filesystem::temp_directory_path()
-        / ("fsim-sdf-scheduling-" + unique)
-    };
-    std::filesystem::create_directories(directory.path);
+    fsim::test::TemporaryDirectory directory { "fsim-sdf-scheduling" };
     const auto source_path = directory.path / "top.sv";
-    {
-        std::ofstream source(source_path);
-        source << R"(module delay_buf(input logic a, output wire z);
+    fsim::test::write_text(source_path, R"(module delay_buf(input logic a, output wire z);
   assign z = a;
   specify
     (a => z) = 5;
@@ -410,8 +386,7 @@ module top;
     #20 $finish;
   end
 endmodule
-)";
-    }
+)");
     diagnostic::Engine diagnostics;
     auto project = app::build_project(
         make_config(directory.path, source_path), diagnostics);
@@ -440,11 +415,9 @@ endmodule
             project->design);
     require(scheduled.ok(), "compiled differential timing must publish");
     project->design = scheduled.application->design();
-    auto compiled_project = *project;
-    const auto reference
-        = run_engine(std::move(*project), app::SimulationEngine::interpreter);
-    const auto compiled
-        = run_engine(std::move(compiled_project), app::SimulationEngine::compiled);
+    const auto [reference, compiled]
+        = fsim::test::run_interpreter_compiled_pair(
+            std::move(*project), run_engine);
 #if defined(FSIM_HAS_LLVM)
     const bool compiled_process_count_ok = compiled.compiled_processes > 0U;
 #else

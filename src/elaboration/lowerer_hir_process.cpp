@@ -84,6 +84,17 @@ void Lowerer::set_systemverilog_program_owner(
     systemverilog_program_owner_ = owner;
 }
 
+void Lowerer::set_hir_code_coverage_context(
+    const CoverageHirContext* coverage, const bool module) noexcept
+{
+    coverage_hir_context_ = module ? coverage : nullptr;
+}
+
+void Lowerer::set_hir_code_coverage_active(const bool active) noexcept
+{
+    coverage_hir_process_active_ = active;
+}
+
 std::vector<Process> Lowerer::take_generated_processes()
 {
     return std::exchange(generated_processes_, { });
@@ -1399,65 +1410,6 @@ std::optional<Process> Lowerer::lower_hir_process(
     return lower_hir_process_body(description, language, hierarchy);
 }
 
-bool Lowerer::can_lower_hir_concurrent_statement(
-    const semantic::StatementId statement) const
-{
-    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
-        *this
-    };
-    const auto source = specialized_hir_unit_ != nullptr
-        ? specialized_hir_unit_->find_statement(statement)
-        : std::nullopt;
-    if (!source) {
-        return false;
-    }
-    // A concurrent statement is not a lexical process scope. Its HIR
-    // expressions retain the enclosing unit scope so name lookup still finds
-    // module variables and architecture signals, but those declarations own
-    // DesignIR signal storage rather than process-local registers. Use the
-    // invalid scope sentinel for the local-storage classification performed by
-    // the shared statement capability walker.
-    const auto scope = semantic::ScopeId { };
-    std::unordered_set<std::uint32_t> visiting;
-    if (can_lower_hir_statement(statement, scope, visiting)) {
-        return true;
-    }
-
-    // Continuous-assignment diagnostics, callable result sizing, and compound
-    // lvalue/value handling belong to the direct statement lowerer. The
-    // shared capability walker is intentionally conservative about selected
-    // package types and packed member expressions, so do not replace a
-    // source-preserving lowering attempt with the generic adapter diagnostic.
-    if (source->vhdl != nullptr) {
-        const auto& input = *source->vhdl;
-        if (input.kind
-                != semantic::vhdl::StatementKind::signal_assignment
-            || !input.target
-            || (input.waveform.empty() && !input.value)) {
-            return false;
-        }
-        const auto value = input.waveform.empty()
-            ? input.value
-            : std::optional { input.waveform.front().value };
-        return specialized_hir_unit_->find_expression(*input.target)
-                   .has_value()
-            && value
-            && specialized_hir_unit_->find_expression(*value).has_value();
-    }
-    const auto& input = *source->systemverilog;
-    if (input.kind != semantic::sv::StatementKind::assignment
-        || input.assignment_kind
-            != semantic::sv::AssignmentKind::continuous
-        || input.assignment_control
-            != semantic::sv::AssignmentControl::none
-        || input.update_kind != semantic::sv::UpdateKind::none
-        || input.delay || !input.target || !input.value) {
-        return false;
-    }
-    return specialized_hir_unit_->find_expression(*input.target).has_value()
-        && specialized_hir_unit_->find_expression(*input.value).has_value();
-}
-
 std::optional<SignalId> Lowerer::hir_concurrent_port_signal(
     const semantic::DeclarationId declaration) const
 {
@@ -1541,8 +1493,8 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
     const std::array statements { statement };
     HirProcessDescription description;
     description.source = source_span;
-    // See can_lower_hir_concurrent_statement: the statement's enclosing unit
-    // scope is a name-resolution scope, not process-local storage.
+    // The statement's enclosing unit scope is a name-resolution scope,
+    // not process-local storage.
     description.scope = semantic::ScopeId { };
     if (source->systemverilog != nullptr
         && !source->systemverilog->label.empty()) {

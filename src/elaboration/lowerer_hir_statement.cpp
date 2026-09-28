@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/frontend/source.hpp"
+
 #include <charconv>
 #include <cstdlib>
 #include <iostream>
@@ -1363,6 +1366,94 @@ bool Lowerer::lower_hir_statement(
         nested_scope = input.nested_scope;
     }
     const auto span = hir_source_span(source);
+    const auto emit_coverage_hit = [&](const frontend::SourceSpan& hit_span,
+                                     const runtime::CodeCoverageMetric metric,
+                                     const frontend::CodeCoverageConstructKind kind) {
+        if (coverage_hir_context_ == nullptr
+            || !coverage_hir_process_active_ || active_hir_callable_) {
+            return true;
+        }
+        const auto physical = frontend::physical_source(hit_span);
+        const auto found = std::ranges::find_if(
+            coverage_hir_context_->sources,
+            [&](const CoverageHirSource& item) {
+                return item.inventory.source_name == physical;
+            });
+        if (found == coverage_hir_context_->sources.end()) {
+            report("FSIM-COV-008",
+                "covered HIR statement has no mapped source identity",
+                hit_span);
+            return false;
+        }
+        const auto source_metric = metric == runtime::CodeCoverageMetric::Branch
+            ? frontend::CoverageSourceMetric::Branch
+            : frontend::CoverageSourceMetric::Statement;
+        if (frontend::coverage_source_exclusion_at(
+                found->exclusions, source_metric,
+                hit_span.begin.offset) != nullptr) {
+            return true;
+        }
+        const frontend::CodeCoverageSourceSpan offsets {
+            hit_span.begin.offset, hit_span.end.offset };
+        const auto identity = frontend::make_code_coverage_point_identity(
+            found->inventory.identity,
+            frontend::CodeCoverageLanguage::SystemVerilog,
+            kind, offsets);
+        if (!identity.ok()) {
+            report("FSIM-COV-008",
+                "covered HIR statement has an invalid source span",
+                hit_span);
+            return false;
+        }
+        process_.operations.emplace_back(CodeCoverageHit {
+            *identity.identity, metric,
+            runtime::CodeCoverageCounterId { 0U } });
+        return true;
+    };
+    const bool parsed_coverage_statement = statement->systemverilog != nullptr
+        && coverage_hir_context_ != nullptr
+        && coverage_hir_process_active_
+        && !active_hir_callable_
+        && statement->systemverilog->origin.valid()
+        && statement->systemverilog->origin.value()
+            < specialized_hir_unit_->design().semantics.origins().size()
+        && specialized_hir_unit_->design().semantics.origins()[
+               statement->systemverilog->origin.value()].kind
+            == semantic::OriginKind::parsed;
+    const auto emit_coverage_arm = [&](
+        const std::span<const semantic::StatementId> body,
+        const bool true_arm) {
+        if (!parsed_coverage_statement) {
+            return true;
+        }
+        auto arm = span;
+        auto kind = true_arm
+            ? frontend::CodeCoverageConstructKind::BranchTrueArm
+            : frontend::CodeCoverageConstructKind::BranchImplicitArm;
+        if (!body.empty()) {
+            const auto first = specialized_hir_unit_->find_statement(
+                body.front());
+            const auto last = specialized_hir_unit_->find_statement(
+                body.back());
+            if (!first || !last || first->systemverilog == nullptr
+                || last->systemverilog == nullptr) {
+                report("FSIM-COV-008",
+                    "covered conditional arm has no HIR source span", span);
+                return false;
+            }
+            arm = hir_source_span(first->systemverilog->source);
+            arm.end = hir_source_span(last->systemverilog->source).end;
+            if (!true_arm) {
+                kind = frontend::CodeCoverageConstructKind::BranchFalseArm;
+            }
+        } else if (true_arm) {
+            report("FSIM-COV-008",
+                "covered conditional has an empty true arm", span);
+            return false;
+        }
+        return emit_coverage_hit(
+            arm, runtime::CodeCoverageMetric::Branch, kind);
+    };
     std::string statement_scope;
     if (statement->vhdl != nullptr) {
         const auto& input = *statement->vhdl;
@@ -1401,6 +1492,15 @@ bool Lowerer::lower_hir_statement(
         emit_debug_point(assertion ? DebugPointKind::assertion
                                    : DebugPointKind::statement,
             span);
+        if (parsed_coverage_statement
+            && statement->systemverilog->kind
+                != semantic::sv::StatementKind::null_statement) {
+            if (!emit_coverage_hit(span,
+                    runtime::CodeCoverageMetric::Statement,
+                    frontend::CodeCoverageConstructKind::Statement)) {
+                return false;
+            }
+        }
     }
     if (is_hir_vhdl_access_assignment(statement_id)) {
         return lower_hir_vhdl_access_assignment(statement_id);
@@ -5827,6 +5927,12 @@ bool Lowerer::lower_hir_statement(
             const auto constant = specialized_hir_unit_
                                       ->evaluate_integral_expression(*condition);
             if (constant) {
+                if (!emit_coverage_arm(
+                        *constant != 0 ? std::span { statements }
+                                       : std::span { else_statements },
+                        *constant != 0)) {
+                    return false;
+                }
                 return lower_hir_statements(
                     *constant != 0 ? std::span { statements }
                                    : std::span { else_statements });
@@ -5842,6 +5948,9 @@ bool Lowerer::lower_hir_statement(
             *lowered, 0U, 0U, UnknownBranchPolicy::when_false });
         const auto when_true = static_cast<InstructionIndex>(
             process_.operations.size());
+        if (!emit_coverage_arm(statements, true)) {
+            return false;
+        }
         if (!lower_hir_statements(statements)) {
             return false;
         }
@@ -5850,6 +5959,9 @@ bool Lowerer::lower_hir_statement(
         process_.operations.emplace_back(Jump { 0U });
         const auto when_false = static_cast<InstructionIndex>(
             process_.operations.size());
+        if (!emit_coverage_arm(else_statements, false)) {
+            return false;
+        }
         if (!lower_hir_statements(else_statements)) {
             return false;
         }

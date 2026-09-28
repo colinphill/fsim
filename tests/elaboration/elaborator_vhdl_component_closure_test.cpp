@@ -3,40 +3,6 @@
 
 namespace fsim::tests::elaboration {
 
-namespace {
-
-void append_design(
-    fsim::frontend::ParsedDesign& destination,
-    fsim::frontend::ParsedDesign source) {
-    for (auto& unit : source.units) {
-        destination.units.push_back(std::move(unit));
-    }
-}
-
-const fsim::elaboration::SpecializationInfo&
-specialization(
-    const fsim::elaboration::ElaborationResult& result,
-    const std::string_view path) {
-    const auto found = std::ranges::find_if(
-        result.design->specializations(),
-        [&](const auto& candidate) {
-          return candidate.instance == path;
-        });
-    assert(found != result.design->specializations().end());
-    return *found;
-}
-
-fsim::elaboration::ElaborationResult elaborate_text(
-    const std::string_view name,
-    const std::string_view source,
-    const std::string_view top) {
-    const auto parsed = fsim::frontend::parse_text(
-        name, source, fsim::frontend::Language::Vhdl2008);
-    assert(parsed.ok());
-    return compile_and_elaborate(parsed.design, top);
-}
-
-}  // namespace
 
 void test_vhdl_component_defaults_and_revision()
 {
@@ -76,7 +42,7 @@ end architecture;
         invalid_port_order_result,
         "FSIM-ELAB-VHCOMP-009"));
 
-    const auto configured_default = elaborate_text(
+    const auto configured_default = elaborate_vhdl_component_text(
         "configured_component_default.vhd",
         R"(
 entity configured_default_leaf is
@@ -126,7 +92,7 @@ end architecture;
             .to_msb_string()
         == "00000000000000000000000000001100");
     const auto& configured_specialization =
-        specialization(
+        component_specialization(
             configured_default,
             "configured_default_top.child");
     assert(std::ranges::any_of(
@@ -161,14 +127,14 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(foreign.ok() && foreign_parent.ok());
-    append_design(
+    append_component_design(
         foreign.design, std::move(foreign_parent.design));
     const auto cross_language = compile_and_elaborate(
         foreign.design,
         "vhdl:work.foreign_default_parent(rtl)");
     assert(cross_language.ok());
     assert(
-        specialization(
+        component_specialization(
             cross_language, "foreign_default_parent.child").unit
         == "sv:work.foreign_default");
 

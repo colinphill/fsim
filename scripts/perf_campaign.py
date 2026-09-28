@@ -1563,7 +1563,7 @@ def preflight_identity(engine: str, case: dict[str, Any], config: dict[str, Any]
             return [logical_paths(item) for item in value]
         if isinstance(value, str) and Path(value).is_absolute():
             try:
-                relative = Path(value).relative_to(output)
+                relative = Path(value).resolve().relative_to(output)
                 return "<campaign>/" + relative.as_posix()
             except ValueError:
                 pass

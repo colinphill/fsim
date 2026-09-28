@@ -89,7 +89,9 @@ fsim::project::Config make_config(
   config.project.time_resolution = "1ns";
   config.build.optimization = fsim::project::Optimization::o0;
   config.build.cache_path = directory / "native-cache";
-  config.coverage.enabled = true;
+  // This fixture places one hit at the process tail to test observer timing.
+  // Keep automatic HIR instrumentation out of that synthetic boundary.
+  config.coverage.enabled = false;
   config.run.max_deltas = 1000;
 
   fsim::project::SourceSet sources;
@@ -107,7 +109,7 @@ void attach_statement_coverage(
     const std::filesystem::path& source_path) {
   using namespace fsim;
 
-  assert(built.code_coverage_enabled);
+  assert(!built.code_coverage_enabled);
   assert(!built.design.code_coverage_inventory());
   assert(!built.design.specializations().empty());
   assert(!built.design_ir.processes().empty());
@@ -203,9 +205,10 @@ Capture execute(
     fsim::diagnostic::print_text(std::cerr, diagnostics);
   }
   assert(built && !diagnostics.has_error());
-  assert(built->code_coverage_enabled);
+  assert(!built->code_coverage_enabled);
   attach_statement_coverage(*built, config,
       config.source_sets.front().files.front());
+  built->code_coverage_enabled = true;
   const auto& inventory = built->design.code_coverage_inventory();
   assert(inventory && inventory->total_points > 0U);
   assert(!built->specialization_cache_keys.empty());

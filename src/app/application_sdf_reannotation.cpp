@@ -458,6 +458,8 @@ SdfReannotationResult apply_sdf_reannotation(
     std::vector<const elaboration::ElaboratedDesign*> layer_designs;
     layer_designs.reserve(layers.size());
     std::size_t pattern_bytes { };
+    std::size_t selected_target_count { };
+    std::size_t selected_target_bytes { };
     for (const auto& layer : layers) {
         if (!layer.timing || !layer.timing->scheduling()
             || layer.timing->semantic_identity().empty()
@@ -477,6 +479,24 @@ SdfReannotationResult apply_sdf_reannotation(
             return result;
         }
         pattern_bytes += added_bytes;
+        if (layer.selected_targets.size() > limits.max_targets
+            || selected_target_count > limits.max_targets
+                - layer.selected_targets.size()) {
+            diagnose(result.diagnostics, "FSIM-SDF-REANNOTATION-004",
+                "SDF reannotation exceeds its selected-target limit");
+            return result;
+        }
+        selected_target_count += layer.selected_targets.size();
+        for (const auto& target : layer.selected_targets) {
+            if (target.size() > limits.max_identity_bytes
+                || selected_target_bytes > limits.max_identity_bytes
+                    - target.size()) {
+                diagnose(result.diagnostics, "FSIM-SDF-REANNOTATION-004",
+                    "SDF reannotation exceeds its selected-target byte limit");
+                return result;
+            }
+            selected_target_bytes += target.size();
+        }
         const auto& design = layer.timing->scheduling()->design();
         if (!validate_layer_topology(baseline_design, design)) {
             diagnose(result.diagnostics, "FSIM-SDF-REANNOTATION-003",
@@ -533,6 +553,9 @@ SdfReannotationResult apply_sdf_reannotation(
             index < design.verilog_specify_paths().size(); ++index) {
             const auto& path = design.verilog_specify_paths()[index];
             if (scope_matches(path.instance, layer)
+                && (layer.selected_targets.empty()
+                    || std::ranges::find(layer.selected_targets, path.identity)
+                        != layer.selected_targets.end())
                 && !select(path.identity, index, false, layer_index)) {
                 return result;
             }
@@ -541,6 +564,9 @@ SdfReannotationResult apply_sdf_reannotation(
             index < design.verilog_timing_checks().size(); ++index) {
             const auto& check = design.verilog_timing_checks()[index];
             if (scope_matches(check_instance(check.identity), layer)
+                && (layer.selected_targets.empty()
+                    || std::ranges::find(layer.selected_targets, check.identity)
+                        != layer.selected_targets.end())
                 && !select(check.identity, index, true, layer_index)) {
                 return result;
             }

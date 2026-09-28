@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include <cstdlib>
 #include <numeric>
 
 namespace fsim::app::application_detail {
@@ -103,6 +104,9 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , container_object_aliases_(storage_->container_object_aliases)
     , active_container_object_aliases_(
           storage_->active_container_object_aliases)
+    , stable_direct_update_suppression_allowed_(
+          std::getenv("FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION")
+              == nullptr)
 {
     if (operation_count_ != process_.operations.size()) {
         throw compiler::LlvmJitError(

@@ -3,6 +3,7 @@
 
 #include "elaborator_internal.hpp"
 #include "scoped_bindings.hpp"
+#include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -73,11 +74,12 @@ public:
     /// Lowerer.
     void set_specialized_hir_unit(
         const semantic::SpecializedHirUnit* unit) noexcept;
+    void set_hir_code_coverage_context(
+        const CoverageHirContext* coverage, bool module) noexcept;
+    void set_hir_code_coverage_active(bool active) noexcept;
     void set_systemverilog_interface_handles(
         const std::unordered_map<std::string, std::uint64_t>* handles)
         noexcept;
-    [[nodiscard]] bool can_lower_hir_process(
-        semantic::ProcessId process) const;
     void diagnose_hir_systemverilog_file_process(
         semantic::ProcessId process);
     [[nodiscard]] std::optional<semantic::SourceSpanId>
@@ -87,8 +89,6 @@ public:
         semantic::ProcessId process,
         frontend::Language language,
         std::string_view hierarchy);
-    [[nodiscard]] bool can_lower_hir_concurrent_statement(
-        semantic::StatementId statement) const;
     [[nodiscard]] bool diagnose_hir_vhdl_block_guard(
         semantic::ExpressionId expression);
     [[nodiscard]] std::optional<semantic::SourceSpanId>
@@ -634,17 +634,6 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         std::unordered_set<std::uint32_t>& visiting) const;
-    [[nodiscard]] bool can_lower_hir_statement(
-        semantic::StatementId statement,
-        semantic::ScopeId process_scope,
-        std::unordered_set<std::uint32_t>& visiting) const;
-    [[nodiscard]] std::optional<std::size_t>
-    hir_statement_expansion_cost(
-        semantic::StatementId statement,
-        std::unordered_set<std::uint32_t>& visiting) const;
-    [[nodiscard]] bool can_lower_hir_declaration(
-        semantic::DeclarationId declaration,
-        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_expression(
         semantic::ExpressionId expression,
         std::size_t expected_width,
@@ -694,10 +683,6 @@ private:
         semantic::ExpressionId expression,
         const semantic::sv::TypeReference& type,
         std::size_t expected_width);
-    [[nodiscard]] bool can_lower_hir_systemverilog_packed_pattern(
-        semantic::ExpressionId expression,
-        const semantic::sv::TypeReference& type,
-        semantic::ScopeId process_scope) const;
     [[nodiscard]] bool lower_hir_systemverilog_file_statement(
         semantic::StatementId statement);
     [[nodiscard]] bool is_hir_vhdl_file_call(
@@ -944,10 +929,6 @@ private:
         const semantic::vhdl::SubtypeIndication& subtype) const;
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_type_actual(semantic::ExpressionId expression) const;
-    [[nodiscard]] std::optional<std::vector<HirGenericBinding>>
-    bind_hir_vhdl_generics(
-        std::span<const semantic::DeclarationId> formals,
-        std::span<const semantic::vhdl::Association> associations) const;
     [[nodiscard]] std::optional<HirCallableResolution>
     hir_callable_resolution(semantic::DeclarationId declaration) const;
     enum class HirRuntimeBindingKind : std::uint8_t {
@@ -1251,10 +1232,6 @@ private:
     hir_class_task_profile(
         semantic::StatementId statement,
         semantic::ScopeId process_scope) const;
-    [[nodiscard]] bool can_lower_hir_class_task_call(
-        semantic::StatementId statement,
-        semantic::ScopeId process_scope,
-        std::unordered_set<std::uint32_t>& visiting) const;
     [[nodiscard]] bool lower_hir_class_task_call(
         semantic::StatementId statement);
     struct HirInterfaceFunctionProfile {
@@ -1349,10 +1326,6 @@ private:
     bind_hir_vhdl_procedure_actuals(
         semantic::StatementId statement,
         semantic::DeclarationId declaration) const;
-    [[nodiscard]] bool can_lower_hir_vhdl_procedure_call(
-        semantic::StatementId statement,
-        semantic::ScopeId process_scope,
-        std::unordered_set<std::uint32_t>& visiting) const;
     [[nodiscard]] bool lower_hir_vhdl_procedure_call(
         semantic::StatementId statement);
     [[nodiscard]] bool lower_pending_hir_callables();
@@ -1429,6 +1402,8 @@ private:
     const ReadOnlyContainerBindings& read_only_container_objects_;
     std::vector<Diagnostic>& diagnostics_;
     const semantic::SpecializedHirUnit* specialized_hir_unit_ { };
+    const CoverageHirContext* coverage_hir_context_ { };
+    bool coverage_hir_process_active_ { };
     const std::unordered_map<std::string, std::uint64_t>*
         systemverilog_interface_handles_ { };
     semantic::ScopeId hir_process_scope_;

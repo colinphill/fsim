@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/trace_archive.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 
@@ -160,6 +161,130 @@ endprimitive
     assert(!detail::load_workspace_objects(
         std::array { selected, selected }, diagnostics));
     assert(diagnostics.has_error());
+}
+
+void check_managed_order_boundary(const std::filesystem::path& root)
+{
+    const auto first = compile(root, "ordered-first",
+        "module ordered_first; endmodule\n");
+    const auto second = compile(root, "ordered-second",
+        "module ordered_second; endmodule\n");
+    const auto next_catalog = compile(root, "ordered-next",
+        "module ordered_next; endmodule\n");
+    fsim::diagnostic::Engine diagnostics;
+    const std::array manual { second, first };
+    const auto loaded_manual = detail::load_workspace_objects(manual, diagnostics);
+    assert(loaded_manual && !diagnostics.has_error()
+        && loaded_manual->objects.size() == 2U
+        && loaded_manual->objects[0].directory == second.path
+        && loaded_manual->objects[1].directory == first.path);
+
+    auto ranked_first = first;
+    auto ranked_second = second;
+    auto ranked_next = next_catalog;
+    ranked_first.catalog_rank = 0U;
+    ranked_second.catalog_rank = 0U;
+    ranked_next.catalog_rank = 1U;
+    diagnostics.clear();
+    const std::array forward { ranked_first, ranked_second, ranked_next };
+    const std::array reversed { ranked_second, ranked_first, ranked_next };
+    const auto loaded_forward = detail::load_workspace_objects(
+        forward, diagnostics);
+    assert(loaded_forward && !diagnostics.has_error());
+    diagnostics.clear();
+    const auto loaded_reversed = detail::load_workspace_objects(
+        reversed, diagnostics);
+    assert(loaded_reversed && !diagnostics.has_error()
+        && loaded_forward->objects.size() == 3U
+        && loaded_reversed->objects.size() == 3U);
+    for (std::size_t index = 0; index < 3U; ++index) {
+        assert(loaded_forward->objects[index].metadata_digest
+            == loaded_reversed->objects[index].metadata_digest);
+    }
+    assert(loaded_forward->objects.back().directory == next_catalog.path
+        && loaded_reversed->objects.back().directory == next_catalog.path);
+}
+
+fsim::app::TraceArchiveSnapshot trace_snapshot(
+    const std::filesystem::path& root,
+    const fsim::app::TraceControlSurface surface,
+    const fsim::app::TraceLifecycle lifecycle,
+    const std::uint64_t generation)
+{
+    fsim::app::TraceControlRequest request;
+    request.surface = surface;
+    request.phase = fsim::app::TraceControlPhase::Compile;
+    request.output = root / "waves.fst";
+    request.format = fsim::project::TraceFormat::fst;
+    request.compression = fsim::project::TraceCompression::none;
+    request.selection = { "shared.*" };
+    request.lifecycle = lifecycle;
+    request.generation = generation;
+    const auto applied = fsim::app::apply_trace_control(std::move(request));
+    assert(applied.ok());
+    return fsim::app::make_trace_archive_snapshot(
+        *applied.application, root);
+}
+
+void attach_trace_archive(const detail::WorkspaceObjectSelection& object,
+    const fsim::app::TraceArchiveSnapshot& snapshot)
+{
+    fsim::diagnostic::Engine diagnostics;
+    auto metadata = fsim::artifact::load_object_metadata(object.path, diagnostics);
+    assert(metadata && !diagnostics.has_error());
+    const auto encoded = fsim::app::encode_trace_archive(
+        snapshot, fsim::app::TraceArchiveKind::Object);
+    assert(encoded.ok());
+    metadata->trace_archive = fsim::app::trace_archive_hex(encoded.archive);
+    metadata->compilation_digest
+        = fsim::artifact::compute_object_compilation_digest(*metadata);
+    const auto path = object.path / fsim::artifact::kObjectMetadataFilename;
+    std::filesystem::permissions(path,
+        std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::add);
+    write_file(path, fsim::artifact::serialize_object_metadata(*metadata));
+}
+
+void check_trace_replay_class_and_representative(
+    const std::filesystem::path& root)
+{
+    const auto first = compile(root, "trace-first",
+        "module trace_first; endmodule\n");
+    const auto second = compile(root, "trace-second",
+        "module trace_second; endmodule\n");
+    const auto first_snapshot = trace_snapshot(root,
+        fsim::app::TraceControlSurface::ProjectCli,
+        fsim::app::TraceLifecycle::Configured, 1U);
+    const auto second_snapshot = trace_snapshot(root,
+        fsim::app::TraceControlSurface::Tcl,
+        fsim::app::TraceLifecycle::Configured, 7U);
+    assert(fsim::app::trace_archive_profiles_compatible(
+        first_snapshot, second_snapshot));
+    attach_trace_archive(first, first_snapshot);
+    attach_trace_archive(second, second_snapshot);
+    fsim::diagnostic::Engine diagnostics;
+    const auto forward = detail::load_workspace_objects(
+        std::array { first, second }, diagnostics);
+    assert(forward && !diagnostics.has_error() && forward->trace_archive);
+    diagnostics.clear();
+    const auto reversed = detail::load_workspace_objects(
+        std::array { second, first }, diagnostics);
+    assert(reversed && !diagnostics.has_error() && reversed->trace_archive
+        && *forward->trace_archive == *reversed->trace_archive);
+
+    const auto disabled = trace_snapshot(root,
+        fsim::app::TraceControlSurface::ProjectCli,
+        fsim::app::TraceLifecycle::Disabled, 1U);
+    assert(fsim::app::trace_archive_profiles_compatible(
+        first_snapshot, disabled));
+    attach_trace_archive(second, disabled);
+    diagnostics.clear();
+    assert(!detail::load_workspace_objects(
+        std::array { first, second }, diagnostics));
+    assert(std::ranges::any_of(diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-TRACE-ARCHIVE-003";
+        }));
 }
 
 void mark_uvm_release(const detail::WorkspaceObjectSelection& object)
@@ -363,6 +488,9 @@ int main()
         std::filesystem::temp_directory_path() / ("fsim-workspace-objects-" + unique)
     };
     check_catalog_selection(temporary.path / "selection");
+    check_managed_order_boundary(temporary.path / "managed-order");
+    check_trace_replay_class_and_representative(
+        temporary.path / "trace-representative");
     check_split_uvm_environment(temporary.path / "uvm");
     check_compilation_unit_partition(temporary.path / "mutable-state", true);
     check_compilation_unit_partition(temporary.path / "constant-support", false);

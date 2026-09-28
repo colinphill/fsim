@@ -1,29 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_container_helpers.hpp"
 
 #include <algorithm>
 
 namespace fsim::runtime::simir {
 namespace {
-
-[[nodiscard]] bool aggregate_box(const ContainerType& type) noexcept {
-  return type.element_kind == ContainerElementKind::Aggregate
-      && type.aggregate_value;
-}
-
-[[nodiscard]] ContainerType aggregate_element_type(
-    const ContainerType& type) {
-  auto result = type;
-  result.queue = false;
-  result.associative = false;
-  result.fixed = false;
-  result.aggregate_value = true;
-  result.maximum_elements.reset();
-  result.dimensions.clear();
-  result.index_left = 0;
-  result.index_right = 0;
-  return result;
-}
 
 [[nodiscard]] std::size_t active_element_count(
     const ContainerValue& value) noexcept {
@@ -77,58 +59,13 @@ namespace {
   return left + right;
 }
 
-[[nodiscard]] PackedLogic4 initial_packed_element(
-    const ContainerType& type) {
-  if (type.element_kind == ContainerElementKind::Scalar
-      || type.two_state) {
-    return PackedLogic4(type.element_width, Logic4::zero);
-  }
-  return PackedLogic4{type.element_width, Logic4::x};
-}
-
-void append_default_element(ContainerValue& value) {
-  switch (value.type.element_kind) {
-  case ContainerElementKind::Packed:
-  case ContainerElementKind::Scalar:
-    value.elements.push_back(initial_packed_element(value.type));
-    return;
-  case ContainerElementKind::String:
-    value.string_elements.emplace_back();
-    return;
-  case ContainerElementKind::Container:
-    value.nested_elements.push_back(
-        default_container_value(value.type.element_types.front()));
-    return;
-  case ContainerElementKind::Aggregate:
-    value.nested_elements.push_back(
-        default_container_value(aggregate_element_type(value.type)));
-    return;
-  }
-}
-
 }  // namespace
 
 bool associative_index_key_less(
     const ContainerType& type,
     const PackedLogic4& left,
     const PackedLogic4& right) {
-  if (type.signed_indices) {
-    const auto lhs_negative
-        = left.get(type.index_width - 1U) == Logic4::one;
-    const auto rhs_negative
-        = right.get(type.index_width - 1U) == Logic4::one;
-    if (lhs_negative != rhs_negative) {
-      return lhs_negative;
-    }
-  }
-  const auto lhs = left.aval_words();
-  const auto rhs = right.aval_words();
-  for (auto index = lhs.size(); index != 0; --index) {
-    if (lhs[index - 1U] != rhs[index - 1U]) {
-      return lhs[index - 1U] < rhs[index - 1U];
-    }
-  }
-  return false;
+  return associative_index_key_less_impl(type, left, right);
 }
 
 std::size_t container_value_size(const ContainerValue& value) noexcept {

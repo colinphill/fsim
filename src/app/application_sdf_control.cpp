@@ -57,7 +57,7 @@ namespace {
         const SdfControlInput& input) noexcept
     {
         return revision.file_identity == input.source_identity
-            && revision.root == input.root
+            && (revision.root == input.root || input.root == "*")
             && revision.cell_pattern == input.cell_pattern
             && revision.file_precedence == input.file_precedence
             && revision.cell_precedence == input.cell_precedence;

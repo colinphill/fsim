@@ -769,6 +769,7 @@ endif()
       src/frontend/coverage_toggle_selection.cpp
       src/elaboration/coverage_instance_identity.cpp
       src/elaboration/coverage_inventory.cpp
+      src/elaboration/coverage_hir_points.cpp
       src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
       src/elaboration/elaborate.cpp
@@ -1182,6 +1183,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_sdf_precedence.cpp
       src/app/application_sdf_reannotation.cpp
       src/app/application_sdf_control.cpp
+      src/app/application_sdf_session.cpp
       src/app/application_sdf_effective_archive.cpp
       src/app/application_sdf_observability.cpp
       src/runtime/sdf_scheduling.cpp

@@ -225,6 +225,7 @@ Simulation::Impl::current_standard_coverage_database()
                 interpreter->code_coverage_counter_overflowed(
                     point.point.counter),
                 false,
+                point.line,
             });
         }
     }

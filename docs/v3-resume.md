@@ -1,17 +1,140 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # fsim v3 clean resume
 
-**Current direction, 2026-09-28:** The user paused further under-15-second
-optimization trials with P96 retained at 32.579 seconds. Cleanup and local
-qualification passed: Release 454/454, focused Debug 7/7, and Tcl-off 6/6.
-The fresh [ten-case wall/RSS matrix](performance-matrix-2026-09-28.md)
-passed fsim/Vivado stimulus and correctness parity in every case. Each engine
-has one timed sample, so the seven-pair performance gate remains open.
-Matched short-case controls reproduced roughly 0.55–0.65 seconds more native
-setup/simulation time than frozen P8A; the user accepted those small
-regressions and asked to publish the table and prepare a commit. Do not
-commit or push yet. Use the `home-colin-projects-fsim` codebase-memory project
-for manual indexing.
+**CI repair and publication, 2026-09-28:** the user authorized inspection of
+the existing CI failures, fixes, commit and push, with no monitoring of the
+replacement run. Run `36437357263` at `6efa4c35` passed both Ubuntu lanes and
+failed both Windows lanes. Repairs configure the fetched Tcl library for all
+application tests (including direct `Tcl_Init`), keep stream-channel newlines
+consistent with transcript commands, resolve both sides of campaign fixture
+path identities, and clean the debugger fixture from a parent process after
+SystemC's intentionally retained DLLs unload. Archive upload now skips an
+archive-producing step that never ran. No substantive test assertion was
+removed; the blocked closure-matrix case retains its dependency.
+
+The cumulative all-target Release build and full suite pass 454/454 (140.94
+seconds); fresh affected Debug passes 7/7 (22.60 seconds). The performance
+parser passes 40 tests, including a new alias regression that fails against
+the prior implementation. Final evidence is under `build/ci-repair-20260928/`.
+The canonical full index was refreshed at `2026-09-28T20:33:45Z`, with 57,651
+nodes and 372,201 edges; the existing 325 partial files and one unusable include
+remain disclosed. This publication includes the completed simplification work
+and preserved handoff documents. Hosted Windows confirmation is unverified;
+do not monitor the new CI run. Batch 189 remains unstarted.
+
+**Simplification implementation complete, 2026-09-28:** the user-authorized
+plan has an explicit disposition for every selected requirement. S1, S2 and S3 are completed intermediate
+packets. S2 connects HDL coverage discovery, per-instance hits and persistence;
+Release 454/454, fresh affected Debug 14/14, Tcl-off 14/14 and final docs/package
+24/24 pass. Final-binary O0/O2 replays prove native execution for both covered
+leaf instances. Root independently verified the cumulative diff, six new-file
+hashes and unchanged staged patch against the S2 closure receipt. The canonical
+persistent graph was refreshed at `2026-09-28T17:49:31Z`.
+
+S3 SDF request integration is locally closed. Release has 454 distinct passing
+cases (451 in the full run plus three corrected diagnostic-count audit reruns),
+fresh Debug 8/8, Tcl-off 7/7 and final docs/package 24/24. Actual O0/O2 native
+producer resumes and source-free saved-snapshot replay are verified; no on-disk
+native object-cache hit is claimed for the tiny fixture. CLI min/typ/max,
+selectors, multi-file precedence, indexed provenance and real C/Tcl safe-point
+application/rollback have permanent regression coverage. Root independently
+verified `build/simplification-packet-3/closure-receipt.json`, cumulative/staged
+patches, 68 file identities and the final executable. The canonical persistent
+index generation is `2026-09-28T18:55:01Z`.
+
+S4 cache reproducibility is locally closed:
+final Release 454/454 (134.06 seconds), fresh Debug 16/16 (7.17 seconds) and
+Tcl-off 16/16 (7.07 seconds). Fixed-input SV/VHDL replay agrees across reversed
+catalog revision IDs; the native regression records two cold misses and two
+warm hits after reversal. SDF relative-path and body-limit boundary tests found
+by the full-plan audit also pass in all three configurations. The initial
+453/454 Release run exposed source/object specialization-key version mismatch;
+the consistent-version repair retains the five-path equality assertion. The
+secondary runner's initial empty regex match is archived as harness triage,
+not qualification.
+
+Final-binary SV/VHDL replay is recorded in
+`build/simplification-packet-4/reversed-id-final-comparison.json`.
+Final docs/package gates pass 24/24. Root verified the closure receipt, all
+22 referenced evidence hashes, 77 source/document identities, cumulative patch,
+Release executable and unchanged original staged patch. The canonical graph
+generation is `2026-09-28T19:40:10Z`; recorded partial-parse limits remain in
+the receipt. S5 used the same Sol/high execution and Luna/max review
+configuration. Its four candidate dispositions and requirement-by-requirement
+audit are in [the disposition](simplification-disposition.md). The baseline is
+frozen at `build/simplification-packet-5/baseline/manifest.json`; the current
+ThinLTO binary passes the full workload's 19 input, 75 fingerprint and 87
+correctness checks. Its separate single cold baseline is 33.186 seconds.
+Fresh attribution rejects the DCO-7 index for its small observed working set
+and T9's simple guard for changed observer-lifetime semantics. F2 passed dump,
+native-object and cache compatibility, but is rejected: its 33.134897-second
+cold screen has no useful measured change in the affected native stage. The
+trial is restored byte-identically. T3 is retained as a small existing-field
+constructor-lifetime simplification. Actual O0/O2 suppression-route and
+sequential-executor witnesses pass, and all 308 native objects remain identical.
+Its single cold screen is 34.137321 seconds, 0.950973 seconds above baseline;
+no speedup or performance-neutrality conclusion is supported. Final cumulative
+Release passes 454/454 (146.72 seconds), fresh Debug and Tcl-off pass 21/21
+each. Final docs/package gates, graph coverage, CTest surface comparison and
+exact source/evidence identities are recorded in
+`build/simplification-packet-5/closure-receipt.json`. The six-phase audit found
+no additional selected requirement. F2/T3 were not reindexed immediately before
+their screens; the final integrated refresh and this procedural deviation are
+recorded explicitly. No further implementation is scheduled by this plan.
+The final canonical graph generation is `2026-09-28T20:21:27Z`, with 57,647
+nodes, 372,200 edges, 325 partial files and one unusable include. All three
+T3 changed paths have matching metadata and no recorded parse issue.
+Batch 189 and the
+original staged handoff were preserved through S5 closure. The subsequent
+publication authorization is recorded above.
+
+**Current checkpoint, 2026-09-28, simplification packet S1:** The user-authorized
+first 20-change packet is implemented on top of `6efa4c35` in the uncommitted
+`codex/v3` worktree. Nine dead lowerer methods and the unused runtime
+assertion formatter were removed; retained container helpers, bounded
+effective-subtype cache accounting, and selected test helpers were
+consolidated. The two-validator CMake inventory parser prototype was
+rejected because it added 16 source lines without simplifying the obligations.
+No feature stack was retired. The [packet disposition](simplification-disposition.md)
+records source ownership and the separate coverage/SDF repair sequence;
+[the packet plan](simplification-implementation-plan.md) remains outside
+Batch 189 numbering.
+
+The full Release build and 454/454 CTests passed. Affected Debug and Tcl-off
+builds passed with 12 workers, followed by focused 9/9 and 8/8 tests.
+The separate SDF and VITAL pilot executables were then explicitly rebuilt
+in both secondary configurations; fresh pilot and semantic checks passed
+3/3 in each tree.
+Generated CTest names, commands, fixtures, labels, and execution metadata
+match the frozen 454/454/445 registrations. Fixed-library SV and VHDL
+artifact replays from byte-identical inputs have equal compiled payloads,
+cache objects, logical library rows, and behavior before and after the packet.
+Raw fresh-compile artifact names vary because workspace revision IDs are
+random and catalog order feeds the cache key; the controlled comparison and
+raw failures are both retained. The tiny `--engine compiled -O O0/O2` witness
+outputs match, but those runs did not materialize new native-cache objects,
+so they are behavior smoke rather than native-codegen proof. Exact commands,
+binary identities, hashes, case inventories, and logs are in
+[`closure-receipt.json`](../build/simplification-packet-1/closure-receipt.json).
+The final documentation, packaging, installed-public-contract, and related
+source/SCV/SystemC gate passed 24/24 after the disposition's final edit.
+Preserve the pre-existing staged performance handoff and other
+dirty worktree entries. Do not commit, push, monitor hosted CI, or restart
+the paused mixed-codec optimization loop under this packet. After local
+closure, the next bounded product work is the separately planned S2 HDL
+coverage integration; SDF repair follows its own gate.
+
+**Prior performance checkpoint, 2026-09-28:** The performance change set and ten-case
+matrix were committed and pushed as `6efa4c35` to `origin/codex/v3`.
+Release 454/454, focused Debug 7/7, Tcl-off 6/6, and final packaging/docs
+24/24 passed. All ten matrix cases passed stimulus and correctness parity;
+the user accepted the small short-case timing regressions. CI was not
+monitored, as requested. The under-15-second full mixed-codec loop remains
+paused and its target unmet (fresh matrix Wall 32.933 seconds; earlier P96
+32.579 seconds). Read the self-contained
+[performance resume instructions](performance-resume.md) for worker setup,
+exact commands, evidence, accepted/rejected work, and the next bounded action.
+Saving the handoff does not restart the loop or authorize another push.
 
 Verify the live branch, HEAD, tracking ref, and worktree first. Batch 188K is
 complete on `codex/v3`; its initial commit is `b54d7066`, followed by the

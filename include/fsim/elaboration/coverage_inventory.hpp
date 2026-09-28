@@ -135,6 +135,8 @@ enum class CoverageInventoryError : std::uint8_t {
     CounterOwnershipMismatch,
     NonCanonicalOrder,
     TotalPointMismatch,
+    InvalidProcess,
+    UnboundHit,
 };
 
 struct CoverageInventoryValidationResult {

@@ -3,40 +3,6 @@
 
 namespace fsim::tests::elaboration {
 
-namespace {
-
-void append_design(
-    fsim::frontend::ParsedDesign& destination,
-    fsim::frontend::ParsedDesign source) {
-    for (auto& unit : source.units) {
-        destination.units.push_back(std::move(unit));
-    }
-}
-
-const fsim::elaboration::SpecializationInfo&
-specialization(
-    const fsim::elaboration::ElaborationResult& result,
-    const std::string_view path) {
-    const auto found = std::ranges::find_if(
-        result.design->specializations(),
-        [&](const auto& candidate) {
-          return candidate.instance == path;
-        });
-    assert(found != result.design->specializations().end());
-    return *found;
-}
-
-fsim::elaboration::ElaborationResult elaborate_text(
-    const std::string_view name,
-    const std::string_view source,
-    const std::string_view top) {
-    const auto parsed = fsim::frontend::parse_text(
-        name, source, fsim::frontend::Language::Vhdl2008);
-    assert(parsed.ok());
-    return compile_and_elaborate(parsed.design, top);
-}
-
-}  // namespace
 
 void test_vhdl_component_defaults_and_revision();
 
@@ -92,7 +58,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(leaf.ok() && top.ok());
-    append_design(leaf.design, std::move(top.design));
+    append_component_design(leaf.design, std::move(top.design));
     const auto positive = compile_and_elaborate(
         leaf.design, "vhdl:work.component_top(rtl)");
     if (!positive.ok()) {
@@ -105,7 +71,7 @@ end architecture;
     for (const auto child : {
              "component_top.positional_child",
              "component_top.default_child"}) {
-        const auto& selected = specialization(positive, child);
+        const auto& selected = component_specialization(positive, child);
         assert(selected.unit == "vhdl:work.component_leaf(rtl)");
         assert(std::ranges::find(
                    selected.source_dependencies,
@@ -121,7 +87,7 @@ end architecture;
             "vhdl-component-binding-v7;name=component_leaf"));
     }
     assert(std::ranges::any_of(
-        specialization(
+        component_specialization(
             positive,
             "component_top.positional_child")
             .parameter_values,
@@ -130,7 +96,7 @@ end architecture;
               && value.second == "4";
         }));
     assert(std::ranges::any_of(
-        specialization(positive, "component_top.direct_open_child")
+        component_specialization(positive, "component_top.direct_open_child")
             .parameter_values,
         [](const auto& value) {
           return value.first == "entity_width"
@@ -150,7 +116,7 @@ end architecture;
             == positive.design->find_signal(child));
     }
 
-    const auto required_open = elaborate_text(
+    const auto required_open = elaborate_vhdl_component_text(
         "required_open_generic.vhd",
         R"(
 entity required_open_leaf is
@@ -173,7 +139,7 @@ end architecture;
     assert(has_diagnostic(
         required_open, "FSIM-ELAB-GENERIC-001"));
 
-    const auto invalid_packed_generics = elaborate_text(
+    const auto invalid_packed_generics = elaborate_vhdl_component_text(
         "invalid_packed_generics.vhd",
         R"(
 package packed_generic_types is
@@ -342,7 +308,7 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(visible_profiles.ok() && visible_hierarchy.ok());
-    append_design(
+    append_component_design(
         visible_profiles.design,
         std::move(visible_hierarchy.design));
     const auto visible_result =
@@ -366,21 +332,21 @@ end architecture;
              "visible_component_top.local_block.lexical_child",
              "visible_component_top.selected.generated_child"}) {
         assert(
-            specialization(visible_result, path).unit.ends_with(
+            component_specialization(visible_result, path).unit.ends_with(
                 "(rtl)"));
     }
     assert(
-        specialization(
+        component_specialization(
             visible_result,
             "visible_component_top.overload_child").unit
         == "vhdl:work.overload_leaf(second)");
     assert(
-        specialization(
+        component_specialization(
             visible_result,
             "visible_component_top.package_child").unit
         == "vhdl:work.package_leaf(rtl)");
     const auto& package_child =
-        specialization(
+        component_specialization(
             visible_result,
             "visible_component_top.package_child");
     assert(std::ranges::find(
@@ -530,10 +496,10 @@ end architecture;
         composite_types.ok()
         && composite_profiles.ok()
         && composite_hierarchy.ok());
-    append_design(
+    append_component_design(
         composite_types.design,
         std::move(composite_profiles.design));
-    append_design(
+    append_component_design(
         composite_types.design,
         std::move(composite_hierarchy.design));
     const auto composite_result =
@@ -549,7 +515,7 @@ end architecture;
     }
     assert(composite_result.ok());
     assert(
-        specialization(
+        component_specialization(
             composite_result,
             "composite_component_top.configured_child").unit
         == "vhdl:work.record_leaf(configured)");
@@ -560,11 +526,11 @@ end architecture;
              "composite_component_top.selected_child",
              "composite_component_top.overload_child"}) {
         assert(
-            specialization(composite_result, path).unit.ends_with(
+            component_specialization(composite_result, path).unit.ends_with(
                 "(rtl)"));
     }
     const auto& composite_child =
-        specialization(
+        component_specialization(
             composite_result,
             "composite_component_top.configured_child");
     for (const auto dependency : {
@@ -728,10 +694,10 @@ end architecture;
         nonvalue_template.ok()
         && nonvalue_leaf.ok()
         && nonvalue_top.ok());
-    append_design(
+    append_component_design(
         nonvalue_template.design,
         std::move(nonvalue_leaf.design));
-    append_design(
+    append_component_design(
         nonvalue_template.design,
         std::move(nonvalue_top.design));
     const auto nonvalue_result =
@@ -747,7 +713,7 @@ end architecture;
     }
     assert(nonvalue_result.ok());
     const auto& nonvalue_child =
-        specialization(
+        component_specialization(
             nonvalue_result,
             "nonvalue_component_top.configured_child");
     assert(
@@ -757,7 +723,7 @@ end architecture;
              "nonvalue_component_top.omitted_child",
              "nonvalue_component_top.explicit_child"}) {
         assert(
-            specialization(nonvalue_result, path).unit
+            component_specialization(nonvalue_result, path).unit
                 == "vhdl:work.nonvalue_component_leaf(configured)");
     }
     const auto nonvalue_identity = std::ranges::find_if(
@@ -791,7 +757,7 @@ end architecture;
                != nonvalue_child.source_dependencies.end());
     }
 
-    const auto hidden_sibling = elaborate_text(
+    const auto hidden_sibling = elaborate_vhdl_component_text(
         "hidden_sibling_component.vhd",
         R"(
 entity lexical_only_leaf is
@@ -823,7 +789,7 @@ end architecture;
     assert(has_diagnostic(
         hidden_sibling, "FSIM-ELAB-VHCOMP-001"));
 
-    const auto unmatched_overload = elaborate_text(
+    const auto unmatched_overload = elaborate_vhdl_component_text(
         "unmatched_component_overload.vhd",
         R"(
 entity overloaded_target is
@@ -851,7 +817,7 @@ end architecture;
     assert(has_diagnostic(
         unmatched_overload, "FSIM-ELAB-VHCOMP-012"));
 
-    const auto ambiguous_packages = elaborate_text(
+    const auto ambiguous_packages = elaborate_vhdl_component_text(
         "ambiguous_package_components.vhd",
         R"(
 package first_component_profiles is
@@ -885,7 +851,7 @@ end architecture;
     assert(has_diagnostic(
         ambiguous_packages, "FSIM-ELAB-VHCOMP-002"));
 
-    const auto nominal_profile_mismatch = elaborate_text(
+    const auto nominal_profile_mismatch = elaborate_vhdl_component_text(
         "composite_component_nominal_mismatch.vhd",
         R"(
 package first_record_types is
@@ -922,7 +888,7 @@ end architecture;
     assert(has_diagnostic(
         nominal_profile_mismatch, "FSIM-ELAB-VHCOMP-007"));
 
-    const auto nominal_actual_mismatch = elaborate_text(
+    const auto nominal_actual_mismatch = elaborate_vhdl_component_text(
         "composite_component_actual_mismatch.vhd",
         R"(
 package component_record_types is
@@ -957,7 +923,7 @@ end architecture;
     assert(has_diagnostic(
         nominal_actual_mismatch, "FSIM-ELAB-BIND-057"));
 
-    const auto composite_default = elaborate_text(
+    const auto composite_default = elaborate_vhdl_component_text(
         "composite_component_default.vhd",
         R"(
 package component_default_types is
@@ -987,7 +953,7 @@ end architecture;
         "vhdl:work.composite_default_top(rtl)");
     assert(composite_default.ok());
 
-    const auto missing_component_type = elaborate_text(
+    const auto missing_component_type = elaborate_vhdl_component_text(
         "missing_component_type.vhd",
         R"(
 entity missing_component_type_leaf is
@@ -1012,7 +978,7 @@ end architecture;
     assert(has_diagnostic(
         missing_component_type, "FSIM-ELAB-VHTYPE-001"));
 
-    const auto missing_nonvalue_default = elaborate_text(
+    const auto missing_nonvalue_default = elaborate_vhdl_component_text(
         "component_missing_nonvalue_default.vhd",
         R"(
 entity component_missing_nonvalue_leaf is
@@ -1042,7 +1008,7 @@ end architecture;
         missing_nonvalue_default,
         "FSIM-ELAB-VHCOMP-014"));
 
-    const auto nonvalue_profile_mismatch = elaborate_text(
+    const auto nonvalue_profile_mismatch = elaborate_vhdl_component_text(
         "component_nonvalue_profile_mismatch.vhd",
         R"(
 entity component_nonvalue_profile_leaf is
@@ -1077,7 +1043,7 @@ end architecture;
         nonvalue_profile_mismatch,
         "FSIM-ELAB-VHCOMP-006"));
 
-    const auto wrong_nonvalue_kind = elaborate_text(
+    const auto wrong_nonvalue_kind = elaborate_vhdl_component_text(
         "component_wrong_nonvalue_kind.vhd",
         R"(
 entity component_wrong_nonvalue_leaf is
@@ -1108,7 +1074,7 @@ end architecture;
         wrong_nonvalue_kind,
         "FSIM-ELAB-GENTYPE-003"));
 
-    const auto missing_package_actual = elaborate_text(
+    const auto missing_package_actual = elaborate_vhdl_component_text(
         "component_missing_package_actual.vhd",
         R"(
 package missing_package_template is
@@ -1140,7 +1106,7 @@ end architecture;
         missing_package_actual,
         "FSIM-ELAB-VHCOMP-008"));
 
-    const auto package_profile_mismatch = elaborate_text(
+    const auto package_profile_mismatch = elaborate_vhdl_component_text(
         "component_package_profile_mismatch.vhd",
         R"(
 package first_component_template is
@@ -1179,7 +1145,7 @@ end architecture;
         package_profile_mismatch,
         "FSIM-ELAB-VHCOMP-006"));
 
-    const auto missing_declaration = elaborate_text(
+    const auto missing_declaration = elaborate_vhdl_component_text(
         "missing_component_declaration.vhd",
         R"(
 entity undeclared_leaf is
@@ -1228,7 +1194,7 @@ end architecture;
     assert(has_diagnostic(
         duplicate_result, "FSIM-ELAB-VHCOMP-002"));
 
-    const auto missing_target = elaborate_text(
+    const auto missing_target = elaborate_vhdl_component_text(
         "missing_component_target.vhd",
         R"(
 entity missing_component_target is
@@ -1245,7 +1211,7 @@ end architecture;
     assert(has_diagnostic(
         missing_target, "FSIM-ELAB-VHCOMP-003"));
 
-    const auto ambiguous_architecture = elaborate_text(
+    const auto ambiguous_architecture = elaborate_vhdl_component_text(
         "ambiguous_component_architecture.vhd",
         R"(
 entity ambiguous_leaf is
@@ -1270,7 +1236,7 @@ end architecture;
     assert(has_diagnostic(
         ambiguous_architecture, "FSIM-ELAB-VHCOMP-005"));
 
-    const auto ambiguous_entity = elaborate_text(
+    const auto ambiguous_entity = elaborate_vhdl_component_text(
         "ambiguous_component_entity.vhd",
         R"(
 entity duplicate_leaf is
@@ -1294,7 +1260,7 @@ end architecture;
     assert(has_diagnostic(
         ambiguous_entity, "FSIM-ELAB-VHCOMP-005"));
 
-    const auto generic_profile = elaborate_text(
+    const auto generic_profile = elaborate_vhdl_component_text(
         "incompatible_component_generic.vhd",
         R"(
 entity incompatible_generic_leaf is
@@ -1318,7 +1284,7 @@ end architecture;
     assert(has_diagnostic(
         generic_profile, "FSIM-ELAB-VHCOMP-006"));
 
-    const auto port_profile = elaborate_text(
+    const auto port_profile = elaborate_vhdl_component_text(
         "incompatible_component_port.vhd",
         R"(
 entity incompatible_port_leaf is
@@ -1343,7 +1309,7 @@ end architecture;
     assert(has_diagnostic(
         port_profile, "FSIM-ELAB-VHCOMP-007"));
 
-    const auto invalid_maps = elaborate_text(
+    const auto invalid_maps = elaborate_vhdl_component_text(
         "invalid_component_maps.vhd",
         R"(
 entity mapped_leaf is
@@ -1374,7 +1340,7 @@ end architecture;
     assert(has_diagnostic(
         invalid_maps, "FSIM-ELAB-VHCOMP-009"));
 
-    const auto invalid_configuration_map = elaborate_text(
+    const auto invalid_configuration_map = elaborate_vhdl_component_text(
         "invalid_component_configuration_map.vhd",
         R"(
 entity configured_profile_leaf is
@@ -1407,7 +1373,7 @@ end architecture;
         invalid_configuration_map,
         "FSIM-ELAB-VHCOMP-010"));
 
-    const auto defaulted_ports = elaborate_text(
+    const auto defaulted_ports = elaborate_vhdl_component_text(
         "component_port_defaults.vhd",
         R"(
 entity defaulted_port_leaf is
@@ -1454,7 +1420,7 @@ end architecture;
              "defaulted_port_top.omitted_child",
              "defaulted_port_top.open_child"}) {
         const auto& selected =
-            specialization(defaulted_ports, child);
+            component_specialization(defaulted_ports, child);
         const auto identity = std::ranges::find_if(
             selected.parameter_identity_values,
             [](const auto& value) {
@@ -1495,7 +1461,7 @@ end architecture;
             == "00000000000000000000000000001101");
     }
 
-    const auto expression_ports = elaborate_text(
+    const auto expression_ports = elaborate_vhdl_component_text(
         "component_expression_ports.vhd",
         R"(
 entity expression_port_leaf is
@@ -1548,7 +1514,7 @@ end architecture;
                == expected);
     }
 
-    const auto dynamic_expression_port = elaborate_text(
+    const auto dynamic_expression_port = elaborate_vhdl_component_text(
         "dynamic_expression_port.vhd",
         R"(
 entity dynamic_expression_leaf is
@@ -1573,7 +1539,7 @@ end architecture;
         "vhdl:work.dynamic_expression_top(rtl)");
     assert(dynamic_expression_port.ok());
 
-    const auto mismatched_qualification = elaborate_text(
+    const auto mismatched_qualification = elaborate_vhdl_component_text(
         "mismatched_port_qualification.vhd",
         R"(
 entity qualified_leaf is
@@ -1595,7 +1561,7 @@ end architecture;
     assert(has_diagnostic(
         mismatched_qualification, "FSIM-ELAB-VHPORT-001"));
 
-    const auto invalid_output_expression = elaborate_text(
+    const auto invalid_output_expression = elaborate_vhdl_component_text(
         "invalid_output_expression.vhd",
         R"(
 entity invalid_output_leaf is
@@ -1618,7 +1584,7 @@ end architecture;
     assert(has_diagnostic(
         invalid_output_expression, "FSIM-ELAB-VHPORT-002"));
 
-    const auto composite_defaults = elaborate_text(
+    const auto composite_defaults = elaborate_vhdl_component_text(
         "component_composite_defaults.vhd",
         R"(
 package component_default_types is
@@ -1685,7 +1651,7 @@ end architecture;
     require_initial(
         "composite_default_top.child.entity_lane", "1000");
 
-    const auto visible_default = elaborate_text(
+    const auto visible_default = elaborate_vhdl_component_text(
         "component_visible_default.vhd",
         R"(
 package visible_default_profiles is
@@ -1734,7 +1700,7 @@ end architecture;
             .to_msb_string()
         == "00000000000000000000000000000101");
 
-    const auto dynamic_default = elaborate_text(
+    const auto dynamic_default = elaborate_vhdl_component_text(
         "component_dynamic_default.vhd",
         R"(
 entity dynamic_default_leaf is
@@ -1759,7 +1725,7 @@ end architecture;
     assert(has_diagnostic(
         dynamic_default, "FSIM-ELAB-VHCOMP-013"));
 
-    const auto illegal_open = elaborate_text(
+    const auto illegal_open = elaborate_vhdl_component_text(
         "component_required_open.vhd",
         R"(
 entity required_open_leaf is
@@ -1784,7 +1750,7 @@ end architecture;
     assert(has_diagnostic(
         illegal_open, "FSIM-ELAB-VHCOMP-009"));
 
-    const auto direct_missing_input = elaborate_text(
+    const auto direct_missing_input = elaborate_vhdl_component_text(
         "direct_required_input.vhd",
         R"(
 entity direct_required_leaf is
@@ -1809,7 +1775,7 @@ end architecture;
     assert(has_diagnostic(
         direct_missing_input, "FSIM-ELAB-BIND-027"));
 
-    const auto open_output_modes = elaborate_text(
+    const auto open_output_modes = elaborate_vhdl_component_text(
         "open_output_modes.vhd",
         R"(
 entity open_mode_leaf is
