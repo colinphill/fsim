@@ -81,7 +81,8 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     std::span<const runtime::simir::ValueKind> signal_value_kinds,
     std::span<const runtime::simir::ResolutionKind> signal_resolutions,
     std::shared_ptr<const SignalRemap> signal_remap,
-    const std::optional<runtime::simir::ProcessId> generated_process)
+    const std::optional<runtime::simir::ProcessId> generated_process,
+    ExecutorHotCellPool* hot_cell_pool)
     : jit_(jit)
     , binding_(jit.bind(handle))
     , process_(process)
@@ -107,6 +108,8 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , stable_direct_update_suppression_allowed_(
           std::getenv("FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION")
               == nullptr)
+    , validated_static_sensitivity_(!process.static_sensitivity.empty())
+    , has_container_registers_(!process.container_register_types.empty())
 {
     if (operation_count_ != process_.operations.size()) {
         throw compiler::LlvmJitError(
@@ -132,6 +135,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
         process.container_register_types.size(), invalid_container_object);
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
+    initialize_hot_cell(hot_cell_pool);
     initialize_direct_read_signals();
     initialize_code_coverage_hit_counters();
     initialize_direct_update_slots();
@@ -178,6 +182,8 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     , container_object_aliases_(storage_->container_object_aliases)
     , active_container_object_aliases_(
           storage_->active_container_object_aliases)
+    , validated_static_sensitivity_(!process.static_sensitivity.empty())
+    , has_container_registers_(!process.container_register_types.empty())
 {
     if (operation_count_ != process_.operations.size()) {
         throw compiler::LlvmJitError(
@@ -185,6 +191,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     }
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
+    initialize_hot_cell(nullptr);
     initialize_direct_read_signals();
     initialize_code_coverage_hit_counters();
     initialize_direct_update_slots();
@@ -230,10 +237,38 @@ void LlvmProcessExecutor::initialize_direct_read_signals()
     }
 }
 
+void LlvmProcessExecutor::initialize_hot_cell(ExecutorHotCellPool* pool)
+{
+    if (pool != nullptr && layout_.direct_update_signals.size() == 1U) {
+        const auto source = layout_.direct_update_signals.front();
+        if (source < signal_widths_.size()) {
+            const auto width = signal_widths_[source];
+            const auto actual = remap_signal(
+                signal_remap_, dense_signal_remap_base_,
+                dense_signal_remap_, source);
+            const auto kind = actual < signal_value_kinds_.size()
+                ? signal_value_kinds_[actual]
+                : runtime::simir::ValueKind::logic4;
+            if (width != 0U && width <= 128U
+                && kind == runtime::simir::ValueKind::logic4) {
+                hot_cell_ = pool->acquire();
+            }
+        }
+    }
+    if (hot_cell_) {
+        prepared_member_ = &hot_cell_->prepared;
+        owned_update_slot_ = &hot_cell_->owned;
+    } else {
+        fallback_pure_wave_ = std::make_unique<PureWaveFallbackStorage>();
+        prepared_member_ = &fallback_pure_wave_->prepared;
+        owned_update_slot_ = &fallback_pure_wave_->owned;
+    }
+}
+
 void LlvmProcessExecutor::initialize_direct_update_slots()
 {
     direct_update_signals_.clear();
-    direct_update_slot_views_.clear();
+    direct_update_slot_views_storage_.clear();
     buffered_logic9_update_views_.clear();
     direct_update_signals_.reserve(layout_.direct_update_signals.size());
     std::vector<std::uint32_t> widths;
@@ -245,18 +280,41 @@ void LlvmProcessExecutor::initialize_direct_update_slots()
         direct_update_signals_.push_back(actual);
         widths.push_back(signal_widths_[signal]);
     }
-    direct_update_slots_.resize(direct_update_signals_.size());
-    direct_update_active_words_.assign(
-        (direct_update_slots_.size() + 63U) / 64U, UINT64_C(0));
+    if (hot_cell_) {
+        direct_update_slots_ = { &hot_cell_->slot, 1U };
+        direct_update_active_words_ = {
+            &hot_cell_->active_word, 1U
+        };
+    } else {
+        direct_update_slots_storage_.resize(direct_update_signals_.size());
+        direct_update_active_words_storage_.assign(
+            (direct_update_slots_storage_.size() + 63U) / 64U, UINT64_C(0));
+        direct_update_slots_ = direct_update_slots_storage_;
+        direct_update_active_words_ = direct_update_active_words_storage_;
+    }
     std::size_t wide_word_count { };
     for (const auto width : widths) {
         if (width > 64U) {
             wide_word_count += (static_cast<std::size_t>(width) + 63U) / 64U;
         }
     }
-    direct_update_wide_aval_.resize(wide_word_count);
-    direct_update_wide_bval_.resize(wide_word_count);
-    direct_update_wide_mask_.resize(wide_word_count);
+    std::span<std::uint64_t> wide_aval;
+    std::span<std::uint64_t> wide_bval;
+    std::span<std::uint64_t> wide_mask;
+    if (hot_cell_) {
+        if (wide_word_count != 0U) {
+            wide_aval = hot_cell_->wide_aval;
+            wide_bval = hot_cell_->wide_bval;
+            wide_mask = hot_cell_->wide_mask;
+        }
+    } else {
+        direct_update_wide_aval_.resize(wide_word_count);
+        direct_update_wide_bval_.resize(wide_word_count);
+        direct_update_wide_mask_.resize(wide_word_count);
+        wide_aval = direct_update_wide_aval_;
+        wide_bval = direct_update_wide_bval_;
+        wide_mask = direct_update_wide_mask_;
+    }
     std::size_t wide_offset { };
     for (std::size_t index = 0; index < widths.size(); ++index) {
         auto& slot = direct_update_slots_[index];
@@ -267,14 +325,17 @@ void LlvmProcessExecutor::initialize_direct_update_slots()
         if (width <= 64U) {
             continue;
         }
-        slot.wide_aval = direct_update_wide_aval_.data() + wide_offset;
-        slot.wide_bval = direct_update_wide_bval_.data() + wide_offset;
-        slot.wide_mask = direct_update_wide_mask_.data() + wide_offset;
+        slot.wide_aval = wide_aval.data() + wide_offset;
+        slot.wide_bval = wide_bval.data() + wide_offset;
+        slot.wide_mask = wide_mask.data() + wide_offset;
         wide_offset += slot.word_count;
     }
-    direct_update_slot_views_.reserve(direct_update_slots_.size());
+    if (!hot_cell_) {
+        direct_update_slot_views_storage_.reserve(direct_update_slots_.size());
+    }
     buffered_logic9_update_views_.reserve(direct_update_slots_.size());
-    for (std::size_t index = 0; index < direct_update_slots_.size(); ++index) {
+    for (std::size_t index = 0;
+         index < direct_update_slots_.size(); ++index) {
         auto& slot = direct_update_slots_[index];
         const auto signal = direct_update_signals_[index];
         const auto kind = signal < signal_value_kinds_.size()
@@ -287,7 +348,7 @@ void LlvmProcessExecutor::initialize_direct_update_slots()
             continue;
         }
         const bool wide = slot.width > 64U;
-        direct_update_slot_views_.push_back({
+        const runtime::simir::ProcessUpdateSlotView view {
             signal,
             slot.width,
             slot.word_count,
@@ -295,8 +356,16 @@ void LlvmProcessExecutor::initialize_direct_update_slots()
             wide ? slot.wide_aval : &slot.aval,
             wide ? slot.wide_bval : &slot.bval,
             wide ? slot.wide_mask : &slot.mask
-        });
+        };
+        if (hot_cell_) {
+            hot_cell_->slot_view = view;
+        } else {
+            direct_update_slot_views_storage_.push_back(view);
+        }
     }
+    direct_update_slot_views_ = hot_cell_
+        ? std::span { &hot_cell_->slot_view, 1U }
+        : std::span { direct_update_slot_views_storage_ };
 }
 
 void LlvmProcessExecutor::initialize_buffered_logic9_updates()
@@ -439,6 +508,7 @@ LlvmProcessExecutor::fork_clone(
 void LlvmProcessExecutor::redirect(
     const runtime::simir::InstructionIndex instruction)
 {
+    invalidate_pure_wave_member_binding();
     frame_.program_counter = instruction;
     frame_.state = FSIM_JIT_FRAME_STATE_READY;
     frame_.last_instruction = FSIM_JIT_INVALID_INSTRUCTION;

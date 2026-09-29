@@ -161,21 +161,103 @@ void Interpreter::Impl::demote_owned_driver(const SignalId signal)
         [&](DriverRecord& record) {
             record.value = owned_driver_value(record.process, signal);
         });
+    std::vector<PendingDriverCommit> materialized;
+    materialized.reserve(staged.size());
+    auto touched_masked_owners = std::vector<std::uint8_t>(
+        processes.size(), 0U);
     for (auto& update : staged) {
         if (!update.owned_composite) {
+            materialized.push_back(std::move(update));
+            continue;
+        }
+        if (update.fused_masked) {
+            if (!update.fused_cohort
+                || *update.fused_cohort
+                    >= fused_masked_pending_touches.size()) {
+                throw std::logic_error {
+                    "masked owned update has no original owners"
+                };
+            }
+            const auto& touch = fused_masked_pending_touches[
+                *update.fused_cohort];
+            const auto& plan = fused_masked_regions.at(touch.region_id);
+            const auto& phase = owned.phase_active
+                ? owned.phase : owned.committed;
+            for (std::size_t index = 0U;
+                 index < plan.members.size(); ++index) {
+                const auto active = index < 64U
+                    ? (touch.active_low >> index) & UINT64_C(1)
+                    : (touch.active_high[(index - 64U) / 64U]
+                        >> ((index - 64U) % 64U)) & UINT64_C(1);
+                if (!active) {
+                    continue;
+                }
+                const auto id = plan.members[index].process;
+                if (touched_masked_owners[id]) {
+                    continue;
+                }
+                touched_masked_owners[id] = 1U;
+                const auto& span = owned_driver_spans.at(id);
+                if (span.signal != signal) {
+                    continue;
+                }
+                const auto old_bits = owned.committed.extract_bits(
+                    span.offset, span.width);
+                const auto new_bits = phase.extract_bits(
+                    span.offset, span.width);
+                if (old_bits == new_bits) {
+                    continue;
+                }
+                auto value = PackedLogic4 {
+                    owned.committed.width(), Logic4::z
+                };
+                value.insert_bits(new_bits, span.offset);
+                materialized.push_back(PendingDriverCommit {
+                    id, std::move(value), false
+                });
+            }
+            continue;
+        }
+        if (update.fused_cohort) {
+            const auto& plan = fused_static_cohorts.at(*update.fused_cohort);
+            const auto& phase = owned.phase_active
+                ? owned.phase : owned.committed;
+            for (const auto id : plan.candidate.members) {
+                const auto& span = owned_driver_spans.at(id);
+                if (span.signal != signal) {
+                    continue;
+                }
+                const auto old_bits = owned.committed.extract_bits(
+                    span.offset, span.width);
+                const auto new_bits = phase.extract_bits(
+                    span.offset, span.width);
+                if (old_bits == new_bits) {
+                    continue;
+                }
+                auto value = PackedLogic4 {
+                    owned.committed.width(), Logic4::z
+                };
+                value.insert_bits(new_bits, span.offset);
+                materialized.push_back(PendingDriverCommit {
+                    id, std::move(value), false
+                });
+            }
             continue;
         }
         if (!update.driver) {
             throw std::logic_error { "owned update has no process" };
         }
         const auto& span = owned_driver_spans.at(*update.driver);
-        update.value = PackedLogic4 {
+        auto value = PackedLogic4 {
             owned.committed.width(), Logic4::z
         };
-        update.value.insert_bits(owned.phase.extract_bits(
+        value.insert_bits(owned.phase.extract_bits(
             span.offset, span.width), span.offset);
-        update.owned_composite = false;
+        materialized.push_back(PendingDriverCommit {
+            update.driver, std::move(value), false
+        });
     }
+    staged = std::move(materialized);
     owned.active = false;
     owned.phase_active = false;
 }
@@ -188,22 +270,94 @@ void Interpreter::Impl::demote_all_owned_drivers()
     }
 }
 
+std::optional<PreparedOwnedUpdateSlot>
+Interpreter::Impl::prepare_owned_update_slot(
+    const ProcessUpdateSlotBatch& batch) const
+{
+    if (batch.slots.size() != 1U || batch.active_words.size() != 1U
+        || batch.active_words[0] != 0U || !module_paths.empty()
+        || has_bidirectional_switches || process_profile_enabled
+        || update_profile_enabled || batch.process >= owned_driver_spans.size()) {
+        return std::nullopt;
+    }
+    const auto& slot = batch.slots[0];
+    const auto signal = slot.signal;
+    if (signal >= signals.size() || slot.width == 0U
+        || slot.width > 128U
+        || slot.word_count == 0U || slot.word_count > 2U
+        || slot.word_count != (slot.width + 63U) / 64U
+        || slot.active == nullptr || slot.aval == nullptr
+        || slot.bval == nullptr || slot.mask == nullptr
+        || *slot.active != 0U || !owned_driver_active(signal)
+        || direct_single_driver_record(signal) != nullptr
+        || signals[signal].systemverilog_scalar
+            != SystemVerilogScalarKind::None
+        || signals[signal].value_kind == ValueKind::logic9
+        || signals[signal].resolution == ResolutionKind::none
+        || signal_transaction_observed[signal]
+        || owned_driver_spans[batch.process].signal != signal
+        || owned_driver_composites[signal].committed.width()
+            != slot.width) {
+        return std::nullopt;
+    }
+    const auto& span = owned_driver_spans[batch.process];
+    PreparedOwnedUpdateSlot prepared {
+        this, batch.process, signal, slot.width, slot.word_count, { }
+    };
+    for (std::uint32_t word = 0U; word < slot.word_count; ++word) {
+        if (slot.mask[word] != 0U) {
+            return std::nullopt;
+        }
+        const auto begin = static_cast<std::size_t>(word) * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        const auto own_begin = std::max<std::size_t>(begin, span.offset);
+        const auto own_end = std::min<std::size_t>(
+            begin + size,
+            static_cast<std::size_t>(span.offset) + span.width);
+        if (own_begin >= own_end) {
+            continue;
+        }
+        const auto count = own_end - own_begin;
+        prepared.own_masks[word] = count == 64U
+            ? std::numeric_limits<std::uint64_t>::max()
+            : ((UINT64_C(1) << count) - UINT64_C(1))
+                << (own_begin - begin);
+    }
+    return prepared;
+}
+
 Interpreter::Impl::OwnedDriverStage
 Interpreter::Impl::stage_owned_driver_slot(
     const ProcessId process, const ProcessUpdateSlotView& slot)
+{
+    return stage_owned_driver_slot_impl(process, slot, nullptr);
+}
+
+Interpreter::Impl::OwnedDriverStage
+Interpreter::Impl::stage_prepared_owned_update_slot(
+    const PreparedOwnedUpdateSlot& prepared,
+    const ProcessUpdateSlotView& slot)
+{
+    return stage_owned_driver_slot_impl(prepared.process, slot, &prepared);
+}
+
+Interpreter::Impl::OwnedDriverStage
+Interpreter::Impl::stage_owned_driver_slot_impl(
+    const ProcessId process, const ProcessUpdateSlotView& slot,
+    const PreparedOwnedUpdateSlot* prepared)
 {
     const auto signal = slot.signal;
     if (!owned_driver_active(signal)) {
         return OwnedDriverStage::unsupported;
     }
-    if (process >= owned_driver_spans.size()
-        || owned_driver_spans[process].signal != signal
+    if ((prepared == nullptr
+            && (process >= owned_driver_spans.size()
+                || owned_driver_spans[process].signal != signal))
         || slot.width != owned_driver_composites[signal].committed.width()
         || signal_transaction_observed[signal]) {
         demote_owned_driver(signal);
         return OwnedDriverStage::unsupported;
     }
-    const auto& span = owned_driver_spans[process];
     auto& owned = owned_driver_composites[signal];
     const auto& current = owned.phase_active
         ? owned.phase : owned.committed;
@@ -216,17 +370,23 @@ Interpreter::Impl::stage_owned_driver_slot(
             ? std::numeric_limits<std::uint64_t>::max()
             : (UINT64_C(1) << word_size) - UINT64_C(1);
         const auto mask = slot.mask[word] & valid_mask;
-        const auto own_begin = std::max<std::size_t>(word_begin, span.offset);
-        const auto own_end = std::min<std::size_t>(
-            word_begin + word_size,
-            static_cast<std::size_t>(span.offset) + span.width);
         std::uint64_t own_mask { };
-        if (own_begin < own_end) {
-            const auto count = own_end - own_begin;
-            own_mask = count == 64U
-                ? std::numeric_limits<std::uint64_t>::max()
-                : ((UINT64_C(1) << count) - UINT64_C(1))
-                    << (own_begin - word_begin);
+        if (prepared != nullptr) {
+            own_mask = prepared->own_masks[word];
+        } else {
+            const auto& span = owned_driver_spans[process];
+            const auto own_begin = std::max<std::size_t>(
+                word_begin, span.offset);
+            const auto own_end = std::min<std::size_t>(
+                word_begin + word_size,
+                static_cast<std::size_t>(span.offset) + span.width);
+            if (own_begin < own_end) {
+                const auto count = own_end - own_begin;
+                own_mask = count == 64U
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : ((UINT64_C(1) << count) - UINT64_C(1))
+                        << (own_begin - word_begin);
+            }
         }
         if ((mask & ~own_mask) != 0U) {
             demote_owned_driver(signal);
@@ -269,6 +429,193 @@ Interpreter::Impl::stage_owned_driver_slot(
         });
     }
     return OwnedDriverStage::changed;
+}
+
+Interpreter::Impl::OwnedDriverStage
+Interpreter::Impl::stage_fused_owned_slot(
+    const std::size_t cohort, const ProcessUpdateSlotView& slot)
+{
+    if (!valid_fused_owned_slot(cohort, slot)) {
+        return OwnedDriverStage::unsupported;
+    }
+    auto& owned = owned_driver_composites[slot.signal];
+    const auto& current = owned.phase_active
+        ? owned.phase : owned.committed;
+    bool changed = false;
+    for (std::size_t word = 0U; word < slot.word_count; ++word) {
+        const auto begin = word * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        const auto valid = size == 64U
+            ? std::numeric_limits<std::uint64_t>::max()
+            : (UINT64_C(1) << size) - UINT64_C(1);
+        const auto mask = slot.mask[word] & valid;
+        changed |= !current.matches_masked_word(Logic4Word {
+            size, slot.aval[word], slot.bval[word]
+        }, mask, begin);
+    }
+    if (!changed) {
+        return OwnedDriverStage::unchanged;
+    }
+    if (!owned.phase_active) {
+        owned.phase = owned.committed;
+        owned.phase_active = true;
+    }
+    for (std::size_t word = 0U; word < slot.word_count; ++word) {
+        const auto begin = word * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        owned.phase.insert_masked_word(Logic4Word {
+            size, slot.aval[word], slot.bval[word]
+        }, slot.mask[word], begin);
+    }
+    auto& staged = driver_update_scratch[slot.signal];
+    if (staged.empty()) {
+        driver_update_signals.push_back(slot.signal);
+    }
+    staged.push_back(PendingDriverCommit {
+        std::nullopt, PackedLogic4 { }, true, cohort
+    });
+    if (!resolved_update_marked[slot.signal]) {
+        resolved_update_marked[slot.signal] = true;
+        if (private_signal_bridge_active(slot.signal)) {
+            if (private_owned_update_marked.size() < signals.size()) {
+                private_owned_update_marked.resize(signals.size());
+            }
+            private_owned_update_marked[slot.signal] = true;
+            private_owned_update_signals.push_back(slot.signal);
+        } else {
+            resolved_update_signals.push_back(slot.signal);
+        }
+    }
+    return OwnedDriverStage::changed;
+}
+
+bool Interpreter::Impl::valid_fused_masked_owned_slot(
+    const std::size_t region_id, const ProcessUpdateSlotView& slot,
+    const std::span<const std::uint64_t> active_members,
+    const std::span<const std::uint64_t> selected_write_mask) const
+{
+    if (region_id >= fused_masked_regions.size()
+        || fused_masked_regions[region_id].candidate.projected
+        || fused_masked_regions[region_id].candidate.outputs.empty()
+        || slot.signal
+            != fused_masked_regions[region_id].candidate.outputs.front()
+        || !owned_driver_active(slot.signal)
+        || slot.width != signals[slot.signal].initial_value.width()
+        || slot.word_count != selected_write_mask.size()
+        || slot.active == nullptr || *slot.active == 0U
+        || slot.aval == nullptr || slot.bval == nullptr
+        || slot.mask == nullptr || active_members.empty()) {
+        return false;
+    }
+    if (signal_transaction_observed[slot.signal]
+        || active_members.size()
+            != fused_masked_regions[region_id].activation_words.size()) {
+        return false;
+    }
+    for (std::size_t word = 0U; word < slot.word_count; ++word) {
+        const auto begin = word * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        const auto valid = size == 64U
+            ? std::numeric_limits<std::uint64_t>::max()
+            : (UINT64_C(1) << size) - UINT64_C(1);
+        if ((slot.mask[word] & valid) != selected_write_mask[word]
+            || (slot.mask[word] & ~valid) != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+Interpreter::Impl::OwnedDriverStage
+Interpreter::Impl::stage_fused_masked_owned_slot(
+    const std::size_t region_id, const ProcessUpdateSlotView& slot,
+    const std::span<const std::uint64_t> active_members,
+    const std::span<const std::uint64_t> selected_write_mask)
+{
+    if (!valid_fused_masked_owned_slot(
+            region_id, slot, active_members, selected_write_mask)) {
+        return OwnedDriverStage::unsupported;
+    }
+    auto& owned = owned_driver_composites[slot.signal];
+    const auto& current = owned.phase_active
+        ? owned.phase : owned.committed;
+    bool changed { };
+    for (std::size_t word = 0U; word < slot.word_count; ++word) {
+        const auto begin = word * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        changed |= !current.matches_masked_word(Logic4Word {
+            size, slot.aval[word], slot.bval[word]
+        }, slot.mask[word], begin);
+    }
+    if (!changed) {
+        return OwnedDriverStage::unchanged;
+    }
+    if (!owned.phase_active) {
+        owned.phase = owned.committed;
+        owned.phase_active = true;
+    }
+    for (std::size_t word = 0U; word < slot.word_count; ++word) {
+        const auto begin = word * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        owned.phase.insert_masked_word(Logic4Word {
+            size, slot.aval[word], slot.bval[word]
+        }, slot.mask[word], begin);
+    }
+    auto touch = FusedMaskedPendingTouch { };
+    touch.region_id = region_id;
+    touch.active_low = active_members.front();
+    if (active_members.size() > 1U) {
+        touch.active_high.assign(active_members.begin() + 1U,
+            active_members.end());
+    }
+    const auto touch_index = fused_masked_pending_touches.size();
+    fused_masked_pending_touches.push_back(std::move(touch));
+    auto& staged = driver_update_scratch[slot.signal];
+    if (staged.empty()) {
+        driver_update_signals.push_back(slot.signal);
+    }
+    auto marker = PendingDriverCommit {
+        std::nullopt, PackedLogic4 { }, true, touch_index
+    };
+    marker.fused_masked = true;
+    staged.push_back(std::move(marker));
+    if (!resolved_update_marked[slot.signal]) {
+        resolved_update_marked[slot.signal] = true;
+        resolved_update_signals.push_back(slot.signal);
+    }
+    return OwnedDriverStage::changed;
+}
+
+bool Interpreter::Impl::valid_fused_owned_slot(
+    const std::size_t cohort, const ProcessUpdateSlotView& slot) const
+{
+    if (cohort >= fused_static_cohorts.size()) {
+        return false;
+    }
+    const auto& plan = fused_static_cohorts[cohort];
+    const auto found = std::ranges::find(
+        plan.outputs, slot.signal, &FusedStaticCohortPlan::Output::signal);
+    if (found == plan.outputs.end() || !owned_driver_active(slot.signal)
+        || slot.width != found->width
+        || slot.word_count != found->owner_masks.size()
+        || slot.active == nullptr || slot.aval == nullptr
+        || slot.bval == nullptr || slot.mask == nullptr
+        || *slot.active == 0U
+        || signal_transaction_observed[slot.signal]) {
+        return false;
+    }
+    for (std::size_t word = 0U; word < slot.word_count; ++word) {
+        const auto begin = word * 64U;
+        const auto size = std::min<std::size_t>(64U, slot.width - begin);
+        const auto valid = size == 64U
+            ? std::numeric_limits<std::uint64_t>::max()
+            : (UINT64_C(1) << size) - UINT64_C(1);
+        if ((slot.mask[word] & valid) != found->owner_masks[word]
+            || (slot.mask[word] & ~valid) != 0U) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool Interpreter::Impl::stage_owned_driver_pending(PendingUpdate& pending)

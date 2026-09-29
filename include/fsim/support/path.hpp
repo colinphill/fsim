@@ -29,6 +29,32 @@ namespace fsim::support {
       encoded.size()};
 }
 
+/// Use an absolute extended-length path at Windows filesystem I/O seams.
+/// Keep public path spellings and serialized artifact names unchanged.
+[[nodiscard]] inline std::filesystem::path path_for_native_io(
+    const std::filesystem::path& value) {
+#if defined(_WIN32)
+  const auto& spelling = value.native();
+  if (spelling.starts_with(L"\\\\?\\") || spelling.starts_with(L"\\\\.\\")) {
+    return value;
+  }
+  std::error_code error;
+  auto absolute = std::filesystem::absolute(value, error);
+  if (error) {
+    return value;
+  }
+  absolute = absolute.lexically_normal();
+  absolute.make_preferred();
+  const auto& native = absolute.native();
+  if (native.starts_with(L"\\\\")) {
+    return std::filesystem::path{L"\\\\?\\UNC\\" + native.substr(2)};
+  }
+  return std::filesystem::path{L"\\\\?\\" + native};
+#else
+  return value;
+#endif
+}
+
 /// Recognize absolute source names produced on either supported host family.
 [[nodiscard]] inline bool path_is_portably_absolute(
     const std::filesystem::path& value) {

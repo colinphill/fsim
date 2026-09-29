@@ -459,6 +459,57 @@ debug_code_coverage_snapshot(
 
 #if defined(FSIM_HAS_LLVM)
 
+class ExecutorHotCellPool {
+public:
+    struct Cell {
+        runtime::simir::PureWavePreparedMember prepared;
+        std::optional<runtime::simir::PreparedOwnedUpdateSlot> owned;
+        fsim_jit_update_slot_v1 slot { };
+        runtime::simir::ProcessUpdateSlotView slot_view { };
+        std::uint64_t active_word { };
+        std::array<std::uint64_t, 2U> wide_aval { };
+        std::array<std::uint64_t, 2U> wide_bval { };
+        std::array<std::uint64_t, 2U> wide_mask { };
+    };
+
+    [[nodiscard]] Cell* acquire()
+    {
+        if (next_ == block_size) {
+            blocks_.push_back(std::make_unique<Cell[]>(block_size));
+            next_ = 0U;
+        }
+        return &blocks_.back()[next_++];
+    }
+
+private:
+    static constexpr std::size_t block_size = 128U;
+    std::vector<std::unique_ptr<Cell[]>> blocks_;
+    std::size_t next_ { block_size };
+};
+
+struct PureBitAndAssignment {
+    std::array<runtime::simir::SignalId, 2> inputs { };
+    std::array<runtime::simir::RegisterId, 2> read_registers { };
+    std::array<runtime::simir::RegisterId, 2> extracted_registers { };
+    std::array<std::uint32_t, 2> input_bit_offsets { };
+    runtime::simir::RegisterId result_register { };
+    runtime::simir::SignalId output { };
+    std::uint32_t output_bit_offset { };
+
+    friend bool operator==(
+        const PureBitAndAssignment&,
+        const PureBitAndAssignment&) = default;
+};
+
+[[nodiscard]] std::optional<PureBitAndAssignment>
+classify_pure_bit_and_assignment(
+    const runtime::simir::Process& process,
+    const compiler::JitProcessFrameLayout& layout,
+    std::span<const std::uint32_t> signal_widths,
+    std::span<const runtime::simir::ValueKind> signal_value_kinds,
+    std::span<const runtime::simir::SignalId> direct_read_signals,
+    std::span<const runtime::simir::SignalId> direct_update_signals);
+
 class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
 public:
     using SignalRemap
@@ -472,7 +523,8 @@ public:
         std::span<const runtime::simir::ValueKind> signal_value_kinds,
         std::span<const runtime::simir::ResolutionKind> signal_resolutions,
         std::shared_ptr<const SignalRemap> signal_remap = { },
-        std::optional<runtime::simir::ProcessId> generated_process = { });
+        std::optional<runtime::simir::ProcessId> generated_process = { },
+        ExecutorHotCellPool* hot_cell_pool = nullptr);
 
     ~LlvmProcessExecutor() override;
 
@@ -489,6 +541,27 @@ public:
 
     [[nodiscard]] std::size_t resume_cohort(
         std::span<runtime::simir::ProcessCohortResumeEntry> entries) override;
+
+    [[nodiscard]] std::size_t resume_cohort_with_native_context(
+        std::span<runtime::simir::ProcessCohortResumeEntry> entries,
+        const runtime::simir::ProcessCohortNativeContext&) override;
+
+    [[nodiscard]] const runtime::simir::PureWavePreparedMember*
+    prepare_pure_wave_member(
+        const runtime::simir::PureWaveResumeEntry& entry,
+        runtime::simir::ProcessExecutionContext& shared_context,
+        const runtime::simir::ProcessCohortNativeContext& native_context,
+        std::uint64_t owner_epoch) override;
+
+    [[nodiscard]] std::optional<runtime::simir::PureWaveCompletion>
+    try_resume_prepared_pure_wave(
+        std::span<const runtime::simir::PureWavePreparedMember* const> members,
+        std::span<const std::size_t> task_ends,
+        runtime::simir::ProcessExecutionContext& shared_context,
+        const runtime::simir::ProcessCohortNativeContext&) override;
+
+    void flush_pure_wave_updates(
+        runtime::simir::ProcessExecutionContext&) override;
 
     [[nodiscard]] std::size_t resume_region(
         std::span<runtime::simir::ProcessCohortResumeEntry> entries,
@@ -525,6 +598,10 @@ public:
         std::shared_ptr<runtime::simir::ContainerValue> value) override;
 
 private:
+    void invalidate_pure_wave_member_binding();
+    [[nodiscard]] std::size_t resume_cohort_impl(
+        std::span<runtime::simir::ProcessCohortResumeEntry> entries,
+        const runtime::simir::ProcessCohortNativeContext*);
     static constexpr runtime::simir::ContainerObjectId invalid_container_object
         = std::numeric_limits<runtime::simir::ContainerObjectId>::max();
     [[nodiscard]] static std::uint64_t next_instance_generation();
@@ -603,6 +680,7 @@ private:
         const runtime::simir::ProcessExecutionContext& context);
     void discard_container_object_aliases() noexcept;
     void initialize_direct_read_signals();
+    void initialize_hot_cell(ExecutorHotCellPool* pool);
     void initialize_code_coverage_hit_counters();
     void initialize_direct_update_slots();
     void initialize_buffered_logic9_updates();
@@ -1199,15 +1277,21 @@ private:
     std::vector<std::uint32_t> direct_read_signals_;
     std::vector<std::uint32_t> code_coverage_hit_counters_;
     std::vector<std::uint32_t> direct_update_signals_;
-    std::vector<fsim_jit_update_slot_v1> direct_update_slots_;
+    std::vector<fsim_jit_update_slot_v1> direct_update_slots_storage_;
+    std::span<fsim_jit_update_slot_v1> direct_update_slots_;
     std::uint64_t direct_update_writer_revision_
         { std::numeric_limits<std::uint64_t>::max() };
     bool stable_direct_update_suppression_allowed_ { true };
-    std::vector<std::uint64_t> direct_update_active_words_;
+    bool validated_static_sensitivity_ { };
+    bool has_container_registers_ { };
+    std::vector<std::uint64_t> direct_update_active_words_storage_;
+    std::span<std::uint64_t> direct_update_active_words_;
     std::vector<std::uint64_t> direct_update_wide_aval_;
     std::vector<std::uint64_t> direct_update_wide_bval_;
     std::vector<std::uint64_t> direct_update_wide_mask_;
     std::vector<runtime::simir::ProcessUpdateSlotView>
+        direct_update_slot_views_storage_;
+    std::span<runtime::simir::ProcessUpdateSlotView>
         direct_update_slot_views_;
     std::vector<runtime::simir::ProcessUpdateWord> pending_update_words_;
     struct BufferedLogic9Update {
@@ -1241,6 +1325,40 @@ private:
     std::vector<runtime::simir::ProcessLogic9UpdateBatch>
         cohort_logic9_update_batches_;
     compiler::JitProcessCohortBinding cohort_binding_;
+    compiler::JitProcessCohortBinding pure_cohort_binding_;
+    compiler::JitProcessCohortBinding compact_pure_cohort_binding_;
+    compiler::JitPureWaveMemberBinding pure_wave_member_binding_;
+    compiler::JitPureWaveMemberLease pure_wave_member_lease_;
+    struct PureWaveFallbackStorage {
+        runtime::simir::PureWavePreparedMember prepared;
+        std::optional<runtime::simir::PreparedOwnedUpdateSlot> owned;
+    };
+    ExecutorHotCellPool::Cell* hot_cell_ { };
+    std::unique_ptr<PureWaveFallbackStorage> fallback_pure_wave_;
+    runtime::simir::PureWavePreparedMember* prepared_member_ { };
+    std::optional<runtime::simir::PreparedOwnedUpdateSlot>* owned_update_slot_
+        { };
+    bool pure_wave_owned_update_checked_ { };
+    bool pure_wave_prepared_disabled_ { };
+    std::optional<bool> pure_wave_member_eligible_;
+    std::optional<std::array<runtime::simir::SignalId, 2U>>
+        pure_wave_and_inputs_;
+    struct PureWaveMemberCertificate {
+        std::array<const void*, 13U> addresses;
+        std::array<std::size_t, 9U> sizes;
+        std::uint64_t writer_revision { };
+
+        friend bool operator==(
+            const PureWaveMemberCertificate&,
+            const PureWaveMemberCertificate&) = default;
+    };
+    std::optional<PureWaveMemberCertificate>
+        pure_wave_member_certificate_;
+    bool pure_wave_member_binding_checked_ { };
+    std::optional<runtime::simir::ProcessCohortNativeContext>
+        pure_cohort_native_context_;
+    const void* prepared_cohort_domain_ { };
+    bool pure_cohort_checked_ { };
     std::vector<LlvmProcessExecutor*> region_members_;
     std::vector<std::uint64_t> region_member_generations_;
     std::vector<runtime::simir::ProcessExecutionContext*> region_contexts_;

@@ -656,6 +656,25 @@ class PreflightReuseTests(unittest.TestCase):
         self.assertEqual(result["preflight_reuse"]["historical_elapsed_seconds"], 123.0)
         self.assertEqual(result["stimulus"]["known_answer_words"], list(campaign.XORSHIFT32_KAT))
 
+    def test_reuse_resolves_native_path_aliases_before_exact_coverage_check(self) -> None:
+        result = self.create_proof("fsim")
+        directory = self.prior / "preflight" / self.case["id"] / "fsim"
+        alias_directory = directory / "proof-path-alias"
+        alias_directory.mkdir()
+        phases = result["phases"]
+        records = [*phases["compile"], phases["elaborate"], phases["simulate"]]
+        for record in records:
+            for stream in ("stdout", "stderr"):
+                path = Path(record[stream])
+                record[stream] = str(path.parent / alias_directory.name / ".." / path.name)
+                self.assertIn(f"{os.sep}..{os.sep}", record[stream])
+        campaign.persist_engine_result(directory, result)
+        campaign.write_preflight_proofs(self.prior, {"preflight_results": [result]})
+
+        reused, reason = self.reuse()
+        self.assertIsNotNone(reused, reason)
+        self.assertIsNone(reused["elapsed_seconds"])
+
     def test_legacy_missing_changed_and_corrupt_proofs_fall_back(self) -> None:
         result, reason = self.reuse()
         self.assertIsNone(result)

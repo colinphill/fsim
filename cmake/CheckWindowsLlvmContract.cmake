@@ -213,7 +213,10 @@ foreach(FSIM_ABI_EVIDENCE IN ITEMS
     "offsetof(fsim_jit_runtime_v1, sample_coverage) == 848"
     "offsetof(fsim_jit_runtime_v1, execute_class_property_operation) == 856"
     "offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864"
-    "sizeof(fsim_jit_runtime_v1) == 872"
+    "offsetof(fsim_jit_runtime_v1, fused_activation_words) == 872"
+    "offsetof(fsim_jit_runtime_v1, fused_activation_word_count) == 880"
+    "offsetof(fsim_jit_runtime_v1, fused_activation_reserved) == 884"
+    "sizeof(fsim_jit_runtime_v1) == 888"
     "sizeof(fsim_jit_frame_v1) == 344"
     "sizeof(fsim_jit_resume_result_v1) == 24")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)

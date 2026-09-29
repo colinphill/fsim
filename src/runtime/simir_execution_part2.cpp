@@ -473,9 +473,10 @@ std::size_t Interpreter::Impl::execute_native_static_region(
             ++native_process_resume_counts[id];
             ++native_process_single_resume_counts[id];
             ++native_process_single_boundary_counts[
-                static_cast<std::size_t>(entry.result.external.kind)];
-            if (entry.result.external.kind
-                == ExternalSuspendKind::wait_sensitivity) {
+                external_suspension_profile_index(
+                    entry.result.external.kind)];
+            if (is_static_wait_suspension(
+                    entry.result.external.kind)) {
                 ++native_process_single_static_wait_counts[id];
             }
         }
@@ -1227,6 +1228,35 @@ SchedulerBatchResult Interpreter::Impl::execute(
     const auto phase_revision = runtime.current_phase_revision();
     std::size_t batch_index { };
     while (batch_index < cohort_ids.size()) {
+        std::size_t offered_tasks { };
+        try {
+            if (const auto completed = try_execute_fused_static_cohort(
+                    cohort_ids.subspan(batch_index), offered_tasks)) {
+                result.executed += *completed;
+                batch_index += *completed;
+                if (runtime.stop_requested()
+                    || runtime.current_phase_revision()
+                        != phase_revision) {
+                    break;
+                }
+                continue;
+            }
+            if (const auto completed = try_execute_pure_wave(
+                    cohort_ids.subspan(batch_index), offered_tasks)) {
+                result.executed += *completed;
+                batch_index += *completed;
+                if (runtime.stop_requested()
+                    || runtime.current_phase_revision()
+                        != phase_revision) {
+                    break;
+                }
+                continue;
+            }
+        } catch (...) {
+            result.failure = std::current_exception();
+            result.executed += std::max(std::size_t { 1U }, offered_tasks);
+            break;
+        }
         const auto raw_cohort = cohort_ids[batch_index];
         if ((raw_cohort & native_static_region_payload) != 0U) {
             const auto process = static_cast<ProcessId>(
@@ -1298,6 +1328,26 @@ SchedulerBatchResult Interpreter::Impl::execute(
                 break;
             }
             if (runtime.stop_requested()
+                || runtime.current_phase_revision() != phase_revision) {
+                break;
+            }
+            continue;
+        }
+        if ((raw_cohort & pure_wave_singleton_payload) != 0U) {
+            const auto process = static_cast<ProcessId>(
+                raw_cohort & ~pure_wave_singleton_payload);
+            try {
+                auto& state = get_process(process);
+                state.queued = false;
+                state.waiting_on_static = false;
+                remove_dynamic_wait(state);
+                execute(process);
+            } catch (...) {
+                result.failure = std::current_exception();
+            }
+            ++result.executed;
+            ++batch_index;
+            if (result.failure || runtime.stop_requested()
                 || runtime.current_phase_revision() != phase_revision) {
                 break;
             }

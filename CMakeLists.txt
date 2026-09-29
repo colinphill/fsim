@@ -713,6 +713,13 @@ add_library(
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
     src/runtime/simir_execution_part2.cpp
+    src/runtime/simir_execution_pure_wave.cpp
+    src/runtime/simir_fused_static_graph.cpp
+    src/runtime/simir_fused_container_reads.cpp
+    src/runtime/simir_fused_masked_normalization.cpp
+    src/runtime/simir_fused_masked_graph.cpp
+    src/runtime/simir_fused_masked_execution.cpp
+    src/runtime/simir_private_bridge.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp
     src/runtime/simir_execution_interpreter.cpp
@@ -1068,6 +1075,9 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit.cpp
       src/compiler/llvm_jit_execution.cpp
       src/compiler/llvm_jit_process_modules.cpp
+      src/compiler/llvm_jit_fused_static_process.cpp
+      src/compiler/llvm_jit_fused_masked_process.cpp
+      src/compiler/llvm_jit_masked_lowering.cpp
       src/compiler/llvm_jit_cache_key.cpp
       src/compiler/llvm_jit_cache_key_operations.cpp
       src/compiler/llvm_jit_coverage.cpp
@@ -1211,6 +1221,9 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_runtime_path_codec.cpp
       src/app/application_design_artifact_hir_codec.cpp
       src/app/application_executor_frame.cpp
+      src/app/application_fused_static_executor.cpp
+      src/app/application_fused_static_setup.cpp
+      src/app/application_fused_masked_setup.cpp
       src/app/application_executors.cpp
       src/app/application_executor_vital.cpp
       src/app/application_executor_signal_attributes.cpp

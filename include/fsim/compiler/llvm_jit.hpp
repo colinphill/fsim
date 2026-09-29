@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/compiler/jit_runtime.h"
+#include "fsim/compiler/fused_masked_process.hpp"
 #include "fsim/runtime/simir.hpp"
 
 #include <chrono>
@@ -14,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::compiler {
@@ -137,6 +139,71 @@ private:
   std::uint64_t generation_{};
 };
 
+/// Per-process immutable SimIR classification used to assemble ordered waves.
+/// It is valid only for the LlvmJit instance that created it.
+class JitPureWaveMemberBinding final {
+public:
+  constexpr JitPureWaveMemberBinding() noexcept = default;
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return owner_ != nullptr && entry_ != nullptr;
+  }
+  friend bool operator==(
+      JitPureWaveMemberBinding, JitPureWaveMemberBinding) = default;
+
+private:
+  friend class LlvmJit;
+
+  constexpr JitPureWaveMemberBinding(
+      const void* owner, const void* entry,
+      std::uint64_t generation) noexcept
+      : owner_(owner), entry_(entry), generation_(generation) {}
+
+  const void* owner_{};
+  const void* entry_{};
+  std::uint64_t generation_{};
+};
+
+/// Owning view of one prepared pure-wave member. Keep one with its executor;
+/// spans passed to the trusted wave entry point may then contain pointers to
+/// these stable views without copying shared ownership on each activation.
+class JitPureWaveMemberLease final {
+public:
+  JitPureWaveMemberLease() noexcept = default;
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return owner_ != nullptr && entry_ != nullptr && view_ != nullptr
+        && storage_ != nullptr;
+  }
+  /// Return the stable compiler-owned view pinned by this lease. The pointer
+  /// is valid only while this lease remains alive and its binding is unreleased.
+  [[nodiscard]] const void* prepared_view() const noexcept {
+    return storage_ != nullptr ? view_ : nullptr;
+  }
+  /// Generation of the compiler binding represented by prepared_view().
+  [[nodiscard]] std::uint64_t prepared_generation() const noexcept {
+    return storage_ != nullptr ? generation_ : 0U;
+  }
+  /// Compiler/JIT identity that owns this prepared view.
+  [[nodiscard]] const void* prepared_domain() const noexcept {
+    return storage_ != nullptr ? owner_ : nullptr;
+  }
+
+private:
+  friend class LlvmJit;
+
+  JitPureWaveMemberLease(
+      const void* owner, const void* entry, const void* view,
+      std::uint64_t generation,
+      std::shared_ptr<const void> storage) noexcept
+      : owner_(owner), entry_(entry), view_(view), generation_(generation),
+        storage_(std::move(storage)) {}
+
+  const void* owner_ {};
+  const void* entry_ {};
+  const void* view_ {};
+  std::uint64_t generation_ {};
+  std::shared_ptr<const void> storage_;
+};
+
 /// Caller-owned activation records for one ordered native process cohort.
 struct JitProcessCohortResumeEntry {
   JitProcessCohortResumeEntry() noexcept = default;
@@ -164,6 +231,53 @@ struct JitProcessCohortResumeEntry {
   std::uint8_t* active {};
   std::uint32_t status {};
   std::exception_ptr failure;
+};
+
+/// One process in a caller-certified callback-free pure wave. The native
+/// activation stores the scheduler/runtime addresses; process identifies the
+/// immutable SimIR body checked when the wave binding is created.
+struct JitPureWaveMember {
+  JitProcessCohortResumeEntry native;
+  const runtime::simir::Process* process {};
+  std::span<const runtime::simir::SignalId> direct_update_signals;
+};
+
+/// One native register slot used by a supported Logic4 bit-and cohort member.
+/// The logical ID addresses the initialization bitmap; the word offset and
+/// width describe the physical register planes in the member frame. A
+/// nonresident slot uses activation-local scratch and leaves frame planes and
+/// initialization bytes untouched.
+struct JitProcessCohortLogic4BitAndRegisterSlot {
+  runtime::simir::RegisterId register_id {};
+  std::uint32_t word_offset {};
+  std::uint32_t width {};
+  bool frame_resident {};
+
+  friend bool operator==(
+      JitProcessCohortLogic4BitAndRegisterSlot,
+      JitProcessCohortLogic4BitAndRegisterSlot) = default;
+};
+
+/// Shape-only description of one caller-certified Logic4 bit-and cohort
+/// member. Signal identities are represented by runtime table indices, so
+/// generated code can be reused across instances with the same shape.
+struct JitProcessCohortLogic4BitAndMember {
+  JitProcessCohortLogic4BitAndRegisterSlot read_lhs;
+  JitProcessCohortLogic4BitAndRegisterSlot read_rhs;
+  JitProcessCohortLogic4BitAndRegisterSlot extract_lhs;
+  JitProcessCohortLogic4BitAndRegisterSlot extract_rhs;
+  JitProcessCohortLogic4BitAndRegisterSlot result;
+  std::uint32_t direct_read_lhs_slot {};
+  std::uint32_t direct_read_rhs_slot {};
+  std::uint32_t extract_lhs_offset {};
+  std::uint32_t extract_rhs_offset {};
+  std::uint32_t direct_update_slot {};
+  std::uint32_t update_offset {};
+  bool tracks_register_initialization {};
+
+  friend bool operator==(
+      const JitProcessCohortLogic4BitAndMember&,
+      const JitProcessCohortLogic4BitAndMember&) = default;
 };
 
 enum class JitExecutionStatus : std::uint32_t {
@@ -217,6 +331,7 @@ struct JitProcessModuleEntry {
   /// Sorted instruction indexes whose known narrow literals are loaded from
   /// the embedding's instance-local container_operation callback.
   std::vector<runtime::simir::InstructionIndex> bound_literal_sites { };
+  std::vector<FusedMaskedMemberGate> masked_member_gates { };
 };
 
 class LlvmJitError : public std::runtime_error {
@@ -350,6 +465,11 @@ public:
                    std::span<const runtime::simir::ValueKind>
                        signal_value_kinds = {});
 
+  void add_masked_process(std::string_view symbol,
+      const FusedMaskedProcess& process,
+      std::span<const std::uint32_t> signal_widths,
+      std::span<const runtime::simir::ValueKind> signal_value_kinds = {});
+
   /// Compile/materialize a symbol through ORC and return an opaque handle.
   [[nodiscard]] JitProcessHandle lookup(std::string_view symbol);
 
@@ -430,6 +550,120 @@ public:
   [[nodiscard]] JitProcessCohortBinding bind_cohort_prevalidated(
       std::span<JitProcessCohortResumeEntry> entries) const;
 
+  /// Bind an exact cohort for the caller-certified strict-Logic4 bit-and
+  /// shape (DebugPoint 0, DebugPoint 1, Read lhs 2, Extract lhs 3, Read rhs
+  /// 4, Extract rhs 5, BitAnd 6, WriteUpdateSlice 7, WaitSensitivity 8, and
+  /// Jump 9 to 0).
+  /// The caller is responsible for proving each descriptor matches its
+  /// immutable SimIR body and for applying simulation-context, revision, hook,
+  /// and pending-update guards. Member descriptors contain register layout
+  /// and runtime-table indices, including each register's frame residency,
+  /// but no instance signal identities. The JIT validates descriptor/layout
+  /// compatibility and runtime, frame, and result ABI/table shape before
+  /// creating the binding.
+  /// Instrumented-debug and region cohorts are unsupported and return
+  /// nullopt.
+  /// The caller keeps this binding beside the generic cohort binding and
+  /// releases it with release_cohort_binding().
+  [[nodiscard]] std::optional<JitProcessCohortBinding>
+  bind_logic4_bit_and_cohort_prevalidated(
+      std::span<JitProcessCohortResumeEntry> entries,
+      std::span<const JitProcessCohortLogic4BitAndMember> members) const;
+
+  /// Bind a compact Logic4 bit-and cohort using the same caller-certified
+  /// member shape. Binding succeeds only when all five register slots for
+  /// every member are nonresident, each runtime resolves both reads to the
+  /// same actual input pair on shared signal planes, and each deferred output
+  /// slot and active-bitmap word is valid. The caller must provide the exact
+  /// warm cohort order and keep its runtime owners, tables, output slots, and
+  /// scheduler-state addresses stable for the binding lifetime. A failed
+  /// shape or runtime preflight returns nullopt without mutation.
+  ///
+  /// The compact path updates only deferred output slots, active bitmap bits,
+  /// and terminal queued/waiting/process-status bytes. It does not write
+  /// frames, registers, resume results, or per-entry status/failure fields.
+  /// The caller remains responsible for proving the exact immutable SimIR
+  /// body, warm process state, absence of pending updates/hooks, and private
+  /// disjoint storage needed by the specialized operation. This includes
+  /// proving that runtime debug-point callbacks are disabled for the binding.
+  [[nodiscard]] std::optional<JitProcessCohortBinding>
+  bind_compact_logic4_bit_and_cohort_prevalidated(
+      std::span<JitProcessCohortResumeEntry> entries,
+      std::span<const JitProcessCohortLogic4BitAndMember> shapes) const;
+
+  /// Validate and retain one process's immutable pure-wave shape and resolved
+  /// runtime slots. The actual Process body and mapped update IDs are checked
+  /// once here; the returned handle can be reused in many ordered waves.
+  [[nodiscard]] std::optional<JitPureWaveMemberBinding>
+  bind_pure_wave_member_prevalidated(const JitPureWaveMember& member) const;
+
+  /// Retain a prepared member once for direct trusted wave dispatch. Releasing
+  /// the binding marks this view stale, while the lease keeps its immutable
+  /// descriptor storage alive until the owning executor drops the lease.
+  [[nodiscard]] std::optional<JitPureWaveMemberLease>
+  acquire_pure_wave_member_lease(JitPureWaveMemberBinding member) const;
+
+  /// Release a per-process pure-wave member handle after its executor and
+  /// runtime storage are no longer offered to wave bindings.
+  [[nodiscard]] bool release_pure_wave_member_binding(
+      JitPureWaveMemberBinding member) const;
+
+  /// Bind one ordered wave from previously classified members. task_ends
+  /// contains cumulative member counts for complete original scheduler tasks
+  /// and must end at the member count. The wave reuses four fixed shape kernels
+  /// and stores the runtime addresses/slots used by the caller's task order.
+  /// The caller must keep all member handles, runtimes, scheduler state, and
+  /// deferred-update storage alive and unchanged until release. Unsupported
+  /// task shapes return nullopt without mutation. Application context,
+  /// hook-lifetime, and task-order guards remain the caller's duty.
+  [[nodiscard]] std::optional<JitProcessCohortBinding>
+  bind_pure_wave_prevalidated(
+      std::span<const JitPureWaveMemberBinding> members,
+      std::span<const std::size_t> task_ends) const;
+
+  /// Execute every bound task and write its deferred updates/terminal process
+  /// bytes exactly once. The caller retains normal scheduler and update commit
+  /// ownership. False means preflight declined before any member or slot
+  /// changed; after execution starts, the whole bound wave completes. The
+  /// compiler updates only deferred slots, their activity bitmap, and terminal
+  /// queued/waiting/process-status bytes. It leaves frames, registers, native
+  /// resume results, and per-entry status/failure fields untouched; the caller
+  /// supplies the certified static-wait completion result.
+  [[nodiscard]] bool try_resume_pure_wave_prevalidated(
+      JitProcessCohortBinding wave) const;
+
+  /// Execute an ordered wave directly from prepared per-executor member
+  /// views. The caller owns bounded reusable pointer/task scratch and certifies
+  /// the current owner, storage, writer epoch, warm state, unique queued
+  /// processes, and exact original task boundaries, including shared input
+  /// pairs for complete AND tasks. Every lease and its external runtime/frame
+  /// storage must remain alive and unchanged, with no concurrent release, for
+  /// the duration of this trusted call. A decline returns nullopt before any
+  /// member, update slot, or scheduler byte changes; success returns the
+  /// number of complete tasks dispatched. This path checks only the lease
+  /// tokens and bounded task/shape structure, relying on the caller's
+  /// certificate instead of repeating full runtime, frame-layout, and signal
+  /// map validation. The checked wave API remains available independently.
+  [[nodiscard]] std::optional<std::size_t>
+  try_resume_pure_wave_members_prevalidated(
+      std::span<const JitPureWaveMemberLease* const> members,
+      std::span<const std::size_t> task_ends) const;
+
+  /// Execute an ordered wave directly from runtime prepared-member records.
+  /// Each record's compiler_view must be pinned by its still-live member lease,
+  /// and compiler_generation must match that lease's binding generation. The
+  /// caller also certifies the owner epoch, storage, warm state, unique queued
+  /// processes, and exact original task boundaries. A decline occurs before
+  /// any member, update slot, or scheduler byte changes; success returns the
+  /// number of complete tasks dispatched. Runtime records and their external
+  /// frame/update storage must remain alive and unchanged through this call,
+  /// with no concurrent release. The checked wave API remains available for
+  /// callers that cannot provide this certificate.
+  [[nodiscard]] std::optional<std::size_t>
+  try_resume_pure_wave_prepared_members_prevalidated(
+      std::span<const runtime::simir::PureWavePreparedMember* const> members,
+      std::span<const std::size_t> task_ends) const;
+
   /// Release one bound cohort after its caller invalidates the saved member
   /// and scheduler-state addresses. A stale binding cannot release a newer one.
   [[nodiscard]] bool release_cohort_binding(
@@ -442,6 +676,43 @@ public:
   [[nodiscard]] std::size_t resume_cohort_prevalidated(
       JitProcessCohortBinding cohort,
       std::span<JitProcessCohortResumeEntry> entries) const;
+
+  /// Attempt one fully checked Logic4 bit-and cohort activation. The JIT
+  /// revalidates every member's runtime tables, frame/result ABI, and buffered
+  /// update slots before changing any frame or scheduler state. Unsupported
+  /// runtime state returns nullopt without mutation so the caller can use the
+  /// generic bound cohort path. Writes remain in the existing deferred update
+  /// slots for the host to commit at the normal suspension boundary. Every
+  /// frame must be ready at the certified WaitSensitivity resume point.
+  [[nodiscard]] std::optional<std::size_t>
+  try_resume_logic4_bit_and_cohort_prevalidated(
+      JitProcessCohortBinding cohort,
+      std::span<JitProcessCohortResumeEntry> entries) const;
+
+  /// Attempt one Logic4 bit-and activation using a caller-established
+  /// same-owner runtime certificate. The caller must pass the exact ordered
+  /// span with the same process/runtime/frame/result/scheduler-state addresses
+  /// used at binding and with each entry's active pointer still null. Preserve
+  /// each runtime's ABI, direct-read map/planes,
+  /// update slot layout, active-word mapping, frame/result ABI layout, and
+  /// backing register planes. This method validates the binding owner and
+  /// generation, but trusts those per-entry identities and immutable layouts.
+  /// It still checks the mutable runtime debug flag and frame
+  /// PC/state/last-instruction/native-depth for every member before any member
+  /// is changed. A failed check returns nullopt without mutation. Deferred
+  /// update slots remain pending for the normal host commit.
+  [[nodiscard]] std::optional<std::size_t>
+  try_resume_logic4_bit_and_cohort_trusted_prevalidated(
+      JitProcessCohortBinding cohort,
+      std::span<JitProcessCohortResumeEntry> entries) const;
+
+  /// Execute a compact binding created by
+  /// bind_compact_logic4_bit_and_cohort_prevalidated(). False means the
+  /// binding preflight was rejected before any member was changed; once
+  /// execution starts this method returns true. It relies on the caller's
+  /// same-owner, warm-state, no-debug-hook, and pointer-lifetime certificate.
+  [[nodiscard]] bool try_resume_compact_logic4_bit_and_cohort_prevalidated(
+      JitProcessCohortBinding cohort) const;
 
   /// Resume the active members of a stable ordered region through one cached
   /// native wrapper. Every entry must provide an active byte. Inactive members
@@ -476,6 +747,12 @@ public:
 
 private:
   struct Impl;
+  [[nodiscard]] std::optional<std::size_t>
+  try_resume_logic4_bit_and_cohort_prevalidated_impl(
+      JitProcessCohortBinding cohort,
+      std::span<JitProcessCohortResumeEntry> entries,
+      bool validate_immutable_state) const;
+
   std::unique_ptr<Impl> impl_;
 };
 

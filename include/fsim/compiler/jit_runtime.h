@@ -856,6 +856,17 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t instruction,
       fsim_jit_frame_v1* frame);
 
+  /*
+   * Append-only activation mask for a graph-certified fused process. Bit n
+   * selects canonical member n. This is separate from the per-output
+   * direct_update_active_words bitmap. A masked entry checks struct_size and
+   * fused_activation_word_count before reading any word; an ordinary process
+   * leaves both fields zero.
+   */
+  const uint64_t* fused_activation_words;
+  uint32_t fused_activation_word_count;
+  uint32_t fused_activation_reserved;
+
 } fsim_jit_runtime_v1;
 
 /*

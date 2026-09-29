@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -22,6 +23,34 @@ namespace fsim::runtime {
 using SimulationTick = std::uint64_t;
 using StableOrder = std::uint64_t;
 using RuntimeSignalId = std::uint32_t;
+
+struct SchedulerOrderKey {
+  StableOrder order { };
+  std::uint64_t sequence { };
+
+  friend auto operator<=>(const SchedulerOrderKey &left,
+                          const SchedulerOrderKey &right) noexcept
+  {
+    if (const auto compared = left.order <=> right.order; compared != 0)
+      return compared;
+    return left.sequence <=> right.sequence;
+  }
+  friend bool operator==(const SchedulerOrderKey &left,
+                         const SchedulerOrderKey &right) noexcept
+  {
+    return left.order == right.order && left.sequence == right.sequence;
+  }
+
+private:
+  const void *owner_ { };
+  std::uint64_t epoch_ { };
+  SchedulerOrderKey(StableOrder task_order, std::uint64_t task_sequence,
+                    const void *owner, std::uint64_t epoch) noexcept
+      : order(task_order), sequence(task_sequence), owner_(owner), epoch_(epoch)
+  {
+  }
+  friend class Scheduler;
+};
 
 enum class SchedulerPhase : std::uint8_t {
     active = 0,
@@ -214,6 +243,26 @@ public:
       SchedulerPhase phase, StableOrder stable_order,
       SchedulerBatchTask& batch_task, std::uint64_t batch_payload,
       Task fallback_task);
+
+  /// Reserve the ordering identity of a virtual next-delta task without
+  /// placing an entry in the queue. Runtime-owned region frontiers use this
+  /// to preserve the order of callbacks they coalesce. A key belongs to this
+  /// scheduler and reset epoch. The trusted caller must keep at most one live
+  /// entry per key; after canceling that entry, it may reuse the key for a
+  /// continuation. Discard/reset also ends all unqueued virtual work.
+  [[nodiscard]] SchedulerOrderKey reserve_order_key(StableOrder stable_order);
+  void schedule_reserved_next_delta(
+      SchedulerPhase phase, SchedulerOrderKey key, Task task);
+  [[nodiscard]] ScheduledTaskHandle schedule_reserved_next_delta_cancelable(
+      SchedulerPhase phase, SchedulerOrderKey key, Task task);
+  void schedule_reserved_current(
+      SchedulerPhase phase, SchedulerOrderKey key, Task task);
+  [[nodiscard]] ScheduledTaskHandle schedule_reserved_current_cancelable(
+      SchedulerPhase phase, SchedulerOrderKey key, Task task);
+  /// During an ordinary callback, return the next queued task in this phase.
+  /// A batch callback cannot use this because its entries were prefetched.
+  [[nodiscard]] std::optional<SchedulerOrderKey>
+  next_current_order_key() const;
 
   /// Schedule compact runtime-owned work without a per-entry callback object.
   /// The descriptor payload must not outlive its owning runtime context.

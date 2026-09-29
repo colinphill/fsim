@@ -285,6 +285,10 @@ runtime::RunResult Simulation::run(
                     = std::chrono::steady_clock::now() - barrier_begin;
             }
         }
+        impl_->interpreter->start();
+        impl_->refresh_observation_hooks();
+        impl_->bind_fused_static_cohorts();
+        impl_->bind_fused_masked_regions();
 #endif
         const auto interpreter_begin = profile_phase_split
             ? std::chrono::steady_clock::now()
@@ -324,6 +328,75 @@ runtime::RunResult Simulation::run(
             impl_->lifecycle = Impl::Lifecycle::finished;
         }
         impl_->refresh_observation_hooks();
+#if defined(FSIM_HAS_LLVM)
+        if (std::getenv("FSIM_PROFILE_FUSED_STATIC") != nullptr) {
+            const auto counts
+                = impl_->interpreter->fused_static_counters();
+            std::cerr << "fsim fused-static route: invocations="
+                      << counts.invocations
+                      << " represented_members="
+                      << counts.represented_members
+                      << " owner_stage_calls_avoided="
+                      << counts.owner_stage_calls_avoided
+                      << " aggregate_slots_staged="
+                      << counts.aggregate_signals_staged
+                      << " fallbacks=" << counts.fallbacks << '\n';
+            std::cerr << "fsim fused-static fork summary: events="
+                      << counts.fork_events
+                      << " plans_invalidated="
+                      << counts.fork_plans_invalidated
+                      << " surviving_after_last="
+                      << counts.fork_plans_surviving_after_last << '\n';
+        }
+        if (std::getenv("FSIM_PROFILE_FUSED_MASKED") != nullptr) {
+            const auto counts = impl_->interpreter->fused_masked_region_counters();
+            std::cerr << "fsim masked route: masked_calls="
+                      << counts.masked_calls
+                      << " represented_members="
+                      << counts.represented_members
+                      << " owner_stage_calls_avoided="
+                      << counts.owner_stage_calls_avoided
+                      << " aggregate_signals_staged="
+                      << counts.aggregate_signals_staged
+                      << " virtual_tasks=" << counts.virtual_tasks
+                      << " frontier_calls=" << counts.frontier_calls
+                      << " global_frontier_callbacks="
+                      << counts.global_frontier_callbacks
+                      << " global_frontier_queue_entries="
+                      << counts.global_frontier_queue_entries
+                      << " prepared_fallback_tasks="
+                      << counts.prepared_fallback_tasks
+                      << " ordinary_fallback_tasks="
+                      << counts.ordinary_fallback_tasks
+                      << " boundary_publications="
+                      << counts.boundary_publications
+                      << " private_publications_elided="
+                      << counts.private_publications_elided
+                      << " private_candidates="
+                      << counts.private_candidates
+                      << " private_local_commits="
+                      << counts.private_local_commits
+                      << " private_fanout_entries_avoided="
+                      << counts.private_fanout_entries_avoided
+                      << " private_masked_notifications="
+                      << counts.private_masked_notifications
+                      << " private_owned_direct_commits="
+                      << counts.private_owned_direct_commits
+                      << " terminal_candidates="
+                      << counts.terminal_candidates
+                      << " normalized_terminal_candidates="
+                      << counts.normalized_terminal_candidates
+                      << " terminal_regions_bound="
+                      << counts.terminal_regions_bound
+                      << " terminal_members_bound="
+                      << counts.terminal_members_bound
+                      << " terminal_activations="
+                      << counts.terminal_activations
+                      << " terminal_joint_activations="
+                      << counts.terminal_joint_activations
+                      << " demotions=" << counts.demotions << '\n';
+        }
+#endif
         return result;
     } catch (...) {
         impl_->lifecycle = Impl::Lifecycle::poisoned;

@@ -1595,6 +1595,11 @@ def preflight_identity(engine: str, case: dict[str, Any], config: dict[str, Any]
     })
 
 
+def _resolved_path_key(path: str | Path) -> str:
+    """Return the platform-normalized absolute identity used for proof coverage."""
+    return os.path.normcase(str(Path(path).resolve()))
+
+
 def reuse_preflight_result(prior: Path, engine: str, case: dict[str, Any],
                            config: dict[str, Any], identity: dict[str, Any],
                            has_overlay: bool, fixture: dict[str, Any] | None
@@ -1626,10 +1631,13 @@ def reuse_preflight_result(prior: Path, engine: str, case: dict[str, Any],
         records = [*phases["compile"], phases["elaborate"], phases["simulate"]]
         if not phases["compile"] or any(item["returncode"] != 0 for item in records):
             return None, "saved execution has an incomplete or failed phase"
-        required_paths = {str((directory / "engine_result.json").resolve()),
-                          result["transcript_raw"], result["transcript_canonical"]}
-        required_paths.update(item[stream] for item in records for stream in ("stdout", "stderr"))
-        if required_paths != {item["path"] for item in receipt["files"]}:
+        required_paths = {_resolved_path_key(directory / "engine_result.json"),
+                          _resolved_path_key(result["transcript_raw"]),
+                          _resolved_path_key(result["transcript_canonical"])}
+        required_paths.update(_resolved_path_key(item[stream])
+                              for item in records for stream in ("stdout", "stderr"))
+        proof_paths = {_resolved_path_key(item["path"]) for item in receipt["files"]}
+        if required_paths != proof_paths:
             return None, "saved proof does not cover every execution and transcript file"
         stdout = "\n".join(Path(item["stdout"]).read_text(encoding="utf-8", errors="replace")
                            for item in records)

@@ -153,10 +153,39 @@ namespace {
 
     struct WorkQueue {
         std::vector<Entry> entries;
+        // Once dispatch starts, keep the sorted bulk queue fixed. Entries
+        // inserted during callbacks live in this min-heap until the phase
+        // ends, so a lower-key continuation never re-sorts the bulk suffix.
+        std::vector<Entry> current_insertions;
         std::size_t cursor { };
         std::size_t pushes_since_compaction { };
         bool needs_sort { };
+        bool prepared { };
         bool has_cancelable { };
+
+        [[nodiscard]] static bool key_less(
+            const Entry& lhs, const Entry& rhs) noexcept
+        {
+            return lhs.order < rhs.order
+                || (lhs.order == rhs.order
+                    && lhs.sequence < rhs.sequence);
+        }
+
+        [[nodiscard]] static bool key_later(
+            const Entry& lhs, const Entry& rhs) noexcept
+        {
+            return key_less(rhs, lhs);
+        }
+
+        void discard_cancelled_insertions() noexcept
+        {
+            while (!current_insertions.empty()
+                && current_insertions.front().is_cancelled()) {
+                std::pop_heap(current_insertions.begin(),
+                    current_insertions.end(), key_later);
+                current_insertions.pop_back();
+            }
+        }
 
         void compact() noexcept
         {
@@ -166,9 +195,19 @@ namespace {
             entries.erase(std::remove_if(entries.begin(), entries.end(),
                 [](const Entry& entry) { return entry.is_cancelled(); }),
                 entries.end());
+            current_insertions.erase(std::remove_if(
+                current_insertions.begin(), current_insertions.end(),
+                [](const Entry& entry) { return entry.is_cancelled(); }),
+                current_insertions.end());
+            std::make_heap(current_insertions.begin(),
+                current_insertions.end(), key_later);
             pushes_since_compaction = 0;
             has_cancelable = std::any_of(entries.begin(), entries.end(),
-                [](const Entry& entry) { return entry.cancel_slots != nullptr; });
+                [](const Entry& entry) { return entry.cancel_slots != nullptr; })
+                || std::any_of(current_insertions.begin(),
+                    current_insertions.end(), [](const Entry& entry) {
+                        return entry.cancel_slots != nullptr;
+                    });
             if (entries.empty())
                 needs_sort = false;
         }
@@ -178,7 +217,11 @@ namespace {
             return std::none_of(
                 entries.begin() + static_cast<std::ptrdiff_t>(cursor),
                 entries.end(),
-                [](const Entry& entry) { return !entry.is_cancelled(); });
+                [](const Entry& entry) { return !entry.is_cancelled(); })
+                && std::none_of(current_insertions.begin(),
+                    current_insertions.end(), [](const Entry& entry) {
+                        return !entry.is_cancelled();
+                    });
         }
 
         void push(Entry entry)
@@ -186,17 +229,23 @@ namespace {
             // A cancelled task has already released its payload. Reclaim its
             // queue entry after enough pushes to amortize a scan of the
             // remaining bucket.
-            if (has_cancelable && entries.size() >= 64U
-                && pushes_since_compaction >= entries.size() / 2U)
+            const auto size = entries.size() - cursor
+                + current_insertions.size();
+            if (has_cancelable && size >= 64U
+                && pushes_since_compaction >= size / 2U)
                 compact();
-            if (!needs_sort && cursor < entries.size()) {
+            if (!prepared && !needs_sort && cursor < entries.size()) {
                 const auto& last = entries.back();
-                needs_sort = entry.order < last.order
-                    || (entry.order == last.order
-                        && entry.sequence < last.sequence);
+                needs_sort = key_less(entry, last);
             }
             const bool cancelable = entry.cancel_slots != nullptr;
-            entries.push_back(std::move(entry));
+            if (prepared) {
+                current_insertions.push_back(std::move(entry));
+                std::push_heap(current_insertions.begin(),
+                    current_insertions.end(), key_later);
+            } else {
+                entries.push_back(std::move(entry));
+            }
             has_cancelable |= cancelable;
             ++pushes_since_compaction;
         }
@@ -205,17 +254,14 @@ namespace {
         {
             if (needs_sort) {
                 std::sort(entries.begin() + static_cast<std::ptrdiff_t>(cursor),
-                    entries.end(), [](const Entry& lhs, const Entry& rhs) {
-                        if (lhs.order != rhs.order) {
-                            return lhs.order < rhs.order;
-                        }
-                        return lhs.sequence < rhs.sequence;
-                    });
+                    entries.end(), key_less);
                 needs_sort = false;
             }
+            prepared = true;
             while (cursor < entries.size() && entries[cursor].is_cancelled()) {
                 ++cursor;
             }
+            discard_cancelled_insertions();
             if (has_cancelable && cursor >= 64U
                 && cursor >= entries.size() / 2U)
                 compact();
@@ -224,22 +270,42 @@ namespace {
         [[nodiscard]] const Entry* next()
         {
             prepare();
-            return cursor < entries.size() ? &entries[cursor] : nullptr;
+            const Entry* bulk = cursor < entries.size()
+                ? &entries[cursor] : nullptr;
+            const Entry* inserted = current_insertions.empty()
+                ? nullptr : &current_insertions.front();
+            if (!bulk)
+                return inserted;
+            if (!inserted)
+                return bulk;
+            return key_less(*inserted, *bulk) ? inserted : bulk;
         }
 
         Entry pop()
         {
             prepare();
-            return std::move(entries.at(cursor++));
+            if (current_insertions.empty()
+                || (cursor < entries.size()
+                    && !key_less(current_insertions.front(),
+                        entries[cursor]))) {
+                return std::move(entries.at(cursor++));
+            }
+            std::pop_heap(current_insertions.begin(),
+                current_insertions.end(), key_later);
+            auto entry = std::move(current_insertions.back());
+            current_insertions.pop_back();
+            return entry;
         }
 
         void clear_consumed()
         {
             if (empty()) {
                 entries.clear();
+                current_insertions.clear();
                 cursor = 0;
                 pushes_since_compaction = 0;
                 needs_sort = false;
+                prepared = false;
                 has_cancelable = false;
             }
         }
@@ -249,17 +315,23 @@ namespace {
             for (auto index = cursor; index < entries.size(); ++index) {
                 entries[index].complete();
             }
+            for (auto index = 0U; index < current_insertions.size(); ++index)
+                current_insertions[index].complete();
         }
 
         [[nodiscard]] std::vector<StableOrder> pending_orders() const
         {
             std::vector<StableOrder> result;
             result.reserve(
-                entries.size() - cursor);
+                entries.size() - cursor + current_insertions.size());
             for (auto index = cursor; index < entries.size(); ++index) {
                 if (!entries[index].is_cancelled()) {
                     result.push_back(entries[index].order);
                 }
+            }
+            for (const auto& entry : current_insertions) {
+                if (!entry.is_cancelled())
+                    result.push_back(entry.order);
             }
             return result;
         }
@@ -273,7 +345,8 @@ namespace {
             std::size_t retained = 0;
             for (auto& queue : queues) {
                 queue.compact();
-                retained += queue.entries.size();
+                retained += queue.entries.size()
+                    + queue.current_insertions.size();
             }
             return retained;
         }
@@ -360,6 +433,7 @@ struct Scheduler::Impl {
     SimulationTick now { };
     std::uint64_t callbacks { };
     std::uint64_t next_sequence { };
+    std::uint64_t reservation_epoch { };
     std::uint64_t current_phase_revision { };
     bool in_run { };
     bool in_callback { };
@@ -748,6 +822,143 @@ void Scheduler::schedule_next_delta_batchable(
     impl_->enqueue_next_delta(phase, std::move(entry));
 }
 
+SchedulerOrderKey Scheduler::reserve_order_key(
+    const StableOrder stable_order)
+{
+    if (impl_->next_sequence == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error("scheduler insertion sequence overflow");
+    }
+    return SchedulerOrderKey {
+        stable_order, impl_->next_sequence++, impl_.get(),
+        impl_->reservation_epoch
+    };
+}
+
+void Scheduler::schedule_reserved_next_delta(
+    const SchedulerPhase phase, const SchedulerOrderKey key, Task task)
+{
+    if (impl_->discarding) {
+        return;
+    }
+    if (!task || key.owner_ != impl_.get()
+        || key.epoch_ != impl_->reservation_epoch
+        || key.sequence >= impl_->next_sequence) {
+        throw std::invalid_argument("invalid reserved scheduler task");
+    }
+    auto entry = Entry {
+        key.order, key.sequence, EntryTask { std::move(task) },
+        nullptr, { }
+    };
+    impl_->enqueue_next_delta(phase, std::move(entry));
+}
+
+ScheduledTaskHandle Scheduler::schedule_reserved_next_delta_cancelable(
+    const SchedulerPhase phase, const SchedulerOrderKey key, Task task)
+{
+    if (impl_->discarding) {
+        return { };
+    }
+    if (!task || key.owner_ != impl_.get()
+        || key.epoch_ != impl_->reservation_epoch
+        || key.sequence >= impl_->next_sequence) {
+        throw std::invalid_argument("invalid reserved scheduler task");
+    }
+    const auto cancellation = impl_->cancel_slots->acquire(std::move(task));
+    auto entry = Entry {
+        key.order, key.sequence, EntryTask { std::monostate { } },
+        impl_->cancel_slots.get(), cancellation
+    };
+    try {
+        impl_->enqueue_next_delta(phase, std::move(entry));
+    } catch (...) {
+        impl_->cancel_slots->release(cancellation);
+        throw;
+    }
+    return ScheduledTaskHandle {
+        impl_->cancel_slots, cancellation.slot, cancellation.generation
+    };
+}
+
+void Scheduler::schedule_reserved_current(
+    const SchedulerPhase phase, const SchedulerOrderKey key, Task task)
+{
+    if (impl_->discarding) {
+        return;
+    }
+    if (!impl_->in_callback || !impl_->batch_entries.empty()
+        || !impl_->current
+        || impl_->current->phase >= phase_count
+        || phase != static_cast<SchedulerPhase>(impl_->current->phase)) {
+        throw std::logic_error(
+            "reserved current task requires its ordinary callback phase");
+    }
+    if (!task || key.owner_ != impl_.get()
+        || key.epoch_ != impl_->reservation_epoch
+        || key.sequence >= impl_->next_sequence) {
+        throw std::invalid_argument("invalid reserved scheduler task");
+    }
+    auto entry = Entry {
+        key.order, key.sequence, EntryTask { std::move(task) },
+        nullptr, { }
+    };
+    impl_->enqueue_at(impl_->now, phase, std::move(entry));
+}
+
+ScheduledTaskHandle Scheduler::schedule_reserved_current_cancelable(
+    const SchedulerPhase phase, const SchedulerOrderKey key, Task task)
+{
+    if (impl_->discarding) {
+        return { };
+    }
+    if (!impl_->in_callback || !impl_->batch_entries.empty()
+        || !impl_->current
+        || impl_->current->phase >= phase_count
+        || phase != static_cast<SchedulerPhase>(impl_->current->phase)) {
+        throw std::logic_error(
+            "reserved current task requires its ordinary callback phase");
+    }
+    if (!task || key.owner_ != impl_.get()
+        || key.epoch_ != impl_->reservation_epoch
+        || key.sequence >= impl_->next_sequence) {
+        throw std::invalid_argument("invalid reserved scheduler task");
+    }
+    const auto cancellation = impl_->cancel_slots->acquire(std::move(task));
+    auto entry = Entry {
+        key.order, key.sequence, EntryTask { std::monostate { } },
+        impl_->cancel_slots.get(), cancellation
+    };
+    try {
+        impl_->enqueue_at(impl_->now, phase, std::move(entry));
+    } catch (...) {
+        impl_->cancel_slots->release(cancellation);
+        throw;
+    }
+    return ScheduledTaskHandle {
+        impl_->cancel_slots, cancellation.slot, cancellation.generation
+    };
+}
+
+std::optional<SchedulerOrderKey>
+Scheduler::next_current_order_key() const
+{
+    if (!impl_->in_callback || !impl_->batch_entries.empty()
+        || !impl_->current
+        || impl_->current->phase >= phase_count) {
+        throw std::logic_error(
+            "next current order key requires an ordinary scheduler callback");
+    }
+    auto& queue = impl_->current->current.queues[impl_->current->phase];
+    const auto* const next = queue.next();
+    return next == nullptr
+        ? std::nullopt
+        : std::optional<SchedulerOrderKey> {
+              SchedulerOrderKey {
+                  next->order, next->sequence, impl_.get(),
+                  impl_->reservation_epoch
+              }
+          };
+}
+
 void Scheduler::schedule_internal_at(
     const SimulationTick time,
     const SchedulerPhase phase,
@@ -1050,6 +1261,7 @@ void Scheduler::discard_pending()
             "cannot discard scheduler work while it is running");
     }
     impl_->discard_queued_and_notify();
+    ++impl_->reservation_epoch;
 }
 
 void Scheduler::reset()

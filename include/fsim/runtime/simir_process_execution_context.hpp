@@ -31,6 +31,21 @@ struct ProcessUpdateSlotBatch {
     std::span<std::uint64_t> active_words;
 };
 
+/// Immutable geometry for one owned native update slot. The executor owns the
+/// value and the runtime rechecks mutable ownership and phase state when it
+/// stages each activation. No pointer into the interpreter's span vector is
+/// retained across a fork.
+struct PreparedOwnedUpdateSlot {
+    const void* owner { };
+    ProcessId process { };
+    SignalId signal { };
+    std::uint32_t width { };
+    std::uint32_t word_count { };
+    std::array<std::uint64_t, 2U> own_masks { };
+};
+
+struct PureWavePreparedMember;
+
 /// Mutable view of one callback-buffered single-word Logic9 update. The four
 /// planes retain the exact std_ulogic values; mask selects bits written by the
 /// current activation.
@@ -292,11 +307,22 @@ public:
     /// path.
     [[nodiscard]] virtual const void*
     direct_update_domain() const noexcept;
+    /// Certify one owned slot's immutable layout before publishing a pure
+    /// wave member. The caller must keep the exact batch process, slot
+    /// storage, and geometry associated with this certificate and revoke it
+    /// before any such storage changes. Nullopt retains ordinary validated
+    /// batch staging.
+    [[nodiscard]] virtual std::optional<PreparedOwnedUpdateSlot>
+    prepare_owned_update_slot(const ProcessUpdateSlotBatch&);
     /// Consume already validated native slot batches in canonical cohort
     /// order. Returns false without mutating slots when the context requires
     /// the ordinary checked path.
     virtual bool write_validated_update_slot_batches(
         std::span<const ProcessUpdateSlotBatch>);
+    /// Stage the active batches in one ordered prepared wave. A false return
+    /// leaves every slot untouched for member-local ordered flushing.
+    virtual bool write_validated_prepared_update_slot_batches(
+        std::span<const PureWavePreparedMember* const>);
     /// Consume validated inline Logic9 accumulators without expanding them to
     /// temporary packed values. False leaves every mask untouched.
     virtual bool write_validated_logic9_update_batch(

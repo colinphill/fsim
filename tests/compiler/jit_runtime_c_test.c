@@ -288,7 +288,16 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864,
     "runtime event-trigger callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 872,
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, fused_activation_words) == 872,
+    "runtime fused activation mask was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, fused_activation_word_count) == 880,
+    "runtime fused activation word count was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, fused_activation_reserved) == 884,
+    "runtime fused activation reserved field was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 888,
     "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_update_slot_v1) == 80,
     "unexpected direct-update slot size");
@@ -912,7 +921,10 @@ int main(void) {
       NULL,
       sample_coverage,
       execute_class_property_operation,
-      query_event_triggered
+      query_event_triggered,
+      NULL,
+      0,
+      0
   };
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);

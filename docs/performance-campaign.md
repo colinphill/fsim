@@ -1,7 +1,402 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
+
+> **2026-09-29 CI repair and commit preparation.** The performance campaign
+> remains paused for review; no new benchmark or profiling run was made.
+> [Dated language comparison](performance-throughput-language-comparison-2026-09-29.md)
+> preserves the V23 report and its single-observation qualification limits.
+> [Hosted run 36480701008](https://github.com/colinphill/fsim/actions/runs/36480701008)
+> failed both Windows lanes in workspace application, Tcl debugger commands,
+> and the performance parser. Artifact staging extended otherwise usable paths
+> beyond MAX_PATH; design publication and metadata reads now use native extended
+> paths on Windows. Proof reuse now compares resolved, platform-normalized path
+> identities while retaining exact coverage, hash, and transcript checks.
+> The C ABI test and Windows contract inventory now include the previously
+> appended activation-mask fields (offsets 872/880/884, total size 888).
+>
+> Validation: full Release build passed; the first full CTest run passed
+> 448/454. The stale ABI inventory and its dependent gates subsequently passed
+> a 23/23 selected rerun. The three remaining package-dependent gates passed
+> using an exact intended-source export at `/tmp/fsim-ci-prep-source-20260929`,
+> leaving protected pre-existing `.aws` untouched. All 16 other offline-closure
+> prerequisites had passed in the full run before the aggregate was checked.
+> The clean manifest contains 2,135 ordered files. Focused Release passed 5/5
+> and focused Debug passed 5/5. The Tcl-disabled build and all four selected
+> tests passed.
+> This is combined local evidence, not a fresh 454/454 run or hosted Windows
+> confirmation. Logs are `/tmp/fsim-ci-prep-{release,debug,tcl-off}-*.log` and
+> `/tmp/fsim-ci-prep-clean-{uvm,offline-closure}.log`.
+>
+> Preparation scope is 93 files: retained performance work, CI repairs, and
+> this report. The `.orig` backup, generated graph/cache files, and `phase.fst`
+> remain excluded. The commit message is prepared in
+> `/tmp/fsim-prepared-commit-message.txt`; no commit or push has been made.
+> Retain the documented aggregate-stage allocation-exception caveat. The
+> next action is user review and commit/push authorization, with no further
+> performance iteration before review.
+
+> **2026-09-29 18:52 UTC throughput checkpoint — pause for review.** V23
+> terminal closure passed 7/7 focused checks, exact full-case parity, and bound
+> all 540 terminal readers. It removed 11,089,911 masked-frontier callbacks
+> and 11,089,934 queue entries versus V22 while retaining original deltas and
+> private commits. One uninstrumented cold screen measured **57.079736638 s**
+> for Verilog `original_throughput` (42.080 s above the 15 s target) and
+> **16.380882400 s** for matching mixed/VHDL throughput. Both have identical
+> raw/canonical outputs. [Common CPU comparison and chart](../build/performance-campaign/verilog-throughput-fast-loop/v23-language-comparison/report.md)
+> attribute the remaining gap using separate instrumented profiles. Retain
+> V23; no further optimization or measurement before user review. An inherited
+> aggregate-stage allocation-exception granularity caveat remains. The
+> source-package-manifest CTest is blocked by protected pre-existing `.aws`;
+> direct manifest/CMake registrations passed.
+
+> **2026-09-29 17:56 UTC throughput checkpoint.** Retained measured control is
+> V22 queue fix at **72.239842616 s** (57.240 s above target); no new timing
+> claim. The active generic gate combines disjoint owned aggregate writers
+> with a pure single-writer terminal reader in one masked native region while
+> retaining the committed pre-update snapshot and ordinary boundary commits.
+> A private post-elaboration copy normalizes only certified fixed container
+> reads; the original process remains fallback. Wide 65/129-bit mixed-sink and
+> VHDL projected-terminal tests, exact-source builds, graph review, and actual
+> terminal admission/activation counters are pending before any full run.
+
+> **2026-09-29 17:28 UTC throughput checkpoint.** V22 global-frontier queue fix
+> passed six focused checks and full 6×12 transcript/78-object parity. Its
+> counter-only run retained 15,069,883 masked calls and 96,599,156 represented
+> members while reducing physical frontier callbacks by 18.7%; a hybrid
+> ordered-bulk/min-heap WorkQueue removed the new sorting spike (30.0% to 1.4%
+> exclusive CPU samples). One frozen uninstrumented cold screen took
+> **72.239842616 s**, **57.240 s above** the 15 s target and 0.949 s slower
+> than a separate V21 observation; no Wall gain or repeatability claim.
+> [Three-way CPU histogram](../build/performance-campaign/verilog-throughput-fast-loop/v22-global-frontier-queuefix-profile/where-time-goes.png)
+> and [profile report](../build/performance-campaign/verilog-throughput-fast-loop/v22-global-frontier-queuefix-profile/report.md)
+> distinguish sampled CPU, counter diagnostics, and cold Wall. Retain V22;
+> next source gate is generic packed producer/consumer plus pure terminal-reader
+> region fusion that removes native/member/update work, preserving original
+> delta and VHDL projected-owner semantics. No new source edit or measurement
+> for a container callback micro-optimization alone.
+
+> **2026-09-29 16:40 UTC throughput checkpoint.** The latest controlled
+> frozen V21 full Verilog observation is **71.291367206 s**, **56.291 s**
+> above the 15 s goal; the near-equal paired V20 run leaves prior timing
+> variance unresolved. V22's global full-key masked frontier passes its
+> focused runtime differential test at widths 3, 65 and 129, including
+> interleaved regions, stop, exception, hook and fallback cases. Final
+> application/LLVM checks and projected exception-prefix review remain.
+> No V22 performance result exists; the next gate is counter-only proof of
+> material physical callback and queue-entry removal with exact parity.
+
+> **2026-09-29 16:10 UTC controlled-pair correction.** Frozen V21→V20 full cold Wall
+> was **71.291367206→71.182836692 s** (+0.109 s paired), with matching
+> user/native CPU, exact transcripts, and 78 native objects. The earlier
+> cross-window +14.008 s cannot be attributed to V21 from available
+> evidence; one pair also does not prove equal performance. Keep the V21
+> graph bridge under user direction; it bypassed 11.7567 million private
+> fanout entries but left masked activation counts unchanged. The 15 s
+> target is unmet. [Pair receipt](../build/performance-campaign/verilog-throughput-fast-loop/v21-private-bridge/freeze/controlled-pair-receipt.json).
+> Do not repeat cold runs without a new technical need.
+
+> **2026-09-29 16:00 UTC V21 measured.** The generic private bridge remains in the
+> worktree for diagnosis under the user's retention instruction. Its one
+> uninstrumented full 6×12 cold Wall was **69.583531710 s**, 14.008 s above
+> retained V20 **55.575112179 s**; the 15 s goal is still unmet. Full
+> transcript and 78 native objects match V20 byte-for-byte. Counter-only
+> evidence shows 8,100 certified private signals and 11.7567 million local
+> commits/fanout entries bypassed, without fewer masked activations. Six
+> focused tests pass, including wide SV/VHDL private bridge parity.
+> [V21 receipts](../build/performance-campaign/verilog-throughput-fast-loop/v21-private-bridge/freeze/)
+> separate counter timing from cold Wall. Diagnose the added path before
+> another edit or measurement; do not repeat this cold screen.
+
+> **2026-09-29 15:40 UTC checkpoint.** Frozen V20 remains the measured
+> control at **55.575112179 s** cold Wall (40.575 s goal gap). V21's generic
+> private-signal bridge retains V19/V20 native kernels and original delta
+> boundaries while bypassing resolved-value assembly and generic fanout for
+> certified producer outputs. Focused runtime parity and direct-commit
+> counters pass; repaired VHDL application and late-fork reader validation
+> await exact-source checks. No V21 benchmark has run.
+
+> **2026-09-29 15:13 UTC profile checkpoint.** Frozen V20 full-case sampling
+> assigned all 6,129 exclusive CPU samples to disjoint categories (zero lost,
+> 77 unresolved). Fanout/queue 12.33%, generated JIT 11.76%, logic
+> values/drivers 10.52%, masked dispatch/staging 9.63%, and scheduler/commit
+> 9.50% lead. The [report and histogram](../build/performance-campaign/verilog-throughput-fast-loop/v20-masked-frozen-profile/report.md)
+> keep profiled phase Wall separate from retained cold 55.575 s. Next gate is
+> architecture/source proof for more generic graph work, not another run.
+
+> **2026-09-29 15:02 UTC: V20 retained.** The one uninstrumented full
+> Verilog cold observation is **55.575112179 s**, 40.575 s above the 15 s
+> target and 4.024 s below V19's single observation. Raw/canonical output
+> matches frozen V16 exactly. A separate counter diagnostic measured
+> 15,069,883 masked calls for 96,599,156 original singleton activations,
+> 96,599,156 owner-stage calls bypassed, and no fallbacks/demotions. Normal
+> boundary publication remains. Generic wide SV/VHDL masked tests at
+> 9/65/129 bits pass. Profile frozen V20 before choosing the next graph
+> change; neither sample proves repeatability or causal savings. Evidence:
+> `build/performance-campaign/verilog-throughput-fast-loop/v20-masked-first/freeze/`.
+
+> **2026-09-29 14:40 UTC checkpoint.** Retained V19 full cold Wall is
+> 59.599133333 s (goal gap 44.599 s). V20 activation-masked native compiler
+> and runtime have initial focused passes; the pending-output observer needs
+> an exact-source rerun. Application binding and actual sparse wide VHDL
+> projected-write admission remain before full-case diagnostics. No V20
+> timing or repeatability claim exists.
+
+> **2026-09-29 13:54 UTC: retained V19 scoped-fork result.** One
+> uninstrumented full Verilog cold observation is **59.599133333 s**, with
+> exact V16 raw/canonical output parity; 15 s remains 44.599 s away. The
+> separate diagnostic confirms 540/540 graph plans survive 12 testbench
+> fork children and records 1,516,205 fused calls bypassing 97,037,120
+> owner-stage calls. This does not establish
+> repeatability or attribute the 21.472 s observed difference. Next graph
+> gate is generic compiled fusion across private singleton/reduction chains,
+> retaining V16 prepared batching and observable delta/owner behavior. No
+> repeat cold. See `build/performance-campaign/verilog-throughput-fast-loop/v19-fork-scope/freeze/`.
+
+> **2026-09-29 13:42 UTC convergence checkpoint.** Retained V19 has one
+> 81.071374422 s full cold observation with exact V16 output parity; the
+> 15 s goal remains 66.071 s away. Its 888 diagnostic fused invocations may
+> reflect global invalidation at the testbench fork. Validate scoped fork
+> invalidation and affected/unrelated child behavior, then measure actual
+> surviving hot work before a new graph-kernel expansion. No repeat cold run.
+
+> **2026-09-29 13:32 UTC: V19 graph-kernel pilot retained, target unmet.**
+> One uninstrumented full Verilog `original_throughput` 6×12 cold screen took
+> **81.071374422 s**, versus frozen V16 **83.468136206 s**; the 2.397 s
+> one-observation difference is not a causal or repeatability estimate.
+> Raw/canonical transcripts are byte-identical to V16; all 16 inputs, six
+> summaries and seven correctness lines pass. A separate counter-only full
+> diagnostic found 540 bound cohorts, five shared kernels and 888 fused
+> invocations representing 56,832 members, only 0.0294% of V16 prepared
+> member executions. V16 already batched those producer cohorts, so this is
+> not 56,832 native calls saved. Six focused checks pass, including actual
+> VHDL `bit_vector` and `std_logic_vector` fusion at widths 9/65/129 with
+> exact nine-state and delta parity. Next extend the elaborated graph plan
+> and fused kernel across repeated singleton/private XOR/reduction chains;
+> preserve V16 batching, original owner/update and boundary delta behavior.
+> The 15 s target remains unmet. Keep V19 for graph-driven iteration; do not
+> repeat this cold screen. See `build/performance-campaign/verilog-throughput-fast-loop/v19-graph-kernel/final-vhdl-freeze/`.
+
+> **2026-09-29 11:33 UTC: V19 prototype active.** The post-elaboration
+> dependency/ownership graph will drive a generic fused native kernel for
+> certified internal chains. Compiler admission and mechanism tests precede
+> runtime integration and any full cold screen. Frozen V16 remains the
+> 83.468136206 s comparison; V18 is rejected and restored. See the V19 source
+> gate under `build/performance-campaign/verilog-throughput-fast-loop/`.
+> Retain V19 for diagnosis and iteration even if its first measurement
+> regresses; preserve V16 as control and avoid an automatic rollback.
+
+> **2026-09-29: V18 rejected; V16 retained.** Full Verilog
+> `original_throughput` 6×12 cold Wall: V16 **83.468136206 s**; V18
+> **94.447004235 s** (+10.978868029 s), with exact raw/canonical and 57-object
+> parity. V18 diagnostic proved 8,644 generic private signals and 10,267,758
+> consumer callbacks/queue entries avoided, but the one cold screen regressed.
+> Production is restored byte-exact to V16; the generic semantic fixture and
+> archived V18 receipts remain. Next source gate seeks generic fused regions or
+> whole-chain elimination, not the already-reverted P26 range filter. The
+> 15-second target remains unmet by 68.468 seconds. See the top checkpoint in
+> `performance-resume.md`; no commit, push, CI, Vivado, or repeat cold run.
 # Cross-simulator performance campaign
 
-**Current checkpoint, 2026-09-28:** The performance change set and ten-case
+**Current full Verilog checkpoint, 2026-09-29:** V16's bounded app-owned
+stable-cell pool passes four affected Release tests, the translation-unit
+structure check, selftest, and a 129-instance block-growth parity witness.
+Its frozen preferred ThinLTO binary took **83.468 seconds total cold Wall**
+on the six-instance/twelve-codeword `original_throughput` case, versus the
+separate V15 observation of 93.051 seconds. All 16 inputs, six summaries,
+seven correctness lines, raw/canonical transcripts, and 57 native object
+paths and bytes match. V16 is provisionally retained, but one observation
+does not establish a causal or repeatable gain; the 15-second target remains
+**68.468 seconds away**. The separate full-case diagnostic confirms
+193,439,732 prepared members, 12,462,215 direct dispatches, and zero
+demotions or fallbacks. Of 7,543 CPU samples, 84 are unresolved and none
+lost; collector admission leads self samples at 11.75%, followed by static
+notification 5.89%, compiler preflight 4.56%, and cohort queueing 4.20%.
+Instruction annotation localizes the notification and cohort ready-scan
+branches, without proving cache misses or removable Wall time. Temporary
+profile instrumentation was restored byte for byte. The post-restoration
+preferred ELF differs from the frozen screened binary despite exact source
+and CMakeCache hashes; use the frozen V16 executable as the comparison
+artifact. At the 09:40 UTC convergence check, a grouped fanout/queue fusion
+was held because it changes the exception-visible prefix of trigger-mask
+stores before the first queue. The next architecture proof concerns moving
+the frame-owner `shared_ptr` out of the 72-byte hot process record while
+preserving the raw frame pointer and ownership lifetime. No V17 production
+edit or saving claim existed at that gate. V17 has since passed its source
+and lifetime proof: the strong frame owner moves to cold state, while the
+hot 64-byte, 64-aligned process record retains a raw frame pointer.
+Optimized `get_process` uses eight-entry deque blocks and shifts; six
+affected Release/structure checks pass, including a new fork-shared
+deferred-promotion witness. Its one full cold throughput screen took
+**88.595 seconds**, 5.127 seconds above V16's separate 83.468-second
+observation. Full output and all 57 native objects match byte for byte.
+V17 is rejected for lack of a supported end-to-end gain; its four production
+files were restored exactly, while the new regression test and frozen V17
+evidence remain. V16 remains the best single observation, 68.468 seconds
+above the goal. The next measurement is one diagnostic full-case CPU-clock
+profile on the frozen uninstrumented V16 binary, with a phase-Wall and
+disjoint sampled-self histogram before another optimization choice. Exact
+receipts are under `build/performance-campaign/verilog-throughput-fast-loop/`.
+
+**Active Verilog-throughput loop, 2026-09-28:** the user resumed the campaign
+on the full `original_throughput` case, targeting **15 seconds total Wall or
+less** for compile, elaboration, native setup and simulation. Source starts
+at `eb8a5042`, including the completed simplification and CI repairs. V1 first
+rebuilds the preferred ThinLTO host, freezes the full six-instance/twelve-codeword
+fixture, and collects a current cold wall baseline and separate detailed
+profile. The published 168.080-second result is historical. Rank changes by
+fresh absolute cost and actual execution routes; preserve CPU 0, O2 JIT,
+cold caches, full correctness and unchanged external RTL. The existing
+one-screen-per-candidate rule remains; no Vivado, reduced-case, paired or
+all-ten campaign is resumed. Evidence belongs under
+`build/performance-campaign/verilog-throughput-fast-loop/`. Keep the documented
+Sol/high execution owner and up to five Luna/max workers. Do not monitor CI
+or publish new changes without authorization. Batch 189 remains unstarted.
+
+**V1 measured checkpoint:** the frozen current ThinLTO binary takes 170.438
+seconds cold Wall on the full throughput fixture: 0.673 compile, 7.041
+elaborate, and 162.722 native setup/simulation. Correctness and all six
+fingerprints match. A separate profile and native-count replay put 99.82% of
+236.55 million native resumes on static waits across single and cohort routes.
+V2's bounded validated static-wait completion trial passes five focused tests
+and one cold full-throughput run at 146.515 seconds, versus the single V1
+observation of 170.438 seconds. Its canonical transcript and all 57 native
+object paths and bytes match V1 exactly. The observed difference is not a
+repeatable speedup claim. The separate V2 profile finds external-boundary self
+samples at 0.18% (V1 7.75%) and executor-resume self at 15.55% (V1 12.83%);
+profiled run duration increased, so the full Wall delta remains unattributed.
+V3 is gated on an actual-resume-weighted container-alias eligibility count
+before a bounded native completion metadata trial. The 15-second target remains unmet.
+The diagnostic-only full-case replay found 86.45% of native resumes in
+processes with zero container registers, which cannot install a container-object
+alias. V3's constructor proof and redundant single-wait opcode-read removal
+pass six focused Release tests. Its one cold full-case observation is 137.220
+seconds (129.757 native), with exact V2 stdout and all 57 native object paths
+and bytes. The observed 9.295-second difference is one sample, not a proven
+repeatable saving. V3 is provisionally retained; separate full-case profiling
+and re-ranking follow below. The 15-second target remains unmet.
+The separate V3 profile reports 12,238 samples, 79 unresolved, none lost.
+Static-cohort execution, next-delta wakeup, and cohort resume now dominate
+host self samples. A diagnostic replay found 99.98% app-level cohort cache
+hits, but did not establish full registered-cohort readiness; no prepared
+cohort cache is selected without its lifecycle and invalidation proof.
+V4 trials the simpler next-delta dynamic-wait cleanup guard, using an
+existing hot flag with no added state or cache. Six focused Release tests,
+including killed `WaitOn`/`WaitPla` children, pass; the preferred ThinLTO
+screen takes 134.270 seconds cold total Wall (126.955 native), with exact V3
+stdout, transcript, and all 57 native object bytes. The observed 2.950-second
+difference is one sample, not a causal or repeatable gain claim. V4 is
+provisionally retained. A separate full-case profile has 12,930 samples,
+88 unresolved and none lost; generated JIT self is 19.52%, while executor
+resume, singleton execute and static-cohort execute lead host self costs.
+The sampled 4.92% cold-guard share was a ceiling,
+not a promised or measured saving. The 15-second target remains unmet.
+V5 trialed a true move of a live interpreter-operation tracking flag into
+existing hot-state padding; Clang 22 keeps the process record at 72 bytes,
+and focused Release tests pass 6/6. Its one cold full-case observation was
+137.390 seconds (130.077 native), 3.120 seconds slower than V4; exact output
+and all 57 native objects matched. V5 source and test were reverted. The next
+design investigation targets compile-proven pure deferred-assignment cohort
+fusion through the current ordered binding with generic fallback.
+V6's first strict process order excluded the actual full-case family: its cold
+screen was 170.949 seconds and the separate profile mapped no fused helper.
+A construction-only dump established the actual `DDREREBWSJ` order; the
+diagnostic edit was removed. V7 uses that exact order and passes focused 3/3.
+Its one cold full-throughput observation is 129.308 seconds total Wall
+(122.093 native), 4.963 seconds below V4's single observation. Output,
+transcript and all 57 native object bytes match V4. A separate profile maps
+and samples one fused JIT helper, while cohort wrapper and preflight costs
+remain material. V7 is provisionally retained without a repeatability or
+causal-speedup claim. The 15-second target remains unmet by 114.308 seconds.
+V8's shared-context guard trial passes focused 4/4 but its one cold screen took
+155.867 seconds; a separate profile confirmed fusion yet did not explain the
+cold/profile difference. It is unqualified as a standalone optimization.
+A restored construction-only diagnostic found 540 exact pure cohorts with
+34,560 fully transient members; all 540 share each cohort's actual input pair.
+V9 binds that family to a compact helper and passes focused 4/4. Its one cold
+full-case observation is **111.349 seconds** (104.235 native), with exact V7
+transcript and all 57 native object bytes. A separate profile maps and samples
+one compact helper and no old full fused helper. V9 is provisionally retained
+without a causal or repeatability claim. The 15-second target remains unmet
+by **96.349 seconds**; current singleton, cohort, notification and update
+costs require renewed absolute-cost ranking before another trial.
+V10's first whole-task pure-wave trial took 257.033 seconds cold because an
+unused private result-buffer ABI check excluded its route. V11 removed that
+check and completed 193.440 million pure-wave members, but took 200.432
+seconds cold. V12 reused bound member leases and compact runtime entries;
+four focused checks passed and its full cold observation was **144.645
+seconds**, still 33.296 seconds above retained V9. The canonical transcript
+and all 57 native objects matched V9 byte for byte. A separate V12 profile
+confirmed full route transfer; repeated cold operation metadata reads and app
+guards dominate its sampled host path. V12 is unqualified, and the next
+bounded decision awaits immutable-metadata and certificate-lifetime proofs.
+V13 caches immutable operation-count eligibility and reuses each pure member's
+private warm proof until a non-pure mutation invalidates it. Focused checks
+pass 4/4. Its one cold full-case observation is **109.959 seconds** (102.743
+native), 1.390 seconds below V9, with identical raw/canonical transcript and
+all 57 native object paths and bytes. This is a provisional best observation,
+not a repeatable or causal gain; the target remains 94.959 seconds away. A
+separate full-case profile counted 193.393 million warm-binding hits and
+46,980 full scans. Runtime pure-wrapper self fell to 12.39% from V12's 17.73%,
+while app admission remained 10.86%; the sampled pure route's entire 40.52%
+inclusive share is smaller than the remaining target gap. Further narrow guard
+work is therefore not a target-scale choice. V9 remains a frozen fallback.
+At the 06:40 UTC convergence check, V10 through V13 had mostly recovered
+the broad pure-wave route's own overhead. The next bounded architecture gate
+is a prepared member-record stream replacing per-wave entry, lease-pointer,
+and batch reconstruction while preserving task order, logical deltas, and
+the existing update-stage rules. It leaves the 72-byte hot process record
+unchanged and does not repeat rejected P33 unchanged-value projection or
+P38 operation-extent caching. No gain or 15-second outcome is predicted.
+See [the active resume](performance-resume.md) and the V1/V2 receipts for
+exact evidence and profile limitations.
+
+V14 implemented that bounded prepared-record stream. Four affected Release
+tests and both translation-unit structure checks pass. One cold full
+`original_throughput` observation is **95.107 seconds total Wall** (0.673
+compile, 6.490 elaborate, 87.943 native setup/simulation), with exact raw
+and canonical transcript and all 57 native-object paths and bytes matching
+V13. The observed 14.852-second reduction from V13 is one screen, not a
+repeatability or causal claim. V14 is provisionally retained; V9 and V13
+remain preserved, and the 15-second target is still 80.107 seconds away.
+A separate full-case diagnostic profile must rank the remaining cost before
+another production change. Evidence is under
+`build/performance-campaign/verilog-throughput-fast-loop/v14-prepared-wave/`.
+That profile confirms 193.440 million completed prepared members with zero
+dispatch declines or lazy flushes. Runtime collection is 12.79% self, prepared
+staging 5.14%, compiler preflight 4.36%, and five mapped pure JIT helpers
+7.78%; app dispatch is 0.07%. Of 8,328 simulation samples, 72 are unresolved
+and none lost. Inclusive scheduler, staging, and commit shares overlap, so
+these are opportunity evidence rather than a removable-time sum. Temporary
+diagnostic source and launcher edits were restored byte for byte.
+At the 07:40 UTC convergence check, the 95.107-second V14 observation is
+provisional progress against V13's 109.959 seconds, with the goal still
+80.107 seconds away. One full saved-snapshot diagnostic replay counted
+193.440 million active prepared slots, exactly one per member, all on the
+owned-driver path: 155.120 million unchanged and 38.320 million changed.
+No prepared-stage fallback occurred; transcript and native objects matched
+the cold V14 run. These counts justify a bounded selected-slot staging design
+gate, not a timing claim or permission to skip activations, deltas, force,
+ownership, notification, or ordered commit semantics.
+
+V15 implements that narrow selected owned-slot staging path. Preparation
+certifies one Logic4 slot and at most two word masks beside the stable
+prepared member; the hot stage uses live ownership and phase data and falls
+through to the existing per-slot continuation after demotion, without
+replaying earlier members. Four affected Release tests and both structure
+checks pass. Its single full cold throughput screen took **93.051 seconds**
+total Wall, versus V14's single 95.107-second observation, with byte-identical
+raw/canonical transcript and all 57 native objects. The 2.056-second
+difference is provisional and does not establish repeatability or causality;
+the 15-second target remains 78.051 seconds away. A separate full-case
+diagnostic profile observed all 193.440 million prepared members on the new
+owned-slot route, including 155.120 million unchanged and 38.320 million
+changed values, with zero live demotions or whole-wave fallbacks. All 46,980
+cold certificates succeeded. Of 8,481 simulation samples, 80 are unresolved
+and none lost. Collector, staging, compiler, and commit paths still dominate
+different overlapping stacks. The frozen V14 binary remains a fallback;
+the uninstrumented V15 screen and instrumented profile are archived separately
+under `build/performance-campaign/verilog-throughput-fast-loop/v15-prepared-owned-slot/`.
+
+**Historical checkpoint, 2026-09-28:** The performance change set and ten-case
 matrix were committed and pushed as `6efa4c35` to `origin/codex/v3`.
 Release 454/454, focused Debug 7/7, Tcl-off 6/6, and final packaging/docs
 24/24 passed. All ten matrix cases passed stimulus and correctness parity;

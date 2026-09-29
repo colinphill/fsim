@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace fsim::tests::runtime {
 
@@ -293,6 +294,121 @@ void test_simir_external_executor_boundary_validation()
         1U, 2U, "invalid dynamic boundary instruction");
     expect_failure(
         0U, 2U, "non-sequential dynamic boundary resume instruction");
+
+    Interpreter missing_sensitivity;
+    Process static_wait;
+    static_wait.id = 0U;
+    static_wait.name = "unvalidated_static_wait";
+    static_wait.operations = { WaitSensitivity { } };
+    const auto static_wait_id
+        = missing_sensitivity.add_process(std::move(static_wait));
+    ProcessResumeResult boundary { 0U, 1U };
+    boundary.external.kind = ExternalSuspendKind::wait_sensitivity;
+    missing_sensitivity.set_process_executor(
+        static_wait_id,
+        std::make_unique<FixedExternalExecutor>(std::move(boundary)));
+    try {
+        (void)missing_sensitivity.run();
+        throw std::runtime_error {
+            "an unvalidated static wait without sensitivity was accepted"
+        };
+    } catch (const InterpreterError& error) {
+        require(
+            std::string_view { error.what() }.find(
+                "dynamic static wait has no sensitivity list")
+                != std::string_view::npos,
+            "unvalidated static wait keeps its sensitivity diagnostic");
+    }
+}
+
+void test_simir_validated_static_wait_completion()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    Interpreter interpreter;
+    const auto dynamic_trigger = interpreter.add_signal(
+        { "top.dynamic_trigger", PackedLogic4::from_msb_string("0") });
+    const auto clock = interpreter.add_signal(
+        { "top.clock", PackedLogic4::from_msb_string("0") });
+    Process process;
+    process.id = 0U;
+    process.name = "validated_static_wait";
+    process.static_sensitivity.push_back({ clock, EdgeKind::posedge });
+    process.operations = {
+        WaitOn { { dynamic_trigger } }, WaitSensitivity { }, Halt { }
+    };
+    const auto bound = process;
+    const auto id = interpreter.add_process(std::move(process));
+
+    class ValidatedWaitExecutor final : public ProcessExecutor {
+    public:
+        ValidatedWaitExecutor(
+            const Process& bound, const SignalId dynamic_trigger)
+            : bound_(bound)
+            , dynamic_trigger_(dynamic_trigger)
+        {
+            require(!bound_.static_sensitivity.empty(),
+                "validated static wait requires a bound sensitivity");
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext&,
+            const InstructionIndex start) override
+        {
+            require(start == resumes_,
+                "validated executor observes sequential kernel resumes");
+            ProcessResumeResult result { start, start + 1U };
+            if (resumes_++ == 0U) {
+                result.external.kind = ExternalSuspendKind::wait_on;
+                result.external.sensitivity.push_back(
+                    { dynamic_trigger_, EdgeKind::any });
+                result.external.timeout = 4U;
+            } else if (start == 1U) {
+                require(operation_holds<WaitSensitivity>(
+                            bound_.operations[start]),
+                    "validated executor returns its bound static wait");
+                result.external.kind
+                    = ExternalSuspendKind::validated_wait_sensitivity;
+            } else {
+                result.external.kind = ExternalSuspendKind::halt;
+            }
+            return result;
+        }
+
+        std::size_t resumes_ { };
+
+    private:
+        const Process& bound_;
+        SignalId dynamic_trigger_ { };
+    };
+    auto executor = std::make_unique<ValidatedWaitExecutor>(
+        bound, dynamic_trigger);
+    auto* const probe = executor.get();
+    interpreter.set_process_executor(id, std::move(executor));
+
+    std::vector<std::pair<SimulationTick, InstructionIndex>> suspensions;
+    interpreter.set_execution_point_hook(
+        [&](Scheduler& scheduler, const ExecutionPoint& point) {
+            if (point.process == id
+                && point.kind == ExecutionPointKind::process_suspend) {
+                suspensions.emplace_back(
+                    scheduler.now(), point.instruction);
+            }
+        });
+    interpreter.schedule_signal_at(
+        dynamic_trigger, PackedLogic4::from_msb_string("1"), 1U, 0U);
+    interpreter.schedule_signal_at(
+        clock, PackedLogic4::from_msb_string("1"), 6U, 0U);
+
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed && probe->resumes_ == 3U,
+        "dynamic event, validated static wait and completion all execute");
+    require(
+        suspensions == std::vector<std::pair<SimulationTick,
+                           InstructionIndex>> {
+            { 0U, 0U }, { 1U, 1U }, { 6U, 2U } },
+        "validated static wait retains execution-point hooks and event order");
 }
 
 void test_simir_system_command()

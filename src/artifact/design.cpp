@@ -1200,7 +1200,7 @@ std::optional<DesignMetadata> load_design_metadata(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics) {
   const auto path = directory / kDesignMetadataFilename;
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(support::path_for_native_io(path), std::ios::binary);
   if (!input) {
     report(
         diagnostics, kIoCode, "cannot open .fsimdesign metadata",
@@ -1229,8 +1229,9 @@ bool publish_design(
     report(diagnostics, kIoCode, "design output path must not be empty");
     return false;
   }
+  const auto io_destination = support::path_for_native_io(destination);
   std::error_code exists_error;
-  if (std::filesystem::exists(destination, exists_error) || exists_error) {
+  if (std::filesystem::exists(io_destination, exists_error) || exists_error) {
     report(
         diagnostics, kIoCode,
         "design output already exists or cannot be inspected",
@@ -1313,8 +1314,8 @@ bool publish_design(
     report(diagnostics, kIoCode, "design payload set is incomplete");
     return false;
   }
-  const auto parent = destination.parent_path().empty()
-      ? std::filesystem::path{"."} : destination.parent_path();
+  const auto parent = io_destination.parent_path().empty()
+      ? std::filesystem::path{"."} : io_destination.parent_path();
   std::error_code parent_error;
   std::filesystem::create_directories(parent, parent_error);
   if (parent_error) {
@@ -1323,7 +1324,7 @@ bool publish_design(
         "cannot create design output parent: " + parent_error.message());
     return false;
   }
-  const auto staging = staging_path(destination);
+  const auto staging = staging_path(io_destination);
   Cleanup cleanup{staging};
   std::error_code stage_error;
   if (!std::filesystem::create_directory(staging, stage_error) || stage_error) {
@@ -1365,7 +1366,7 @@ bool publish_design(
     return false;
   }
   std::error_code install_error;
-  std::filesystem::rename(staging, destination, install_error);
+  std::filesystem::rename(staging, io_destination, install_error);
   if (install_error) {
     report(
         diagnostics, kIoCode,

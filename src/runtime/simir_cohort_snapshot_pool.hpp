@@ -92,6 +92,21 @@ public:
         return true;
     }
 
+    /// Copy a pending snapshot for admission checks without consuming its
+    /// token. The caller must not invoke a reentrant scheduler callback while
+    /// inspecting the copy; a declined fast path leaves the original task
+    /// available to its ordinary consumer.
+    [[nodiscard]] bool copy_pending(
+        const Token token, std::vector<ProcessId>& destination) const
+    {
+        const auto* const slot = pending_slot(token);
+        if (slot == nullptr) {
+            return false;
+        }
+        destination.assign(slot->members.begin(), slot->members.end());
+        return true;
+    }
+
     /// Invalidate one pending token and retain its snapshot capacity.
     void release(const Token token) noexcept
     {
@@ -161,6 +176,11 @@ private:
             return nullptr;
         }
         return &slot;
+    }
+
+    [[nodiscard]] const Slot* pending_slot(const Token token) const noexcept
+    {
+        return const_cast<CohortSnapshotPool*>(this)->pending_slot(token);
     }
 
     void finish_consume(const std::size_t index) noexcept

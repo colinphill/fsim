@@ -227,7 +227,6 @@ void Interpreter::Impl::complete_process(
     process.suspended = false;
     process.suspended_wake = false;
     process.waiting_on_static = false;
-    process.waiting_on_signal = false;
     process.cold().waiting_for_children = false;
     process.cold().waiting_fork_group.reset();
     if (process.cold().waiting_process) {
@@ -537,6 +536,8 @@ void Interpreter::Impl::spawn_fork(
         child.cold().design_process = design_process;
         child.id = child_id;
         child.has_callable_frame_push = parent.has_callable_frame_push;
+        child.pure_wave_operation_count_supported
+            = parent.pure_wave_operation_count_supported;
         child.program().name += ".$fork[" + std::to_string(instruction)
             + "].child[" + std::to_string(children.size()) + "]";
         child.program().initialize = false;
@@ -562,9 +563,19 @@ void Interpreter::Impl::spawn_fork(
         if (operation.join != ForkJoinKind::none) {
             child.cold().fork_group = group_id;
         }
-        processes.push_back(std::move(child));
-        static_fanout_dirty = true;
-        register_static_sensitivity_cohort(child_id);
+        try {
+            processes.push_back(std::move(child));
+            pure_wave_prepared_slots.emplace_back();
+            static_fanout_dirty = true;
+            register_static_sensitivity_cohort(child_id);
+            invalidate_fused_static_cohorts_for_fork(child_id);
+            invalidate_fused_masked_regions_for_fork(child_id);
+        } catch (...) {
+            // Insertion may have changed the graph before failing. Retire
+            // every certificate rather than retaining a partial topology.
+            invalidate_fused_static_cohorts();
+            throw;
+        }
         children.insert(child_id);
     }
 

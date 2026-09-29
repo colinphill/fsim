@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -343,6 +344,101 @@ void test_simir_fork_process_lifecycle()
                     == static_cast<std::uint32_t>(ProcessStatus::killed)
                 && value(6) == 1,
             "generation-safe process handles await, kill, and report lifecycle");
+    }
+
+    for (const bool wait_on_container : { false, true }) {
+        Interpreter interpreter;
+        const auto trigger = interpreter.add_signal({
+            "kill_wait.trigger", PackedLogic4::from_msb_string("0")
+        });
+        const auto observed = interpreter.add_signal({
+            "kill_wait.observed", PackedLogic4::from_msb_string("0")
+        });
+        ContainerType memory_type;
+        memory_type.fixed = true;
+        memory_type.dimensions.emplace_back(0, 0);
+        ContainerObjectId memory { };
+        ContainerObjectId replacement { };
+        if (wait_on_container) {
+            memory = interpreter.add_container_object({
+                "kill_wait.memory",
+                ContainerValue {
+                    memory_type,
+                    { PackedLogic4::from_msb_string("0") },
+                    { }
+                },
+                std::nullopt
+            });
+            replacement = interpreter.add_container_object({
+                "kill_wait.replacement",
+                ContainerValue {
+                    memory_type,
+                    { PackedLogic4::from_msb_string("1") },
+                    { }
+                },
+                std::nullopt
+            });
+        }
+
+        Process process;
+        process.id = 0;
+        process.name = wait_on_container
+            ? "killed_wait_pla" : "killed_wait_on";
+        process.register_count = 3;
+        process.debug_locals = {
+            DebugLocal {
+                "child_status", "process::state", 2, 32, { }, { }, { },
+                ValueKind::logic4, { } },
+        };
+        if (wait_on_container) {
+            process.container_register_count = 1;
+            process.container_register_types = { memory_type };
+        }
+        process.operations = {
+            Fork { { 8 }, ForkJoinKind::none },
+            Yield { },
+            ProcessKill { 0 },
+        };
+        if (wait_on_container) {
+            process.operations.emplace_back(
+                ReadContainerObject { 0, replacement });
+            process.operations.emplace_back(
+                WriteContainerObject { memory, 0, std::nullopt });
+        } else {
+            process.operations.emplace_back(LoadConstant {
+                1, PackedLogic4::from_msb_string("1")
+            });
+            process.operations.emplace_back(WriteBlocking { trigger, 1 });
+        }
+        process.operations.emplace_back(WaitFor { 1 });
+        process.operations.emplace_back(ProcessStatusQuery { 2, 0 });
+        process.operations.emplace_back(Halt { });
+        process.operations.emplace_back(ProcessSelf { 0 });
+        if (wait_on_container) {
+            process.operations.emplace_back(WaitPla { memory, { } });
+        } else {
+            process.operations.emplace_back(WaitOn { { trigger } });
+        }
+        process.operations.emplace_back(LoadConstant {
+            1, PackedLogic4::from_msb_string("1")
+        });
+        process.operations.emplace_back(WriteBlocking { observed, 1 });
+        process.operations.emplace_back(ForkEnd { });
+        (void)interpreter.add_process(std::move(process));
+
+        const auto result = interpreter.run();
+        const auto source_changed = wait_on_container
+            ? interpreter.container_object_value(memory).elements.front()
+                  .to_msb_string() == "1"
+            : interpreter.signal_value(trigger).to_msb_string() == "1";
+        require(
+            result.status == RunStatus::completed
+                && result.time == 1
+                && source_changed
+                && interpreter.signal_value(observed).to_msb_string() == "0"
+                && interpreter.read_debug_local(0, 0).low_word().aval
+                    == static_cast<std::uint32_t>(ProcessStatus::killed),
+            "killed WaitOn or WaitPla child must stay inactive after a source change");
     }
 
     {

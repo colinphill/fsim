@@ -781,7 +781,10 @@ namespace llvm_detail {
         == 856);
     static_assert(
         offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864);
-    static_assert(sizeof(fsim_jit_runtime_v1) == 872);
+    static_assert(offsetof(fsim_jit_runtime_v1, fused_activation_words) == 872);
+    static_assert(offsetof(fsim_jit_runtime_v1, fused_activation_word_count) == 880);
+    static_assert(offsetof(fsim_jit_runtime_v1, fused_activation_reserved) == 884);
+    static_assert(sizeof(fsim_jit_runtime_v1) == 888);
     static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
     static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
     static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);

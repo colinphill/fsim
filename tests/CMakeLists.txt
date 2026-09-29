@@ -4029,6 +4029,9 @@ if(FSIM_WITH_LLVM)
     PRIVATE
       compiler/llvm_jit_test_support.cpp
       compiler/llvm_jit_scheduling_test.cpp
+      compiler/llvm_jit_pure_cohort_test.cpp
+      compiler/llvm_jit_fused_static_process_test.cpp
+      compiler/llvm_jit_fused_masked_process_test.cpp
       compiler/llvm_jit_value_test.cpp
       compiler/llvm_jit_value_arithmetic_test.cpp
       compiler/llvm_jit_cache_test.cpp
@@ -4602,6 +4605,7 @@ if(TARGET fsim_application)
       fsim_application_tests
       PRIVATE
         app/application_test_cli.cpp
+        app/fused_static_executor_test.cpp
         app/application_test_cli_trace.cpp
         app/application_test_artifact_phases.cpp
         app/application_test_artifact_verilog.cpp
@@ -4610,6 +4614,7 @@ if(TARGET fsim_application)
         app/application_test_multiple_roots.cpp
         app/application_test_non_project_cli.cpp
         app/application_test_simulation.cpp
+        app/application_test_fused_static.cpp
         app/application_test_classes.cpp
         app/application_test_uvm_virtual.cpp
         app/application_test_source_updates.cpp

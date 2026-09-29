@@ -785,6 +785,7 @@ bool Interpreter::clear_process_executor(const ProcessId process)
         return false;
     }
     auto& state = impl_->get_process(process);
+    impl_->pure_wave_prepared_slots[process] = { };
     state.executor.reset();
     state.cold().deferred_executor.reset();
     return true;
@@ -834,6 +835,7 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
     }
     executor->redirect(process.pc);
     process.executor = std::move(executor);
+    pure_wave_prepared_slots[process.id] = { };
     process.cold().deferred_executor.reset();
     process.frame.reset();
 }
@@ -1045,9 +1047,27 @@ void Interpreter::Impl::execute_static_cohort(
             });
         }
         std::span<ProcessCohortResumeEntry> entries = overflow_entries;
-
+        const auto& first_context = overflow_contexts.front();
+        const ProcessCohortNativeContext native_context {
+            this,
+            first_context.direct_signal_aval(),
+            first_context.direct_signal_bval(),
+            first_context.signal_writer_revision(),
+            first_context.supports_direct_word_updates(),
+            first_context.execution_points_enabled(),
+            first_context.direct_wide_signal_aval(),
+            first_context.direct_wide_signal_bval(),
+            first_context.direct_wide_signal_offsets(),
+            first_context.direct_signal_logic9_plane0(),
+            first_context.direct_signal_logic9_plane1(),
+            first_context.direct_signal_logic9_plane2(),
+            first_context.direct_signal_logic9_plane3(),
+            first_context.direct_wide_signal_logic9_plane2(),
+            first_context.direct_wide_signal_logic9_plane3(),
+        };
         const auto executed
-            = entries.front().executor->resume_cohort(entries);
+            = entries.front().executor->resume_cohort_with_native_context(
+                entries, native_context);
         if (native_phase_profile_enabled) {
             ++native_phase_profile_cohort_resumes;
             native_phase_profile_cohort_members += executed;
@@ -1075,10 +1095,10 @@ void Interpreter::Impl::execute_static_cohort(
                 ++native_process_resume_counts[id];
                 ++native_process_cohort_resume_counts[id];
                 ++native_process_cohort_boundary_counts[
-                    static_cast<std::size_t>(
+                    external_suspension_profile_index(
                         entries[offset].result.external.kind)];
-                if (entries[offset].result.external.kind
-                    == ExternalSuspendKind::wait_sensitivity) {
+                if (is_static_wait_suspension(
+                        entries[offset].result.external.kind)) {
                     ++native_process_cohort_static_wait_counts[id];
                 }
             }

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <new>
 #include <ranges>
 #include <string>
 #include <vector>
@@ -160,6 +161,356 @@ private:
 
 } // namespace
 
+std::optional<PureBitAndAssignment> classify_pure_bit_and_assignment(
+    const runtime::simir::Process& process,
+    const compiler::JitProcessFrameLayout& layout,
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const runtime::simir::ValueKind> signal_value_kinds,
+    const std::span<const runtime::simir::SignalId> direct_read_signals,
+    const std::span<const runtime::simir::SignalId> direct_update_signals)
+{
+    using namespace runtime::simir;
+
+    // This is an exact admission contract, not an operation histogram. The
+    // final jump re-enters the body after each static-sensitivity suspension.
+    if (process.operations.size() != 10U
+        || process.static_sensitivity.empty()
+        || !process.static_trigger_regions.empty()
+        || !process.container_register_types.empty()
+        || !process.debug_string_locals.empty()
+        || !process.debug_container_locals.empty()
+        || layout.uses_logic9
+        || layout.register_count != process.register_count
+        || layout.register_widths.size() != process.register_count
+        || layout.register_word_offsets.size() != process.register_count
+        || direct_read_signals.size()
+            != layout.direct_read_signals.size()
+        || direct_update_signals.size()
+            != layout.direct_update_signals.size()
+        || (!process.register_value_kinds.empty()
+            && process.register_value_kinds.size()
+                != process.register_count)
+        || !operation_holds<WaitSensitivity>(process.operations[8])
+        || !operation_holds<Jump>(process.operations[9])) {
+        return std::nullopt;
+    }
+    // The fused body preserves this exact instruction order. Public native
+    // frame and signal planes are not required to have disjoint storage.
+    if (!operation_holds<DebugPoint>(process.operations[0])
+        || !operation_holds<DebugPoint>(process.operations[1])
+        || !operation_holds<ReadSignal>(process.operations[2])
+        || !operation_holds<Extract>(process.operations[3])
+        || !operation_holds<ReadSignal>(process.operations[4])
+        || !operation_holds<Extract>(process.operations[5])
+        || !operation_holds<Binary>(process.operations[6])
+        || !operation_holds<WriteUpdateSlice>(process.operations[7])) {
+        return std::nullopt;
+    }
+    const auto* jump = operation_get_if<Jump>(&process.operations[9]);
+    if (jump->target != 0U) {
+        return std::nullopt;
+    }
+
+    std::array<const ReadSignal*, 2> reads { };
+    std::array<const Extract*, 2> extracts { };
+    std::array<std::size_t, 2> read_indices { };
+    std::array<std::size_t, 2> extract_indices { };
+    const Binary* binary { };
+    const WriteUpdateSlice* update { };
+    std::size_t binary_index { };
+    std::size_t update_index { };
+    std::size_t read_count { };
+    std::size_t extract_count { };
+    std::size_t debug_count { };
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const auto& stored = process.operations[index];
+        if (const auto* read = operation_get_if<ReadSignal>(&stored)) {
+            if (read_count == reads.size()) {
+                return std::nullopt;
+            }
+            read_indices[read_count] = index;
+            reads[read_count++] = read;
+        } else if (const auto* extract
+            = operation_get_if<Extract>(&stored)) {
+            if (extract_count == extracts.size()) {
+                return std::nullopt;
+            }
+            extract_indices[extract_count] = index;
+            extracts[extract_count++] = extract;
+        } else if (const auto* binary_candidate
+            = operation_get_if<Binary>(&stored)) {
+            if (binary != nullptr) {
+                return std::nullopt;
+            }
+            binary = binary_candidate;
+            binary_index = index;
+        } else if (const auto* update_candidate
+            = operation_get_if<WriteUpdateSlice>(&stored)) {
+            if (update != nullptr) {
+                return std::nullopt;
+            }
+            update = update_candidate;
+            update_index = index;
+        } else if (operation_holds<DebugPoint>(stored)) {
+            ++debug_count;
+        } else {
+            return std::nullopt;
+        }
+    }
+    if (read_count != 2U || extract_count != 2U
+        || debug_count != 2U || binary == nullptr || update == nullptr
+        || binary->operation != BinaryOperator::bit_and
+        || binary_index >= update_index
+        || !std::ranges::all_of(
+            extract_indices,
+            [binary_index](const auto index) {
+                return index < binary_index;
+            })) {
+        return std::nullopt;
+    }
+
+    const auto valid_register = [&](const RegisterId id,
+                                    const std::uint32_t width) {
+        return id < layout.register_widths.size()
+            && layout.register_widths[id] == width
+            && layout.register_word_offsets[id]
+                < layout.register_word_count
+            && (process.register_value_kinds.empty()
+                || process.register_value_kinds[id] == ValueKind::logic4);
+    };
+    PureBitAndAssignment descriptor;
+    for (std::size_t index = 0; index < reads.size(); ++index) {
+        const auto& read = *reads[index];
+        if (read.kind != SignalReadKind::current
+            || read.clock || read.gate
+            || read.signal >= signal_widths.size()
+            || read.signal >= signal_value_kinds.size()
+            || signal_value_kinds[read.signal] != ValueKind::logic4
+            || signal_widths[read.signal] == 0U
+            || signal_widths[read.signal] > 64U
+            || !valid_register(
+                read.destination, signal_widths[read.signal])
+            || std::ranges::find(
+                direct_read_signals, read.signal)
+                == direct_read_signals.end()
+            || std::ranges::count(
+                direct_read_signals, read.signal) != 1) {
+            return std::nullopt;
+        }
+        descriptor.inputs[index] = read.signal;
+        descriptor.read_registers[index] = read.destination;
+    }
+    if (descriptor.read_registers[0] == descriptor.read_registers[1]) {
+        return std::nullopt;
+    }
+    std::array<bool, 2> matched_reads { };
+    for (std::size_t index = 0; index < extracts.size(); ++index) {
+        const auto& extract = *extracts[index];
+        const auto found = std::ranges::find(
+            descriptor.read_registers, extract.source);
+        if (found == descriptor.read_registers.end()
+            || extract.width != 1U
+            || !valid_register(extract.destination, 1U)) {
+            return std::nullopt;
+        }
+        const auto read_index = static_cast<std::size_t>(
+            found - descriptor.read_registers.begin());
+        if (read_index != index || matched_reads[read_index]
+            || read_indices[read_index] >= extract_indices[index]
+            || extract.offset >= signal_widths[
+                descriptor.inputs[read_index]]) {
+            return std::nullopt;
+        }
+        matched_reads[read_index] = true;
+        descriptor.extracted_registers[read_index]
+            = extract.destination;
+        descriptor.input_bit_offsets[read_index]
+            = extract.offset;
+    }
+    if (descriptor.extracted_registers[0]
+            == descriptor.extracted_registers[1]
+        || !valid_register(binary->destination, 1U)
+        || !((binary->lhs == descriptor.extracted_registers[0]
+                && binary->rhs == descriptor.extracted_registers[1])
+            || (binary->lhs == descriptor.extracted_registers[1]
+                && binary->rhs == descriptor.extracted_registers[0]))
+        || update->source != binary->destination
+        || update->signal >= signal_widths.size()
+        || update->signal >= signal_value_kinds.size()
+        || signal_value_kinds[update->signal] != ValueKind::logic4
+        || signal_widths[update->signal] == 0U
+        || signal_widths[update->signal] > 64U
+        || update->offset >= signal_widths[update->signal]
+        || std::ranges::find(
+            direct_update_signals, update->signal)
+            == direct_update_signals.end()
+        || std::ranges::count(
+            direct_update_signals, update->signal) != 1
+        || process.driver_regions.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto& region = process.driver_regions.front();
+    if (region.signal != update->signal || region.whole
+        || region.offset != update->offset || region.width != 1U) {
+        return std::nullopt;
+    }
+    const std::array destination_registers {
+        descriptor.read_registers[0], descriptor.read_registers[1],
+        descriptor.extracted_registers[0],
+        descriptor.extracted_registers[1], binary->destination
+    };
+    for (std::size_t index = 0; index < destination_registers.size();
+         ++index) {
+        if (std::ranges::find(
+                destination_registers.begin(),
+                destination_registers.begin() + index,
+                destination_registers[index])
+            != destination_registers.begin() + index) {
+            return std::nullopt;
+        }
+        const auto slot = layout.register_word_offsets[
+            destination_registers[index]];
+        for (std::size_t prior = 0; prior < index; ++prior) {
+            if (layout.register_word_offsets[
+                    destination_registers[prior]] == slot) {
+                return std::nullopt;
+            }
+        }
+    }
+    descriptor.result_register = binary->destination;
+    descriptor.output = update->signal;
+    descriptor.output_bit_offset = update->offset;
+    return descriptor;
+}
+
+[[nodiscard]] static bool is_pure_wave_source_shape(
+    const runtime::simir::Process& process)
+{
+    using namespace runtime::simir;
+    if (process.static_sensitivity.empty()
+        || !process.static_trigger_regions.empty()
+        || !process.debug_locals.empty()
+        || !process.debug_string_locals.empty()
+        || !process.debug_container_locals.empty()
+        || !process.container_register_types.empty()) {
+        return false;
+    }
+    const auto& operations = process.operations;
+    const auto debug_prefix = operations.size() >= 2U
+        && operation_holds<DebugPoint>(operations[0])
+        && operation_holds<DebugPoint>(operations[1]);
+    if (!debug_prefix) {
+        return false;
+    }
+    switch (operations.size()) {
+    case 6U:
+        return operation_holds<ReadSignal>(operations[2])
+            && operation_holds<WriteUpdateSlice>(operations[3])
+            && operation_holds<WaitSensitivity>(operations[4])
+            && operation_holds<Jump>(operations[5]);
+    case 7U:
+        return operation_holds<ReadSignal>(operations[2])
+            && operation_holds<Reduction>(operations[3])
+            && operation_holds<WriteUpdateSlice>(operations[4])
+            && operation_holds<WaitSensitivity>(operations[5])
+            && operation_holds<Jump>(operations[6]);
+    case 10U:
+        return operation_holds<ReadSignal>(operations[2])
+            && operation_holds<Extract>(operations[3])
+            && operation_holds<ReadSignal>(operations[4])
+            && operation_holds<Extract>(operations[5])
+            && operation_holds<Binary>(operations[6])
+            && operation_holds<WriteUpdateSlice>(operations[7])
+            && operation_holds<WaitSensitivity>(operations[8])
+            && operation_holds<Jump>(operations[9]);
+    case 31U:
+        return operation_holds<ReadSignal>(operations[2])
+            && operation_holds<Extract>(operations[3])
+            && operation_holds<Extract>(operations[4])
+            && operation_holds<LoadConstant>(operations[5])
+            && operation_holds<LoadConstant>(operations[6])
+            && operation_holds<Binary>(operations[7])
+            && operation_holds<Binary>(operations[8])
+            && operation_holds<Branch>(operations[9])
+            && operation_holds<ReadSignal>(operations[10])
+            && operation_holds<Extract>(operations[11])
+            && operation_holds<ReadSignal>(operations[12])
+            && operation_holds<Binary>(operations[13])
+            && operation_holds<CopyRegister>(operations[14])
+            && operation_holds<Jump>(operations[15])
+            && operation_holds<Branch>(operations[16])
+            && operation_holds<ReadSignal>(operations[17])
+            && operation_holds<Extract>(operations[18])
+            && operation_holds<CopyRegister>(operations[19])
+            && operation_holds<Jump>(operations[20])
+            && operation_holds<ReadSignal>(operations[21])
+            && operation_holds<Extract>(operations[22])
+            && operation_holds<ReadSignal>(operations[23])
+            && operation_holds<Binary>(operations[24])
+            && operation_holds<ReadSignal>(operations[25])
+            && operation_holds<Extract>(operations[26])
+            && operation_holds<ConditionalSelect>(operations[27])
+            && operation_holds<WriteUpdateSlice>(operations[28])
+            && operation_holds<WaitSensitivity>(operations[29])
+            && operation_holds<Jump>(operations[30]);
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] static std::optional<
+    compiler::JitProcessCohortLogic4BitAndMember>
+make_pure_bit_and_native_member(
+    const PureBitAndAssignment& assignment,
+    const runtime::simir::Process& process,
+    const compiler::JitProcessFrameLayout& layout,
+    const std::span<const runtime::simir::SignalId> direct_reads,
+    const std::span<const runtime::simir::SignalId> direct_updates)
+{
+    const auto left = std::ranges::find(
+        direct_reads, assignment.inputs[0]);
+    const auto right = std::ranges::find(
+        direct_reads, assignment.inputs[1]);
+    const auto update = std::ranges::find(
+        direct_updates, assignment.output);
+    if (left == direct_reads.end() || right == direct_reads.end()
+        || update == direct_updates.end()
+        || direct_reads.size()
+            > std::numeric_limits<std::uint32_t>::max()
+        || direct_updates.size()
+            > std::numeric_limits<std::uint32_t>::max()) {
+        return std::nullopt;
+    }
+    const auto slot = [&](const runtime::simir::RegisterId id) {
+        return compiler::JitProcessCohortLogic4BitAndRegisterSlot {
+            id, layout.register_word_offsets[id],
+            layout.register_widths[id],
+            std::ranges::any_of(process.debug_locals,
+                [id](const auto& local) {
+                    return local.register_id == id;
+                })
+        };
+    };
+    compiler::JitProcessCohortLogic4BitAndMember member;
+    member.read_lhs = slot(assignment.read_registers[0]);
+    member.read_rhs = slot(assignment.read_registers[1]);
+    member.extract_lhs = slot(assignment.extracted_registers[0]);
+    member.extract_rhs = slot(assignment.extracted_registers[1]);
+    member.result = slot(assignment.result_register);
+    member.direct_read_lhs_slot = static_cast<std::uint32_t>(
+        left - direct_reads.begin());
+    member.direct_read_rhs_slot = static_cast<std::uint32_t>(
+        right - direct_reads.begin());
+    member.extract_lhs_offset = assignment.input_bit_offsets[0];
+    member.extract_rhs_offset = assignment.input_bit_offsets[1];
+    member.direct_update_slot = static_cast<std::uint32_t>(
+        update - direct_updates.begin());
+    member.update_offset = assignment.output_bit_offset;
+    member.tracks_register_initialization
+        = layout.tracks_register_initialization;
+    return member;
+}
+
 std::uint64_t LlvmProcessExecutor::next_instance_generation()
 {
     static std::atomic_uint64_t next { 1U };
@@ -174,6 +525,26 @@ std::uint64_t LlvmProcessExecutor::next_instance_generation()
 
 LlvmProcessExecutor::~LlvmProcessExecutor()
 {
+    try {
+        invalidate_pure_wave_member_binding();
+    } catch (...) {
+        // Destructors must not replace an in-flight simulation failure.
+    }
+    if (compact_pure_cohort_binding_) {
+        try {
+            (void)jit_.release_cohort_binding(
+                compact_pure_cohort_binding_);
+        } catch (...) {
+            // Destructors must not replace an in-flight simulation failure.
+        }
+    }
+    if (pure_cohort_binding_) {
+        try {
+            (void)jit_.release_cohort_binding(pure_cohort_binding_);
+        } catch (...) {
+            // Destructors must not replace an in-flight simulation failure.
+        }
+    }
     if (cohort_binding_) {
         try {
             (void)jit_.release_cohort_binding(cohort_binding_);
@@ -183,10 +554,43 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
     }
 }
 
+void LlvmProcessExecutor::invalidate_pure_wave_member_binding()
+{
+    // A live binding certifies the private warm frame and update buffers.
+    // Every non-pure mutation entrance must invalidate it before changing
+    // that state; the external storage and writer certificate stays live.
+    // Publishing a valid record requires a completed bind attempt. This
+    // invalidator clears valid before it clears the checked flag.
+    if (!pure_wave_member_binding_
+        && !pure_wave_member_binding_checked_) {
+        return;
+    }
+    prepared_member_->valid = false;
+    prepared_member_->compiler_view = nullptr;
+    prepared_member_->prepared_owned_update_slot = nullptr;
+    owned_update_slot_->reset();
+    pure_wave_owned_update_checked_ = false;
+    if (prepared_member_->generation
+        == std::numeric_limits<std::uint64_t>::max()) {
+        pure_wave_prepared_disabled_ = true;
+    } else {
+        ++prepared_member_->generation;
+    }
+    if (pure_wave_member_binding_) {
+        (void)jit_.release_pure_wave_member_binding(
+            pure_wave_member_binding_);
+    }
+    pure_wave_member_binding_ = { };
+    pure_wave_member_lease_ = { };
+    pure_wave_member_binding_checked_ = false;
+    pure_wave_member_certificate_.reset();
+}
+
 [[nodiscard]] runtime::simir::ProcessResumeResult LlvmProcessExecutor::resume(
     runtime::simir::ProcessExecutionContext& context,
     const runtime::simir::InstructionIndex start_instruction)
 {
+    invalidate_pure_wave_member_binding();
     std::optional<JitProcessProfileScope> process_profile;
     if (jit_process_profile().enabled) {
         process_profile.emplace(
@@ -195,6 +599,12 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
     }
     const bool consuming_cohort
         = cohort_resume_mode_ == CohortResumeMode::consume;
+    const auto* const prior_prepared_domain = prepared_cohort_domain_;
+    const auto* const current_domain = consuming_cohort
+        ? prior_prepared_domain : context.direct_update_domain();
+    if (!consuming_cohort) {
+        prepared_cohort_domain_ = nullptr;
+    }
     if (!consuming_cohort
         && frame_.program_counter != start_instruction) {
         const bool kernel_owned_callable_boundary = frame_.program_counter < operation_count_
@@ -475,7 +885,9 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
         runtime.direct_update_active_reserved = 0U;
         runtime.static_trigger_mask = context.static_trigger_mask();
         const auto writer_revision = context.signal_writer_revision();
-        if (writer_revision != direct_update_writer_revision_) {
+        const bool owner_changed = current_domain != prior_prepared_domain;
+        if (owner_changed
+            || writer_revision != direct_update_writer_revision_) {
             const auto stable_owners
                 = context.stable_single_writer_processes();
             const auto direct_aval = context.direct_signal_aval();
@@ -484,6 +896,9 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             for (std::size_t index = 0;
                 index < direct_update_slots_.size(); ++index) {
                 auto& slot = direct_update_slots_[index];
+                if (owner_changed) {
+                    slot.reserved &= ~1U;
+                }
                 const auto signal = direct_update_signals_[index];
                 if (signal < signal_value_kinds_.size()
                     && signal_value_kinds_[signal]
@@ -509,6 +924,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             }
             direct_update_writer_revision_ = writer_revision;
         }
+        prepared_cohort_domain_ = current_domain;
     }
 
     if (cohort_resume_mode_ == CohortResumeMode::prepare) {
@@ -671,7 +1087,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
     } catch (...) {
         const auto failure = std::current_exception();
         flush_updates();
-        if (!active_container_object_aliases_.empty()) {
+        if (has_container_registers_
+            && !active_container_object_aliases_.empty()) {
             discard_container_object_aliases();
         }
         std::rethrow_exception(failure);
@@ -684,7 +1101,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
     // a complete value materializes it before executing; aliases still active
     // at a suspension boundary were consumed only by direct element reads and
     // are dead temporaries, so do not snapshot the whole object here.
-    if (!active_container_object_aliases_.empty()) {
+    if (has_container_registers_
+        && !active_container_object_aliases_.empty()) {
         discard_container_object_aliases();
     }
     if (result.instruction >= operation_count_) {
@@ -692,8 +1110,6 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             "compiled process returned an invalid boundary instruction");
     }
     if (status == compiler::JitResumeStatus::wait_sensitivity) {
-        require_boundary<runtime::simir::WaitSensitivity>(
-            result.instruction, "WaitSensitivity");
         if (frame_.program_counter != result.instruction + 1U) {
             throw compiler::LlvmJitError(
                 "compiled process returned a non-sequential WaitSensitivity PC");
@@ -702,7 +1118,9 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             result.instruction, frame_.program_counter
         };
         resumed.external.kind
-            = runtime::simir::ExternalSuspendKind::wait_sensitivity;
+            = validated_static_sensitivity_
+            ? runtime::simir::ExternalSuspendKind::validated_wait_sensitivity
+            : runtime::simir::ExternalSuspendKind::wait_sensitivity;
         return resumed;
     }
 
@@ -989,6 +1407,286 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
 [[nodiscard]] std::size_t LlvmProcessExecutor::resume_cohort(
     const std::span<runtime::simir::ProcessCohortResumeEntry> entries)
 {
+    return resume_cohort_impl(entries, nullptr);
+}
+
+[[nodiscard]] std::size_t
+LlvmProcessExecutor::resume_cohort_with_native_context(
+    const std::span<runtime::simir::ProcessCohortResumeEntry> entries,
+    const runtime::simir::ProcessCohortNativeContext& native_context)
+{
+    return resume_cohort_impl(entries, &native_context);
+}
+
+[[nodiscard]] const runtime::simir::PureWavePreparedMember*
+LlvmProcessExecutor::prepare_pure_wave_member(
+    const runtime::simir::PureWaveResumeEntry& entry,
+    runtime::simir::ProcessExecutionContext& shared_context,
+    const runtime::simir::ProcessCohortNativeContext& native_context,
+    const std::uint64_t owner_epoch)
+{
+    if (pure_wave_prepared_disabled_
+        || entry.process != process_.id || entry.executor != this
+        || entry.queued == nullptr || entry.waiting_on_static == nullptr
+        || entry.status == nullptr || native_context.owner == nullptr
+        || !native_context.supports_direct_word_updates
+        || native_context.execution_points_enabled
+        || jit_process_profile().enabled
+        || shared_context.direct_update_domain()
+            != native_context.owner) {
+        return nullptr;
+    }
+
+    if (!pure_wave_member_eligible_) {
+        bool source_shape = is_pure_wave_source_shape(process_);
+        if (source_shape && operation_count_ == 10U) {
+            const auto assignment = classify_pure_bit_and_assignment(
+                process_, layout_, signal_widths_, signal_value_kinds_,
+                direct_read_signals_, direct_update_signals_);
+            source_shape = assignment.has_value();
+            if (assignment) {
+                pure_wave_and_inputs_ = assignment->inputs;
+            }
+        }
+        pure_wave_member_eligible_ = source_shape;
+    }
+    if (!*pure_wave_member_eligible_ || operation_count_ < 2U
+        || entry.start_instruction != operation_count_ - 1U) {
+        return nullptr;
+    }
+
+    const PureWaveMemberCertificate certificate {
+        {
+            entry.queued, entry.waiting_on_static, entry.status,
+            native_context.owner,
+            native_context.signal_aval.data(),
+            native_context.signal_bval.data(),
+            native_context.wide_signal_aval.data(),
+            native_context.wide_signal_bval.data(),
+            native_context.wide_signal_offsets.data(),
+            runtime_.direct_read_signals,
+            runtime_.direct_update_slots,
+            runtime_.direct_update_active_words,
+            direct_update_signals_.data()
+        },
+        {
+            native_context.signal_aval.size(),
+            native_context.signal_bval.size(),
+            native_context.wide_signal_aval.size(),
+            native_context.wide_signal_bval.size(),
+            native_context.wide_signal_offsets.size(),
+            runtime_.direct_read_signal_count,
+            runtime_.direct_update_slot_count,
+            runtime_.direct_update_active_word_count,
+            direct_update_signals_.size()
+        },
+        native_context.signal_writer_revision
+    };
+    if (pure_wave_member_binding_
+        && (!pure_wave_member_certificate_
+            || *pure_wave_member_certificate_ != certificate
+            || !pure_wave_member_lease_
+            || prepared_member_->owner_epoch != owner_epoch)) {
+        invalidate_pure_wave_member_binding();
+    }
+    if (pure_wave_prepared_disabled_) {
+        return nullptr;
+    }
+
+    if (!pure_wave_member_binding_) {
+        const bool warm
+            = frame_.program_counter == operation_count_ - 1U
+            && frame_.state == FSIM_JIT_FRAME_STATE_READY
+            && frame_.last_instruction == operation_count_ - 2U
+            && frame_.native_call_depth == 0U
+            && cohort_resume_mode_ == CohortResumeMode::normal
+            && prepared_cohort_domain_ == native_context.owner
+            && runtime_.abi_version == FSIM_JIT_RUNTIME_ABI_VERSION_V1
+            && runtime_.flags == 0U
+            && !callback_state_.failure
+            && pending_update_words_.empty()
+            && !has_buffered_update_words()
+            && !has_buffered_logic9_updates()
+            && direct_update_writer_revision_
+                == native_context.signal_writer_revision
+            && runtime_.direct_signal_aval
+                == native_context.signal_aval.data()
+            && runtime_.direct_signal_bval
+                == native_context.signal_bval.data()
+            && runtime_.direct_signal_count
+                == native_context.signal_aval.size()
+            && native_context.signal_aval.size()
+                == native_context.signal_bval.size()
+            && runtime_.direct_wide_signal_aval
+                == native_context.wide_signal_aval.data()
+            && runtime_.direct_wide_signal_bval
+                == native_context.wide_signal_bval.data()
+            && runtime_.direct_wide_signal_offsets
+                == native_context.wide_signal_offsets.data()
+            && runtime_.direct_wide_signal_offset_count
+                == native_context.wide_signal_offsets.size()
+            && runtime_.direct_wide_word_count
+                == native_context.wide_signal_aval.size()
+            && native_context.wide_signal_aval.size()
+                == native_context.wide_signal_bval.size()
+            && runtime_.direct_read_signals
+                == direct_read_signals_.data()
+            && runtime_.direct_update_slots
+                == direct_update_slots_.data()
+            && runtime_.direct_update_active_words
+                == direct_update_active_words_.data();
+        if (!warm || pure_wave_member_binding_checked_) {
+            return nullptr;
+        }
+        const compiler::JitProcessCohortResumeEntry native {
+            binding_, runtime_, frame_, cohort_resume_result_,
+            reinterpret_cast<std::uint8_t*>(entry.queued),
+            reinterpret_cast<std::uint8_t*>(entry.waiting_on_static),
+            reinterpret_cast<std::uint8_t*>(entry.status)
+        };
+        const compiler::JitPureWaveMember member {
+            native, &process_, direct_update_signals_
+        };
+        pure_wave_member_binding_checked_ = true;
+        pure_wave_member_binding_
+            = jit_.bind_pure_wave_member_prevalidated(member)
+                  .value_or(compiler::JitPureWaveMemberBinding { });
+        if (pure_wave_member_binding_) {
+            pure_wave_member_lease_
+                = jit_.acquire_pure_wave_member_lease(
+                      pure_wave_member_binding_)
+                      .value_or(compiler::JitPureWaveMemberLease { });
+        }
+        pure_wave_member_certificate_ = certificate;
+        if (!pure_wave_member_lease_) {
+            if (pure_wave_member_binding_) {
+                (void)jit_.release_pure_wave_member_binding(
+                    pure_wave_member_binding_);
+                pure_wave_member_binding_ = { };
+            }
+            return nullptr;
+        }
+    }
+
+    if (prepared_member_->generation == 0U) {
+        prepared_member_->generation = 1U;
+    }
+    auto& prepared = *prepared_member_;
+    prepared.process = process_.id;
+    prepared.executor = this;
+    prepared.owner = native_context.owner;
+    prepared.domain = pure_wave_member_lease_.prepared_domain();
+    prepared.compiler_view = pure_wave_member_lease_.prepared_view();
+    prepared.update_batch = {
+        process_.id, direct_update_slot_views_,
+        direct_update_active_words_
+    };
+    if (!pure_wave_owned_update_checked_) {
+        *owned_update_slot_
+            = shared_context.prepare_owned_update_slot(
+                  prepared.update_batch);
+        pure_wave_owned_update_checked_ = true;
+    }
+    prepared.prepared_owned_update_slot
+        = *owned_update_slot_
+        ? &**owned_update_slot_ : nullptr;
+    prepared.and_lhs = pure_wave_and_inputs_
+        ? (*pure_wave_and_inputs_)[0] : 0U;
+    prepared.and_rhs = pure_wave_and_inputs_
+        ? (*pure_wave_and_inputs_)[1] : 0U;
+    prepared.resume_instruction = operation_count_ - 1U;
+    prepared.owner_epoch = owner_epoch;
+    prepared.compiler_generation
+        = pure_wave_member_lease_.prepared_generation();
+    switch (operation_count_) {
+    case 6U:
+        prepared.shape = runtime::simir::PureWavePreparedShape::wide_copy6;
+        break;
+    case 7U:
+        prepared.shape = runtime::simir::PureWavePreparedShape::reduction7;
+        break;
+    case 10U:
+        prepared.shape = runtime::simir::PureWavePreparedShape::logic4_bit_and;
+        break;
+    case 31U:
+        prepared.shape = runtime::simir::PureWavePreparedShape::reducer31;
+        break;
+    default:
+        return nullptr;
+    }
+    prepared.valid = prepared.compiler_view != nullptr;
+    return prepared.valid ? &prepared : nullptr;
+}
+
+[[nodiscard]] std::optional<runtime::simir::PureWaveCompletion>
+LlvmProcessExecutor::try_resume_prepared_pure_wave(
+    const std::span<const runtime::simir::PureWavePreparedMember* const>
+        members,
+    const std::span<const std::size_t> task_ends,
+    runtime::simir::ProcessExecutionContext& shared_context,
+    const runtime::simir::ProcessCohortNativeContext& native_context)
+{
+    if (members.empty() || task_ends.empty()
+        || task_ends.back() != members.size()
+        || native_context.owner == nullptr
+        || !native_context.supports_direct_word_updates
+        || native_context.execution_points_enabled
+        || jit_process_profile().enabled
+        || shared_context.direct_update_domain()
+            != native_context.owner) {
+        return std::nullopt;
+    }
+
+    const auto invalidate_members = [&] {
+        for (const auto* member : members) {
+            static_cast<LlvmProcessExecutor*>(member->executor)
+                ->invalidate_pure_wave_member_binding();
+        }
+    };
+    std::optional<std::size_t> completed;
+    try {
+        completed = jit_.try_resume_pure_wave_prepared_members_prevalidated(
+            members, task_ends);
+    } catch (...) {
+        invalidate_members();
+        throw;
+    }
+    if (!completed) {
+        invalidate_members();
+        return std::nullopt;
+    }
+    if (*completed == 0U || *completed > task_ends.size()) {
+        invalidate_members();
+        throw compiler::LlvmJitError(
+            "pure wave executor returned an invalid task prefix");
+    }
+    const auto member_end = task_ends[*completed - 1U];
+    try {
+        const bool staged
+            = shared_context.write_validated_prepared_update_slot_batches(
+                members.first(member_end));
+        if (!staged) {
+            invalidate_members();
+        }
+        return runtime::simir::PureWaveCompletion {
+            *completed, staged
+        };
+    } catch (...) {
+        invalidate_members();
+        throw;
+    }
+}
+
+void LlvmProcessExecutor::flush_pure_wave_updates(
+    runtime::simir::ProcessExecutionContext& context)
+{
+    flush_buffered_updates(context, false);
+}
+
+[[nodiscard]] std::size_t LlvmProcessExecutor::resume_cohort_impl(
+    const std::span<runtime::simir::ProcessCohortResumeEntry> entries,
+    const runtime::simir::ProcessCohortNativeContext* native_context)
+{
     if (entries.size() < 2U) {
         return 0U;
     }
@@ -999,6 +1697,12 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             return 0U;
         }
     }
+    for (const auto& entry : entries) {
+        static_cast<LlvmProcessExecutor*>(entry.executor)
+            ->invalidate_pure_wave_member_binding();
+    }
+    static const bool bound_cohort_enabled
+        = std::getenv("FSIM_DISABLE_BOUND_COHORT") == nullptr;
 
     bool cache_matches = cohort_members_.size() == entries.size()
         && std::ranges::equal(
@@ -1042,6 +1746,13 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 "compiled cohort generation exhausted");
         }
         ++cohort_generation_;
+        if (compact_pure_cohort_binding_) {
+            (void)jit_.release_cohort_binding(
+                compact_pure_cohort_binding_);
+        }
+        if (pure_cohort_binding_) {
+            (void)jit_.release_cohort_binding(pure_cohort_binding_);
+        }
         if (cohort_binding_) {
             (void)jit_.release_cohort_binding(cohort_binding_);
         }
@@ -1052,6 +1763,10 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
         cohort_update_batches_.clear();
         cohort_logic9_update_batches_.clear();
         cohort_binding_ = { };
+        pure_cohort_binding_ = { };
+        compact_pure_cohort_binding_ = { };
+        pure_cohort_native_context_.reset();
+        pure_cohort_checked_ = false;
         cohort_binding_generation_ = 0U;
         cohort_members_.reserve(entries.size());
         cohort_member_generations_.reserve(entries.size());
@@ -1060,60 +1775,176 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
         cohort_update_batches_.reserve(entries.size());
         cohort_logic9_update_batches_.reserve(entries.size());
     }
-    for (const auto& entry : entries) {
-        auto& executor = *static_cast<LlvmProcessExecutor*>(entry.executor);
-        executor.cohort_resume_mode_ = CohortResumeMode::prepare;
-        try {
-            static_cast<void>(executor.resume(
-                *entry.context, entry.start_instruction));
-        } catch (...) {
-            for (const auto& reset_entry : entries) {
-                auto& reset = *static_cast<LlvmProcessExecutor*>(
-                    reset_entry.executor);
-                reset.cohort_resume_mode_ = CohortResumeMode::normal;
-            }
-            return 0U;
-        }
-        executor.cohort_resume_result_ = { };
-        executor.cohort_resume_result_.abi_version
-            = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
-        executor.cohort_resume_result_.struct_size
-            = sizeof(executor.cohort_resume_result_);
-        if (!cache_matches) {
-            cohort_members_.push_back(&executor);
-            cohort_member_generations_.push_back(
-                executor.instance_generation_);
-            cohort_start_instructions_.push_back(entry.start_instruction);
-            cohort_native_entries_.push_back(
-                compiler::JitProcessCohortResumeEntry {
-                    executor.binding_, executor.runtime_, executor.frame_,
-                    executor.cohort_resume_result_,
-                    reinterpret_cast<std::uint8_t*>(entry.queued),
-                    reinterpret_cast<std::uint8_t*>(
-                        entry.waiting_on_static),
-                    reinterpret_cast<std::uint8_t*>(entry.status)
-                });
-        }
-    }
-
-    for (auto& native : cohort_native_entries_) {
-        native.failure = { };
-        native.status = std::numeric_limits<std::uint32_t>::max();
-    }
-
-    auto native_entries
-        = std::span { cohort_native_entries_.data(), entries.size() };
-    static const bool bound_cohort_enabled
-        = std::getenv("FSIM_DISABLE_BOUND_COHORT") == nullptr;
     if (cohort_binding_
         && cohort_binding_generation_ != cohort_generation_) {
         throw compiler::LlvmJitError(
             "compiled cohort binding generation is stale");
     }
-    const auto executed = bound_cohort_enabled && cohort_binding_
-        ? jit_.resume_cohort_prevalidated(cohort_binding_, native_entries)
-        : jit_.resume_cohort_prevalidated(native_entries);
-    if (bound_cohort_enabled && !cohort_binding_) {
+    const auto native_context_matches = [&] {
+        if (native_context == nullptr || !pure_cohort_native_context_) {
+            return false;
+        }
+        const auto& cached = *pure_cohort_native_context_;
+        return native_context->owner != nullptr
+            && native_context->owner == cached.owner
+            && native_context->signal_aval.data()
+                == cached.signal_aval.data()
+            && native_context->signal_aval.size()
+                == cached.signal_aval.size()
+            && native_context->signal_bval.data()
+                == cached.signal_bval.data()
+            && native_context->signal_bval.size()
+                == cached.signal_bval.size()
+            && native_context->signal_writer_revision
+                == cached.signal_writer_revision
+            && native_context->supports_direct_word_updates
+            && !native_context->execution_points_enabled;
+    };
+    if (native_context != nullptr
+        && (pure_cohort_binding_ || compact_pure_cohort_binding_)
+        && !native_context_matches()) {
+        if (compact_pure_cohort_binding_) {
+            (void)jit_.release_cohort_binding(
+                compact_pure_cohort_binding_);
+        }
+        if (pure_cohort_binding_) {
+            (void)jit_.release_cohort_binding(pure_cohort_binding_);
+        }
+        pure_cohort_binding_ = { };
+        compact_pure_cohort_binding_ = { };
+        pure_cohort_native_context_.reset();
+        pure_cohort_checked_ = false;
+    }
+    const bool certified_context = native_context_matches();
+    const bool pure_ready = bound_cohort_enabled && cache_matches
+        && (pure_cohort_binding_
+            || (certified_context && compact_pure_cohort_binding_))
+        && (native_context == nullptr || certified_context)
+        && !jit_process_profile().enabled
+        && std::ranges::all_of(
+            entries, [&](const auto& entry) {
+                const auto& executor
+                    = *static_cast<LlvmProcessExecutor*>(entry.executor);
+                const auto& runtime = executor.runtime_;
+                const bool mutable_ready = entry.start_instruction == 9U
+                    && executor.frame_.program_counter == 9U
+                    && executor.frame_.state
+                        == FSIM_JIT_FRAME_STATE_READY
+                    && executor.frame_.last_instruction == 8U
+                    && executor.frame_.native_call_depth == 0U
+                    && executor.cohort_resume_mode_
+                        == CohortResumeMode::normal
+                    && (!certified_context
+                        || executor.prepared_cohort_domain_
+                            == native_context->owner)
+                    && runtime.flags == 0U
+                    && !executor.callback_state_.failure
+                    && executor.pending_update_words_.empty()
+                    && !executor.has_buffered_update_words()
+                    && !executor.has_buffered_logic9_updates();
+                if (!mutable_ready) {
+                    return false;
+                }
+                if (certified_context) {
+                    return true;
+                }
+                const auto direct_aval
+                    = entry.context->direct_signal_aval();
+                const auto direct_bval
+                    = entry.context->direct_signal_bval();
+                return runtime.abi_version
+                        == FSIM_JIT_RUNTIME_ABI_VERSION_V1
+                    && !entry.context->execution_points_enabled()
+                    && entry.context->supports_direct_word_updates()
+                    && direct_aval.data() == runtime.direct_signal_aval
+                    && direct_bval.data() == runtime.direct_signal_bval
+                    && direct_aval.size() == direct_bval.size()
+                    && direct_aval.size() == runtime.direct_signal_count
+                    && runtime.direct_read_signals
+                        == executor.direct_read_signals_.data()
+                    && runtime.direct_read_signal_count
+                        == executor.direct_read_signals_.size()
+                    && runtime.direct_update_slots
+                        == executor.direct_update_slots_.data()
+                    && runtime.direct_update_slot_count
+                        == executor.direct_update_slots_.size()
+                    && runtime.direct_update_active_words
+                        == executor.direct_update_active_words_.data()
+                    && entry.context->signal_writer_revision()
+                        == executor.direct_update_writer_revision_;
+            });
+    bool compact_executed { };
+    if (pure_ready && certified_context
+        && compact_pure_cohort_binding_) {
+        compact_executed
+            = jit_.try_resume_compact_logic4_bit_and_cohort_prevalidated(
+                compact_pure_cohort_binding_);
+    }
+    std::optional<std::size_t> pure_executed;
+    if (compact_executed) {
+        pure_executed = entries.size();
+    } else if (pure_ready && pure_cohort_binding_) {
+        auto native_entries = std::span {
+            cohort_native_entries_.data(), entries.size() };
+        pure_executed = certified_context
+            ? jit_.try_resume_logic4_bit_and_cohort_trusted_prevalidated(
+                  pure_cohort_binding_, native_entries)
+            : jit_.try_resume_logic4_bit_and_cohort_prevalidated(
+                  pure_cohort_binding_, native_entries);
+    }
+    if (!pure_executed) {
+        for (const auto& entry : entries) {
+            auto& executor = *static_cast<LlvmProcessExecutor*>(
+                entry.executor);
+            executor.cohort_resume_mode_ = CohortResumeMode::prepare;
+            try {
+                static_cast<void>(executor.resume(
+                    *entry.context, entry.start_instruction));
+            } catch (...) {
+                for (const auto& reset_entry : entries) {
+                    auto& reset = *static_cast<LlvmProcessExecutor*>(
+                        reset_entry.executor);
+                    reset.cohort_resume_mode_ = CohortResumeMode::normal;
+                }
+                return 0U;
+            }
+            executor.cohort_resume_result_ = { };
+            executor.cohort_resume_result_.abi_version
+                = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
+            executor.cohort_resume_result_.struct_size
+                = sizeof(executor.cohort_resume_result_);
+            if (!cache_matches) {
+                cohort_members_.push_back(&executor);
+                cohort_member_generations_.push_back(
+                    executor.instance_generation_);
+                cohort_start_instructions_.push_back(
+                    entry.start_instruction);
+                cohort_native_entries_.push_back(
+                    compiler::JitProcessCohortResumeEntry {
+                        executor.binding_, executor.runtime_,
+                        executor.frame_, executor.cohort_resume_result_,
+                        reinterpret_cast<std::uint8_t*>(entry.queued),
+                        reinterpret_cast<std::uint8_t*>(
+                            entry.waiting_on_static),
+                        reinterpret_cast<std::uint8_t*>(entry.status)
+                    });
+            }
+        }
+        for (auto& native : cohort_native_entries_) {
+            native.failure = { };
+            native.status
+                = std::numeric_limits<std::uint32_t>::max();
+        }
+    }
+    auto native_entries
+        = std::span { cohort_native_entries_.data(), entries.size() };
+    const auto executed = pure_executed
+        ? *pure_executed
+        : bound_cohort_enabled && cohort_binding_
+            ? jit_.resume_cohort_prevalidated(
+                  cohort_binding_, native_entries)
+            : jit_.resume_cohort_prevalidated(native_entries);
+    if (!pure_executed && bound_cohort_enabled && !cohort_binding_) {
         cohort_binding_ = jit_.bind_cohort_prevalidated(native_entries);
         cohort_binding_generation_ = cohort_generation_;
     }
@@ -1122,29 +1953,33 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
         = std::getenv("FSIM_DISABLE_COHORT_UPDATE_BATCH") == nullptr;
     if (cohort_update_batches_enabled
         && executed == entries.size() && !jit_process_profile().enabled) {
-        const auto* const update_domain
-            = entries.front().context->direct_update_domain();
-        const bool compatible = update_domain != nullptr
-            && std::ranges::all_of(
-                entries,
-                [&](const auto& entry) {
-                    return entry.context->direct_update_domain()
-                        == update_domain;
-                })
-            && std::ranges::all_of(
-                native_entries,
-                [](const auto& entry) {
-                    return entry.status
-                            == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY
-                        && !entry.failure;
-                })
-            && std::ranges::all_of(
-                entries,
-                [](const auto& entry) {
-                    const auto& executor
-                        = *static_cast<LlvmProcessExecutor*>(entry.executor);
-                    return !executor.callback_state_.failure;
-                });
+        bool compatible = compact_executed;
+        if (!compact_executed) {
+            const auto* const update_domain
+                = entries.front().context->direct_update_domain();
+            compatible = update_domain != nullptr
+                && std::ranges::all_of(
+                    entries,
+                    [&](const auto& entry) {
+                        return entry.context->direct_update_domain()
+                            == update_domain;
+                    })
+                && std::ranges::all_of(
+                    native_entries,
+                    [](const auto& entry) {
+                        return entry.status
+                                == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY
+                            && !entry.failure;
+                    })
+                && std::ranges::all_of(
+                    entries,
+                    [](const auto& entry) {
+                        const auto& executor
+                            = *static_cast<LlvmProcessExecutor*>(
+                                entry.executor);
+                        return !executor.callback_state_.failure;
+                    });
+        }
         if (compatible) {
             try {
                 cohort_update_batches_.clear();
@@ -1152,7 +1987,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 for (std::size_t index = 0; index < executed; ++index) {
                     auto& executor = *static_cast<LlvmProcessExecutor*>(
                         entries[index].executor);
-                    if (executor.has_buffered_logic9_updates()) {
+                    if (!compact_executed
+                        && executor.has_buffered_logic9_updates()) {
                         cohort_logic9_update_batches_.push_back({
                             executor.process_.id,
                             executor.buffered_logic9_update_views_
@@ -1166,7 +2002,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                         });
                     }
                 }
-                bool logic9_flushed = cohort_logic9_update_batches_.empty()
+                bool logic9_flushed = compact_executed
+                    || cohort_logic9_update_batches_.empty()
                     || entries.front().context
                            ->write_validated_logic9_update_batches(
                                std::span {
@@ -1198,6 +2035,26 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             }
         }
     }
+    if (compact_executed) {
+        for (std::size_t index = 0; index < executed; ++index) {
+            auto& entry = entries[index];
+            auto& executor = *static_cast<LlvmProcessExecutor*>(
+                entry.executor);
+            try {
+                if (!cohort_updates_flushed) {
+                    executor.flush_buffered_updates(*entry.context, false);
+                }
+                entry.result = runtime::simir::ProcessResumeResult { 8U, 9U };
+                entry.result.external.kind
+                    = runtime::simir::ExternalSuspendKind::
+                        validated_wait_sensitivity;
+            } catch (...) {
+                entry.failure = std::current_exception();
+                return index + 1U;
+            }
+        }
+        return executed;
+    }
     for (std::size_t index = 0; index < executed; ++index) {
         auto& entry = entries[index];
         auto& executor = *static_cast<LlvmProcessExecutor*>(entry.executor);
@@ -1212,7 +2069,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 if (!cohort_updates_flushed) {
                     executor.flush_buffered_updates(*entry.context, false);
                 }
-                if (!executor.active_container_object_aliases_.empty()) {
+                if (executor.has_container_registers_
+                    && !executor.active_container_object_aliases_.empty()) {
                     executor.discard_container_object_aliases();
                 }
                 const auto& result = executor.cohort_resume_result_;
@@ -1231,7 +2089,9 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                     result.instruction, executor.frame_.program_counter
                 };
                 entry.result.external.kind
-                    = runtime::simir::ExternalSuspendKind::wait_sensitivity;
+                    = executor.validated_static_sensitivity_
+                    ? runtime::simir::ExternalSuspendKind::validated_wait_sensitivity
+                    : runtime::simir::ExternalSuspendKind::wait_sensitivity;
                 continue;
             } catch (...) {
                 entry.failure = std::current_exception();
@@ -1250,6 +2110,150 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
         } catch (...) {
             entry.failure = std::current_exception();
             return index + 1U;
+        }
+    }
+    if (!pure_executed && !pure_cohort_checked_
+        && bound_cohort_enabled && cohort_binding_
+        && executed == entries.size()
+        && !jit_process_profile().enabled
+        && std::ranges::all_of(
+            entries, [](const auto& entry) {
+                return entry.start_instruction == 9U;
+            })
+        && std::ranges::all_of(
+            native_entries, [](const auto& native) {
+                return native.status
+                        == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY
+                    && !native.failure;
+            })) {
+        pure_cohort_checked_ = true;
+        try {
+            std::vector<compiler::JitProcessCohortLogic4BitAndMember>
+                members;
+            members.reserve(entries.size());
+            for (const auto& entry : entries) {
+                const auto& executor
+                    = *static_cast<LlvmProcessExecutor*>(entry.executor);
+                const auto assignment
+                    = classify_pure_bit_and_assignment(
+                        executor.process_, executor.layout_,
+                        executor.signal_widths_,
+                        executor.signal_value_kinds_,
+                        executor.direct_read_signals_,
+                        executor.direct_update_signals_);
+                if (!assignment
+                    || executor.frame_.program_counter != 9U
+                    || executor.frame_.last_instruction != 8U
+                    || executor.frame_.state
+                        != FSIM_JIT_FRAME_STATE_READY
+                    || executor.frame_.native_call_depth != 0U
+                    || executor.callback_state_.failure) {
+                    break;
+                }
+                const auto member = make_pure_bit_and_native_member(
+                    *assignment, executor.process_, executor.layout_,
+                    executor.direct_read_signals_,
+                    executor.direct_update_signals_);
+                if (!member) {
+                    break;
+                }
+                members.push_back(*member);
+            }
+            if (members.size() == entries.size()) {
+                const bool native_context_valid = native_context != nullptr
+                    && native_context->owner != nullptr
+                    && native_context->supports_direct_word_updates
+                    && !native_context->execution_points_enabled
+                    && !native_context->signal_aval.empty()
+                    && native_context->signal_aval.size()
+                        == native_context->signal_bval.size()
+                    && std::ranges::all_of(
+                        entries, [&](const auto& entry) {
+                            const auto& executor
+                                = *static_cast<LlvmProcessExecutor*>(
+                                    entry.executor);
+                            const auto& runtime = executor.runtime_;
+                            const auto aval
+                                = entry.context->direct_signal_aval();
+                            const auto bval
+                                = entry.context->direct_signal_bval();
+                            return entry.context->direct_update_domain()
+                                    == native_context->owner
+                                && aval.data()
+                                    == native_context->signal_aval.data()
+                                && aval.size()
+                                    == native_context->signal_aval.size()
+                                && bval.data()
+                                    == native_context->signal_bval.data()
+                                && bval.size()
+                                    == native_context->signal_bval.size()
+                                && entry.context->signal_writer_revision()
+                                    == native_context->signal_writer_revision
+                                && entry.context
+                                       ->supports_direct_word_updates()
+                                && !entry.context
+                                        ->execution_points_enabled()
+                                && executor.direct_update_writer_revision_
+                                    == native_context->signal_writer_revision
+                                && executor.prepared_cohort_domain_
+                                    == native_context->owner
+                                && runtime.direct_signal_aval == aval.data()
+                                && runtime.direct_signal_bval == bval.data()
+                                && runtime.direct_signal_count == aval.size()
+                                && runtime.direct_read_signals
+                                    == executor.direct_read_signals_.data()
+                                && runtime.direct_read_signal_count
+                                    == executor.direct_read_signals_.size()
+                                && runtime.direct_update_slots
+                                    == executor.direct_update_slots_.data()
+                                && runtime.direct_update_slot_count
+                                    == executor.direct_update_slots_.size()
+                                && runtime.direct_update_active_words
+                                    == executor.direct_update_active_words_.data();
+                        });
+                if (native_context == nullptr || native_context_valid) {
+                    const bool fully_transient
+                        = native_context_valid
+                        && std::ranges::all_of(
+                            members, [](const auto& member) {
+                                return !member.read_lhs.frame_resident
+                                    && !member.read_rhs.frame_resident
+                                    && !member.extract_lhs.frame_resident
+                                    && !member.extract_rhs.frame_resident
+                                    && !member.result.frame_resident;
+                            })
+                        && std::ranges::all_of(
+                            entries, [](const auto& entry) {
+                                const auto& executor
+                                    = *static_cast<LlvmProcessExecutor*>(
+                                        entry.executor);
+                                return executor.validated_static_sensitivity_;
+                            });
+                    if (fully_transient) {
+                        const auto bound
+                            = jit_.bind_compact_logic4_bit_and_cohort_prevalidated(
+                                native_entries, members);
+                        compact_pure_cohort_binding_ = bound.value_or(
+                            compiler::JitProcessCohortBinding { });
+                    }
+                    if (!compact_pure_cohort_binding_) {
+                        pure_cohort_binding_
+                            = jit_.bind_logic4_bit_and_cohort_prevalidated(
+                                  native_entries, members)
+                                  .value_or(
+                                      compiler::JitProcessCohortBinding { });
+                    }
+                    if ((compact_pure_cohort_binding_
+                            || pure_cohort_binding_)
+                        && native_context_valid) {
+                        pure_cohort_native_context_ = *native_context;
+                    }
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            // Native fusion is optional after the generic activation commits.
+        } catch (const compiler::LlvmJitError&) {
+            // Native fusion is optional after the generic activation commits.
         }
     }
     return executed;
@@ -1272,6 +2276,10 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             || entry.executor->cohort_domain() != &jit_) {
             return 0U;
         }
+    }
+    for (const auto& entry : entries) {
+        static_cast<LlvmProcessExecutor*>(entry.executor)
+            ->invalidate_pure_wave_member_binding();
     }
     bool cache_matches = region_members_.size() == entries.size();
     if (cache_matches) {
@@ -1451,7 +2459,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 if (!updates_flushed) {
                     executor.flush_buffered_updates(*entry.context, false);
                 }
-                if (!executor.active_container_object_aliases_.empty()) {
+                if (executor.has_container_registers_
+                    && !executor.active_container_object_aliases_.empty()) {
                     executor.discard_container_object_aliases();
                 }
                 const auto& result = executor.cohort_resume_result_;
@@ -1466,7 +2475,9 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                     result.instruction, executor.frame_.program_counter
                 };
                 entry.result.external.kind
-                    = runtime::simir::ExternalSuspendKind::wait_sensitivity;
+                    = executor.validated_static_sensitivity_
+                    ? runtime::simir::ExternalSuspendKind::validated_wait_sensitivity
+                    : runtime::simir::ExternalSuspendKind::wait_sensitivity;
                 continue;
             } catch (...) {
                 entry.failure = std::current_exception();
@@ -1593,6 +2604,7 @@ void LlvmProcessExecutor::write_register(
             "compiled process register write is out of range"
         };
     }
+    invalidate_pure_wave_member_binding();
     if (value.width() == 0) {
         register_initialized_[id] = 1;
         return;

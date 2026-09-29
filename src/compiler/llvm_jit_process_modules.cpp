@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_impl.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -63,7 +64,8 @@ void LlvmJit::add_process_module(
     };
     const auto make_process_key = [&](const std::string_view symbol,
                                       const JitProcessModuleEntry& entry) {
-        return impl_->immutable_design_identity.empty()
+        auto key = impl_->immutable_design_identity.empty()
+                || !entry.masked_member_gates.empty()
             ? make_native_object_cache_key(
                   symbol, *entry.process, signal_widths, signal_value_kinds,
                   impl_->options.optimization,
@@ -86,6 +88,47 @@ void LlvmJit::add_process_module(
                   impl_->jit->getDataLayout(), impl_->target_cpu,
                   impl_->target_features,
                   entry.bound_literal_sites);
+        if (!entry.masked_member_gates.empty()) {
+            if (entry.process->operations.size() < 3U) {
+                throw LlvmJitError("masked native body is incomplete");
+            }
+            std::string identity = key + ":masked-members-v1";
+            runtime::simir::InstructionIndex expected_begin { };
+            for (std::size_t index = 0U; index < entry.masked_member_gates.size(); ++index) {
+                const auto& gate = entry.masked_member_gates[index];
+                if (gate.begin_instruction != expected_begin
+                    || gate.begin_instruction >= gate.end_instruction
+                    || gate.end_instruction > entry.process->operations.size() - 2U
+                    || gate.activation_bit != index) {
+                    throw LlvmJitError("invalid masked member gate layout");
+                }
+                for (auto instruction = gate.begin_instruction;
+                     instruction < gate.end_instruction; ++instruction) {
+                    const auto operation = entry.process->operations.expanded(instruction);
+                    const auto valid_target = [&](const auto target) {
+                        return target > instruction && target <= gate.end_instruction;
+                    };
+                    const auto* jump = runtime::simir::operation_get_if<runtime::simir::Jump>(&operation);
+                    const auto* branch = runtime::simir::operation_get_if<runtime::simir::Branch>(&operation);
+                    if ((jump && !valid_target(jump->target))
+                        || (branch && (!valid_target(branch->when_true)
+                            || !valid_target(branch->when_false)))) {
+                        throw LlvmJitError("masked branch escapes its forward member body");
+                    }
+                }
+                expected_begin = gate.end_instruction;
+                identity += ":" + std::to_string(gate.begin_instruction)
+                    + ":" + std::to_string(gate.end_instruction)
+                    + ":" + std::to_string(gate.activation_bit);
+            }
+            if (expected_begin + 2U != entry.process->operations.size()
+                || impl_->options.debug_instrumentation
+                || !entry.bound_literal_sites.empty()) {
+                throw LlvmJitError("masked native entry requires a complete uninstrumented body");
+            }
+            key = support::Sha256::hex(support::Sha256::digest(identity));
+        }
+        return key;
     };
     std::unique_ptr<llvm::MemoryBuffer> preflight_object;
     bool object_preflight_attempted { };
@@ -181,6 +224,7 @@ void LlvmJit::add_process_module(
         std::string symbol;
         const Process* process { };
         std::vector<runtime::simir::InstructionIndex> bound_literal_sites;
+        std::vector<FusedMaskedMemberGate> masked_member_gates;
         ValidatedProcess validated;
         std::string cache_key;
         ProcessLoweringPlan lowering_plan;
@@ -237,6 +281,9 @@ void LlvmJit::add_process_module(
         auto lowering_plan = make_process_lowering_plan(
             *entry.process, validated.register_widths,
             impl_->options.debug_instrumentation);
+        if (!entry.masked_member_gates.empty() && lowering_plan.partial) {
+            throw LlvmJitUnsupportedError("masked native body requires complete lowering");
+        }
         auto process_info = Impl::ProcessInfo {
             make_frame_layout(
                 cache_key,
@@ -304,7 +351,7 @@ void LlvmJit::add_process_module(
         }
         prepared.push_back(
             { std::move(owned_symbol), entry.process,
-                entry.bound_literal_sites, std::move(validated),
+                entry.bound_literal_sites, entry.masked_member_gates, std::move(validated),
                 std::move(cache_key), std::move(lowering_plan),
                 std::move(process_info) });
     }
@@ -380,7 +427,7 @@ void LlvmJit::add_process_module(
                 impl_->options.optimization,
                 impl_->options.debug_instrumentation,
                 impl_->options.require_direct_update_slots,
-                item.bound_literal_sites);
+                item.bound_literal_sites, item.masked_member_gates);
         }
         const auto lowering_end = std::chrono::steady_clock::now();
         const auto lowering_cpu = profile_cpu
@@ -610,6 +657,20 @@ void LlvmJit::add_process(
     };
     add_process_module(
         symbol, entries, signal_widths, signal_value_kinds);
+}
+
+void LlvmJit::add_masked_process(const std::string_view symbol,
+    const FusedMaskedProcess& process,
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const ValueKind> signal_value_kinds)
+{
+    if (process.gates.empty()) {
+        throw LlvmJitError("masked native process has no member gates");
+    }
+    const std::array entries {
+        JitProcessModuleEntry { symbol, &process.process, { }, process.gates }
+    };
+    add_process_module(symbol, entries, signal_widths, signal_value_kinds);
 }
 
 JitProcessHandle LlvmJit::lookup(const std::string_view symbol)

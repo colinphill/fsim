@@ -123,6 +123,56 @@ void test_simir_deferred_executor_state_handoff()
     require(
         interpreter.signal_value(output).to_msb_string() == "1010",
         "deferred executor must publish the migrated value");
+
+    Interpreter shared_frame_interpreter;
+    const auto shared_output = shared_frame_interpreter.add_signal(
+        { "deferred_shared_output", PackedLogic4(4, Logic4::zero) });
+    // Readiness becomes true only after Fork gives the child a frame owner.
+    const auto shared_ready = shared_frame_interpreter.add_signal(
+        { "deferred_shared_ready", PackedLogic4(1, Logic4::zero) });
+    Process shared_process;
+    shared_process.id = 0;
+    shared_process.name = "deferred_shared_fork_frame";
+    shared_process.register_count = 2;
+    shared_process.operations = {
+        LoadConstant { 0, PackedLogic4::from_msb_string("0000") },
+        LoadConstant { 1, PackedLogic4::from_msb_string("1") },
+        Fork { { 8 }, ForkJoinKind::none },
+        WriteBlocking { shared_ready, 1 },
+        WaitFor { 1 },
+        WaitFor { 2 },
+        WriteBlocking { shared_output, 0 },
+        Halt { },
+        WaitFor { 2 },
+        LoadConstant { 0, PackedLogic4::from_msb_string("0101") },
+        ForkEnd { },
+    };
+    const auto shared_process_id
+        = shared_frame_interpreter.add_process(std::move(shared_process));
+    bool shared_factory_called = false;
+    shared_frame_interpreter.set_deferred_process_executor(
+        shared_process_id,
+        [&] {
+            return shared_frame_interpreter.signal_value(shared_ready)
+                    .to_msb_string()
+                == "1";
+        },
+        [&]() -> std::unique_ptr<ProcessExecutor> {
+            shared_factory_called = true;
+            throw std::runtime_error(
+                "a fork-shared frame cannot be promoted to a native executor");
+        });
+    const auto shared_result = shared_frame_interpreter.run();
+    require(
+        shared_result.status == RunStatus::completed && shared_result.time == 3
+            && !shared_factory_called
+            && shared_frame_interpreter.signal_value(shared_ready)
+                    .to_msb_string()
+                == "1"
+            && shared_frame_interpreter.signal_value(shared_output)
+                    .to_msb_string()
+                == "0101",
+        "a deferred executor must preserve its fork-shared frame");
 }
 
 void test_simir_alternate_executor_event_replacement_and_cancel()

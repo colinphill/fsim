@@ -412,6 +412,7 @@ void Interpreter::Impl::force_slice(
         || value.width() > signal.initial_value.width() - offset) {
         throw std::invalid_argument("SimIR signal force slice is out of range");
     }
+    invalidate_fused_static_cohorts();
     demote_owned_driver(signal_id);
     value = coerce_value_kind(std::move(value), signal.value_kind);
     if (!forced_values[signal_id]) {
@@ -446,6 +447,7 @@ void Interpreter::Impl::release_slice(
         || width > signal.initial_value.width() - offset) {
         throw std::invalid_argument("SimIR signal release slice is out of range");
     }
+    invalidate_fused_static_cohorts();
     if (!forced_values[signal_id]) {
         return;
     }

@@ -398,7 +398,8 @@ void Simulation::Impl::setup_execution(
                                 this->signal_value_kinds,
                                 this->signal_resolutions,
                                 signal_remap,
-                                generated_process);
+                                generated_process,
+                                &this->executor_hot_cells);
                         });
                 }
                 jobs.push_back(

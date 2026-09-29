@@ -887,17 +887,20 @@ void Interpreter::Impl::handle_external_boundary(
     const InstructionIndex next_instruction,
     const ExternalSuspension& suspension)
 {
-    if (instruction >= process.program().operations.size()) {
-        process.pc = instruction;
-        fail(process, "executor returned an invalid dynamic boundary instruction");
-    }
-    if (instruction == std::numeric_limits<InstructionIndex>::max()
-        || next_instruction != instruction + 1) {
-        process.pc = instruction;
-        fail(
-            process,
-            "executor returned a non-sequential dynamic boundary resume "
-            "instruction");
+    if (suspension.kind
+        != ExternalSuspendKind::validated_wait_sensitivity) {
+        if (instruction >= process.program().operations.size()) {
+            process.pc = instruction;
+            fail(process, "executor returned an invalid dynamic boundary instruction");
+        }
+        if (instruction == std::numeric_limits<InstructionIndex>::max()
+            || next_instruction != instruction + 1) {
+            process.pc = instruction;
+            fail(
+                process,
+                "executor returned a non-sequential dynamic boundary resume "
+                "instruction");
+        }
     }
     process.pc = next_instruction;
     clear_wait_timeout(process);
@@ -958,8 +961,10 @@ void Interpreter::Impl::handle_external_boundary(
         break;
     }
     case ExternalSuspendKind::wait_sensitivity:
+    case ExternalSuspendKind::validated_wait_sensitivity:
         process.status = ProcessStatus::waiting;
-        if (process.program().static_sensitivity.empty()) {
+        if (suspension.kind == ExternalSuspendKind::wait_sensitivity
+            && process.program().static_sensitivity.empty()) {
             process.pc = instruction;
             fail(process, "dynamic static wait has no sensitivity list");
         }
@@ -974,9 +979,11 @@ void Interpreter::Impl::handle_external_boundary(
         complete_process(process, ProcessStatus::finished);
         break;
     }
-    notify_execution_point(
-        process, instruction, ExecutionPointKind::process_suspend,
-        process.cold().current_source);
+    if (execution_point_hook) {
+        notify_execution_point(
+            process, instruction, ExecutionPointKind::process_suspend,
+            process.cold().current_source);
+    }
 }
 
 [[noreturn]] void Interpreter::Impl::fail(const ProcessState& process,

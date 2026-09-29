@@ -734,6 +734,10 @@ ProcessId Interpreter::add_process_impl(
         std::as_const(process.operations), [](const Operation& operation) {
             return operation_holds<CallableFramePush>(operation);
         });
+    const auto operation_count = process.operations.size();
+    state.pure_wave_operation_count_supported
+        = operation_count == 6U || operation_count == 7U
+        || operation_count == 10U || operation_count == 31U;
     state.cold().random_state = Impl::initial_random_state(
         impl_->root_seed, id);
     state.cold().design_process = id;
@@ -812,6 +816,7 @@ ProcessId Interpreter::add_process_impl(
     }
     state.program().id = id;
     impl_->processes.push_back(std::move(state));
+    impl_->pure_wave_prepared_slots.emplace_back();
     impl_->static_fanout_dirty = true;
     if (owned_process != nullptr) {
         impl_->register_static_sensitivity_cohort(id);
@@ -1341,6 +1346,7 @@ void Interpreter::set_process_executor(
             "a SimIR process executor is already installed");
     }
     state.executor = std::move(executor);
+    impl_->pure_wave_prepared_slots[process] = { };
 }
 
 void Interpreter::set_deferred_process_executor(
@@ -1377,6 +1383,222 @@ void Interpreter::materialize_ready_process_executors()
             && process.cold().deferred_executor->ready()) {
             impl_->install_deferred_executor(process);
         }
+    }
+}
+
+std::vector<FusedStaticCohortCandidate>
+Interpreter::fused_static_cohort_candidates() const
+{
+    std::vector<FusedStaticCohortCandidate> result;
+    if (!impl_->started) {
+        return result;
+    }
+    for (const auto& plan : impl_->fused_static_cohorts) {
+        if (plan.certified) {
+            result.push_back(plan.candidate);
+        }
+    }
+    return result;
+}
+
+FusedStaticCounters Interpreter::fused_static_counters() const noexcept
+{
+    return impl_->fused_static_counts;
+}
+
+void Interpreter::set_fused_static_counters_enabled(const bool enabled)
+{
+    if (impl_->started && !impl_->fused_static_bindings_open) {
+        throw std::logic_error {
+            "fused static counters must be configured before execution"
+        };
+    }
+    impl_->fused_static_counters_enabled = enabled;
+}
+
+void Interpreter::install_fused_static_cohort(
+    const std::size_t cohort_id,
+    std::unique_ptr<FusedStaticCohortExecutor> executor)
+{
+    if (!impl_->started || !impl_->fused_static_bindings_open
+        || !executor || cohort_id >= impl_->fused_static_cohorts.size()
+        || !impl_->fused_static_cohorts[cohort_id].certified
+        || impl_->fused_static_cohorts[cohort_id].executor) {
+        throw std::logic_error {
+            "invalid or stale fused static cohort binding"
+        };
+    }
+    impl_->fused_static_cohorts[cohort_id].executor = std::move(executor);
+}
+
+std::vector<FusedMaskedRegionCandidate>
+Interpreter::fused_masked_region_candidates() const
+{
+    std::vector<FusedMaskedRegionCandidate> result;
+    if (!impl_->started) {
+        return result;
+    }
+    for (const auto& plan : impl_->fused_masked_regions) {
+        if (plan.certified) {
+            result.push_back(plan.candidate);
+        }
+    }
+    return result;
+}
+
+FusedMaskedRegionCounters
+Interpreter::fused_masked_region_counters() const noexcept
+{
+    return impl_->fused_masked_counts;
+}
+
+void Interpreter::set_fused_masked_region_counters_enabled(
+    const bool enabled)
+{
+    if (impl_->started && !impl_->fused_static_bindings_open) {
+        throw std::logic_error {
+            "fused masked counters must be configured before execution"
+        };
+    }
+    impl_->fused_masked_counters_enabled = enabled;
+}
+
+void Interpreter::install_fused_masked_region(
+    const std::size_t region_id,
+    std::vector<std::vector<Process::DriverRegion>> mandatory_writes,
+    std::unique_ptr<FusedMaskedRegionExecutor> executor)
+{
+    if (!impl_->started || !impl_->fused_static_bindings_open
+        || !executor || region_id >= impl_->fused_masked_regions.size()) {
+        throw std::logic_error { "invalid fused masked region binding" };
+    }
+    auto& plan = impl_->fused_masked_regions[region_id];
+    if (!plan.certified || plan.executor
+        || mandatory_writes.size() != plan.members.size()) {
+        throw std::logic_error { "stale fused masked region certificate" };
+    }
+    if (plan.candidate.projected) {
+        if (plan.candidate.outputs.size() != plan.members.size()) {
+            throw std::logic_error { "masked projected owner count changed" };
+        }
+        for (std::size_t index = 0U; index < plan.members.size(); ++index) {
+            const auto signal = plan.candidate.outputs[index];
+            const auto id = plan.members[index].process;
+            const auto& state = impl_->get_signal(signal);
+            if (mandatory_writes[index].size() != 1U
+                || mandatory_writes[index].front().signal != signal
+                || !mandatory_writes[index].front().whole
+                || mandatory_writes[index].front().offset != 0U
+                || mandatory_writes[index].front().width
+                    != state.initial_value.width()
+                || impl_->signal_transaction_observed[signal]) {
+                throw std::logic_error { "masked projected write lost its owner" };
+            }
+            const bool unresolved_logic4
+                = state.value_kind == ValueKind::logic4
+                && state.resolution == ResolutionKind::none;
+            const bool resolved_logic9
+                = state.value_kind == ValueKind::logic9
+                && state.resolution == ResolutionKind::std_logic;
+            const auto* record = impl_->driver_values[signal].find(id);
+            if ((unresolved_logic4
+                    && (impl_->signal_writer_counts[signal] != 1U
+                        || impl_->stable_single_writer_processes[signal]
+                            != id))
+                || (resolved_logic9
+                    && (record == nullptr
+                        || impl_->driver_values[signal].size() != 1U))
+                || (!unresolved_logic4 && !resolved_logic9)) {
+                throw std::logic_error { "masked projected driver changed" };
+            }
+        }
+        plan.executor = std::move(executor);
+        if (!plan.candidate.terminal_members.empty()) {
+            ++impl_->fused_masked_counts.terminal_regions_bound;
+            impl_->fused_masked_counts.terminal_members_bound
+                += plan.candidate.terminal_members.size();
+        }
+        return;
+    }
+    if (plan.candidate.outputs.size()
+            != (plan.normal_output_owner ? 2U : 1U)
+        || static_cast<bool>(plan.normal_output_owner)
+            != static_cast<bool>(plan.candidate.normal_single_writer_output)) {
+        throw std::logic_error { "masked owned region output count changed" };
+    }
+    const auto signal = plan.candidate.outputs.front();
+    const auto width = impl_->get_signal(signal).initial_value.width();
+    auto complete = std::vector<std::uint64_t>((width + 63U) / 64U);
+    for (std::size_t index = 0U; index < plan.members.size(); ++index) {
+        const auto id = plan.members[index].process;
+        if (plan.normal_output_owner == id) {
+            const auto output = *plan.candidate.normal_single_writer_output;
+            const auto& value = impl_->get_signal(output);
+            const auto* record = impl_->driver_values[output].find(id);
+            const bool ordinary_single_driver
+                = value.resolution == ResolutionKind::sv_wire
+                && impl_->driver_values[output].size() == 1U
+                && record != nullptr
+                && record->strength == DriveStrength { }
+                && record->value.width() == value.initial_value.width();
+            if (plan.candidate.outputs.back() != output
+                || mandatory_writes[index].size() != 1U
+                || mandatory_writes[index].front().signal != output
+                || !mandatory_writes[index].front().whole
+                || mandatory_writes[index].front().offset != 0U
+                || (mandatory_writes[index].front().width != 0U
+                    && mandatory_writes[index].front().width
+                        != value.initial_value.width())
+                || value.value_kind != ValueKind::logic4
+                || (value.resolution != ResolutionKind::none
+                    && !ordinary_single_driver)
+                || value.systemverilog_scalar
+                    != SystemVerilogScalarKind::None
+                || value.has_implicit_driver || value.has_charge_strength
+                || impl_->signal_writer_counts[output] != 1U
+                || impl_->stable_single_writer_processes[output] != id
+                || impl_->signal_transaction_observed[output]) {
+                throw std::logic_error {
+                    "masked normal output lost its original writer"
+                };
+            }
+            plan.members[index].mandatory_write_mask.assign(
+                complete.size(), UINT64_C(0));
+            continue;
+        }
+        const auto& owner = impl_->owned_driver_spans[id];
+        if (owner.signal != signal || !impl_->owned_driver_active(signal)
+            || mandatory_writes[index].empty()) {
+            throw std::logic_error { "masked member lost its original owner" };
+        }
+        auto member_mask = std::vector<std::uint64_t>(complete.size());
+        for (const auto& write : mandatory_writes[index]) {
+            if (write.signal != signal || write.whole
+                || write.width == 0U || write.offset < owner.offset
+                || write.offset - owner.offset > owner.width
+                || write.width > owner.width
+                    - (write.offset - owner.offset)) {
+                throw std::logic_error { "masked member write escapes owner span" };
+            }
+            for (std::size_t bit = write.offset;
+                 bit < static_cast<std::size_t>(write.offset)
+                     + write.width; ++bit) {
+                member_mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+            }
+        }
+        for (std::size_t word = 0U; word < complete.size(); ++word) {
+            if ((complete[word] & member_mask[word]) != 0U) {
+                throw std::logic_error { "masked members overlap owner bits" };
+            }
+            complete[word] |= member_mask[word];
+        }
+        plan.members[index].mandatory_write_mask
+            = std::move(member_mask);
+    }
+    plan.executor = std::move(executor);
+    if (plan.normal_output_owner) {
+        ++impl_->fused_masked_counts.terminal_regions_bound;
+        ++impl_->fused_masked_counts.terminal_members_bound;
     }
 }
 
@@ -1460,6 +1682,9 @@ void Interpreter::start()
     }
     impl_->build_native_static_regions();
     impl_->build_owned_driver_composites();
+    impl_->build_fused_static_cohort_plans();
+    impl_->build_fused_masked_region_plans();
+    impl_->build_private_signal_bridges();
     std::vector<bool> prearmed_static_waits(
         impl_->processes.size(), false);
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
@@ -1481,12 +1706,14 @@ void Interpreter::start()
             impl_->queue_at(id, impl_->scheduler.now());
         }
     }
+    impl_->fused_static_bindings_open = true;
 }
 
 RunResult Interpreter::run(std::optional<SimulationTick> until)
 {
     impl_->simulator_status.reset();
     start();
+    impl_->fused_static_bindings_open = false;
     auto ordinary = impl_->scheduler.run(until);
     ordinary.simulator_status = impl_->simulator_status;
     const bool design_stop = ordinary.status == RunStatus::stopped
@@ -1563,6 +1790,7 @@ RunResult Interpreter::finish()
 
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->commit(signal, std::move(value));
 }
 
@@ -1782,6 +2010,17 @@ const Process& Interpreter::process_program(const ProcessId process) const
     return impl_->get_process(process).program();
 }
 
+const Process& Interpreter::fused_masked_member_program(
+    const ProcessId process) const
+{
+    (void)impl_->get_process(process);
+    if (process < impl_->fused_masked_normalized_programs.size()
+        && impl_->fused_masked_normalized_programs[process]) {
+        return *impl_->fused_masked_normalized_programs[process];
+    }
+    return impl_->processes[process].program();
+}
+
 InstructionIndex Interpreter::process_instruction(
     const ProcessId process) const
 {
@@ -1927,28 +2166,33 @@ const Scheduler& Interpreter::scheduler() const noexcept
 
 void Interpreter::set_signal_change_hook(SignalChangeHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_native_signal_observation_required_hook(
     NativeSignalObservationRequiredHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->native_signal_observation_required_hook = std::move(hook);
 }
 
 void Interpreter::set_native_signal_observation_any_hook(
     NativeSignalObservationAnyHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->native_signal_observation_any_hook = std::move(hook);
 }
 
 void Interpreter::set_stored_signal_change_hook(StoredSignalChangeHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->stored_signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_driver_change_hook(DriverChangeHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     if (hook) {
         impl_->demote_all_owned_drivers();
     }
@@ -1957,23 +2201,27 @@ void Interpreter::set_driver_change_hook(DriverChangeHook hook)
 
 void Interpreter::set_event_trigger_hook(EventTriggerHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->event_trigger_hook = std::move(hook);
 }
 
 void Interpreter::set_container_object_change_hook(
     ContainerObjectChangeHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->container_object_change_hook = std::move(hook);
 }
 
 void Interpreter::set_scalar_signal_change_hook(
     ScalarSignalChangeHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->scalar_signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_execution_point_hook(ExecutionPointHook hook)
 {
+    impl_->invalidate_fused_static_cohorts();
     impl_->execution_point_hook = std::move(hook);
 }
 

@@ -84,6 +84,9 @@ class ApplicationTestFixture {
   void test_artifact_phase_semantics();
 
  private:
+  void test_fused_static_simulation();
+  void test_fused_static_vhdl_simulation(bool masked = false,
+      bool private_bridge = false, bool terminal_chain = false);
   void test_cli_trace_and_timescale(fsim::cli::Services& services);
   void test_verilog_artifact_matrix(fsim::cli::Services& services);
   void create_common_sources();

@@ -195,6 +195,12 @@ int main() {
       JitOptimizationLevel::o0, "cohort_resume_o0");
   test_process_cohort_resume_at_level(
       JitOptimizationLevel::o2, "cohort_resume_o2");
+  test_logic4_bit_and_cohort_at_level(JitOptimizationLevel::o0);
+  test_logic4_bit_and_cohort_at_level(JitOptimizationLevel::o2);
+  test_fused_static_process_at_level(JitOptimizationLevel::o0);
+  test_fused_static_process_at_level(JitOptimizationLevel::o2);
+  test_fused_masked_process_at_level(JitOptimizationLevel::o0);
+  test_fused_masked_process_at_level(JitOptimizationLevel::o2);
   test_class_service_boundaries_at_level(
       JitOptimizationLevel::o0, "class_boundary_o0");
   test_class_service_boundaries_at_level(

@@ -194,6 +194,7 @@ docs/legacy-pli.md
 docs/performance-campaign.md
 docs/performance-matrix-2026-09-28.md
 docs/performance-resume.md
+docs/performance-throughput-language-comparison-2026-09-29.md
 docs/release-and-post-v2.md
 docs/sdf.md
 docs/simplification-disposition.md
@@ -333,6 +334,8 @@ include/fsim/artifact/design.hpp
 include/fsim/artifact/object.hpp
 include/fsim/cli/driver.hpp
 include/fsim/compiler/cache_support.hpp
+include/fsim/compiler/fused_masked_process.hpp
+include/fsim/compiler/fused_static_process.hpp
 include/fsim/compiler/jit_runtime.h
 include/fsim/compiler/llvm_jit.hpp
 include/fsim/compiler/object_cache.hpp
@@ -444,6 +447,7 @@ include/fsim/runtime/simir_class.hpp
 include/fsim/runtime/simir_container_value.hpp
 include/fsim/runtime/simir_coverage.hpp
 include/fsim/runtime/simir_debug.hpp
+include/fsim/runtime/simir_fused_container_reads.hpp
 include/fsim/runtime/simir_operation_storage.hpp
 include/fsim/runtime/simir_operations_extended.hpp
 include/fsim/runtime/simir_process_execution_context.hpp
@@ -658,6 +662,10 @@ src/app/application_executor_signals.cpp
 src/app/application_executor_values.cpp
 src/app/application_executor_vital.cpp
 src/app/application_executors.cpp
+src/app/application_fused_masked_setup.cpp
+src/app/application_fused_static_executor.cpp
+src/app/application_fused_static_executor.hpp
+src/app/application_fused_static_setup.cpp
 src/app/application_hierarchy_path_codec.cpp
 src/app/application_hierarchy_path_codec.hpp
 src/app/application_internal.hpp
@@ -830,6 +838,8 @@ src/compiler/llvm_jit_coverage.cpp
 src/compiler/llvm_jit_coverage.hpp
 src/compiler/llvm_jit_dynamic_part.cpp
 src/compiler/llvm_jit_execution.cpp
+src/compiler/llvm_jit_fused_masked_process.cpp
+src/compiler/llvm_jit_fused_static_process.cpp
 src/compiler/llvm_jit_impl.hpp
 src/compiler/llvm_jit_internal.hpp
 src/compiler/llvm_jit_lowering.cpp
@@ -838,6 +848,7 @@ src/compiler/llvm_jit_lowering_internal.hpp
 src/compiler/llvm_jit_lowering_operations_prefix.cpp
 src/compiler/llvm_jit_lowering_operations_suffix.cpp
 src/compiler/llvm_jit_lowering_planning.cpp
+src/compiler/llvm_jit_masked_lowering.cpp
 src/compiler/llvm_jit_module.cpp
 src/compiler/llvm_jit_operations_container.cpp
 src/compiler/llvm_jit_operations_control.cpp
@@ -1119,6 +1130,7 @@ src/runtime/simir_execution_context.cpp
 src/runtime/simir_execution_context.hpp
 src/runtime/simir_execution_interpreter.cpp
 src/runtime/simir_execution_part2.cpp
+src/runtime/simir_execution_pure_wave.cpp
 src/runtime/simir_execution_shared.cpp
 src/runtime/simir_execution_shared.hpp
 src/runtime/simir_file_binary.cpp
@@ -1126,12 +1138,18 @@ src/runtime/simir_file_scanning.cpp
 src/runtime/simir_files.cpp
 src/runtime/simir_fork.cpp
 src/runtime/simir_format.cpp
+src/runtime/simir_fused_container_reads.cpp
+src/runtime/simir_fused_masked_execution.cpp
+src/runtime/simir_fused_masked_graph.cpp
+src/runtime/simir_fused_masked_normalization.cpp
+src/runtime/simir_fused_static_graph.cpp
 src/runtime/simir_internal.hpp
 src/runtime/simir_interpreter.cpp
 src/runtime/simir_interpreter_profiles.cpp
 src/runtime/simir_logic.cpp
 src/runtime/simir_module_path.cpp
 src/runtime/simir_owned_driver.cpp
+src/runtime/simir_private_bridge.cpp
 src/runtime/simir_process_execution_context.cpp
 src/runtime/simir_random_distribution.cpp
 src/runtime/simir_sampled_values.cpp
@@ -1321,6 +1339,7 @@ tests/app/application_test_classes.cpp
 tests/app/application_test_cli.cpp
 tests/app/application_test_cli_trace.cpp
 tests/app/application_test_fixture.cpp
+tests/app/application_test_fused_static.cpp
 tests/app/application_test_mixed.cpp
 tests/app/application_test_multiple_roots.cpp
 tests/app/application_test_non_project_cli.cpp
@@ -1362,6 +1381,7 @@ tests/app/expression_application_advanced_test.cpp
 tests/app/expression_application_test.cpp
 tests/app/fork_application_test.cpp
 tests/app/fst_corpus_test.cpp
+tests/app/fused_static_executor_test.cpp
 tests/app/governed_process_limits.cpp
 tests/app/governed_process_limits.hpp
 tests/app/hierarchy_path_artifact_reload_test.cpp
@@ -1552,7 +1572,10 @@ tests/compiler/llvm_jit_cache_test.cpp
 tests/compiler/llvm_jit_control_cache_test.cpp
 tests/compiler/llvm_jit_coverage_test.cpp
 tests/compiler/llvm_jit_display_test.cpp
+tests/compiler/llvm_jit_fused_masked_process_test.cpp
+tests/compiler/llvm_jit_fused_static_process_test.cpp
 tests/compiler/llvm_jit_logic9_test.cpp
+tests/compiler/llvm_jit_pure_cohort_test.cpp
 tests/compiler/llvm_jit_scheduling_test.cpp
 tests/compiler/llvm_jit_slice_cache_test.cpp
 tests/compiler/llvm_jit_string_test.cpp
@@ -1844,11 +1867,18 @@ tests/runtime/runtime_container_tests.cpp
 tests/runtime/runtime_dpi_abi_c_test.c
 tests/runtime/runtime_dpi_tests.cpp
 tests/runtime/runtime_execution_lifecycle.cpp
+tests/runtime/runtime_execution_pure_wave_tests.cpp
 tests/runtime/runtime_execution_services_tests.cpp
 tests/runtime/runtime_execution_tests.cpp
 tests/runtime/runtime_executor_tests.cpp
 tests/runtime/runtime_file_tests.cpp
 tests/runtime/runtime_foreign_abi_cpp_test.cpp
+tests/runtime/runtime_fused_masked_frontier_tests.cpp
+tests/runtime/runtime_fused_masked_terminal_tests.cpp
+tests/runtime/runtime_fused_projected_cohort_test.cpp
+tests/runtime/runtime_fused_static_cohort_test.cpp
+tests/runtime/runtime_private_region_scheduler_tests.cpp
+tests/runtime/runtime_private_region_tests.cpp
 tests/runtime/runtime_scalar_text_tests.cpp
 tests/runtime/runtime_specify_tests.cpp
 tests/runtime/runtime_synchronization_tests.cpp

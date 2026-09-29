@@ -650,9 +650,21 @@ void Interpreter::Impl::ExecutionContext::write_validated_update_words(
     return &owner;
 }
 
+std::optional<PreparedOwnedUpdateSlot>
+Interpreter::Impl::ExecutionContext::prepare_owned_update_slot(
+    const ProcessUpdateSlotBatch& batch)
+{
+    return owner.prepare_owned_update_slot(batch);
+}
+
 bool Interpreter::Impl::ExecutionContext::write_validated_update_slot_batches(
     const std::span<const ProcessUpdateSlotBatch> batches){
     return owner.stage_validated_update_slot_batches(batches);
+}
+
+bool Interpreter::Impl::ExecutionContext::write_validated_prepared_update_slot_batches(
+    const std::span<const PureWavePreparedMember* const> members){
+    return owner.stage_validated_prepared_update_slot_batches(members);
 }
 
 bool Interpreter::Impl::ExecutionContext::write_validated_logic9_update_batch(

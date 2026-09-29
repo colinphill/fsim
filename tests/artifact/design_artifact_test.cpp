@@ -18,6 +18,7 @@
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory.hpp"
 #include "fsim/systemc/kernel_backend_inventory.hpp"
@@ -927,6 +928,42 @@ int main() {
   std::filesystem::remove_all(
       generated_directory, generated_cleanup_error);
   assert(!generated_cleanup_error);
+
+  const auto long_root = directory.parent_path()
+      / (directory.filename().string() + "-extended");
+  const auto long_directory = long_root
+      / std::string(64U, 'a') / std::string(64U, 'b')
+      / std::string(64U, 'c') / std::string(64U, 'd');
+#if defined(_WIN32)
+  assert(std::filesystem::absolute(long_directory).native().size() > 260U);
+  const auto extended = fsim::support::path_for_native_io(long_directory);
+  assert(extended.native().starts_with(L"\\\\?\\"));
+  assert(fsim::support::path_for_native_io(extended) == extended);
+  const auto unc = fsim::support::path_for_native_io(
+      std::filesystem::path{L"\\\\server\\share\\payload.bin"});
+  assert(unc.native().starts_with(L"\\\\?\\UNC\\server\\share\\"));
+#endif
+  fsim::diagnostic::Engine long_publish_diagnostics;
+  assert(fsim::artifact::publish_design(long_directory, metadata,
+      retained_payloads, generated_payloads, long_publish_diagnostics));
+  assert(!long_publish_diagnostics.has_error());
+  fsim::diagnostic::Engine long_load_diagnostics;
+  assert(fsim::artifact::load_design_metadata(
+      long_directory, long_load_diagnostics) == metadata);
+  assert(!long_load_diagnostics.has_error());
+  {
+    std::ifstream input(fsim::support::path_for_native_io(
+        long_directory / metadata.payloads.front().artifact),
+        std::ios::binary);
+    assert((std::string{std::istreambuf_iterator<char>{input},
+                std::istreambuf_iterator<char>{}}
+        == state_bytes));
+  }
+  const auto long_io_root = fsim::support::path_for_native_io(long_root);
+  make_tree_writable(long_io_root);
+  std::error_code long_cleanup_error;
+  std::filesystem::remove_all(long_io_root, long_cleanup_error);
+  assert(!long_cleanup_error);
 
   make_tree_writable(directory);
   std::error_code cleanup_error;

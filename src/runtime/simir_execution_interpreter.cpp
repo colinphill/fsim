@@ -93,9 +93,9 @@ void Interpreter::Impl::execute(ProcessId id)
             if (native_process_count_profile_enabled) {
                 ++native_process_single_resume_counts[id];
                 ++native_process_single_boundary_counts[
-                    static_cast<std::size_t>(boundary.external.kind)];
-                if (boundary.external.kind
-                    == ExternalSuspendKind::wait_sensitivity) {
+                    external_suspension_profile_index(
+                        boundary.external.kind)];
+                if (is_static_wait_suspension(boundary.external.kind)) {
                     ++native_process_single_static_wait_counts[id];
                     const auto wave = std::pair {
                         scheduler.now(), scheduler.delta()

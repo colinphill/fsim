@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_fused_container_reads.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -13,6 +14,7 @@ void test_mixed_container_port_rejections(
     const fsim::frontend::ParsedDesign& port_design,
     const fsim::frontend::ParsedDesign& dynamic_port_design);
 void test_systemverilog_static_generated_container_reads();
+void test_systemverilog_static_typed_container_reads();
 
 void test_systemverilog_container_lowering()
 {
@@ -2022,6 +2024,7 @@ endmodule
     test_mixed_container_port_rejections(
         port_parsed.design, dynamic_port_parsed.design);
     test_systemverilog_static_generated_container_reads();
+    test_systemverilog_static_typed_container_reads();
 }
 
 void test_systemverilog_static_generated_container_reads()
@@ -2251,6 +2254,248 @@ endmodule
     assert(bit2_result.status == fsim::runtime::RunStatus::completed);
     assert(bit2_interpreter->signal_value(*bit_source)
         == bit2_interpreter->signal_value(*bit_observed));
+}
+
+void test_systemverilog_static_typed_container_reads()
+{
+    using namespace fsim::runtime::simir;
+    using fsim::runtime::Logic4;
+    using fsim::runtime::PackedLogic4;
+
+    for (const auto width : { 65U, 129U }) {
+        const auto source = std::string {
+            "module static_typed_container_reads; localparam W = " }
+            + std::to_string(width) + R"(;
+  localparam int PICK = 1;
+  logic [W-1:0] down_values[2:-1];
+  logic [W-1:0] up_values[-1:2];
+  logic [W-1:0] high_values[255:254];
+  logic [W-1:0] blocking_values[1:0];
+  int selector;
+  logic [W-1:0] literal_result, parameter_result, arithmetic_result;
+  logic [W-1:0] truncated_result, wrapped_result, unsigned_result;
+  logic [W-1:0] signed_result, unknown_result, dynamic_result;
+  logic [W-1:0] signed_in_range_result, out_of_range_result;
+  logic [W-1:0] blocking_result;
+  assign literal_result = down_values[2];
+  assign parameter_result = down_values[PICK];
+  assign arithmetic_result = up_values[1 + 1];
+  assign truncated_result = down_values[64'h100000001];
+  assign wrapped_result = up_values[8'(8'hff + 8'd2)];
+  assign unsigned_result = high_values[8'hff];
+  assign signed_result = high_values[$signed(8'hff)];
+  assign signed_in_range_result = up_values[$signed(8'hff)];
+  assign unknown_result = down_values[2'bx1];
+  assign out_of_range_result = down_values[3];
+  assign dynamic_result = down_values[selector];
+  always_comb begin
+    blocking_values[selector - 1] = down_values[2];
+    blocking_result = blocking_values[0];
+  end
+endmodule
+)";
+        const auto parsed = fsim::frontend::parse_text(
+            "static-typed-container-reads.sv", source,
+            fsim::frontend::Language::SystemVerilog2017);
+        assert(parsed.ok());
+        const auto elaborated = compile_and_elaborate(
+            parsed.design, "static_typed_container_reads");
+        assert(elaborated.ok());
+        auto normalized_state = elaborated.design->state();
+        std::vector<FusedMaskedContainerRead> bindings;
+        for (const auto& alias : normalized_state.container_signal_aliases) {
+            assert(alias.readable && alias.writable);
+            const auto& object = normalized_state.container_objects[alias.object];
+            assert(!object.slice_alias);
+            bindings.push_back({ alias.object, alias.signal,
+                &object.initial_value.type,
+                static_cast<std::uint32_t>(
+                    normalized_state.signal_info[alias.signal].width) });
+        }
+        for (auto& process : normalized_state.processes) {
+            if (auto normalized = normalize_fused_container_reads(process, bindings)) {
+                assert(normalized->id == process.id);
+                assert(normalized->static_sensitivity == process.static_sensitivity);
+                assert(normalized->operations.size() == process.operations.size());
+                assert(normalized->container_register_count == 0U);
+                process = std::move(*normalized);
+            }
+        }
+
+        const auto signal = [&](const std::string_view name) {
+            const auto found = elaborated.design->find_signal(name);
+            assert(found);
+            return *found;
+        };
+        const auto literal_writer = std::ranges::find_if(
+            elaborated.design->processes(), [&](const Process& process) {
+                return std::ranges::any_of(process.operations,
+                    [&](const Operation& operation) {
+                        const auto* write = operation_get_if<WriteUpdate>(&operation);
+                        return write != nullptr
+                            && write->signal == signal("literal_result");
+                    });
+            });
+        assert(literal_writer != elaborated.design->processes().end());
+        assert(normalize_fused_container_reads(*literal_writer, bindings));
+        auto malformed = *literal_writer;
+        malformed.static_sensitivity.clear();
+        assert(!normalize_fused_container_reads(malformed, bindings));
+        const auto blocking_writer = std::ranges::find_if(
+            elaborated.design->processes(), [&](const Process& process) {
+                return std::ranges::any_of(process.operations,
+                    [&](const Operation& operation) {
+                        const auto* write = operation_get_if<WriteUpdate>(&operation);
+                        const auto* blocking
+                            = operation_get_if<WriteBlocking>(&operation);
+                        return (write != nullptr
+                                   && write->signal == signal("blocking_result"))
+                            || (blocking != nullptr
+                                && blocking->signal == signal("blocking_result"));
+                    });
+            });
+        assert(blocking_writer != elaborated.design->processes().end());
+        assert(!normalize_fused_container_reads(*blocking_writer, bindings));
+        auto duplicate_bindings = bindings;
+        duplicate_bindings.insert(duplicate_bindings.end(), bindings.begin(),
+            bindings.end());
+        assert(!normalize_fused_container_reads(*literal_writer,
+            duplicate_bindings));
+        auto no_bindings = std::vector<FusedMaskedContainerRead> { };
+        assert(!normalize_fused_container_reads(*literal_writer, no_bindings));
+        malformed = *literal_writer;
+        for (auto& operation : malformed.operations) {
+            if (const auto* read = operation_get_if<ReadContainerObject>(&operation)) {
+                operation = WriteContainerObject {
+                    read->object, read->destination, std::nullopt };
+                break;
+            }
+        }
+        assert(!normalize_fused_container_reads(malformed, bindings));
+        const auto expect_read = [&](const std::string_view output_name,
+                                     const std::string_view input_name,
+                                     const std::optional<std::uint32_t> offset,
+                                     const std::size_t backing_width) {
+            const auto output = signal(output_name);
+            const auto input = signal(input_name);
+            std::size_t writers { };
+            for (const auto& process : normalized_state.processes) {
+                const auto writes_output = std::ranges::any_of(
+                    process.operations, [&](const Operation& operation) {
+                        const auto* write
+                            = operation_get_if<WriteUpdate>(&operation);
+                        return write != nullptr && write->signal == output;
+                    });
+                if (!writes_output) {
+                    continue;
+                }
+                ++writers;
+                std::size_t signal_reads { };
+                std::size_t container_reads { };
+                for (std::size_t position { };
+                    position < process.operations.size(); ++position) {
+                    const auto& operation = process.operations[position];
+                    container_reads += operation_holds<ContainerRead>(
+                        operation) ? 1U : 0U;
+                    const auto* read = operation_get_if<ReadSignal>(&operation);
+                    if (read == nullptr || read->signal != input) {
+                        continue;
+                    }
+                    ++signal_reads;
+                    assert(offset);
+                    assert(read->kind == SignalReadKind::current);
+                    assert(elaborated.design->signals()[input].width
+                        == backing_width);
+                    assert(position + 1U < process.operations.size());
+                    const auto* extract = operation_get_if<Extract>(
+                        &process.operations[position + 1U]);
+                    assert(extract != nullptr);
+                    assert(extract->source == read->destination);
+                    assert(extract->offset == *offset);
+                    assert(extract->width == width);
+                }
+                if (signal_reads != (offset ? 1U : 0U)) {
+                    std::cerr << "typed container reader " << output_name
+                              << ": signal reads=" << signal_reads
+                              << ", container reads=" << container_reads << '\n';
+                }
+                assert(signal_reads == (offset ? 1U : 0U));
+                assert(container_reads == (offset ? 0U : 1U));
+                assert(std::ranges::any_of(process.static_sensitivity,
+                    [&](const Sensitivity& entry) {
+                        return entry.signal == input;
+                    }));
+            }
+            assert(writers == 1U);
+        };
+        expect_read("literal_result", "down_values", 3U * width, 4U * width);
+        expect_read("parameter_result", "down_values", 2U * width, 4U * width);
+        expect_read("arithmetic_result", "up_values", 0U, 4U * width);
+        expect_read("truncated_result", "down_values", 2U * width, 4U * width);
+        // Arithmetic that survives lowering keeps the original container path.
+        expect_read("wrapped_result", "up_values", std::nullopt, 4U * width);
+        // Extension operations also remain outside the constant proof tier.
+        expect_read("unsigned_result", "high_values", std::nullopt, 2U * width);
+        expect_read("signed_result", "high_values", std::nullopt, 2U * width);
+        expect_read("signed_in_range_result", "up_values", std::nullopt,
+            4U * width);
+        expect_read("unknown_result", "down_values", std::nullopt, 4U * width);
+        expect_read("out_of_range_result", "down_values", std::nullopt,
+            4U * width);
+        expect_read("dynamic_result", "down_values", std::nullopt, 4U * width);
+
+        const auto normalized_design = fsim::elaboration::ElaboratedDesign::from_state(
+            std::move(normalized_state));
+        assert(normalized_design);
+        auto interpreter = normalized_design->create_interpreter();
+        auto original_interpreter = elaborated.design->create_interpreter();
+        for (std::size_t round { }; round < 2U; ++round) {
+            auto down = PackedLogic4(4U * width, Logic4::zero);
+            auto up = down;
+            auto high = PackedLogic4(2U * width, Logic4::zero);
+            const auto pattern = PackedLogic4::from_msb_string("10XZ");
+            for (std::size_t bit { }; bit < down.width(); ++bit) {
+                down.set(bit, pattern.get((bit + bit / 17U + round) % 4U));
+                up.set(bit, pattern.get((bit + bit / 19U + round + 1U) % 4U));
+            }
+            for (std::size_t bit { }; bit < high.width(); ++bit) {
+                high.set(bit, pattern.get((bit + bit / 23U + round) % 4U));
+            }
+            interpreter->force_signal(signal("down_values"), down);
+            interpreter->force_signal(signal("up_values"), up);
+            interpreter->force_signal(signal("high_values"), high);
+            interpreter->force_signal(signal("selector"),
+                PackedLogic4::from_aval_bval(32U, 1U, 0U));
+            original_interpreter->force_signal(signal("down_values"), down);
+            original_interpreter->force_signal(signal("up_values"), up);
+            original_interpreter->force_signal(signal("high_values"), high);
+            original_interpreter->force_signal(signal("selector"),
+                PackedLogic4::from_aval_bval(32U, 1U, 0U));
+            assert(interpreter->run().status
+                == fsim::runtime::RunStatus::completed);
+            assert(original_interpreter->run().status
+                == fsim::runtime::RunStatus::completed);
+            const auto expect_value = [&](const std::string_view name,
+                                          const PackedLogic4& expected) {
+                assert(interpreter->signal_value(signal(name)) == expected);
+                assert(original_interpreter->signal_value(signal(name)) == expected);
+            };
+            expect_value("literal_result", down.extract_bits(3U * width, width));
+            expect_value("parameter_result", down.extract_bits(2U * width, width));
+            expect_value("arithmetic_result", up.extract_bits(0U, width));
+            expect_value("truncated_result", down.extract_bits(2U * width, width));
+            expect_value("wrapped_result", up.extract_bits(width, width));
+            expect_value("unsigned_result", high.extract_bits(width, width));
+            expect_value("signed_in_range_result", up.extract_bits(3U * width,
+                width));
+            expect_value("dynamic_result", down.extract_bits(2U * width, width));
+            expect_value("blocking_result", down.extract_bits(3U * width, width));
+            const auto unknown = PackedLogic4(width, Logic4::x);
+            expect_value("signed_result", unknown);
+            expect_value("unknown_result", unknown);
+            expect_value("out_of_range_result", unknown);
+        }
+    }
 }
 
 } // namespace fsim::tests::elaboration

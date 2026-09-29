@@ -51,6 +51,18 @@ void Interpreter::Impl::discard_scheduler_work() noexcept
         std::ranges::fill(region.active, UINT8_C(0));
         region.ready_offsets.clear();
     }
+    for (auto& region : fused_masked_regions) {
+        for (auto& bucket : region.ready_buckets) {
+            bucket.ready.clear();
+        }
+    }
+    for (auto& bucket : fused_masked_global_frontiers) {
+        bucket.heads.clear();
+        std::ranges::fill(bucket.positions,
+            std::numeric_limits<std::size_t>::max());
+        bucket.callback.reset();
+        bucket.callback_key.reset();
+    }
 }
 
 [[nodiscard]] SignalHot& Interpreter::Impl::get_signal(SignalId id)
@@ -398,7 +410,6 @@ void Interpreter::Impl::remove_dynamic_wait_nonempty(ProcessState& process)
         fail(process, "dynamic wait generation overflow");
     }
     ++cold.dynamic_wait_generation;
-    process.waiting_on_signal = false;
     ensure_dynamic_fanout_counts();
     for (std::size_t sensitivity_index = 0;
         sensitivity_index < cold.dynamic_sensitivity.size();
@@ -441,6 +452,7 @@ void Interpreter::Impl::remove_dynamic_wait_nonempty(ProcessState& process)
         std::erase(fanout, process.id);
         cold.waiting_on_container.reset();
     }
+    process.waiting_on_signal = false;
 }
 
 void Interpreter::Impl::ensure_dynamic_fanout_counts()
@@ -1133,6 +1145,9 @@ void Interpreter::Impl::queue_static_next_delta(const ProcessId id)
     if (process.halted || process.queued) {
         return;
     }
+    if (queue_fused_masked_member(id)) {
+        return;
+    }
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
     const auto cohort = id < static_sensitivity_cohort_by_process.size()
         ? static_sensitivity_cohort_by_process[id]
@@ -1160,6 +1175,22 @@ void Interpreter::Impl::queue_static_next_delta(const ProcessId id)
                 native_static_region_payload
                     | static_cast<std::uint64_t>(id),
                 fallback);
+            return;
+        }
+        if (static_phase_batches_enabled) {
+            process.queued = true;
+            const auto execute_one = [this, id](Scheduler&) {
+                auto& state = get_process(id);
+                state.queued = false;
+                state.waiting_on_static = false;
+                remove_dynamic_wait(state);
+                execute(id);
+            };
+            scheduler.schedule_next_delta_batchable(
+                process.execution_phase, id, *this,
+                pure_wave_singleton_payload
+                    | static_cast<std::uint64_t>(id),
+                execute_one);
             return;
         }
         queue_next_delta(id);
@@ -1200,6 +1231,10 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     try {
         if (static_phase_batches_enabled) {
             static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
+            if (cohort_id >= pure_wave_singleton_payload) {
+                throw std::overflow_error(
+                    "static cohort identifier exceeds scheduler payload");
+            }
             scheduler.schedule_next_delta_batchable(
                 phase, order, *this,
                 static_cast<std::uint64_t>(cohort_id), execute_one);
@@ -2266,6 +2301,10 @@ void Interpreter::Impl::publish_native_word(
     if (!has_static_fanout) {
         return;
     }
+    if (private_signal_bridge_active(signal_id)) {
+        notify_private_signal_bridge(signal_id);
+        return;
+    }
 
     const auto decode_low = [](const Logic4Word word) {
         const bool aval = (word.aval & UINT64_C(1)) != 0U;
@@ -2336,6 +2375,10 @@ void Interpreter::Impl::publish_native_logic9_word(
     scheduler.note_signal_change(signal_id);
 
     if (!has_static_fanout) {
+        return;
+    }
+    if (private_signal_bridge_active(signal_id)) {
+        notify_private_signal_bridge(signal_id);
         return;
     }
 
@@ -2438,6 +2481,10 @@ void Interpreter::Impl::publish_value_change(
     }
 
     if (notify_fanout) {
+        if (private_signal_bridge_active(signal_id)) {
+            notify_private_signal_bridge(signal_id);
+            return;
+        }
         auto transition = StaticTransitionMatches { };
         bool transition_decoded { };
         const bool has_static_edge_fanout

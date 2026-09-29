@@ -511,11 +511,13 @@ void Interpreter::Impl::schedule_update_commit()
                 staged.clear();
             }
             driver_update_signals.clear();
+            fused_masked_pending_touches.clear();
 
             update_commit_scratch.clear();
             update_commit_scratch.reserve(
                 unresolved_update_signals.size()
-                + resolved_update_signals.size());
+                + resolved_update_signals.size()
+                + private_owned_update_signals.size());
             for (const auto signal : unresolved_update_signals) {
                 auto& staged = unresolved_update_scratch[signal];
                 update_commit_scratch.emplace_back(
@@ -529,6 +531,13 @@ void Interpreter::Impl::schedule_update_commit()
                 resolved_update_marked[signal] = false;
             }
             resolved_update_signals.clear();
+            for (const auto signal : private_owned_update_signals) {
+                const auto value = owned_driver_active(signal)
+                    ? owned_driver_composites[signal].committed
+                    : resolved_driver_value(signal);
+                update_commit_scratch.emplace_back(signal, value);
+                resolved_update_marked[signal] = false;
+            }
             std::sort(
                 update_commit_scratch.begin(),
                 update_commit_scratch.end(),
@@ -540,6 +549,18 @@ void Interpreter::Impl::schedule_update_commit()
                     += update_commit_scratch.size();
             }
             for (auto& [signal, value] : update_commit_scratch) {
+                if (signal < private_owned_update_marked.size()
+                    && private_owned_update_marked[signal]) {
+                    private_owned_update_marked[signal] = false;
+                    if (private_signal_bridge_active(signal)
+                        && owned_driver_active(signal)) {
+                        commit_private_owned_signal(
+                            signal, std::move(value));
+                    } else {
+                        commit_resolved(signal, std::move(value));
+                    }
+                    continue;
+                }
                 if (direct_single_driver_commit_marked[signal]) {
                     direct_single_driver_commit_marked[signal] = false;
                     commit_direct_single_driver(signal, std::move(value));
@@ -550,6 +571,7 @@ void Interpreter::Impl::schedule_update_commit()
                     commit_resolved(signal, std::move(value));
                 }
             }
+            private_owned_update_signals.clear();
         });
 }
 
@@ -1049,10 +1071,14 @@ void Interpreter::Impl::stage_validated_update_words(
     }
 }
 
-bool Interpreter::Impl::stage_validated_update_slot_batches(
-    const std::span<const ProcessUpdateSlotBatch> batches)
+template <typename Batches>
+bool Interpreter::Impl::stage_validated_update_slot_batches_impl(
+    Batches& batches,
+    const bool schedule_commit,
+    bool* staged_any_out,
+    const bool count_profile_call)
 {
-    if (native_update_profile_enabled) {
+    if (native_update_profile_enabled && count_profile_call) {
         ++native_update_profile_calls;
     }
     // Module-path destinations may redirect or synthesize writes, and
@@ -1197,8 +1223,9 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
     };
 
     bool staged_any { };
-    if (native_update_profile_enabled) {
-        native_update_profile_batches += batches.size();
+    if (native_update_profile_enabled && count_profile_call) {
+        native_update_profile_batches += static_cast<std::uint64_t>(
+            std::ranges::distance(batches));
     }
     for (const auto& batch : batches) {
         for_each_active_update_slot(batch, [&](const auto& slot) {
@@ -1454,6 +1481,132 @@ bool Interpreter::Impl::stage_validated_update_slot_batches(
             consume_slot(slot);
         });
         std::ranges::fill(batch.active_words, UINT64_C(0));
+    }
+    if (staged_any_out != nullptr) {
+        *staged_any_out |= staged_any;
+    }
+    if (staged_any && schedule_commit) {
+        schedule_update_commit();
+    }
+    return true;
+}
+
+bool Interpreter::Impl::stage_validated_update_slot_batches(
+    const std::span<const ProcessUpdateSlotBatch> batches)
+{
+    auto source = batches;
+    return stage_validated_update_slot_batches_impl(source);
+}
+
+bool Interpreter::Impl::stage_validated_prepared_update_slot_batches(
+    const std::span<const PureWavePreparedMember* const> members)
+{
+    const auto active = [](const PureWavePreparedMember* member) {
+        return member != nullptr
+            && std::ranges::any_of(
+                member->update_batch.active_words,
+                [](const std::uint64_t word) { return word != 0U; });
+    };
+    if (std::ranges::none_of(members, active)) {
+        return true;
+    }
+    const auto batch = [](const PureWavePreparedMember* member)
+        -> const ProcessUpdateSlotBatch& {
+        return member->update_batch;
+    };
+    auto batches = members | std::views::filter(active)
+        | std::views::transform(batch);
+
+    // Certification is published once with the member. Dynamic policy gates
+    // must be checked before the first slot is consumed; unsupported layouts
+    // keep the complete V14 batch path.
+    if (module_paths.size() != 0U || has_bidirectional_switches
+        || process_profile_enabled || update_profile_enabled
+        || std::ranges::any_of(members, [&](const auto* member) {
+            return active(member)
+                && (member->prepared_owned_update_slot == nullptr
+                    || member->prepared_owned_update_slot->owner != this);
+        })) {
+        return stage_validated_update_slot_batches_impl(batches);
+    }
+
+    if (unresolved_update_scratch.size() < signals.size()) {
+        unresolved_update_scratch.resize(signals.size());
+        driver_update_scratch.resize(signals.size());
+        resolved_update_marked.resize(signals.size());
+    }
+    bool staged_any { };
+    if (native_update_profile_enabled) {
+        ++native_update_profile_calls;
+        native_update_profile_batches += static_cast<std::uint64_t>(
+            std::ranges::distance(batches));
+    }
+    for (const auto* member : members) {
+        if (!active(member)) {
+            continue;
+        }
+        const auto& update_batch = member->update_batch;
+        const auto& slot = update_batch.slots[0];
+        if (*slot.active == 0U) {
+            if (native_update_profile_enabled) {
+                ++native_update_profile_slots;
+                ++native_update_profile_inactive;
+            }
+            update_batch.active_words[0] = 0U;
+            continue;
+        }
+        bool touched { };
+        for (std::uint32_t word = 0U;
+             word < slot.word_count; ++word) {
+            touched |= slot.mask[word] != 0U;
+        }
+        if (!touched) {
+            if (native_update_profile_enabled) {
+                ++native_update_profile_slots;
+                ++native_update_profile_untouched;
+            }
+            *slot.active = 0U;
+            std::fill_n(slot.mask, slot.word_count, UINT64_C(0));
+            update_batch.active_words[0] = 0U;
+            continue;
+        }
+
+        const auto owned = stage_prepared_owned_update_slot(
+            *member->prepared_owned_update_slot, slot);
+        if (owned == OwnedDriverStage::unsupported) {
+            auto one = std::span { &update_batch, 1U };
+            if (!stage_validated_update_slot_batches_impl(
+                    one, false, &staged_any, false)) {
+                throw std::logic_error {
+                    "prepared update continuation changed policy"
+                };
+            }
+            continue;
+        }
+        if (native_update_profile_enabled) {
+            ++native_update_profile_slots;
+        }
+        if (owned == OwnedDriverStage::unchanged) {
+            if (native_update_profile_enabled) {
+                ++native_update_profile_unchanged;
+                ++native_update_profile_unchanged_resolved;
+                ++native_update_profile_unchanged_owned;
+            }
+        } else {
+            const auto signal = slot.signal;
+            if (!resolved_update_marked[signal]) {
+                resolved_update_marked[signal] = true;
+                resolved_update_signals.push_back(signal);
+            }
+            if (native_update_profile_enabled) {
+                ++native_update_profile_resolved;
+                ++native_update_profile_changed_owned;
+            }
+            staged_any = true;
+        }
+        *slot.active = 0U;
+        std::fill_n(slot.mask, slot.word_count, UINT64_C(0));
+        update_batch.active_words[0] = 0U;
     }
     if (staged_any) {
         schedule_update_commit();

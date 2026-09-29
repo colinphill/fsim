@@ -317,6 +317,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool halted { };
         bool killed { };
         bool has_callable_frame_push { };
+        bool pure_wave_operation_count_supported { };
 
         // The sidecar is allocated with its program at process creation and
         // remains heap-stable if this small deque record is moved.
@@ -481,6 +482,115 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t fanout_visit { };
     };
 
+    struct FusedStaticCohortPlan {
+        struct Output {
+            enum class Route : std::uint8_t {
+                owned_logic4,
+                projected_logic4,
+                projected_logic9,
+            };
+            SignalId signal { };
+            std::uint32_t width { };
+            std::vector<std::uint64_t> owner_masks;
+            ProcessId original_owner { };
+            Route route { Route::owned_logic4 };
+        };
+        FusedStaticCohortCandidate candidate;
+        std::vector<InstructionIndex> resume_instructions;
+        std::uint64_t owner_stage_calls_total { };
+        std::vector<Output> outputs;
+        std::unique_ptr<FusedStaticCohortExecutor> executor;
+        bool certified { };
+    };
+
+    struct FusedMaskedRegionPlan {
+        struct Member {
+            ProcessId process { };
+            InstructionIndex resume_instruction { };
+            std::vector<std::uint64_t> mandatory_write_mask;
+        };
+        struct Ready {
+            ProcessId process { };
+            SchedulerOrderKey key;
+        };
+        struct ReadyBucket {
+            SimulationTick time { };
+            std::uint64_t delta { };
+            std::vector<Ready> ready;
+        };
+        FusedMaskedRegionCandidate candidate;
+        std::vector<Member> members;
+        std::array<ReadyBucket, 2U> ready_buckets;
+        std::vector<std::uint64_t> activation_words;
+        std::vector<std::uint64_t> selected_write_mask;
+        std::vector<std::uint64_t> before_terminal_write_mask;
+        std::vector<std::uint64_t> after_terminal_write_mask;
+        std::vector<std::uint64_t> before_terminal_activation_words;
+        std::vector<std::uint64_t> after_terminal_activation_words;
+        std::optional<ProcessId> normal_output_owner;
+        std::vector<ContainerObjectId> protected_container_objects;
+        std::unique_ptr<FusedMaskedRegionExecutor> executor;
+        bool certified { };
+    };
+
+    struct FusedMaskedGlobalFrontier {
+        struct Head {
+            SchedulerOrderKey key;
+            std::size_t region { };
+        };
+
+        SimulationTick time { };
+        std::uint64_t delta { };
+        std::vector<Head> heads;
+        std::vector<std::size_t> positions;
+        std::optional<ScheduledTaskHandle> callback;
+        std::optional<SchedulerOrderKey> callback_key;
+
+        void set_head(std::size_t region, SchedulerOrderKey key);
+        void erase_head(std::size_t region) noexcept;
+        [[nodiscard]] std::optional<SchedulerOrderKey>
+        next_other_key() const noexcept;
+
+    private:
+        void sift_up(std::size_t index) noexcept;
+        void sift_down(std::size_t index) noexcept;
+    };
+
+    struct PrivateSignalBridge {
+        std::size_t producer_cohort { };
+        std::vector<Fanout> consumers;
+        std::vector<std::size_t> consumer_regions;
+        bool certified { };
+    };
+
+    struct PureWaveScratch {
+        std::vector<const PureWavePreparedMember*> members;
+        std::vector<std::size_t> task_ends;
+        std::vector<CohortSnapshotPool::Token> task_snapshots;
+        std::vector<ProcessId> copied_snapshot;
+        std::vector<ExecutionContext> contexts;
+
+        void clear() noexcept;
+    };
+
+    struct PureWavePreparedSlot {
+        ProcessExecutor* executor { };
+        const PureWavePreparedMember* member { };
+        std::uint64_t generation { };
+    };
+
+    struct PureWaveOwnerSignature {
+        std::array<const void*, 6U> addresses;
+        std::array<std::size_t, 5U> sizes;
+        std::uint64_t writer_revision { };
+        bool direct_word_updates { };
+        bool execution_points { };
+
+        friend bool operator==(
+            const PureWaveOwnerSignature&,
+            const PureWaveOwnerSignature&) = default;
+    };
+
     struct NativeStaticRegion {
         std::vector<ProcessId> members;
         std::vector<std::unique_ptr<ProcessExecutionContext>> contexts;
@@ -530,6 +640,24 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::optional<ProcessId> driver;
         PackedLogic4 value;
         bool owned_composite { };
+        bool fused_masked { };
+        std::optional<std::size_t> fused_cohort;
+
+        PendingDriverCommit(std::optional<ProcessId> owner,
+            PackedLogic4 pending_value, bool composite = false,
+            std::optional<std::size_t> cohort = std::nullopt)
+            : driver(owner)
+            , value(std::move(pending_value))
+            , owned_composite(composite)
+            , fused_cohort(cohort)
+        {
+        }
+    };
+
+    struct FusedMaskedPendingTouch {
+        std::size_t region_id { };
+        std::uint64_t active_low { };
+        std::vector<std::uint64_t> active_high;
     };
 
     struct OwnedDriverSpan {
@@ -672,6 +800,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<ExecutionContext> cohort_overflow_contexts;
     std::vector<ProcessCohortResumeEntry> cohort_overflow_entries;
     bool cohort_overflow_scratch_in_use { };
+    PureWaveScratch pure_wave_scratch;
+    bool pure_wave_scratch_in_use { };
     std::uint64_t root_seed { 1 };
     // SignalHot and SignalCold are dense, SignalId-indexed parallel records.
     std::vector<SignalHot> signals;
@@ -765,6 +895,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // order. This mirrors event_identities across alias rebinding.
     std::vector<std::vector<SignalId>> event_identity_members;
     std::deque<ProcessState> processes;
+    // Kept separate from the hot ProcessState deque. Entries are indexed by
+    // ProcessId; only executor-owned member pointers escape a lookup.
+    std::vector<PureWavePreparedSlot> pure_wave_prepared_slots;
+    std::optional<PureWaveOwnerSignature> pure_wave_owner_signature;
+    std::uint64_t pure_wave_owner_epoch { 1U };
+    bool pure_wave_prepared_disabled { };
     std::vector<MailboxState> mailboxes;
     std::vector<SemaphoreState> semaphores;
     std::unordered_map<std::int32_t, StochasticQueueState>
@@ -785,6 +921,23 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // hierarchy. Cohorts batch scheduler dispatch while retaining each
     // member's process identity, frame, driver ownership, and program counter.
     std::vector<StaticSensitivityCohort> static_sensitivity_cohorts;
+    std::vector<FusedStaticCohortPlan> fused_static_cohorts;
+    FusedStaticCounters fused_static_counts;
+    bool fused_static_counters_enabled { };
+    bool fused_static_bindings_open { };
+    std::vector<FusedMaskedRegionPlan> fused_masked_regions;
+    std::vector<std::optional<Process>> fused_masked_normalized_programs;
+    std::vector<std::vector<std::size_t>>
+        fused_masked_regions_by_container_object;
+    std::array<FusedMaskedGlobalFrontier, 2U>
+        fused_masked_global_frontiers;
+    std::vector<std::size_t> fused_masked_region_by_process;
+    std::vector<std::size_t> fused_masked_offset_by_process;
+    FusedMaskedRegionCounters fused_masked_counts;
+    bool fused_masked_counters_enabled { };
+    // SignalId-indexed closed producer-to-consumer edges. Publication still
+    // updates the ordinary public signal state at its original update phase.
+    std::vector<PrivateSignalBridge> private_signal_bridges;
     std::vector<std::size_t> static_sensitivity_cohort_by_process;
     std::unordered_map<std::string, std::size_t>
         static_sensitivity_cohort_by_key;
@@ -800,6 +953,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::array<std::uint64_t, 5U> native_static_region_declines { };
     static constexpr std::uint64_t native_static_region_payload
         = UINT64_C(1) << 63U;
+    static constexpr std::uint64_t pure_wave_singleton_payload
+        = UINT64_C(1) << 62U;
     std::vector<std::vector<DynamicWaitRegistration>> dynamic_fanout;
     // Counts exclude tombstones. Slot indices in each live process sidecar
     // make removal proportional to that process's own sensitivity list.
@@ -820,6 +975,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // per-delta map/set construction and whole-container snapshots.
     std::vector<std::optional<PackedLogic4>> unresolved_update_scratch;
     std::vector<std::vector<PendingDriverCommit>> driver_update_scratch;
+    std::vector<FusedMaskedPendingTouch> fused_masked_pending_touches;
     std::vector<DirectSingleDriverRoute> direct_single_driver_routes;
     std::vector<ProcessNativeWordUpdate>
         direct_single_driver_word_scratch;
@@ -839,6 +995,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<SignalId> driver_update_signals;
     std::vector<SignalId> resolved_update_signals;
     std::vector<bool> resolved_update_marked;
+    std::vector<SignalId> private_owned_update_signals;
+    std::vector<bool> private_owned_update_marked;
     std::vector<std::pair<SignalId, PackedLogic4>> update_commit_scratch;
     std::unordered_set<std::uint64_t> pending_channel_updates;
     std::unordered_map<
@@ -1189,10 +1347,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void remove_dynamic_wait(ProcessState& process)
     {
-        const auto& cold = process.cold();
-        if (!process.waiting_on_signal
-            && !cold.waiting_on_container
-            && cold.dynamic_sensitivity.empty()) {
+        // Every dynamic wait sets this before recording cold registrations.
+        if (!process.waiting_on_signal) {
             return;
         }
         remove_dynamic_wait_nonempty(process);
@@ -1335,6 +1491,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute(ProcessId id);
     void execute_static_cohort(std::span<const ProcessId> processes);
     void execute_queued_static_cohort(std::size_t cohort);
+    [[nodiscard]] std::optional<std::size_t> try_execute_pure_wave(
+        std::span<const std::uint64_t> task_payloads,
+        std::size_t& offered_tasks);
     void discard_scheduler_work() noexcept;
     [[nodiscard]] SchedulerBatchResult execute(
         Scheduler&, std::span<const std::uint64_t> cohort_ids) override;
@@ -1363,6 +1522,32 @@ struct Interpreter::Impl : SchedulerBatchTask {
         StaticTransitionMatches transition,
         bool count_native_word_profile = false);
     void build_native_static_regions();
+    void build_fused_static_cohort_plans();
+    void build_fused_masked_normalized_programs();
+    void build_fused_masked_region_plans();
+    void build_private_signal_bridges();
+    [[nodiscard]] bool private_signal_bridge_active(SignalId signal) const;
+    void notify_private_signal_bridge(SignalId signal);
+    void commit_private_owned_signal(SignalId signal, PackedLogic4 value);
+    void schedule_fused_masked_frontier(std::size_t bucket_index,
+        bool current_phase);
+    [[nodiscard]] bool queue_fused_masked_member(ProcessId id);
+    void execute_fused_masked_frontier(std::size_t bucket_index,
+        SimulationTick time, std::uint64_t delta);
+    void execute_fused_masked_region(std::size_t region_id,
+        std::size_t bucket_index, SimulationTick time,
+        std::uint64_t delta,
+        std::optional<SchedulerOrderKey> barrier);
+    void invalidate_fused_masked_regions() noexcept;
+    void invalidate_fused_masked_regions_for_container_object(
+        ContainerObjectId object) noexcept;
+    void invalidate_fused_masked_regions_for_fork(ProcessId child);
+    void invalidate_fused_static_cohorts() noexcept;
+    void invalidate_fused_static_cohorts_for_fork(ProcessId child);
+    [[nodiscard]] std::optional<std::size_t>
+    try_execute_fused_static_cohort(
+        std::span<const std::uint64_t> task_payloads,
+        std::size_t& offered_tasks);
     [[nodiscard]] std::size_t execute_native_static_region(
         std::size_t region, std::span<const ProcessId> ready);
     [[nodiscard]] std::uint64_t next_static_fanout_visit();
@@ -1542,6 +1727,27 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process, SignalId signal_id) const;
     [[nodiscard]] OwnedDriverStage stage_owned_driver_slot(
         ProcessId process, const ProcessUpdateSlotView& slot);
+    [[nodiscard]] std::optional<PreparedOwnedUpdateSlot>
+    prepare_owned_update_slot(const ProcessUpdateSlotBatch& batch) const;
+    [[nodiscard]] OwnedDriverStage stage_prepared_owned_update_slot(
+        const PreparedOwnedUpdateSlot& prepared,
+        const ProcessUpdateSlotView& slot);
+    [[nodiscard]] OwnedDriverStage stage_owned_driver_slot_impl(
+        ProcessId process,
+        const ProcessUpdateSlotView& slot,
+        const PreparedOwnedUpdateSlot* prepared);
+    [[nodiscard]] OwnedDriverStage stage_fused_owned_slot(
+        std::size_t cohort, const ProcessUpdateSlotView& slot);
+    [[nodiscard]] OwnedDriverStage stage_fused_masked_owned_slot(
+        std::size_t region_id, const ProcessUpdateSlotView& slot,
+        std::span<const std::uint64_t> active_members,
+        std::span<const std::uint64_t> selected_write_mask);
+    [[nodiscard]] bool valid_fused_masked_owned_slot(
+        std::size_t region_id, const ProcessUpdateSlotView& slot,
+        std::span<const std::uint64_t> active_members,
+        std::span<const std::uint64_t> selected_write_mask) const;
+    [[nodiscard]] bool valid_fused_owned_slot(
+        std::size_t cohort, const ProcessUpdateSlotView& slot) const;
     [[nodiscard]] bool stage_owned_driver_pending(PendingUpdate& pending);
     void commit_owned_driver(SignalId signal_id);
 
@@ -1672,6 +1878,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::span<const ProcessUpdateWord> updates);
     [[nodiscard]] bool stage_validated_update_slot_batches(
         std::span<const ProcessUpdateSlotBatch> batches);
+    [[nodiscard]] bool stage_validated_prepared_update_slot_batches(
+        std::span<const PureWavePreparedMember* const> members);
+    template <typename Batches>
+    [[nodiscard]] bool stage_validated_update_slot_batches_impl(
+        Batches& batches,
+        bool schedule_commit = true,
+        bool* staged_any_out = nullptr,
+        bool count_profile_call = true);
     [[nodiscard]] bool stage_validated_logic9_update_batch(
         const ProcessLogic9UpdateBatch& batch);
     [[nodiscard]] bool stage_validated_logic9_update_batches(

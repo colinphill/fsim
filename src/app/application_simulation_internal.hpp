@@ -187,6 +187,10 @@ struct Simulation::Impl {
         const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates);
 
     void setup_execution(SimulationEngine engine);
+#if defined(FSIM_HAS_LLVM)
+    void bind_fused_static_cohorts();
+    void bind_fused_masked_regions();
+#endif
 
     [[nodiscard]] std::size_t ensure_concurrent_assertion_coverage(
         const runtime::simir::ProcessId process,
@@ -495,6 +499,12 @@ struct Simulation::Impl {
     // The interpreter owns executors referring to this JIT. Member destruction
     // is reversed, so declaring the JIT first destroys the interpreter first.
     std::unique_ptr<compiler::LlvmJit> jit;
+    bool fused_static_cohorts_bound { };
+    bool fused_masked_regions_bound { };
+
+    // Original compiled executors borrow fixed-address cells. Destruction
+    // runs in reverse declaration order: interpreter, then cells, then JIT.
+    application_detail::ExecutorHotCellPool executor_hot_cells;
 
     // Retain each bounded background compilation so cache observers can request
     // a stable completed snapshot without making normal simulation startup

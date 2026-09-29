@@ -7,6 +7,12 @@ add_executable(
   fsim_runtime_tests
   runtime_tests.cpp
   runtime_value_tests.cpp
+  runtime_private_region_scheduler_tests.cpp
+  runtime_private_region_tests.cpp
+  runtime_fused_masked_frontier_tests.cpp
+  runtime_fused_masked_terminal_tests.cpp
+  runtime_fused_static_cohort_test.cpp
+  runtime_fused_projected_cohort_test.cpp
   runtime_value_primitives_tests.cpp
   runtime_dpi_tests.cpp
   runtime_dpi_abi_c_test.c
@@ -50,6 +56,7 @@ add_executable(
   runtime_execution_tests.cpp
   runtime_execution_services_tests.cpp
   runtime_execution_lifecycle.cpp
+  runtime_execution_pure_wave_tests.cpp
   runtime_synchronization_tests.cpp
   runtime_file_tests.cpp
   runtime_container_tests.cpp

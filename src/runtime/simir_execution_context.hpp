@@ -216,8 +216,14 @@ struct Interpreter::Impl::ExecutionContext final
 
     [[nodiscard]] const void* direct_update_domain() const noexcept override;
 
+    [[nodiscard]] std::optional<PreparedOwnedUpdateSlot>
+    prepare_owned_update_slot(const ProcessUpdateSlotBatch&) override;
+
     bool write_validated_update_slot_batches(
         const std::span<const ProcessUpdateSlotBatch> batches) override;
+
+    bool write_validated_prepared_update_slot_batches(
+        std::span<const PureWavePreparedMember* const>) override;
 
     bool write_validated_logic9_update_batch(
         const ProcessLogic9UpdateBatch& batch) override;

@@ -8,6 +8,7 @@
 #include "fsim/runtime/simir_container_value.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <compare>
@@ -1415,7 +1416,26 @@ enum class ExternalSuspendKind : std::uint8_t {
     wait_sensitivity,
     yield,
     halt,
+    /// Native executor verified the bound WaitSensitivity boundary and its
+    /// nonempty static sensitivity before returning this result.
+    validated_wait_sensitivity,
 };
+
+[[nodiscard]] constexpr bool is_static_wait_suspension(
+    const ExternalSuspendKind kind)
+{
+    return kind == ExternalSuspendKind::wait_sensitivity
+        || kind == ExternalSuspendKind::validated_wait_sensitivity;
+}
+
+[[nodiscard]] constexpr std::size_t external_suspension_profile_index(
+    const ExternalSuspendKind kind)
+{
+    return static_cast<std::size_t>(
+        kind == ExternalSuspendKind::validated_wait_sensitivity
+            ? ExternalSuspendKind::wait_sensitivity
+            : kind);
+}
 
 /// Common-kernel suspension selected by an alternate language executor.
 struct ExternalSuspension {
@@ -1457,6 +1477,179 @@ struct ProcessCohortResumeEntry {
     bool* waiting_on_static { };
     ProcessStatus* status { };
     std::uint8_t* active { };
+};
+
+/// One member of a certified pure wave. The shared execution context and
+/// deferred update commit belong to the whole wave rather than each member.
+struct PureWaveResumeEntry {
+    ProcessId process { };
+    ProcessExecutor* executor { };
+    InstructionIndex start_instruction { };
+    bool* queued { };
+    bool* waiting_on_static { };
+    ProcessStatus* status { };
+};
+
+/// A successful whole-task prefix and whether its deferred updates were
+/// staged as one ordered batch. The runtime flushes each member in order when
+/// staging declines; a disengaged result always precedes all mutation.
+struct PureWaveCompletion {
+    std::size_t completed_tasks { };
+    bool updates_staged { };
+};
+
+/// One-call view of state shared by every context in a cohort assembled by
+/// the interpreter. The view is valid only during the resume call; alternate
+/// executors may ignore it and use the ordinary cohort entry contract.
+struct ProcessCohortNativeContext {
+    const void* owner { };
+    std::span<const std::uint64_t> signal_aval;
+    std::span<const std::uint64_t> signal_bval;
+    std::uint64_t signal_writer_revision { };
+    bool supports_direct_word_updates { };
+    bool execution_points_enabled { };
+    std::span<const std::uint64_t> wide_signal_aval;
+    std::span<const std::uint64_t> wide_signal_bval;
+    std::span<const std::uint32_t> wide_signal_offsets;
+    std::span<const std::uint64_t> signal_logic9_plane0;
+    std::span<const std::uint64_t> signal_logic9_plane1;
+    std::span<const std::uint64_t> signal_logic9_plane2;
+    std::span<const std::uint64_t> signal_logic9_plane3;
+    std::span<const std::uint64_t> wide_signal_logic9_plane2;
+    std::span<const std::uint64_t> wide_signal_logic9_plane3;
+};
+
+/// Post-elaboration graph certificate for an existing atomic static cohort.
+/// The runtime retains original process and driver identities on every path.
+struct FusedStaticCohortCandidate {
+    std::size_t cohort_id { };
+    std::vector<ProcessId> members;
+    std::vector<SignalId> outputs;
+    std::vector<SignalId> private_outputs;
+    std::vector<SignalId> boundary_outputs;
+    bool projected { };
+};
+
+struct FusedStaticCounters {
+    std::uint64_t candidates { };
+    std::uint64_t invocations { };
+    std::uint64_t represented_members { };
+    std::uint64_t owner_stage_calls_avoided { };
+    std::uint64_t aggregate_signals_staged { };
+    std::uint64_t fallbacks { };
+    std::uint64_t fork_events { };
+    std::uint64_t fork_plans_invalidated { };
+    std::uint64_t fork_plans_surviving_after_last { };
+};
+
+/// Exact VHDL projected write retained with its original elaborated signal.
+/// The graph plan supplies the original process owner and projected timing.
+struct FusedStaticProjectedWrite {
+    SignalId signal { };
+    PackedLogic4 value;
+};
+
+struct FusedStaticCohortResume {
+    std::span<const ProcessUpdateSlotView> aggregate_slots;
+    std::span<const FusedStaticProjectedWrite> projected_writes;
+};
+
+/// Return nullopt only before changing signal slots or process state. A
+/// successful result borrows stable slot views until the runtime stages them.
+class FusedStaticCohortExecutor {
+public:
+    virtual ~FusedStaticCohortExecutor() = default;
+    [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
+    resume(const ProcessCohortNativeContext& context) = 0;
+};
+
+/// Post-elaboration graph cut for original singleton static tasks. Each
+/// member keeps its own sensitivity and process/driver identity; a compiled
+/// kernel may execute any ordered active subset in one native call.
+struct FusedMaskedRegionCandidate {
+    std::size_t region_id { };
+    std::vector<ProcessId> members;
+    std::vector<SignalId> outputs;
+    // A complete, distinct Logic4 output with one original writer may share
+    // an owned aggregate's masked native call. It still uses the ordinary
+    // update/commit path under that writer's ProcessId.
+    std::optional<SignalId> normal_single_writer_output;
+    // Downstream pure readers folded into the same-snapshot masked region.
+    std::vector<ProcessId> terminal_members;
+    std::vector<SignalId> private_outputs;
+    std::vector<SignalId> boundary_outputs;
+    bool projected { };
+};
+
+struct FusedMaskedRegionCounters {
+    std::uint64_t candidates { };
+    std::uint64_t terminal_candidates { };
+    std::uint64_t normalized_terminal_candidates { };
+    std::uint64_t terminal_regions_bound { };
+    std::uint64_t terminal_members_bound { };
+    std::uint64_t terminal_activations { };
+    std::uint64_t terminal_joint_activations { };
+    std::uint64_t private_candidates { };
+    std::uint64_t private_local_commits { };
+    std::uint64_t private_fanout_entries_avoided { };
+    std::uint64_t private_masked_notifications { };
+    std::uint64_t private_owned_direct_commits { };
+    std::uint64_t virtual_tasks { };
+    std::uint64_t frontier_calls { };
+    std::uint64_t global_frontier_callbacks { };
+    std::uint64_t global_frontier_queue_entries { };
+    std::uint64_t masked_calls { };
+    std::uint64_t represented_members { };
+    std::uint64_t owner_stage_calls_avoided { };
+    std::uint64_t aggregate_signals_staged { };
+    std::uint64_t prepared_fallback_tasks { };
+    std::uint64_t ordinary_fallback_tasks { };
+    std::uint64_t boundary_publications { };
+    std::uint64_t private_publications_elided { };
+    std::uint64_t demotions { };
+};
+
+/// A disengaged result must precede every mutation. On success the output
+/// views remain valid until the interpreter validates and stages all slots.
+class FusedMaskedRegionExecutor {
+public:
+    virtual ~FusedMaskedRegionExecutor() = default;
+    [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
+    resume(const ProcessCohortNativeContext& context,
+        std::span<const std::uint64_t> activation_words) = 0;
+};
+
+enum class PureWavePreparedShape : std::uint8_t {
+    logic4_bit_and,
+    reducer31,
+    reduction7,
+    wide_copy6,
+};
+
+/// Executor-owned, stable member view for one certified pure-wave shape.
+/// The runtime borrows this record only while its exact executor owns it.
+/// Invalidation clears valid and changes generation before releasing the
+/// compiler view; process and update_batch stay intact through fatal cleanup
+/// or an ordered member-local update fallback.
+struct PureWavePreparedMember {
+    ProcessId process { };
+    ProcessExecutor* executor { };
+    const void* owner { };
+    const void* domain { };
+    const void* compiler_view { };
+    ProcessUpdateSlotBatch update_batch;
+    SignalId and_lhs { };
+    SignalId and_rhs { };
+    InstructionIndex resume_instruction { };
+    std::uint64_t owner_epoch { };
+    std::uint64_t generation { };
+    std::uint64_t compiler_generation { };
+    PureWavePreparedShape shape { };
+    bool valid { };
+    /// Cold-certified against update_batch. Invalidation clears this pointer
+    /// before releasing its executor-owned value; hot staging trusts the
+    /// published record and rechecks only live ownership and phase state.
+    const PreparedOwnedUpdateSlot* prepared_owned_update_slot { };
 };
 
 enum class ExecutionPointKind : std::uint8_t {
@@ -1522,6 +1715,56 @@ public:
         std::span<ProcessCohortResumeEntry>)
     {
         return 0U;
+    }
+
+    /// The interpreter constructs every entry's context from the same owner
+    /// before offering this call. The default keeps alternate executors on
+    /// their established fully checked path.
+    [[nodiscard]] virtual std::size_t resume_cohort_with_native_context(
+        std::span<ProcessCohortResumeEntry> entries,
+        const ProcessCohortNativeContext&)
+    {
+        return resume_cohort(entries);
+    }
+
+    /// Prepare one warm member without executing it or touching scheduler or
+    /// update state. The default leaves unsupported executors on the ordinary
+    /// process/cohort path. owner_epoch belongs to the exact interpreter owner
+    /// in native_context and must be captured by any returned record. The
+    /// executor owns the record and must invalidate it before an ordinary
+    /// resume or another mutation changes its certified frame or storage.
+    [[nodiscard]] virtual const PureWavePreparedMember*
+    prepare_pure_wave_member(
+        const PureWaveResumeEntry&,
+        ProcessExecutionContext&,
+        const ProcessCohortNativeContext&,
+        std::uint64_t)
+    {
+        return nullptr;
+    }
+
+    /// Execute a complete ordered task prefix using previously prepared
+    /// members. A disengaged result declines before any mutation; after
+    /// execution starts, exceptions are fatal and never trigger generic replay.
+    /// A successful state-aware executor clears queued and sets waiting and
+    /// status for each completed member, leaving the unexecuted suffix intact.
+    [[nodiscard]] virtual std::optional<PureWaveCompletion>
+    try_resume_prepared_pure_wave(
+        std::span<const PureWavePreparedMember* const>,
+        std::span<const std::size_t> task_ends,
+        ProcessExecutionContext&,
+        const ProcessCohortNativeContext&)
+    {
+        static_cast<void>(task_ends);
+        return std::nullopt;
+    }
+
+    /// Complete a member's deferred writes after whole-wave batch staging
+    /// declines. Called only after the pure wave has executed; failures are
+    /// fatal and never trigger a generic replay.
+    virtual void flush_pure_wave_updates(ProcessExecutionContext&)
+    {
+        throw std::logic_error { "executor cannot flush pure-wave updates" };
     }
 
     /// Resume the selected members of a stable region. Each entry supplies a
@@ -1867,6 +2110,29 @@ public:
     /// materialization with scheduler execution.
     void materialize_ready_process_executors();
 
+    /// Available after start() has certified the complete elaborated graph.
+    [[nodiscard]] std::vector<FusedStaticCohortCandidate>
+    fused_static_cohort_candidates() const;
+    [[nodiscard]] FusedStaticCounters fused_static_counters() const noexcept;
+    void set_fused_static_counters_enabled(bool enabled);
+    /// Bind only after start() and before the first run(). Unknown or stale
+    /// cohort IDs reject; declined activations use their original process path.
+    void install_fused_static_cohort(
+        std::size_t cohort_id,
+        std::unique_ptr<FusedStaticCohortExecutor> executor);
+    [[nodiscard]] std::vector<FusedMaskedRegionCandidate>
+    fused_masked_region_candidates() const;
+    [[nodiscard]] FusedMaskedRegionCounters
+    fused_masked_region_counters() const noexcept;
+    void set_fused_masked_region_counters_enabled(bool enabled);
+    /// The mandatory write ranges come from validation of the same synthetic
+    /// body bound by executor, in candidate member order. The runtime checks
+    /// them against every original owner before accepting the binding.
+    void install_fused_masked_region(
+        std::size_t region_id,
+        std::vector<std::vector<Process::DriverRegion>> mandatory_writes,
+        std::unique_ptr<FusedMaskedRegionExecutor> executor);
+
     void start();
     [[nodiscard]] RunResult
     run(std::optional<SimulationTick> until = std::nullopt);
@@ -1922,6 +2188,11 @@ public:
     /// Return the immutable SimIR program owned by a static design process.
     /// The reference remains valid for the lifetime of this interpreter.
     [[nodiscard]] const Process& process_program(ProcessId process) const;
+    /// Return a private, graph-certified copy when a fixed container read can
+    /// be compiled as a packed signal extract. Ordinary fallback always uses
+    /// process_program() and its unchanged container semantics.
+    [[nodiscard]] const Process& fused_masked_member_program(
+        ProcessId process) const;
     /// Return the next SimIR instruction for a scheduler-owned process.
     [[nodiscard]] InstructionIndex process_instruction(
         ProcessId process) const;

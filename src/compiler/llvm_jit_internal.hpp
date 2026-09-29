@@ -376,7 +376,8 @@ void lower_process(
     JitOptimizationLevel optimization,
     bool debug_instrumentation,
     bool require_direct_update_slots,
-    std::span<const runtime::simir::InstructionIndex> bound_literal_sites);
+    std::span<const runtime::simir::InstructionIndex> bound_literal_sites,
+    std::span<const FusedMaskedMemberGate> masked_member_gates);
 
 void optimize_module(
     llvm::Module& module,

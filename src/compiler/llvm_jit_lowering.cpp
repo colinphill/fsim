@@ -48,7 +48,8 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     const bool debug_instrumentation,
     const bool require_direct_update_slots,
     const std::span<const runtime::simir::InstructionIndex>
-        bound_literal_sites)
+        bound_literal_sites,
+    const std::span<const FusedMaskedMemberGate> masked_member_gates)
 {
     auto& context = module.getContext();
     auto* i32 = llvm::Type::getInt32Ty(context);
@@ -98,6 +99,10 @@ void lower_process(llvm::Module& module, const std::string& symbol,
         offsetof(fsim_jit_runtime_v1, execute_class_property_operation));
     require_runtime_member(
         115U, offsetof(fsim_jit_runtime_v1, query_event_triggered));
+    require_runtime_member(
+        116U, offsetof(fsim_jit_runtime_v1, fused_activation_words));
+    require_runtime_member(
+        117U, offsetof(fsim_jit_runtime_v1, fused_activation_word_count));
     auto* direct_update_slot_type = llvm::StructType::create(
         context,
         { i64, i64, i64, i64, i64, i32, i32,
@@ -2023,6 +2028,8 @@ ProcessLoweringContext lowering_context {
         suppressed_false_guards
     };
     lower_process_operations(lowering_context);
+    lower_masked_member_gates(*function, runtime_type,
+        instruction_blocks, masked_member_gates);
     if (std::getenv("FSIM_PROFILE_JIT_REGISTERS") != nullptr
         && allow_unbound_constant_planes) {
         std::size_t eligible { };

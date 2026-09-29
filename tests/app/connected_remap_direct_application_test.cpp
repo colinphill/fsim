@@ -16,6 +16,8 @@
 #include <utility>
 #include <vector>
 
+void test_fused_static_executor_bindings();
+
 namespace {
 
 #if defined(FSIM_HAS_LLVM)
@@ -30,6 +32,16 @@ struct Snapshot {
     std::string safe_value;
     std::string final_value;
     std::vector<std::tuple<SimulationTick, std::uint64_t, std::string>> timeline;
+};
+
+struct PureCohortSnapshot {
+    RunResult result;
+    std::string output;
+    std::size_t bound_cohorts { };
+    std::size_t hooked_suspensions { };
+    std::vector<std::tuple<SimulationTick, std::uint64_t, std::string>>
+        timeline;
+    std::array<std::array<std::string, 5>, 2> registers;
 };
 
 void set_test_environment(const char* name, const char* value)
@@ -140,6 +152,144 @@ Snapshot run_case(const compiler::JitOptimizationLevel level, const bool compile
     return snapshot;
 }
 
+PureCohortSnapshot run_pure_cohort_case(
+    const compiler::JitOptimizationLevel level, const bool compiled,
+    const bool enable_execution_hook_after_first = false,
+    const bool retain_debug_locals = true,
+    const bool redirect_after_first_output = false)
+{
+    const std::array<std::uint32_t, 3> widths { 2U, 2U, 2U };
+    const std::array<ValueKind, 3> kinds {
+        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4
+    };
+    const std::array<ResolutionKind, 3> resolutions {
+        ResolutionKind::none, ResolutionKind::none,
+        ResolutionKind::none
+    };
+    std::unique_ptr<compiler::LlvmJit> jit;
+    if (compiled) {
+        compiler::LlvmJitOptions options;
+        options.optimization = level;
+        options.debug_instrumentation = false;
+        options.require_direct_update_slots = true;
+        jit = std::make_unique<compiler::LlvmJit>(std::move(options));
+    }
+    Interpreter interpreter;
+    const auto a = interpreter.add_signal({
+        "pure.a", PackedLogic4::from_msb_string("ZZ") });
+    const auto b = interpreter.add_signal({
+        "pure.b", PackedLogic4::from_msb_string("ZZ") });
+    const auto output = interpreter.add_signal({
+        "pure.out", PackedLogic4::from_msb_string("00") });
+    assert(a == 0U && b == 1U && output == 2U);
+    std::array<app::application_detail::LlvmProcessExecutor*, 2U>
+        native_executors { };
+    for (std::uint32_t bit = 0U; bit < 2U; ++bit) {
+        Process process;
+        process.id = bit;
+        process.name = "pure_bit_and_" + std::to_string(bit);
+        process.register_count = 5U;
+        if (retain_debug_locals) {
+            for (RegisterId reg = 0U; reg < 5U; ++reg) {
+                DebugLocal local;
+                local.name = "r" + std::to_string(reg);
+                local.type_name = "logic";
+                local.register_id = reg;
+                local.width = reg < 2U ? 2U : 1U;
+                process.debug_locals.push_back(std::move(local));
+            }
+        }
+        process.static_sensitivity = {
+            { a, EdgeKind::any }, { b, EdgeKind::any }
+        };
+        process.driver_regions = { { output, bit, 1U, false } };
+        process.initialize = false;
+        process.operations = {
+            DebugPoint { }, DebugPoint { },
+            ReadSignal { 0U, a }, Extract { 2U, 0U, bit, 1U },
+            ReadSignal { 1U, b }, Extract { 3U, 1U, bit, 1U },
+            Binary { BinaryOperator::bit_and, 4U, 2U, 3U },
+            WriteUpdateSlice { output, 4U, bit },
+            WaitSensitivity { }, Jump { 0U }
+        };
+        if (compiled) {
+            jit->add_process(process.name, process, widths, kinds);
+        }
+        const auto id = interpreter.add_process(std::move(process));
+        assert(id == bit);
+        if (compiled) {
+            const auto handle = jit->lookup(
+                interpreter.process_program(id).name);
+            assert(handle);
+            auto executor = std::make_unique<app::application_detail::
+                LlvmProcessExecutor>(
+                *jit, handle, interpreter.process_program(id), widths,
+                kinds, resolutions, nullptr, id);
+            native_executors[bit] = executor.get();
+            interpreter.set_process_executor(id, std::move(executor));
+        }
+    }
+    constexpr std::string_view logic = "01XZ";
+    for (std::size_t row = 0; row < 16U; ++row) {
+        const auto left = std::string(2U, logic[row / 4U]);
+        const auto right = std::string(2U, logic[row % 4U]);
+        const auto time = static_cast<SimulationTick>((row + 1U) * 10U);
+        interpreter.schedule_signal_at(
+            a, PackedLogic4::from_msb_string(left), time, 0U);
+        interpreter.schedule_signal_at(
+            b, PackedLogic4::from_msb_string(right), time, 0U);
+    }
+    PureCohortSnapshot snapshot;
+    bool execution_hook_enabled { };
+    bool redirected { };
+    interpreter.set_signal_change_hook(
+        [&](const SignalId signal, const PackedLogic4& value,
+            const SimulationTick time) {
+            if (signal == output) {
+                snapshot.timeline.emplace_back(
+                    time, interpreter.scheduler().delta(),
+                    value.to_msb_string());
+                if (compiled && redirect_after_first_output
+                    && !redirected) {
+                    redirected = true;
+                    for (auto* executor : native_executors) {
+                        assert(executor != nullptr);
+                        executor->redirect(9U);
+                    }
+                }
+                if (enable_execution_hook_after_first
+                    && !execution_hook_enabled) {
+                    execution_hook_enabled = true;
+                    interpreter.set_execution_point_hook(
+                        [&](Scheduler&, const ExecutionPoint& point) {
+                            if (point.kind
+                                == ExecutionPointKind::process_suspend) {
+                                ++snapshot.hooked_suspensions;
+                            }
+                        });
+                }
+            }
+        });
+    snapshot.result = interpreter.run();
+    if (compiled && redirect_after_first_output) {
+        assert(redirected);
+    }
+    snapshot.output = interpreter.signal_value(output).to_msb_string();
+    snapshot.bound_cohorts = compiled
+        ? jit->active_cohort_binding_count()
+        : 0U;
+    if (retain_debug_locals) {
+        for (ProcessId process = 0U; process < 2U; ++process) {
+            for (RegisterId reg = 0U; reg < 5U; ++reg) {
+                snapshot.registers[process][reg]
+                    = interpreter.read_debug_local(process, reg)
+                          .to_msb_string();
+            }
+        }
+    }
+    return snapshot;
+}
+
 MixedUpdateResult run_mixed_update_case(
     const compiler::JitOptimizationLevel level, const bool compiled,
     const std::optional<bool> disable_after_first = std::nullopt)
@@ -226,12 +376,85 @@ MixedUpdateResult run_mixed_update_case(
 int fsim_application_case_connected_remap_direct()
 {
 #if defined(FSIM_HAS_LLVM)
+    test_fused_static_executor_bindings();
     const auto previous_profile = support::environment_variable(
         "FSIM_PROFILE_NATIVE_UPDATES");
     const auto previous_suppression = support::environment_variable(
         "FSIM_DISABLE_STABLE_DIRECT_UPDATE_SUPPRESSION");
     for (const auto level : { compiler::JitOptimizationLevel::o0,
              compiler::JitOptimizationLevel::o2 }) {
+        const auto pure_reference = run_pure_cohort_case(level, false);
+        const auto pure_native = run_pure_cohort_case(level, true);
+        assert(pure_reference.result.status == RunStatus::completed);
+        assert(pure_reference.output == "XX");
+        assert(!pure_reference.timeline.empty());
+        assert(pure_native.result.status == pure_reference.result.status);
+        assert(pure_native.result.time == pure_reference.result.time);
+        assert(pure_native.result.delta == pure_reference.result.delta);
+        assert(pure_native.output == pure_reference.output);
+        assert(pure_native.timeline == pure_reference.timeline);
+        assert(pure_native.registers == pure_reference.registers);
+        assert(pure_native.bound_cohorts == 2U);
+
+        const auto hooked_reference = run_pure_cohort_case(
+            level, false, true);
+        const auto hooked_native = run_pure_cohort_case(
+            level, true, true);
+        assert(hooked_reference.hooked_suspensions > 0U);
+        assert(hooked_native.hooked_suspensions
+            == hooked_reference.hooked_suspensions);
+        assert(hooked_native.timeline == hooked_reference.timeline);
+        assert(hooked_native.registers == hooked_reference.registers);
+        assert(hooked_native.output == hooked_reference.output);
+        assert(hooked_native.bound_cohorts == 1U);
+
+        const auto compact_reference = run_pure_cohort_case(
+            level, false, false, false);
+        const auto compact_native = run_pure_cohort_case(
+            level, true, false, false);
+        assert(compact_reference.result.status == RunStatus::completed);
+        assert(compact_native.result.status == compact_reference.result.status);
+        assert(compact_native.result.time == compact_reference.result.time);
+        assert(compact_native.result.delta == compact_reference.result.delta);
+        assert(compact_native.output == compact_reference.output);
+        assert(compact_native.timeline == compact_reference.timeline);
+        // The trusted wave reuses member leases rather than holding a
+        // separate wave binding alongside the existing compact cohort.
+        assert(compact_native.bound_cohorts == 1U);
+
+        const auto redirected_native = run_pure_cohort_case(
+            level, true, false, false, true);
+        assert(redirected_native.result.status
+            == compact_reference.result.status);
+        assert(redirected_native.result.time
+            == compact_reference.result.time);
+        assert(redirected_native.result.delta
+            == compact_reference.result.delta);
+        assert(redirected_native.output == compact_reference.output);
+        assert(redirected_native.timeline
+            == compact_reference.timeline);
+
+        const auto compact_hooked_reference = run_pure_cohort_case(
+            level, false, true, false);
+        const auto compact_hooked_native = run_pure_cohort_case(
+            level, true, true, false);
+        assert(compact_hooked_reference.hooked_suspensions > 0U);
+        assert(compact_hooked_native.hooked_suspensions
+            == compact_hooked_reference.hooked_suspensions);
+        assert(compact_hooked_native.result.status
+            == compact_hooked_reference.result.status);
+        assert(compact_hooked_native.result.time
+            == compact_hooked_reference.result.time);
+        assert(compact_hooked_native.result.delta
+            == compact_hooked_reference.result.delta);
+        assert(compact_hooked_native.output
+            == compact_hooked_reference.output);
+        assert(compact_hooked_native.timeline
+            == compact_hooked_reference.timeline);
+        // The pure wave runs before the hook is installed. Later resumes use
+        // the generic path so every execution-point callback still fires.
+        assert(compact_hooked_native.bound_cohorts == 1U);
+
         const auto reference = run_case(level, false);
         const auto native = run_case(level, true);
         assert(reference.result.status == RunStatus::completed);

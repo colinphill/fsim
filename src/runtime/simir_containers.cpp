@@ -97,6 +97,7 @@ void Interpreter::Impl::write_container_object_value(
             "container object write type mismatch"
         };
     }
+    invalidate_fused_masked_regions_for_container_object(id);
     if (!object.slice_alias) {
         const bool changed = object.initial_value != value;
         object.initial_value = value;
@@ -246,6 +247,7 @@ void Interpreter::Impl::write_container_object_element_value(
               target.type.element_width)
             != value
         : target.elements[selected] != value;
+    invalidate_fused_masked_regions_for_container_object(id);
     target.elements[selected] = value;
     if (alias && alias->writable) {
         const auto& signal = get_signal(alias->signal).initial_value;

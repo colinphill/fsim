@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "../../src/app/application_internal.hpp"
 
 #include "fsim/systemc/hierarchy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <csignal>
 #include <fstream>
@@ -20,8 +22,120 @@
 
 namespace fsim::test {
 
+#if defined(FSIM_HAS_LLVM)
+namespace {
+
+void test_pure_bit_and_assignment_admission()
+{
+    using namespace fsim::runtime::simir;
+
+    Process process;
+    process.register_count = 5;
+    process.static_sensitivity = { { 0, EdgeKind::any },
+        { 1, EdgeKind::any } };
+    process.driver_regions = { { 2, 3, 1, false } };
+    process.operations = {
+        DebugPoint { },
+        DebugPoint { },
+        ReadSignal { 0, 0 },
+        Extract { 2, 0, 2, 1 },
+        ReadSignal { 1, 1 },
+        Extract { 3, 1, 5, 1 },
+        Binary { BinaryOperator::bit_and, 4, 2, 3 },
+        WriteUpdateSlice { 2, 4, 3 },
+        WaitSensitivity { },
+        Jump { 0 },
+    };
+    fsim::compiler::JitProcessFrameLayout layout;
+    layout.register_count = 5;
+    layout.register_word_count = 5;
+    layout.register_widths = { 8, 8, 1, 1, 1 };
+    layout.register_word_offsets = { 0, 1, 2, 3, 4 };
+    layout.direct_read_signals = { 0, 1 };
+    layout.direct_update_signals = { 2 };
+    const std::array widths { 8U, 8U, 8U };
+    const std::array kinds {
+        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4
+    };
+    const std::array direct_reads { SignalId { 0 }, SignalId { 1 } };
+    const std::array direct_updates { SignalId { 2 } };
+    const auto classify = [&](const Process& candidate) {
+        return fsim::app::application_detail::
+            classify_pure_bit_and_assignment(
+                candidate, layout, widths, kinds, direct_reads,
+                direct_updates);
+    };
+    const auto admitted = classify(process);
+    assert(admitted);
+    assert((admitted->inputs == std::array<SignalId, 2> { 0, 1 }));
+    assert((admitted->input_bit_offsets
+        == std::array<std::uint32_t, 2> { 2, 5 }));
+    assert(admitted->output == 2 && admitted->output_bit_offset == 3);
+
+    auto invalid = process;
+    invalid.operations[6] = Binary {
+        BinaryOperator::bit_or, 4, 2, 3
+    };
+    assert(!classify(invalid));
+    invalid = process;
+    invalid.operations[3] = Extract { 2, 1, 2, 1 };
+    assert(!classify(invalid));
+    invalid = process;
+    std::swap(invalid.operations[2], invalid.operations[3]);
+    assert(!classify(invalid));
+    invalid = process;
+    std::swap(invalid.operations[3], invalid.operations[4]);
+    assert(!classify(invalid));
+    invalid = process;
+    invalid.operations = {
+        DebugPoint { }, ReadSignal { 0, 0 }, ReadSignal { 1, 1 },
+        Extract { 2, 0, 2, 1 }, Extract { 3, 1, 5, 1 },
+        Binary { BinaryOperator::bit_and, 4, 2, 3 },
+        WriteUpdateSlice { 2, 4, 3 }, DebugPoint { },
+        WaitSensitivity { }, Jump { 0 },
+    };
+    assert(!classify(invalid));
+    invalid = process;
+    invalid.operations[9] = Jump { 1 };
+    assert(!classify(invalid));
+    invalid = process;
+    invalid.driver_regions.front().offset = 4;
+    assert(!classify(invalid));
+
+    // A later extract must not read a register overwritten by an earlier
+    // extract, even when each operation has the expected width and kind.
+    auto aliased = process;
+    aliased.operations[3] = Extract { 0, 1, 0, 1 };
+    aliased.operations[5] = Extract { 2, 0, 0, 1 };
+    aliased.operations[6] = Binary {
+        BinaryOperator::bit_and, 4, 0, 2
+    };
+    auto one_bit_layout = layout;
+    one_bit_layout.register_widths = { 1, 1, 1, 1, 1 };
+    const std::array one_bit_widths { 1U, 1U, 8U };
+    assert(!fsim::app::application_detail::
+        classify_pure_bit_and_assignment(
+            aliased, one_bit_layout, one_bit_widths, kinds,
+            direct_reads, direct_updates));
+
+    auto generated_layout = layout;
+    generated_layout.direct_read_signals = { 10, 11 };
+    generated_layout.direct_update_signals = { 12 };
+    assert(fsim::app::application_detail::
+        classify_pure_bit_and_assignment(
+            process, generated_layout, widths, kinds,
+            direct_reads, direct_updates));
+}
+
+} // namespace
+#endif
+
 void ApplicationTestFixture::test_simulation_semantics()
 {
+#if defined(FSIM_HAS_LLVM)
+    test_pure_bit_and_assignment_admission();
+    test_fused_static_simulation();
+#endif
     auto config = base_config();
     auto differential_config = config;
     std::erase_if(
@@ -87,6 +201,97 @@ void ApplicationTestFixture::test_simulation_semantics()
             == fsim::app::NativeCacheStatistics { });
 #endif
     }
+
+#if defined(FSIM_HAS_LLVM)
+    constexpr std::size_t hot_cell_assignment_count = 129U;
+    auto hot_cell_config = base_config();
+    hot_cell_config.project.name = "executor-hot-cell-pool-test";
+    hot_cell_config.project.top = "sv:work.hot_cell_pool";
+    hot_cell_config.build.optimization = fsim::project::Optimization::o2;
+    hot_cell_config.build.cache_path
+        = directory / "executor-hot-cell-pool-cache";
+    hot_cell_config.source_sets.clear();
+    fsim::project::SourceSet hot_cell_sources;
+    hot_cell_sources.language = fsim::project::Language::system_verilog;
+    hot_cell_sources.standard = "2017";
+    hot_cell_sources.library = "work";
+    const auto hot_cell_source = directory / "executor-hot-cell-pool.sv";
+    std::ostringstream hot_cell_source_text;
+    hot_cell_source_text
+        << "module hot_cell_leaf(input logic a, input logic b, output logic y);\n"
+        << "  always_comb y = a & b;\n"
+        << "endmodule\n"
+        << "module hot_cell_pool;\n"
+        << "  logic a;\n"
+        << "  logic b;\n";
+    for (std::size_t index = 0;
+         index < hot_cell_assignment_count; ++index) {
+        hot_cell_source_text
+            << "  logic output_" << index << ";\n";
+    }
+    for (std::size_t index = 0;
+         index < hot_cell_assignment_count; ++index) {
+        hot_cell_source_text
+            << "  hot_cell_leaf u" << index
+            << " (.a(a), .b(b), .y(output_" << index << "));\n";
+    }
+    hot_cell_source_text
+        << "  initial begin\n"
+        << "    a = 1'b0;\n"
+        << "    b = 1'b0;\n"
+        << "    #1 a = 1'b1; b = 1'b1;\n"
+        << "    #1 b = 1'b0;\n"
+        << "    #1 $finish;\n"
+        << "  end\n"
+        << "endmodule\n";
+    {
+        std::ofstream hot_cell_output(hot_cell_source);
+        assert(hot_cell_output);
+        hot_cell_output << hot_cell_source_text.str();
+        assert(hot_cell_output);
+    }
+    hot_cell_sources.files.push_back(hot_cell_source);
+    hot_cell_config.source_sets.push_back(std::move(hot_cell_sources));
+    fsim::diagnostic::Engine hot_cell_diagnostics;
+    auto hot_cell_reference_project = fsim::app::build_project(
+        hot_cell_config, hot_cell_diagnostics);
+    auto hot_cell_compiled_project = fsim::app::build_project(
+        hot_cell_config, hot_cell_diagnostics);
+    assert(hot_cell_reference_project);
+    assert(hot_cell_compiled_project);
+    std::vector<fsim::runtime::simir::SignalId> hot_cell_outputs;
+    hot_cell_outputs.reserve(hot_cell_assignment_count);
+    for (std::size_t index = 0;
+         index < hot_cell_assignment_count; ++index) {
+        const auto output = hot_cell_reference_project->design.find_signal(
+            "hot_cell_pool.output_" + std::to_string(index));
+        assert(output);
+        hot_cell_outputs.push_back(*output);
+    }
+    const auto hot_cell_reference = capture_simulation(
+        std::move(*hot_cell_reference_project),
+        fsim::app::SimulationEngine::interpreter);
+    const auto hot_cell_compiled = capture_simulation(
+        std::move(*hot_cell_compiled_project),
+        fsim::app::SimulationEngine::compiled);
+    compare_captures(hot_cell_reference, hot_cell_compiled);
+    assert(hot_cell_compiled.process_count >= hot_cell_assignment_count);
+    assert(
+        hot_cell_compiled.compiled_processes
+        >= hot_cell_assignment_count);
+    assert(
+        hot_cell_compiled.result.status
+        == fsim::runtime::RunStatus::stopped);
+    for (const auto output : hot_cell_outputs) {
+        assert(hot_cell_compiled.final_values.at(output) == "0");
+        assert(std::ranges::any_of(
+            hot_cell_compiled.changes,
+            [output](const auto& change) {
+                return std::get<0>(change) == output
+                    && std::get<1>(change) == "1";
+            }));
+    }
+#endif
 
     struct CapturedAssertion {
         fsim::runtime::simir::ProcessId process { };

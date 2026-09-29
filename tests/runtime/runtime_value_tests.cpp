@@ -123,13 +123,17 @@ public:
       std::vector<std::string> values,
       std::function<void(
           fsim::runtime::simir::ProcessExecutionContext&,
-          std::size_t)> after_stage = {})
+          std::size_t)> after_stage = {},
+      bool use_prepared_staging = false,
+      std::optional<std::uint32_t> mutate_mask_bit = std::nullopt)
       : signal_{signal}
       , process_{process}
       , width_{width}
       , segments_{std::move(segments)}
       , values_{std::move(values)}
-      , after_stage_{std::move(after_stage)} {
+      , after_stage_{std::move(after_stage)}
+      , use_prepared_staging_{use_prepared_staging}
+      , mutate_mask_bit_{mutate_mask_bit} {
     if (segments_.size() != values_.size() || values_.empty()
         || width_ == 0U || width_ > 128U) {
       throw std::invalid_argument("invalid owned-span update fixture");
@@ -145,8 +149,11 @@ public:
     require(
         start == next_phase_ && next_phase_ < values_.size(),
         "owned-span writer resumes at its next slot phase");
-    const auto value = PackedLogic4::from_msb_string(values_[next_phase_]);
+    auto value = PackedLogic4::from_msb_string(values_[next_phase_]);
     require(value.width() == width_, "owned-span slot has its target width");
+    if (mutate_mask_bit_ && next_phase_ == 0U) {
+      value.insert_bits(PackedLogic4 { 1U, Logic4::one }, *mutate_mask_bit_);
+    }
     const auto& segments = segments_[next_phase_];
     require(!segments.empty() && segments.size() <= 3U,
             "owned-span phase has a bounded slot set");
@@ -169,11 +176,14 @@ public:
           offset <= width_ && segment_width != 0U
               && segment_width <= width_ - offset,
           "owned-span slot segment is inside its target");
-      storage[index].active = 1U;
+      storage[index].active = use_prepared_staging_ ? 0U : 1U;
       std::copy_n(value_aval.begin(), word_count, storage[index].aval.begin());
       std::copy_n(value_bval.begin(), word_count, storage[index].bval.begin());
-      for (std::uint32_t bit = offset; bit < offset + segment_width; ++bit) {
-        storage[index].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+      if (!use_prepared_staging_) {
+        for (std::uint32_t bit = offset;
+             bit < offset + segment_width; ++bit) {
+          storage[index].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+        }
       }
       slots[index] = ProcessUpdateSlotView{
           signal_, width_, word_count, &storage[index].active,
@@ -183,16 +193,68 @@ public:
 
     const auto active_mask
         = (UINT64_C(1) << segments.size()) - UINT64_C(1);
-    std::array<std::uint64_t, 1U> active_words{active_mask};
+    std::array<std::uint64_t, 1U> active_words{
+        use_prepared_staging_ ? 0U : active_mask};
     const ProcessUpdateSlotBatch batch{
         process_,
         std::span<const ProcessUpdateSlotView>{
             slots.data(), segments.size()},
         active_words};
-    const std::array batches{batch};
-    require(
-        context.write_validated_update_slot_batches(batches),
-        "owned-span slot batch is accepted by the native update path");
+    if (use_prepared_staging_) {
+      auto prepared_slot = context.prepare_owned_update_slot(batch);
+      ++prepared_prepare_calls_;
+      prepared_certificate_results_.push_back(prepared_slot.has_value());
+      for (std::size_t index = 0U; index < segments.size(); ++index) {
+        const auto [offset, segment_width] = segments[index];
+        storage[index].active = 1U;
+        for (std::uint32_t bit = offset;
+             bit < offset + segment_width; ++bit) {
+          storage[index].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+        }
+      }
+      if (mutate_mask_bit_ && next_phase_ == 0U) {
+        const auto bit = *mutate_mask_bit_;
+        require(bit < width_, "prepared slot mutation stays in target width");
+        storage[0U].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+        storage[0U].aval[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+        storage[0U].bval[bit / 64U] &= ~(UINT64_C(1) << (bit % 64U));
+      }
+      active_words[0U] = active_mask;
+      PureWavePreparedMember prepared_member;
+      prepared_member.process = process_;
+      prepared_member.update_batch = batch;
+      prepared_member.prepared_owned_update_slot = prepared_slot
+          ? &*prepared_slot : nullptr;
+      const std::array<const PureWavePreparedMember*, 1U> members {
+          &prepared_member
+      };
+      require(
+          context.write_validated_prepared_update_slot_batches(members),
+          "prepared owned slot batch is accepted by the runtime path");
+      ++prepared_stage_calls_;
+      prepared_buffers_consumed_ = prepared_buffers_consumed_
+          && active_words[0U] == 0U
+          && std::all_of(
+              storage.begin(), storage.begin() + segments.size(),
+              [](const SlotStorage& slot) {
+                return slot.active == 0U
+                    && std::all_of(
+                        slot.mask.begin(), slot.mask.end(),
+                        [](const auto word) { return word == 0U; });
+              });
+    } else {
+      if (mutate_mask_bit_ && next_phase_ == 0U) {
+        const auto bit = *mutate_mask_bit_;
+        require(bit < width_, "ordinary slot mutation stays in target width");
+        storage[0U].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+        storage[0U].aval[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+        storage[0U].bval[bit / 64U] &= ~(UINT64_C(1) << (bit % 64U));
+      }
+      const std::array batches{batch};
+      require(
+          context.write_validated_update_slot_batches(batches),
+          "owned-span slot batch is accepted by the native update path");
+    }
 
     if (after_stage_)
       after_stage_(context, next_phase_);
@@ -205,6 +267,23 @@ public:
     return result;
   }
 
+  [[nodiscard]] std::size_t prepared_prepare_calls() const noexcept {
+    return prepared_prepare_calls_;
+  }
+
+  [[nodiscard]] std::size_t prepared_stage_calls() const noexcept {
+    return prepared_stage_calls_;
+  }
+
+  [[nodiscard]] const std::vector<bool>&
+  prepared_certificate_results() const noexcept {
+    return prepared_certificate_results_;
+  }
+
+  [[nodiscard]] bool prepared_buffers_consumed() const noexcept {
+    return prepared_buffers_consumed_;
+  }
+
 private:
   fsim::runtime::simir::SignalId signal_{};
   fsim::runtime::simir::ProcessId process_{};
@@ -214,6 +293,12 @@ private:
   std::function<void(
       fsim::runtime::simir::ProcessExecutionContext&,
       std::size_t)> after_stage_;
+  bool use_prepared_staging_ { };
+  std::optional<std::uint32_t> mutate_mask_bit_;
+  std::size_t prepared_prepare_calls_ { };
+  std::size_t prepared_stage_calls_ { };
+  std::vector<bool> prepared_certificate_results_;
+  bool prepared_buffers_consumed_ { true };
   std::size_t next_phase_{};
 };
 
@@ -1598,6 +1683,163 @@ void test_owned_span_native_updates() {
   }
 }
 
+void test_owned_span_prepared_native_updates() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  struct Snapshot {
+    std::vector<std::string> drivers;
+    std::string resolved;
+    std::string stored;
+    std::vector<SimulationTick> stored_change_times;
+    std::size_t certificate_calls { };
+    std::size_t stage_calls { };
+    std::vector<bool> certificate_results;
+    bool buffers_consumed { };
+  };
+
+  constexpr std::uint32_t width = 120U;
+  const auto make_value = [=](const std::uint32_t offset,
+                             const std::uint32_t segment_width,
+                             const Logic4 fill) {
+    PackedLogic4 value { width, Logic4::z };
+    value.insert_bits(PackedLogic4 { segment_width, fill }, offset);
+    return value.to_msb_string();
+  };
+  const auto first_write = make_value(60U, 15U, Logic4::one);
+  auto final_value = PackedLogic4::from_msb_string(first_write);
+  final_value.insert_bits(PackedLogic4 { 15U, Logic4::x }, 105U);
+  const auto final_write = final_value.to_msb_string();
+
+  const auto run_case = [&](const bool prepared, const bool mutate_outside) {
+    Interpreter interpreter;
+    const auto target = interpreter.add_signal({
+        "top.prepared_owned_span",
+        PackedLogic4 { width, Logic4::z }, ResolutionKind::sv_wire
+    });
+    const auto trigger = interpreter.add_signal({
+        "top.prepared_owned_span_trigger",
+        PackedLogic4::from_msb_string("0")
+    });
+
+    Process low_writer;
+    low_writer.id = 0U;
+    low_writer.name = "prepared_owned_span_low";
+    low_writer.driver_regions.push_back({ target, 0U, 60U, false });
+    low_writer.operations = { Halt { } };
+    low_writer.initialize = false;
+    const auto low_id = interpreter.add_process(std::move(low_writer));
+
+    Process high_writer;
+    high_writer.id = 1U;
+    high_writer.name = "prepared_owned_span_high";
+    high_writer.static_sensitivity.push_back({ trigger, EdgeKind::any });
+    high_writer.driver_regions.push_back({ target, 60U, 60U, false });
+    high_writer.operations = {
+        WaitSensitivity { }, WaitSensitivity { }, WaitSensitivity { }, Halt { }
+    };
+    high_writer.initialize = false;
+    const auto high_id = interpreter.add_process(std::move(high_writer));
+
+    std::vector<SimulationTick> stored_change_times;
+    interpreter.set_stored_signal_change_hook(
+        [&](const SignalId signal, const SimulationTick time) {
+          if (signal == target) {
+            stored_change_times.push_back(time);
+          }
+        });
+
+    auto first_value = PackedLogic4::from_msb_string(first_write);
+    auto final_slot_value = PackedLogic4::from_msb_string(final_write);
+    if (mutate_outside) {
+      first_value.insert_bits(PackedLogic4 { 1U, Logic4::one }, 0U);
+      final_slot_value.insert_bits(PackedLogic4 { 1U, Logic4::one }, 0U);
+    }
+    auto executor = std::make_unique<OwnedSpanUpdateExecutor>(
+        target, high_id, width,
+        std::vector<std::vector<OwnedSpanUpdateExecutor::SlotSegment>> {
+            { { 60U, 15U } }, { { 60U, 15U } }, { { 105U, 15U } }
+        },
+        std::vector<std::string> {
+            first_value.to_msb_string(), first_value.to_msb_string(),
+            final_slot_value.to_msb_string()
+        },
+        std::function<void(ProcessExecutionContext&, std::size_t)> { },
+        prepared, mutate_outside ? std::optional<std::uint32_t> { 0U }
+                                 : std::nullopt);
+    auto* const executor_view = executor.get();
+    interpreter.set_process_executor(high_id, std::move(executor));
+
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("1"), 1U, 0U);
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("0"), 2U, 0U);
+    interpreter.schedule_signal_at(
+        trigger, PackedLogic4::from_msb_string("1"), 3U, 0U);
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed && result.time == 3U,
+        "prepared owned-span phases complete through the static wait");
+
+    Snapshot snapshot;
+    snapshot.drivers = {
+        interpreter.driver_value(low_id, target).to_msb_string(),
+        interpreter.driver_value(high_id, target).to_msb_string()
+    };
+    snapshot.resolved = interpreter.signal_value(target).to_msb_string();
+    snapshot.stored = interpreter.stored_signal_value(target).to_msb_string();
+    snapshot.stored_change_times = std::move(stored_change_times);
+    snapshot.certificate_calls = executor_view->prepared_prepare_calls();
+    snapshot.stage_calls = executor_view->prepared_stage_calls();
+    snapshot.certificate_results
+        = executor_view->prepared_certificate_results();
+    snapshot.buffers_consumed = executor_view->prepared_buffers_consumed();
+    return snapshot;
+  };
+
+  const auto prepared = run_case(true, false);
+  const auto ordinary = run_case(false, false);
+  const auto initial = std::string(width, 'Z');
+  const auto expected_final = PackedLogic4::from_msb_string(final_write)
+      .to_msb_string();
+  require(prepared.certificate_calls == 3U
+          && prepared.stage_calls == 3U
+          && prepared.certificate_results
+              == std::vector<bool> { true, true, true },
+      "each prepared activation must obtain its cold owned-slot certificate");
+  require(prepared.buffers_consumed,
+      "prepared staging consumes slot activity, masks, and active bitmap");
+  require(prepared.drivers
+              == std::vector<std::string> { initial, expected_final }
+          && prepared.resolved == expected_final
+          && prepared.stored == expected_final,
+      "prepared staging preserves disjoint wide driver slices");
+  require(prepared.stored_change_times
+              == std::vector<SimulationTick> { 1U, 3U },
+      "the repeated same-value slot is consumed without a duplicate change");
+  require(prepared.drivers == ordinary.drivers
+          && prepared.resolved == ordinary.resolved
+          && prepared.stored == ordinary.stored
+          && prepared.stored_change_times == ordinary.stored_change_times,
+      "prepared owned-slot staging matches ordinary validated staging");
+
+  const auto demoted = run_case(true, true);
+  const auto demoted_ordinary = run_case(false, true);
+  auto demoted_final = PackedLogic4::from_msb_string(final_write);
+  demoted_final.insert_bits(PackedLogic4 { 1U, Logic4::one }, 0U);
+  const auto demoted_high = demoted_final.to_msb_string();
+  require(demoted.certificate_results
+              == std::vector<bool> { true, false, false }
+          && demoted.buffers_consumed,
+      "an out-of-owned live mask demotes the cached slot and consumes each activation");
+  require(demoted.drivers
+              == std::vector<std::string> { initial, demoted_high }
+          && demoted.resolved == demoted_high
+          && demoted.stored == demoted_high
+          && demoted.drivers == demoted_ordinary.drivers
+          && demoted.resolved == demoted_ordinary.resolved,
+      "post-certificate owner demotion continues through ordinary staging");
+}
+
 void test_owned_span_pending_transitions() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2660,6 +2902,7 @@ void test_resolved_driver_slots() {
   test_mixed_signal_id_alignment();
   test_force_release_word_boundary();
   test_owned_span_native_updates();
+  test_owned_span_prepared_native_updates();
   test_owned_span_pending_transitions();
   test_disjoint_driver_update_order_baseline();
 }

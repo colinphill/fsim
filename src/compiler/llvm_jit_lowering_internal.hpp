@@ -17,6 +17,11 @@ namespace fsim::compiler::llvm_detail {
 [[nodiscard]] llvm::StructType* create_jit_runtime_type(
     llvm::LLVMContext& context);
 
+void lower_masked_member_gates(llvm::Function& function,
+    llvm::StructType* runtime_type,
+    std::span<llvm::BasicBlock* const> instruction_blocks,
+    std::span<const FusedMaskedMemberGate> gates);
+
 struct EncodedValue {
     llvm::Value* aval { };
     llvm::Value* bval { };

@@ -813,6 +813,12 @@ void test_resumable_at_level(
 void test_process_cohort_resume_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_logic4_bit_and_cohort_at_level(
+    fsim::compiler::JitOptimizationLevel optimization);
+void test_fused_static_process_at_level(
+    fsim::compiler::JitOptimizationLevel optimization);
+void test_fused_masked_process_at_level(
+    fsim::compiler::JitOptimizationLevel optimization);
 void test_class_service_boundaries_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
