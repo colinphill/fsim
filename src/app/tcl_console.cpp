@@ -124,14 +124,20 @@ namespace {
         return "tcl-command";
     }
 
-    std::string bbcode_safe_text(const std::string_view text)
+    // Escape markup and control characters for the editor. Completion help
+    // keeps its line breaks (usage, then description), which the editor lays
+    // out under the help column.
+    std::string bbcode_safe_text(
+        const std::string_view text, const bool keep_line_breaks = false)
     {
         static constexpr char hex[] = "0123456789ABCDEF";
         std::string result;
         result.reserve(text.size());
         for (const char byte : text) {
             const auto character = static_cast<unsigned char>(byte);
-            if (character < 0x20U || character == 0x7FU) {
+            if (keep_line_breaks && character == '\n') {
+                result.push_back('\n');
+            } else if (character < 0x20U || character == 0x7FU) {
                 result.append("\\x");
                 result.push_back(hex[character >> 4U]);
                 result.push_back(hex[character & 0x0FU]);
@@ -365,7 +371,7 @@ struct TclConsole::State {
                 const std::string display_text = bbcode_safe_text(
                     candidate.display.empty() ? std::string_view { candidate.text }
                                               : std::string_view { candidate.display });
-                const std::string help_text = bbcode_safe_text(candidate.help);
+                const std::string help_text = bbcode_safe_text(candidate.help, true);
                 if (!ic_add_completion_prim(environment, candidate.text.c_str(),
                         display_text.c_str(),
                         candidate.help.empty() ? nullptr : help_text.c_str(),

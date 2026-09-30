@@ -48,6 +48,31 @@ ic_private void sbuf_append_tagged( stringbuf_t* sb, const char* tag, const char
   sbuf_append(sb,"[/]");
 }
 
+// fsim: completion help may span lines (a usage line, then a description).
+static bool completion_help_multiline(const char* help) {
+  return (help != NULL && strchr(help, '\n') != NULL);
+}
+
+// fsim: list entries indent help continuation lines under the help column;
+// a fixed-width grid cell keeps only the first help line.
+static void editor_append_completion_help(ic_env_t* env, editor_t* eb, const char* display, const char* help, ssize_t width, bool numbered) {
+  if (!completion_help_multiline(help)) {
+    sbuf_append_tagged(eb->extra, "ic-info", help );
+    return;
+  }
+  const ssize_t indent = (numbered ? 3 : 0) + bbcode_column_width(env->bbcode, display) + 2;
+  const char* line = help;
+  for (;;) {
+    const char* end = strchr(line, '\n');
+    sbuf_append(eb->extra, "[ic-info]");
+    sbuf_append_n(eb->extra, line, (end == NULL ? ic_strlen(line) : (ssize_t)(end - line)));
+    sbuf_append(eb->extra, "[/]");
+    if (end == NULL || width > 0) break;
+    sbuf_appendf(eb->extra, "\n%*s", (int)indent, "");
+    line = end + 1;
+  }
+}
+
 static void editor_append_completion(ic_env_t* env, editor_t* eb, ssize_t idx, ssize_t width, bool numbered, bool selected ) {
   const char* help = NULL;
   const char* display = completions_get_display(env->completions, idx, &help);
@@ -67,9 +92,9 @@ static void editor_append_completion(ic_env_t* env, editor_t* eb, ssize_t idx, s
   if (selected) { sbuf_append(eb->extra,"[/ic-emphasis]"); }
   if (help != NULL) {
     sbuf_append(eb->extra, "  ");
-    sbuf_append_tagged(eb->extra, "ic-info", help );      
+    editor_append_completion_help(env, eb, display, help, width, numbered);
   }
-  if (width > 0) { sbuf_append(eb->extra,"[/width]"); }  
+  if (width > 0) { sbuf_append(eb->extra,"[/width]"); }
 }
 
 // 2 and 3 column output up to 80 wide
@@ -129,7 +154,14 @@ again:
   sbuf_clear(eb->extra);
   ssize_t twidth = term_get_width(env->term) - 1;
   ssize_t colwidth;
-  if (count > 3 && ((colwidth = 3 + edit_completions_max_width(env, 9))*3 + 2*2) < twidth) {
+  // fsim: multi-line help does not fit a grid cell, so list those entries.
+  bool multiline_help = false;
+  for (ssize_t i = 0; i < count && i < 9 && !multiline_help; i++) {
+    const char* help = NULL;
+    completions_get_display(env->completions, i, &help);
+    multiline_help = completion_help_multiline(help);
+  }
+  if (!multiline_help && count > 3 && ((colwidth = 3 + edit_completions_max_width(env, 9))*3 + 2*2) < twidth) {
     // display as a 3 column block
     count_displayed = (count > 9 ? 9 : count);
     percolumn = 3;
@@ -138,7 +170,7 @@ again:
       editor_append_completion3(env, eb, colwidth, rw, percolumn+rw, (2*percolumn)+rw, selected);
     }
   }
-  else if (count > 4 && ((colwidth = 3 + edit_completions_max_width(env, 8))*2 + 2) < twidth) {
+  else if (!multiline_help && count > 4 && ((colwidth = 3 + edit_completions_max_width(env, 8))*2 + 2) < twidth) {
     // display as a 2 column block if some entries are too wide for three columns
     count_displayed = (count > 8 ? 8 : count);
     percolumn = (count_displayed <= 6 ? 3 : 4);

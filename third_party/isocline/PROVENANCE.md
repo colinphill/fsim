@@ -43,6 +43,10 @@ The upstream snapshot is patched to meet the fsim Tcl console contract:
   sets immediately before use, poll the output/interrupt callback while the
   completion menu is open, and redraw the saved edit buffer and cursor after
   output. Output control bytes are escaped before terminal display.
+- `src/editline_completion.c` lays out multi-line completion help (a usage
+  line, then a description): such menus use the list layout, continuation
+  lines are indented under the help column, and a grid cell would keep only
+  the first help line.
 - `src/tty.h`, `src/tty.c`, and `src/tty_esc.c` recognize bracketed paste,
   retain at most 4 MiB per paste, and return the paste as one editor event.
 - `src/editline.c` normalizes pasted CRLF/CR line endings and inserts the paste

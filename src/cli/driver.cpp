@@ -731,6 +731,15 @@ namespace {
 #endif
     }
 
+    bool standard_output_is_terminal() noexcept
+    {
+#if defined(_WIN32)
+        return _isatty(_fileno(stdout)) != 0;
+#else
+        return ::isatty(STDOUT_FILENO) != 0;
+#endif
+    }
+
     bool no_color_requested() noexcept
     {
         const char* value = std::getenv("NO_COLOR");
@@ -2119,6 +2128,7 @@ namespace {
         const Services& services,
         std::ostream& output,
         std::ostream& error,
+        const bool output_is_terminal,
         const bool error_is_terminal)
     {
         diagnostic::Engine diagnostics;
@@ -2151,6 +2161,13 @@ namespace {
                 output << "fsim " << fsim::version << " (C API "
                        << FSIM_API_VERSION << ")\n";
                 return kSuccess;
+            }
+            // The banner is for people at a console. Pipes, scripts, --quiet,
+            // and --version keep their exact output.
+            if (output_is_terminal && invocation->verbosity != Verbosity::quiet) {
+                output
+                    << "FSIM: Free mixed-language HDL simulator, version "
+                    << fsim::version << "\nCopyright (c) 2026 Colin Hill\n\n";
             }
             if (invocation->help) {
                 print_help(output, invocation->program_name);
@@ -2213,7 +2230,7 @@ int run(
 {
     // A caller-supplied stream has no portable terminal query. Treat it as
     // redirected in automatic mode; --color always remains an explicit opt-in.
-    return run_impl(argc, argv, services, output, error, false);
+    return run_impl(argc, argv, services, output, error, false, false);
 }
 
 int run(
@@ -2221,8 +2238,8 @@ int run(
     const char* const* argv,
     const Services& services)
 {
-    return run_impl(
-        argc, argv, services, std::cout, std::cerr, standard_error_is_terminal());
+    return run_impl(argc, argv, services, std::cout, std::cerr,
+        standard_output_is_terminal(), standard_error_is_terminal());
 }
 
 } // namespace fsim::cli

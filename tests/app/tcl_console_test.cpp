@@ -136,8 +136,8 @@ void pty_child_interactive(const std::filesystem::path& workspace)
         result.replace_begin_byte = 0U;
         result.replace_end_byte = buffer.size();
         if (buffer == "he" && cursor == buffer.size()) {
-            result.candidates.push_back({ "he_alpha", "he_alpha", "alpha candidate",
-                CandidateKind::literal });
+            result.candidates.push_back({ "he_alpha", "he_alpha",
+                "he_alpha ?-mode value?\nalpha candidate", CandidateKind::literal });
             result.candidates.push_back({ "he_beta", "he_beta", "beta candidate",
                 CandidateKind::literal });
             result.hints.push_back({ "choose a candidate" });
@@ -424,9 +424,24 @@ void interactive_pty_contract_test(const std::filesystem::path& executable,
     cursor = find_result_offset(child.transcript(), 1U);
     check_pty(child.wait_for("(fsim:tcl)", cursor, timeout),
         "completion prompt was not drawn");
+    check_pty(child.resize(80U, 24U), "could not widen the completion PTY");
     check_pty(child.send("he\t"), "could not invoke completion");
     check_pty(child.wait_for("he_beta", cursor, timeout),
         "completion menu did not display its candidates");
+    {
+        // Multi-line help breaks lines under the help column instead of
+        // showing an escaped line feed.
+        const auto menu = child.transcript().substr(cursor);
+        const auto usage = menu.find("he_alpha ?-mode value?");
+        const auto description = menu.find("alpha candidate");
+        check_pty(menu.find("\\x0A") == std::string::npos,
+            "completion help showed an escaped line feed");
+        check_pty(usage != std::string::npos && description != std::string::npos
+                && usage < description
+                && menu.substr(usage, description - usage).find('\n')
+                    != std::string::npos,
+            "multi-line completion help was not split across lines");
+    }
     check_pty(child.send("\x1b[B\r\r"),
         "could not cycle and select a completion candidate");
     check_pty(child.wait_for("__RESULT2=", 0U, timeout),
