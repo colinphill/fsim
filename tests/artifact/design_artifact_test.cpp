@@ -939,6 +939,9 @@ int main() {
   const auto extended = fsim::support::path_for_native_io(long_directory);
   assert(extended.native().starts_with(L"\\\\?\\"));
   assert(fsim::support::path_for_native_io(extended) == extended);
+  const auto joined = fsim::support::path_for_native_io(
+      extended / std::filesystem::path{"state/runtime.bin"});
+  assert(joined.native().find(L'/') == std::wstring::npos);
   const auto unc = fsim::support::path_for_native_io(
       std::filesystem::path{L"\\\\server\\share\\payload.bin"});
   assert(unc.native().starts_with(L"\\\\?\\UNC\\server\\share\\"));

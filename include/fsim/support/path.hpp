@@ -31,12 +31,16 @@ namespace fsim::support {
 
 /// Use an absolute extended-length path at Windows filesystem I/O seams.
 /// Keep public path spellings and serialized artifact names unchanged.
+/// Windows does not translate '/' after an extended-length prefix, so apply
+/// this again after joining generic relative names onto an extended path.
 [[nodiscard]] inline std::filesystem::path path_for_native_io(
     const std::filesystem::path& value) {
 #if defined(_WIN32)
   const auto& spelling = value.native();
   if (spelling.starts_with(L"\\\\?\\") || spelling.starts_with(L"\\\\.\\")) {
-    return value;
+    auto preferred = value;
+    preferred.make_preferred();
+    return preferred;
   }
   std::error_code error;
   auto absolute = std::filesystem::absolute(value, error);

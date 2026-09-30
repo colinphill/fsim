@@ -1334,12 +1334,13 @@ bool publish_design(
     return false;
   }
   for (const auto& payload : payloads) {
-    if (!write_file(staging / payload.path, payload.bytes, diagnostics)) {
+    if (!write_file(support::path_for_native_io(staging / payload.path),
+            payload.bytes, diagnostics)) {
       return false;
     }
   }
   for (const auto& payload : generated_payloads) {
-    const auto path = staging / payload.path;
+    const auto path = support::path_for_native_io(staging / payload.path);
     std::error_code directory_error;
     std::filesystem::create_directories(path.parent_path(), directory_error);
     if (directory_error || !payload.write(path, diagnostics)) {

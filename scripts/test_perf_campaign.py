@@ -722,7 +722,8 @@ class PreflightReuseTests(unittest.TestCase):
         self.assertTrue(verdict["passed"])
         for engine in ("fsim", "vivado"):
             self.assertEqual(Path(verdict["engine_results"][engine]),
-                             self.current / "preflight" / self.case["id"] / engine / "engine_result.json")
+                             (self.current / "preflight" / self.case["id"] / engine
+                              / "engine_result.json").resolve())
 
     def test_changed_fsim_runs_fresh_while_vivado_reuses_and_pair_parity_still_gates(self) -> None:
         self.create_proof("fsim")
