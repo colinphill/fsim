@@ -40,6 +40,7 @@ include(cmake/FsimUvmSources.cmake)
 include(cmake/FsimSystemCAccellera.cmake)
 include(cmake/FsimScv.cmake)
 include(cmake/FsimSqlite.cmake)
+include(cmake/FsimWindowsRuntime.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -1518,6 +1519,7 @@ install(
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+fsim_install_windows_runtime()
 configure_package_config_file(
   "${PROJECT_SOURCE_DIR}/cmake/fsimConfig.cmake.in"
   "${PROJECT_BINARY_DIR}/fsimConfig.cmake"

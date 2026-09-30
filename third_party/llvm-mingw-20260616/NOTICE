@@ -1,0 +1,20 @@
+LLVM-MinGW 20260616 runtime libraries (LLVM 22.1.8, UCRT, x86-64)
+
+fsim's Windows binary archives include these unmodified files from the official
+llvm-mingw-20260616-ucrt-x86_64.zip release archive:
+
+  bin/libc++.dll       LLVM libc++ C++ standard library
+  bin/libunwind.dll    LLVM libunwind unwinder
+  bin/libLLVM-22.dll   LLVM 22.1.8 shared library (LLVM-enabled archives only)
+
+fsim is compiled with this toolchain, so its executables and libraries import
+libc++.dll and libunwind.dll. LLVM-enabled builds also import libLLVM-22.dll.
+These components are part of the LLVM Project and are licensed under the
+Apache License v2.0 with LLVM Exceptions. The adjacent LICENSE reproduces
+LICENSE.TXT from the release archive unchanged, including the legacy
+University of Illinois/NCSA Open Source License.
+
+LLVM Project: https://llvm.org/
+LLVM Project source: https://github.com/llvm/llvm-project
+LLVM-MinGW release:
+https://github.com/mstorsjo/llvm-mingw/releases/tag/20260616

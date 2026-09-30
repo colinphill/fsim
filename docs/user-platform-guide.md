@@ -51,6 +51,12 @@ cmake --build --preset windows-llvm-mingw --parallel 12
 ctest --preset windows-llvm-mingw --parallel 12
 ```
 
+The Windows binary archive runs without the toolchain or MSYS2 on `PATH`. Its
+`bin` directory carries `libc++.dll`, `libunwind.dll`, and, in LLVM-enabled
+archives, `libLLVM-22.dll` from the pinned LLVM-MinGW 20260616 release.
+`share/doc/fsim/third-party/llvm-mingw-20260616` holds their license and
+provenance.
+
 Select a workspace by changing to its directory, then run the three phases:
 
 ```sh

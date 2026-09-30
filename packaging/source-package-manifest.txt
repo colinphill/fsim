@@ -149,6 +149,7 @@ cmake/FsimTcl.cmake
 cmake/FsimTclVersion.cmake
 cmake/FsimUvmSources.cmake
 cmake/FsimWarnings.cmake
+cmake/FsimWindowsRuntime.cmake
 cmake/MaterializeUvmSources.cmake
 cmake/MergeSystemCArchives.cmake
 cmake/RunAccelleraSystemCClosure.cmake
@@ -2112,6 +2113,11 @@ third_party/isocline/src/tty_esc.c
 third_party/isocline/src/undo.c
 third_party/isocline/src/undo.h
 third_party/isocline/src/wcwidth.c
+third_party/llvm-mingw-20260616/LICENSE
+third_party/llvm-mingw-20260616/NOTICE
+third_party/llvm-mingw-20260616/README.md
+third_party/llvm-mingw-20260616/SOURCE_MANIFEST.txt
+third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json
 third_party/scv-2.0.1/LICENSE
 third_party/scv-2.0.1/NOTICE
 third_party/scv-2.0.1/PATCHES.txt

@@ -14,6 +14,10 @@ V3SUP-SQLITE-NOTICE	notice	third_party/sqlite-3.53.4/NOTICE	B188J-C02
 V3SUP-SQLITE-SBOM	sbom	third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json	B188J-C02
 V3SUP-SQLITE-PROVENANCE	provenance	third_party/sqlite-3.53.4/SOURCE_MANIFEST.txt	B188J-C02
 V3SUP-SQLITE-SOURCE	provenance	third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip	B188J-C02
+V3SUP-LLVM-MINGW-LICENSE	license	third_party/llvm-mingw-20260616/LICENSE	CI-WINDOWS-RUNTIME
+V3SUP-LLVM-MINGW-NOTICE	notice	third_party/llvm-mingw-20260616/NOTICE	CI-WINDOWS-RUNTIME
+V3SUP-LLVM-MINGW-SBOM	sbom	third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json	CI-WINDOWS-RUNTIME
+V3SUP-LLVM-MINGW-PROVENANCE	provenance	third_party/llvm-mingw-20260616/SOURCE_MANIFEST.txt	CI-WINDOWS-RUNTIME
 V3SUP-UVM-PROVENANCE	provenance	docs/uvm-source-provenance.md	B188-C17
 V3SUP-SOURCE-EXCLUSIONS	exclusion	packaging/source-package-exclusions.txt	B188-C17
 V3SUP-VHDL-INVENTORY	reference-audit	tests/feature_matrix/vhdl_2019_inventory.tsv	B188-C17

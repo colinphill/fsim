@@ -51,10 +51,13 @@ endforeach()
 foreach(sbom IN ITEMS
     third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
     third_party/scv-2.0.1/scv-2.0.1.spdx.json
-    third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json)
+    third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json
+    third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json)
   set(expected_license "Apache-2.0")
   if(sbom MATCHES "^third_party/sqlite-")
     set(expected_license "blessing")
+  elseif(sbom MATCHES "^third_party/llvm-mingw-")
+    set(expected_license "Apache-2.0 WITH LLVM-exception")
   endif()
   file(READ "${FSIM_SOURCE_DIR}/${sbom}" contents)
   string(JSON spdx_version ERROR_VARIABLE json_error
@@ -141,6 +144,55 @@ string(JSON sqlite_sbom_sha3 GET "${sqlite_sbom}" packages 0 checksums 1 checksu
 if(NOT sqlite_sbom_sha256 STREQUAL FSIM_SQLITE_ARCHIVE_SHA256
     OR NOT sqlite_sbom_sha3 STREQUAL sqlite_sha3)
   message(FATAL_ERROR "SQLite SBOM checksums differ from the pinned source")
+endif()
+
+foreach(id IN ITEMS V3SUP-LLVM-MINGW-LICENSE V3SUP-LLVM-MINGW-NOTICE
+    V3SUP-LLVM-MINGW-SBOM V3SUP-LLVM-MINGW-PROVENANCE)
+  if(NOT id IN_LIST ids)
+    message(FATAL_ERROR "Windows runtime supply-chain row is missing: ${id}")
+  endif()
+endforeach()
+include("${FSIM_SOURCE_DIR}/cmake/FsimWindowsRuntime.cmake")
+set(runtime_name "llvm-mingw-${FSIM_LLVM_MINGW_RUNTIME_RELEASE}")
+set(runtime_root "${FSIM_SOURCE_DIR}/third_party/${runtime_name}")
+file(STRINGS
+  "${FSIM_SOURCE_DIR}/packaging/targets/windows-llvm-mingw-llvm22.txt"
+  toolchain_archive REGEX "^toolchain_archive_sha256=")
+string(REPLACE "toolchain_archive_sha256=" "" toolchain_archive
+  "${toolchain_archive}")
+file(STRINGS "${runtime_root}/SOURCE_MANIFEST.txt" runtime_manifest)
+foreach(record IN ITEMS
+    "schema=fsim-llvm-mingw-runtime-v1" "name=LLVM-MinGW"
+    "release=${FSIM_LLVM_MINGW_RUNTIME_RELEASE}"
+    "archive_sha256=${toolchain_archive}"
+    "license=Apache-2.0 WITH LLVM-exception")
+  if(NOT record IN_LIST runtime_manifest)
+    message(FATAL_ERROR "LLVM-MinGW runtime provenance omits ${record}")
+  endif()
+endforeach()
+foreach(kind IN ITEMS license notice)
+  string(TOUPPER "${kind}" filename)
+  file(SHA256 "${runtime_root}/${filename}" digest)
+  if(NOT "${kind}_sha256=${digest}" IN_LIST runtime_manifest)
+    message(FATAL_ERROR "LLVM-MinGW runtime ${kind} differs from its recorded identity")
+  endif()
+endforeach()
+file(READ "${runtime_root}/${runtime_name}.spdx.json" runtime_sbom)
+string(JSON runtime_package_count LENGTH "${runtime_sbom}" packages)
+math(EXPR runtime_package_last "${runtime_package_count} - 1")
+set(runtime_dlls)
+foreach(package_index RANGE 1 ${runtime_package_last})
+  string(JSON dll GET "${runtime_sbom}" packages ${package_index} name)
+  string(JSON digest GET "${runtime_sbom}"
+    packages ${package_index} checksums 0 checksumValue)
+  if(NOT "file_sha256=bin/${dll}|${digest}" IN_LIST runtime_manifest)
+    message(FATAL_ERROR "LLVM-MinGW runtime SBOM differs for ${dll}")
+  endif()
+  list(APPEND runtime_dlls "${dll}")
+endforeach()
+list(SORT runtime_dlls)
+if(NOT "${runtime_dlls}" STREQUAL "libLLVM-22.dll;libc++.dll;libunwind.dll")
+  message(FATAL_ERROR "LLVM-MinGW runtime SBOM has an unexpected DLL set")
 endif()
 
 set(forbidden_home "/home/" "colin/standards")

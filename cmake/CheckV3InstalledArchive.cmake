@@ -171,23 +171,48 @@ foreach(path IN ITEMS
   endif()
   list(APPEND FSIM_REQUIRED_PATHS "${path}")
 endforeach()
+# Windows archives carry the LLVM-MinGW runtime their binaries import. Their
+# installed commands run with PATH unset, so any DLL they load comes from the
+# archive or the Windows system directories.
+set(launcher)
+if(suffix STREQUAL ".exe")
+  include("${FSIM_SOURCE_DIR}/cmake/FsimWindowsRuntime.cmake")
+  set(runtime_docs
+    "share/doc/fsim/third-party/llvm-mingw-${FSIM_LLVM_MINGW_RUNTIME_RELEASE}")
+  foreach(path IN ITEMS
+      bin/libc++.dll
+      bin/libunwind.dll
+      ${runtime_docs}/LICENSE
+      ${runtime_docs}/NOTICE
+      ${runtime_docs}/SOURCE_MANIFEST.txt
+      ${runtime_docs}/llvm-mingw-${FSIM_LLVM_MINGW_RUNTIME_RELEASE}.spdx.json)
+    if(NOT "${FSIM_ARCHIVE_AUDIT_ROOT}/${path}" IN_LIST seen)
+      message(FATAL_ERROR "v3 installed archive omits LLVM-MinGW runtime: ${path}")
+    endif()
+    list(APPEND FSIM_REQUIRED_PATHS "${path}")
+  endforeach()
+  set(launcher "${CMAKE_COMMAND}" -E env --unset=PATH)
+endif()
 
-file(REMOVE_RECURSE "${FSIM_ARCHIVE_AUDIT_WORK_DIR}")
-file(MAKE_DIRECTORY "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract")
+# The installed commands run from the workspace, so their executable path
+# must not depend on the caller's working directory.
+file(REMOVE_RECURSE "${FSIM_WORK_ROOT}")
+file(MAKE_DIRECTORY "${FSIM_WORK_ROOT}/extract")
 file(ARCHIVE_EXTRACT INPUT "${FSIM_ARCHIVE_AUDIT_ARCHIVE}"
-  DESTINATION "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract")
-set(prefix
-  "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/extract/${FSIM_ARCHIVE_AUDIT_ROOT}")
+  DESTINATION "${FSIM_WORK_ROOT}/extract")
+set(prefix "${FSIM_WORK_ROOT}/extract/${FSIM_ARCHIVE_AUDIT_ROOT}")
 foreach(path IN LISTS FSIM_REQUIRED_PATHS)
   if(NOT EXISTS "${prefix}/${path}")
     message(FATAL_ERROR "v3 installed archive omits ${path}")
   endif()
 endforeach()
-execute_process(COMMAND "${prefix}/bin/fsim${suffix}" --version
+execute_process(COMMAND ${launcher} "${prefix}/bin/fsim${suffix}" --version
   RESULT_VARIABLE version_result OUTPUT_VARIABLE version ERROR_VARIABLE version_error)
 string(STRIP "${version}" version)
 if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 3.0.0 (C API 1)")
-  message(FATAL_ERROR "v3 installed archive version failed: ${version}${version_error}")
+  message(FATAL_ERROR
+    "v3 installed archive version failed with ${version_result}: "
+    "${version}${version_error}")
 endif()
 file(READ "${prefix}/lib/pkgconfig/fsim.pc" pc)
 foreach(token IN ITEMS "Version: 3.0.0" "Libs: -L\${libdir} -lfsim_api")
@@ -197,18 +222,19 @@ foreach(token IN ITEMS "Version: 3.0.0" "Libs: -L\${libdir} -lfsim_api")
   endif()
 endforeach()
 
-set(workspace "${FSIM_ARCHIVE_AUDIT_WORK_DIR}/workspace")
+set(workspace "${FSIM_WORK_ROOT}/workspace")
 file(MAKE_DIRECTORY "${workspace}")
 file(WRITE "${workspace}/top.sv"
   "module archive_top; initial begin $display(\"WORKSPACE_ARCHIVE_PASS\"); $finish; end endmodule\n")
 function(fsim_installed_workspace_command expected_output)
-  execute_process(COMMAND "${prefix}/bin/fsim${suffix}" ${ARGN}
+  execute_process(COMMAND ${launcher} "${prefix}/bin/fsim${suffix}" ${ARGN}
     WORKING_DIRECTORY "${workspace}"
     TIMEOUT 7200
     RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
   if(NOT result EQUAL 0)
     message(FATAL_ERROR
-      "installed workspace command failed (${ARGN}): ${output}${error}")
+      "installed workspace command failed (${ARGN}) with ${result}: "
+      "${output}${error}")
   endif()
   if(NOT expected_output STREQUAL "")
     string(FIND "${output}" "${expected_output}" offset)

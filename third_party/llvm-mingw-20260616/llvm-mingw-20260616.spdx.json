@@ -1,0 +1,137 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fsim-llvm-mingw-20260616-runtime",
+  "documentNamespace": "https://fsim.dev/spdx/llvm-mingw-20260616/b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35",
+  "creationInfo": {
+    "created": "2026-09-30T00:00:00Z",
+    "creators": [
+      "Tool: fsim LLVM-MinGW runtime provenance harness"
+    ]
+  },
+  "packages": [
+    {
+      "name": "LLVM-MinGW",
+      "SPDXID": "SPDXRef-Package-LLVM-MinGW-20260616",
+      "versionInfo": "20260616",
+      "supplier": "Person: Martin Storsjo",
+      "downloadLocation": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
+        }
+      ],
+      "sourceInfo": "Official UCRT x86-64 release archive; LLVM 22.1.8",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/mstorsjo/llvm-mingw@20260616"
+        }
+      ]
+    },
+    {
+      "name": "libLLVM-22.dll",
+      "SPDXID": "SPDXRef-Package-libLLVM-22-dll",
+      "versionInfo": "22.1.8",
+      "supplier": "Organization: LLVM Project",
+      "downloadLocation": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "1e2aed1785cedbbb6f19338eac72257649bab60157e044d0435883871a2f58af"
+        }
+      ],
+      "sourceInfo": "Unmodified bin/libLLVM-22.dll from the LLVM-MinGW 20260616 archive",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/mstorsjo/llvm-mingw@20260616#bin/libLLVM-22.dll"
+        }
+      ]
+    },
+    {
+      "name": "libc++.dll",
+      "SPDXID": "SPDXRef-Package-libcxx-dll",
+      "versionInfo": "22.1.8",
+      "supplier": "Organization: LLVM Project",
+      "downloadLocation": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "952b41b1370ddb5e7299cc9fcefce2ad8c2021409948b057ec4d903c03760b6c"
+        }
+      ],
+      "sourceInfo": "Unmodified bin/libc++.dll from the LLVM-MinGW 20260616 archive",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/mstorsjo/llvm-mingw@20260616#bin/libc%2B%2B.dll"
+        }
+      ]
+    },
+    {
+      "name": "libunwind.dll",
+      "SPDXID": "SPDXRef-Package-libunwind-dll",
+      "versionInfo": "22.1.8",
+      "supplier": "Organization: LLVM Project",
+      "downloadLocation": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "8d9f60801f50c0a6cb7beb7fd2e121f98bf39ebe40e6c7e07a8a39fccb817c03"
+        }
+      ],
+      "sourceInfo": "Unmodified bin/libunwind.dll from the LLVM-MinGW 20260616 archive",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/mstorsjo/llvm-mingw@20260616#bin/libunwind.dll"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-LLVM-MinGW-20260616"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LLVM-MinGW-20260616",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-libLLVM-22-dll"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LLVM-MinGW-20260616",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-libcxx-dll"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LLVM-MinGW-20260616",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-libunwind-dll"
+    }
+  ]
+}
