@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -101,7 +102,7 @@ std::optional<std::string> source_identity(
         error = "cannot resolve source path: " + code.message();
         return std::nullopt;
     }
-    const auto canonical = std::filesystem::weakly_canonical(absolute, code);
+    const auto canonical = support::native_fs::weakly_canonical(absolute, code);
     if (code) {
         error = "cannot identify source path: " + code.message();
         return std::nullopt;
@@ -118,11 +119,11 @@ namespace detail {
 bool ensure_directory(const std::filesystem::path& path, std::string& error)
 {
     std::error_code code;
-    const auto status = std::filesystem::symlink_status(path, code);
-    if (!code && std::filesystem::is_directory(status))
+    const auto status = support::native_fs::symlink_status(path, code);
+    if (!code && support::native_fs::is_directory(status))
         return true;
-    if (std::filesystem::is_symlink(status)
-        || (!code && std::filesystem::exists(status))) {
+    if (support::native_fs::is_symlink(status)
+        || (!code && support::native_fs::exists(status))) {
         error = "workspace directory is not a real directory: "
             + support::path_to_utf8(path);
         return false;
@@ -132,7 +133,7 @@ bool ensure_directory(const std::filesystem::path& path, std::string& error)
         return false;
     }
     code.clear();
-    if (!std::filesystem::create_directory(path, code) && code) {
+    if (!support::native_fs::create_directory(path, code) && code) {
         error = "cannot create workspace directory: " + code.message();
         return false;
     }
@@ -156,8 +157,8 @@ bool safe_descendant(const std::filesystem::path& root,
         }
         current /= component;
         std::error_code code;
-        const auto status = std::filesystem::symlink_status(current, code);
-        if (std::filesystem::is_symlink(status)) {
+        const auto status = support::native_fs::symlink_status(current, code);
+        if (support::native_fs::is_symlink(status)) {
             error = "catalog artifact path traverses a symbolic link";
             return false;
         }
@@ -260,21 +261,21 @@ std::string new_revision()
 void remove_revision(const std::filesystem::path& path) noexcept
 {
     std::error_code code;
-    const auto status = std::filesystem::symlink_status(path, code);
+    const auto status = support::native_fs::symlink_status(path, code);
     if (code)
         return;
-    if (std::filesystem::is_symlink(status)) {
-        std::filesystem::remove(path, code);
+    if (support::native_fs::is_symlink(status)) {
+        support::native_fs::remove(path, code);
         return;
     }
-    std::filesystem::permissions(path, std::filesystem::perms::owner_all,
+    support::native_fs::permissions(path, std::filesystem::perms::owner_all,
         std::filesystem::perm_options::add, code);
-    std::filesystem::recursive_directory_iterator iterator { path, code };
+    auto iterator = support::native_fs::recursive_directory_iterator(path, code);
     const std::filesystem::recursive_directory_iterator end;
     while (!code && iterator != end) {
         const auto entry_status = iterator->symlink_status(code);
-        if (!code && !std::filesystem::is_symlink(entry_status))
-            std::filesystem::permissions(iterator->path(),
+        if (!code && !support::native_fs::is_symlink(entry_status))
+            support::native_fs::permissions(iterator->path(),
                 std::filesystem::perms::owner_all,
                 std::filesystem::perm_options::add, code);
         if (!code)
@@ -283,17 +284,17 @@ void remove_revision(const std::filesystem::path& path) noexcept
     code.clear();
     // Loaded DLLs may remain locked on Windows. A later successful publication
     // retries collection; failure here never invalidates the committed catalog.
-    std::filesystem::remove_all(path, code);
+    support::native_fs::remove_all(path, code);
 }
 
 void collect_revisions(const std::filesystem::path& root,
     const std::set<std::string>& retained) noexcept
 {
     std::error_code code;
-    const auto status = std::filesystem::symlink_status(root, code);
-    if (code || !std::filesystem::is_directory(status))
+    const auto status = support::native_fs::symlink_status(root, code);
+    if (code || !support::native_fs::is_directory(status))
         return;
-    std::filesystem::directory_iterator iterator { root, code };
+    auto iterator = support::native_fs::directory_iterator(root, code);
     const std::filesystem::directory_iterator end;
     while (!code && iterator != end) {
         const auto filename = support::path_to_utf8(iterator->path().filename());
@@ -307,13 +308,13 @@ bool replace_text(const std::filesystem::path& destination,
     const std::string_view text, std::string& error)
 {
     const auto temporary = destination.parent_path() / (new_revision() + ".tmp");
-    std::ofstream output { temporary, std::ios::binary | std::ios::trunc };
+    auto output = support::native_fs::open_ofstream(temporary, std::ios::binary | std::ios::trunc);
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
     output.close();
     std::error_code code;
     if (!output || !compiler::detail::atomic_replace_file(temporary, destination, code)) {
         error = "cannot atomically publish workspace metadata: " + code.message();
-        std::filesystem::remove(temporary, code);
+        support::native_fs::remove(temporary, code);
         return false;
     }
     return true;
@@ -323,14 +324,14 @@ std::optional<std::string> read_text(const std::filesystem::path& path,
     const std::size_t limit, std::string& error)
 {
     std::error_code code;
-    const auto status = std::filesystem::symlink_status(path, code);
-    const auto size = std::filesystem::file_size(path, code);
-    if (code || !std::filesystem::is_regular_file(status) || size > limit) {
+    const auto status = support::native_fs::symlink_status(path, code);
+    const auto size = support::native_fs::file_size(path, code);
+    if (code || !support::native_fs::is_regular_file(status) || size > limit) {
         error = "workspace metadata is absent, unsafe, or exceeds its size limit";
         return std::nullopt;
     }
     std::string result(static_cast<std::size_t>(size), '\0');
-    std::ifstream input { path, std::ios::binary };
+    auto input = support::native_fs::open_ifstream(path, std::ios::binary);
     input.read(result.data(), static_cast<std::streamsize>(result.size()));
     if (!input || input.peek() != std::char_traits<char>::eof()) {
         error = "cannot read complete workspace metadata";

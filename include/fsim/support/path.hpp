@@ -29,14 +29,49 @@ namespace fsim::support {
       encoded.size()};
 }
 
+#if defined(_WIN32)
+namespace detail {
+
+/// Recognize Windows device names such as NUL, which an extended-length
+/// spelling would turn into ordinary file names.
+[[nodiscard]] inline bool is_windows_device_name(
+    const std::filesystem::path& value) {
+  auto name = value.filename().native();
+  if (const auto dot = name.find(L'.'); dot != name.npos) {
+    name.resize(dot);
+  }
+  while (!name.empty() && name.back() == L' ') {
+    name.pop_back();
+  }
+  for (auto& character : name) {
+    if (character >= L'a' && character <= L'z') {
+      character = static_cast<wchar_t>(character - L'a' + L'A');
+    }
+  }
+  if (name == L"CON" || name == L"PRN" || name == L"AUX" || name == L"NUL"
+      || name == L"CONIN$" || name == L"CONOUT$") {
+    return true;
+  }
+  return name.size() == 4
+      && (name.starts_with(L"COM") || name.starts_with(L"LPT"))
+      && name[3] >= L'1' && name[3] <= L'9';
+}
+
+}  // namespace detail
+#endif
+
 /// Use an absolute extended-length path at Windows filesystem I/O seams.
 /// Keep public path spellings and serialized artifact names unchanged.
 /// Windows does not translate '/' after an extended-length prefix, so apply
 /// this again after joining generic relative names onto an extended path.
+/// Empty paths and device names such as NUL keep their original spelling.
 [[nodiscard]] inline std::filesystem::path path_for_native_io(
     const std::filesystem::path& value) {
 #if defined(_WIN32)
   const auto& spelling = value.native();
+  if (spelling.empty() || detail::is_windows_device_name(value)) {
+    return value;
+  }
   if (spelling.starts_with(L"\\\\?\\") || spelling.starts_with(L"\\\\.\\")) {
     auto preferred = value;
     preferred.make_preferred();
@@ -57,6 +92,23 @@ namespace fsim::support {
 #else
   return value;
 #endif
+}
+
+/// Return the ordinary spelling of an extended-length path, such as an entry
+/// from a directory iterator over a path_for_native_io root, for display,
+/// serialization, or comparison with ordinary paths.
+[[nodiscard]] inline std::filesystem::path path_from_native_io(
+    const std::filesystem::path& value) {
+#if defined(_WIN32)
+  const auto& spelling = value.native();
+  if (spelling.starts_with(L"\\\\?\\UNC\\")) {
+    return std::filesystem::path{L"\\\\" + spelling.substr(8)};
+  }
+  if (spelling.starts_with(L"\\\\?\\")) {
+    return std::filesystem::path{spelling.substr(4)};
+  }
+#endif
+  return value;
 }
 
 /// Recognize absolute source names produced on either supported host family.
@@ -89,8 +141,9 @@ namespace detail {
   if (error) {
     return path.lexically_normal();
   }
-  auto canonical = std::filesystem::weakly_canonical(absolute, error);
-  return error ? absolute.lexically_normal() : canonical;
+  auto canonical = std::filesystem::weakly_canonical(
+      path_for_native_io(absolute), error);
+  return error ? absolute.lexically_normal() : path_from_native_io(canonical);
 }
 
 }  // namespace detail

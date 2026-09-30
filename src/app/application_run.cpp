@@ -6,6 +6,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <chrono>
@@ -1879,14 +1880,15 @@ namespace {
         }
         std::error_code error;
         if (!file.path.parent_path().empty()) {
-            std::filesystem::create_directories(file.path.parent_path(), error);
+            support::native_fs::create_directories(file.path.parent_path(), error);
         }
         if (error) {
             throw std::runtime_error {
                 "cannot create extended VCD directory: " + error.message()
             };
         }
-        file.stream.open(file.path, std::ios::binary | std::ios::trunc);
+        support::native_fs::open(
+            file.stream, file.path, std::ios::binary | std::ios::trunc);
         if (!file.stream) {
             throw std::runtime_error { "cannot open extended VCD file" };
         }
@@ -2236,7 +2238,7 @@ void attach_hdl_vcd_control(
                 }
                 std::error_code error;
                 if (!state.path.parent_path().empty()) {
-                    std::filesystem::create_directories(
+                    support::native_fs::create_directories(
                         state.path.parent_path(), error);
                 }
                 if (error) {
@@ -2244,7 +2246,7 @@ void attach_hdl_vcd_control(
                         "cannot create HDL VCD directory: " + error.message()
                     };
                 }
-                state.stream.open(
+                support::native_fs::open(state.stream,
                     state.path, std::ios::binary | std::ios::trunc);
                 if (!state.stream) {
                     throw std::runtime_error { "cannot open HDL VCD file" };

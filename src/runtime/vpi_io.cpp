@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_io.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/version.hpp"
 
@@ -167,10 +168,10 @@ SystemVerilogVpiIoService::SystemVerilogVpiIoService(
     return;
   }
   std::error_code error;
-  canonical_root_ = std::filesystem::weakly_canonical(
+  canonical_root_ = support::native_fs::weakly_canonical(
       configuration_.file_root, error);
   if (error
-      || !std::filesystem::is_directory(canonical_root_, error)) {
+      || !support::native_fs::is_directory(canonical_root_, error)) {
     configuration_error_ = SystemVerilogVpiIoError::InvalidPath;
     canonical_root_.clear();
   }
@@ -270,7 +271,7 @@ SystemVerilogVpiIoOpenResult SystemVerilogVpiIoService::open(
 
   const auto joined = canonical_root_ / relative;
   std::error_code error;
-  auto checked = std::filesystem::weakly_canonical(
+  auto checked = support::native_fs::weakly_canonical(
       joined.parent_path(), error);
   if (error || !below_root(canonical_root_, checked)) {
     return {{}, SystemVerilogVpiIoError::InvalidPath,
@@ -281,7 +282,7 @@ SystemVerilogVpiIoOpenResult SystemVerilogVpiIoService::open(
   auto record = std::make_shared<FileRecord>();
   record->path = checked;
   record->mode = std::string{mode_text};
-  record->stream.open(checked, *mode);
+  support::native_fs::open(record->stream, checked, *mode);
   if (!record->stream.is_open()) {
     return {{}, SystemVerilogVpiIoError::OpenFailed,
             bounded("cannot open VPI output '" + std::string{path_text} + "'")};

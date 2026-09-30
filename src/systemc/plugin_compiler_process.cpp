@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
 
+#include "fsim/support/path.hpp"
+
 namespace fsim::systemc::plugin_detail {
 
 #if defined(_WIN32)
@@ -59,7 +61,7 @@ TemporaryResponseFile::TemporaryResponseFile() = default;
 
 TemporaryResponseFile::~TemporaryResponseFile()  {
         if (!path_.empty()) {
-            DeleteFileW(path_.c_str());
+            DeleteFileW(support::path_for_native_io(path_).c_str());
         }
     }
 
@@ -78,8 +80,8 @@ bool TemporaryResponseFile::write(
                 / (".fsim-compiler-arguments-" + std::to_string(GetCurrentProcessId())
                    + "-" + std::to_string(serial) + ".rsp");
             const HANDLE file = CreateFileW(
-                path_.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                FILE_ATTRIBUTE_TEMPORARY, nullptr);
+                support::path_for_native_io(path_).c_str(), GENERIC_WRITE, 0,
+                nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
             if (file == INVALID_HANDLE_VALUE) {
                 if (GetLastError() == ERROR_FILE_EXISTS
                     || GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -135,7 +137,7 @@ bool TemporaryResponseFile::write(
                 error_message =
                     "cannot write compiler response file (error "
                     + std::to_string(native_error) + ")";
-                DeleteFileW(path_.c_str());
+                DeleteFileW(support::path_for_native_io(path_).c_str());
                 path_.clear();
                 return false;
             }

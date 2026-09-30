@@ -8,6 +8,7 @@
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/source_mapping.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/incremental.hpp"
@@ -36,7 +37,7 @@ std::optional<std::string> read_checked_source(
     const std::filesystem::path& path,
     const std::string_view digest,
     diagnostic::Engine& diagnostics) {
-  std::ifstream input(path, std::ios::binary);
+  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
   if (!input) {
     diagnostics.error(
         "FSIM-ART-0004",

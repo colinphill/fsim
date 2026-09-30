@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "tcl_transcript.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <fstream>
@@ -176,7 +178,7 @@ namespace {
 
     bool ends_with_newline(const std::filesystem::path& path)
     {
-        std::ifstream input { path, std::ios::binary };
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!input)
             return true;
 
@@ -217,7 +219,7 @@ bool TclTranscript::start(const std::filesystem::path& path, std::string& error)
 
     const auto parent = resolved_path.parent_path();
     if (!parent.empty()) {
-        std::filesystem::create_directories(parent, filesystem_error);
+        support::native_fs::create_directories(parent, filesystem_error);
         if (filesystem_error) {
             error = error_message("could not create Tcl transcript directory",
                 filesystem_error);
@@ -228,8 +230,8 @@ bool TclTranscript::start(const std::filesystem::path& path, std::string& error)
     }
 
     const bool had_trailing_newline = ends_with_newline(resolved_path);
-    std::ofstream new_output { resolved_path,
-        std::ios::out | std::ios::app | std::ios::binary };
+    auto new_output = support::native_fs::open_ofstream(resolved_path,
+        std::ios::out | std::ios::app | std::ios::binary);
     if (!new_output) {
         const std::error_code open_error { errno, std::generic_category() };
         error = error_message("could not open Tcl transcript", open_error);

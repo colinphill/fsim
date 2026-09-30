@@ -10,6 +10,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/version.hpp"
 
@@ -549,7 +550,7 @@ namespace tcl_detail {
             / FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH)
                                    .lexically_normal();
         std::error_code error;
-        if (!std::filesystem::is_regular_file(
+        if (!support::native_fs::is_regular_file(
                 candidate / "init.tcl", error)) {
             return;
         }

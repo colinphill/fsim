@@ -2,6 +2,7 @@
 #include "fsim/runtime/fst_reader.hpp"
 
 #include "fsim/runtime/fst_compression.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -1574,7 +1575,7 @@ void append_file_chunk(Bytes& bytes, const std::span<const char> chunk,
 [[nodiscard]] Bytes read_file_bytes(const std::filesystem::path& path,
     const FstReaderLimits& limits)
 {
-    std::ifstream input { path, std::ios::binary };
+    auto input = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!input) {
         input_failure("cannot open FST input", 0U);
     }

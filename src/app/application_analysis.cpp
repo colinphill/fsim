@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
@@ -314,14 +315,14 @@ bool same_source_path(
         return true;
     }
     std::error_code equivalent_error;
-    if (std::filesystem::equivalent(left, right, equivalent_error)
+    if (support::native_fs::equivalent(left, right, equivalent_error)
         && !equivalent_error) {
         return true;
     }
     std::error_code left_error;
     std::error_code right_error;
-    const auto canonical_left = std::filesystem::weakly_canonical(left, left_error);
-    const auto canonical_right = std::filesystem::weakly_canonical(right, right_error);
+    const auto canonical_left = support::native_fs::weakly_canonical(left, left_error);
+    const auto canonical_right = support::native_fs::weakly_canonical(right, right_error);
     return !left_error && !right_error
         && source_path_key(canonical_left) == source_path_key(canonical_right);
 }
@@ -586,7 +587,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       : "systemverilog";
   source.standard = input.standard;
   source.standard_revision = input.standard_revision;
-  std::ifstream stream(input.path, std::ios::binary);
+  auto stream = support::native_fs::open_ifstream(input.path, std::ios::binary);
   if (!stream) {
       snapshot.result.diagnostics.push_back({
           frontend::DiagnosticSeverity::Error,

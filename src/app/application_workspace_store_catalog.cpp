@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_sqlite.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <map>
@@ -22,8 +23,8 @@ public:
         if (retained_)
             return;
         std::error_code code;
-        std::filesystem::remove(path_, code);
-        std::filesystem::remove(path_.parent_path() / "library.sqlite3-journal", code);
+        support::native_fs::remove(path_, code);
+        support::native_fs::remove(path_.parent_path() / "library.sqlite3-journal", code);
     }
 
     void retain() { retained_ = true; }
@@ -217,7 +218,9 @@ std::optional<LibraryCatalog> load_catalog(const LibraryLocation& location,
     const bool create, std::string& error)
 {
     std::error_code code;
-    if (create && !std::filesystem::exists(location.directory / "library.sqlite3", code) && !code) {
+    if (create
+        && !support::native_fs::exists(location.directory / "library.sqlite3", code)
+        && !code) {
         LibraryCatalog empty { location, { } };
         if (save_catalog(empty, error))
             return empty;
@@ -259,7 +262,8 @@ bool save_catalog(const LibraryCatalog& catalog, std::string& error)
         }
     }
     std::error_code code;
-    const bool exists = std::filesystem::exists(catalog.location.directory / "library.sqlite3", code);
+    const bool exists = support::native_fs::exists(
+        catalog.location.directory / "library.sqlite3", code);
     if (code) {
         error = "cannot inspect library catalog before publication: " + code.message();
         return false;

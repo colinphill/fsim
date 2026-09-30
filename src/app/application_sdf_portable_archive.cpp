@@ -2,6 +2,7 @@
 #include "fsim/app/sdf_portable_archive.hpp"
 
 #include "fsim/support/bounded_bytes.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -611,7 +612,8 @@ SdfPortableArchiveDecodeResult load_sdf_library_archive(
             "mapped library does not contain a compatible SDF annotation");
         return result;
     }
-    std::ifstream input(library_directory / unit->artifact, std::ios::binary);
+    auto input = support::native_fs::open_ifstream(
+        library_directory / unit->artifact, std::ios::binary);
     if (!input) {
         diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-003",
             "mapped library SDF annotation payload cannot be opened");

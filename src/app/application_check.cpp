@@ -8,6 +8,7 @@
 #include "fsim/frontend/class_inheritance.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app {
@@ -333,7 +334,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
           ? manifest_path
           : config.base_directory / manifest_path;
       source.path = source.path.lexically_normal();
-      std::ifstream input{source.path, std::ios::binary};
+      auto input = support::native_fs::open_ifstream(source.path, std::ios::binary);
       if (!input) {
         diagnostics.error(
             "FSIM-FE-IO-001",

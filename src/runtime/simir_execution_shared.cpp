@@ -2,6 +2,7 @@
 #include "simir_execution_shared.hpp"
 
 #include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -256,7 +257,7 @@ namespace fsim::runtime::simir {
     auto candidate = requested.is_absolute()
         ? requested
         : working / requested;
-    candidate = std::filesystem::weakly_canonical(candidate, error);
+    candidate = support::native_fs::weakly_canonical(candidate, error);
     if (error || !vhdl_path_below_root(root, candidate)) {
         if (!error) {
             error = std::make_error_code(std::errc::permission_denied);

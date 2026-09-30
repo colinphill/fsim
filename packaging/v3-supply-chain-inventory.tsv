@@ -18,6 +18,7 @@ V3SUP-LLVM-MINGW-LICENSE	license	third_party/llvm-mingw-20260616/LICENSE	CI-WIND
 V3SUP-LLVM-MINGW-NOTICE	notice	third_party/llvm-mingw-20260616/NOTICE	CI-WINDOWS-RUNTIME
 V3SUP-LLVM-MINGW-SBOM	sbom	third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json	CI-WINDOWS-RUNTIME
 V3SUP-LLVM-MINGW-PROVENANCE	provenance	third_party/llvm-mingw-20260616/SOURCE_MANIFEST.txt	CI-WINDOWS-RUNTIME
+V3SUP-TCL-PATCHES	provenance	third_party/tcl-9.0.4/PATCHES.txt	WINDOWS-LONG-PATHS
 V3SUP-UVM-PROVENANCE	provenance	docs/uvm-source-provenance.md	B188-C17
 V3SUP-SOURCE-EXCLUSIONS	exclusion	packaging/source-package-exclusions.txt	B188-C17
 V3SUP-VHDL-INVENTORY	reference-audit	tests/feature_matrix/vhdl_2019_inventory.tsv	B188-C17

@@ -2,6 +2,7 @@
 #include "plugin_compiler_internal.hpp"
 #include "producer_fingerprint.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/systemc/accellera.hpp"
 #include "fsim/systemc/scv.hpp"
 
@@ -27,7 +28,7 @@ namespace {
         auto result = std::filesystem::path { FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH;
         }
 #endif
@@ -43,7 +44,7 @@ namespace {
         auto result = std::filesystem::path { FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH;
         }
 #endif
@@ -59,7 +60,7 @@ namespace {
         auto result = std::filesystem::path { FSIM_SCV_LIBRARY_PATH };
 #if defined(FSIM_INSTALLED_SCV_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_INSTALLED_SCV_LIBRARY_PATH;
         }
 #endif
@@ -92,7 +93,7 @@ namespace {
             = std::filesystem::path { FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH;
         }
 #endif
@@ -135,7 +136,7 @@ std::optional<std::string> plugin_host_fingerprint(
     auto header_directory = std::filesystem::path { FSIM_SYSTEMC_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
     std::error_code header_error;
-    if (!std::filesystem::is_directory(header_directory, header_error)) {
+    if (!support::native_fs::is_directory(header_directory, header_error)) {
         header_directory = FSIM_SYSTEMC_INSTALLED_HEADER_PATH;
     }
 #endif
@@ -147,7 +148,7 @@ std::optional<std::string> plugin_host_fingerprint(
         = std::filesystem::path { FSIM_SYSTEMC_UPSTREAM_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH)
     std::error_code upstream_header_error;
-    if (!std::filesystem::is_directory(
+    if (!support::native_fs::is_directory(
             upstream_header_directory, upstream_header_error)) {
         upstream_header_directory = FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH;
     }
@@ -160,7 +161,7 @@ std::optional<std::string> plugin_host_fingerprint(
     auto scv_header_directory = std::filesystem::path { FSIM_SCV_HEADER_PATH };
 #if defined(FSIM_INSTALLED_SCV_HEADER_PATH)
     std::error_code scv_header_error;
-    if (!std::filesystem::is_directory(
+    if (!support::native_fs::is_directory(
             scv_header_directory, scv_header_error)) {
         scv_header_directory = FSIM_INSTALLED_SCV_HEADER_PATH;
     }
@@ -256,7 +257,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     auto header_directory = std::filesystem::path { FSIM_SYSTEMC_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
     std::error_code header_error;
-    if (!std::filesystem::is_directory(header_directory, header_error)) {
+    if (!support::native_fs::is_directory(header_directory, header_error)) {
         header_directory = FSIM_SYSTEMC_INSTALLED_HEADER_PATH;
     }
 #endif
@@ -268,7 +269,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
         = std::filesystem::path { FSIM_SYSTEMC_UPSTREAM_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH)
     std::error_code upstream_header_error;
-    if (!std::filesystem::is_directory(
+    if (!support::native_fs::is_directory(
             upstream_header_directory, upstream_header_error)) {
         upstream_header_directory = FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH;
     }
@@ -281,7 +282,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     auto scv_header_directory = std::filesystem::path { FSIM_SCV_HEADER_PATH };
 #if defined(FSIM_INSTALLED_SCV_HEADER_PATH)
     std::error_code scv_header_error;
-    if (!std::filesystem::is_directory(
+    if (!support::native_fs::is_directory(
             scv_header_directory, scv_header_error)) {
         scv_header_directory = FSIM_INSTALLED_SCV_HEADER_PATH;
     }
@@ -318,7 +319,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
                 absolute);
             return std::nullopt;
         }
-        if (!std::filesystem::is_regular_file(absolute, error)) {
+        if (!support::native_fs::is_regular_file(absolute, error)) {
             const auto detail = error ? ": " + error.message() : std::string { };
             report_error(
                 diagnostics,
@@ -529,7 +530,7 @@ PluginCompileResult compile_plugin(
 
     const auto cache_root = plan->library_path.parent_path().parent_path().parent_path().parent_path();
     const auto lock_directory = cache_root / "locks";
-    std::filesystem::create_directories(lock_directory, error);
+    support::native_fs::create_directories(lock_directory, error);
     if (error) {
         report_error(
             diagnostics,
@@ -557,7 +558,7 @@ PluginCompileResult compile_plugin(
         return result;
     }
 
-    std::filesystem::create_directories(plan->library_path.parent_path(), error);
+    support::native_fs::create_directories(plan->library_path.parent_path(), error);
     if (error) {
         report_error(
             diagnostics,
@@ -609,7 +610,7 @@ PluginCompileResult compile_plugin(
                 "FSIM-SC-C007",
                 "SystemC compiler process failed after launch: "
                     + process.execution_error);
-            std::filesystem::remove(plan->build_path, error);
+            support::native_fs::remove(plan->build_path, error);
             return result;
         }
         if (process.exit_code == 0) {
@@ -625,11 +626,11 @@ PluginCompileResult compile_plugin(
             diagnostic.notes.push_back({ "compiler output:\n" + process.output, { } });
         }
         diagnostics.report(std::move(diagnostic));
-        std::filesystem::remove(plan->build_path, error);
+        support::native_fs::remove(plan->build_path, error);
         return result;
     }
-    if (!std::filesystem::is_regular_file(plan->build_path, error)
-        || std::filesystem::file_size(plan->build_path, error) == 0) {
+    if (!support::native_fs::is_regular_file(plan->build_path, error)
+        || support::native_fs::file_size(plan->build_path, error) == 0) {
         report_error(
             diagnostics,
             "FSIM-SC-C007",
@@ -659,10 +660,10 @@ PluginCompileResult compile_plugin(
                     { } });
             diagnostics.report(std::move(diagnostic));
 
-            std::filesystem::remove(plan->build_path, error);
+            support::native_fs::remove(plan->build_path, error);
             error.clear();
             for (const auto& intermediate : plan->intermediate_paths) {
-                std::filesystem::remove(intermediate, error);
+                support::native_fs::remove(intermediate, error);
                 error.clear();
             }
             return result;
@@ -672,7 +673,7 @@ PluginCompileResult compile_plugin(
         return result;
     }
     for (const auto& intermediate : plan->intermediate_paths) {
-        std::filesystem::remove(intermediate, error);
+        support::native_fs::remove(intermediate, error);
         error.clear();
     }
 

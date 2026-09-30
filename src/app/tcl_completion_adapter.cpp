@@ -6,6 +6,7 @@
 
 #include "application_workspace_store.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <tcl.h>
@@ -678,25 +679,26 @@ namespace {
         }
         std::error_code error;
         const fs::directory_iterator end;
-        fs::directory_iterator iterator {
-            directory, fs::directory_options::skip_permission_denied, error
-        };
+        auto iterator = fsim::support::native_fs::directory_iterator(
+            directory, fs::directory_options::skip_permission_denied, error);
         std::size_t entry_count = 0U;
         while (!error && iterator != end && entry_count < kMaximumDirectoryEntries
             && result.owned_paths.size() < kMaximumPathItems) {
             const auto entry = *iterator;
-            const auto name = fsim::support::path_to_utf8(entry.path().filename());
+            const auto entry_path = fsim::support::native_fs::ordinary_entry_path(
+                directory, entry.path());
+            const auto name = fsim::support::path_to_utf8(entry_path.filename());
             const auto status = entry.symlink_status(error);
-            if (!error && !fs::is_symlink(status)) {
-                if (fs::is_directory(status)) {
+            if (!error && !fsim::support::native_fs::is_symlink(status)) {
+                if (fsim::support::native_fs::is_directory(status)) {
                     if (!should_skip_directory(name)) {
-                        add_path(result, entry.path(), root, true);
+                        add_path(result, entry_path, root, true);
                         if (visited.size() + next_directories.size() < kMaximumPathDirectories) {
-                            next_directories.push_back(entry.path());
+                            next_directories.push_back(entry_path);
                         }
                     }
-                } else if (fs::is_regular_file(status)) {
-                    add_path(result, entry.path(), root, false);
+                } else if (fsim::support::native_fs::is_regular_file(status)) {
+                    add_path(result, entry_path, root, false);
                 }
             }
             if (!error) {
@@ -924,18 +926,18 @@ namespace {
 
         const auto snapshot_directory = store.managed_directory() / "snapshots";
         std::error_code code;
-        if (!fs::is_directory(snapshot_directory, code) || code) {
+        if (!fsim::support::native_fs::is_directory(snapshot_directory, code) || code) {
             return;
         }
-        fs::directory_iterator iterator {
-            snapshot_directory, fs::directory_options::skip_permission_denied, code
-        };
+        auto iterator = fsim::support::native_fs::directory_iterator(
+            snapshot_directory, fs::directory_options::skip_permission_denied, code);
         const fs::directory_iterator end;
         std::size_t count = 0U;
         while (!code && iterator != end && count < kMaximumSnapshots) {
             const auto name = fsim::support::path_to_utf8(iterator->path().filename());
             const auto status = iterator->symlink_status(code);
-            if (!code && fs::is_directory(status) && !fs::is_symlink(status)) {
+            if (!code && fsim::support::native_fs::is_directory(status)
+                && !fsim::support::native_fs::is_symlink(status)) {
                 const auto snapshot = store.read_snapshot(name, error);
                 if (snapshot) {
                     append_item(

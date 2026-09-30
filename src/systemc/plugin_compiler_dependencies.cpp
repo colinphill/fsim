@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::systemc::plugin_detail {
@@ -31,7 +32,7 @@ DependencyScratchDirectory::DependencyScratchDirectory(DependencyScratchDirector
 
 DependencyScratchDirectory::~DependencyScratchDirectory()  {
         std::error_code ignored;
-        std::filesystem::remove_all(path_, ignored);
+        support::native_fs::remove_all(path_, ignored);
     }
 
 [[nodiscard]] const std::filesystem::path& DependencyScratchDirectory::path() const noexcept  {
@@ -48,7 +49,7 @@ create_dependency_scratch_directory(
     if (error) {
         return std::nullopt;
     }
-    std::filesystem::create_directories(root, error);
+    support::native_fs::create_directories(root, error);
     if (error) {
         return std::nullopt;
     }
@@ -63,7 +64,7 @@ create_dependency_scratch_directory(
             + "-" + std::to_string(serial);
         const auto candidate = root / name;
         error.clear();
-        if (std::filesystem::create_directory(candidate, error)) {
+        if (support::native_fs::create_directory(candidate, error)) {
             return DependencyScratchDirectory{candidate};
         }
         if (error) {
@@ -591,7 +592,7 @@ private:
     std::error_code error;
     std::unordered_set<std::string> source_names;
     for (const auto& source : sources) {
-        auto normalized = std::filesystem::weakly_canonical(source, error);
+        auto normalized = support::native_fs::weakly_canonical(source, error);
         if (error) {
             error.clear();
             normalized = source.lexically_normal();

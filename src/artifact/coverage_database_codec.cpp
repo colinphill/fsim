@@ -2,6 +2,7 @@
 #include "fsim/artifact/coverage_database_codec.hpp"
 
 #include "fsim/support/bounded_bytes.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -703,7 +704,7 @@ CoverageDatabaseFileResult write_coverage_database_atomically(
         return { CoverageDatabaseCodecError::IoFailure };
     }
     if (!path.parent_path().empty()) {
-        std::filesystem::create_directories(path.parent_path(), error);
+        support::native_fs::create_directories(path.parent_path(), error);
         if (error) {
             return { CoverageDatabaseCodecError::IoFailure };
         }
@@ -712,31 +713,32 @@ CoverageDatabaseFileResult write_coverage_database_atomically(
     temporary += ".fsim-tmp";
     auto backup = path;
     backup += ".fsim-old";
-    const auto destination_exists = std::filesystem::exists(path, error);
+    const auto destination_exists = support::native_fs::exists(path, error);
     if (error) {
         return { CoverageDatabaseCodecError::IoFailure };
     }
-    const auto backup_exists = std::filesystem::exists(backup, error);
+    const auto backup_exists = support::native_fs::exists(backup, error);
     if (error) {
         return { CoverageDatabaseCodecError::IoFailure };
     }
     if (!destination_exists && backup_exists) {
-        std::filesystem::rename(backup, path, error);
+        support::native_fs::rename(backup, path, error);
         if (error) {
             return { CoverageDatabaseCodecError::AtomicReplaceFailure };
         }
     } else if (backup_exists) {
-        std::filesystem::remove(backup, error);
+        support::native_fs::remove(backup, error);
         if (error) {
             return { CoverageDatabaseCodecError::IoFailure };
         }
     }
-    std::filesystem::remove(temporary, error);
+    support::native_fs::remove(temporary, error);
     if (error) {
         return { CoverageDatabaseCodecError::IoFailure };
     }
     {
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        auto output = support::native_fs::open_ofstream(
+            temporary, std::ios::binary | std::ios::trunc);
         if (!output) {
             return { CoverageDatabaseCodecError::IoFailure };
         }
@@ -744,33 +746,33 @@ CoverageDatabaseFileResult write_coverage_database_atomically(
             static_cast<std::streamsize>(encoded.bytes.size()));
         if (!output) {
             output.close();
-            std::filesystem::remove(temporary, error);
+            support::native_fs::remove(temporary, error);
             return { CoverageDatabaseCodecError::IoFailure };
         }
     }
-    const auto exists = std::filesystem::exists(path, error);
+    const auto exists = support::native_fs::exists(path, error);
     if (error) {
-        std::filesystem::remove(temporary, error);
+        support::native_fs::remove(temporary, error);
         return { CoverageDatabaseCodecError::IoFailure };
     }
     if (exists) {
-        std::filesystem::rename(path, backup, error);
+        support::native_fs::rename(path, backup, error);
         if (error) {
-            std::filesystem::remove(temporary, error);
+            support::native_fs::remove(temporary, error);
             return { CoverageDatabaseCodecError::AtomicReplaceFailure };
         }
     }
-    std::filesystem::rename(temporary, path, error);
+    support::native_fs::rename(temporary, path, error);
     if (error) {
         if (exists) {
             std::error_code restore_error;
-            std::filesystem::rename(backup, path, restore_error);
+            support::native_fs::rename(backup, path, restore_error);
         }
-        std::filesystem::remove(temporary, error);
+        support::native_fs::remove(temporary, error);
         return { CoverageDatabaseCodecError::AtomicReplaceFailure };
     }
     if (exists) {
-        std::filesystem::remove(backup, error);
+        support::native_fs::remove(backup, error);
         if (error) {
             return { CoverageDatabaseCodecError::IoFailure };
         }
@@ -784,7 +786,7 @@ CoverageDatabaseDecodeResult read_coverage_database(
 {
     try {
         std::error_code error;
-        const auto size = std::filesystem::file_size(path, error);
+        const auto size = support::native_fs::file_size(path, error);
         if (error) {
             return { { }, CoverageDatabaseCodecError::IoFailure };
         }
@@ -792,7 +794,7 @@ CoverageDatabaseDecodeResult read_coverage_database(
             || size > std::numeric_limits<std::size_t>::max()) {
             return { { }, CoverageDatabaseCodecError::ResourceLimit };
         }
-        std::ifstream input(path, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!input) {
             return { { }, CoverageDatabaseCodecError::IoFailure };
         }

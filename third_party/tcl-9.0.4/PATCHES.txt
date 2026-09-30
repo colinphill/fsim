@@ -1,0 +1,16 @@
+schema=fsim-tcl-patch-set-v1
+upstream_version=9.0.4
+upstream_archive_sha256=d0aed49230bc02a65c1e0229e65f34590a4b037ec40d546f32573b467f7551ea
+patch_count=1
+patch=tcl-windows-long-paths|2c991079e73e84ab1eec0aa259f07f6e807721fff8ca047949f067b9dabaf50e|patches/tcl-windows-long-paths.patch
+file=tcl-windows-long-paths|win/tclWinFCmd.c|5411e862bc78fa21c6d0e96febf569ec32071ab044c7c230477540655099f0ec|004784ec038335571aae028d6721650451d064c38cb8fe0bbd2bab0fa58662fe
+file=tcl-windows-long-paths|win/tclWinFile.c|7f331af6c728b0608f2fd78575ba08c1ab915416bda1da6d6fd0a3113ddb48e4|73467b211f46732e359e7445aed662bfbc1d3a8da96f97cf07399e1d52a57404
+file=tcl-windows-long-paths|win/tclWinInt.h|7d96637167e6b90fb88d06a4955634fb4229f30b6bd53b771829e6ead1ea2b2d|7f8c3b6fdd9d8ff669a83f0b0938d08e60c3242a99e4456a95a5c1625902d701
+platform_scope=windows-fetched-tcl
+application=patch-p1-fuzz0-between-input-and-output-digest-checks
+rationale=tcl-9.0.4-extends-only-absolute-paths-beyond-max-path-so-file-mkdir-fails-in-the-248-to-260-character-range-relative-paths-and-glob-patterns-are-never-extended-recursive-copy-and-delete-walk-ordinary-long-paths-and-the-cwd-and-device-helpers-use-max-path-buffers
+behavior=extend-native-paths-from-max-path-minus-12-resolve-long-relative-paths-extend-glob-patterns-and-tree-roots-size-cwd-and-device-buffers-replace-long-rename-targets-directly-and-report-extended-errors-in-ordinary-spelling
+positive_probe=file-mkdir-open-source-stat-mtime-attributes-copy-rename-overwrite-delete-glob-and-append-on-259-and-320-character-absolute-and-relative-paths
+upstream_tests=fCmd,winFCmd,winFile,fileName,fileSystem,cmdAH|total=17937|passed=17347|skipped=590|failed=0|unchanged-from-pristine
+unchanged=working-directory-changes-beyond-max-path-need-windows-long-path-support-and-exec-searches-remain-max-path-bounded
+removal_criteria=remove-when-an-official-governed-tcl-release-extends-these-paths-itself-and-the-long-path-probe-and-upstream-tests-pass-unpatched

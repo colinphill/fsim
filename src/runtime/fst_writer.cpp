@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/fst_compression.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
+#include "fsim/support/native_filesystem.hpp"
 
 #include <algorithm>
 #include <array>
@@ -728,7 +729,9 @@ namespace {
                     1U, std::memory_order_relaxed);
                 root_ = base / ("fsim-fst-" + std::to_string(clock_value)
                     + "-" + std::to_string(sequence));
-                if (CreateDirectoryW(root_.c_str(), &security_attributes)) {
+                if (CreateDirectoryW(
+                        support::path_for_native_io(root_).c_str(),
+                        &security_attributes)) {
                     return;
                 }
                 const auto create_error = GetLastError();
@@ -760,7 +763,7 @@ namespace {
         ~FstTempWorkspace()
         {
             std::error_code ignored;
-            std::filesystem::remove_all(root_, ignored);
+            support::native_fs::remove_all(root_, ignored);
         }
 
         FstTempWorkspace(const FstTempWorkspace&) = delete;
@@ -789,7 +792,7 @@ namespace {
         void remove_run(const std::uint64_t id) const
         {
             std::error_code ignored;
-            std::filesystem::remove(run_path(id), ignored);
+            support::native_fs::remove(run_path(id), ignored);
         }
 
     private:
@@ -991,7 +994,7 @@ namespace {
             throw std::logic_error("invalid FST temporary merge group");
         }
         const auto output_id = workspace.allocate_run_id();
-        std::fstream output(workspace.run_path(output_id),
+        auto output = support::native_fs::open_fstream(workspace.run_path(output_id),
             std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
         if (!output) {
             throw std::runtime_error(
@@ -1267,7 +1270,7 @@ struct FstWriter::Impl {
             throw std::length_error("FST temporary event count overflows");
         }
         const auto run_id = workspace->allocate_run_id();
-        std::ofstream run(workspace->run_path(run_id),
+        auto run = support::native_fs::open_ofstream(workspace->run_path(run_id),
             std::ios::binary | std::ios::trunc);
         if (!run) {
             throw std::runtime_error(
@@ -1593,7 +1596,7 @@ struct FstWriter::Impl {
         const std::filesystem::path& path,
         const std::uint64_t expected_size)
     {
-        std::ifstream input(path, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!input) {
             throw std::runtime_error(
                 "failed to read FST temporary work file");
@@ -1635,7 +1638,7 @@ struct FstWriter::Impl {
         ensure_workspace();
 
         const auto times_path = workspace->named_path("timestamps.bin");
-        std::ofstream times_output(
+        auto times_output = support::native_fs::open_ofstream(
             times_path, std::ios::binary | std::ios::trunc);
         if (!times_output) {
             throw std::runtime_error(
@@ -1752,7 +1755,7 @@ struct FstWriter::Impl {
         }
 
         const auto waves_path = workspace->named_path("waves.bin");
-        std::ofstream waves_output(
+        auto waves_output = support::native_fs::open_ofstream(
             waves_path, std::ios::binary | std::ios::trunc);
         if (!waves_output) {
             throw std::runtime_error(

@@ -11,6 +11,7 @@
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/scv_artifact.hpp"
@@ -92,9 +93,9 @@ namespace {
         const std::string_view checksum,
         diagnostic::Engine& diagnostics)
     {
-        std::ifstream input(path, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         std::error_code size_error;
-        const auto file_size = std::filesystem::file_size(path, size_error);
+        const auto file_size = support::native_fs::file_size(path, size_error);
         if (!input || size_error
             || file_size > static_cast<std::uintmax_t>(
                 std::numeric_limits<std::streamsize>::max())) {
@@ -940,7 +941,7 @@ std::optional<BuiltProject> load_design_artifact(
     if (!runtime_size) {
         return std::nullopt;
     }
-    std::ifstream runtime_input(runtime_path, std::ios::binary);
+    auto runtime_input = support::native_fs::open_ifstream(runtime_path, std::ios::binary);
     if (!runtime_input) {
         diagnostics.error("FSIM-ART-0014",
             "cannot open .fsimdesign payload: "
@@ -1266,11 +1267,13 @@ std::optional<ArtifactInspection> inspect_artifact(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics)
 {
-    const auto object_metadata = std::filesystem::exists(directory / artifact::kObjectMetadataFilename);
-    const auto design_metadata = std::filesystem::exists(directory / artifact::kDesignMetadataFilename);
-    const auto systemc_object_metadata = std::filesystem::exists(
+    const auto object_metadata = support::native_fs::exists(
+        directory / artifact::kObjectMetadataFilename);
+    const auto design_metadata = support::native_fs::exists(
+        directory / artifact::kDesignMetadataFilename);
+    const auto systemc_object_metadata = support::native_fs::exists(
         directory / systemc::kIncrementalObjectMetadataFilename);
-    const auto systemc_plugin_metadata = std::filesystem::exists(
+    const auto systemc_plugin_metadata = support::native_fs::exists(
         directory / systemc::kIncrementalPluginMetadataFilename);
     const auto metadata_count = static_cast<unsigned>(object_metadata)
         + static_cast<unsigned>(design_metadata)
@@ -1540,7 +1543,7 @@ struct AotReceipt {
     const auto cache = aot_receipt_cache(built.cache_path);
     const auto path = cache.path_for(context.key);
     std::error_code size_error;
-    const auto bytes = std::filesystem::file_size(path, size_error);
+    const auto bytes = support::native_fs::file_size(path, size_error);
     if (!size_error && bytes > kMaximumAotReceiptBytes) {
         diagnostics.warning("FSIM-AOT-002",
             "ignoring an oversized native AOT receipt");

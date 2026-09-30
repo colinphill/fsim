@@ -5,6 +5,7 @@
 #include "path_validation.hpp"
 #include "tree_permissions.hpp"
 #include "fsim/support/bounded_bytes.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -398,20 +399,21 @@ class StagingCleanup {
   ~StagingCleanup() {
     if (!path_.empty()) {
       std::error_code error;
-      for (std::filesystem::recursive_directory_iterator iterator(
-               path_, error), end;
+      for (auto iterator =
+               support::native_fs::recursive_directory_iterator(path_, error),
+           end = std::filesystem::recursive_directory_iterator{};
            !error && iterator != end;
            iterator.increment(error)) {
-        std::filesystem::permissions(
+        support::native_fs::permissions(
             iterator->path(), std::filesystem::perms::owner_all,
             std::filesystem::perm_options::add, error);
         error.clear();
       }
-      std::filesystem::permissions(
+      support::native_fs::permissions(
           path_, std::filesystem::perms::owner_all,
           std::filesystem::perm_options::add, error);
       error.clear();
-      std::filesystem::remove_all(path_, error);
+      support::native_fs::remove_all(path_, error);
     }
   }
   void release() noexcept { path_.clear(); }
@@ -425,7 +427,7 @@ bool write_file(
     const std::string_view bytes,
     diagnostic::Engine& diagnostics) {
   std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
+  support::native_fs::create_directories(path.parent_path(), error);
   if (error) {
     fsim::artifact::error(
         diagnostics, kIoCode,
@@ -433,7 +435,7 @@ bool write_file(
         support::path_to_utf8(path));
     return false;
   }
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
   output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
   if (!output) {
     fsim::artifact::error(
@@ -704,7 +706,7 @@ std::optional<ObjectMetadata> load_object_metadata(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics) {
   const auto path = directory / kObjectMetadataFilename;
-  std::ifstream input(path, std::ios::binary);
+  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
   if (!input) {
     error(
         diagnostics, kIoCode, "cannot open .fsimobj metadata",
@@ -733,7 +735,7 @@ bool publish_object(
     return false;
   }
   std::error_code exists_error;
-  if (std::filesystem::exists(destination, exists_error) || exists_error) {
+  if (support::native_fs::exists(destination, exists_error) || exists_error) {
     error(
         diagnostics, kIoCode,
         "object output already exists or cannot be inspected",
@@ -810,7 +812,7 @@ bool publish_object(
   const auto parent = destination.parent_path().empty()
       ? std::filesystem::path{"."} : destination.parent_path();
   std::error_code parent_error;
-  std::filesystem::create_directories(parent, parent_error);
+  support::native_fs::create_directories(parent, parent_error);
   if (parent_error) {
     error(
         diagnostics, kIoCode,
@@ -820,7 +822,7 @@ bool publish_object(
   const auto staging = staging_path(destination);
   StagingCleanup cleanup{staging};
   std::error_code stage_error;
-  if (!std::filesystem::create_directory(staging, stage_error) || stage_error) {
+  if (!support::native_fs::create_directory(staging, stage_error) || stage_error) {
     error(
         diagnostics, kIoCode,
         "cannot create object staging directory: " + stage_error.message());
@@ -837,7 +839,7 @@ bool publish_object(
     return false;
   }
   std::error_code install_error;
-  std::filesystem::rename(staging, destination, install_error);
+  support::native_fs::rename(staging, destination, install_error);
   if (install_error) {
     error(
         diagnostics, kIoCode,

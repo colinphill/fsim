@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_sqlite.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <limits>
@@ -54,15 +55,16 @@ bool Database::open(const LibraryLocation& location, const bool write, std::stri
     }
     const auto path = location.directory / "library.sqlite3";
     std::error_code code;
-    if (std::filesystem::exists(path, code)) {
-        const auto size = std::filesystem::file_size(path, code);
+    if (support::native_fs::exists(path, code)) {
+        const auto size = support::native_fs::file_size(path, code);
         if (code || size > 256U * 1024U * 1024U) {
             error = "workspace library catalog exceeds its size limit";
             return false;
         }
     }
     const int flags = write ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : SQLITE_OPEN_READONLY;
-    if (sqlite3_open_v2(support::path_to_utf8(path).c_str(), &handle,
+    // SQLite's Windows VFS only widens drive paths and leaves '/' in place.
+    if (sqlite3_open_v2(support::native_fs::utf8_for_native_io(path).c_str(), &handle,
             flags | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_NOFOLLOW, nullptr) != SQLITE_OK) {
         database_error(*this, error);
         return false;

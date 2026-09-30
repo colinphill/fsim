@@ -7,6 +7,7 @@
 #include "fsim/elaboration/coverage_external_exclusions.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/coverage_source_identity.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
@@ -69,7 +70,7 @@ namespace {
                 backing = root / backing;
             }
             std::error_code io_error;
-            const auto bytes = std::filesystem::file_size(backing, io_error);
+            const auto bytes = support::native_fs::file_size(backing, io_error);
             if (io_error || bytes > (1U << 30U)
                 || bytes > (1U << 30U) - total_source_bytes) {
                 diagnostics.error("FSIM-COV-008",
@@ -78,7 +79,7 @@ namespace {
                 return std::nullopt;
             }
             total_source_bytes += bytes;
-            std::ifstream input { backing, std::ios::binary };
+            auto input = support::native_fs::open_ifstream(backing, std::ios::binary);
             std::string contents(static_cast<std::size_t>(bytes), '\0');
             input.read(contents.data(),
                 static_cast<std::streamsize>(contents.size()));

@@ -4,6 +4,7 @@
 #include "../artifact/tree_permissions.hpp"
 #include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/bounded_bytes.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
@@ -500,7 +501,7 @@ std::optional<std::string> read_file(
     const std::filesystem::path& path,
     diagnostic::Engine& diagnostics,
     const std::string_view description) {
-  std::ifstream input(path, std::ios::binary);
+  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
   if (!input) {
     report(
         diagnostics, kIoCode,
@@ -534,18 +535,20 @@ class Cleanup {
       return;
     }
     std::error_code error;
-    for (std::filesystem::recursive_directory_iterator iterator(path_, error), end;
+    for (auto iterator =
+             support::native_fs::recursive_directory_iterator(path_, error),
+         end = std::filesystem::recursive_directory_iterator{};
          !error && iterator != end; iterator.increment(error)) {
-      std::filesystem::permissions(
+      support::native_fs::permissions(
           iterator->path(), std::filesystem::perms::owner_all,
           std::filesystem::perm_options::add, error);
       error.clear();
     }
-    std::filesystem::permissions(
+    support::native_fs::permissions(
         path_, std::filesystem::perms::owner_all,
         std::filesystem::perm_options::add, error);
     error.clear();
-    std::filesystem::remove_all(path_, error);
+    support::native_fs::remove_all(path_, error);
   }
   void release() noexcept { path_.clear(); }
 
@@ -558,7 +561,7 @@ bool write_file(
     const std::string_view bytes,
     diagnostic::Engine& diagnostics) {
   std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
+  support::native_fs::create_directories(path.parent_path(), error);
   if (error) {
     report(
         diagnostics, kIoCode,
@@ -566,7 +569,7 @@ bool write_file(
         support::path_to_utf8(path));
     return false;
   }
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
   output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
   if (!output) {
     report(
@@ -603,7 +606,7 @@ bool publish(
     return false;
   }
   std::error_code error;
-  if (std::filesystem::exists(destination, error) || error) {
+  if (support::native_fs::exists(destination, error) || error) {
     report(
         diagnostics, kIoCode,
         "native artifact output already exists or cannot be inspected",
@@ -612,7 +615,7 @@ bool publish(
   }
   const auto parent = destination.parent_path().empty()
       ? std::filesystem::path{"."} : destination.parent_path();
-  std::filesystem::create_directories(parent, error);
+  support::native_fs::create_directories(parent, error);
   if (error) {
     report(
         diagnostics, kIoCode,
@@ -622,13 +625,13 @@ bool publish(
   }
   const auto staging = staging_path(destination);
   Cleanup cleanup{staging};
-  if (!std::filesystem::create_directory(staging, error) || error
+  if (!support::native_fs::create_directory(staging, error) || error
       || !write_file(staging / payload_name, payload, diagnostics)
       || !write_file(staging / metadata_name, metadata, diagnostics)
       || !make_read_only(staging, diagnostics)) {
     return false;
   }
-  std::filesystem::rename(staging, destination, error);
+  support::native_fs::rename(staging, destination, error);
   if (error) {
     report(
         diagnostics, kIoCode,

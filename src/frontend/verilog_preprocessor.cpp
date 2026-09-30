@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/preprocessor.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "verilog_preprocessor_internal.hpp"
 
@@ -338,7 +339,7 @@ namespace {
         [[nodiscard]] std::optional<std::string> read_file(
             const std::filesystem::path& path)
         {
-            std::ifstream stream(path, std::ios::binary);
+            auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
             if (!stream) {
                 return std::nullopt;
             }
@@ -1259,7 +1260,7 @@ namespace {
                 const auto local = normalized_path(
                     include_stack_.back().parent_path()
                     / fsim::support::path_from_utf8(requested));
-                if (std::filesystem::is_regular_file(local, error) && !error) {
+                if (support::native_fs::is_regular_file(local, error) && !error) {
                     return local;
                 }
                 error.clear();
@@ -1267,7 +1268,7 @@ namespace {
             for (const auto& directory : include_directories_) {
                 const auto candidate = normalized_path(
                     directory / fsim::support::path_from_utf8(requested));
-                if (std::filesystem::is_regular_file(candidate, error) && !error) {
+                if (support::native_fs::is_regular_file(candidate, error) && !error) {
                     return candidate;
                 }
                 error.clear();

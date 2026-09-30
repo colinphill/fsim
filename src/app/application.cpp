@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
+
 namespace fsim::app::application_detail {
 
 BinaryPayloadReadResult read_binary_payload(
     const std::filesystem::path& path,
     const std::optional<std::uintmax_t> maximum_bytes)
 {
-    std::ifstream input { path, std::ios::binary };
+    auto input = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!input) {
         return { std::nullopt, BinaryPayloadReadFailure::open };
     }
     std::error_code size_error;
-    const auto file_size = std::filesystem::file_size(path, size_error);
+    const auto file_size = support::native_fs::file_size(path, size_error);
     const bool budget_exceeded = !size_error && maximum_bytes
         && file_size > *maximum_bytes;
     if (size_error || budget_exceeded

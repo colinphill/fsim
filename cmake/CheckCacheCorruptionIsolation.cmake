@@ -84,7 +84,7 @@ endfunction()
 
 fsim_require_cache_tokens(src/compiler/object_cache.cpp
   "kMaximumCacheEntryBytes" "std::errc::file_too_large"
-  "MoveFileExW" "std::filesystem::rename" ".lock" ".tmp.")
+  "MoveFileExW" "support::native_fs::rename" ".lock" ".tmp.")
 fsim_require_cache_tokens(tests/compiler/cache_test.cpp
   "illegal_byte_sequence" "maximum_cache_entry_bytes"
   "std::launch::async" "read_only" "uppercase_key")

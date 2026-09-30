@@ -402,6 +402,10 @@ function(fsim_configure_command_entrypoint target)
     # GNU-compatible Windows CRTs select the wide-character startup object
     # explicitly; MSVC discovers wmain without an additional linker option.
     target_link_options(${target} PRIVATE -municode)
+    # MSVC-like linkers generate their own manifest, so only GNU-compatible
+    # links embed the long-path manifest as a resource.
+    target_sources(${target} PRIVATE
+      "${PROJECT_SOURCE_DIR}/src/platform/windows_long_paths.rc")
   endif()
 endfunction()
 

@@ -2,6 +2,7 @@
 #include "fsim/project/project.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -1794,7 +1795,7 @@ std::vector<std::filesystem::path> expand_pattern(
   const auto pattern_text = fsim::support::path_to_utf8(pattern);
   if (!has_glob(pattern_text)) {
     std::error_code error;
-    if (!std::filesystem::is_regular_file(pattern, error)) {
+    if (!support::native_fs::is_regular_file(pattern, error)) {
       diagnostics.error(
           std::string(kSourceCode),
           "source file does not exist: "
@@ -1808,7 +1809,7 @@ std::vector<std::filesystem::path> expand_pattern(
 
   const auto root = glob_root(pattern);
   std::error_code error;
-  if (!std::filesystem::is_directory(root, error)) {
+  if (!support::native_fs::is_directory(root, error)) {
     diagnostics.error(
         std::string(kSourceCode),
         "source glob root does not exist: "
@@ -1817,16 +1818,15 @@ std::vector<std::filesystem::path> expand_pattern(
     return result;
   }
 
-  std::filesystem::recursive_directory_iterator iterator(
+  auto iterator = support::native_fs::recursive_directory_iterator(
       root, std::filesystem::directory_options::skip_permission_denied, error);
   const std::filesystem::recursive_directory_iterator end;
   while (!error && iterator != end) {
+    const auto entry = support::native_fs::ordinary_entry_path(
+        root, iterator->path()).lexically_normal();
     if (iterator->is_regular_file(error) &&
-        glob_match(
-            pattern_text,
-            fsim::support::path_to_utf8(
-                iterator->path().lexically_normal()))) {
-      result.push_back(iterator->path().lexically_normal());
+        glob_match(pattern_text, fsim::support::path_to_utf8(entry))) {
+      result.push_back(entry);
     }
     iterator.increment(error);
   }
@@ -1906,7 +1906,7 @@ std::optional<Config> parse(
 std::optional<Config> load(
     const std::filesystem::path& manifest,
     diagnostic::Engine& diagnostics) {
-  std::ifstream stream(manifest, std::ios::binary);
+  auto stream = support::native_fs::open_ifstream(manifest, std::ios::binary);
   if (!stream) {
     diagnostics.error(
         std::string(kIoCode),

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
+
 namespace fsim::app {
 
 [[nodiscard]] std::filesystem::path Simulation::Impl::coverage_database_file(
@@ -29,7 +31,7 @@ namespace fsim::app {
 void Simulation::Impl::load_coverage_database(const std::filesystem::path& path)
 {
     std::error_code error;
-    const auto bytes = std::filesystem::file_size(path, error);
+    const auto bytes = support::native_fs::file_size(path, error);
     if (error) {
         throw std::runtime_error {
             "cannot inspect coverage database: " + error.message()
@@ -40,7 +42,7 @@ void Simulation::Impl::load_coverage_database(const std::filesystem::path& path)
             "coverage database exceeds the governed file-size budget"
         };
     }
-    std::ifstream input(path, std::ios::binary);
+    auto input = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!input) {
         throw std::runtime_error { "cannot open coverage database" };
     }
@@ -88,7 +90,7 @@ void Simulation::Impl::save_coverage_database()
         };
     }
     std::error_code error;
-    std::filesystem::create_directories(
+    support::native_fs::create_directories(
         coverage_database_path->parent_path(), error);
     if (error) {
         throw std::runtime_error {
@@ -99,12 +101,12 @@ void Simulation::Impl::save_coverage_database()
     auto temporary = *coverage_database_path;
     temporary += ".fsim-tmp";
     {
-        std::ofstream output(
+        auto output = support::native_fs::open_ofstream(
             temporary, std::ios::binary | std::ios::trunc);
         output.write(contents->data(),
             static_cast<std::streamsize>(contents->size()));
         if (!output) {
-            std::filesystem::remove(temporary, error);
+            support::native_fs::remove(temporary, error);
             throw std::runtime_error {
                 "cannot write coverage database"
             };
@@ -112,50 +114,50 @@ void Simulation::Impl::save_coverage_database()
     }
     auto backup = *coverage_database_path;
     backup += ".fsim-old";
-    std::filesystem::remove(backup, error);
+    support::native_fs::remove(backup, error);
     if (error) {
-        std::filesystem::remove(temporary, error);
+        support::native_fs::remove(temporary, error);
         throw std::runtime_error {
             "cannot prepare coverage database replacement: "
             + error.message()
         };
     }
-    const auto had_existing = std::filesystem::exists(
+    const auto had_existing = support::native_fs::exists(
         *coverage_database_path, error);
     if (error) {
-        std::filesystem::remove(temporary, error);
+        support::native_fs::remove(temporary, error);
         throw std::runtime_error {
             "cannot inspect coverage database destination: "
             + error.message()
         };
     }
     if (had_existing) {
-        std::filesystem::rename(
+        support::native_fs::rename(
             *coverage_database_path, backup, error);
         if (error) {
-            std::filesystem::remove(temporary, error);
+            support::native_fs::remove(temporary, error);
             throw std::runtime_error {
                 "cannot preserve the previous coverage database: "
                 + error.message()
             };
         }
     }
-    std::filesystem::rename(
+    support::native_fs::rename(
         temporary, *coverage_database_path, error);
     if (error) {
         const auto publish_error = error.message();
         if (had_existing) {
             std::error_code restore_error;
-            std::filesystem::rename(
+            support::native_fs::rename(
                 backup, *coverage_database_path, restore_error);
         }
-        std::filesystem::remove(temporary, error);
+        support::native_fs::remove(temporary, error);
         throw std::runtime_error {
             "cannot publish coverage database: " + publish_error
         };
     }
     if (had_existing) {
-        std::filesystem::remove(backup, error);
+        support::native_fs::remove(backup, error);
     }
 }
 

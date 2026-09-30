@@ -2,6 +2,7 @@
 #include "fsim/cli/driver.hpp"
 
 #include "fsim/api.h"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/version.hpp"
 
@@ -410,7 +411,7 @@ namespace {
             }
             const auto path = absolute_normalized(input);
             std::error_code file_error;
-            if (!std::filesystem::is_regular_file(path, file_error)) {
+            if (!support::native_fs::is_regular_file(path, file_error)) {
                 argument_error(
                     diagnostics,
                     "source file does not exist: "

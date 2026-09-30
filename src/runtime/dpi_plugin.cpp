@@ -2,6 +2,7 @@
 #include "fsim/runtime/dpi_plugin.hpp"
 
 #include "fsim/platform/dynamic_library.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -375,7 +376,7 @@ provenance_systemverilog_dpi_plugin(
   add_strings(manifest.exported_symbols);
   const auto manifest_digest = support::Sha256::hex(manifest_hash.finish());
 
-  std::ifstream stream{artifact, std::ios::binary};
+  auto stream = support::native_fs::open_ifstream(artifact, std::ios::binary);
   if (!stream) {
     return {{}, SystemVerilogDpiPluginError::ArtifactRead,
         "cannot read DPI plug-in artifact"};

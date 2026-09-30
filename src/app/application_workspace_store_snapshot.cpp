@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app::workspace {
@@ -76,7 +77,7 @@ bool SnapshotTransaction::commit(std::string& error)
     const auto relative = std::filesystem::path { "revisions" } / impl_->artifact.filename();
     std::error_code code;
     if (!detail::safe_descendant(impl_->directory, relative, error)
-        || !std::filesystem::is_directory(impl_->artifact, code) || code) {
+        || !support::native_fs::is_directory(impl_->artifact, code) || code) {
         if (error.empty())
             error = "snapshot artifact was not published before commit";
         return false;
@@ -105,7 +106,7 @@ std::unique_ptr<SnapshotTransaction> Store::begin_snapshot(
         return nullptr;
     impl->artifact = *directory / "revisions" / (detail::new_revision() + ".fsimdesign");
     std::error_code code;
-    if (std::filesystem::exists(impl->artifact, code) || code) {
+    if (support::native_fs::exists(impl->artifact, code) || code) {
         error = "generated snapshot artifact path is unavailable";
         return nullptr;
     }
@@ -138,7 +139,7 @@ std::optional<SnapshotRecord> Store::read_snapshot(
         return std::nullopt;
     }
     std::error_code code;
-    if (!std::filesystem::is_directory(*directory / relative, code) || code) {
+    if (!support::native_fs::is_directory(*directory / relative, code) || code) {
         error = "snapshot artifact does not exist";
         return std::nullopt;
     }

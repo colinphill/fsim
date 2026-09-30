@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <cctype>
@@ -312,7 +313,7 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
                            .parent_path()
                     / path;
             }
-            std::ifstream input(path, std::ios::binary);
+            auto input = support::native_fs::open_ifstream(path, std::ios::binary);
             if (!input) {
                 report(
                     "FSIM-ELAB-VITALMEM-004",

@@ -3,6 +3,28 @@
 include(ExternalProject)
 include("${CMAKE_CURRENT_LIST_DIR}/FsimTclVersion.cmake")
 
+# Windows builds apply the governed patches in third_party/tcl-<version>/;
+# Tcl's Unix build never compiles the patched win/ sources.
+function(fsim_tcl_windows_patch_command git_root output_variable)
+  find_program(
+    FSIM_TCL_PATCH_EXECUTABLE
+    NAMES patch
+    HINTS "${git_root}/usr/bin"
+    REQUIRED
+  )
+  set(
+    ${output_variable}
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_TCL_VERSION=${FSIM_TCL_VERSION}"
+    "-DFSIM_TCL_SOURCE_SHA256=${FSIM_TCL_SOURCE_SHA256}"
+    "-DSOURCE_DIR=<SOURCE_DIR>"
+    "-DPATCH_EXECUTABLE=${FSIM_TCL_PATCH_EXECUTABLE}"
+    -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/PatchTcl.cmake"
+    PARENT_SCOPE
+  )
+endfunction()
+
 # Build the pinned Tcl release outside fsim's CMake graph when a system
 # development package is unavailable. Tcl's native Unix and Windows builds are
 # the supported upstream build paths, so this adapter deliberately keeps
@@ -60,12 +82,14 @@ function(fsim_add_fetched_tcl)
     endif()
     set(tcl_library "${tcl_install}/lib/${tcl_library_name}")
     set(tcl_optimization "OPTIMIZATIONS=/O2 /GS /GL-")
+    fsim_tcl_windows_patch_command("$ENV{ProgramFiles}/Git" tcl_patch_command)
     ExternalProject_Add(
       fsim_tcl_external
       URL "${tcl_url}"
       URL_HASH "SHA256=${FSIM_TCL_SOURCE_SHA256}"
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE
       SOURCE_DIR "${tcl_source}"
+      PATCH_COMMAND ${tcl_patch_command}
       CONFIGURE_COMMAND ""
       BUILD_COMMAND
         "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc
@@ -149,12 +173,16 @@ function(fsim_add_fetched_tcl)
       "-DTOOLCHAIN_BIN=${tcl_compiler_bin}"
       "-DJOBS=4"
     )
+    get_filename_component(tcl_git_root "${FSIM_GIT_BASH_EXECUTABLE}" DIRECTORY)
+    get_filename_component(tcl_git_root "${tcl_git_root}" DIRECTORY)
+    fsim_tcl_windows_patch_command("${tcl_git_root}" tcl_patch_command)
     ExternalProject_Add(
       fsim_tcl_external
       URL "${tcl_url}"
       URL_HASH "SHA256=${FSIM_TCL_SOURCE_SHA256}"
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE
       SOURCE_DIR "${tcl_source}"
+      PATCH_COMMAND ${tcl_patch_command}
       CONFIGURE_COMMAND
         "${CMAKE_COMMAND}" ${tcl_mingw_common_arguments}
         -DMODE=configure -P "${tcl_mingw_script}"

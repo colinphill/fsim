@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <limits>
@@ -78,7 +79,7 @@ namespace {
     return fsim::support::path_to_utf8(path.lexically_normal());
   }
   std::error_code error;
-  const auto canonical = std::filesystem::weakly_canonical(path, error);
+  const auto canonical = support::native_fs::weakly_canonical(path, error);
   return fsim::support::path_to_utf8(
       error ? path.lexically_normal() : canonical);
 }

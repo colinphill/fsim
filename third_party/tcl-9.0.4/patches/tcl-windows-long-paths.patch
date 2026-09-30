@@ -1,0 +1,443 @@
+--- a/win/tclWinFCmd.c
++++ b/win/tclWinFCmd.c
+@@ -105,6 +105,8 @@
+ 			    Tcl_DString *errorPtr);
+ static int		DoRenameFile(const WCHAR *nativeSrc,
+ 			    const WCHAR *dstPtr);
++static void		NativeErrorPath(const WCHAR *nativePath,
++			    Tcl_DString *errorPtr);
+ static int		TraversalCopy(const WCHAR *srcPtr, const WCHAR *dstPtr,
+ 			    int type, Tcl_DString *errorPtr);
+ static int		TraversalDelete(const WCHAR *srcPtr,
+@@ -155,6 +157,45 @@
+  *---------------------------------------------------------------------------
+  */
+ 
++/*
++ *---------------------------------------------------------------------------
++ *
++ * NativeErrorPath --
++ *
++ *	Fill errorPtr with the UTF-8 name of a native path for error
++ *	reporting. An extended-length path is reported in the ordinary
++ *	forward-slash spelling of the normalized path it came from.
++ *
++ *---------------------------------------------------------------------------
++ */
++
++static void
++NativeErrorPath(
++    const WCHAR *nativePath,
++    Tcl_DString *errorPtr)
++{
++    int extended = 1;
++    char *p;
++
++    Tcl_DStringInit(errorPtr);
++    if (wcsncmp(nativePath, L"\\\\?\\UNC\\", 8) == 0) {
++	TclDStringAppendLiteral(errorPtr, "//");
++	nativePath += 8;
++    } else if (wcsncmp(nativePath, L"\\\\?\\", 4) == 0) {
++	nativePath += 4;
++    } else {
++	extended = 0;
++    }
++    Tcl_WCharToUtfDString(nativePath, TCL_INDEX_NONE, errorPtr);
++    if (extended) {
++	for (p = Tcl_DStringValue(errorPtr); *p != '\0'; p++) {
++	    if (*p == '\\') {
++		*p = '/';
++	    }
++	}
++    }
++}
++
+ int
+ TclpObjRenameFile(
+     Tcl_Obj *srcPathPtr,
+@@ -298,17 +339,23 @@
+ 
+     srcAttr = GetFileAttributesW(nativeSrc);
+     dstAttr = GetFileAttributesW(nativeDst);
++
++    /*
++     * An extended-length path is not too long; its attributes are simply
++     * unavailable.
++     */
++
+     if (srcAttr == 0xFFFFFFFF) {
+-	if (GetFullPathNameW(nativeSrc, 0, NULL,
+-		NULL) >= MAX_PATH) {
++	if (wcsncmp(nativeSrc, L"\\\\?\\", 4) != 0
++		&& GetFullPathNameW(nativeSrc, 0, NULL, NULL) >= MAX_PATH) {
+ 	    errno = ENAMETOOLONG;
+ 	    return TCL_ERROR;
+ 	}
+ 	srcAttr = 0;
+     }
+     if (dstAttr == 0xFFFFFFFF) {
+-	if (GetFullPathNameW(nativeDst, 0, NULL,
+-		NULL) >= MAX_PATH) {
++	if (wcsncmp(nativeDst, L"\\\\?\\", 4) != 0
++		&& GetFullPathNameW(nativeDst, 0, NULL, NULL) >= MAX_PATH) {
+ 	    errno = ENAMETOOLONG;
+ 	    return TCL_ERROR;
+ 	}
+@@ -468,7 +515,20 @@
+ 
+ 		size = GetFullPathNameW(nativeDst, MAX_PATH,
+ 			tempBuf, &nativeRest);
+-		if ((size == 0) || (size > MAX_PATH) || (nativeRest == NULL)) {
++		if (size > MAX_PATH - 14) {
++		    /*
++		     * GetTempFileNameW cannot name a backup in a directory
++		     * this long, so replace the file directly.
++		     */
++
++		    if (MoveFileExW(nativeSrc, nativeDst,
++			    MOVEFILE_REPLACE_EXISTING) != FALSE) {
++			return TCL_OK;
++		    }
++		    Tcl_WinConvertError(GetLastError());
++		    return TCL_ERROR;
++		}
++		if ((size == 0) || (nativeRest == NULL)) {
+ 		    return TCL_ERROR;
+ 		}
+ 		nativeTmp = (WCHAR *) tempBuf;
+@@ -937,6 +997,13 @@
+     Tcl_UtfToWCharDString(TclGetString(normSrcPtr), TCL_INDEX_NONE, &srcString);
+     Tcl_UtfToWCharDString(TclGetString(normDestPtr), TCL_INDEX_NONE, &dstString);
+ 
++    /*
++     * Descendants of a short root may exceed MAX_PATH, so traverse from
++     * extended-length roots. Errors report the normalized spelling.
++     */
++
++    TclWinExtendNativePath(&srcString, 1);
++    TclWinExtendNativePath(&dstString, 1);
+     ret = TraverseWinTree(TraversalCopy, &srcString, &dstString, &ds);
+ 
+     Tcl_DStringFree(&srcString);
+@@ -1013,6 +1080,13 @@
+ 	if (normPtr != pathPtr) { Tcl_IncrRefCount(normPtr); }
+ 	Tcl_DStringInit(&native);
+ 	Tcl_UtfToWCharDString(TclGetString(normPtr), TCL_INDEX_NONE, &native);
++
++	/*
++	 * Descendants of a short root may exceed MAX_PATH. An ordinary long
++	 * root would report ENOENT, which "file delete" treats as success.
++	 */
++
++	TclWinExtendNativePath(&native, 1);
+ 	ret = DoRemoveDirectory(&native, recursive, &ds);
+ 	Tcl_DStringFree(&native);
+     } else {
+@@ -1139,9 +1213,8 @@
+     if (errorPtr != NULL) {
+ 	char *p;
+ 
+-	Tcl_DStringInit(errorPtr);
+-	p = Tcl_WCharToUtfDString(nativePath, TCL_INDEX_NONE, errorPtr);
+-	for (; *p; ++p) {
++	NativeErrorPath(nativePath, errorPtr);
++	for (p = Tcl_DStringValue(errorPtr); *p; ++p) {
+ 	    if (*p == '\\') {
+ 		*p = '/';
+ 	    }
+@@ -1356,8 +1429,7 @@
+     if (nativeErrfile != NULL) {
+ 	Tcl_WinConvertError(GetLastError());
+ 	if (errorPtr != NULL) {
+-	    Tcl_DStringInit(errorPtr);
+-	    Tcl_WCharToUtfDString(nativeErrfile, TCL_INDEX_NONE, errorPtr);
++	    NativeErrorPath(nativeErrfile, errorPtr);
+ 	}
+ 	result = TCL_ERROR;
+     }
+@@ -1421,8 +1493,7 @@
+      */
+ 
+     if (errorPtr != NULL) {
+-	Tcl_DStringInit(errorPtr);
+-	Tcl_WCharToUtfDString(nativeDst, TCL_INDEX_NONE, errorPtr);
++	NativeErrorPath(nativeDst, errorPtr);
+     }
+     return TCL_ERROR;
+ }
+@@ -1477,8 +1548,7 @@
+     }
+ 
+     if (errorPtr != NULL) {
+-	Tcl_DStringInit(errorPtr);
+-	Tcl_WCharToUtfDString(nativeSrc, TCL_INDEX_NONE, errorPtr);
++	NativeErrorPath(nativeSrc, errorPtr);
+     }
+     return TCL_ERROR;
+ }
+--- a/win/tclWinFile.c
++++ b/win/tclWinFile.c
+@@ -1041,7 +1041,16 @@
+ 	}
+ 
+ 	Tcl_DStringInit(&ds);
+-	native = Tcl_UtfToWCharDString(dirName, TCL_INDEX_NONE, &ds);
++	Tcl_UtfToWCharDString(dirName, TCL_INDEX_NONE, &ds);
++
++	/*
++	 * The normalized directory is absolute, and FindFirstFileW needs the
++	 * extended-length form beyond MAX_PATH. Otherwise a long directory
++	 * reports no such path, which would read as no matches.
++	 */
++
++	TclWinExtendNativePath(&ds, 0);
++	native = (const WCHAR *) Tcl_DStringValue(&ds);
+ 	if ((types == NULL) || (types->type != TCL_GLOB_TYPE_DIR)) {
+ 	    handle = FindFirstFileW(native, &data);
+ 	} else {
+@@ -1970,11 +1979,19 @@
+     Tcl_DString *bufferPtr)	/* Uninitialized or free DString filled with
+ 				 * name of current directory. */
+ {
+-    WCHAR buffer[MAX_PATH];
++    WCHAR *buffer;
+     char *p;
+     WCHAR *native;
++    DWORD size = GetCurrentDirectoryW(0, NULL);
+ 
+-    if (GetCurrentDirectoryW(MAX_PATH, buffer) == 0) {
++    /*
++     * A long-path-aware process may have a working directory beyond
++     * MAX_PATH.
++     */
++
++    buffer = (WCHAR *)Tcl_Alloc((size + 1) * sizeof(WCHAR));
++    if (size == 0 || GetCurrentDirectoryW(size + 1, buffer) == 0) {
++	Tcl_Free(buffer);
+ 	Tcl_WinConvertError(GetLastError());
+ 	if (interp != NULL) {
+ 	    Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+@@ -1995,6 +2012,7 @@
+     }
+     Tcl_DStringInit(bufferPtr);
+     Tcl_WCharToUtfDString(native, TCL_INDEX_NONE, bufferPtr);
++    Tcl_Free(buffer);
+ 
+     /*
+      * Convert to forward slashes for easier use in scripts.
+@@ -2197,13 +2215,34 @@
+ {
+     int dev;
+     Tcl_DString ds;
+-    WCHAR nativeFullPath[MAX_PATH];
++    WCHAR *nativeFullPath;
+     WCHAR *nativePart;
+     const char *fullPath;
++    DWORD fullLen = GetFullPathNameW(nativePath, 0, NULL, NULL);
+ 
+-    GetFullPathNameW(nativePath, MAX_PATH, nativeFullPath, &nativePart);
++    /*
++     * Size the buffer for paths beyond MAX_PATH, and classify an extended
++     * path like its ordinary spelling so its device number does not depend
++     * on the path length.
++     */
++
++    nativeFullPath = (WCHAR *)Tcl_Alloc((fullLen + 2) * sizeof(WCHAR));
++    if (fullLen == 0 || GetFullPathNameW(nativePath, fullLen + 1,
++	    nativeFullPath, &nativePart) == 0) {
++	nativeFullPath[0] = '\0';
++    }
+     Tcl_DStringInit(&ds);
+-    fullPath = Tcl_WCharToUtfDString(nativeFullPath, TCL_INDEX_NONE, &ds);
++    if (wcsncmp(nativeFullPath, L"\\\\?\\UNC\\", 8) == 0) {
++	nativeFullPath[6] = '\\';
++	fullPath = Tcl_WCharToUtfDString(nativeFullPath + 6, TCL_INDEX_NONE,
++		&ds);
++    } else if (wcsncmp(nativeFullPath, L"\\\\?\\", 4) == 0) {
++	fullPath = Tcl_WCharToUtfDString(nativeFullPath + 4, TCL_INDEX_NONE,
++		&ds);
++    } else {
++	fullPath = Tcl_WCharToUtfDString(nativeFullPath, TCL_INDEX_NONE, &ds);
++    }
++    Tcl_Free(nativeFullPath);
+ 
+     if ((fullPath[0] == '\\') && (fullPath[1] == '\\')) {
+ 	const char *p;
+@@ -2371,20 +2410,27 @@
+ TclpGetNativeCwd(
+     void *clientData)
+ {
+-    WCHAR buffer[MAX_PATH];
+-
+-    if (GetCurrentDirectoryW(MAX_PATH, buffer) == 0) {
++    WCHAR *buffer;
++    void *result;
++    DWORD size = GetCurrentDirectoryW(0, NULL);
++
++    buffer = (WCHAR *)Tcl_Alloc((size + 1) * sizeof(WCHAR));
++    if (size == 0 || GetCurrentDirectoryW(size + 1, buffer) == 0) {
++	Tcl_Free(buffer);
+ 	Tcl_WinConvertError(GetLastError());
+ 	return NULL;
+     }
+ 
+     if (clientData != NULL) {
+ 	if (wcscmp((const WCHAR *) clientData, buffer) == 0) {
++	    Tcl_Free(buffer);
+ 	    return clientData;
+ 	}
+     }
+ 
+-    return TclNativeDupInternalRep(buffer);
++    result = TclNativeDupInternalRep(buffer);
++    Tcl_Free(buffer);
++    return result;
+ }
+ 
+ int
+@@ -3146,11 +3192,14 @@
+      * and the path is larger than MAX_PATH chars, no Win32 API function can
+      * handle that unless it is prefixed with the extended path prefix. See:
+      * <https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file#maxpath>
++     * CreateDirectoryW already fails beyond MAX_PATH - 12 characters, and
++     * every deeper path passes through that range when "file mkdir" creates
++     * its parents, so extend from that length.
+      */
+ 
+     if (((str[0] >= 'A' && str[0] <= 'Z') || (str[0] >= 'a' && str[0] <= 'z'))
+ 	    && str[1] == ':') {
+-	if (wp == nativePathPtr && len > MAX_PATH
++	if (wp == nativePathPtr && len > MAX_PATH - 12
+ 		&& (str[2] == '\\' || str[2] == '/')) {
+ 	    memmove(wp + 4, wp, len * sizeof(WCHAR));
+ 	    memcpy(wp, L"\\\\?\\", 4 * sizeof(WCHAR));
+@@ -3163,7 +3212,7 @@
+ 	 */
+ 
+ 	wp += 2;
+-    } else if (wp == nativePathPtr && len > MAX_PATH
++    } else if (wp == nativePathPtr && len > MAX_PATH - 12
+ 	    && (str[0] == '\\' || str[0] == '/')
+ 	    && (str[1] == '\\' || str[1] == '/') && str[2] != '?') {
+ 	memmove(wp + 6, wp, len * sizeof(WCHAR));
+@@ -3185,10 +3234,110 @@
+ 	++wp;
+     }
+ 
++    /*
++     * A relative path resolves against the working directory, so its full
++     * path can exceed the limit although its own spelling does not. Resolve
++     * such a path and extend it like an absolute one. The filesystem epoch
++     * discards this cached representation when the working directory
++     * changes.
++     */
++
++    if (!(nativePathPtr[0] == '\\' && nativePathPtr[1] == '\\')
++	    && !(nativePathPtr[0] != '\0' && nativePathPtr[1] == ':')) {
++	DWORD fullLen = GetFullPathNameW(nativePathPtr, 0, NULL, NULL);
++
++	if (fullLen > MAX_PATH - 12) {
++	    WCHAR *extended = (WCHAR *)Tcl_Alloc((fullLen + 8) * sizeof(WCHAR));
++	    DWORD written = GetFullPathNameW(nativePathPtr, fullLen,
++		    extended + 4, NULL);
++
++	    if (written == 0 || written >= fullLen) {
++		Tcl_Free(extended);
++	    } else {
++		if (extended[4] == '\\' && extended[5] == '\\') {
++		    memmove(extended + 8, extended + 6,
++			    (written - 1) * sizeof(WCHAR));
++		    memcpy(extended, L"\\\\?\\UNC\\", 8 * sizeof(WCHAR));
++		} else {
++		    memcpy(extended, L"\\\\?\\", 4 * sizeof(WCHAR));
++		}
++		Tcl_Free(nativePathPtr);
++		nativePathPtr = extended;
++	    }
++	}
++    }
++
+   done:
+     TclDecrRefCount(validPathPtr);
+     return nativePathPtr;
+ }
++
++/*
++ *---------------------------------------------------------------------------
++ *
++ * TclWinExtendNativePath --
++ *
++ *	Rewrite the absolute native path held in dsPtr (a drive or UNC path
++ *	with either separator) in extended-length form. This happens when the
++ *	path is too long for ordinary Win32 path handling, or always when
++ *	requested for a directory traversal root whose descendants may be
++ *	long.
++ *
++ * Results:
++ *	None.
++ *
++ * Side effects:
++ *	The contents of dsPtr may change.
++ *
++ *---------------------------------------------------------------------------
++ */
++
++void
++TclWinExtendNativePath(
++    Tcl_DString *dsPtr,
++    int always)
++{
++    const WCHAR *path = (const WCHAR *) Tcl_DStringValue(dsPtr);
++    size_t length = Tcl_DStringLength(dsPtr) / sizeof(WCHAR);
++    size_t skip, prefix, count, i;
++    const WCHAR *extended;
++    Tcl_DString copy;
++    WCHAR *out;
++
++    if (!always && length <= MAX_PATH - 12) {
++	return;
++    }
++    if (length >= 3
++	    && ((path[0] >= 'A' && path[0] <= 'Z')
++		|| (path[0] >= 'a' && path[0] <= 'z'))
++	    && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
++	skip = 0;
++	extended = L"\\\\?\\";
++	prefix = 4;
++    } else if (length >= 3 && (path[0] == '\\' || path[0] == '/')
++	    && (path[1] == '\\' || path[1] == '/')
++	    && path[2] != '?' && path[2] != '.') {
++	skip = 2;
++	extended = L"\\\\?\\UNC\\";
++	prefix = 8;
++    } else {
++	return;
++    }
++
++    count = prefix + length - skip;
++    Tcl_DStringInit(&copy);
++    Tcl_DStringAppend(&copy, (const char *) path, length * sizeof(WCHAR));
++    path = (const WCHAR *) Tcl_DStringValue(&copy);
++    Tcl_DStringSetLength(dsPtr, (count + 1) * sizeof(WCHAR));
++    out = (WCHAR *) Tcl_DStringValue(dsPtr);
++    memcpy(out, extended, prefix * sizeof(WCHAR));
++    for (i = skip; i < length; i++) {
++	out[prefix + i - skip] = (path[i] == '/') ? '\\' : path[i];
++    }
++    out[count] = 0;
++    Tcl_DStringSetLength(dsPtr, count * sizeof(WCHAR));
++    Tcl_DStringFree(&copy);
++}
+ 
+ /*
+  *---------------------------------------------------------------------------
+--- a/win/tclWinInt.h
++++ b/win/tclWinInt.h
+@@ -39,6 +39,7 @@
+ MODULE_SCOPE char	TclWinDriveLetterForVolMountPoint(
+ 			    const WCHAR *mountPoint);
+ MODULE_SCOPE void	TclWinEncodingsCleanup(void);
++MODULE_SCOPE void	TclWinExtendNativePath(Tcl_DString *dsPtr, int always);
+ MODULE_SCOPE void	TclWinInit(HINSTANCE hInst);
+ MODULE_SCOPE TclFile	TclWinMakeFile(HANDLE handle);
+ MODULE_SCOPE Tcl_Channel TclWinOpenConsoleChannel(HANDLE handle,

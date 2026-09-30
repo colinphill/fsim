@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -75,7 +76,7 @@ std::optional<LibraryMappings> read_mappings(const Store& store, std::string& er
     if (!safe_descendant(store.root(), ".fsim/libraries.toml", error))
         return std::nullopt;
     std::error_code code;
-    if (!std::filesystem::exists(path, code) && !code)
+    if (!support::native_fs::exists(path, code) && !code)
         return LibraryMappings { };
     const auto text = read_text(path, kMaximumTextBytes, error);
     if (!text)
@@ -140,7 +141,7 @@ std::optional<LibraryLocation> locate_library(const Store& store,
         location.directory = mapped->second.is_absolute()
             ? mapped->second : store.root() / mapped->second;
         std::error_code code;
-        location.directory = std::filesystem::canonical(location.directory, code);
+        location.directory = support::native_fs::canonical(location.directory, code);
         if (code) {
             error = "mapped library directory cannot be resolved: " + code.message();
             return std::nullopt;
@@ -155,7 +156,7 @@ std::optional<LibraryLocation> locate_library(const Store& store,
             return std::nullopt;
     }
     std::error_code code;
-    if (!std::filesystem::is_directory(location.directory, code) || code) {
+    if (!support::native_fs::is_directory(location.directory, code) || code) {
         error = "library directory does not exist: " + std::string { name };
         return std::nullopt;
     }
@@ -195,18 +196,18 @@ std::optional<std::vector<LibraryLocation>> Store::library_locations(
         return std::nullopt;
     std::error_code code;
     const auto local = managed_directory() / "libraries";
-    if (std::filesystem::exists(local, code)) {
-        std::filesystem::directory_iterator iterator { local, code };
+    if (support::native_fs::exists(local, code)) {
+        auto iterator = support::native_fs::directory_iterator(local, code);
         const std::filesystem::directory_iterator end;
         while (!code && iterator != end) {
             const auto name = support::path_to_utf8(iterator->path().filename());
             const auto status = iterator->symlink_status(code);
-            if (!code && valid_name(name) && std::filesystem::is_symlink(status)) {
+            if (!code && valid_name(name) && support::native_fs::is_symlink(status)) {
                 error = "local library directory must not be a symbolic link";
                 return std::nullopt;
             }
-            if (!code && valid_name(name) && std::filesystem::is_directory(status)
-                && std::filesystem::exists(iterator->path() / "library.sqlite3", code))
+            if (!code && valid_name(name) && support::native_fs::is_directory(status)
+                && support::native_fs::exists(iterator->path() / "library.sqlite3", code))
                 names.insert(name);
             if (!code)
                 iterator.increment(code);
@@ -240,7 +241,7 @@ std::optional<LibraryCatalog> Store::read_library(
     const auto local = managed_directory() / "libraries" / name;
     std::error_code code;
     if (!mappings->contains(std::string { name })
-        && !std::filesystem::exists(local / "library.sqlite3", code) && !code) {
+        && !support::native_fs::exists(local / "library.sqlite3", code) && !code) {
         if (!detail::safe_descendant(root_,
                 std::filesystem::path { ".fsim/libraries" } / name, error))
             return std::nullopt;
@@ -281,7 +282,7 @@ bool Store::map_library(const std::string_view name,
     if (!lock || !mappings)
         return false;
     std::error_code code;
-    const auto target = std::filesystem::canonical(
+    const auto target = support::native_fs::canonical(
         directory.is_absolute() ? directory : root_ / directory, code);
     if (code) {
         error = "mapped library directory cannot be resolved: " + code.message();
@@ -291,7 +292,8 @@ bool Store::map_library(const std::string_view name,
     if (!detail::load_catalog({ std::string { name }, target, true }, false, error))
         return false;
     const auto local = managed_directory() / "libraries" / name;
-    if (std::filesystem::exists(local, code) && !std::filesystem::equivalent(local, target, code)) {
+    if (support::native_fs::exists(local, code)
+        && !support::native_fs::equivalent(local, target, code)) {
         error = "library mapping conflicts with an existing local library";
         return false;
     }

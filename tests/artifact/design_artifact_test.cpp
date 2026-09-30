@@ -18,6 +18,7 @@
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory.hpp"
@@ -906,7 +907,8 @@ int main() {
           metadata.payloads.front().checksum,
           [&](const std::filesystem::path& path,
               fsim::diagnostic::Engine&) {
-            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            auto output = fsim::support::native_fs::open_ofstream(
+                path, std::ios::binary | std::ios::trunc);
             output.write(state_bytes.data(),
                 static_cast<std::streamsize>(state_bytes.size()));
             return static_cast<bool>(output);

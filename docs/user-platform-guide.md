@@ -136,11 +136,26 @@ filesystem failure worth reporting, not a reason to weaken locking.
 
 ## Windows paths and loaded files
 
-Use a short workspace and cache root for native builds, especially when source
-names, keyword profiles, and cache identities are long. Public CLI, mapping,
-diagnostic, and artifact paths are UTF-8; Windows entry points convert once to
-native paths. CMake variables and mapping files should use forward slashes to avoid
-PowerShell, CMake, TOML, and C/C++ escape ambiguities.
+fsim's own file operations accept paths beyond the Windows 260-character
+`MAX_PATH` limit. Sources, include files, workspace libraries and snapshots,
+caches, traces, and simulation file output may lie at any depth below the
+workspace. The Tcl that fsim builds on Windows is patched so that Tcl scripts
+and Tcl's own file commands, including `glob` and recursive `file copy` and
+`file delete`, accept such paths too (see `third_party/tcl-9.0.4/README.md`).
+A Tcl development package found on the build host is used unpatched.
+
+Windows still limits a working directory to `MAX_PATH` unless the host enables
+long paths (the `LongPathsEnabled` policy). On other hosts, keep the workspace
+root, `--file-root`, SystemC compiler working directories, and Tcl `cd`
+targets under 248 characters. Also keep programs run with Tcl `exec`, and the
+paths that user plug-ins or compilers open themselves, under 260. fsim's
+commands declare long-path support in their manifest, so enabling the policy
+lifts those limits.
+
+Public CLI, mapping, diagnostic, and artifact paths are UTF-8; Windows entry
+points convert once to native paths. CMake variables and mapping files should
+use forward slashes to avoid PowerShell, CMake, TOML, and C/C++ escape
+ambiguities.
 
 fsim invokes compilers with argument arrays and uses UTF-16 response files when
 needed; do not embed shell quoting inside individual compiler-option arguments. Generated plug-ins use

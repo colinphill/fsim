@@ -6,6 +6,7 @@
 #include "fsim/library/artifact.hpp"
 #include "fsim/library/source_mapping.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/scv.hpp"
@@ -43,7 +44,7 @@ namespace {
         const std::string_view expected_digest,
         diagnostic::Engine& diagnostics)
     {
-        std::ifstream input(path, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!input) {
             diagnostics.error(
                 "FSIM-LIB-0007",
@@ -76,7 +77,7 @@ namespace {
         const std::filesystem::path& path,
         diagnostic::Engine& diagnostics)
     {
-        std::ifstream input(path, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!input) {
             diagnostics.error(
                 "FSIM-LIB-0007",
@@ -185,7 +186,7 @@ namespace {
         }
         const auto object_root = cache_directory / "llvm-native" / "llvm" / "objects";
         std::error_code exists_error;
-        const bool exists = std::filesystem::exists(object_root, exists_error);
+        const bool exists = support::native_fs::exists(object_root, exists_error);
         if (exists_error) {
             diagnostics.error(
                 "FSIM-LIB-0007",
@@ -198,9 +199,9 @@ namespace {
         }
         std::vector<std::string> keys;
         std::error_code iteration_error;
-        for (std::filesystem::recursive_directory_iterator iterator(
+        for (auto iterator = support::native_fs::recursive_directory_iterator(
                  object_root, iteration_error),
-            end;
+             end = std::filesystem::recursive_directory_iterator {};
             !iteration_error && iterator != end;
             iterator.increment(iteration_error)) {
             if (!iterator->is_regular_file()
@@ -273,24 +274,24 @@ namespace {
     void remove_seed_tree(const std::filesystem::path& path) noexcept
     {
         std::error_code error;
-        if (!std::filesystem::exists(path, error)) {
+        if (!support::native_fs::exists(path, error)) {
             return;
         }
-        for (std::filesystem::recursive_directory_iterator iterator(
+        for (auto iterator = support::native_fs::recursive_directory_iterator(
                  path, error),
-            end;
+             end = std::filesystem::recursive_directory_iterator {};
             !error && iterator != end;
             iterator.increment(error)) {
-            std::filesystem::permissions(
+            support::native_fs::permissions(
                 iterator->path(), std::filesystem::perms::owner_all,
                 std::filesystem::perm_options::add, error);
             error.clear();
         }
-        std::filesystem::permissions(
+        support::native_fs::permissions(
             path, std::filesystem::perms::owner_all,
             std::filesystem::perm_options::add, error);
         error.clear();
-        std::filesystem::remove_all(path, error);
+        support::native_fs::remove_all(path, error);
     }
 #endif
 

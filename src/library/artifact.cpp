@@ -2,6 +2,7 @@
 #include "fsim/library/artifact.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -191,7 +192,7 @@ class StagingCleanup final {
       return;
     }
     std::error_code ignored;
-    std::filesystem::remove_all(path_, ignored);
+    support::native_fs::remove_all(path_, ignored);
   }
 
   void release() noexcept { active_ = false; }
@@ -206,7 +207,7 @@ bool write_file(
     const std::string_view contents,
     diagnostic::Engine& diagnostics) {
   std::error_code directory_error;
-  std::filesystem::create_directories(path.parent_path(), directory_error);
+  support::native_fs::create_directories(path.parent_path(), directory_error);
   if (directory_error) {
     diagnostics.error(
         std::string{kPublishCode},
@@ -215,7 +216,7 @@ bool write_file(
             + "': " + directory_error.message());
     return false;
   }
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
   output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
   output.close();
   if (!output) {
@@ -232,8 +233,9 @@ bool make_tree_read_only(
     const std::filesystem::path& root,
     diagnostic::Engine& diagnostics) {
   std::error_code iteration_error;
-  for (std::filesystem::recursive_directory_iterator iterator(
-           root, iteration_error), end;
+  for (auto iterator = support::native_fs::recursive_directory_iterator(
+           root, iteration_error),
+       end = std::filesystem::recursive_directory_iterator{};
        !iteration_error && iterator != end;
        iterator.increment(iteration_error)) {
     std::error_code permission_error;
@@ -247,14 +249,15 @@ bool make_tree_read_only(
         : std::filesystem::perms::owner_read
               | std::filesystem::perms::group_read
               | std::filesystem::perms::others_read;
-    std::filesystem::permissions(
+    support::native_fs::permissions(
         iterator->path(), permissions,
         std::filesystem::perm_options::replace, permission_error);
     if (permission_error) {
       diagnostics.error(
           std::string{kPublishCode},
           "cannot make library artifact read-only: "
-              + fsim::support::path_to_utf8(iterator->path())
+              + fsim::support::path_to_utf8(
+                  fsim::support::path_from_native_io(iterator->path()))
               + ": " + permission_error.message());
       return false;
     }
@@ -267,7 +270,7 @@ bool make_tree_read_only(
     return false;
   }
   std::error_code root_error;
-  std::filesystem::permissions(
+  support::native_fs::permissions(
       root,
       std::filesystem::perms::owner_read
           | std::filesystem::perms::owner_exec
@@ -942,7 +945,7 @@ std::optional<Metadata> load_metadata(
     const std::string_view expected_library,
     diagnostic::Engine& diagnostics) {
   const auto path = directory / kMetadataFilename;
-  std::ifstream input(path, std::ios::binary);
+  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
   if (!input) {
     diagnostics.error(
         std::string{kIoCode},
@@ -983,7 +986,7 @@ bool publish(
     return false;
   }
   std::error_code exists_error;
-  if (std::filesystem::exists(destination, exists_error) || exists_error) {
+  if (support::native_fs::exists(destination, exists_error) || exists_error) {
     diagnostics.error(
         std::string{kPublishCode},
         "library export destination already exists or cannot be inspected: "
@@ -1089,7 +1092,7 @@ bool publish(
   std::error_code parent_error;
   const auto parent = destination.parent_path().empty()
       ? std::filesystem::path{"."} : destination.parent_path();
-  std::filesystem::create_directories(parent, parent_error);
+  support::native_fs::create_directories(parent, parent_error);
   if (parent_error) {
     diagnostics.error(
         std::string{kPublishCode},
@@ -1100,7 +1103,7 @@ bool publish(
   const auto staging = staging_path(destination);
   StagingCleanup cleanup(staging);
   std::error_code stage_error;
-  if (!std::filesystem::create_directory(staging, stage_error)
+  if (!support::native_fs::create_directory(staging, stage_error)
       || stage_error) {
     diagnostics.error(
         std::string{kPublishCode},
@@ -1119,7 +1122,7 @@ bool publish(
     return false;
   }
   std::error_code install_error;
-  std::filesystem::rename(staging, destination, install_error);
+  support::native_fs::rename(staging, destination, install_error);
   if (install_error) {
     diagnostics.error(
         std::string{kPublishCode},

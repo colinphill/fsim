@@ -5,6 +5,7 @@
 #include "plugin_compiler_internal.hpp"
 #include "producer_fingerprint.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
@@ -106,7 +107,7 @@ namespace {
             return { };
         }
         result = result.lexically_normal();
-        if (!std::filesystem::is_directory(result, error) || error) {
+        if (!support::native_fs::is_directory(result, error) || error) {
             report(
                 diagnostics, kCompileCode,
                 "SystemC working directory does not exist", result);
@@ -131,7 +132,7 @@ namespace {
             ? std::filesystem::temp_directory_path()
             : absolute_from(requested, base);
         std::error_code error;
-        std::filesystem::create_directories(parent, error);
+        support::native_fs::create_directories(parent, error);
         if (error) {
             report(
                 diagnostics, kCompileCode,
@@ -142,7 +143,7 @@ namespace {
             const auto serial = scratch_sequence.fetch_add(1, std::memory_order_relaxed);
             const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
             const auto path = parent / ("fsim-systemc-phase-" + std::to_string(tick) + "-" + std::to_string(serial));
-            if (std::filesystem::create_directory(path, error)) {
+            if (support::native_fs::create_directory(path, error)) {
                 return path;
             }
             if (error) {
@@ -167,7 +168,7 @@ namespace {
         ~ScratchCleanup()
         {
             std::error_code error;
-            std::filesystem::remove_all(path_, error);
+            support::native_fs::remove_all(path_, error);
         }
 
     private:
@@ -182,7 +183,7 @@ namespace {
         auto header = std::filesystem::path { FSIM_SYSTEMC_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
         std::error_code error;
-        if (!std::filesystem::is_directory(header, error)) {
+        if (!support::native_fs::is_directory(header, error)) {
             header = FSIM_SYSTEMC_INSTALLED_HEADER_PATH;
         }
 #endif
@@ -194,7 +195,7 @@ namespace {
             = std::filesystem::path { FSIM_SYSTEMC_UPSTREAM_HEADER_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH)
         std::error_code upstream_error;
-        if (!std::filesystem::is_directory(upstream_header, upstream_error)) {
+        if (!support::native_fs::is_directory(upstream_header, upstream_error)) {
             upstream_header = FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH;
         }
 #endif
@@ -206,7 +207,7 @@ namespace {
         auto scv_header = std::filesystem::path { FSIM_SCV_HEADER_PATH };
 #if defined(FSIM_INSTALLED_SCV_HEADER_PATH)
         std::error_code scv_header_error;
-        if (!std::filesystem::is_directory(scv_header, scv_header_error)) {
+        if (!support::native_fs::is_directory(scv_header, scv_header_error)) {
             scv_header = FSIM_INSTALLED_SCV_HEADER_PATH;
         }
 #endif
@@ -223,7 +224,7 @@ namespace {
         auto result = std::filesystem::path { FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH;
         }
 #endif
@@ -239,7 +240,7 @@ namespace {
         auto result = std::filesystem::path { FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH;
         }
 #endif
@@ -255,7 +256,7 @@ namespace {
         auto result = std::filesystem::path { FSIM_SCV_LIBRARY_PATH };
 #if defined(FSIM_INSTALLED_SCV_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_INSTALLED_SCV_LIBRARY_PATH;
         }
 #endif
@@ -272,7 +273,7 @@ namespace {
             = std::filesystem::path { FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH };
 #if defined(FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH)
         std::error_code error;
-        if (!std::filesystem::is_regular_file(result, error)) {
+        if (!support::native_fs::is_regular_file(result, error)) {
             result = FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH;
         }
 #endif
@@ -296,7 +297,7 @@ namespace {
         const std::string_view operation,
         const std::string_view code)
     {
-        std::ifstream input(path, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!input) {
             report(
                 diagnostics, code,
@@ -690,7 +691,7 @@ namespace {
         const auto source = absolute_from(request.source, base);
         std::error_code error;
         if (!source_extension_supported(source)
-            || !std::filesystem::is_regular_file(source, error)) {
+            || !support::native_fs::is_regular_file(source, error)) {
             report(
                 diagnostics, kCompileCode,
                 "SystemC compile requires one existing .cpp, .cc, or .cxx source",
@@ -850,7 +851,7 @@ namespace {
     {
         const auto directory = root / "systemc" / "incremental" / "locks";
         std::error_code error;
-        std::filesystem::create_directories(directory, error);
+        support::native_fs::create_directories(directory, error);
         if (error) {
             report(
                 diagnostics, kCompileCode,
@@ -889,7 +890,7 @@ bool compile_incremental_object(
     const auto source = absolute_from(request.source, base);
     std::error_code error;
     if (!source_extension_supported(source)
-        || !std::filesystem::is_regular_file(source, error)) {
+        || !support::native_fs::is_regular_file(source, error)) {
         report(
             diagnostics, kCompileCode,
             "SystemC compile requires one existing .cpp, .cc, or .cxx source",
@@ -964,8 +965,8 @@ bool compile_incremental_object(
     if (!run_command(
             command, diagnostics, "SystemC translation-unit compilation",
             kCompileCode)
-        || !std::filesystem::is_regular_file(object, error)
-        || std::filesystem::file_size(object, error) == 0) {
+        || !support::native_fs::is_regular_file(object, error)
+        || support::native_fs::file_size(object, error) == 0) {
         if (!diagnostics.has_error()) {
             report(
                 diagnostics, kCompileCode,
@@ -1126,14 +1127,14 @@ bool link_incremental_plugin(
     }
     const bool needs_support = entry_point_count == 0;
     if (needs_support
-        && (support.empty() || !std::filesystem::is_regular_file(support, error))) {
+        && (support.empty() || !support::native_fs::is_regular_file(support, error))) {
         report(
             diagnostics, kLinkCode,
             "cannot locate the fsim SystemC plug-in export library", support);
         return false;
     }
     if (accellera_runtime.empty()
-        || !std::filesystem::is_regular_file(accellera_runtime, error)) {
+        || !support::native_fs::is_regular_file(accellera_runtime, error)) {
         report(
             diagnostics, kLinkCode,
             "cannot locate the one shared Accellera SystemC runtime bridge",
@@ -1141,7 +1142,7 @@ bool link_incremental_plugin(
         return false;
     }
     if (official_runtime.empty()
-        || !std::filesystem::is_regular_file(official_runtime, error)) {
+        || !support::native_fs::is_regular_file(official_runtime, error)) {
         report(
             diagnostics, kLinkCode,
             "cannot locate the governed official Accellera SystemC runtime",
@@ -1149,7 +1150,7 @@ bool link_incremental_plugin(
         return false;
     }
     if (scv_runtime.empty()
-        || !std::filesystem::is_regular_file(scv_runtime, error)) {
+        || !support::native_fs::is_regular_file(scv_runtime, error)) {
         report(
             diagnostics, kLinkCode,
             "cannot locate the governed official SCV runtime", scv_runtime);
@@ -1218,8 +1219,8 @@ bool link_incremental_plugin(
     }
     const CompilerCommand command { std::move(argv), base, toolchain };
     if (!run_command(command, diagnostics, "SystemC plug-in link", kLinkCode)
-        || !std::filesystem::is_regular_file(output, error)
-        || std::filesystem::file_size(output, error) == 0) {
+        || !support::native_fs::is_regular_file(output, error)
+        || support::native_fs::file_size(output, error) == 0) {
         if (!diagnostics.has_error()) {
             report(
                 diagnostics, kLinkCode,
@@ -1349,7 +1350,7 @@ IncrementalPhaseResult compile_incremental_object_cached(
     result.artifact = cache_artifact_path(
         root, "objects", *digest, ".fsimscobj");
     std::error_code error;
-    if (std::filesystem::exists(result.artifact, error)) {
+    if (support::native_fs::exists(result.artifact, error)) {
         auto metadata = load_incremental_object_metadata(
             result.artifact, diagnostics);
         if (metadata && metadata->input_digest == *digest) {
@@ -1363,7 +1364,7 @@ IncrementalPhaseResult compile_incremental_object_cached(
         return result;
     }
     error.clear();
-    if (std::filesystem::exists(result.artifact, error)) {
+    if (support::native_fs::exists(result.artifact, error)) {
         auto metadata = load_incremental_object_metadata(
             result.artifact, diagnostics);
         if (metadata && metadata->input_digest == *digest) {
@@ -1393,7 +1394,7 @@ IncrementalPhaseResult link_incremental_plugin_cached(
     result.artifact = cache_artifact_path(
         root, "plugins", *digest, ".fsimscplugin");
     std::error_code error;
-    if (std::filesystem::exists(result.artifact, error)) {
+    if (support::native_fs::exists(result.artifact, error)) {
         auto metadata = load_incremental_plugin_metadata(
             result.artifact, diagnostics);
         if (metadata && metadata->input_digest == *digest) {
@@ -1407,7 +1408,7 @@ IncrementalPhaseResult link_incremental_plugin_cached(
         return result;
     }
     error.clear();
-    if (std::filesystem::exists(result.artifact, error)) {
+    if (support::native_fs::exists(result.artifact, error)) {
         auto metadata = load_incremental_plugin_metadata(
             result.artifact, diagnostics);
         if (metadata && metadata->input_digest == *digest) {

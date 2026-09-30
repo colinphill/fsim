@@ -7,6 +7,7 @@
 #include "fsim/artifact/coverage_report_model.hpp"
 #include "fsim/artifact/coverage_report_projection.hpp"
 #include "fsim/artifact/coverage_report_render.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -124,7 +125,7 @@ namespace {
         }
         std::error_code error;
         if (!path.parent_path().empty()) {
-            std::filesystem::create_directories(path.parent_path(), error);
+            support::native_fs::create_directories(path.parent_path(), error);
             if (error)
                 return false;
         }
@@ -132,26 +133,26 @@ namespace {
         temporary += ".fsim-tmp";
         auto backup = path;
         backup += ".fsim-old";
-        const auto destination_exists = std::filesystem::exists(path, error);
+        const auto destination_exists = support::native_fs::exists(path, error);
         if (error)
             return false;
-        const auto backup_exists = std::filesystem::exists(backup, error);
+        const auto backup_exists = support::native_fs::exists(backup, error);
         if (error)
             return false;
         if (!destination_exists && backup_exists) {
-            std::filesystem::rename(backup, path, error);
+            support::native_fs::rename(backup, path, error);
             if (error)
                 return false;
         } else if (backup_exists) {
-            std::filesystem::remove(backup, error);
+            support::native_fs::remove(backup, error);
             if (error)
                 return false;
         }
-        std::filesystem::remove(temporary, error);
+        support::native_fs::remove(temporary, error);
         if (error)
             return false;
         {
-            std::ofstream output(
+            auto output = support::native_fs::open_ofstream(
                 temporary, std::ios::binary | std::ios::trunc);
             if (!output)
                 return false;
@@ -159,33 +160,33 @@ namespace {
                 static_cast<std::streamsize>(contents.size()));
             if (!output) {
                 output.close();
-                std::filesystem::remove(temporary, error);
+                support::native_fs::remove(temporary, error);
                 return false;
             }
         }
-        const auto exists = std::filesystem::exists(path, error);
+        const auto exists = support::native_fs::exists(path, error);
         if (error) {
-            std::filesystem::remove(temporary, error);
+            support::native_fs::remove(temporary, error);
             return false;
         }
         if (exists) {
-            std::filesystem::rename(path, backup, error);
+            support::native_fs::rename(path, backup, error);
             if (error) {
-                std::filesystem::remove(temporary, error);
+                support::native_fs::remove(temporary, error);
                 return false;
             }
         }
-        std::filesystem::rename(temporary, path, error);
+        support::native_fs::rename(temporary, path, error);
         if (error) {
             if (exists) {
                 std::error_code restore_error;
-                std::filesystem::rename(backup, path, restore_error);
+                support::native_fs::rename(backup, path, restore_error);
             }
-            std::filesystem::remove(temporary, error);
+            support::native_fs::remove(temporary, error);
             return false;
         }
         if (exists) {
-            std::filesystem::remove(backup, error);
+            support::native_fs::remove(backup, error);
             if (error)
                 return false;
         }

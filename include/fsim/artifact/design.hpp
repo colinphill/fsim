@@ -100,7 +100,8 @@ struct DesignPayload {
 
 /// A payload produced directly in the artifact staging tree. The checksum is
 /// established before publication and verified again from the generated file,
-/// so large payloads need not be retained in memory.
+/// so large payloads need not be retained in memory. The staging path may
+/// exceed MAX_PATH on Windows, so write through support::native_fs.
 struct GeneratedDesignPayload {
   std::filesystem::path path;
   std::string checksum;

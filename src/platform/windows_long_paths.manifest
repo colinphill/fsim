@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Opt fsim's commands into Windows long paths. Windows honors this only
+     when the host enables LongPathsEnabled; fsim's own file I/O uses
+     extended-length paths either way, and this setting extends long-path
+     support to Tcl scripts, child-process working directories, and plug-ins
+     loaded into the process. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings
+        xmlns:ws2="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+      <ws2:longPathAware>true</ws2:longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

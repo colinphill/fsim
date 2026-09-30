@@ -4,6 +4,7 @@
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
@@ -1516,11 +1517,11 @@ void Interpreter::Impl::handle_boundary(
                 bool result = false;
                 if (resolved) {
                     if (directory->kind == Kind::item_exists) {
-                        result = std::filesystem::exists(*resolved, error);
+                        result = support::native_fs::exists(*resolved, error);
                     } else if (directory->kind == Kind::item_is_directory) {
-                        result = std::filesystem::is_directory(*resolved, error);
+                        result = support::native_fs::is_directory(*resolved, error);
                     } else {
-                        result = std::filesystem::is_regular_file(*resolved, error);
+                        result = support::native_fs::is_regular_file(*resolved, error);
                     }
                 }
                 write_result(!error && result ? 1U : 0U);
@@ -1530,9 +1531,9 @@ void Interpreter::Impl::handle_boundary(
                 std::uint64_t status = 0U;
                 if (!resolved) {
                     status = vhdl_access_denied(error) ? 3U : 4U;
-                } else if (!std::filesystem::exists(*resolved, error)) {
+                } else if (!support::native_fs::exists(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 1U;
-                } else if (!std::filesystem::is_directory(*resolved, error)) {
+                } else if (!support::native_fs::is_directory(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 2U;
                 } else {
                     if (!directory->directory) {
@@ -1543,8 +1544,9 @@ void Interpreter::Impl::handle_boundary(
                     auto value = read_container(*directory->directory);
                     std::vector<std::string> items;
                     std::size_t text_bytes = 0U;
-                    for (std::filesystem::directory_iterator iterator(
-                             *resolved, error), end;
+                    for (auto iterator = support::native_fs::directory_iterator(
+                             *resolved, error),
+                         end = std::filesystem::directory_iterator {};
                          !error && iterator != end; iterator.increment(error)) {
                         auto item = fsim::support::path_to_utf8(
                             iterator->path().filename());
@@ -1586,9 +1588,9 @@ void Interpreter::Impl::handle_boundary(
                 std::uint64_t status = 0U;
                 if (!resolved) {
                     status = vhdl_access_denied(error) ? 3U : 4U;
-                } else if (!std::filesystem::exists(*resolved, error)) {
+                } else if (!support::native_fs::exists(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 1U;
-                } else if (!std::filesystem::is_directory(*resolved, error)) {
+                } else if (!support::native_fs::is_directory(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 2U;
                 } else {
                     vhdl_working_directory = *resolved;
@@ -1600,12 +1602,12 @@ void Interpreter::Impl::handle_boundary(
                 std::uint64_t status = 0U;
                 if (!resolved) {
                     status = vhdl_access_denied(error) ? 2U : 3U;
-                } else if (std::filesystem::exists(*resolved, error)) {
+                } else if (support::native_fs::exists(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 2U : 1U;
                 } else {
                     const bool created = option()
-                        ? std::filesystem::create_directories(*resolved, error)
-                        : std::filesystem::create_directory(*resolved, error);
+                        ? support::native_fs::create_directories(*resolved, error)
+                        : support::native_fs::create_directory(*resolved, error);
                     if (error || !created) {
                         status = vhdl_access_denied(error) ? 2U : 3U;
                     }
@@ -1623,15 +1625,15 @@ void Interpreter::Impl::handle_boundary(
                     // Preserve the configured sandbox root and the logical
                     // working-directory chain for subsequent operations.
                     status = 3U;
-                } else if (!std::filesystem::is_directory(*resolved, error)) {
+                } else if (!support::native_fs::is_directory(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 1U;
                 } else if (option()) {
                     static_cast<void>(
-                        std::filesystem::remove_all(*resolved, error));
+                        support::native_fs::remove_all(*resolved, error));
                     if (error) {
                         status = vhdl_access_denied(error) ? 3U : 4U;
                     }
-                } else if (!std::filesystem::remove(*resolved, error)) {
+                } else if (!support::native_fs::remove(*resolved, error)) {
                     status = error == std::errc::directory_not_empty
                         ? 2U : vhdl_access_denied(error) ? 3U : 4U;
                 }
@@ -1642,9 +1644,9 @@ void Interpreter::Impl::handle_boundary(
                 std::uint64_t status = 0U;
                 if (!resolved) {
                     status = vhdl_access_denied(error) ? 2U : 3U;
-                } else if (!std::filesystem::is_regular_file(*resolved, error)) {
+                } else if (!support::native_fs::is_regular_file(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 2U : 1U;
-                } else if (!std::filesystem::remove(*resolved, error)) {
+                } else if (!support::native_fs::remove(*resolved, error)) {
                     status = vhdl_access_denied(error) ? 2U : 3U;
                 }
                 write_result(status);

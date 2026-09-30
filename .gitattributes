@@ -18,3 +18,7 @@ third_party/scv-2.0.1/** -text whitespace=-trailing-space
 # The LLVM-MinGW runtime license is the release archive's LICENSE.TXT, byte
 # for byte, including its trailing blank line.
 third_party/llvm-mingw-20260616/LICENSE -text whitespace=-blank-at-eof
+
+# The governed Tcl patch set carries pinned byte digests, and its patches
+# reproduce upstream context lines exactly.
+third_party/tcl-9.0.4/** -text whitespace=-trailing-space,-space-before-tab,-indent-with-non-tab

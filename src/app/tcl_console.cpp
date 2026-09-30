@@ -3,6 +3,7 @@
 
 #if defined(FSIM_HAS_TCL)
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <isocline.h>
@@ -544,7 +545,7 @@ struct TclConsole::State {
         if (options.persist_history && options.history_limit > 0U) {
             const auto history_parent = options.history_path.parent_path();
             if (!history_parent.empty()) {
-                std::filesystem::create_directories(history_parent, history_error);
+                support::native_fs::create_directories(history_parent, history_error);
             }
         }
         const bool use_history = options.persist_history && options.history_limit > 0U

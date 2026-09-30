@@ -4,6 +4,7 @@
 #include "application_trace_observation.hpp"
 
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <cctype>
@@ -37,14 +38,14 @@ namespace {
         }
         std::error_code error;
         if (!state.staging_path.empty()) {
-            std::filesystem::remove(state.staging_path, error);
+            support::native_fs::remove(state.staging_path, error);
         }
         error.clear();
         const auto backup_exists = !state.backup_path.empty()
-            && std::filesystem::exists(state.backup_path, error);
+            && support::native_fs::exists(state.backup_path, error);
         if (!backup_exists && !state.lock_directory.empty()) {
             error.clear();
-            std::filesystem::remove(state.lock_directory, error);
+            support::native_fs::remove(state.lock_directory, error);
         }
     }
 
@@ -77,7 +78,7 @@ namespace {
     void publish_staging(TraceState& state)
     {
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(
+        const auto status = support::native_fs::symlink_status(
             state.output_path, error);
         if (error
             && error != std::errc::no_such_file_or_directory) {
@@ -87,26 +88,26 @@ namespace {
         const auto had_existing
             = status.type() != std::filesystem::file_type::not_found;
         if (had_existing) {
-            if (!std::filesystem::is_regular_file(status)) {
+            if (!support::native_fs::is_regular_file(status)) {
                 throw std::runtime_error {
                     "trace destination is not a regular file"
                 };
             }
             state.backup_path = state.lock_directory / "previous";
-            std::filesystem::rename(
+            support::native_fs::rename(
                 state.output_path, state.backup_path, error);
             if (error) {
                 throw trace_error("cannot preserve previous trace", error);
             }
         }
 
-        std::filesystem::rename(
+        support::native_fs::rename(
             state.staging_path, state.output_path, error);
         if (error) {
             const auto publish_message = error.message();
             if (had_existing) {
                 std::error_code restore_error;
-                std::filesystem::rename(
+                support::native_fs::rename(
                     state.backup_path, state.output_path, restore_error);
                 if (restore_error) {
                     throw std::runtime_error {
@@ -121,13 +122,13 @@ namespace {
         }
 
         if (had_existing) {
-            std::filesystem::remove(state.backup_path, error);
+            support::native_fs::remove(state.backup_path, error);
             if (error) {
                 const auto cleanup_message = error.message();
                 std::error_code remove_error;
-                std::filesystem::remove(state.output_path, remove_error);
+                support::native_fs::remove(state.output_path, remove_error);
                 std::error_code restore_error;
-                std::filesystem::rename(
+                support::native_fs::rename(
                     state.backup_path, state.output_path, restore_error);
                 if (remove_error || restore_error) {
                     throw std::runtime_error {
@@ -142,7 +143,7 @@ namespace {
             }
             state.backup_path.clear();
         }
-        std::filesystem::remove(state.lock_directory, error);
+        support::native_fs::remove(state.lock_directory, error);
         if (error) {
             throw trace_error("cannot release trace output lock", error);
         }
@@ -274,7 +275,7 @@ bool prepare_trace_output(
     std::error_code error;
     const auto parent = output.parent_path();
     if (!parent.empty()) {
-        std::filesystem::create_directories(parent, error);
+        support::native_fs::create_directories(parent, error);
     }
     if (error) {
         diagnostics.error(
@@ -284,7 +285,7 @@ bool prepare_trace_output(
             "cannot create trace directory: " + error.message());
         return false;
     }
-    const auto destination_status = std::filesystem::symlink_status(
+    const auto destination_status = support::native_fs::symlink_status(
         output, error);
     if (error
         && error != std::errc::no_such_file_or_directory) {
@@ -297,7 +298,7 @@ bool prepare_trace_output(
     }
     error.clear();
     if (destination_status.type() != std::filesystem::file_type::not_found
-        && !std::filesystem::is_regular_file(destination_status)) {
+        && !support::native_fs::is_regular_file(destination_status)) {
         diagnostics.error(
             state.format == project::TraceFormat::vcd
                 ? "FSIM-VCD-0002"
@@ -305,7 +306,7 @@ bool prepare_trace_output(
             "trace destination must be a regular file");
         return false;
     }
-    const auto acquired = std::filesystem::create_directory(
+    const auto acquired = support::native_fs::create_directory(
         state.lock_directory, error);
     if (error || !acquired) {
         diagnostics.error(
@@ -318,7 +319,7 @@ bool prepare_trace_output(
         state.staging_path.clear();
         return false;
     }
-    state.stream.open(
+    support::native_fs::open(state.stream,
         state.staging_path, std::ios::binary | std::ios::trunc);
     if (!state.stream) {
         diagnostics.error(

@@ -1101,7 +1101,15 @@ fsim_register_simple_test(
   "fast;support;codec;bytes;bounds;endianness;positive;negative"
 )
 
-foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages objects selection systemc controls application)
+add_executable(fsim_native_filesystem_tests support/native_filesystem_test.cpp)
+fsim_configure_test(fsim_native_filesystem_tests)
+fsim_register_simple_test(
+  fsim.support.native-filesystem
+  fsim_native_filesystem_tests
+  "fast;support;paths;windows;positive;negative"
+)
+
+foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages objects selection systemc controls application long_paths)
   fsim_add_single_source_test_target(
     fsim_workspace_${workspace_case}_tests
     app/workspace_${workspace_case}_test.cpp
@@ -1449,6 +1457,46 @@ set_tests_properties(
   fsim.ast-lifetime-governance
   PROPERTIES
     LABELS "fast;cmake;source;governance;ast;hir;elaboration;cache;positive;negative"
+)
+add_test(
+  NAME fsim.native-path-io
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckNativePathIo.cmake"
+)
+set_tests_properties(
+  fsim.native-path-io
+  PROPERTIES
+    LABELS "fast;cmake;source;governance;paths;windows;positive"
+)
+add_test(
+  NAME fsim.native-path-io-selftest
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_BINARY_DIR}/tests/native-path-io-selftest"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/CheckNativePathIoSelfTest.cmake"
+)
+set_tests_properties(
+  fsim.native-path-io-selftest
+  PROPERTIES
+    LABELS "fast;cmake;source;governance;paths;windows;negative"
+)
+add_test(
+  NAME fsim.tcl.patch-governance
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_BINARY_DIR}/tests/tcl-patch-governance"
+    "-DFSIM_TCL_VERSION=${FSIM_TCL_VERSION}"
+    "-DFSIM_TCL_SOURCE_SHA256=${FSIM_TCL_SOURCE_SHA256}"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/CheckTclPatchGovernance.cmake"
+)
+set_tests_properties(
+  fsim.tcl.patch-governance
+  PROPERTIES
+    LABELS "fast;cmake;source;governance;tcl;patch;paths;windows;positive;negative"
 )
 add_test(
   NAME fsim.uvm-phase-tlm-matrix

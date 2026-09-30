@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
+#include "fsim/support/native_filesystem.hpp"
 
 #include <cctype>
 #include <fstream>
@@ -42,7 +43,7 @@ ParseResult parse_file(const std::filesystem::path& path,
             std::move(preprocessed.lexed),
             language == Language::SystemVerilog2017);
     }
-    std::ifstream input(path, std::ios::binary);
+    auto input = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!input) {
         ParseResult result;
         result.diagnostics.push_back(Diagnostic {

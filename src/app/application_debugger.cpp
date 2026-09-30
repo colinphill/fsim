@@ -3,6 +3,7 @@
 #include "application_simulation_internal.hpp"
 #include "application_trace_control.hpp"
 #include "application_workspace.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app {
@@ -14,12 +15,12 @@ namespace {
   {
     std::error_code error;
     auto directory = plugin;
-    if (!std::filesystem::is_directory(directory, error)) {
+    if (!support::native_fs::is_directory(directory, error)) {
       directory = directory.parent_path();
     }
     while (!directory.empty()) {
       error.clear();
-      if (std::filesystem::exists(
+      if (support::native_fs::exists(
               directory / systemc::kIncrementalPluginMetadataFilename, error)
           && !error) {
         return directory;

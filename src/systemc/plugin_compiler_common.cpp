@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
+
 #include <charconv>
 #include <chrono>
 
@@ -132,7 +134,7 @@ void report_error(
         if (!candidate.is_absolute()) {
             candidate = make_absolute(candidate, working_directory);
         }
-        if (std::filesystem::is_regular_file(candidate, error)) {
+        if (support::native_fs::is_regular_file(candidate, error)) {
 #if !defined(_WIN32)
             if (::access(candidate.c_str(), X_OK) != 0) {
                 error.clear();
@@ -282,12 +284,12 @@ void add_paths_to_key(
     }
     builder.add("compiler.binary", "<unavailable>");
     error.clear();
-    const auto size = std::filesystem::file_size(resolved_compiler, error);
+    const auto size = support::native_fs::file_size(resolved_compiler, error);
     if (!error) {
         builder.add("compiler.size", std::to_string(size));
     }
     error.clear();
-    const auto stamp = std::filesystem::last_write_time(resolved_compiler, error);
+    const auto stamp = support::native_fs::last_write_time(resolved_compiler, error);
     if (!error) {
         const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
             stamp.time_since_epoch());
@@ -354,7 +356,7 @@ void add_compiler_environment_to_key(
     std::error_code& error)
 {
     error.clear();
-    std::ifstream stream(path, std::ios::binary);
+    auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!stream) {
         error = std::make_error_code(std::errc::io_error);
         return std::nullopt;
@@ -622,21 +624,22 @@ void add_compiler_environment_to_key(
 {
     std::error_code error;
     for (const auto& root : roots) {
-        if (!std::filesystem::is_directory(root, error)) {
+        if (!support::native_fs::is_directory(root, error)) {
             error.clear();
             continue;
         }
-        std::filesystem::recursive_directory_iterator iterator {
+        auto iterator = support::native_fs::recursive_directory_iterator(
             root, std::filesystem::directory_options::skip_permission_denied, error
-        };
+        );
         const std::filesystem::recursive_directory_iterator end;
         while (!error && iterator != end) {
             if (iterator->is_regular_file(error)
                 && plausible_cpp_dependency(iterator->path())) {
-                auto normalized = std::filesystem::weakly_canonical(iterator->path(), error);
+                auto normalized = support::native_fs::weakly_canonical(iterator->path(), error);
                 if (error) {
                     error.clear();
-                    normalized = iterator->path().lexically_normal();
+                    normalized = support::native_fs::ordinary_entry_path(
+                        root, iterator->path()).lexically_normal();
                 }
                 dependencies.push_back(std::move(normalized));
             }
@@ -659,11 +662,11 @@ void add_compiler_environment_to_key(
     std::error_code& error)
 {
     error.clear();
-    if (!std::filesystem::is_regular_file(path, error)) {
+    if (!support::native_fs::is_regular_file(path, error)) {
         error.clear();
         return { };
     }
-    auto canonical = std::filesystem::weakly_canonical(path, error);
+    auto canonical = support::native_fs::weakly_canonical(path, error);
     if (error) {
         error.clear();
         return path.lexically_normal();
@@ -728,7 +731,7 @@ void add_compiler_environment_to_key(
     pending.reserve(sources.size());
     for (const auto& source : sources) {
         std::error_code ignored;
-        auto normalized = std::filesystem::weakly_canonical(source, ignored);
+        auto normalized = support::native_fs::weakly_canonical(source, ignored);
         if (ignored) {
             normalized = source.lexically_normal();
         }
@@ -828,7 +831,7 @@ void add_compiler_environment_to_key(
         }
 #endif
         const auto candidate = make_absolute(std::filesystem::path { library }, working_directory);
-        const auto exists = std::filesystem::is_regular_file(candidate, error);
+        const auto exists = support::native_fs::is_regular_file(candidate, error);
         error.clear();
         const bool explicit_path = std::filesystem::path { library }.is_absolute()
             || contains_directory_separator(library);
@@ -1161,7 +1164,7 @@ void add_compiler_environment_to_key(
     std::error_code& error)
 {
     error.clear();
-    std::ifstream stream(path, std::ios::binary);
+    auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!stream) {
         error = std::make_error_code(std::errc::io_error);
         return false;
@@ -1208,8 +1211,8 @@ namespace {
         diagnostic::Engine& diagnostics)
     {
         std::error_code error;
-        const bool exists = std::filesystem::exists(path, error);
-        if (!error && (!exists || std::filesystem::remove(path, error))) {
+        const bool exists = support::native_fs::exists(path, error);
+        if (!error && (!exists || support::native_fs::remove(path, error))) {
             return true;
         }
         report_error(
@@ -1227,17 +1230,17 @@ namespace {
     std::error_code& error)
 {
     error.clear();
-    if (!std::filesystem::is_regular_file(plan.library_path, error)) {
+    if (!support::native_fs::is_regular_file(plan.library_path, error)) {
         error.clear();
         return false;
     }
-    const auto size = std::filesystem::file_size(plan.library_path, error);
+    const auto size = support::native_fs::file_size(plan.library_path, error);
     if (error || size == 0) {
         error.clear();
         return false;
     }
 
-    std::ifstream metadata_stream(
+    auto metadata_stream = support::native_fs::open_ifstream(
         artifact_metadata_path(plan.library_path), std::ios::binary);
     if (!metadata_stream) {
         error.clear();
@@ -1294,11 +1297,11 @@ namespace {
 
     std::error_code error;
     const auto directory = plan.library_path.parent_path();
-    std::filesystem::directory_iterator iterator {
+    auto iterator = support::native_fs::directory_iterator(
         directory,
         std::filesystem::directory_options::skip_permission_denied,
         error
-    };
+    );
     if (error) {
         report_error(
             diagnostics,
@@ -1319,7 +1322,10 @@ namespace {
             && !filename.starts_with(legacy_prefix)) {
             continue;
         }
-        if (!remove_stale_file(iterator->path(), diagnostics)) {
+        if (!remove_stale_file(
+                support::native_fs::ordinary_entry_path(
+                    directory, iterator->path()),
+                diagnostics)) {
             return false;
         }
     }
@@ -1349,7 +1355,7 @@ namespace {
         return false;
     }
 
-    const auto artifact_size = std::filesystem::file_size(plan.build_path, error);
+    const auto artifact_size = support::native_fs::file_size(plan.build_path, error);
     if (error || artifact_size == 0) {
         report_error(
             diagnostics,
@@ -1367,7 +1373,7 @@ namespace {
         + std::to_string(suffix)
     };
     {
-        std::ofstream stream(
+        auto stream = support::native_fs::open_ofstream(
             temporary_metadata, std::ios::binary | std::ios::trunc);
         stream << kArtifactMetadataMagic << '\n'
                << plan.cache_key << '\n'
@@ -1380,7 +1386,7 @@ namespace {
                 "FSIM-SC-C008",
                 "cannot write SystemC plug-in metadata",
                 temporary_metadata);
-            std::filesystem::remove(temporary_metadata, error);
+            support::native_fs::remove(temporary_metadata, error);
             return false;
         }
     }
@@ -1392,7 +1398,7 @@ namespace {
             "FSIM-SC-C008",
             "cannot publish compiled SystemC plug-in: " + error.message(),
             plan.library_path);
-        std::filesystem::remove(temporary_metadata, error);
+        support::native_fs::remove(temporary_metadata, error);
         return false;
     }
 
@@ -1404,11 +1410,11 @@ namespace {
             "cannot commit SystemC plug-in metadata: " + error.message(),
             metadata_path);
         std::error_code ignored;
-        std::filesystem::remove(temporary_metadata, ignored);
-        std::filesystem::remove(plan.library_path, ignored);
+        support::native_fs::remove(temporary_metadata, ignored);
+        support::native_fs::remove(plan.library_path, ignored);
         return false;
     }
-    std::filesystem::remove(plan.library_path.string() + ".sha256", error);
+    support::native_fs::remove(plan.library_path.string() + ".sha256", error);
     return true;
 }
 

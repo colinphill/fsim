@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/sdf_phase_persistence.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <fstream>
@@ -110,7 +111,8 @@ bool restore_sdf_phase_artifacts(const std::filesystem::path& directory,
                 ".fsimdesign is missing its indexed SDF phase payload");
             return false;
         }
-        std::ifstream input(directory / index->artifact, std::ios::binary);
+        auto input = support::native_fs::open_ifstream(
+            directory / index->artifact, std::ios::binary);
         std::vector<std::byte> bytes;
         char value { };
         while (input.get(value)) {

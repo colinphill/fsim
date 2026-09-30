@@ -59,7 +59,7 @@ foreach(FSIM_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_POLICY IN ITEMS
-    "std::ifstream input { path, std::ios::binary }"
+    "support::native_fs::open_ifstream(path, std::ios::binary)"
     "constexpr std::size_t chunk_size"
     "std::bad_alloc"
     "read_fst_file("

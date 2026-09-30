@@ -80,6 +80,8 @@ std::unique_ptr<DynamicLibrary> DynamicLibrary::open(
     // Resolve dependent DLLs from the loaded image's directory and the
     // process' safe default locations. This makes a cached plug-in independent
     // of the caller's current directory and avoids legacy search-path capture.
+    // The loader accepts paths beyond MAX_PATH as-is. An extended-length
+    // spelling would hide the module from GetModuleHandleExW in is_loaded.
     const auto handle = LoadLibraryExW(
         resolved.c_str(),
         nullptr,

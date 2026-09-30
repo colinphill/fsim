@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
+#include "fsim/support/native_filesystem.hpp"
 
 #include <algorithm>
 #include <array>
@@ -55,7 +56,7 @@ std::optional<std::vector<std::byte>> read_all(
     const std::uintmax_t maximum_size =
         std::numeric_limits<std::uintmax_t>::max()) {
     error.clear();
-    const auto size = std::filesystem::file_size(path, error);
+    const auto size = support::native_fs::file_size(path, error);
     if (error) {
         return std::nullopt;
     }
@@ -66,7 +67,7 @@ std::optional<std::vector<std::byte>> read_all(
         return std::nullopt;
     }
 
-    std::ifstream stream(path, std::ios::binary);
+    auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
     if (!stream) {
         error = std::make_error_code(std::errc::io_error);
         return std::nullopt;
@@ -206,7 +207,7 @@ struct LockOwner {
 
 [[nodiscard]] std::optional<LockOwner> read_owner(
     const std::filesystem::path& directory) {
-    std::ifstream stream(directory / "owner", std::ios::binary);
+    auto stream = support::native_fs::open_ifstream(directory / "owner", std::ios::binary);
     std::string magic;
     LockOwner owner;
     if (!stream || !std::getline(stream, magic) || magic != kLockMagic
@@ -225,8 +226,8 @@ struct LockOwner {
         + std::to_string(owner.process_id) + " " + owner.token + "\n";
 #if defined(_WIN32)
     const HANDLE file = CreateFileW(
-        marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
+        support::path_for_native_io(marker).c_str(), GENERIC_WRITE, 0,
+        nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         error = std::error_code{
             static_cast<int>(GetLastError()), std::system_category()};
@@ -279,7 +280,7 @@ struct LockOwner {
     const std::filesystem::path& path,
     const std::chrono::seconds stale_after,
     std::error_code& error) {
-    const auto stamp = std::filesystem::last_write_time(path, error);
+    const auto stamp = support::native_fs::last_write_time(path, error);
     if (error) {
         return false;
     }
@@ -312,7 +313,7 @@ struct LockOwner {
 
     const auto quarantine =
         std::filesystem::path{path.string() + ".stale." + std::string{contender_token}};
-    std::filesystem::rename(path, quarantine, error);
+    support::native_fs::rename(path, quarantine, error);
     if (error) {
         // Another contender either recovered the lock or its owner released it.
         error.clear();
@@ -327,13 +328,13 @@ struct LockOwner {
             && original_owner->token == quarantined_owner->token);
     std::error_code ignored;
     if (same_owner) {
-        std::filesystem::remove_all(quarantine, ignored);
+        support::native_fs::remove_all(quarantine, ignored);
         return true;
     }
 
     // Ownership changed while recovery was being attempted. Restore the
     // directory if possible and conservatively leave it alone otherwise.
-    std::filesystem::rename(quarantine, path, ignored);
+    support::native_fs::rename(quarantine, path, ignored);
     return false;
 }
 
@@ -358,7 +359,7 @@ CacheDirectoryLock::CacheDirectoryLock(
         : std::chrono::steady_clock::now() + wait_for;
     while (true) {
         error.clear();
-        if (std::filesystem::create_directory(path_, error)) {
+        if (support::native_fs::create_directory(path_, error)) {
             const LockOwner owner{current_process_id(), token_};
             // Register before publishing the owner record. A same-process
             // contender that observes the record must never reclaim a lock
@@ -368,7 +369,7 @@ CacheDirectoryLock::CacheDirectoryLock(
             } catch (const std::bad_alloc&) {
                 error = std::make_error_code(std::errc::not_enough_memory);
                 std::error_code ignored;
-                std::filesystem::remove_all(path_, ignored);
+                support::native_fs::remove_all(path_, ignored);
                 return;
             }
             if (write_owner_exclusive(path_, owner, error)) {
@@ -379,7 +380,7 @@ CacheDirectoryLock::CacheDirectoryLock(
             if (const auto published = read_owner(path_);
                 published && published->token == token_) {
                 std::error_code ignored;
-                std::filesystem::remove_all(path_, ignored);
+                support::native_fs::remove_all(path_, ignored);
             }
             unregister_active_lock(token_);
             return;
@@ -410,8 +411,8 @@ CacheDirectoryLock::~CacheDirectoryLock() {
         return;
     }
     std::error_code ignored;
-    std::filesystem::remove(path_ / "owner", ignored);
-    std::filesystem::remove(path_, ignored);
+    support::native_fs::remove(path_ / "owner", ignored);
+    support::native_fs::remove(path_, ignored);
     // Windows virus scanners and indexers can transiently prevent either
     // removal. Once this destructor has stopped touching the canonical path,
     // make its token reclaimable so a later operation in the same process
@@ -435,7 +436,8 @@ bool atomic_replace_file(
     constexpr DWORD maximum_attempts = 1001;
     for (DWORD attempt = 0; attempt < maximum_attempts; ++attempt) {
         if (MoveFileExW(
-                source.c_str(), destination.c_str(),
+                support::path_for_native_io(source).c_str(),
+                support::path_for_native_io(destination).c_str(),
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
             return true;
         }
@@ -548,7 +550,7 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
     // Successful reads refresh LRU recency. Failure to update metadata must
     // never turn a valid cache hit into a compilation failure.
     std::error_code ignored;
-    std::filesystem::last_write_time(
+    support::native_fs::last_write_time(
         path, std::filesystem::file_time_type::clock::now(), ignored);
     return std::vector<std::byte>{payload.begin(), payload.end()};
 }
@@ -567,14 +569,14 @@ bool ObjectCache::store(
         error = std::make_error_code(std::errc::file_too_large);
         return false;
     }
-    std::filesystem::create_directories(path.parent_path(), error);
+    support::native_fs::create_directories(path.parent_path(), error);
     if (error) {
         // Concurrent first-time publishers can race while creating the same
         // shard on Windows. Some filesystem implementations retain an
         // already-exists error even though another publisher completed the
         // directory. Accept only the exact postcondition we require.
         std::error_code status_error;
-        if (!std::filesystem::is_directory(path.parent_path(), status_error)) {
+        if (!support::native_fs::is_directory(path.parent_path(), status_error)) {
             return false;
         }
         error.clear();
@@ -588,7 +590,8 @@ bool ObjectCache::store(
     const auto suffix = temp_counter.fetch_add(1, std::memory_order_relaxed);
     const auto temporary = path.string() + ".tmp." + std::to_string(suffix);
     {
-        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        auto stream = support::native_fs::open_ofstream(
+            temporary, std::ios::binary | std::ios::trunc);
         if (!stream) {
             error = std::make_error_code(std::errc::io_error);
             return false;
@@ -607,13 +610,13 @@ bool ObjectCache::store(
     }
     if (error) {
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        support::native_fs::remove(temporary, ignored);
         return false;
     }
 
     if (!detail::atomic_replace_file(temporary, path, error)) {
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        support::native_fs::remove(temporary, ignored);
         return false;
     }
     return true;
@@ -636,7 +639,7 @@ bool ObjectCache::erase(const std::string_view key, std::error_code& error) cons
         error = std::make_error_code(std::errc::invalid_argument);
         return false;
     }
-    return std::filesystem::remove(path, error);
+    return support::native_fs::remove(path, error);
 }
 
 bool ObjectCache::prune(
@@ -651,13 +654,13 @@ bool ObjectCache::prune(
         error = std::make_error_code(std::errc::invalid_argument);
         return false;
     }
-    if (!std::filesystem::exists(root_, error)) {
+    if (!support::native_fs::exists(root_, error)) {
         if (!error) {
             return true;
         }
         return false;
     }
-    if (!std::filesystem::is_directory(root_, error)) {
+    if (!support::native_fs::is_directory(root_, error)) {
         if (!error) {
             error = std::make_error_code(std::errc::not_a_directory);
         }
@@ -674,8 +677,8 @@ bool ObjectCache::prune(
     std::vector<Entry> entries;
     std::vector<std::filesystem::path> shards;
 
-    std::filesystem::directory_iterator shard_iterator{
-        root_, std::filesystem::directory_options::skip_permission_denied, error};
+    auto shard_iterator = support::native_fs::directory_iterator(
+        root_, std::filesystem::directory_options::skip_permission_denied, error);
     if (error) {
         return false;
     }
@@ -686,8 +689,8 @@ bool ObjectCache::prune(
         }
         std::error_code status_error;
         const auto status = shard_iterator->symlink_status(status_error);
-        if (status_error || !std::filesystem::is_directory(status)
-            || std::filesystem::is_symlink(status)) {
+        if (status_error || !support::native_fs::is_directory(status)
+            || support::native_fs::is_symlink(status)) {
             continue;
         }
         const auto shard = shard_iterator->path();
@@ -702,8 +705,8 @@ bool ObjectCache::prune(
         }
         shards.push_back(shard);
 
-        std::filesystem::directory_iterator file_iterator{
-            shard, std::filesystem::directory_options::skip_permission_denied, error};
+        auto file_iterator = support::native_fs::directory_iterator(
+            shard, std::filesystem::directory_options::skip_permission_denied, error);
         if (error) {
             return false;
         }
@@ -713,7 +716,7 @@ bool ObjectCache::prune(
             }
             const auto path = file_iterator->path();
             const auto file_status = file_iterator->symlink_status(status_error);
-            if (status_error || !std::filesystem::is_regular_file(file_status)) {
+            if (status_error || !support::native_fs::is_regular_file(file_status)) {
                 continue;
             }
             std::string key;
@@ -760,7 +763,7 @@ bool ObjectCache::prune(
                 continue;
             }
             std::error_code remove_error;
-            if (std::filesystem::remove(path, remove_error)) {
+            if (support::native_fs::remove(path, remove_error)) {
                 ++result.removed_temporary_files;
             } else if (remove_error) {
                 ++result.failed_removals;
@@ -800,7 +803,7 @@ bool ObjectCache::prune(
         }
         std::error_code size_error;
         const auto current_size =
-            std::filesystem::file_size(entry.path, size_error);
+            support::native_fs::file_size(entry.path, size_error);
         if (size_error == std::errc::no_such_file_or_directory) {
             entry.removed = true;
             if (remaining_entries != 0) {
@@ -818,7 +821,7 @@ bool ObjectCache::prune(
             return false;
         }
         std::error_code remove_error;
-        if (!std::filesystem::remove(entry.path, remove_error)) {
+        if (!support::native_fs::remove(entry.path, remove_error)) {
             if (remove_error) {
                 ++result.failed_removals;
             }
@@ -864,7 +867,7 @@ bool ObjectCache::prune(
     result.remaining_bytes = remaining_bytes;
     for (const auto& shard : shards) {
         std::error_code remove_error;
-        (void)std::filesystem::remove(shard, remove_error);
+        (void)support::native_fs::remove(shard, remove_error);
     }
     error.clear();
     return true;

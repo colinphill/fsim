@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_internal.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -121,7 +122,7 @@ std::optional<ArtifactRecord> LibraryTransaction::allocate_artifact(
     }
     record.path = std::filesystem::path { "artifacts" } / (record.id + extension);
     std::error_code code;
-    if (std::filesystem::exists(artifact_path(record), code) || code) {
+    if (support::native_fs::exists(artifact_path(record), code) || code) {
         error = "generated workspace artifact path is unavailable";
         return std::nullopt;
     }
@@ -161,7 +162,7 @@ bool LibraryTransaction::commit(std::vector<ArtifactRecord> records,
         });
         std::error_code code;
         if (!allocated || !detail::safe_descendant(impl_->catalog.location.directory, record.path, error)
-            || !std::filesystem::is_directory(artifact_path(record), code) || code) {
+            || !support::native_fs::is_directory(artifact_path(record), code) || code) {
             if (error.empty())
                 error = "workspace artifact was not allocated and published by this transaction";
             return false;
@@ -257,16 +258,16 @@ bool Store::delete_library(const std::string_view name, std::string& error) cons
     }
     detail::collect_revisions(location->directory / "artifacts", { });
     std::error_code code;
-    std::filesystem::remove(location->directory / "artifacts", code);
+    support::native_fs::remove(location->directory / "artifacts", code);
     code.clear();
-    std::filesystem::remove(location->directory / "library.sqlite3", code);
+    support::native_fs::remove(location->directory / "library.sqlite3", code);
     if (code) {
         error = "cannot delete workspace library catalog: " + code.message();
         return false;
     }
     lock.reset();
     if (!location->mapped)
-        std::filesystem::remove(location->directory, code);
+        support::native_fs::remove(location->directory, code);
     return true;
 }
 

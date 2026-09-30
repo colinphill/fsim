@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -671,7 +672,7 @@ end package vital_memory;
         const std::string_view expected,
         diagnostic::Engine& diagnostics)
     {
-        std::ifstream stream(path, std::ios::binary);
+        auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
         if (!stream) {
             diagnostics.error(
                 "FSIM-FE-VHSTD-001",

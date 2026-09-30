@@ -95,7 +95,7 @@ if(FSIM_COMPILER_ENVIRONMENT_INDEX EQUAL -1
 endif()
 
 foreach(FSIM_SEMANTIC_PATH_POLICY IN ITEMS
-    "std::filesystem::weakly_canonical(path, error)"
+    "support::native_fs::weakly_canonical(path, error)"
     "normalized_source_name(fsim::support::path_to_utf8(path))")
   string(FIND
     "${FSIM_APPLICATION_SEMANTIC_CONTENTS}"

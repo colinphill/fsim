@@ -53,6 +53,7 @@ cmake/CheckLinuxPackageDefinitions.cmake
 cmake/CheckMixedToolchainInstall.cmake
 cmake/CheckMsvcDebugContract.cmake
 cmake/CheckMsvcReleaseContract.cmake
+cmake/CheckNativePathIo.cmake
 cmake/CheckNativeProducerPolicy.cmake
 cmake/CheckNestedPortableFreeze.cmake
 cmake/CheckNonProjectRestartability.cmake
@@ -152,6 +153,7 @@ cmake/FsimWarnings.cmake
 cmake/FsimWindowsRuntime.cmake
 cmake/MaterializeUvmSources.cmake
 cmake/MergeSystemCArchives.cmake
+cmake/PatchTcl.cmake
 cmake/RunAccelleraSystemCClosure.cmake
 cmake/RunCleanMachineInstallClosure.cmake
 cmake/RunClosureWitnesses.cmake
@@ -553,6 +555,7 @@ include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/environment.hpp
 include/fsim/support/identity128.hpp
+include/fsim/support/native_filesystem.hpp
 include/fsim/support/path.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
@@ -1060,6 +1063,8 @@ src/frontend/vhdl_toggle_inventory.cpp
 src/library/artifact.cpp
 src/main.cpp
 src/platform/dynamic_library.cpp
+src/platform/windows_long_paths.manifest
+src/platform/windows_long_paths.rc
 src/project/project.cpp
 src/project/project_language.cpp
 src/runtime/acc_callback.cpp
@@ -1538,6 +1543,7 @@ tests/app/wide_file_binary_read_jit_test.cpp
 tests/app/workspace_application_test.cpp
 tests/app/workspace_cli_test.cpp
 tests/app/workspace_controls_test.cpp
+tests/app/workspace_long_paths_test.cpp
 tests/app/workspace_objects_test.cpp
 tests/app/workspace_packages_test.cpp
 tests/app/workspace_selection_test.cpp
@@ -1561,7 +1567,9 @@ tests/artifact/design_artifact_test.cpp
 tests/artifact/object_artifact_test.cpp
 tests/cmake/CheckCurrentResourceDomainSelfTest.cmake
 tests/cmake/CheckGateMigrationNegativeProbes.cmake
+tests/cmake/CheckNativePathIoSelfTest.cmake
 tests/cmake/CheckRequiredSetHelpersSelfTest.cmake
+tests/cmake/CheckTclPatchGovernance.cmake
 tests/cmake/CheckTranslationUnitStructureSelfTest.cmake
 tests/cmake/CheckV3InstalledArchiveRequiredSet.cmake
 tests/cmake/release_assertion_witness.cpp
@@ -2012,6 +2020,7 @@ tests/semantic/systemverilog_class_specialization_test.cpp
 tests/support/bounded_bytes_test.cpp
 tests/support/ctype_whitespace_test.cpp
 tests/support/identity128_test.cpp
+tests/support/native_filesystem_test.cpp
 tests/support/test_helpers.hpp
 tests/systemc/accellera_systemc_corpus_test.cpp
 tests/systemc/accellera_upstream_sc_main.cpp
@@ -2142,3 +2151,6 @@ third_party/systemc-3.0.2/README.md
 third_party/systemc-3.0.2/SOURCE_MANIFEST.txt
 third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
 third_party/systemc-3.0.2/systemc-3.0.2.tar.gz
+third_party/tcl-9.0.4/PATCHES.txt
+third_party/tcl-9.0.4/README.md
+third_party/tcl-9.0.4/patches/tcl-windows-long-paths.patch

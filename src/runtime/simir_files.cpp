@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "simir_internal.hpp"
 
@@ -104,8 +105,8 @@ void Interpreter::Impl::set_file_root(
         return;
     }
     std::error_code error;
-    root = std::filesystem::weakly_canonical(root, error);
-    if (error || !std::filesystem::is_directory(root, error)) {
+    root = support::native_fs::weakly_canonical(root, error);
+    if (error || !support::native_fs::is_directory(root, error)) {
         throw std::invalid_argument {
             "SimIR file root is not an accessible directory"
         };
@@ -160,7 +161,7 @@ FileHandle Interpreter::Impl::open_file(
     }
     const auto joined = file_root / relative;
     std::error_code error;
-    auto checked = std::filesystem::weakly_canonical(
+    auto checked = support::native_fs::weakly_canonical(
         mode->readable && !mode->writable
             ? joined
             : joined.parent_path(),
@@ -180,7 +181,8 @@ FileHandle Interpreter::Impl::open_file(
         };
     }
 
-    auto stream = std::make_unique<std::fstream>(checked, mode->flags);
+    auto stream = std::make_unique<std::fstream>(
+        support::native_fs::open_fstream(checked, mode->flags));
     if (!stream->is_open()) {
         throw std::runtime_error {
             "cannot open SimIR text file '"
