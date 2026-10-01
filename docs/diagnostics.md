@@ -63,7 +63,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-TCL-0005` | error | A complete interactive Tcl command failed during evaluation; the diagnostic includes the interpreter's error result. |
 | `FSIM-TCL-0006` | error | The Tcl transcript could not be opened or written. |
 | `FSIM-TCL-WORKSPACE-0001` | error | Tcl could not determine the process working directory while synchronizing the active workspace. |
-| `FSIM-TCL-DEBUG` | domain | Diagnostic domain assigned to `fsim::debug` and `fsim::provenance`; classified command failures use the child codes below. |
+| `FSIM-TCL-WORKSPACE-0002` | error | On Windows, Tcl `cd` could not enter an existing directory longer than the 258-character working-directory limit because long path support is disabled. The note names the `LongPathsEnabled` registry value and links Microsoft's instructions; Tcl's own error result and `errorCode` are unchanged. |
+| `FSIM-TCL-DEBUG` | domain | Diagnostic domain assigned to `fsim::debug` and `fsim::get_provenance`; classified command failures use the child codes below. |
 | `FSIM-TCL-DEBUG-0001` | error | An exception or unexpected failure occurred during debugger or provenance command execution and was reported at the Tcl command boundary. |
 | `FSIM-TCL-DEBUG-0002` | error | A debugger request contains an invalid numeric identifier or frame index, or an unknown debugger operation. |
 | `FSIM-TCL-DEBUG-CALLBACK-0001` | error | A Tcl callback failed while a debugger command was executing. |

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/cli/driver.hpp"
+#include "fsim/support/environment.hpp"
+#include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/path.hpp"
+#include "tcl.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -151,12 +155,12 @@ proc assert_stale_catalog_reference {reference operation} {
       [string first "stale" $message] < 0} {
     error "$operation did not stale the old catalog reference"
   }
-  set diagnostics [fsim::diagnostics]
+  set diagnostics [fsim::get_diagnostics]
   if {[llength $diagnostics] == 0 ||
       [dict get [lindex $diagnostics end] code] ne "FSIM-TCL-OBJECT-0002"} {
     error "$operation did not publish the stale-reference diagnostic"
   }
-  fsim::diagnostics clear
+  fsim::clear_diagnostics
 }
 
 proc assert_messages {operation verbosity messages} {
@@ -271,7 +275,7 @@ set cd_result [cd $switched_directory]
 if {$cd_result ne ""} {
   error "successful Tcl cd did not preserve its empty result"
 }
-set switched_view [fsim::workspace]
+set switched_view [fsim::get_workspace]
 if {[file normalize [dict get $switched_view directory]] ne $switched_directory ||
     [file normalize [dict get $switched_view managed_directory]] ne
         [file normalize [file join $switched_directory .fsim]]} {
@@ -283,10 +287,10 @@ if {[llength [dict get $switched_view libraries]] != 0 ||
 }
 set switched_compile [fsim::compile -verbosity quiet switched.sv]
 if {[dict get $switched_compile library] ne "work" ||
-    [llength [dict get [fsim::workspace] libraries]] != 1} {
+    [llength [dict get [fsim::get_workspace] libraries]] != 1} {
   error "compile did not publish into the switched workspace"
 }
-set switched_library [lindex [dict get [fsim::workspace] libraries] 0]
+set switched_library [lindex [dict get [fsim::get_workspace] libraries] 0]
 if {[dict get $switched_library library] ne "work" ||
     [file normalize [dict get $switched_library path]] ne
         [file normalize [file join $switched_directory .fsim libraries work]]} {
@@ -297,7 +301,7 @@ set switched_elaboration [fsim::elaborate \
 if {[dict get $switched_elaboration snapshot] ne "switched"} {
   error "elaborate did not publish in the switched workspace"
 }
-set switched_load [fsim::load switched]
+set switched_load [fsim::load_snapshot switched]
 if {[dict get $switched_load snapshot] ne "switched"} {
   error "load did not select the switched workspace snapshot"
 }
@@ -313,7 +317,7 @@ foreach child [fsim::object children $switched_root] {
 }
 if {$switched_ready eq ""} {error "switched snapshot omitted ready"}
 if {[dict get [fsim::run 1ns] status] ni {completed time_limit} ||
-    [dict get [fsim::object value $switched_ready] value] ne "1"} {
+    [dict get [fsim::object read $switched_ready] value] ne "1"} {
   error "switched snapshot did not run independently"
 }
 set switched_catalog_ref [fsim::object definition work switched_pkg]
@@ -331,7 +335,7 @@ if {$cd_error eq "" ||
 if {[file normalize [pwd]] ne $switched_directory} {
   error "failed cd changed the process directory"
 }
-set failed_cd_view [fsim::workspace]
+set failed_cd_view [fsim::get_workspace]
 if {[file normalize [dict get $failed_cd_view directory]] ne
         $switched_directory ||
     [dict get [fsim::object info $switched_catalog_ref] name] ne "switched_pkg"} {
@@ -355,7 +359,7 @@ proc reject_callback_cd {target args} {
     if {[file normalize [pwd]] ne $before} {
       error "callback $spelling changed the process directory"
     }
-    set callback_view [fsim::workspace]
+    set callback_view [fsim::get_workspace]
     if {[file normalize [dict get $callback_view directory]] ne $before ||
         [dict get [fsim::object info $::switched_catalog_ref] name] ne
             "switched_pkg"} {
@@ -363,9 +367,9 @@ proc reject_callback_cd {target args} {
     }
   }
 }
-fsim::on safe_point [list reject_callback_cd $initial_directory]
+fsim::add_callback safe_point [list reject_callback_cd $initial_directory]
 set callback_run [fsim::run 2ns]
-fsim::off safe_point
+fsim::remove_callback safe_point
 if {!$::callback_cd_attempted ||
     [dict get $callback_run status] ni {completed time_limit}} {
   error "callback cd regression did not complete normally: $callback_run"
@@ -376,13 +380,13 @@ if {$cd_result ne ""} {
   error "qualified Tcl cd did not preserve its empty result"
 }
 assert_stale_catalog_reference $switched_catalog_ref cd
-set restored_view [fsim::workspace]
+set restored_view [fsim::get_workspace]
 if {[file normalize [dict get $restored_view directory]] ne $initial_directory ||
     [llength [dict get $restored_view libraries]] != 1 ||
     [dict get [lindex [dict get $restored_view libraries] 0] library] ne "work"} {
   error "cd back did not restore the original workspace view: $restored_view"
 }
-if {[dict get [fsim::object value $switched_ready] value] ne "1"} {
+if {[dict get [fsim::object read $switched_ready] value] ne "1"} {
   error "changing workspace invalidated the loaded snapshot"
 }
 
@@ -410,7 +414,7 @@ set replacement [fsim::compile -library work -verbosity quiet top.sv]
 if {[llength [dict get $replacement diagnostics]] != 0} {
   error "successful replacement returned unexpected diagnostics"
 }
-if {[dict get [fsim::object value $switched_ready] value] ne "1"} {
+if {[dict get [fsim::object read $switched_ready] value] ne "1"} {
   error "another workspace's catalog replacement changed the loaded snapshot"
 }
 assert_stale_catalog_reference $original_catalog_ref replacement
@@ -436,14 +440,14 @@ set deletion [fsim::library delete work]
 if {![dict get $deletion deleted]} {
   error "library delete did not report deletion"
 }
-if {[dict get [fsim::object value $switched_ready] value] ne "1"} {
+if {[dict get [fsim::object read $switched_ready] value] ne "1"} {
   error "another workspace's library deletion changed the loaded snapshot"
 }
 file delete top.sv
 
 # The snapshot owns its design payload and remains loadable after its source
 # library and source file have been deleted.
-set loaded [fsim::load inspectable]
+set loaded [fsim::load_snapshot inspectable]
 if {[dict get $loaded snapshot] ne "inspectable"} {
   error "source-free named snapshot did not load"
 }
@@ -477,7 +481,7 @@ set run_result [fsim::run 1ns]
 if {[dict get $run_result status] ni {completed time_limit}} {
   error "loaded snapshot did not run: $run_result"
 }
-if {[dict get [fsim::object value $ready_ref] value] ne "1"} {
+if {[dict get [fsim::object read $ready_ref] value] ne "1"} {
   error "loaded snapshot did not preserve the expected run value"
 }
 
@@ -488,7 +492,7 @@ if {[llength [dict get $post_load_compilation diagnostics]] != 0} {
   error "successful post-load compile returned unexpected diagnostics"
 }
 set post_load_catalog_ref [fsim::object definition work workspace_pkg]
-if {[dict get [fsim::object value $ready_ref] value] ne "1"} {
+if {[dict get [fsim::object read $ready_ref] value] ne "1"} {
   error "compiling a replacement changed the loaded snapshot"
 }
 set deletion [fsim::library delete work]
@@ -496,7 +500,7 @@ if {![dict get $deletion deleted]} {
   error "post-load library delete did not report deletion"
 }
 assert_stale_catalog_reference $post_load_catalog_ref library-delete
-if {[dict get [fsim::object value $ready_ref] value] ne "1" ||
+if {[dict get [fsim::object read $ready_ref] value] ne "1" ||
     [dict get [fsim::object info $ready_ref] path] ne $ready_path} {
   error "deleting the compiled library changed the loaded snapshot"
 }
@@ -507,7 +511,7 @@ if {![catch {fsim::elaborate missing_top} message]} {
 if {[lindex $::errorCode 0] ne "FSIM"} {
   error "workspace failure did not set an fsim errorCode"
 }
-set diagnostics [fsim::diagnostics]
+set diagnostics [fsim::get_diagnostics]
 if {[llength $diagnostics] == 0
     || ![string match "FSIM-WS-*" [dict get [lindex $diagnostics end] code]]} {
   error "workspace failure did not publish a structured diagnostic"
@@ -597,7 +601,7 @@ endmodule
     invoke({ "fsim", "compile", "--library", "work", "top.sv" });
     invoke({ "fsim", "elaborate", "work.top", "--snapshot", "timed" });
     constexpr auto script = R"FSIM_TCL(
-set loaded [fsim::load timed]
+set loaded [fsim::load_snapshot timed]
 if {[dict get $loaded top] ne "top"} {error "wrong SDF top"}
 set first [fsim::sdf configure first.sdf top top.u0 typ]
 if {![dict get $first effective] || [dict get $first paths] != 1 ||
@@ -615,15 +619,15 @@ proc commit_sdf_at_safe_point {time delta phase} {
     set ::sdf_live_committed 1
   }
 }
-fsim::on safe_point commit_sdf_at_safe_point
+fsim::add_callback safe_point commit_sdf_at_safe_point
 fsim::run 11ns
-fsim::off safe_point
+fsim::remove_callback safe_point
 if {!$::sdf_live_committed} {error "Tcl SDF safe point was not reached"}
-if {[fsim::read top.z] ne "0"} {error "first path event was early"}
+if {[fsim::read_signal top.z] ne "0"} {error "first path event was early"}
 if {![catch {fsim::sdf configure missing.sdf top top.u0 typ} message]} {
   error "missing live Tcl SDF file succeeded"
 }
-set committed [fsim::sdf summary]
+set committed [fsim::sdf status]
 if {![dict get $committed effective] || [dict get $committed generation] != 2 ||
     [dict get $committed identity] eq [dict get $first identity]} {
   error "failed Tcl SDF apply changed effective control"
@@ -631,17 +635,17 @@ if {![dict get $committed effective] || [dict get $committed generation] != 2 ||
 if {![catch {fsim::sdf configure third.sdf top top.u0 typ} message]} {
   error "outside-safe-point Tcl SDF change succeeded"
 }
-if {[dict get [fsim::sdf summary] identity] ne [dict get $committed identity]} {
+if {[dict get [fsim::sdf status] identity] ne [dict get $committed identity]} {
   error "outside-safe-point rejection changed effective control"
 }
 fsim::run 12500ps
-if {[fsim::read top.z] ne "0"} {error "queued path was rescheduled"}
+if {[fsim::read_signal top.z] ne "0"} {error "queued path was rescheduled"}
 fsim::run 13500ps
-if {[fsim::read top.z] ne "1"} {error "queued 13 ns event was lost"}
+if {[fsim::read_signal top.z] ne "1"} {error "queued 13 ns event was lost"}
 fsim::run 31500ps
-if {[fsim::read top.z] ne "1"} {error "new path event was early"}
+if {[fsim::read_signal top.z] ne "1"} {error "new path event was early"}
 fsim::run 32500ps
-if {[fsim::read top.z] ne "0"} {error "new path event was not applied"}
+if {[fsim::read_signal top.z] ne "0"} {error "new path event was not applied"}
 puts sdf-workspace-ok
 )FSIM_TCL";
     std::istringstream input;
@@ -654,6 +658,120 @@ puts sdf-workspace-ok
     }
 }
 
+void run_unqualified_command_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory { temporary.path() };
+    const std::string script = R"FSIM_TCL(
+if {[version] ne [fsim::version]} {error "unqualified version did not run fsim::version"}
+if {[get_workspace] ne [fsim::get_workspace]} {
+  error "unqualified get_workspace did not run fsim::get_workspace"
+}
+if {[dict get [help get_signals] name] ne "fsim::get_signals"} {
+  error "help did not resolve an unqualified command name"
+}
+foreach builtin {load read trace} {
+  if {[namespace which $builtin] ne "::$builtin"} {
+    error "Tcl built-in $builtin lost precedence over fsim commands"
+  }
+}
+foreach removed {load read trace signals deposit force release status
+                 workspace diagnostics on off callbacks provenance} {
+  if {[info commands ::fsim::$removed] ne ""} {
+    error "renamed command fsim::$removed still exists"
+  }
+}
+proc get_signals {} {return user-procedure}
+if {[get_signals] ne "user-procedure"} {
+  error "a global procedure did not shadow the unqualified fsim command"
+}
+rename get_signals {}
+namespace eval ::user_package {
+  proc probe {} {return [catch {version}]}
+}
+if {![::user_package::probe]} {
+  error "the fsim command path leaked into another namespace"
+}
+puts unqualified-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+        || output.str().find("unqualified-ok") == std::string::npos) {
+        throw std::runtime_error(
+            "unqualified fsim commands failed: " + error.str());
+    }
+}
+
+void run_windows_long_path_cd_test()
+{
+    using fsim::app::tcl_detail::windows_long_path_cd_note;
+    TemporaryDirectory temporary;
+    auto long_directory = temporary.path();
+    for (char segment = 'a'; segment < 'f'; ++segment) {
+        long_directory /= std::string(60, segment);
+    }
+    fsim::support::native_fs::create_directories(long_directory);
+    const auto requested = fsim::support::path_to_utf8(long_directory);
+    struct Cleanup {
+        const std::filesystem::path& root;
+        ~Cleanup()
+        {
+            std::error_code error;
+            fsim::support::native_fs::remove_all(root, error);
+        }
+    } cleanup { temporary.path() };
+
+    const auto note = windows_long_path_cd_note(requested, false);
+#if defined(_WIN32)
+    const auto length = std::to_string(
+        long_directory.lexically_normal().native().size());
+    if (!note || note->find("LongPathsEnabled") == std::string::npos
+        || note->find("learn.microsoft.com") == std::string::npos
+        || note->find("this directory has " + length) == std::string::npos) {
+        throw std::runtime_error(
+            "long-path cd note is incomplete: " + note.value_or("<none>"));
+    }
+    if (windows_long_path_cd_note(requested, true)
+        || windows_long_path_cd_note(requested + "/missing", false)
+        || windows_long_path_cd_note(
+            fsim::support::path_to_utf8(temporary.path()), false)) {
+        throw std::runtime_error(
+            "long-path cd note appeared when the limit was not the cause");
+    }
+
+    // End to end through the shell. The branch depends on this machine's
+    // LongPathsEnabled value; both must keep Tcl's native error details.
+    WorkingDirectory working_directory { temporary.path() };
+    const auto script = "set code [catch {cd {" + requested
+        + "}} message options]\n"
+          "puts \"cd-result=$code [dict get $options -errorcode]\"\n";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    (void)run_cli({ "fsim", "tcl", "-c", script }, input, output, error);
+    const auto diagnosed = error.str().find("FSIM-TCL-WORKSPACE-0002")
+        != std::string::npos;
+    if (fsim::support::windows_long_paths_enabled()) {
+        if (output.str().find("cd-result=0") == std::string::npos
+            || diagnosed) {
+            throw std::runtime_error("enabled long-path cd failed: "
+                + output.str() + error.str());
+        }
+    } else if (output.str().find("cd-result=1 POSIX ENAMETOOLONG")
+                   == std::string::npos
+        || !diagnosed
+        || error.str().find("LongPathsEnabled") == std::string::npos) {
+        throw std::runtime_error("disabled long-path cd was not diagnosed: "
+            + output.str() + error.str());
+    }
+#else
+    if (note) {
+        throw std::runtime_error("long-path cd note appeared off Windows");
+    }
+#endif
+}
 
 } // namespace
 
@@ -662,6 +780,8 @@ int main()
     try {
         run_workspace_commands_test();
         run_sdf_workspace_commands_test();
+        run_unqualified_command_test();
+        run_windows_long_path_cd_test();
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';
         return 1;

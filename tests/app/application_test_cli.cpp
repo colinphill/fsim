@@ -1593,15 +1593,15 @@ if {[dict get $initial time] != 0 ||
     [dict get $initial finished]} {
   error "bad initial debugger status: $initial"
 }
-if {[fsim::trace list] ne "(no traced signals)"} {
+if {[fsim::tracing list] ne "(no traced signals)"} {
   error "trace selection was not initially empty"
 }
-if {[fsim::trace add q] ne "tracing tb.q" ||
-    [fsim::trace list] ne "tb.q"} {
+if {[fsim::tracing add q] ne "tracing tb.q" ||
+    [fsim::tracing list] ne "tb.q"} {
   error "trace selection did not retain tb.q"
 }
-set trace_status_first [fsim::trace status]
-set trace_status_second [fsim::trace status]
+set trace_status_first [fsim::tracing status]
+set trace_status_second [fsim::tracing status]
 set trace_runtime [dict get $trace_status_first runtime]
 set trace_pattern "format vcd, output *, compression none, lifecycle open, "
 append trace_pattern "declared 3, selected 1, generation *"
@@ -1616,13 +1616,13 @@ set partial [fsim::debug continue 1ns]
 if {[dict get $partial time] != 1 || [dict get $partial finished]} {
   error "bounded debugger continue did not stop at 1ns: $partial"
 }
-if {[fsim::trace remove q] ne "stopped tracing tb.q" ||
-    [fsim::trace list] ne "(no traced signals)"} {
+if {[fsim::tracing remove q] ne "stopped tracing tb.q" ||
+    [fsim::tracing list] ne "(no traced signals)"} {
   error "trace selection did not remove tb.q"
 }
 set completed [fsim::debug continue]
 if {[dict get $completed time] != 3 || ![dict get $completed finished] ||
-    [dict get [fsim::trace status] lifecycle] ne "complete"} {
+    [dict get [fsim::tracing status] lifecycle] ne "complete"} {
   error "debugger or trace did not complete: $completed"
 }
 puts "structured-debug-cli-ok"

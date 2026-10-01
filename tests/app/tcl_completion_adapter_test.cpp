@@ -167,7 +167,7 @@ void test_command_catalog_completion_metadata()
     const auto* library = find_spec("fsim::library");
     const auto* object = find_spec("fsim::object");
     const auto* debug = find_spec("fsim::debug");
-    const auto* load = find_spec("fsim::load");
+    const auto* load = find_spec("fsim::load_snapshot");
     require(compile != nullptr && compile->capability == TclCommandCapability::workspace
             && compile->result_shape == TclResultShape::dictionary
             && !compile->diagnostic_domain.empty()
@@ -316,7 +316,7 @@ void test_read_only_completion_and_generation_snapshot()
     require(has_candidate(option_library_result, "work", CandidateKind::library),
         "completion must route a valued option to the library provider");
 
-    constexpr std::string_view snapshot_input = "::fsim::load smo";
+    constexpr std::string_view snapshot_input = "::fsim::load_snapshot smo";
     const auto snapshot_result = fsim::app::tcl_detail::complete_tcl(
         context, snapshot_input, snapshot_input.size());
     require(has_candidate(snapshot_result, "smoke", CandidateKind::snapshot),

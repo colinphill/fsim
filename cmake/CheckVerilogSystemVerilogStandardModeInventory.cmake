@@ -450,7 +450,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "six-row revision corpus"
     "seven-row switch corpus"
     "16-witness serial"
-    "fsim::provenance PATH"
+    "fsim::get_provenance PATH"
     "size-gated append-only fields"
     "full historical tool emulation"
     "${FSIM_MODE_SHA256}"

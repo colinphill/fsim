@@ -30,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -41,6 +42,59 @@ namespace fsim::app {
 namespace tcl_detail {
 
     constexpr int kUnavailable = 3;
+
+    // Without long path support, SetCurrentDirectoryW accepts MAX_PATH - 2
+    // characters before it appends a separator and the terminator.
+    constexpr std::size_t kWindowsWorkingDirectoryLimit = 258;
+
+    constexpr std::string_view kWindowsLongPathsGuide {
+        "https://learn.microsoft.com/windows/win32/fileio/"
+        "maximum-file-path-limitation"
+        "#enable-long-paths-in-windows-10-version-1607-and-later"
+    };
+
+    std::optional<std::string> windows_long_path_cd_note(
+        const std::string_view requested_directory,
+        const bool long_paths_enabled)
+    {
+#if defined(_WIN32)
+        if (long_paths_enabled || requested_directory.empty()) {
+            return std::nullopt;
+        }
+        std::error_code error;
+        auto directory = fsim::support::path_from_utf8(requested_directory);
+        if (directory.is_relative()) {
+            directory = std::filesystem::current_path(error) / directory;
+            if (error) {
+                return std::nullopt;
+            }
+        }
+        auto spelling = directory.lexically_normal().native();
+        while (spelling.size() > 3 && spelling.back() == L'\\') {
+            spelling.pop_back();
+        }
+        // A missing directory is the real failure; enabling long paths would
+        // only change Tcl's error from "too long" to "not found".
+        if (spelling.size() <= kWindowsWorkingDirectoryLimit
+            || !fsim::support::native_fs::is_directory(spelling, error)
+            || error) {
+            return std::nullopt;
+        }
+        return "Windows limits the working directory to "
+            + std::to_string(kWindowsWorkingDirectoryLimit)
+            + " characters unless long path support is enabled, and this "
+              "directory has "
+            + std::to_string(spelling.size())
+            + ". Set the REG_DWORD value LongPathsEnabled to 1 under "
+              "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem "
+              "(requires administrator rights), then restart fsim. See "
+            + std::string { kWindowsLongPathsGuide };
+#else
+        (void)requested_directory;
+        (void)long_paths_enabled;
+        return std::nullopt;
+#endif
+    }
 
 #if defined(FSIM_HAS_TCL)
 
@@ -154,6 +208,45 @@ namespace tcl_detail {
         return TCL_ERROR;
     }
 
+    // Windows reports only "file name too long" when a directory exceeds the
+    // working-directory limit, so name the machine setting that lifts it.
+    // Tcl's own result and error code stay unchanged for scripts.
+    void report_windows_long_path_cd(
+        TclCdCommandState& state,
+        Tcl_Interp* interpreter,
+        const int command_result,
+        const std::string_view requested_directory) noexcept
+    {
+        if (command_result != TCL_ERROR || state.context == nullptr) {
+            return;
+        }
+        try {
+            auto note = windows_long_path_cd_note(
+                requested_directory,
+                fsim::support::windows_long_paths_enabled());
+            if (!note) {
+                return;
+            }
+            const char* message = Tcl_GetStringResult(interpreter);
+            state.context->diagnostics.report({ diagnostic::Severity::error,
+                "FSIM-TCL-WORKSPACE-0002",
+                message == nullptr ? std::string { } : std::string { message },
+                { },
+                { { std::move(*note), { } } } });
+        } catch (...) {
+            // The note is advisory; Tcl's error result still reports the failure.
+        }
+    }
+
+    std::string_view requested_cd_directory(Tcl_Obj* argument) noexcept
+    {
+        Tcl_Size length { };
+        const char* text = Tcl_GetStringFromObj(argument, &length);
+        return text == nullptr
+            ? std::string_view { }
+            : std::string_view { text, static_cast<std::size_t>(length) };
+    }
+
     int guarded_cd_string_command(
         void* client_data,
         Tcl_Interp* interpreter,
@@ -169,6 +262,9 @@ namespace tcl_detail {
             interpreter,
             argument_count,
             arguments);
+        if (argument_count == 2 && arguments[1] != nullptr) {
+            report_windows_long_path_cd(state, interpreter, result, arguments[1]);
+        }
         return synchronize_after_cd(state, interpreter, result);
     }
 
@@ -187,6 +283,10 @@ namespace tcl_detail {
             interpreter,
             argument_count,
             arguments);
+        if (argument_count == 2) {
+            report_windows_long_path_cd(state, interpreter, result,
+                requested_cd_directory(arguments[1]));
+        }
         return synchronize_after_cd(state, interpreter, result);
     }
 
@@ -206,6 +306,10 @@ namespace tcl_detail {
             interpreter,
             argument_count,
             arguments);
+        if (argument_count == 2) {
+            report_windows_long_path_cd(state, interpreter, result,
+                requested_cd_directory(arguments[1]));
+        }
         return synchronize_after_cd(state, interpreter, result);
     }
 #endif
@@ -1093,6 +1197,12 @@ int handle_tcl(
             break;
         }
     }
+    // Resolve unqualified names from global code through ::fsim, so `compile`
+    // runs fsim::compile. Global commands still win, so Tcl's load, read and
+    // trace keep their meaning, and other namespaces are unaffected.
+    constexpr std::string_view global_command_path {
+        "::namespace eval :: {::namespace path ::fsim}"
+    };
     if (Tcl_CreateObjCommand2(
             interpreter.get(),
             "exit",
@@ -1101,6 +1211,11 @@ int handle_tcl(
             nullptr)
             == nullptr
         || !commands_ok
+        || Tcl_EvalEx(interpreter.get(),
+               global_command_path.data(),
+               tcl_size(global_command_path.size()),
+               TCL_EVAL_GLOBAL)
+            != TCL_OK
         || !initialize_arguments(interpreter.get(), invocation)) {
         diagnostics.error(
             "FSIM-TCL-0002",

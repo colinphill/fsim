@@ -60,10 +60,10 @@ not rewrite already published history.
 Tcl can configure and inspect a trace before simulation:
 
 ```tcl
-fsim::trace configure waves.fst -format fst \
+fsim::tracing configure waves.fst -format fst \
   -compression deterministic -select top.*
-set status [fsim::trace status]
-set report [fsim::trace report]
+set status [fsim::tracing status]
+set report [fsim::tracing report]
 ```
 
 The lifecycle is `disabled`, `configured`, `open`, `complete`, or `failed`.

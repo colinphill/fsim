@@ -131,7 +131,7 @@ if {[dict get $breakpoint kind] ne "time" ||
     [llength [fsim::debug break list]] != 1} {
   error "breakpoint add/list failed: $breakpoint"
 }
-fsim::debug break delete $breakpoint_id
+fsim::debug break remove $breakpoint_id
 if {[llength [fsim::debug break list]] != 0} {
   error "breakpoint delete failed"
 }
@@ -142,7 +142,7 @@ if {[dict get $watch kind] ne "watch" ||
     [llength [fsim::debug watch list]] != 1} {
   error "watch add/list failed: $watch"
 }
-fsim::debug watch delete $watch_id
+fsim::debug watch remove $watch_id
 if {[llength [fsim::debug watch list]] != 0} {
   error "watch delete failed"
 }
@@ -197,7 +197,7 @@ if {[dict get $owner language] ne "systemverilog" ||
 if {![catch {fsim::debug restart missing-debug-snapshot} reload_error]} {
   error "missing snapshot restart succeeded"
 }
-set reload_diagnostics [fsim::diagnostics]
+set reload_diagnostics [fsim::get_diagnostics]
 if {[llength $reload_diagnostics] != 1 ||
     [dict get [lindex $reload_diagnostics 0] code] ne "FSIM-WS-001"} {
   error "failed restart did not publish only its expected diagnostic: $reload_diagnostics"
@@ -205,7 +205,7 @@ if {[llength $reload_diagnostics] != 1 ||
 if {[dict get [fsim::debug inspect $q_ref] path] ne "debug_top.q"} {
   error "failed restart changed the active debugger session"
 }
-fsim::diagnostics clear
+fsim::clear_diagnostics
 set restarted [fsim::debug restart]
 if {[dict get $restarted snapshot] ne "debug-top" ||
     [dict get $restarted time] != 0} {
@@ -215,12 +215,12 @@ if {![catch {fsim::debug inspect $q_ref} stale_error] ||
     [string first "stale" $stale_error] < 0} {
   error "successful restart did not invalidate loaded object references"
 }
-set stale_diagnostics [fsim::diagnostics]
+set stale_diagnostics [fsim::get_diagnostics]
 if {[llength $stale_diagnostics] != 1 ||
     [dict get [lindex $stale_diagnostics 0] code] ne "FSIM-TCL-DEBUG-REF-0001"} {
   error "stale reference did not publish only its expected diagnostic: $stale_diagnostics"
 }
-fsim::diagnostics clear
+fsim::clear_diagnostics
 puts "debugger-commands-ok"
 )tcl",
         "debugger-commands-ok");
@@ -248,7 +248,7 @@ puts "debugger-commands-ok"
     }
 
     run_script("vhdl-debugger", R"tcl(
-set records [fsim::provenance]
+set records [fsim::get_provenance]
 if {[llength $records] != 1} {error "bad VHDL provenance: $records"}
 set owner [lindex $records 0]
 if {[dict get $owner language] ne "vhdl" ||
@@ -303,7 +303,7 @@ foreach field {plugin_input_digest plugin_link_digest plugin_library_checksum} {
 if {[dict get $owner plugin_compiler_fingerprint] eq ""} {
   error "SystemC compiler fingerprint was not restored: $owner"
 }
-if {[fsim::debug provenance] ne $records || [fsim::provenance] ne $records} {
+if {[fsim::debug provenance] ne $records || [fsim::get_provenance] ne $records} {
   error "SystemC provenance changed across equivalent archived queries"
 }
 puts "systemc-plugin-provenance-ok"

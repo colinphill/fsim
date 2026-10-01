@@ -904,7 +904,7 @@ namespace fsim::app::tcl_detail {
         Tcl_Obj* const arguments[])
     {
         if (argument_count == 2
-            && std::string_view { Tcl_GetString(arguments[1]) } == "summary") {
+            && std::string_view { Tcl_GetString(arguments[1]) } == "status") {
             Tcl_Obj* result = Tcl_NewDictObj();
             put_sdf_summary(interpreter, result, context.sdf_control.get());
             Tcl_SetObjResult(interpreter, result);
@@ -948,7 +948,7 @@ namespace fsim::app::tcl_detail {
             Tcl_WrongNumArgs(interpreter,
                 1,
                 arguments,
-                "summary|report|configure source root ?cell? ?min|typ|max? ?reportLimit?");
+                "status|report|configure source root ?cell? ?min|typ|max? ?reportLimit?");
             return TCL_ERROR;
         }
         if (context.callback_depth != 0
@@ -1057,19 +1057,28 @@ namespace fsim::app::tcl_detail {
         return TCL_OK;
     }
 
+    int clear_diagnostics_command(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        if (argument_count != 1) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
+            return TCL_ERROR;
+        }
+        context.diagnostics.clear();
+        return set_result(interpreter, "0");
+    }
+
     int diagnostics_command(
         TclContext& context,
         Tcl_Interp* interpreter,
         const Tcl_Size argument_count,
         Tcl_Obj* const arguments[])
     {
-        if (argument_count == 2
-            && std::string_view { Tcl_GetString(arguments[1]) } == "clear") {
-            context.diagnostics.clear();
-            return set_result(interpreter, "0");
-        }
         if (argument_count != 1) {
-            Tcl_WrongNumArgs(interpreter, 1, arguments, "?clear?");
+            Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
             return TCL_ERROR;
         }
         Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
@@ -1441,7 +1450,7 @@ namespace fsim::app::tcl_detail {
         if (argument_count < 2) {
             Tcl_WrongNumArgs(
                 interpreter, 1, arguments,
-                "configure|disable|status|report|add|remove|all|clear|list");
+                "configure|disable|status|report|add|add_all|remove|clear|list|flush|close");
             return TCL_ERROR;
         }
         const auto apply_configuration
@@ -1667,10 +1676,19 @@ namespace fsim::app::tcl_detail {
             Tcl_SetObjResult(interpreter, result);
             return TCL_OK;
         }
+        // The debugger's own trace vocabulary names add_all as "all"; Tcl
+        // keeps every tracing subcommand a verb.
+        if (operation == "all") {
+            return command_error(
+                interpreter, "unknown tracing subcommand 'all'; use add_all");
+        }
         std::vector<std::string> command { "trace" };
         command.reserve(static_cast<std::size_t>(argument_count));
         for (Tcl_Size index = 1; index < argument_count; ++index) {
             command.emplace_back(Tcl_GetString(arguments[index]));
+        }
+        if (operation == "add_all") {
+            command[1] = "all";
         }
         return execute_debug_command(context, interpreter, command);
     }
@@ -1685,18 +1703,20 @@ namespace fsim::app::tcl_detail {
         try {
             const std::string_view command { Tcl_GetString(arguments[0]) };
             if (context.callback_depth != 0
-                && command != "::fsim::workspace"
-                && command != "fsim::workspace"
-                && command != "::fsim::signals"
-                && command != "fsim::signals"
-                && command != "::fsim::provenance"
-                && command != "fsim::provenance"
-                && command != "::fsim::read"
-                && command != "fsim::read"
-                && command != "::fsim::status"
-                && command != "fsim::status"
-                && command != "::fsim::diagnostics"
-                && command != "fsim::diagnostics"
+                && command != "::fsim::get_workspace"
+                && command != "fsim::get_workspace"
+                && command != "::fsim::get_signals"
+                && command != "fsim::get_signals"
+                && command != "::fsim::get_provenance"
+                && command != "fsim::get_provenance"
+                && command != "::fsim::read_signal"
+                && command != "fsim::read_signal"
+                && command != "::fsim::get_simulation"
+                && command != "fsim::get_simulation"
+                && command != "::fsim::get_diagnostics"
+                && command != "fsim::get_diagnostics"
+                && command != "::fsim::clear_diagnostics"
+                && command != "fsim::clear_diagnostics"
                 && command != "::fsim::sdf"
                 && command != "fsim::sdf"
                 && command != "::fsim::stop"
@@ -1705,28 +1725,30 @@ namespace fsim::app::tcl_detail {
                     interpreter,
                     "this fsim command is not safe inside a simulation callback");
             }
-            if (command == "::fsim::workspace" || command == "fsim::workspace") {
+            if (command == "::fsim::get_workspace"
+                || command == "fsim::get_workspace") {
                 return workspace_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::load" || command == "fsim::load") {
+            if (command == "::fsim::load_snapshot" || command == "fsim::load_snapshot") {
                 return load_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::signals" || command == "fsim::signals") {
+            if (command == "::fsim::get_signals" || command == "fsim::get_signals") {
                 return signals_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::provenance"
-                || command == "fsim::provenance") {
+            if (command == "::fsim::get_provenance"
+                || command == "fsim::get_provenance") {
                 return provenance_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::read" || command == "fsim::read") {
+            if (command == "::fsim::read_signal" || command == "fsim::read_signal") {
                 return read_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::deposit" || command == "fsim::deposit") {
+            if (command == "::fsim::deposit_signal"
+                || command == "fsim::deposit_signal") {
                 return mutate_command(
                     context,
                     interpreter,
@@ -1734,7 +1756,7 @@ namespace fsim::app::tcl_detail {
                     arguments,
                     "deposit");
             }
-            if (command == "::fsim::force" || command == "fsim::force") {
+            if (command == "::fsim::force_signal" || command == "fsim::force_signal") {
                 return mutate_command(
                     context,
                     interpreter,
@@ -1742,7 +1764,8 @@ namespace fsim::app::tcl_detail {
                     arguments,
                     "force");
             }
-            if (command == "::fsim::release" || command == "fsim::release") {
+            if (command == "::fsim::release_signal"
+                || command == "fsim::release_signal") {
                 return mutate_command(
                     context,
                     interpreter,
@@ -1754,29 +1777,36 @@ namespace fsim::app::tcl_detail {
                 return run_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::status" || command == "fsim::status") {
+            if (command == "::fsim::get_simulation"
+                || command == "fsim::get_simulation") {
                 return status_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::diagnostics"
-                || command == "fsim::diagnostics") {
+            if (command == "::fsim::get_diagnostics"
+                || command == "fsim::get_diagnostics") {
                 return diagnostics_command(
+                    context, interpreter, argument_count, arguments);
+            }
+            if (command == "::fsim::clear_diagnostics"
+                || command == "fsim::clear_diagnostics") {
+                return clear_diagnostics_command(
                     context, interpreter, argument_count, arguments);
             }
             if (command == "::fsim::sdf" || command == "fsim::sdf") {
                 return sdf_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::on" || command == "fsim::on") {
+            if (command == "::fsim::add_callback" || command == "fsim::add_callback") {
                 return on_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::off" || command == "fsim::off") {
+            if (command == "::fsim::remove_callback"
+                || command == "fsim::remove_callback") {
                 return off_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::callbacks"
-                || command == "fsim::callbacks") {
+            if (command == "::fsim::get_callbacks"
+                || command == "fsim::get_callbacks") {
                 return callbacks_command(
                     context, interpreter, argument_count, arguments);
             }
@@ -1784,7 +1814,7 @@ namespace fsim::app::tcl_detail {
                 return stop_command(
                     context, interpreter, argument_count, arguments);
             }
-            if (command == "::fsim::trace" || command == "fsim::trace") {
+            if (command == "::fsim::tracing" || command == "fsim::tracing") {
                 return trace_command(
                     context, interpreter, argument_count, arguments);
             }

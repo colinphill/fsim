@@ -2438,7 +2438,7 @@ Boolean/integer adapters, configuration and bind selection.
 Public Batch 167 provenance joins every elaborated Verilog/SystemVerilog scope
 to its owning semantic unit and source, canonical revision and compatibility
 profile. The C++ simulation API, append-only C object and safe-point records,
-Tcl `fsim::provenance`, debugger `provenance`, VPI type metadata and VCD
+Tcl `fsim::get_provenance`, debugger `provenance`, VPI type metadata and VCD
 comments expose the same identity. Descendant objects inherit their owning
 scope identity; cache keys, compiler objects and other implementation details
 remain absent from hierarchy discovery. Partial VPI provenance is rejected.

@@ -74,7 +74,7 @@ CLI controls are `--trace`, `--trace-format`, `--trace-compression`, repeatable
 `--trace-filter`, `--trace-lifecycle`, and `--trace-report-limit`. They are
 valid for project build/run/debug and the owning manifest-free phases.
 
-Tcl uses `fsim::trace configure|disable|status|report|add|remove|all|clear|list`.
+Tcl uses `fsim::tracing configure|disable|status|report|add|add_all|remove|clear|list`.
 Debugger selection uses `trace add|remove|all|clear|list|status`. These paths
 share the same selection limits, canonical identities, lifecycle transitions,
 and diagnostics as C/C++.

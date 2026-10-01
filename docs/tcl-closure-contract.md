@@ -11,7 +11,7 @@ form below supersedes their text-only behavior.
 All commands live in `::fsim`; each returns Tcl lists, dictionaries, scalar
 values, or an opaque reference. Operational failures raise Tcl errors and add
 a structured fsim diagnostic. Tcl scripts may inspect `::errorCode` and
-`fsim::diagnostics`; they need not parse terminal output.
+`fsim::get_diagnostics`; they need not parse terminal output.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
@@ -27,14 +27,14 @@ a structured fsim diagnostic. Tcl scripts may inspect `::errorCode` and
 | `fsim::object resolve` | `PATH` | Loaded design object reference. |
 | `fsim::object children` | `REFERENCE` | List of child references. |
 | `fsim::object info` | `REFERENCE` | Dictionary with identity, kind, name, path, parent, type, width, dimensions, language, library, and provenance where available. |
-| `fsim::object value` | `REFERENCE` | Typed dictionary with kind, shape, and value; unsupported reads have a specific diagnostic. |
-| `fsim::object set` | `REFERENCE VALUE` | Typed value after validated mutation at a permitted simulation control boundary. |
+| `fsim::object read` | `REFERENCE` | Typed dictionary with kind, shape, and value; unsupported reads have a specific diagnostic. |
+| `fsim::object write` | `REFERENCE VALUE` | Typed value after validated mutation at a permitted simulation control boundary. |
 | `fsim::object definitions` | `?LIBRARY?` | List of compiled definition dictionaries including packages/classes and members. |
 | `fsim::object definition` | `LIBRARY NAME` | Catalog reference for a named compiled definition. |
 | `fsim::debug` | `status`, `step`, `continue`, `break`, `watch`, `frames`, `frame`, `scope`, `inspect`, `restart`, `provenance` and their documented operands | Structured results for normal control and inspection. Existing provenance behavior remains compatible. |
 | `fsim::transcript` | `start ?PATH?`, `stop`, `status` | Control a running append-only log of entered Tcl commands and stdout/stderr output. |
 
-`fsim::load ?SNAPSHOT?` keeps its existing result schema; it additionally
+`fsim::load_snapshot ?SNAPSHOT?` keeps its existing result schema; it additionally
 advances the loaded-session generation after a successful load. `fsim tcl`
 starts a general Tcl session. `fsim debug` loads the selected default or named
 snapshot into the same Tcl session before accepting Tcl input. Tcl file and
@@ -60,7 +60,7 @@ the previous workspace, including if the user later returns to it, while
 preserving references to an already loaded independent snapshot.
 
 Loaded-design references belong to one session generation. A successful
-`fsim::load` or `fsim::debug restart` invalidates all references from the
+`fsim::load_snapshot` or `fsim::debug restart` invalidates all references from the
 previous loaded session; a failed load/restart preserves them. Runtime object
 destruction invalidates that object's reference. A simulation start or step
 within the same loaded session retains references to surviving objects.
@@ -71,7 +71,8 @@ Callbacks may read safe object metadata and values at existing safe points.
 Workspace changes, debugger execution, and object mutation inside callbacks
 are rejected. Mutations outside callbacks validate target kind, width, value,
 and runtime state before changing simulation data. Existing
-`fsim::deposit`/`force`/`release` remain supported. SDF timing configuration is a
+`fsim::deposit_signal`, `fsim::force_signal`, and `fsim::release_signal`
+remain supported. SDF timing configuration is a
 narrow exception: `fsim::sdf configure` may commit from an actual scheduler
 safe-point callback. A callback name alone does not make the operation safe,
 and an ordinary stopped run is not a safe point. See [SDF control](sdf.md).

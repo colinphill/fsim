@@ -114,16 +114,16 @@ set identity [dict get $second identity]
 if {![catch {fsim::sdf configure alpha.sdf alpha u* max 2} message]} {
   error "duplicate SDF configuration succeeded"
 }
-set retained [fsim::sdf summary]
+set retained [fsim::sdf status]
 if {[dict get $retained identity] ne $identity ||
     [dict get $retained inputs] != 2} {
   error "failed SDF configuration changed published control"
 }
-set diagnostics [fsim::diagnostics]
+set diagnostics [fsim::get_diagnostics]
 if {[dict get [lindex $diagnostics end] code] ne "FSIM-SDF-CONTROL-002"} {
   error "missing cataloged SDF control diagnostic: $diagnostics"
 }
-fsim::diagnostics clear
+fsim::clear_diagnostics
 puts "sdf-control-tcl-ok"
 )tcl",
             },
@@ -155,7 +155,7 @@ puts "sdf-control-tcl-ok"
         std::ostringstream error;
         const int result = run_cli(
             { "fsim", "tcl", "-c", R"tcl(
-set workspace [fsim::workspace]
+set workspace [fsim::get_workspace]
 if {[file normalize [dict get $workspace directory]] ne [file normalize [pwd]]} {
   error "workspace is not the current directory"
 }
@@ -210,7 +210,7 @@ puts "workspace-description-ok"
                 "older-verilog",
                 "-c",
                 R"tcl(
-set provenance [fsim::provenance]
+set provenance [fsim::get_provenance]
 if {[llength $provenance] != 1} {error "bad provenance count"}
 set owner [lindex $provenance 0]
 if {[dict get $owner path] ne "older_verilog" ||
@@ -225,7 +225,7 @@ if {[dict get $owner path] ne "older_verilog" ||
     [dict get $owner source_column] != 1} {
   error "bad public provenance: $owner"
 }
-set selected [fsim::provenance older_verilog]
+set selected [fsim::get_provenance older_verilog]
 if {$selected ne $provenance} {error "provenance selection mismatch"}
 set debug_provenance [fsim::debug provenance older_verilog]
 if {$debug_provenance ne $selected ||
@@ -295,15 +295,15 @@ puts "verilog-standard-profiles-ok"
         std::ostringstream error;
         const int result = run_cli(
             { "fsim", "tcl", "--snapshot", "mapped-display", "-c", R"tcl(
-set libraries [dict get [fsim::workspace] libraries]
+set libraries [dict get [fsim::get_workspace] libraries]
 if {[llength $libraries] != 1} {error "bad mapping count"}
 set mapped [lindex $libraries 0]
 if {[dict get $mapped library] ne "work" || ![dict get $mapped mapped]} {
   error "bad mapped library"
 }
-set loaded [fsim::load]
+set loaded [fsim::load_snapshot]
 if {[dict get $loaded top] ne "display"} {error "bad mapped snapshot top"}
-set provenance [lindex [fsim::provenance display] 0]
+set provenance [lindex [fsim::get_provenance display] 0]
 if {[dict get $provenance library] ne "work" ||
     [dict get $provenance unit] ne "display"} {
   error "bad mapped unit provenance"
@@ -368,7 +368,7 @@ if {[dict get $provenance library] ne "work" ||
     {
         std::istringstream input {
             "puts before-diagnostic\n"
-            "catch {fsim::load missing-snapshot}\n"
+            "catch {fsim::load_snapshot missing-snapshot}\n"
             "puts after-diagnostic\n"
             "exit 0\n"
         };
@@ -388,7 +388,7 @@ if {[dict get $provenance library] ne "work" ||
             "fsim::transcript start " + transcript.generic_string() + "\n"
                                                                       "puts transcript-stdout\n"
                                                                       "puts stderr transcript-stderr\n"
-                                                                      "catch {fsim::load missing-snapshot}\n"
+                                                                      "catch {fsim::load_snapshot missing-snapshot}\n"
                                                                       "fsim::transcript stop\n"
                                                                       "puts after-stop\n"
                                                                       "exit 0\n"
@@ -437,10 +437,10 @@ if {[dict get $provenance library] ne "work" ||
     }
     {
         const std::string diagnostic_script = R"FSIM_TCL(
-if {![catch {fsim::load missing-snapshot} load_error]} {
+if {![catch {fsim::load_snapshot missing-snapshot} load_error]} {
   error "missing snapshot unexpectedly loaded"
 }
-set diagnostics [fsim::diagnostics]
+set diagnostics [fsim::get_diagnostics]
 if {[llength $diagnostics] != 1} {
   error "missing snapshot diagnostic: $diagnostics"
 }
@@ -450,8 +450,8 @@ if {[dict get $diagnostic severity] ne "error" ||
     [dict get $diagnostic message] eq ""} {
   error "malformed diagnostic dictionary: $diagnostic"
 }
-fsim::diagnostics clear
-if {[llength [fsim::diagnostics]] != 0} {
+fsim::clear_diagnostics
+if {[llength [fsim::get_diagnostics]] != 0} {
   error "diagnostics were not cleared"
 }
 puts "diagnostics-ok"
@@ -513,44 +513,44 @@ puts "diagnostics-ok"
     std::filesystem::remove(assertion_source);
     {
         const std::string control_script = R"(
-set workspace [fsim::workspace]
+set workspace [fsim::get_workspace]
 if {[dict get $workspace snapshot] ne "control"} {error "bad selected snapshot"}
-if {[llength [fsim::diagnostics]] != 0} {
+if {[llength [fsim::get_diagnostics]] != 0} {
   error "unexpected initial diagnostics"
 }
-if {[fsim::diagnostics clear] != 0} {
+if {[fsim::clear_diagnostics] != 0} {
   error "diagnostic clear failed"
 }
-set built [fsim::load]
+set built [fsim::load_snapshot]
 if {[dict get $built top] ne "tb"} {error "bad top"}
 if {[dict get $built signals] != 2} {error "bad signal count"}
-if {[lsearch -exact [fsim::signals] "tb.q"] < 0} {error "missing signal"}
-if {[lsearch -exact [fsim::signals] "tb.wide"] < 0} {error "missing wide signal"}
+if {[lsearch -exact [fsim::get_signals] "tb.q"] < 0} {error "missing signal"}
+if {[lsearch -exact [fsim::get_signals] "tb.wide"] < 0} {error "missing wide signal"}
 set wide_seed "1[string repeat 0 63]X[string repeat 0 63]Z10101010"
 set wide_force "Z[string repeat 0 63]1[string repeat 0 63]X01010101"
-if {[fsim::deposit tb.wide $wide_seed] ne $wide_seed} {
+if {[fsim::deposit_signal tb.wide $wide_seed] ne $wide_seed} {
   error "wide deposit failed"
 }
-if {[fsim::force tb.wide $wide_force] ne $wide_force} {
+if {[fsim::force_signal tb.wide $wide_force] ne $wide_force} {
   error "wide force failed"
 }
-if {[fsim::deposit tb.wide $wide_seed] ne $wide_force} {
+if {[fsim::deposit_signal tb.wide $wide_seed] ne $wide_force} {
   error "wide force mask failed"
 }
-if {[fsim::release tb.wide] ne $wide_seed} {
+if {[fsim::release_signal tb.wide] ne $wide_seed} {
   error "wide release failed"
 }
-if {[fsim::deposit tb.q 0] ne "0"} {error "deposit failed"}
-if {[fsim::force tb.q 1] ne "1"} {error "force failed"}
-if {[fsim::deposit tb.q 0] ne "1"} {error "force mask failed"}
-if {[fsim::release tb.q] ne "0"} {error "release failed"}
+if {[fsim::deposit_signal tb.q 0] ne "0"} {error "deposit failed"}
+if {[fsim::force_signal tb.q 1] ne "1"} {error "force failed"}
+if {[fsim::deposit_signal tb.q 0] ne "1"} {error "force mask failed"}
+if {[fsim::release_signal tb.q] ne "0"} {error "release failed"}
 set first [fsim::run 1ns]
 if {[dict get $first status] ne "time_limit"} {error "bad first run"}
-if {[dict get [fsim::status] time] != 1} {error "bad status time"}
-if {[fsim::read tb.q] ne "1"} {error "bad tick-1 value"}
+if {[dict get [fsim::get_simulation] time] != 1} {error "bad status time"}
+if {[fsim::read_signal tb.q] ne "1"} {error "bad tick-1 value"}
 set final [fsim::run]
 if {[dict get $final time] != 2} {error "bad final time"}
-if {[dict get [fsim::status] state] ne "finished"} {error "not finished"}
+if {[dict get [fsim::get_simulation] state] ne "finished"} {error "not finished"}
 if {[fsim::stop] ne "stop_requested"} {error "stop request failed"}
 if {![catch {fsim::debug status} mode_error]} {
   error "debug accepted a compiled-mode session"
@@ -598,31 +598,31 @@ if {[dict get $initial_signal kind] ne "signal" ||
     [dict get $initial_signal path] ne "tb.q"} {
   error "missing structured debug signal: $initial_signal"
 }
-if {[fsim::trace list] ne "tb.q\ntb.wide"} {error "bad initial trace list"}
-if {[fsim::trace clear] ne "cleared trace selection"} {
+if {[fsim::tracing list] ne "tb.q\ntb.wide"} {error "bad initial trace list"}
+if {[fsim::tracing clear] ne "cleared trace selection"} {
   error "trace clear failed"
 }
-if {[fsim::trace list] ne "(no traced signals)"} {
+if {[fsim::tracing list] ne "(no traced signals)"} {
   error "trace was not cleared"
 }
-if {[fsim::trace add tb.q] ne "tracing tb.q"} {
+if {[fsim::tracing add tb.q] ne "tracing tb.q"} {
   error "trace add failed"
 }
-if {[fsim::trace list] ne "tb.q"} {error "trace add not retained"}
-if {[fsim::trace remove tb.q] ne "stopped tracing tb.q"} {
+if {[fsim::tracing list] ne "tb.q"} {error "trace add not retained"}
+if {[fsim::tracing remove tb.q] ne "stopped tracing tb.q"} {
   error "trace remove failed"
 }
-if {[fsim::trace all] ne "tracing all signals"} {
+if {[fsim::tracing add_all] ne "tracing all signals"} {
   error "trace all failed"
 }
-set trace_status_first [dict get [fsim::trace status] runtime]
-set trace_status_second [dict get [fsim::trace status] runtime]
+set trace_status_first [dict get [fsim::tracing status] runtime]
+set trace_status_second [dict get [fsim::tracing status] runtime]
 if {$trace_status_first ne $trace_status_second ||
     ![string match "format vcd, output *, compression none, lifecycle open, declared *, selected *, generation *" \
         $trace_status_first]} {
   error "trace status is not stable: $trace_status_first / $trace_status_second"
 }
-set debugger_trace_report [fsim::trace report]
+set debugger_trace_report [fsim::tracing report]
 set output_report [lindex $debugger_trace_report 0]
 set lifecycle_report [lindex $debugger_trace_report end]
 if {[dict get $output_report kind] ne "output" ||
@@ -633,23 +633,23 @@ if {[dict get $output_report kind] ne "output" ||
     [string length [dict get $lifecycle_report identity]] != 64} {
   error "bad debugger trace report: $debugger_trace_report"
 }
-if {[fsim::trace flush] ne "trace flushed"} {
+if {[fsim::tracing flush] ne "trace flushed"} {
   error "debugger trace flush failed"
 }
-if {![catch {fsim::trace close} early_close_error] ||
+if {![catch {fsim::tracing close} early_close_error] ||
     [string first "finished simulation" $early_close_error] < 0} {
   error "debugger trace closed before simulation completion"
 }
-fsim::deposit tb.q 0
-if {[fsim::read tb.q] ne "0"} {
+fsim::deposit_signal tb.q 0
+if {[fsim::read_signal tb.q] ne "0"} {
   error "debug deposit failed"
 }
-fsim::force tb.q 1
-if {[fsim::read tb.q] ne "1"} {
+fsim::force_signal tb.q 1
+if {[fsim::read_signal tb.q] ne "1"} {
   error "debug force failed"
 }
-fsim::release tb.q
-if {[fsim::read tb.q] ne "0"} {
+fsim::release_signal tb.q
+if {[fsim::read_signal tb.q] ne "0"} {
   error "debug release failed"
 }
 set time_breakpoint [fsim::debug break add time 1ns]
@@ -680,7 +680,7 @@ if {[llength $breakpoints] != 3 ||
     [dict get [lindex $breakpoints 2] value] ne "1"} {
   error "structured breakpoint list is incomplete: $breakpoints"
 }
-set remaining_breakpoints [fsim::debug break delete 2]
+set remaining_breakpoints [fsim::debug break remove 2]
 if {[llength $remaining_breakpoints] != 2 ||
     [dict get [lindex $remaining_breakpoints 0] id] != 1 ||
     [dict get [lindex $remaining_breakpoints 1] id] != 3} {
@@ -700,18 +700,18 @@ set absolute [fsim::debug continue 1ns]
 if {[dict get $absolute time] != 2 || ![dict get $absolute finished]} {
   error "bounded debugger continue failed: $absolute"
 }
-set completed_trace_status [fsim::trace status]
+set completed_trace_status [fsim::tracing status]
 if {[dict get $completed_trace_status lifecycle] ne "complete" ||
     [string first "lifecycle complete" \
         [dict get $completed_trace_status runtime]] < 0} {
   error "debugger trace did not complete: $completed_trace_status"
 }
-if {[fsim::trace close] ne "trace complete"} {
+if {[fsim::tracing close] ne "trace complete"} {
   error "completed debugger trace close was not idempotent"
 }
 
 # Reloading starts a fresh debugger session for step coverage.
-fsim::load
+fsim::load_snapshot
 set statement [fsim::debug step statement]
 if {[dict get $statement time] != 0 || ![dict exists $statement stop_reason]} {
   error "statement step did not return structured status: $statement"
@@ -786,12 +786,12 @@ proc stop_at_tick_one {time delta phase} {
     fsim::stop
   }
 }
-if {[fsim::on lifecycle record_lifecycle] ne "lifecycle"} {
+if {[fsim::add_callback lifecycle record_lifecycle] ne "lifecycle"} {
   error "lifecycle registration failed"
 }
-fsim::on value_change record_value
-fsim::on safe_point stop_at_tick_one
-set registered [fsim::callbacks]
+fsim::add_callback value_change record_value
+fsim::add_callback safe_point stop_at_tick_one
+set registered [fsim::get_callbacks]
 if {[dict get $registered lifecycle] ne "record_lifecycle"} {
   error "bad lifecycle callback listing"
 }
@@ -813,15 +813,15 @@ if {[lsearch -exact $::lifecycle_events "started"] < 0 ||
 if {[llength $::value_events] == 0} {
   error "value-change callback did not run"
 }
-if {[fsim::off safe_point] ne "safe_point"} {
+if {[fsim::remove_callback safe_point] ne "safe_point"} {
   error "callback removal failed"
 }
-if {[dict get [fsim::callbacks] safe_point] ne ""} {
+if {[dict get [fsim::get_callbacks] safe_point] ne ""} {
   error "safe-point callback still registered"
 }
 set finished [fsim::run]
 if {[dict get $finished time] != 2 ||
-    [dict get [fsim::status] state] ne "finished"} {
+    [dict get [fsim::get_simulation] state] ne "finished"} {
   error "callback resume failed: $finished"
 }
 if {[lsearch -exact $::lifecycle_events "finished"] < 0} {
@@ -859,7 +859,7 @@ puts "callbacks-ok"
 proc fail_callback {time delta phase} {
   error "deliberate callback failure"
 }
-fsim::on safe_point fail_callback
+fsim::add_callback safe_point fail_callback
 if {![catch {fsim::run} callback_error]} {
   error "callback failure escaped containment"
 }
@@ -897,20 +897,20 @@ puts "callback-error-ok"
     }
     {
         const std::string snapshot_script = R"FSIM_TCL(
-if {![catch {fsim::load definitely-missing} load_error]} {
+if {![catch {fsim::load_snapshot definitely-missing} load_error]} {
   error "missing snapshot unexpectedly loaded"
 }
-if {[dict get [fsim::workspace] snapshot] ne "default"} {
+if {[dict get [fsim::get_workspace] snapshot] ne "default"} {
   error "failed load mutated the selected snapshot"
 }
-set loaded [fsim::load control]
+set loaded [fsim::load_snapshot control]
 if {[dict get $loaded snapshot] ne "control"} {
   error "valid snapshot load failed"
 }
-set trace_path [fsim::trace configure runtime-debug.fst \
+set trace_path [fsim::tracing configure runtime-debug.fst \
     -format fst -compression deterministic -select tb.q \
     -report-limit 8 -lifecycle configured]
-set trace_status [fsim::trace status]
+set trace_status [fsim::tracing status]
 if {[dict get $trace_status file] ne $trace_path ||
     [dict get $trace_status format] ne "fst" ||
     [dict get $trace_status compression] ne "deterministic" ||
@@ -921,34 +921,34 @@ if {[dict get $trace_status file] ne $trace_path ||
   error "bad runtime trace configuration: $trace_status"
 }
 set trace_identity [dict get $trace_status identity]
-set trace_report [fsim::trace report]
+set trace_report [fsim::tracing report]
 if {[llength $trace_report] != 5 ||
     [dict get [lindex $trace_report 0] kind] ne "output" ||
     [string length [dict get [lindex $trace_report 0] identity]] != 64} {
   error "bad runtime trace report: $trace_report"
 }
-if {![catch {fsim::trace configure duplicate.fst \
+if {![catch {fsim::tracing configure duplicate.fst \
         -select tb.q -select tb.q} duplicate_error]} {
   error "duplicate trace selection unexpectedly succeeded"
 }
-if {[dict get [fsim::trace status] identity] ne $trace_identity} {
+if {[dict get [fsim::tracing status] identity] ne $trace_identity} {
   error "failed trace configuration mutated the active control"
 }
-if {[fsim::trace list] ne "tb.q"} {
+if {[fsim::tracing list] ne "tb.q"} {
   error "runtime trace filter was not applied"
 }
-if {![catch {fsim::trace configure too-late.vcd} trace_error]} {
+if {![catch {fsim::tracing configure too-late.vcd} trace_error]} {
   error "live trace reconfiguration unexpectedly succeeded"
 }
-set replaced [fsim::load assertion]
+set replaced [fsim::load_snapshot assertion]
 if {[dict get $replaced snapshot] ne "assertion" ||
-    [dict get [fsim::status] state] ne "loaded"} {
+    [dict get [fsim::get_simulation] state] ne "loaded"} {
   error "snapshot replacement did not reset the live session"
 }
-if {[dict get [fsim::trace status] file] ne ""} {
+if {[dict get [fsim::tracing status] file] ne ""} {
   error "replacement snapshot retained old trace configuration"
 }
-set control_again [fsim::load control]
+set control_again [fsim::load_snapshot control]
 if {[dict get $control_again snapshot] ne "control"} {
   error "second snapshot replacement failed"
 }
@@ -981,13 +981,13 @@ proc record_assertion {tag process severity message path line column} {
 proc record_assertion_lifecycle {event} {
   lappend ::assertion_lifecycle $event
 }
-fsim::on assertion {record_assertion tagged}
-fsim::on lifecycle record_assertion_lifecycle
-if {[dict get [fsim::callbacks] assertion] ne \
+fsim::add_callback assertion {record_assertion tagged}
+fsim::add_callback lifecycle record_assertion_lifecycle
+if {[dict get [fsim::get_callbacks] assertion] ne \
         "record_assertion tagged"} {
   error "assertion command prefix was not retained"
 }
-fsim::load assertion
+fsim::load_snapshot assertion
 if {![catch {fsim::run} assertion_error]} {
   error "failing assertion did not fail the Tcl run"
 }
@@ -1005,14 +1005,14 @@ if {[lsearch -exact $::assertion_lifecycle "started"] < 0 ||
     [lsearch -exact $::assertion_lifecycle "stopped"] < 0} {
   error "bad assertion lifecycle: $::assertion_lifecycle"
 }
-set diagnostics [fsim::diagnostics]
+set diagnostics [fsim::get_diagnostics]
 set last [lindex $diagnostics end]
 if {[dict get $last code] ne "FSIM-TCL-REPORT-0001" ||
     [dict get $last line] != 3 ||
     [dict get $last severity] ne "fatal"} {
   error "bad assertion diagnostic: $last"
 }
-if {[dict get [fsim::status] state] ne "poisoned"} {
+if {[dict get [fsim::get_simulation] state] ne "poisoned"} {
   error "assertion did not poison the failed session"
 }
 puts "assertion-callback-ok"
@@ -1047,13 +1047,13 @@ proc stop_debug_at_one {time delta phase} {
     fsim::stop
   }
 }
-fsim::on safe_point stop_debug_at_one
+fsim::add_callback safe_point stop_debug_at_one
 set stopped [fsim::debug continue]
 if {[dict get $stopped time] != 1 || [dict get $stopped finished] ||
     $::debug_safe_points == 0} {
   error "debugger replaced the Tcl safe-point callback: $stopped"
 }
-fsim::off safe_point
+fsim::remove_callback safe_point
 set finished [fsim::debug continue]
 if {[dict get $finished time] != 2 || ![dict get $finished finished]} {
   error "debugger did not resume after callback stop: $finished"

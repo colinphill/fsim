@@ -139,7 +139,7 @@ if {[lsearch -exact $member_names value] < 0} {
   error "compiled class member reflection omitted value: $member_names"
 }
 
-fsim::load object-model
+fsim::load_snapshot object-model
 set loaded_roots [fsim::object roots]
 set loaded_root [lindex $loaded_roots 0]
 set loaded_children [fsim::object children $loaded_root]
@@ -159,7 +159,7 @@ if {[dict get $loaded_q_info name] ne "q" ||
   error "loaded snapshot reference has bad identity or shape: $loaded_q_info"
 }
 fsim::run 1ns
-set loaded_q_value [fsim::object value $loaded_q_ref]
+set loaded_q_value [fsim::object read $loaded_q_ref]
 if {[dict get $loaded_q_value kind] ne "logic" ||
     [dict get $loaded_q_value shape] ne "packed" ||
     [dict get $loaded_q_value value] ne "1010"} {
@@ -171,16 +171,16 @@ if {![catch {fsim::object info $package_ref} stale_error] ||
     [string first "stale" $stale_error] < 0} {
   error "deleting a compiled library did not stale its catalog reference"
 }
-set loaded_q_after_delete [fsim::object value $loaded_q_ref]
+set loaded_q_after_delete [fsim::object read $loaded_q_ref]
 if {[dict get [fsim::object info $loaded_q_ref] name] ne "q" ||
     [dict get $loaded_q_after_delete value] ne [dict get $loaded_q_value value]} {
   error "deleting the compiled library invalidated an independent loaded snapshot reference"
 }
-set diagnostics [fsim::diagnostics]
+set diagnostics [fsim::get_diagnostics]
 if {[dict get [lindex $diagnostics end] code] ne "FSIM-TCL-OBJECT-0002"} {
   error "stale catalog reference did not add its structured diagnostic: $diagnostics"
 }
-fsim::diagnostics clear
+fsim::clear_diagnostics
 puts "catalog-no-snapshot-ok"
 )tcl";
     {
@@ -201,7 +201,7 @@ puts "catalog-no-snapshot-ok"
     }
 
     const std::string script = R"tcl(
-fsim::load object-model
+fsim::load_snapshot object-model
 fsim::run 1ns
 set root [lindex [fsim::object roots] 0]
 set root_info [fsim::object info $root]
@@ -238,24 +238,24 @@ if {[dict get $q_info kind] ne "signal" ||
     [llength [dict get $q_info dimensions]] != 1} {
   error "bad packed-signal metadata: $q_info"
 }
-if {[dict get [fsim::object value $q_ref] value] ne "1010"} {
+if {[dict get [fsim::object read $q_ref] value] ne "1010"} {
   error "bad initial packed signal value"
 }
-if {![catch {fsim::object set $q_ref 010q} invalid_value_error]} {
+if {![catch {fsim::object write $q_ref 010q} invalid_value_error]} {
   error "invalid packed signal assignment unexpectedly succeeded"
 }
-if {[dict get [fsim::object value $q_ref] value] ne "1010"} {
+if {[dict get [fsim::object read $q_ref] value] ne "1010"} {
   error "invalid packed signal assignment changed the signal"
 }
-set q_value [fsim::object set $q_ref 0011]
+set q_value [fsim::object write $q_ref 0011]
 if {[dict get $q_value value] ne "0011"} {
   error "typed signal mutation did not return the changed value: $q_value"
 }
 
-if {[dict get [fsim::object value $label_ref] value] ne "ready"} {
+if {[dict get [fsim::object read $label_ref] value] ne "ready"} {
   error "bad initial string object value"
 }
-set label_value [fsim::object set $label_ref changed]
+set label_value [fsim::object write $label_ref changed]
 if {[dict get $label_value value] ne "changed"} {
   error "typed string mutation failed: $label_value"
 }
@@ -265,23 +265,23 @@ if {[dict get $data_info kind] ne "container" ||
     [llength [dict get $data_info dimensions]] != 1} {
   error "bad unpacked-container metadata: $data_info"
 }
-set data_value [fsim::object set $data_ref {3 4}]
+set data_value [fsim::object write $data_ref {3 4}]
 set data_elements [dict get $data_value value]
 if {[string trimleft [lindex $data_elements 0] 0] ne "11" ||
     [string trimleft [lindex $data_elements 1] 0] ne "100"} {
   error "typed integer container mutation was not width-normalized: $data_value"
 }
-if {![catch {fsim::object set $data_ref {3 2147483648}} range_error]} {
+if {![catch {fsim::object write $data_ref {3 2147483648}} range_error]} {
   error "out-of-range signed integer container mutation unexpectedly succeeded"
 }
-set read_data_elements [dict get [fsim::object value $data_ref] value]
+set read_data_elements [dict get [fsim::object read $data_ref] value]
 if {[string trimleft [lindex $read_data_elements 0] 0] ne "11" ||
     [string trimleft [lindex $read_data_elements 1] 0] ne "100"} {
   error "container value did not reflect the validated mutation"
 }
 
 fsim::run 1ns
-set counter_value [fsim::object value $counter_ref]
+set counter_value [fsim::object read $counter_ref]
 if {[dict get $counter_value kind] ne "class" ||
     [dict get $counter_value null]} {
   error "class-handle signal did not expose its live object: $counter_value"
@@ -299,7 +299,7 @@ foreach member [fsim::object children $counter_object] {
 }
 set live_property_value ""
 if {$value_ref ne ""} {
-  set live_property_value [fsim::object value $value_ref]
+  set live_property_value [fsim::object read $value_ref]
 }
 if {$value_ref eq "" ||
     [string trimleft [dict get $live_property_value value] 0] ne "111"} {
@@ -307,16 +307,16 @@ if {$value_ref eq "" ||
 }
 
 set stale_ref $q_ref
-fsim::load object-model
+fsim::load_snapshot object-model
 if {![catch {fsim::object info $stale_ref} stale_error] ||
     [string first "stale" $stale_error] < 0} {
   error "reloading a snapshot did not stale the previous object reference"
 }
-set diagnostics [fsim::diagnostics]
+set diagnostics [fsim::get_diagnostics]
 if {[dict get [lindex $diagnostics end] code] ne "FSIM-TCL-OBJECT-0002"} {
   error "stale reference did not add its structured diagnostic: $diagnostics"
 }
-fsim::diagnostics clear
+fsim::clear_diagnostics
 
 set root [lindex [fsim::object roots] 0]
 foreach child [fsim::object children $root] {
@@ -326,7 +326,7 @@ foreach child [fsim::object children $root] {
 }
 proc mutate_from_callback {time delta phase} {
   if {![catch {
-    fsim::object set $::callback_signal_ref 0000
+    fsim::object write $::callback_signal_ref 0000
   } message]} {
     error "object mutation succeeded from a callback"
   }
@@ -334,9 +334,9 @@ proc mutate_from_callback {time delta phase} {
     error "bad callback mutation error: $message"
   }
 }
-fsim::on safe_point mutate_from_callback
+fsim::add_callback safe_point mutate_from_callback
 fsim::run 1ns
-fsim::diagnostics clear
+fsim::clear_diagnostics
 puts "object-model-ok"
 )tcl";
 

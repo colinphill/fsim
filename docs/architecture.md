@@ -2580,7 +2580,7 @@ CLI; they do not create another kernel. The same stateful adapter also exposes
 breakpoint, stepping, trace-selection, diagnostic-query, mutation, and
 synchronous callback commands over the common debugger and scheduler.
 
-`fsim::provenance PATH` returns the owning semantic unit and source plus the
+`fsim::get_provenance PATH` returns the owning semantic unit and source plus the
 canonical standard and compatibility profile for an HDL scope or descendant.
 Ownership uses the longest matching scope, so nested instances cannot inherit
 a broader parent's profile accidentally. Project/build dictionaries preserve

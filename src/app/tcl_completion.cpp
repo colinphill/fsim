@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -717,6 +718,54 @@ namespace {
         "::tcl::mathfunc::tanh", "::tcl::mathfunc::wide"
     };
 
+    constexpr std::string_view kFsimNamespacePrefix = "fsim::";
+
+    // Global code resolves unqualified names through ::fsim, but a Tcl
+    // built-in or global procedure with the same name takes precedence.
+    bool global_command_shadows(
+        const CompletionSnapshot& snapshot,
+        const std::string_view name)
+    {
+        return std::ranges::find(kTclBuiltins, name) != std::end(kTclBuiltins)
+            || std::ranges::any_of(snapshot.procedures,
+                [name](const CompletionItem& item) {
+                    return normalized_command_name(item.text) == name;
+                });
+    }
+
+    // The unqualified name that reaches this fsim command from global code.
+    std::optional<std::string_view> unqualified_fsim_name(
+        const CompletionSnapshot& snapshot,
+        const CompletionCommand& command)
+    {
+        const auto name = normalized_command_name(command.name);
+        if (!starts_with(name, kFsimNamespacePrefix)) {
+            return std::nullopt;
+        }
+        const auto short_name = name.substr(kFsimNamespacePrefix.size());
+        if (short_name.find("::") != std::string_view::npos
+            || global_command_shadows(snapshot, short_name)) {
+            return std::nullopt;
+        }
+        return short_name;
+    }
+
+    const CompletionCommand* resolve_command(
+        const CompletionSnapshot& snapshot,
+        const std::string_view name)
+    {
+        if (const auto* command = find_command(snapshot, name)) {
+            return command;
+        }
+        if (name.find("::") != std::string_view::npos
+            || global_command_shadows(snapshot, name)) {
+            return nullptr;
+        }
+        std::string qualified { kFsimNamespacePrefix };
+        qualified.append(name);
+        return find_command(snapshot, qualified);
+    }
+
     struct CandidateCollector {
         const CompletionRequest& request;
         CompletionResult& result;
@@ -1061,8 +1110,15 @@ namespace {
         add_static_builtins(collector);
         add_items(collector, snapshot.namespaces);
         add_items(collector, snapshot.procedures);
+        // A fully qualified prefix cannot use the global namespace path.
+        const bool offer_unqualified = !starts_with(collector.prefix, "::");
         for (const auto& command : snapshot.commands) {
             collector.add_command(command, command.name);
+            if (offer_unqualified && !collector.exhausted) {
+                if (const auto name = unqualified_fsim_name(snapshot, command)) {
+                    collector.add_command(command, *name);
+                }
+            }
             if (collector.exhausted) {
                 break;
             }
@@ -1199,7 +1255,7 @@ CompletionResult complete(
                 collect_command_subcommands(collector, snapshot);
                 add_hint(result, "fsim subcommand");
             } else {
-                const auto* command = find_command(snapshot, command_name);
+                const auto* command = resolve_command(snapshot, command_name);
                 if (command != nullptr) {
                     if (request.context != RequestContext::callback || command->callback_safe) {
                         auto arguments = command->arguments;

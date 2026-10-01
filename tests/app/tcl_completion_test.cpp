@@ -41,7 +41,7 @@ CompletionSnapshot make_snapshot(const Generations generations)
 {
     static constexpr std::array debug_break_actions {
         CompletionChoice { "add", "Add a breakpoint" },
-        CompletionChoice { "delete", "Delete a breakpoint" },
+        CompletionChoice { "remove", "Remove a breakpoint" },
     };
     static constexpr std::array debug_break_kinds {
         CompletionChoice { "signal", "Break on a signal" },
@@ -111,7 +111,7 @@ CompletionSnapshot make_snapshot(const Generations generations)
             capability_mask(Capability::workspace), false, compile_arguments, compile_options },
         CompletionCommand { "::fsim::debug", "fsim::debug break ACTION ?LOCATION?", "Debug a simulation",
             capability_mask(Capability::debugger), true, { }, { }, debug_subcommands },
-        CompletionCommand { "::fsim::load", "fsim::load ?SNAPSHOT?", "Load a workspace snapshot",
+        CompletionCommand { "::fsim::load_snapshot", "fsim::load_snapshot ?SNAPSHOT?", "Load a workspace snapshot",
             capability_mask(Capability::workspace), false, load_arguments, { } },
         CompletionCommand { "::fsim::object", "fsim::object resolve PATH", "Resolve a loaded object",
             capability_mask(Capability::workspace), true, { }, { }, object_subcommands },
@@ -316,7 +316,7 @@ void test_subcommand_and_nested_argument_completion()
             generations, 16U },
         snapshot);
     require(has_candidate(break_action_result, "add", CandidateKind::literal)
-            && has_candidate(break_action_result, "delete", CandidateKind::literal),
+            && has_candidate(break_action_result, "remove", CandidateKind::literal),
         "fixed action choices must be exposed after selecting a debugger subcommand");
 
     constexpr std::string_view debugger_input = "::fsim::debug break add signal top.si";
@@ -355,7 +355,7 @@ void test_variable_completion_and_tcl_quoting()
             && has_candidate(result, "forest", CandidateKind::variable),
         "variable completion must replace only the variable name and preserve Tcl syntax");
 
-    constexpr std::string_view spaced = "::fsim::load smoke";
+    constexpr std::string_view spaced = "::fsim::load_snapshot smoke";
     const auto snapshot_result = complete(
         CompletionRequest { spaced, spaced.size(), RequestContext::interactive_console,
             capability_mask(Capability::workspace), generations, 16U },
@@ -426,6 +426,39 @@ void test_bounded_sorted_results()
 
 } // namespace
 
+void test_unqualified_fsim_commands()
+{
+    const Generations generations { 3U, 5U, 7U, 9U };
+    const auto snapshot = make_snapshot(generations);
+    const auto request = [&generations](const std::string_view input) {
+        return CompletionRequest { input, input.size(), RequestContext::interactive_console,
+            capability_mask(Capability::workspace), generations, 16U };
+    };
+    require(has_candidate(complete(request("load_"), snapshot),
+                "load_snapshot", CandidateKind::fsim_command),
+        "global code must complete fsim commands without the namespace prefix");
+    require(has_candidate(complete(request("load_snapshot smo"), snapshot),
+                "smoke", CandidateKind::snapshot)
+            && has_candidate(complete(request("compile -"), snapshot),
+                "-lang", CandidateKind::option),
+        "unqualified fsim commands must keep their argument providers");
+    const auto qualified = complete(request("::load_"), snapshot);
+    require(!has_candidate(qualified, "load_snapshot", CandidateKind::fsim_command)
+            && !has_candidate(qualified, "::load_snapshot", CandidateKind::fsim_command),
+        "a fully qualified prefix cannot reach fsim commands through the namespace path");
+
+    static constexpr std::array shadowing {
+        CompletionItem { "::compile", "A user procedure", CandidateKind::procedure, 0U },
+    };
+    auto shadowed = snapshot;
+    shadowed.procedures = shadowing;
+    require(!has_candidate(complete(request("comp"), shadowed),
+                "compile", CandidateKind::fsim_command)
+            && !has_candidate(complete(request("compile -"), shadowed),
+                "-lang", CandidateKind::option),
+        "a global procedure must shadow the unqualified fsim command");
+}
+
 int main()
 {
     try {
@@ -436,6 +469,7 @@ int main()
         test_variable_completion_and_tcl_quoting();
         test_callback_capability_staleness_and_cursor_validation();
         test_bounded_sorted_results();
+        test_unqualified_fsim_commands();
         std::cout << "Tcl completion tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& exception) {

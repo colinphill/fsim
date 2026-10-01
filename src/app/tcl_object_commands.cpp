@@ -2182,7 +2182,7 @@ namespace {
         Tcl_Obj* const arguments[])
     {
         if (argument_count != 3) {
-            Tcl_WrongNumArgs(interpreter, 1, arguments, "value REFERENCE");
+            Tcl_WrongNumArgs(interpreter, 1, arguments, "read REFERENCE");
             return TCL_ERROR;
         }
         const std::string token { tcl_string(arguments[2]) };
@@ -2331,7 +2331,7 @@ namespace {
         Tcl_Obj* const arguments[])
     {
         if (argument_count != 4) {
-            Tcl_WrongNumArgs(interpreter, 1, arguments, "set REFERENCE VALUE");
+            Tcl_WrongNumArgs(interpreter, 1, arguments, "write REFERENCE VALUE");
             return TCL_ERROR;
         }
         if (context.callback_depth != 0) {
@@ -2469,7 +2469,7 @@ namespace {
             if (argument_count < 2) {
                 Tcl_WrongNumArgs(
                     interpreter, 1, arguments,
-                    "roots|resolve|children|info|value|set|definitions|definition ?ARG ...?");
+                    "roots|resolve|children|info|read|write|definitions|definition ?ARG ...?");
                 return TCL_ERROR;
             }
             const std::string_view subcommand { tcl_string(arguments[1]) };
@@ -2485,10 +2485,10 @@ namespace {
             if (subcommand == "info") {
                 return object_info(context, interpreter, argument_count, arguments);
             }
-            if (subcommand == "value") {
+            if (subcommand == "read") {
                 return object_value_command(context, interpreter, argument_count, arguments);
             }
-            if (subcommand == "set") {
+            if (subcommand == "write") {
                 return object_set(context, interpreter, argument_count, arguments);
             }
             if (subcommand == "definitions") {
@@ -2549,10 +2549,10 @@ namespace {
             "info", "info REFERENCE", "Return structured object metadata.", object_reference_arguments,
             TclCommandCapability::loaded_design },
         TclSubcommandSpec {
-            "value", "value REFERENCE", "Read a supported runtime or initial value.", object_reference_arguments,
+            "read", "read REFERENCE", "Read a supported runtime or initial value.", object_reference_arguments,
             TclCommandCapability::loaded_design },
         TclSubcommandSpec {
-            "set", "set REFERENCE VALUE", "Validate and apply a supported value mutation.", set_arguments,
+            "write", "write REFERENCE VALUE", "Validate and apply a supported value mutation.", set_arguments,
             TclCommandCapability::loaded_design },
         TclSubcommandSpec {
             "definitions", "definitions ?LIBRARY?", "List compiled packages and classes.", definitions_arguments },
@@ -2563,7 +2563,7 @@ namespace {
     constexpr std::array<TclCommandSpec, 1> object_specs { {
         {
             "fsim::object",
-            "roots | resolve PATH | children REFERENCE | info REFERENCE | value REFERENCE | set REFERENCE VALUE | definitions ?LIBRARY? | definition LIBRARY NAME",
+            "roots | resolve PATH | children REFERENCE | info REFERENCE | read REFERENCE | write REFERENCE VALUE | definitions ?LIBRARY? | definition LIBRARY NAME",
             "Inspect loaded design objects and compiled package or class definitions.",
             TclCommandCapability::workspace,
             true,

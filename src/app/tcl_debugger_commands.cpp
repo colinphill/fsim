@@ -469,7 +469,7 @@ namespace {
                 if (argument_count < 3) {
                     Tcl_WrongNumArgs(
                         interpreter, 2, arguments,
-                        "add|list|delete|clear ?ARG ...?");
+                        "add|list|remove|clear ?ARG ...?");
                     return TCL_ERROR;
                 }
                 const auto operation = object_string(arguments[2]);
@@ -497,7 +497,7 @@ namespace {
                     Tcl_SetObjResult(interpreter, breakpoints_object(interpreter, watch ? context.debugger->watches() : context.debugger->breakpoints()));
                     return TCL_OK;
                 }
-                if (operation == "delete") {
+                if (operation == "remove") {
                     if (argument_count != 4) {
                         Tcl_WrongNumArgs(interpreter, 3, arguments, "ID");
                         return TCL_ERROR;
@@ -519,7 +519,7 @@ namespace {
                 if (operation != "add") {
                     return structured_error(
                         context, interpreter, "FSIM-TCL-DEBUG-0002",
-                        "debugger subcommand must be add, list, delete, or clear");
+                        "debugger subcommand must be add, list, remove, or clear");
                 }
                 const auto minimum = watch ? 4 : 5;
                 if (argument_count < minimum || argument_count > minimum + 2
@@ -690,7 +690,7 @@ namespace {
         } catch (...) {
             return structured_error(
                 context, interpreter, "FSIM-TCL-DEBUG-0001",
-                "fsim::provenance failed with an unknown exception");
+                "fsim::get_provenance failed with an unknown exception");
         }
     }
 
@@ -717,7 +717,7 @@ namespace {
     constexpr std::array<std::string_view, 4> kMutationChoices {
         "add",
         "list",
-        "delete",
+        "remove",
         "clear",
     };
     constexpr std::array<std::string_view, 5> kBreakpointKindChoices {
@@ -785,10 +785,10 @@ namespace {
         { "continue", "fsim::debug continue ?DURATION?",
             "Run until a stop point or duration limit.", kContinueArguments,
             TclCommandCapability::debugger },
-        { "break", "fsim::debug break add|list|delete|clear ?ARG ...?",
+        { "break", "fsim::debug break add|list|remove|clear ?ARG ...?",
             "Add, list, remove, or clear execution breakpoints.", kBreakArguments,
             TclCommandCapability::debugger },
-        { "watch", "fsim::debug watch add|list|delete|clear ?ARG ...?",
+        { "watch", "fsim::debug watch add|list|remove|clear ?ARG ...?",
             "Add, list, remove, or clear signal watches.", kWatchArguments,
             TclCommandCapability::debugger },
         { "frames", "fsim::debug frames",
@@ -827,8 +827,8 @@ namespace {
             kDebugSubcommands,
         },
         {
-            "fsim::provenance",
-            "fsim::provenance ?PATH?",
+            "fsim::get_provenance",
+            "fsim::get_provenance ?PATH?",
             "Return structured source provenance for a loaded design object or all design roots.",
             TclCommandCapability::loaded_design,
             true,

@@ -73,4 +73,25 @@ std::optional<std::string> environment_variable(
 #endif
 }
 
+bool windows_long_paths_enabled() noexcept {
+#if defined(_WIN32)
+  // Windows 10 version 1607 introduced both the setting and this query;
+  // earlier releases always enforce MAX_PATH.
+  using Query = BOOLEAN(NTAPI*)();
+  const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (ntdll == nullptr) {
+    return false;
+  }
+  const auto address = GetProcAddress(ntdll, "RtlAreLongPathsEnabled");
+  if (address == nullptr) {
+    return false;
+  }
+  const auto query =
+      reinterpret_cast<Query>(reinterpret_cast<void*>(address));
+  return query() != FALSE;
+#else
+  return true;
+#endif
+}
+
 }  // namespace fsim::support

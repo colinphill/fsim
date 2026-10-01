@@ -131,13 +131,13 @@ SDF input and SDF options on compile-only phases are rejected.
 `fsim::sdf configure SOURCE ROOT CELL_GLOB min|typ|max REPORT_LIMIT` appends one
 file input and atomically publishes the resulting pending or effective control.
 With a loaded design, configuration applies the selected timing before success.
-`fsim::sdf summary` returns the effective input/file/path/check counts, generation,
+`fsim::sdf status` returns the effective input/file/path/check counts, generation,
 truncation state and semantic identity. `fsim::sdf report` returns the bounded
 input/path/timing-check detail list. Summary and report reads are safe inside a
 simulation callback. After execution starts, configure is allowed inside a
 callback only at an actual scheduler safe point; direct post-run configuration
 is rejected without replacing the effective annotation. Tcl uses the
-`fsim::on safe_point` callback with `{time delta phase}` arguments; the scheduler
+`fsim::add_callback safe_point` callback with `{time delta phase}` arguments; the scheduler
 must actually be in its safe-point dispatch.
 
 ```tcl

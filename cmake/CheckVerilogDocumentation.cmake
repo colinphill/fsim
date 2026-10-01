@@ -113,7 +113,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "Older Verilog and SystemVerilog selectable modes"
     "Older Verilog and SystemVerilog revision identity"
     "17 preserved and zero active obligations"
-    "fsim::provenance PATH"
+    "fsim::get_provenance PATH"
     "RunVerilogSystemVerilogStandardModeClosureMatrix.cmake")
   string(FIND "${FSIM_ALL_CONTENTS}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)

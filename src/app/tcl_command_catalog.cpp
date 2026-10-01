@@ -169,7 +169,11 @@ int help_command(
         return TCL_ERROR;
     }
     if (count == 2) {
-        const auto* spec = find_command_spec(Tcl_GetString(arguments[1]));
+        const std::string_view name { Tcl_GetString(arguments[1]) };
+        const auto* spec = find_command_spec(name);
+        if (spec == nullptr && name.find("::") == std::string_view::npos) {
+            spec = find_command_spec("fsim::" + std::string { name });
+        }
         if (spec == nullptr) {
             Tcl_SetObjResult(interpreter,
                 Tcl_NewStringObj("unknown fsim Tcl command", -1));
@@ -222,9 +226,6 @@ std::span<const TclCommandSpec> existing_command_specs()
         TclCommandArgument { "event", TclCompletionDomain::literal },
         TclCommandArgument { "script", TclCompletionDomain::literal, true },
     };
-    static constexpr std::array diagnostics_arguments {
-        TclCommandArgument { "clear", TclCompletionDomain::literal, true },
-    };
     static constexpr std::array transcript_actions {
         std::string_view { "start" }, std::string_view { "stop" },
         std::string_view { "status" },
@@ -246,8 +247,8 @@ std::span<const TclCommandSpec> existing_command_specs()
             "Return the active transcript path and status.", { } },
     };
     static constexpr std::array specs {
-        TclCommandSpec { "fsim::workspace", "fsim::workspace",
-            "Describe the current workspace and libraries.",
+        TclCommandSpec { "fsim::get_workspace", "fsim::get_workspace",
+            "Return the current workspace and its libraries.",
             TclCommandCapability::workspace, true, { }, invoke_existing },
         TclCommandSpec { "fsim::help", "fsim::help ?COMMAND?",
             "Describe the registered fsim Tcl commands.",
@@ -257,33 +258,36 @@ std::span<const TclCommandSpec> existing_command_specs()
             "Return the fsim and C API versions.",
             TclCommandCapability::workspace, true, { }, invoke_version,
             TclResultShape::scalar, "FSIM-TCL" },
-        TclCommandSpec { "fsim::load", "fsim::load ?SNAPSHOT?",
+        TclCommandSpec { "fsim::load_snapshot", "fsim::load_snapshot ?SNAPSHOT?",
             "Load a managed snapshot into this Tcl session.",
             TclCommandCapability::workspace, false, load_arguments, invoke_existing },
-        TclCommandSpec { "fsim::signals", "fsim::signals",
-            "List paths of loaded signals.",
+        TclCommandSpec { "fsim::get_signals", "fsim::get_signals",
+            "Return the paths of loaded signals.",
             TclCommandCapability::loaded_design, true, { }, invoke_existing },
-        TclCommandSpec { "fsim::read", "fsim::read SIGNAL",
+        TclCommandSpec { "fsim::read_signal", "fsim::read_signal SIGNAL",
             "Read a signal's logic value.",
             TclCommandCapability::simulation, true, signal_arguments, invoke_existing },
-        TclCommandSpec { "fsim::deposit", "fsim::deposit SIGNAL VALUE",
+        TclCommandSpec { "fsim::deposit_signal", "fsim::deposit_signal SIGNAL VALUE",
             "Deposit a signal value.",
             TclCommandCapability::simulation, false, signal_value_arguments, invoke_existing },
-        TclCommandSpec { "fsim::force", "fsim::force SIGNAL VALUE",
+        TclCommandSpec { "fsim::force_signal", "fsim::force_signal SIGNAL VALUE",
             "Force a signal value.",
             TclCommandCapability::simulation, false, signal_value_arguments, invoke_existing },
-        TclCommandSpec { "fsim::release", "fsim::release SIGNAL",
+        TclCommandSpec { "fsim::release_signal", "fsim::release_signal SIGNAL",
             "Release a forced signal.",
             TclCommandCapability::simulation, false, signal_arguments, invoke_existing },
         TclCommandSpec { "fsim::run", "fsim::run ?DURATION?",
             "Run the loaded simulation.",
             TclCommandCapability::simulation, false, run_arguments, invoke_existing },
-        TclCommandSpec { "fsim::status", "fsim::status",
-            "Describe the loaded simulation state.",
+        TclCommandSpec { "fsim::get_simulation", "fsim::get_simulation",
+            "Return the loaded simulation state.",
             TclCommandCapability::workspace, true, { }, invoke_existing },
-        TclCommandSpec { "fsim::diagnostics", "fsim::diagnostics ?clear?",
-            "Read or clear structured diagnostics.",
-            TclCommandCapability::workspace, true, diagnostics_arguments, invoke_existing },
+        TclCommandSpec { "fsim::get_diagnostics", "fsim::get_diagnostics",
+            "Return structured diagnostics.",
+            TclCommandCapability::workspace, true, { }, invoke_existing },
+        TclCommandSpec { "fsim::clear_diagnostics", "fsim::clear_diagnostics",
+            "Discard the structured diagnostics.",
+            TclCommandCapability::workspace, true, { }, invoke_existing },
         TclCommandSpec { "fsim::transcript", "fsim::transcript start ?PATH? | stop | status",
             "Control the running Tcl command and output transcript.",
             TclCommandCapability::workspace, false, transcript_arguments,
@@ -292,19 +296,19 @@ std::span<const TclCommandSpec> existing_command_specs()
         TclCommandSpec { "fsim::sdf", "fsim::sdf SUBCOMMAND ?ARGS?",
             "Configure and inspect SDF annotation.",
             TclCommandCapability::workspace, true, { }, invoke_existing },
-        TclCommandSpec { "fsim::on", "fsim::on EVENT SCRIPT",
+        TclCommandSpec { "fsim::add_callback", "fsim::add_callback EVENT SCRIPT",
             "Register a simulation callback.",
             TclCommandCapability::simulation, false, event_arguments, invoke_existing },
-        TclCommandSpec { "fsim::off", "fsim::off EVENT ?SCRIPT?",
+        TclCommandSpec { "fsim::remove_callback", "fsim::remove_callback EVENT ?SCRIPT?",
             "Remove a simulation callback.",
             TclCommandCapability::simulation, false, off_arguments, invoke_existing },
-        TclCommandSpec { "fsim::callbacks", "fsim::callbacks ?EVENT?",
-            "List simulation callbacks.",
+        TclCommandSpec { "fsim::get_callbacks", "fsim::get_callbacks ?EVENT?",
+            "Return the registered simulation callbacks.",
             TclCommandCapability::simulation, false, optional_event_arguments, invoke_existing },
         TclCommandSpec { "fsim::stop", "fsim::stop",
             "Request simulation stop at a safe point.",
             TclCommandCapability::simulation, true, { }, invoke_existing },
-        TclCommandSpec { "fsim::trace", "fsim::trace SUBCOMMAND ?ARGS?",
+        TclCommandSpec { "fsim::tracing", "fsim::tracing SUBCOMMAND ?ARGS?",
             "Configure and inspect simulation tracing.",
             TclCommandCapability::simulation, false, { }, invoke_existing },
     };
@@ -360,6 +364,30 @@ bool synchronize_workspace(TclContext& context, Tcl_Interp* interpreter)
     return true;
 }
 
+namespace {
+
+    // Global code reaches fsim commands through the ::fsim namespace path, so
+    // the invoked word may be unqualified; resolve it as Tcl just did.
+    const TclCommandSpec* invoked_command_spec(
+        Tcl_Interp* interpreter, Tcl_Obj* word)
+    {
+        if (const auto* spec = find_command_spec(Tcl_GetString(word))) {
+            return spec;
+        }
+        const auto command = Tcl_GetCommandFromObj(interpreter, word);
+        if (command == nullptr) {
+            return nullptr;
+        }
+        Tcl_Obj* full_name = Tcl_NewObj();
+        Tcl_IncrRefCount(full_name);
+        Tcl_GetCommandFullName(interpreter, command, full_name);
+        const auto* spec = find_command_spec(Tcl_GetString(full_name));
+        Tcl_DecrRefCount(full_name);
+        return spec;
+    }
+
+} // namespace
+
 int invoke_catalog_command(
     void* client_data,
     Tcl_Interp* interpreter,
@@ -375,7 +403,7 @@ int invoke_catalog_command(
                 Tcl_NewStringObj("missing fsim Tcl command", -1));
             return TCL_ERROR;
         }
-        const auto* spec = find_command_spec(Tcl_GetString(arguments[0]));
+        const auto* spec = invoked_command_spec(interpreter, arguments[0]);
         if (spec == nullptr || spec->handler == nullptr) {
             Tcl_SetObjResult(interpreter,
                 Tcl_NewStringObj("unknown fsim Tcl command", -1));
@@ -386,7 +414,19 @@ int invoke_catalog_command(
                 "this fsim command is not safe inside a simulation callback", -1));
             return TCL_ERROR;
         }
-        return spec->handler(context, interpreter, count, arguments);
+        if (normalized_name(Tcl_GetString(arguments[0])) == spec->name) {
+            return spec->handler(context, interpreter, count, arguments);
+        }
+        // Handlers dispatch on and report the canonical fsim:: spelling.
+        std::vector<Tcl_Obj*> canonical(arguments, arguments + count);
+        canonical.front() = Tcl_NewStringObj(
+            spec->name.data(), tcl_size(spec->name.size()));
+        Tcl_IncrRefCount(canonical.front());
+        struct Release {
+            Tcl_Obj* object;
+            ~Release() { Tcl_DecrRefCount(object); }
+        } release { canonical.front() };
+        return spec->handler(context, interpreter, count, canonical.data());
     } catch (const std::exception& exception) {
         Tcl_SetObjResult(interpreter,
             Tcl_NewStringObj(exception.what(), -1));

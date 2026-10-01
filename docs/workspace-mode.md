@@ -182,7 +182,7 @@ fsim tcl -c 'puts [fsim::version]'
 
 Debug and Tcl use the `default` snapshot unless `--snapshot NAME` selects
 another one. `fsim debug` loads that snapshot before starting the Tcl
-debugger; `fsim tcl` starts a general Tcl session and `fsim::load ?SNAPSHOT?`
+debugger; `fsim tcl` starts a general Tcl session and `fsim::load_snapshot ?SNAPSHOT?`
 loads simulation state. The [Tcl console and automation guide](tcl.md)
 documents all commands, structured workspace/object/debug/provenance results,
 console controls, history, and redirected behavior. Within Tcl, the built-in

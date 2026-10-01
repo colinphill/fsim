@@ -13,7 +13,7 @@ fsim debug [--snapshot NAME] [-c SCRIPT ... | SCRIPT [ARG ...]]
 ```
 
 `fsim tcl` opens a general Tcl session. It does not load a snapshot on entry;
-use `fsim::load ?SNAPSHOT?` to load one. The optional `--snapshot` selects the
+use `fsim::load_snapshot ?SNAPSHOT?` to load one. The optional `--snapshot` selects the
 default snapshot for commands that load simulation state. `fsim debug` loads
 the selected snapshot (default `default`) before starting its Tcl session or
 running its script.
@@ -36,27 +36,38 @@ fsim debug --snapshot regression -c 'puts [fsim::debug status]'
 `fsim::help` returns the registered command list in name order.
 `fsim::help COMMAND` returns that command's usage and description.
 
+Top-level commands that return objects are named `get_*`; other top-level
+single actions are `verb_noun` (such as `read_signal` and `add_callback`),
+except the flow commands `compile`, `elaborate`, `run`, and `stop`.
+Commands with several operations take a subcommand instead
+(`fsim::library list`, `fsim::object info`); the `get_` rule does not apply
+to subcommands.
+
+From global Tcl code the `fsim::` prefix is optional: `get_signals` runs
+`fsim::get_signals`. A Tcl built-in or global procedure of the same name
+takes precedence.
+
 | Command | Forms and purpose |
 | --- | --- |
 | `fsim::help` | `?COMMAND?`; list and describe registered fsim Tcl commands. |
 | `fsim::version` | Return fsim and C API versions. |
-| `fsim::workspace` | Describe the current workspace and its libraries. |
-| `fsim::load ?SNAPSHOT?` | Load a managed snapshot into the Tcl session. |
+| `fsim::get_workspace` | Return the current workspace and its libraries. |
+| `fsim::load_snapshot ?SNAPSHOT?` | Load a managed snapshot into the Tcl session. |
 | `fsim::compile` | `?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? SOURCE ...`; compile files into a managed library and return a dictionary. |
 | `fsim::elaborate` | `?-snapshot NAME? ?-verbosity LEVEL? TOP ...`; create a managed snapshot and return a dictionary. |
 | `fsim::library` | `list`, `map NAME DIRECTORY`, `unmap NAME`, `objects NAME`, `delete-object NAME ARTIFACT_ID`, or `delete NAME`. |
-| `fsim::object` | `roots`, `resolve PATH`, `children REFERENCE`, `info REFERENCE`, `value REFERENCE`, `set REFERENCE VALUE`, `definitions ?LIBRARY?`, or `definition LIBRARY NAME`. |
-| `fsim::signals` | List paths of loaded signals. |
-| `fsim::read` | `SIGNAL`; read a signal value. |
-| `fsim::deposit`, `fsim::force` | `SIGNAL VALUE`; change or force a signal value. |
-| `fsim::release` | `SIGNAL`; release a forced value. |
+| `fsim::object` | `roots`, `resolve PATH`, `children REFERENCE`, `info REFERENCE`, `read REFERENCE`, `write REFERENCE VALUE`, `definitions ?LIBRARY?`, or `definition LIBRARY NAME`. |
+| `fsim::get_signals` | Return the paths of loaded signals. |
+| `fsim::read_signal` | `SIGNAL`; read a signal value. |
+| `fsim::deposit_signal`, `fsim::force_signal` | `SIGNAL VALUE`; change or force a signal value. |
+| `fsim::release_signal` | `SIGNAL`; release a forced value. |
 | `fsim::run` | `?DURATION?`; run the loaded simulation. |
-| `fsim::status` | Describe the loaded simulation state. |
-| `fsim::diagnostics` | `?clear?`; read or clear structured diagnostics. |
+| `fsim::get_simulation` | Return the loaded simulation state. |
+| `fsim::get_diagnostics`, `fsim::clear_diagnostics` | Return or discard structured diagnostics. |
 | `fsim::debug` | `status`, `step`, `continue`, `break`, `watch`, `frames`, `frame`, `scope`, `inspect`, `restart`, or `provenance`. |
-| `fsim::provenance` | `?PATH?`; return source provenance for a path or all design roots. |
-| `fsim::sdf`, `fsim::trace` | Configure or inspect SDF annotation and simulation tracing. |
-| `fsim::on`, `fsim::off`, `fsim::callbacks` | Register, remove, or list simulation callbacks. `fsim::stop` requests a stop at a safe point. |
+| `fsim::get_provenance` | `?PATH?`; return source provenance for a path or all design roots. |
+| `fsim::sdf`, `fsim::tracing` | Configure or inspect SDF annotation and simulation tracing. |
+| `fsim::add_callback`, `fsim::remove_callback`, `fsim::get_callbacks` | Register, remove, or return simulation callbacks. `fsim::stop` requests a stop at a safe point. |
 
 The debugger subcommands accept these forms:
 
@@ -64,8 +75,8 @@ The debugger subcommands accept these forms:
 fsim::debug status
 fsim::debug step ?statement|process|phase|delta|time?
 fsim::debug continue ?DURATION?
-fsim::debug break add|list|delete|clear ?ARG ...?
-fsim::debug watch add|list|delete|clear ?ARG ...?
+fsim::debug break add|list|remove|clear ?ARG ...?
+fsim::debug watch add|list|remove|clear ?ARG ...?
 fsim::debug frames
 fsim::debug frame ?INDEX?
 fsim::debug scope ?PATH?
@@ -89,7 +100,7 @@ restarted. A failed `cd` leaves the workspace and references unchanged.
 and its references unchanged.
 
 ```tcl
-set workspace [fsim::workspace]
+set workspace [fsim::get_workspace]
 puts [dict get $workspace managed_directory]
 foreach library [dict get $workspace libraries] {
     puts "[dict get $library library]: [dict get $library path]"
@@ -111,7 +122,7 @@ one nonempty progress line from the operation. Quiet verbosity returns an
 empty list; normal verbosity includes progress, and verbose verbosity adds
 detail. The list contains progress only: operational results remain in their
 named fields, and diagnostics remain separately available in the `diagnostics`
-field and `fsim::diagnostics`.
+field and `fsim::get_diagnostics`.
 
 ## Loaded objects and debugger results
 
@@ -130,14 +141,14 @@ set root_info [fsim::object info $root]
 puts [dict get $root_info path]
 
 set signal [fsim::object resolve top.ready]
-set value [fsim::object value $signal]
+set value [fsim::object read $signal]
 puts [dict get $value value]
 ```
 
 `fsim::object info` reports fields such as `identity`, `kind`, `name`, `path`,
 `parent`, `type`, `width`, and `dimensions`; language, library, and source
-provenance are included when available. `fsim::object value` returns a typed
-dictionary. `fsim::object set` validates the value and the simulation control
+provenance are included when available. `fsim::object read` returns a typed
+dictionary. `fsim::object write` validates the value and the simulation control
 state before applying a supported mutation.
 
 The debugger also returns structured dictionaries for status, breakpoints,
@@ -153,7 +164,7 @@ puts "time=[dict get $stopped time], finished=[dict get $stopped finished]"
 
 ## Source provenance and errors
 
-`fsim::provenance ?PATH?` and `fsim::debug provenance ?PATH?` return a list of
+`fsim::get_provenance ?PATH?` and `fsim::debug provenance ?PATH?` return a list of
 dictionaries. Records include the design path, language, library, owning unit,
 source path and identity, and source line and column. Additional standard,
 instance, and native plug-in fields are present when available. Provenance
@@ -161,7 +172,7 @@ comes from the compiled design or snapshot and remains available when original
 source files have been removed.
 
 ```tcl
-set records [fsim::provenance top.ready]
+set records [fsim::get_provenance top.ready]
 if {[llength $records] != 0} {
     set owner [lindex $records 0]
     puts "[dict get $owner source_path]:[dict get $owner source_line]"
@@ -169,17 +180,17 @@ if {[llength $records] != 0} {
 ```
 
 Operational failures raise Tcl errors and set `::errorCode`; fsim also retains
-structured entries in `fsim::diagnostics`.
+structured entries in `fsim::get_diagnostics`.
 
 ```tcl
 if {[catch {fsim::elaborate missing_top} message options]} {
     puts stderr $message
     puts stderr [dict get $options -errorcode]
-    puts [fsim::diagnostics]
+    puts [fsim::get_diagnostics]
 }
 ```
 
-Use `fsim::diagnostics clear` to clear retained entries. The diagnostic list
+Use `fsim::clear_diagnostics` to clear retained entries. The diagnostic list
 contains dictionaries with `severity`, `code`, `message`, `span`, and `notes`.
 
 ## Interactive console
@@ -252,7 +263,7 @@ terminal; a nonempty `NO_COLOR` turns it off. When a `tcl` or `debug` command
 writes diagnostics to a redirected error stream, fsim keeps that output plain
 even with `--color always`.
 The interactive console prints diagnostics as they are reported, beside other
-output, while retaining their structured forms in `fsim::diagnostics`.
+output, while retaining their structured forms in `fsim::get_diagnostics`.
 
 ## Tcl-disabled builds
 
