@@ -362,7 +362,7 @@ The current tree contains:
   unresolved active rows, deterministic attempt/coverage/debug/VCD equality
   through interpreter and LLVM O0/O2 cold/warm execution, source-independent
   object/library/design replay, mixed roots, a 6 GiB process ceiling, and an
-  installed [`fsim-vhdl` tutorial](docs/vhdl-psl-tutorial.md); see the
+  installed [VHDL/PSL tutorial](docs/vhdl-psl-tutorial.md); see the
   [support boundary](docs/vhdl-psl.md) and
   [closure audit](docs/vhdl-psl-closure-audit.md);
 - ordered VHDL sequential packed `case` statements with `|` choices and

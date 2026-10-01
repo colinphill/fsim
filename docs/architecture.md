@@ -259,7 +259,7 @@ and a 44-row closure matrix. All 29 active supported rows have positive,
 negative, and execution owners; no active row is unresolved. One registered
 aggregate contract freezes 17 direct/interpreter/LLVM/cache/debug/trace/
 artifact/relocation/replay/root/mixed stages, platform-neutral 6 GiB process
-containment, installed `fsim-vhdl` execution, diagnostic/source/provenance
+containment, installed `fsim` execution, diagnostic/source/provenance
 counts, and the exact inventory digests. The public
 [`vhdl-psl.md`](vhdl-psl.md),
 [`vhdl-psl-tutorial.md`](vhdl-psl-tutorial.md), and

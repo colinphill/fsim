@@ -67,8 +67,6 @@ format ceilings. The governed application process is capped at 6 GiB through
 POSIX `RLIMIT_AS` or a Windows Job Object, simulation work at 1,000 deltas,
 trace registration at 64 signals, and its CTest at 1,200 seconds.
 
-The same support is built through the installed `fsim-vhdl` alias. Its
-presence and executable help path are part of the installed-public contract.
 All new C/C++ formatting follows the repository `.clang-format`, based on the
 WebKit preset.
 

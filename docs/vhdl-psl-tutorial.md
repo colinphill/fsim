@@ -53,8 +53,7 @@ fsim elaborate 'work.psl_counter(rtl)'
 fsim simulate --duration 10ns --max-deltas 1000 --trace psl-counter.vcd
 ```
 
-The installed `fsim-vhdl` alias accepts the same commands. Parentheses are
-quoted for the shell. The top's language is inferred from library metadata.
+Parentheses are quoted for the shell. The top's language is inferred from library metadata.
 Run simulation again to exercise the warm cache; PSL attempt outcomes and
 VCD must remain identical.
 

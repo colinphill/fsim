@@ -1390,19 +1390,6 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   else()
     target_link_libraries(fsim PRIVATE fsim_cli)
   endif()
-
-  set(FSIM_COMMAND_TARGETS fsim)
-  foreach(alias_name IN ITEMS fsim-vhdl fsim-sv fsim-elab fsim-run)
-    add_executable(${alias_name} src/main.cpp)
-    fsim_configure_executable(${alias_name})
-    fsim_configure_command_entrypoint(${alias_name})
-    if(TARGET fsim_application)
-      target_link_libraries(${alias_name} PRIVATE fsim_application)
-    else()
-      target_link_libraries(${alias_name} PRIVATE fsim_cli)
-    endif()
-    list(APPEND FSIM_COMMAND_TARGETS ${alias_name})
-  endforeach()
 endif()
 
 set(FSIM_SYSTEMC_RUNTIME_TARGET_MANIFEST
@@ -1460,28 +1447,11 @@ install(
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/systemc"
   PATTERN "scv.hpp" EXCLUDE
 )
-if(FSIM_COMMAND_TARGETS)
-  if(WIN32)
-    install(
-      TARGETS ${FSIM_COMMAND_TARGETS}
-      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-    )
-  else()
-    install(
-      TARGETS fsim
-      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-    )
-    foreach(alias_name IN ITEMS fsim-vhdl fsim-sv fsim-elab fsim-run)
-      install(CODE "
-        set(FSIM_ALIAS_PATH
-          \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/${alias_name}\")
-        file(REMOVE \"\${FSIM_ALIAS_PATH}\")
-        file(CREATE_LINK fsim \"\${FSIM_ALIAS_PATH}\" SYMBOLIC)
-        list(APPEND CMAKE_INSTALL_MANIFEST_FILES
-          \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/${alias_name}\")
-      ")
-    endforeach()
-  endif()
+if(TARGET fsim)
+  install(
+    TARGETS fsim
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  )
 endif()
 if(FSIM_WITH_BUNDLED_TCL)
   install(

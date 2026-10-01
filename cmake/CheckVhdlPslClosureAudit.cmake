@@ -204,8 +204,8 @@ endforeach()
 
 file(READ "${FSIM_INSTALLED}" FSIM_INSTALLED_CONTENTS)
 foreach(FSIM_TOKEN IN ITEMS
-    "FSIM_VHDL_EXECUTABLE_NAME"
-    "^Usage: fsim-vhdl")
+    "FSIM_EXECUTABLE_NAME"
+    "^Usage: fsim")
   string(FIND "${FSIM_INSTALLED_CONTENTS}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)
   if(FSIM_TOKEN_INDEX EQUAL -1)
     message(FATAL_ERROR

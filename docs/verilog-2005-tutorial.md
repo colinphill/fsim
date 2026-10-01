@@ -40,8 +40,7 @@ fsim simulate --engine compiled --duration 2ns --max-deltas 1000 \
   --trace wide-literal.vcd
 ```
 
-The installed `fsim-sv` alias accepts the same commands. Run simulation again
-to exercise the warm native cache under `.fsim/cache`. The `WIDE=` transcript
+Run simulation again to exercise the warm native cache under `.fsim/cache`. The `WIDE=` transcript
 and VCD value must remain identical. Use `fsim debug` for the source-aware
 debugger; inspection retains the complete value.
 

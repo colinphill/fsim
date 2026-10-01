@@ -1026,22 +1026,6 @@ std::optional<Invocation> parse_arguments(
     bool verbosity_explicit = false;
     bool library_explicit = false;
     bool standard_explicit = false;
-    const auto executable = lowercase(invocation.program_name);
-    if (executable == "fsim-vhdl" || executable == "fsim-vhdl.exe") {
-        invocation.command = Command::check;
-        invocation.language = project::Language::vhdl;
-        command_selected = true;
-    } else if (executable == "fsim-sv" || executable == "fsim-sv.exe") {
-        invocation.command = Command::check;
-        invocation.language = project::Language::system_verilog;
-        command_selected = true;
-    } else if (executable == "fsim-elab" || executable == "fsim-elab.exe") {
-        invocation.command = Command::elaborate;
-        command_selected = true;
-    } else if (executable == "fsim-run" || executable == "fsim-run.exe") {
-        invocation.command = Command::simulate;
-        command_selected = true;
-    }
 
     bool positional_only = false;
     for (int index = 1; index < argc; ++index) {
