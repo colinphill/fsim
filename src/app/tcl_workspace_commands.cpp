@@ -335,11 +335,67 @@ namespace {
         return rooted.lexically_normal();
     }
 
+    // Returns the value after the option at INDEX and advances INDEX to it.
+    std::optional<std::string> option_value(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const std::string_view command,
+        const std::string& option,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[],
+        Tcl_Size& index)
+    {
+        if (index + 1 >= argument_count) {
+            fail_command(context, interpreter, "FSIM-WS-TCL002",
+                std::string { command } + " option '" + option + "' requires a value");
+            return std::nullopt;
+        }
+        auto value = object_string(arguments[++index]);
+        if (value.empty() || value.find('\0') != std::string::npos) {
+            fail_command(context, interpreter, "FSIM-WS-TCL002",
+                std::string { command } + " option '" + option
+                    + "' requires a non-empty value");
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    bool accept_once(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const std::string_view command,
+        const std::string& option,
+        std::vector<std::string>& seen)
+    {
+        if (std::ranges::find(seen, option) != seen.end()) {
+            fail_command(context, interpreter, "FSIM-WS-TCL002",
+                std::string { command } + " accepts " + option + " only once");
+            return false;
+        }
+        seen.push_back(option);
+        return true;
+    }
+
+    std::optional<cli::Verbosity> verbosity_option(
+        TclContext& context, Tcl_Interp* interpreter, const std::string_view value)
+    {
+        try {
+            return verbosity_from_text(value);
+        } catch (const std::invalid_argument& error) {
+            fail_command(context, interpreter, "FSIM-WS-TCL002", error.what());
+            return std::nullopt;
+        }
+    }
+
     struct CompileOptions {
         std::optional<project::Language> language;
         std::string library { "work" };
         std::optional<std::string> standard;
         cli::Verbosity verbosity { cli::Verbosity::normal };
+        std::vector<std::filesystem::path> include_directories;
+        std::vector<std::string> defines;
+        std::optional<std::string> compiler;
+        std::vector<std::string> compile_options;
         std::vector<std::filesystem::path> sources;
     };
 
@@ -349,12 +405,10 @@ namespace {
         const Tcl_Size argument_count,
         Tcl_Obj* const arguments[])
     {
+        constexpr std::string_view command { "fsim::compile" };
         CompileOptions result;
         result.verbosity = context.invocation.verbosity;
-        bool language_seen { false };
-        bool library_seen { false };
-        bool standard_seen { false };
-        bool verbosity_seen { false };
+        std::vector<std::string> seen;
         Tcl_Size index = 1;
         for (; index < argument_count; ++index) {
             const auto option = object_string(arguments[index]);
@@ -365,65 +419,48 @@ namespace {
             if (option.empty() || !option.starts_with('-')) {
                 break;
             }
-            if (option != "-lang" && option != "-library"
-                && option != "-standard" && option != "-verbosity") {
+            const bool repeatable = option == "-include" || option == "-define"
+                || option == "-compile-option";
+            if (!repeatable && option != "-lang" && option != "-library"
+                && option != "-standard" && option != "-verbosity"
+                && option != "-compiler") {
                 fail_command(context, interpreter, "FSIM-WS-TCL002",
                     "unknown fsim::compile option '" + option + "'");
                 return std::nullopt;
             }
-            if (index + 1 >= argument_count) {
-                fail_command(context, interpreter, "FSIM-WS-TCL002",
-                    "fsim::compile option '" + option + "' requires a value");
-                return std::nullopt;
-            }
-            const auto value = object_string(arguments[++index]);
-            if (value.empty() || value.find('\0') != std::string::npos) {
-                fail_command(context, interpreter, "FSIM-WS-TCL002",
-                    "fsim::compile option '" + option + "' requires a non-empty value");
+            auto value = option_value(context, interpreter, command, option,
+                argument_count, arguments, index);
+            if (!value
+                || (!repeatable
+                    && !accept_once(context, interpreter, command, option, seen))) {
                 return std::nullopt;
             }
             if (option == "-lang") {
-                if (language_seen) {
-                    fail_command(context, interpreter, "FSIM-WS-TCL002",
-                        "fsim::compile accepts -lang only once");
-                    return std::nullopt;
-                }
-                language_seen = true;
-                result.language = project::parse_language(value);
+                result.language = project::parse_language(*value);
                 if (!result.language) {
                     fail_command(context, interpreter, "FSIM-WS-TCL002",
-                        "unsupported source language '" + value + "'");
+                        "unsupported source language '" + *value + "'");
                     return std::nullopt;
                 }
             } else if (option == "-library") {
-                if (library_seen) {
-                    fail_command(context, interpreter, "FSIM-WS-TCL002",
-                        "fsim::compile accepts -library only once");
-                    return std::nullopt;
-                }
-                library_seen = true;
-                result.library = value;
+                result.library = std::move(*value);
             } else if (option == "-standard") {
-                if (standard_seen) {
-                    fail_command(context, interpreter, "FSIM-WS-TCL002",
-                        "fsim::compile accepts -standard only once");
+                result.standard = std::move(*value);
+            } else if (option == "-verbosity") {
+                const auto verbosity = verbosity_option(context, interpreter, *value);
+                if (!verbosity) {
                     return std::nullopt;
                 }
-                standard_seen = true;
-                result.standard = value;
+                result.verbosity = *verbosity;
+            } else if (option == "-include") {
+                result.include_directories.push_back(
+                    fsim::support::path_from_utf8(*value));
+            } else if (option == "-define") {
+                result.defines.push_back(std::move(*value));
+            } else if (option == "-compiler") {
+                result.compiler = std::move(*value);
             } else {
-                if (verbosity_seen) {
-                    fail_command(context, interpreter, "FSIM-WS-TCL002",
-                        "fsim::compile accepts -verbosity only once");
-                    return std::nullopt;
-                }
-                verbosity_seen = true;
-                try {
-                    result.verbosity = verbosity_from_text(value);
-                } catch (const std::invalid_argument& error) {
-                    fail_command(context, interpreter, "FSIM-WS-TCL002", error.what());
-                    return std::nullopt;
-                }
+                result.compile_options.push_back(std::move(*value));
             }
         }
         for (; index < argument_count; ++index) {
@@ -457,6 +494,12 @@ namespace {
                 }
                 result.language = inferred;
             }
+        }
+        if (*result.language != project::Language::systemc
+            && (result.compiler || !result.compile_options.empty())) {
+            fail_command(context, interpreter, "FSIM-WS-TCL002",
+                "fsim::compile -compiler and -compile-option apply only to SystemC sources");
+            return std::nullopt;
         }
         return result;
     }
@@ -500,6 +543,18 @@ namespace {
                     "-standard is not applicable to SystemC compilation");
                 return std::nullopt;
             }
+            auto& systemc = config.systemc;
+            if (options.compiler) {
+                systemc.compiler = *options.compiler;
+            }
+            for (const auto& directory : options.include_directories) {
+                systemc.include_directories.push_back(
+                    normalized_source_path(config, directory));
+            }
+            systemc.defines.insert(
+                systemc.defines.end(), options.defines.begin(), options.defines.end());
+            systemc.compile_options.insert(systemc.compile_options.end(),
+                options.compile_options.begin(), options.compile_options.end());
             return config;
         }
         project::SourceSet source_set;
@@ -519,6 +574,12 @@ namespace {
             source_set.files.push_back(path);
             source_set.file_patterns.push_back(path);
         }
+        for (const auto& directory : options.include_directories) {
+            source_set.include_directories.push_back(
+                normalized_source_path(config, directory));
+        }
+        source_set.defines.insert(
+            source_set.defines.end(), options.defines.begin(), options.defines.end());
         const auto requested_standard = options.standard
             ? std::string_view { *options.standard }
             : source_set.standard.empty()
@@ -645,6 +706,137 @@ namespace {
         dict_put(interpreter, result, "object_count", size_object(artifact_count));
         dict_put(interpreter, result, "objects", artifacts);
         dict_put(interpreter, result, "owned_units", units);
+        if (!put_messages(interpreter, result, output.str())) {
+            return TCL_ERROR;
+        }
+        dict_put(interpreter, result, "diagnostics",
+            diagnostics_object(interpreter, operation_diagnostics));
+        append_context_diagnostics(context, operation_diagnostics);
+        Tcl_SetObjResult(interpreter, result);
+        return TCL_OK;
+    }
+
+    struct LinkOptions {
+        std::string library { "work" };
+        cli::Verbosity verbosity { cli::Verbosity::normal };
+        std::optional<std::string> compiler;
+        std::vector<std::string> link_options;
+        std::vector<std::string> libraries;
+    };
+
+    std::optional<LinkOptions> parse_link_options(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        constexpr std::string_view command { "fsim::link" };
+        LinkOptions result;
+        result.verbosity = context.invocation.verbosity;
+        std::vector<std::string> seen;
+        for (Tcl_Size index = 1; index < argument_count; ++index) {
+            const auto option = object_string(arguments[index]);
+            const bool repeatable = option == "-link-option" || option == "-link-library";
+            if (!repeatable && option != "-library" && option != "-verbosity"
+                && option != "-compiler") {
+                fail_command(context, interpreter, "FSIM-WS-TCL002",
+                    option.starts_with('-')
+                        ? "unknown fsim::link option '" + option + "'"
+                        : "fsim::link takes no source arguments; it links the "
+                          "SystemC objects already compiled into -library");
+                return std::nullopt;
+            }
+            auto value = option_value(context, interpreter, command, option,
+                argument_count, arguments, index);
+            if (!value
+                || (!repeatable
+                    && !accept_once(context, interpreter, command, option, seen))) {
+                return std::nullopt;
+            }
+            if (option == "-library") {
+                result.library = std::move(*value);
+            } else if (option == "-verbosity") {
+                const auto verbosity = verbosity_option(context, interpreter, *value);
+                if (!verbosity) {
+                    return std::nullopt;
+                }
+                result.verbosity = *verbosity;
+            } else if (option == "-compiler") {
+                result.compiler = std::move(*value);
+            } else if (option == "-link-option") {
+                result.link_options.push_back(std::move(*value));
+            } else {
+                result.libraries.push_back(std::move(*value));
+            }
+        }
+        return result;
+    }
+
+    int link_command(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        const auto options = parse_link_options(
+            context, interpreter, argument_count, arguments);
+        if (!options) {
+            return TCL_ERROR;
+        }
+        auto config = context.initial_config;
+        auto& systemc = config.systemc;
+        if (options->compiler) {
+            systemc.compiler = *options->compiler;
+        }
+        systemc.link_options.insert(systemc.link_options.end(),
+            options->link_options.begin(), options->link_options.end());
+        systemc.libraries.insert(systemc.libraries.end(),
+            options->libraries.begin(), options->libraries.end());
+
+        cli::Invocation invocation = context.invocation;
+        invocation.command = cli::Command::systemc_link;
+        invocation.verbosity = options->verbosity;
+        invocation.library = options->library;
+        invocation.files.clear();
+        diagnostic::Engine operation_diagnostics;
+        std::ostringstream output;
+        std::ostringstream error_output;
+        const int status = application_detail::handle_workspace_systemc_link(
+            invocation, config, operation_diagnostics, output, error_output);
+        if (status != 0 || operation_diagnostics.has_error()) {
+            return fail_with_diagnostics(
+                context, interpreter, operation_diagnostics,
+                "SystemC library link failed");
+        }
+
+        catalog_changed(context, options->library, TclCatalogMutation::replaced);
+        workspace::Store store(config.base_directory);
+        std::string error;
+        const auto catalog = store.read_library(options->library, error);
+        if (!catalog) {
+            operation_diagnostics.error("FSIM-WS-TCL001", std::move(error));
+            return fail_with_diagnostics(
+                context, interpreter, operation_diagnostics,
+                "cannot read linked library catalog");
+        }
+        const auto plugin = std::ranges::find(catalog->artifacts,
+            workspace::ArtifactKind::SystemCPlugin, &workspace::ArtifactRecord::kind);
+        if (plugin == catalog->artifacts.end()) {
+            return fail_command(context, interpreter, "FSIM-WS-TCL001",
+                "linked library '" + options->library + "' has no SystemC plug-in");
+        }
+
+        Tcl_Obj* result = Tcl_NewDictObj();
+        dict_put(interpreter, result, "library", string_object(options->library));
+        dict_put(interpreter, result, "plugin", artifact_object(interpreter, *plugin));
+        Tcl_Obj* modules = Tcl_NewListObj(0, nullptr);
+        for (const auto& unit : plugin->units) {
+            if (!list_append(interpreter, modules, string_object(unit.unit.name))) {
+                return TCL_ERROR;
+            }
+        }
+        dict_put(interpreter, result, "modules", modules);
+        dict_put(interpreter, result, "object_count", size_object(plugin->sources.size()));
         if (!put_messages(interpreter, result, output.str())) {
             return TCL_ERROR;
         }
@@ -999,7 +1191,19 @@ namespace {
         TclCommandArgument { "-standard", TclCompletionDomain::literal, true },
         TclCommandArgument {
             "-verbosity", TclCompletionDomain::literal, true, false, verbosity_choices },
+        TclCommandArgument { "-include", TclCompletionDomain::directory_path, true, true },
+        TclCommandArgument { "-define", TclCompletionDomain::literal, true, true },
+        TclCommandArgument { "-compiler", TclCompletionDomain::source_path, true },
+        TclCommandArgument { "-compile-option", TclCompletionDomain::literal, true, true },
         TclCommandArgument { "source", TclCompletionDomain::source_path, false, true },
+    };
+    constexpr std::array link_arguments {
+        TclCommandArgument { "-library", TclCompletionDomain::library, true },
+        TclCommandArgument { "-compiler", TclCompletionDomain::source_path, true },
+        TclCommandArgument { "-link-option", TclCompletionDomain::literal, true, true },
+        TclCommandArgument { "-link-library", TclCompletionDomain::literal, true, true },
+        TclCommandArgument {
+            "-verbosity", TclCompletionDomain::literal, true, false, verbosity_choices },
     };
     constexpr std::array elaborate_arguments {
         TclCommandArgument { "-snapshot", TclCompletionDomain::snapshot, true },
@@ -1056,13 +1260,30 @@ std::span<const TclCommandSpec> workspace_command_specs()
     static constexpr std::array specs {
         TclCommandSpec {
             "fsim::compile",
-            "fsim::compile ?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? SOURCE ...",
+            "fsim::compile ?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? "
+            "?-verbosity LEVEL? ?-include DIRECTORY? ?-define NAME[=VALUE]? "
+            "?-compiler PATH? ?-compile-option ARG? SOURCE ...",
             "Compile source files into a managed workspace library and return structured "
-            "results with progress messages and diagnostics.",
+            "results with progress messages and diagnostics. -include, -define, and "
+            "-compile-option repeat; -compiler and -compile-option apply to SystemC.",
             TclCommandCapability::workspace,
             false,
             compile_arguments,
             compile_command,
+            TclResultShape::dictionary,
+            "workspace",
+        },
+        TclCommandSpec {
+            "fsim::link",
+            "fsim::link ?-library LIBRARY? ?-compiler PATH? ?-link-option ARG? "
+            "?-link-library ARG? ?-verbosity LEVEL?",
+            "Link a library's compiled SystemC objects into its plug-in, register the "
+            "plug-in's modules for elaboration, and return structured results with "
+            "progress messages and diagnostics. -link-option and -link-library repeat.",
+            TclCommandCapability::workspace,
+            false,
+            link_arguments,
+            link_command,
             TclResultShape::dictionary,
             "workspace",
         },

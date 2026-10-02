@@ -163,6 +163,7 @@ void test_command_catalog_completion_metadata()
 {
     using namespace fsim::app::tcl_detail;
     const auto* compile = find_spec("fsim::compile");
+    const auto* link = find_spec("fsim::link");
     const auto* elaborate = find_spec("fsim::elaborate");
     const auto* library = find_spec("fsim::library");
     const auto* object = find_spec("fsim::object");
@@ -174,6 +175,18 @@ void test_command_catalog_completion_metadata()
             && has_argument(compile->arguments, "source", TclCompletionDomain::source_path)
             && has_argument(compile->arguments, "-library", TclCompletionDomain::library),
         "compile catalog metadata must route source and library completion with result help");
+    require(has_argument(compile->arguments, "-include", TclCompletionDomain::directory_path)
+            && has_argument(compile->arguments, "-compiler", TclCompletionDomain::source_path)
+            && has_argument(compile->arguments, "-define", TclCompletionDomain::literal)
+            && has_argument(compile->arguments, "-compile-option", TclCompletionDomain::literal),
+        "compile catalog metadata must expose the SystemC and preprocessor options");
+    require(link != nullptr && link->capability == TclCommandCapability::workspace
+            && link->result_shape == TclResultShape::dictionary
+            && has_argument(link->arguments, "-library", TclCompletionDomain::library)
+            && has_argument(link->arguments, "-compiler", TclCompletionDomain::source_path)
+            && has_argument(link->arguments, "-link-option", TclCompletionDomain::literal)
+            && has_argument(link->arguments, "-link-library", TclCompletionDomain::literal),
+        "link catalog metadata must route library completion and the link options");
     require(elaborate != nullptr && elaborate->capability == TclCommandCapability::workspace
             && elaborate->result_shape == TclResultShape::dictionary
             && has_argument(elaborate->arguments, "top", TclCompletionDomain::compiled_definition)

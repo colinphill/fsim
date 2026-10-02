@@ -15,7 +15,8 @@ a structured fsim diagnostic. Tcl scripts may inspect `::errorCode` and
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `fsim::compile` | `?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? SOURCE ...` | Dictionary with library, language, source list, object count, owned units, and diagnostics. Infer language from extensions when unambiguous. |
+| `fsim::compile` | `?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? ?-include DIRECTORY? ?-define NAME[=VALUE]? ?-compiler PATH? ?-compile-option ARG? SOURCE ...` | Dictionary with library, language, source list, object count, owned units, and diagnostics. Infer language from extensions when unambiguous. `-compiler` and `-compile-option` apply to SystemC sources. |
+| `fsim::link` | `?-library LIBRARY? ?-compiler PATH? ?-link-option ARG? ?-link-library ARG? ?-verbosity LEVEL?` | Dictionary with library, plug-in artifact, registered modules, linked object count, and diagnostics. |
 | `fsim::elaborate` | `?-snapshot NAME? ?-verbosity LEVEL? TOP ...` | Dictionary with snapshot, selected roots, counts, and diagnostics. A bare top uses metadata lookup; a language prefix is needed only for ambiguous names. |
 | `fsim::library list` | none | List of library dictionaries. |
 | `fsim::library map` | `NAME DIRECTORY` | Updated library dictionary. |

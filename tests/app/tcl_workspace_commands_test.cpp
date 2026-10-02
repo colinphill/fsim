@@ -14,7 +14,17 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define FSIM_TEST_ASAN_ENABLED 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(FSIM_TEST_ASAN_ENABLED)
+#define FSIM_TEST_ASAN_ENABLED 1
+#endif
 
 namespace {
 
@@ -658,6 +668,148 @@ puts sdf-workspace-ok
     }
 }
 
+void write_file(const std::filesystem::path& path, const std::string_view contents)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream file { path, std::ios::binary };
+    file << contents;
+    if (!file) {
+        throw std::runtime_error("cannot write " + path.string());
+    }
+}
+
+void run_systemc_workspace_commands_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory { temporary.path() };
+    write_file(temporary.path() / "include" / "tcl_value.hpp",
+        "#ifndef TCL_WORKSPACE_VALUE\n#error missing workspace define\n#endif\n");
+    write_file(temporary.path() / "helper.cpp",
+        "#include \"tcl_value.hpp\"\n"
+        "int tcl_workspace_value() { return TCL_WORKSPACE_VALUE; }\n");
+    write_file(temporary.path() / "bridge.cpp",
+        "#include \"fsim/systemc.hpp\"\n"
+        "extern int tcl_workspace_value();\n"
+        "SC_MODULE(TclBridge) {\n"
+        "    sc_core::sc_signal<sc_dt::sc_logic> value{\"value\", sc_dt::SC_LOGIC_0};\n"
+        "    void run() {\n"
+        "        value.write(tcl_workspace_value() == 7 ? sc_dt::SC_LOGIC_1 : sc_dt::SC_LOGIC_0);\n"
+        "    }\n"
+        "    SC_CTOR(TclBridge) { SC_THREAD(run); }\n"
+        "};\n"
+        "SC_FSIM_EXPORT_AS(TclBridge, \"bridge\");\n");
+#if defined(FSIM_TEST_ASAN_ENABLED)
+    std::string script = "set link_options {-link-option -fsanitize=address,undefined}\n";
+#else
+    std::string script = "set link_options {}\n";
+#endif
+    script += R"FSIM_TCL(
+proc expect_error {script pattern} {
+  if {![catch {uplevel 1 $script} message]} {
+    error "expected a failure from: $script"
+  }
+  if {![string match $pattern $message]} {
+    error "unexpected failure from $script: $message"
+  }
+}
+
+proc plugin_id {library} {
+  foreach artifact [fsim::library objects $library] {
+    if {[dict get $artifact kind] eq "systemc_plugin"} {
+      return [dict get $artifact id]
+    }
+  }
+  return ""
+}
+
+# The header requires the define, and only -include finds it.
+expect_error {fsim::compile -library models helper.cpp} "*"
+set compiled [fsim::compile -library models -include include \
+    -define TCL_WORKSPACE_VALUE=7 -verbosity verbose helper.cpp bridge.cpp]
+if {[dict get $compiled language] ne "systemc" ||
+    [dict get $compiled object_count] != 2} {
+  error "SystemC compile returned the wrong language or object count: $compiled"
+}
+set messages [dict get $compiled messages]
+foreach pattern {{  define: TCL_WORKSPACE_VALUE=7} {  include: *include}
+                 {  compiler: * (default)}} {
+  if {[lsearch -glob $messages $pattern] < 0} {
+    error "verbose SystemC compile omitted '$pattern': $messages"
+  }
+}
+
+set linked [link -library models {*}$link_options]
+if {[dict get $linked library] ne "models" || [dict get $linked modules] ne {bridge}
+    || [dict get $linked object_count] != 2
+    || [dict get [dict get $linked plugin] kind] ne "systemc_plugin"} {
+  error "link returned the wrong result: $linked"
+}
+if {[llength [dict get $linked messages]] == 0 ||
+    [llength [dict get $linked diagnostics]] != 0} {
+  error "link returned unexpected messages or diagnostics: $linked"
+}
+if {[dict get [help link] name] ne "fsim::link"} {
+  error "help did not describe the link command"
+}
+
+# Recompiling replaces the plug-in; -compile-option reaches the compiler.
+set recompiled [fsim::compile -library models -include include \
+    -define TCL_WORKSPACE_VALUE=7 -compile-option -O1 -verbosity verbose helper.cpp]
+if {[lsearch -exact [dict get $recompiled messages] {  compile option: -O1}] < 0} {
+  error "verbose SystemC compile omitted the compile option: $recompiled"
+}
+if {[plugin_id models] ne ""} {
+  error "recompiling a SystemC source kept the stale plug-in"
+}
+set relinked [fsim::link -library models -verbosity quiet {*}$link_options]
+if {[llength [dict get $relinked messages]] != 0} {
+  error "quiet link returned progress messages"
+}
+set plugin [plugin_id models]
+if {$plugin ne [dict get [dict get $relinked plugin] id]} {
+  error "link did not return the catalog's plug-in"
+}
+
+# -compiler and -link-library reach the tools; failures keep the catalog.
+expect_error {fsim::compile -library models -compiler fsim-no-such-compiler \
+    -include include -define TCL_WORKSPACE_VALUE=7 helper.cpp} \
+  "*fsim-no-such-compiler*"
+expect_error {fsim::link -library models -compiler fsim-no-such-compiler} \
+  "*compiler identity differs from the compiled objects*"
+expect_error {fsim::link -library models \
+    -link-library fsim_tcl_missing_native_library {*}$link_options} "*"
+if {[plugin_id models] ne $plugin} {
+  error "a failed compile or link replaced the SystemC plug-in"
+}
+
+expect_error {fsim::compile -compiler c++ top.sv} "*apply only to SystemC sources*"
+expect_error {fsim::compile -compile-option -O2 top.sv} "*apply only to SystemC sources*"
+expect_error {fsim::link models} "*takes no source arguments*"
+expect_error {fsim::link -library models -compile-option -O2} \
+  "*unknown fsim::link option '-compile-option'*"
+expect_error {fsim::link -library models -library other} "*accepts -library only once*"
+expect_error {fsim::link -link-option} "*requires a value*"
+fsim::clear_diagnostics
+
+fsim::elaborate -verbosity quiet models.bridge
+fsim::load_snapshot
+fsim::run 10ns
+if {[lsearch -exact [fsim::get_signals] bridge.value] < 0 ||
+    [fsim::read_signal bridge.value] ne "1"} {
+  error "the linked SystemC module did not see the compiled define"
+}
+puts systemc-workspace-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+        || output.str().find("systemc-workspace-ok") == std::string::npos) {
+        throw std::runtime_error("Tcl SystemC compile and link failed: "
+            + output.str() + error.str());
+    }
+}
+
 void run_unqualified_command_test()
 {
     TemporaryDirectory temporary;
@@ -780,6 +932,7 @@ int main()
     try {
         run_workspace_commands_test();
         run_sdf_workspace_commands_test();
+        run_systemc_workspace_commands_test();
         run_unqualified_command_test();
         run_windows_long_path_cd_test();
     } catch (const std::exception& exception) {

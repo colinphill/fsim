@@ -243,8 +243,7 @@ int handle_workspace_systemc_compile(
     if (invocation.verbosity != cli::Verbosity::quiet) {
         output << "compiled " << sources->size()
                << " SystemC translation unit(s) into library '"
-               << invocation.library << "'; finalize with fsim systemc link --library "
-               << invocation.library << '\n';
+               << invocation.library << "'; link the library to register its modules\n";
     }
     return 0;
 }

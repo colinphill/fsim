@@ -38,7 +38,7 @@ fsim debug --snapshot regression -c 'puts [fsim::debug status]'
 
 Top-level commands that return objects are named `get_*`; other top-level
 single actions are `verb_noun` (such as `read_signal` and `add_callback`),
-except the flow commands `compile`, `elaborate`, `run`, and `stop`.
+except the flow commands `compile`, `link`, `elaborate`, `run`, and `stop`.
 Commands with several operations take a subcommand instead
 (`fsim::library list`, `fsim::object info`); the `get_` rule does not apply
 to subcommands.
@@ -53,7 +53,8 @@ takes precedence.
 | `fsim::version` | Return fsim and C API versions. |
 | `fsim::get_workspace` | Return the current workspace and its libraries. |
 | `fsim::load_snapshot ?SNAPSHOT?` | Load a managed snapshot into the Tcl session. |
-| `fsim::compile` | `?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? SOURCE ...`; compile files into a managed library and return a dictionary. |
+| `fsim::compile` | `?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? ?-include DIRECTORY? ?-define NAME[=VALUE]? ?-compiler PATH? ?-compile-option ARG? SOURCE ...`; compile files into a managed library and return a dictionary. `-include`, `-define`, and `-compile-option` repeat; `-compiler` and `-compile-option` apply to SystemC sources. |
+| `fsim::link` | `?-library LIBRARY? ?-compiler PATH? ?-link-option ARG? ?-link-library ARG? ?-verbosity LEVEL?`; link a library's compiled SystemC objects into its plug-in, register its modules for elaboration, and return a dictionary. `-link-option` and `-link-library` repeat. |
 | `fsim::elaborate` | `?-snapshot NAME? ?-verbosity LEVEL? TOP ...`; create a managed snapshot and return a dictionary. |
 | `fsim::library` | `list`, `map NAME DIRECTORY`, `unmap NAME`, `objects NAME`, `delete-object NAME ARTIFACT_ID`, or `delete NAME`. |
 | `fsim::object` | `roots`, `resolve PATH`, `children REFERENCE`, `info REFERENCE`, `read REFERENCE`, `write REFERENCE VALUE`, `definitions ?LIBRARY?`, or `definition LIBRARY NAME`. |
@@ -117,7 +118,24 @@ and `mapped` fields. Compile results include the selected library and language,
 source files, object count, owned units, and diagnostics. Elaboration results
 include the snapshot name, selected roots, counts, and diagnostics.
 
-Both compile and elaborate results also include a `messages` list. Each entry is
+SystemC sources (`.cpp`, `.cc`, `.cxx`, or `-lang systemc`) compile to one
+managed object each; `link` then builds the library's plug-in and registers
+its modules, which elaboration needs:
+
+```tcl
+fsim::compile -library models -include include -define WIDTH=8 bridge.cpp
+set linked [fsim::link -library models]
+puts [dict get $linked modules]
+fsim::elaborate models.bridge
+```
+
+Link results include the library, the plug-in artifact, its registered
+`modules`, the number of linked objects, and diagnostics. Compile options
+added with `-include`, `-define`, `-compiler`, and `-compile-option`, and link
+options added with `-compiler`, `-link-option`, and `-link-library`, apply to
+that command only.
+
+Compile, link, and elaborate results also include a `messages` list. Each entry is
 one nonempty progress line from the operation. Quiet verbosity returns an
 empty list; normal verbosity includes progress, and verbose verbosity adds
 detail. The list contains progress only: operational results remain in their
