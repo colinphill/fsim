@@ -47,7 +47,8 @@
         "CMAKE_CXX_SCAN_FOR_MODULES": "OFF",
         "FSIM_BUILD_TESTS": "ON",
         "FSIM_TCL_MODE": "ON",
-        "FSIM_LLVM_MODE": "ON"
+        "FSIM_LLVM_MODE": "ON",
+        "LLVM_DIR": "$env{LLVM_MINGW_ROOT}/lib/cmake/llvm"
       }
     },
     {

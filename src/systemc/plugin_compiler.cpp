@@ -114,6 +114,11 @@ namespace {
 
 } // namespace
 
+std::string default_plugin_compiler()
+{
+    return default_compiler();
+}
+
 std::string_view to_string(const HostToolchain toolchain) noexcept
 {
     switch (toolchain) {

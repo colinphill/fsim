@@ -15,9 +15,9 @@ third_party/systemc-3.0.2/** -text
 # files as well as the archive. Preserve those bytes on every platform.
 third_party/scv-2.0.1/** -text whitespace=-trailing-space
 
-# The LLVM-MinGW runtime license is the release archive's LICENSE.TXT, byte
-# for byte, including its trailing blank line.
-third_party/llvm-mingw-20260616/LICENSE -text whitespace=-blank-at-eof
+# The fsim toolchain license is the release archive's LICENSE.TXT, byte for
+# byte, including its trailing blank line.
+third_party/fsim-toolchain-22.1.8-1/LICENSE -text whitespace=-blank-at-eof
 
 # The governed Tcl patch set carries pinned byte digests, and its patches
 # reproduce upstream context lines exactly.

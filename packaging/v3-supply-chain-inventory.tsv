@@ -14,10 +14,10 @@ V3SUP-SQLITE-NOTICE	notice	third_party/sqlite-3.53.4/NOTICE	B188J-C02
 V3SUP-SQLITE-SBOM	sbom	third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json	B188J-C02
 V3SUP-SQLITE-PROVENANCE	provenance	third_party/sqlite-3.53.4/SOURCE_MANIFEST.txt	B188J-C02
 V3SUP-SQLITE-SOURCE	provenance	third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip	B188J-C02
-V3SUP-LLVM-MINGW-LICENSE	license	third_party/llvm-mingw-20260616/LICENSE	CI-WINDOWS-RUNTIME
-V3SUP-LLVM-MINGW-NOTICE	notice	third_party/llvm-mingw-20260616/NOTICE	CI-WINDOWS-RUNTIME
-V3SUP-LLVM-MINGW-SBOM	sbom	third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json	CI-WINDOWS-RUNTIME
-V3SUP-LLVM-MINGW-PROVENANCE	provenance	third_party/llvm-mingw-20260616/SOURCE_MANIFEST.txt	CI-WINDOWS-RUNTIME
+V3SUP-WINDOWS-TOOLCHAIN-LICENSE	license	third_party/fsim-toolchain-22.1.8-1/LICENSE	WINDOWS-TOOLCHAIN
+V3SUP-WINDOWS-TOOLCHAIN-NOTICE	notice	third_party/fsim-toolchain-22.1.8-1/NOTICE	WINDOWS-TOOLCHAIN
+V3SUP-WINDOWS-TOOLCHAIN-SBOM	sbom	third_party/fsim-toolchain-22.1.8-1/fsim-toolchain-22.1.8-1.spdx.json	WINDOWS-TOOLCHAIN
+V3SUP-WINDOWS-TOOLCHAIN-PROVENANCE	provenance	third_party/fsim-toolchain-22.1.8-1/SOURCE_MANIFEST.txt	WINDOWS-TOOLCHAIN
 V3SUP-TCL-PATCHES	provenance	third_party/tcl-9.0.4/PATCHES.txt	WINDOWS-LONG-PATHS
 V3SUP-UVM-PROVENANCE	provenance	docs/uvm-source-provenance.md	B188-C17
 V3SUP-SOURCE-EXCLUSIONS	exclusion	packaging/source-package-exclusions.txt	B188-C17

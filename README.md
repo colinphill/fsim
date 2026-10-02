@@ -558,8 +558,8 @@ Unsupported syntax is diagnosed rather than silently accepted.
 ## Requirements
 
 - Windows or Linux on x86-64
-- A C++20 compiler: GCC or Clang on Linux, or the pinned LLVM-MinGW UCRT
-  toolchain on Windows
+- A C++20 compiler: GCC or Clang on Linux, or the pinned fsim toolchain (an
+  x86-64 UCRT build of LLVM-MinGW) on Windows
 - CMake 3.28 or newer
 - LLVM **22.1.8** for the supported compiled-code configuration
 - Tcl **9.0.4 or newer in the 9.0 release series**, or network access for
@@ -648,19 +648,27 @@ cmake --build build/llvm
 ctest --test-dir build/llvm --output-on-failure
 ```
 
-On Windows, extract the pinned
-[LLVM-MinGW 20260616 UCRT archive](https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip),
-set `LLVM_MINGW_ROOT` to its forward-slash path, and use the checked-in preset.
-The LLVM-enabled configuration additionally needs LLVM 22.1.8 MinGW development
-files, such as the MSYS2 CLANG64 `mingw-w64-clang-x86_64-llvm` package:
+On Windows, fsim builds with the pinned
+[fsim toolchain 22.1.8-1](https://github.com/colinphill/fsim-toolchain/releases/tag/fsim-22.1.8-1),
+an x86-64 UCRT build of LLVM-MinGW 20260616 with LLVM 22.1.8. Extract its
+`fsim-toolchain-22.1.8-1-ucrt-x86_64.zip` and
+`fsim-toolchain-22.1.8-1-ucrt-x86_64-llvm-dev.zip` archives into the same
+directory; the second adds the LLVM headers and CMake package for the toolchain's
+own `libLLVM-22.dll`. Set `LLVM_MINGW_ROOT` to the toolchain's forward-slash
+path and use the checked-in preset, which finds LLVM there:
 
 ```powershell
-$env:LLVM_MINGW_ROOT = 'C:/llvm-mingw-20260616-ucrt-x86_64'
-cmake --preset windows-llvm-mingw `
-  -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm
+$env:LLVM_MINGW_ROOT = 'C:/fsim-toolchain-22.1.8-1-ucrt-x86_64'
+$env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
+cmake --preset windows-llvm-mingw
 cmake --build --preset windows-llvm-mingw --parallel 12
 ctest --preset windows-llvm-mingw --parallel 12
 ```
+
+Release archives also carry the toolchain, so plug-ins build with fsim's own
+compiler and can be debugged with its LLDB. Pass the release's
+`fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip` as
+`-DFSIM_WINDOWS_TOOLCHAIN_REDIST=...` to install it beside fsim.
 
 The `ci-sanitizers` preset runs the non-LLVM suite locally with GCC ASan/UBSan
 at scheduled release boundaries; the ordinary hosted CI workflow excludes

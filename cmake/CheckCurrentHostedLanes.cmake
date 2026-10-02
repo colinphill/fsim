@@ -277,7 +277,7 @@ fsim_require_job_token("${FSIM_WINDOWS_JOB}"
 fsim_require_job_token("${FSIM_WINDOWS_JOB}"
   "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}")
 fsim_require_job_token("${FSIM_WINDOWS_JOB}"
-  "llvm-config.exe --version)\" = \"${FSIM_LLVM_VERSION}\"")
+  "-DLLVM_DIR=\$env:LLVM_MINGW_ROOT/lib/cmake/llvm")
 
 set(FSIM_WORKFLOW_LANES)
 foreach(FSIM_JOB IN ITEMS linux-llvm22 windows-llvm-mingw)

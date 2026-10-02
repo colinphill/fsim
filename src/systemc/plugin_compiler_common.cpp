@@ -161,8 +161,51 @@ void report_error(
     return HostToolchain::gcc_like;
 }
 
+#if defined(FSIM_SYSTEMC_BUNDLED_COMPILER) && defined(_WIN32)
+// The directory of the module holding this code: fsim.exe, or
+// libfsim_api.dll when an application embeds fsim.
+[[nodiscard]] std::optional<std::filesystem::path> fsim_module_directory()
+{
+    static constexpr char marker { };
+    HMODULE module { };
+    if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&marker),
+            &module)
+        == 0) {
+        return std::nullopt;
+    }
+    std::wstring path(MAX_PATH, L'\0');
+    while (path.size() <= 32768U) {
+        const auto length = GetModuleFileNameW(
+            module, path.data(), static_cast<DWORD>(path.size()));
+        if (length == 0) {
+            return std::nullopt;
+        }
+        if (length < path.size()) {
+            path.resize(length);
+            return std::filesystem::path { path }.parent_path();
+        }
+        path.resize(path.size() * 2U);
+    }
+    return std::nullopt;
+}
+#endif
+
 [[nodiscard]] std::string default_compiler()
 {
+#if defined(FSIM_SYSTEMC_BUNDLED_COMPILER) && defined(_WIN32)
+    // Installed Windows packages carry fsim's toolchain beside fsim, so
+    // plug-ins build with fsim's own compiler and C++ runtime.
+    if (const auto directory = fsim_module_directory()) {
+        const auto bundled = *directory / FSIM_SYSTEMC_BUNDLED_COMPILER;
+        std::error_code error;
+        if (support::native_fs::is_regular_file(bundled, error)) {
+            return support::path_to_utf8(bundled);
+        }
+    }
+#endif
 #if defined(FSIM_SYSTEMC_DEFAULT_COMPILER)
     return FSIM_SYSTEMC_DEFAULT_COMPILER;
 #elif defined(_WIN32)

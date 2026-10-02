@@ -11,11 +11,12 @@ measured Windows results.
 | Host | Build compiler | Execution backend | Current support boundary |
 |---|---|---|---|
 | Linux x86-64 | C++20 GCC or Clang | Interpreter, or LLVM 22.1.8 O0/O2 | Source builds in Debug and Release |
-| Windows x86-64 | Pinned LLVM-MinGW 20260616 UCRT | Interpreter, or matching MinGW LLVM 22.1.8 O0/O2 | Source builds in Debug and Release |
+| Windows x86-64 | Pinned fsim toolchain 22.1.8-1 (LLVM-MinGW 20260616, UCRT) | Interpreter, or the toolchain's LLVM 22.1.8 O0/O2 | Source builds in Debug and Release |
 
 `FSIM_LLVM_MODE=OFF` builds the interpreter without LLVM. `ON` requires exactly
-LLVM 22.1.8, and `AUTO` uses that exact package when it is found. Mixing an
-MSVC-target LLVM package with the LLVM-MinGW build is not supported.
+LLVM 22.1.8, and `AUTO` uses that exact package when it is found. On Windows
+the LLVM package is the fsim toolchain's own LLVM development overlay; any
+other LLVM package is not supported with the toolchain.
 
 The Windows source contains explicit MSVC-compatible command planning,
 dependency parsing, `/bigobj`, CRT, member-pointer, response-file, and DLL
@@ -41,21 +42,34 @@ cmake --build --preset dev --parallel 12
 ctest --preset dev --parallel 12
 ```
 
-On Windows, use the pinned LLVM-MinGW archive and forward-slash paths:
+On Windows, extract the pinned
+[fsim toolchain 22.1.8-1](https://github.com/colinphill/fsim-toolchain/releases/tag/fsim-22.1.8-1)
+build archive and its LLVM development overlay into the same directory, then
+use forward-slash paths:
 
 ```powershell
-$env:LLVM_MINGW_ROOT = 'C:/llvm-mingw-20260616-ucrt-x86_64'
-cmake --preset windows-llvm-mingw `
-  -DLLVM_DIR=C:/msys64/clang64/lib/cmake/llvm
+$env:LLVM_MINGW_ROOT = 'C:/fsim-toolchain-22.1.8-1-ucrt-x86_64'
+$env:PATH = "$env:LLVM_MINGW_ROOT/bin;$env:LLVM_MINGW_ROOT/busybox/bin;$env:PATH"
+cmake --preset windows-llvm-mingw
 cmake --build --preset windows-llvm-mingw --parallel 12
 ctest --preset windows-llvm-mingw --parallel 12
 ```
 
-The Windows binary archive runs without the toolchain or MSYS2 on `PATH`. Its
-`bin` directory carries `libc++.dll`, `libunwind.dll`, and, in LLVM-enabled
-archives, `libLLVM-22.dll` from the pinned LLVM-MinGW 20260616 release.
-`share/doc/fsim/third-party/llvm-mingw-20260616` holds their license and
-provenance.
+The Windows binary archive carries the toolchain's redistributable archive
+installed beside fsim and runs without anything else on `PATH`. Its `bin`
+directory holds fsim, the runtime DLLs fsim imports (`libc++.dll`,
+`libunwind.dll` and `libLLVM-22.dll`), and the toolchain's `clang++.exe`,
+`ld.lld.exe` and `lldb.exe`. SystemC plug-ins build with that bundled
+`clang++.exe` by default, so they share fsim's compiler and C++ runtime, and
+`lldb.exe` can debug fsim and its plug-ins. `fsim systemc compile -v` names the
+compiler it uses. Release archives ship fsim's executables and libraries
+stripped of symbols; the toolchain's runtime DLLs keep the debug information
+they are published with. The toolchain's C and C++ headers
+are in `x86_64-w64-mingw32/include`, which leaves `include` to fsim, SystemC
+and SCV, so another compiler can use those headers without the toolchain's.
+`share/doc/fsim/third-party/fsim-toolchain-22.1.8-1` holds the toolchain's
+license, notices and provenance; mingw-w64's license texts are in
+`x86_64-w64-mingw32/share/mingw32`.
 
 Select a workspace by changing to its directory, then run the three phases:
 

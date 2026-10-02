@@ -49,7 +49,7 @@ foreach(FSIM_EXPECTED IN ITEMS
     "directory_entries=implicit"
     "host_owner_identity=not-encoded"
     "source_entry_limit=5000"
-    "binary_entry_limit=5000"
+    "binary_entry_limit=10000"
     "source_archive_byte_limit=67108864"
     "source_package_root=fsim-v3.0.0-source"
     "source_artifact=build/release/fsim-v3.0.0-source.zip"
@@ -300,6 +300,11 @@ if(NOT FSIM_SOURCE_ONLY)
     if(DEFINED FSIM_CONFIG AND NOT FSIM_CONFIG STREQUAL "")
       list(APPEND FSIM_INSTALL_COMMAND --config "${FSIM_CONFIG}")
     endif()
+    # Release archives ship stripped executables and shared libraries; other
+    # configurations keep their symbols and debug information.
+    if(FSIM_CONFIG STREQUAL "Release")
+      list(APPEND FSIM_INSTALL_COMMAND --strip)
+    endif()
     execute_process(
       COMMAND ${FSIM_INSTALL_COMMAND}
       RESULT_VARIABLE FSIM_INSTALL_RESULT
@@ -315,8 +320,8 @@ if(NOT FSIM_SOURCE_ONLY)
        RELATIVE "${FSIM_ROOT}" "${FSIM_ROOT}/*")
   list(SORT FSIM_BINARY_FILES)
   list(LENGTH FSIM_BINARY_FILES FSIM_BINARY_COUNT)
-  if(FSIM_BINARY_COUNT GREATER 5000)
-    message(FATAL_ERROR "binary package exceeds 5000 entries")
+  if(FSIM_BINARY_COUNT GREATER 10000)
+    message(FATAL_ERROR "binary package exceeds 10000 entries")
   endif()
   foreach(FSIM_RELATIVE IN LISTS FSIM_BINARY_FILES)
     if(FSIM_RELATIVE MATCHES "(^|/)\\.fsim(/|$)")

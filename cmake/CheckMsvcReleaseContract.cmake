@@ -88,7 +88,7 @@ endforeach()
 
 foreach(FSIM_JOB_POLICY IN ITEMS
     "windows-llvm-mingw:"
-    "llvm-mingw-20260616-ucrt-x86_64.zip"
+    "fsim-toolchain-22.1.8-1-ucrt-x86_64.zip"
     "-DFSIM_TCL_MODE=ON"
     "-DFSIM_LLVM_MODE=\${{ matrix.llvm_mode }}"
     "configuration: Release"

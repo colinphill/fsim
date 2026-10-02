@@ -1,0 +1,137 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fsim-toolchain-22.1.8-1",
+  "documentNamespace": "https://fsim.dev/spdx/fsim-toolchain-22.1.8-1/f90acc819f8174ff734e4a4f746756eeec07d607436baa9813d3f81c8efc6744",
+  "creationInfo": {
+    "created": "2026-10-02T00:00:00Z",
+    "creators": [
+      "Tool: fsim toolchain provenance harness"
+    ]
+  },
+  "packages": [
+    {
+      "name": "fsim-toolchain",
+      "SPDXID": "SPDXRef-Package-fsim-toolchain-22.1.8-1",
+      "versionInfo": "22.1.8-1",
+      "supplier": "Person: Colin Hill",
+      "downloadLocation": "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "f90acc819f8174ff734e4a4f746756eeec07d607436baa9813d3f81c8efc6744"
+        }
+      ],
+      "sourceInfo": "Redistributable x86-64 UCRT toolchain built from LLVM-MinGW 20260616 with LLVM 22.1.8 and mingw-w64 c28e9555bb8800c53449f42a465ad9a5676fce88",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception AND ZPL-2.1 AND MIT AND ISC",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception AND ZPL-2.1 AND MIT AND ISC",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/colinphill/fsim-toolchain@fsim-22.1.8-1"
+        }
+      ]
+    },
+    {
+      "name": "libLLVM-22.dll",
+      "SPDXID": "SPDXRef-Package-libLLVM-22-dll",
+      "versionInfo": "22.1.8",
+      "supplier": "Organization: LLVM Project",
+      "downloadLocation": "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "bdacdf40f451209dbaeff8b01a1722eae16c8f11310bdd3af497ad8a0ce2220f"
+        }
+      ],
+      "sourceInfo": "bin/libLLVM-22.dll from the fsim toolchain 22.1.8-1 archives",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/colinphill/fsim-toolchain@fsim-22.1.8-1#bin/libLLVM-22.dll"
+        }
+      ]
+    },
+    {
+      "name": "libc++.dll",
+      "SPDXID": "SPDXRef-Package-libcxx-dll",
+      "versionInfo": "22.1.8",
+      "supplier": "Organization: LLVM Project",
+      "downloadLocation": "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "149ec36c1e1a987898b3f92223488cf15b2962af8130a870ece08d771df6996c"
+        }
+      ],
+      "sourceInfo": "bin/libc++.dll from the fsim toolchain 22.1.8-1 archives",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/colinphill/fsim-toolchain@fsim-22.1.8-1#bin/libc++.dll"
+        }
+      ]
+    },
+    {
+      "name": "libunwind.dll",
+      "SPDXID": "SPDXRef-Package-libunwind-dll",
+      "versionInfo": "22.1.8",
+      "supplier": "Organization: LLVM Project",
+      "downloadLocation": "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4efdead311ec342aa9e43b033ec667cd38c3f2e02ad4875b2c1df1eb77b71613"
+        }
+      ],
+      "sourceInfo": "bin/libunwind.dll from the fsim toolchain 22.1.8-1 archives",
+      "licenseConcluded": "Apache-2.0 WITH LLVM-exception",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/colinphill/fsim-toolchain@fsim-22.1.8-1#bin/libunwind.dll"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-fsim-toolchain-22.1.8-1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-fsim-toolchain-22.1.8-1",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-libLLVM-22-dll"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-fsim-toolchain-22.1.8-1",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-libcxx-dll"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-fsim-toolchain-22.1.8-1",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-libunwind-dll"
+    }
+  ]
+}

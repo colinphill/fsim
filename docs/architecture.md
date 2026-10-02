@@ -2603,7 +2603,9 @@ opt-out.
 ## Platform boundary
 
 The supported release targets are Linux x86-64 with GCC or Clang and Windows
-x86-64 with pinned LLVM-MinGW 20260616 UCRT. Filesystem, dynamic-library
+x86-64 with the pinned fsim toolchain 22.1.8-1, an x86-64 UCRT build of
+LLVM-MinGW 20260616 that Windows archives also carry for plug-in builds and
+debugging. Filesystem, dynamic-library
 loading, process invocation, Unicode path handling, and signal/console
 interruption stay behind platform-specific boundaries. Public C, CLI, Tcl,
 project/cache, diagnostics,

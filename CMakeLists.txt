@@ -41,6 +41,7 @@ include(cmake/FsimSystemCAccellera.cmake)
 include(cmake/FsimScv.cmake)
 include(cmake/FsimSqlite.cmake)
 include(cmake/FsimWindowsRuntime.cmake)
+fsim_configure_windows_toolchain()
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -1027,6 +1028,15 @@ target_compile_definitions(
     FSIM_INSTALLED_SCV_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_LINKER_FILE_NAME:scv>"
     FSIM_SYSTEMC_RUNTIME_IDENTITY="${FSIM_SYSTEMC_RUNTIME_IDENTITY}"
 )
+if(FSIM_WINDOWS_TOOLCHAIN_BUNDLE)
+  # Installed plug-in builds default to the toolchain's compiler, which shares
+  # bin with fsim.
+  target_compile_definitions(
+    fsim_systemc
+    PRIVATE
+      FSIM_SYSTEMC_BUNDLED_COMPILER="clang++.exe"
+  )
+endif()
 target_link_libraries(
   fsim_systemc
   PUBLIC

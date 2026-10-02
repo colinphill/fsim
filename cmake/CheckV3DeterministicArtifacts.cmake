@@ -37,7 +37,7 @@ foreach(row IN LISTS rows)
     list(APPEND source_artifacts "${artifact}")
   elseif(kind STREQUAL "binary")
     if(NOT platform MATCHES "^(linux|windows)-x86_64$"
-        OR NOT compiler MATCHES "^(clang-22|llvm-mingw-20260616)$"
+        OR NOT compiler MATCHES "^(clang-22|fsim-toolchain-22[.]1[.]8-1)$"
         OR NOT llvm MATCHES "^(off|22[.]1[.]8)$")
       message(FATAL_ERROR "invalid v3 binary archive row: ${row}")
     endif()

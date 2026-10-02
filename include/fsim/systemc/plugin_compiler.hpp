@@ -96,6 +96,11 @@ struct PluginCompileResult {
 // argv vector directly and never evaluates this string in a shell.
 [[nodiscard]] std::string format_compiler_command(const CompilerCommand& command);
 
+// The compiler used when the SystemC settings select none: the clang++ that
+// an installed Windows package carries beside fsim, or else the compiler fsim
+// was built with.
+[[nodiscard]] std::string default_plugin_compiler();
+
 [[nodiscard]] std::string_view to_string(HostToolchain toolchain) noexcept;
 
 } // namespace fsim::systemc

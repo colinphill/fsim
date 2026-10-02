@@ -57,9 +57,9 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
      OR NOT FSIM_VALUE_configurations STREQUAL "Debug,Release"
      OR NOT FSIM_VALUE_archive_format STREQUAL "zip"
      OR NOT FSIM_VALUE_toolchain_archive_url STREQUAL
-        "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip"
+        "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64.zip"
      OR NOT FSIM_VALUE_toolchain_archive_sha256 STREQUAL
-        "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
+        "f774dabc63f47a3cf0ed2e042a32666402249d932315f2e8a8de851a39555133"
      OR NOT FSIM_VALUE_job_timeout_minutes STREQUAL "120"
      OR NOT FSIM_VALUE_hosted_workers STREQUAL "2"
      OR NOT FSIM_VALUE_warning_log_owner STREQUAL
@@ -75,7 +75,7 @@ foreach(FSIM_TARGET_FILE IN LISTS FSIM_TARGET_FILES)
   if(FSIM_VALUE_llvm_mode STREQUAL "ON")
     if(NOT FSIM_VALUE_llvm_version STREQUAL "22.1.8"
        OR NOT FSIM_VALUE_llvm_package STREQUAL
-          "mingw-w64-clang-x86_64-llvm-22.1.8-2")
+          "fsim-toolchain-22.1.8-1-ucrt-x86_64-llvm-dev")
       message(FATAL_ERROR "Windows LLVM-enabled package identity drifted")
     endif()
   elseif(NOT FSIM_VALUE_llvm_mode STREQUAL "OFF"
@@ -92,7 +92,7 @@ endforeach()
 
 list(SORT FSIM_TARGET_IDS)
 if(NOT FSIM_TARGET_IDS STREQUAL
-   "windows-x86_64-llvm-mingw-20260616-llvm22;windows-x86_64-llvm-mingw-20260616-no-llvm")
+   "windows-x86_64-fsim-toolchain-22.1.8-1-llvm22;windows-x86_64-fsim-toolchain-22.1.8-1-no-llvm")
   message(FATAL_ERROR "Windows package target set drifted: ${FSIM_TARGET_IDS}")
 endif()
 
@@ -111,9 +111,14 @@ file(READ "${FSIM_ROOT}" FSIM_ROOT_CONTENTS)
 
 foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "windows-llvm-mingw:"
-    "llvm-mingw-20260616-ucrt-x86_64.zip"
-    "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
-    "mingw-w64-clang-x86_64-llvm-22.1.8-2"
+    "fsim-toolchain-22.1.8-1-ucrt-x86_64.zip"
+    "f774dabc63f47a3cf0ed2e042a32666402249d932315f2e8a8de851a39555133"
+    "fsim-toolchain-22.1.8-1-ucrt-x86_64-llvm-dev.zip"
+    "7c18e6f6969784d9006d9e486cd667a6790fe2031967d481de790849c163d6dc"
+    "fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip"
+    "f90acc819f8174ff734e4a4f746756eeec07d607436baa9813d3f81c8efc6744"
+    "-DFSIM_WINDOWS_TOOLCHAIN_REDIST=\$env:FSIM_WINDOWS_TOOLCHAIN_REDIST"
+    "-DLLVM_DIR=\$env:LLVM_MINGW_ROOT/lib/cmake/llvm"
     "configuration: Debug"
     "configuration: Release"
     "llvm_mode: 'ON'"
@@ -122,8 +127,6 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "ci-windows-llvm22-install.log"
     "v3_current_required_ctests.txt"
     "v3_installed_archive_required.txt"
-    "for attempt in 1 2 3; do"
-    "LLVM package installation attempt \${attempt} failed; retrying"
     "-DFSIM_BINARY_ONLY=ON"
     "-DFSIM_BINARY_PACKAGE_NAME=\${{ matrix.binary_package }}"
     "Create deterministic Windows binary archive"
@@ -156,15 +159,18 @@ foreach(FSIM_TIMEOUT_ROW IN LISTS FSIM_TIMEOUT_ROWS)
 endforeach()
 
 foreach(FSIM_INSTALLER_POLICY IN ITEMS
-    "Get-FileHash -LiteralPath $archivePath -Algorithm SHA256"
-    "llvm-mingw-$Release-ucrt-x86_64"
+    "Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256"
+    "$Toolchain-ucrt-x86_64"
     "x86_64-w64-windows-gnu"
     "bin/clang++.exe"
-    "bin/llvm-windres.exe")
+    "bin/llvm-windres.exe"
+    "lib/cmake/llvm/LLVMConfig.cmake"
+    "the LLVM development overlay comes from a different toolchain build"
+    "FSIM_WINDOWS_TOOLCHAIN_REDIST=")
   string(FIND "${FSIM_INSTALLER_CONTENTS}" "${FSIM_INSTALLER_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
-      "LLVM-MinGW installer lost package policy: ${FSIM_INSTALLER_POLICY}")
+      "Windows toolchain installer lost package policy: ${FSIM_INSTALLER_POLICY}")
   endif()
 endforeach()
 
@@ -188,7 +194,8 @@ if(NOT FSIM_UNDEBUG_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "Windows package definitions: 2 LLVM-MinGW 20260616 UCRT targets; all 2 "
+  "Windows package definitions: 2 LLVM-MinGW 20260616 UCRT targets built "
+  "with fsim toolchain 22.1.8-1; all 2 "
   "hosted timeouts are 120 minutes; two retained Windows lane artifacts and "
   "one Release binary archive, /bigobj and warning-clean test assertion "
   "policy are statically owned; every real Windows result is deferred to "

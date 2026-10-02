@@ -5,6 +5,7 @@
 
 #include "fsim/support/path.hpp"
 #include "fsim/systemc/incremental.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
 
 #include <algorithm>
 #include <ostream>
@@ -75,7 +76,8 @@ namespace {
         }
         output << "  compiler: "
                << (request.settings.compiler.empty()
-                       ? "default" : request.settings.compiler)
+                       ? systemc::default_plugin_compiler() + " (default)"
+                       : request.settings.compiler)
                << "\n  object: " << support::path_to_utf8(request.output)
                << '\n';
         for (const auto& include : request.settings.include_directories) {

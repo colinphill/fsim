@@ -141,49 +141,21 @@ jobs:
             "llvm_mode=${{ matrix.llvm_mode }}"
           ) | Set-Content -LiteralPath $logPath -Encoding utf8
 
-      - name: Install and validate LLVM-MinGW 20260616
+      - name: Install and validate the fsim toolchain 22.1.8-1
         shell: pwsh
         run: |
           & ./.github/scripts/install-windows-llvm-mingw.ps1 `
             -Release "20260616" `
+            -Toolchain "fsim-toolchain-22.1.8-1" `
             -Version "22.1.8" `
-            -ArchiveUrl "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip" `
-            -Sha256 "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35" `
+            -ArchiveUrl "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64.zip" `
+            -Sha256 "f774dabc63f47a3cf0ed2e042a32666402249d932315f2e8a8de851a39555133" `
+            -DevArchiveUrl "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64-llvm-dev.zip" `
+            -DevSha256 "7c18e6f6969784d9006d9e486cd667a6790fe2031967d481de790849c163d6dc" `
+            -RedistArchiveUrl "https://github.com/colinphill/fsim-toolchain/releases/download/fsim-22.1.8-1/fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip" `
+            -RedistSha256 "f90acc819f8174ff734e4a4f746756eeec07d607436baa9813d3f81c8efc6744" `
             2>&1 | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Initialize the matching MinGW LLVM development environment
-        id: msys2
-        if: matrix.llvm_mode == 'ON'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: CLANG64
-          update: true
-
-      - name: Install and validate LLVM 22.1.8 development files
-        if: matrix.llvm_mode == 'ON'
-        shell: msys2 {0}
-        run: |
-          set -euo pipefail
-          {
-            installed=false
-            for attempt in 1 2 3; do
-              if pacman -U --noconfirm --needed \
-                https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-libs-22.1.8-2-any.pkg.tar.zst \
-                https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-tools-22.1.8-2-any.pkg.tar.zst \
-                https://mirror.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-llvm-22.1.8-2-any.pkg.tar.zst; then
-                installed=true
-                break
-              fi
-              if [ "${attempt}" -lt 3 ]; then
-                echo "LLVM package installation attempt ${attempt} failed; retrying"
-                sleep $((attempt * 10))
-              fi
-            done
-            test "${installed}" = true
-            test "$(/clang64/bin/llvm-config.exe --version)" = "22.1.8"
-            /clang64/bin/lli.exe --version
-          } 2>&1 | tee -a "${{ matrix.retained_log }}"
 
       - name: Configure
         shell: pwsh
@@ -201,16 +173,13 @@ jobs:
             "-DFSIM_BUILD_TESTS=ON",
             "-DFSIM_TCL_MODE=ON",
             "-DFSIM_LLVM_MODE=${{ matrix.llvm_mode }}",
-            "-DFSIM_WARNINGS_AS_ERRORS=ON"
+            "-DFSIM_WARNINGS_AS_ERRORS=ON",
+            "-DFSIM_WINDOWS_TOOLCHAIN_REDIST=$env:FSIM_WINDOWS_TOOLCHAIN_REDIST"
           )
           if ("${{ matrix.llvm_mode }}" -eq "ON") {
-            $msys2Root = "${{ steps.msys2.outputs.msys2-location }}".Replace('\', '/')
-            $llvmDirectory = "$msys2Root/clang64/lib/cmake/llvm"
-            $llvmConfig = "$llvmDirectory/LLVMConfig.cmake"
-            if (-not (Test-Path -LiteralPath $llvmConfig -PathType Leaf)) {
-              throw "LLVMConfig.cmake was not installed at $llvmConfig"
-            }
-            $arguments += "-DLLVM_DIR=$llvmDirectory"
+            # The toolchain's LLVM development overlay describes the exact
+            # libLLVM-22.dll the toolchain ships.
+            $arguments += "-DLLVM_DIR=$env:LLVM_MINGW_ROOT/lib/cmake/llvm"
           }
           & cmake @arguments 2>&1 `
             | Tee-Object -FilePath "${{ matrix.retained_log }}" -Append
@@ -250,7 +219,7 @@ jobs:
             "-DFSIM_WORK_DIR=${{ matrix.build_dir }}/release-package",
             "-DFSIM_CONFIG=Release",
             "-DFSIM_PLATFORM=Windows-x86_64",
-            "-DFSIM_COMPILER=LLVM-MinGW-20260616",
+            "-DFSIM_COMPILER=fsim-toolchain-22.1.8-1",
             "-DFSIM_BINARY_ONLY=ON",
             "-DFSIM_BINARY_PACKAGE_NAME=${{ matrix.binary_package }}",
             "-DFSIM_BINARY_ARCHIVE_OUTPUT=$env:GITHUB_WORKSPACE/${{ matrix.binary_archive }}",
@@ -279,7 +248,7 @@ jobs:
             "-DFSIM_ARCHIVE_AUDIT_WORK_DIR=${{ matrix.build_dir }}/v3-install-audit",
             "-DFSIM_ARCHIVE_AUDIT_REQUIRED_CTESTS=$env:GITHUB_WORKSPACE/tests/feature_matrix/v3_current_required_ctests.txt",
             "-DFSIM_ARCHIVE_AUDIT_REQUIRED_ENTRIES=$env:GITHUB_WORKSPACE/tests/feature_matrix/v3_installed_archive_required.txt",
-            "-DFSIM_ARCHIVE_AUDIT_TOOLCHAIN=LLVM-MinGW-20260616-LLVM-${{ matrix.llvm_mode }}",
+            "-DFSIM_ARCHIVE_AUDIT_TOOLCHAIN=fsim-toolchain-22.1.8-1-LLVM-${{ matrix.llvm_mode }}",
             "-DFSIM_ARCHIVE_AUDIT_EXECUTABLE_SUFFIX=.exe",
             "-P", "cmake/CheckV3InstalledArchive.cmake"
           )

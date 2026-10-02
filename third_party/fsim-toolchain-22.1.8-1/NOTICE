@@ -1,0 +1,37 @@
+fsim toolchain 22.1.8-1 (LLVM 22.1.8, x86-64 Windows, UCRT)
+
+fsim is built for Windows with this toolchain, and fsim's Windows binary
+archives install its redistributable archive,
+fsim-toolchain-22.1.8-1-ucrt-x86_64-redist.zip, unmodified beside fsim, so
+plug-ins can be compiled with the same compiler and C++ runtime and debugged.
+
+The toolchain is built from https://github.com/colinphill/fsim-toolchain
+(tag fsim-22.1.8-1), a fork of LLVM-MinGW 20260616 by Martin Storsjo that
+targets only x86_64-w64-mingw32 and omits Python, clang-tools-extra and
+lldb-mi. It contains:
+
+  LLVM Project 22.1.8: clang, lld, LLDB, libc++, libunwind, compiler-rt and
+  the shared libLLVM-22.dll, licensed under the Apache License v2.0 with
+  LLVM Exceptions. The adjacent LICENSE reproduces the archive's LICENSE.TXT
+  unchanged, including the legacy University of Illinois/NCSA Open Source
+  License.
+
+  mingw-w64 (commit c28e9555bb8800c53449f42a465ad9a5676fce88): headers, CRT
+  and import libraries, and winpthreads. Most of mingw-w64 is under the Zope
+  Public License 2.1, with parts in the public domain or under BSD, MIT or
+  LGPL terms as marked. The license texts are installed with the toolchain in
+  x86_64-w64-mingw32/share/mingw32 (COPYING, COPYING.MinGW-w64.txt,
+  COPYING.MinGW-w64-runtime.txt, COPYING.winpthreads.txt,
+  COPYING.winstorecompat.txt).
+
+  LLVM-MinGW wrapper programs and scripts, under the ISC license.
+
+The redistributable archive omits the GPL- and LGPL-licensed build tools of
+the full toolchain (BusyBox, GNU make, widl and gendef).
+
+LLVM Project: https://llvm.org/
+LLVM Project source: https://github.com/llvm/llvm-project
+mingw-w64: https://www.mingw-w64.org/
+LLVM-MinGW: https://github.com/mstorsjo/llvm-mingw
+fsim toolchain release:
+https://github.com/colinphill/fsim-toolchain/releases/tag/fsim-22.1.8-1

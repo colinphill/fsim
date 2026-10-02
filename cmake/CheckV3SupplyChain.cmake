@@ -52,12 +52,16 @@ foreach(sbom IN ITEMS
     third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
     third_party/scv-2.0.1/scv-2.0.1.spdx.json
     third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json
-    third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json)
+    third_party/fsim-toolchain-22.1.8-1/fsim-toolchain-22.1.8-1.spdx.json)
   set(expected_license "Apache-2.0")
+  # The first package is the whole component; the rest are its parts.
+  set(expected_first_license "")
   if(sbom MATCHES "^third_party/sqlite-")
     set(expected_license "blessing")
-  elseif(sbom MATCHES "^third_party/llvm-mingw-")
+  elseif(sbom MATCHES "^third_party/fsim-toolchain-")
     set(expected_license "Apache-2.0 WITH LLVM-exception")
+    set(expected_first_license
+      "Apache-2.0 WITH LLVM-exception AND ZPL-2.1 AND MIT AND ISC")
   endif()
   file(READ "${FSIM_SOURCE_DIR}/${sbom}" contents)
   string(JSON spdx_version ERROR_VARIABLE json_error
@@ -77,9 +81,13 @@ foreach(sbom IN ITEMS
   endif()
   math(EXPR package_last "${package_count} - 1")
   foreach(package_index RANGE 0 ${package_last})
+    set(package_license "${expected_license}")
+    if(package_index EQUAL 0 AND NOT expected_first_license STREQUAL "")
+      set(package_license "${expected_first_license}")
+    endif()
     string(JSON declared ERROR_VARIABLE json_error
       GET "${contents}" packages ${package_index} licenseDeclared)
-    if(json_error OR NOT declared STREQUAL expected_license)
+    if(json_error OR NOT declared STREQUAL package_license)
       message(FATAL_ERROR "SPDX SBOM ${sbom} has invalid package license")
     endif()
     foreach(field IN ITEMS checksums externalRefs)
@@ -146,53 +154,56 @@ if(NOT sqlite_sbom_sha256 STREQUAL FSIM_SQLITE_ARCHIVE_SHA256
   message(FATAL_ERROR "SQLite SBOM checksums differ from the pinned source")
 endif()
 
-foreach(id IN ITEMS V3SUP-LLVM-MINGW-LICENSE V3SUP-LLVM-MINGW-NOTICE
-    V3SUP-LLVM-MINGW-SBOM V3SUP-LLVM-MINGW-PROVENANCE)
+foreach(id IN ITEMS V3SUP-WINDOWS-TOOLCHAIN-LICENSE V3SUP-WINDOWS-TOOLCHAIN-NOTICE
+    V3SUP-WINDOWS-TOOLCHAIN-SBOM V3SUP-WINDOWS-TOOLCHAIN-PROVENANCE)
   if(NOT id IN_LIST ids)
-    message(FATAL_ERROR "Windows runtime supply-chain row is missing: ${id}")
+    message(FATAL_ERROR "Windows toolchain supply-chain row is missing: ${id}")
   endif()
 endforeach()
 include("${FSIM_SOURCE_DIR}/cmake/FsimWindowsRuntime.cmake")
-set(runtime_name "llvm-mingw-${FSIM_LLVM_MINGW_RUNTIME_RELEASE}")
-set(runtime_root "${FSIM_SOURCE_DIR}/third_party/${runtime_name}")
+set(toolchain_root "${FSIM_SOURCE_DIR}/third_party/${FSIM_WINDOWS_TOOLCHAIN}")
 file(STRINGS
   "${FSIM_SOURCE_DIR}/packaging/targets/windows-llvm-mingw-llvm22.txt"
   toolchain_archive REGEX "^toolchain_archive_sha256=")
 string(REPLACE "toolchain_archive_sha256=" "" toolchain_archive
   "${toolchain_archive}")
-file(STRINGS "${runtime_root}/SOURCE_MANIFEST.txt" runtime_manifest)
+file(STRINGS "${toolchain_root}/SOURCE_MANIFEST.txt" toolchain_manifest)
 foreach(record IN ITEMS
-    "schema=fsim-llvm-mingw-runtime-v1" "name=LLVM-MinGW"
-    "release=${FSIM_LLVM_MINGW_RUNTIME_RELEASE}"
-    "archive_sha256=${toolchain_archive}"
-    "license=Apache-2.0 WITH LLVM-exception")
-  if(NOT record IN_LIST runtime_manifest)
-    message(FATAL_ERROR "LLVM-MinGW runtime provenance omits ${record}")
+    "schema=fsim-toolchain-v1" "name=fsim-toolchain"
+    "tag=fsim-22.1.8-1" "upstream=llvm-mingw 20260616"
+    "build_archive_sha256=${toolchain_archive}"
+    "license=Apache-2.0 WITH LLVM-exception AND ZPL-2.1 AND MIT AND ISC")
+  if(NOT record IN_LIST toolchain_manifest)
+    message(FATAL_ERROR "Windows toolchain provenance omits ${record}")
   endif()
 endforeach()
 foreach(kind IN ITEMS license notice)
   string(TOUPPER "${kind}" filename)
-  file(SHA256 "${runtime_root}/${filename}" digest)
-  if(NOT "${kind}_sha256=${digest}" IN_LIST runtime_manifest)
-    message(FATAL_ERROR "LLVM-MinGW runtime ${kind} differs from its recorded identity")
+  file(SHA256 "${toolchain_root}/${filename}" digest)
+  if(NOT "${kind}_sha256=${digest}" IN_LIST toolchain_manifest)
+    message(FATAL_ERROR "Windows toolchain ${kind} differs from its recorded identity")
   endif()
 endforeach()
-file(READ "${runtime_root}/${runtime_name}.spdx.json" runtime_sbom)
-string(JSON runtime_package_count LENGTH "${runtime_sbom}" packages)
+file(READ "${toolchain_root}/${FSIM_WINDOWS_TOOLCHAIN}.spdx.json" toolchain_sbom)
+string(JSON redist_digest GET "${toolchain_sbom}" packages 0 checksums 0 checksumValue)
+if(NOT "redist_archive_sha256=${redist_digest}" IN_LIST toolchain_manifest)
+  message(FATAL_ERROR "Windows toolchain SBOM differs for the redistributable archive")
+endif()
+string(JSON runtime_package_count LENGTH "${toolchain_sbom}" packages)
 math(EXPR runtime_package_last "${runtime_package_count} - 1")
 set(runtime_dlls)
 foreach(package_index RANGE 1 ${runtime_package_last})
-  string(JSON dll GET "${runtime_sbom}" packages ${package_index} name)
-  string(JSON digest GET "${runtime_sbom}"
+  string(JSON dll GET "${toolchain_sbom}" packages ${package_index} name)
+  string(JSON digest GET "${toolchain_sbom}"
     packages ${package_index} checksums 0 checksumValue)
-  if(NOT "file_sha256=bin/${dll}|${digest}" IN_LIST runtime_manifest)
-    message(FATAL_ERROR "LLVM-MinGW runtime SBOM differs for ${dll}")
+  if(NOT "file_sha256=bin/${dll}|${digest}" IN_LIST toolchain_manifest)
+    message(FATAL_ERROR "Windows toolchain SBOM differs for ${dll}")
   endif()
   list(APPEND runtime_dlls "${dll}")
 endforeach()
 list(SORT runtime_dlls)
 if(NOT "${runtime_dlls}" STREQUAL "libLLVM-22.dll;libc++.dll;libunwind.dll")
-  message(FATAL_ERROR "LLVM-MinGW runtime SBOM has an unexpected DLL set")
+  message(FATAL_ERROR "Windows toolchain SBOM has an unexpected DLL set")
 endif()
 
 set(forbidden_home "/home/" "colin/standards")

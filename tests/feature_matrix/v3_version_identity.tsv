@@ -9,6 +9,6 @@ V3VER-ARCHIVES	archive	packaging/v3-archive-layout.tsv	fsim-v3.0.0	B188-C19
 V3VER-CI	hosted	.github/workflows/ci.yml	fsim-v3.0.0	B188-C19
 V3VER-LINUX-OFF	target	packaging/targets/linux-clang22-no-llvm.txt	clang-22	B188-C19
 V3VER-LINUX-ON	target	packaging/targets/linux-clang22-llvm22.txt	clang-22+llvm-22.1.8	B188-C19
-V3VER-WINDOWS-OFF	target	packaging/targets/windows-llvm-mingw-no-llvm.txt	llvm-mingw-20260616	B188-C19
-V3VER-WINDOWS-ON	target	packaging/targets/windows-llvm-mingw-llvm22.txt	llvm-mingw-20260616+llvm-22.1.8	B188-C19
+V3VER-WINDOWS-OFF	target	packaging/targets/windows-llvm-mingw-no-llvm.txt	fsim-toolchain-22.1.8-1	B188-C19
+V3VER-WINDOWS-ON	target	packaging/targets/windows-llvm-mingw-llvm22.txt	fsim-toolchain-22.1.8-1+llvm-22.1.8	B188-C19
 # SPDX-License-Identifier: Apache-2.0

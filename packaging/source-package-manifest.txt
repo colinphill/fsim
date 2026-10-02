@@ -2057,6 +2057,11 @@ tests/systemc/test_cxx_compiler.in
 tests/systemc/throwing_plugin.cpp
 tests/systemc/tlm1_backend_test.cpp
 tests/systemc/tlm2_backend_test.cpp
+third_party/fsim-toolchain-22.1.8-1/LICENSE
+third_party/fsim-toolchain-22.1.8-1/NOTICE
+third_party/fsim-toolchain-22.1.8-1/README.md
+third_party/fsim-toolchain-22.1.8-1/SOURCE_MANIFEST.txt
+third_party/fsim-toolchain-22.1.8-1/fsim-toolchain-22.1.8-1.spdx.json
 third_party/ieee-1076-2019/AUTHORS.md
 third_party/ieee-1076-2019/LICENSE
 third_party/ieee-1076-2019/README.md
@@ -2122,11 +2127,6 @@ third_party/isocline/src/tty_esc.c
 third_party/isocline/src/undo.c
 third_party/isocline/src/undo.h
 third_party/isocline/src/wcwidth.c
-third_party/llvm-mingw-20260616/LICENSE
-third_party/llvm-mingw-20260616/NOTICE
-third_party/llvm-mingw-20260616/README.md
-third_party/llvm-mingw-20260616/SOURCE_MANIFEST.txt
-third_party/llvm-mingw-20260616/llvm-mingw-20260616.spdx.json
 third_party/scv-2.0.1/LICENSE
 third_party/scv-2.0.1/NOTICE
 third_party/scv-2.0.1/PATCHES.txt

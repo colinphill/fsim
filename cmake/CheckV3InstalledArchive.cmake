@@ -171,25 +171,56 @@ foreach(path IN ITEMS
   endif()
   list(APPEND FSIM_REQUIRED_PATHS "${path}")
 endforeach()
-# Windows archives carry the LLVM-MinGW runtime their binaries import. Their
+# Windows archives carry the fsim toolchain beside fsim: the runtime fsim's
+# binaries import, and the compiler, linker and debugger for plug-ins. Their
 # installed commands run with PATH unset, so any DLL they load comes from the
 # archive or the Windows system directories.
 set(launcher)
 if(suffix STREQUAL ".exe")
   include("${FSIM_SOURCE_DIR}/cmake/FsimWindowsRuntime.cmake")
-  set(runtime_docs
-    "share/doc/fsim/third-party/llvm-mingw-${FSIM_LLVM_MINGW_RUNTIME_RELEASE}")
+  set(toolchain_docs "share/doc/fsim/third-party/${FSIM_WINDOWS_TOOLCHAIN}")
   foreach(path IN ITEMS
       bin/libc++.dll
       bin/libunwind.dll
-      ${runtime_docs}/LICENSE
-      ${runtime_docs}/NOTICE
-      ${runtime_docs}/SOURCE_MANIFEST.txt
-      ${runtime_docs}/llvm-mingw-${FSIM_LLVM_MINGW_RUNTIME_RELEASE}.spdx.json)
+      bin/libLLVM-22.dll
+      bin/clang++.exe
+      bin/clang-22.exe
+      bin/ld.lld.exe
+      bin/lldb.exe
+      bin/lldb-dap.exe
+      x86_64-w64-mingw32/include/c++/v1/format
+      x86_64-w64-mingw32/include/stddef.h
+      x86_64-w64-mingw32/lib/libucrt.a
+      x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt
+      ${toolchain_docs}/FSIM-TOOLCHAIN.txt
+      ${toolchain_docs}/LICENSE
+      ${toolchain_docs}/NOTICE
+      ${toolchain_docs}/SOURCE_MANIFEST.txt
+      ${toolchain_docs}/${FSIM_WINDOWS_TOOLCHAIN}.spdx.json)
     if(NOT "${FSIM_ARCHIVE_AUDIT_ROOT}/${path}" IN_LIST seen)
-      message(FATAL_ERROR "v3 installed archive omits LLVM-MinGW runtime: ${path}")
+      message(FATAL_ERROR "v3 installed archive omits the Windows toolchain: ${path}")
     endif()
     list(APPEND FSIM_REQUIRED_PATHS "${path}")
+  endforeach()
+  set(gpl_tools "busybox/" "bin/mingw32-make.exe" "bin/widl.exe" "bin/gendef.exe")
+  foreach(entry IN LISTS seen)
+    foreach(path IN LISTS gpl_tools)
+      string(FIND "${entry}" "${FSIM_ARCHIVE_AUDIT_ROOT}/${path}" offset)
+      if(offset EQUAL 0)
+        message(FATAL_ERROR "v3 installed archive carries a GPL build tool: ${entry}")
+      endif()
+    endforeach()
+  endforeach()
+  # Consumers add the prefix include directory to their search path, where
+  # the toolchain's C headers would shadow libc++'s wrappers for them.
+  foreach(entry IN LISTS seen)
+    foreach(path IN ITEMS include/stddef.h include/c++/)
+      string(FIND "${entry}" "${FSIM_ARCHIVE_AUDIT_ROOT}/${path}" offset)
+      if(offset EQUAL 0)
+        message(FATAL_ERROR
+          "v3 installed archive puts toolchain headers in its include directory: ${entry}")
+      endif()
+    endforeach()
   endforeach()
   set(launcher "${CMAKE_COMMAND}" -E env --unset=PATH)
 endif()
@@ -206,6 +237,141 @@ foreach(path IN LISTS FSIM_REQUIRED_PATHS)
     message(FATAL_ERROR "v3 installed archive omits ${path}")
   endif()
 endforeach()
+
+# Read SIZE bytes at OFFSET of FILE as an unsigned little-endian integer.
+function(fsim_binary_field file offset size output)
+  file(READ "${file}" hex OFFSET ${offset} LIMIT ${size} HEX)
+  string(LENGTH "${hex}" length)
+  math(EXPR expected "${size} * 2")
+  if(NOT length EQUAL expected)
+    message(FATAL_ERROR "v3 installed archive binary is truncated: ${file}")
+  endif()
+  set(value "")
+  math(EXPR last "${length} - 2")
+  foreach(index RANGE 0 ${last} 2)
+    string(SUBSTRING "${hex}" ${index} 2 byte)
+    string(PREPEND value "${byte}")
+  endforeach()
+  math(EXPR value "0x${value}")
+  set(${output} ${value} PARENT_SCOPE)
+endfunction()
+
+# A stripped PE image has no COFF symbol table and no debug sections, whose
+# long names would need that table.
+function(fsim_pe_stripped file output)
+  set(${output} TRUE PARENT_SCOPE)
+  fsim_binary_field("${file}" 60 4 header)
+  file(READ "${file}" signature OFFSET ${header} LIMIT 4 HEX)
+  if(NOT signature STREQUAL "50450000")
+    message(FATAL_ERROR "v3 installed archive has a malformed PE image: ${file}")
+  endif()
+  math(EXPR sections_field "${header} + 6")
+  math(EXPR table_field "${header} + 12")
+  math(EXPR symbols_field "${header} + 16")
+  math(EXPR optional_field "${header} + 20")
+  fsim_binary_field("${file}" ${sections_field} 2 sections)
+  fsim_binary_field("${file}" ${table_field} 4 table)
+  fsim_binary_field("${file}" ${symbols_field} 4 symbols)
+  fsim_binary_field("${file}" ${optional_field} 2 optional)
+  if(NOT table EQUAL 0 OR NOT symbols EQUAL 0)
+    set(${output} FALSE PARENT_SCOPE)
+  endif()
+  if(sections EQUAL 0)
+    return()
+  endif()
+  math(EXPR headers "${header} + 24 + ${optional}")
+  math(EXPR length "${sections} * 40")
+  file(READ "${file}" section_table OFFSET ${headers} LIMIT ${length} HEX)
+  math(EXPR last "${sections} - 1")
+  foreach(index RANGE 0 ${last})
+    math(EXPR name_offset "${index} * 80")
+    string(SUBSTRING "${section_table}" ${name_offset} 16 name)
+    # "/" introduces a long name; ".debug" is the DWARF section prefix.
+    if(name MATCHES "^(2f|2e6465627567)")
+      set(${output} FALSE PARENT_SCOPE)
+    endif()
+  endforeach()
+endfunction()
+
+# A stripped ELF file has no SHT_SYMTAB section and no .debug sections.
+function(fsim_elf_stripped file output)
+  set(${output} TRUE PARENT_SCOPE)
+  file(READ "${file}" class OFFSET 4 LIMIT 1 HEX)
+  if(NOT class STREQUAL "02")
+    message(FATAL_ERROR "v3 installed archive has a non-64-bit ELF file: ${file}")
+  endif()
+  fsim_binary_field("${file}" 40 8 table)
+  fsim_binary_field("${file}" 58 2 entry_size)
+  fsim_binary_field("${file}" 60 2 count)
+  fsim_binary_field("${file}" 62 2 names_index)
+  if(count EQUAL 0)
+    return()
+  endif()
+  math(EXPR last "${count} - 1")
+  foreach(index RANGE 0 ${last})
+    math(EXPR type_offset "${table} + ${index} * ${entry_size} + 4")
+    fsim_binary_field("${file}" ${type_offset} 4 type)
+    if(type EQUAL 2)
+      set(${output} FALSE PARENT_SCOPE)
+    endif()
+  endforeach()
+  math(EXPR names_header "${table} + ${names_index} * ${entry_size}")
+  math(EXPR names_offset_field "${names_header} + 24")
+  math(EXPR names_size_field "${names_header} + 32")
+  fsim_binary_field("${file}" ${names_offset_field} 8 names_offset)
+  fsim_binary_field("${file}" ${names_size_field} 8 names_size)
+  file(READ "${file}" names OFFSET ${names_offset} LIMIT ${names_size} HEX)
+  string(REGEX REPLACE "(..)" " \\1" names "${names}")
+  string(FIND "${names}" " 2e 64 65 62 75 67" debug)
+  if(NOT debug EQUAL -1)
+    set(${output} FALSE PARENT_SCOPE)
+  endif()
+endfunction()
+
+# Release archives ship stripped executables and shared libraries; other
+# configurations keep their symbols and debug information. The toolchain's
+# runtime DLLs keep the debug information they are published with, so they
+# match their recorded digests.
+file(STRINGS "${FSIM_TCL_MODE_CACHE}" build_type
+  REGEX "^CMAKE_BUILD_TYPE:[A-Z]+=")
+set(toolchain_runtimes)
+if(suffix STREQUAL ".exe")
+  foreach(directory IN ITEMS bin x86_64-w64-mingw32/bin)
+    foreach(name IN ITEMS libc++.dll libunwind.dll libomp.dll
+        libwinpthread-1.dll libclang_rt.asan_dynamic-x86_64.dll)
+      list(APPEND toolchain_runtimes
+        "${FSIM_ARCHIVE_AUDIT_ROOT}/${directory}/${name}")
+    endforeach()
+  endforeach()
+endif()
+set(binaries)
+if(build_type MATCHES "=Release$")
+  set(binaries "${seen}")
+endif()
+set(unstripped)
+foreach(entry IN LISTS binaries)
+  set(path "${FSIM_WORK_ROOT}/extract/${entry}")
+  if(IS_DIRECTORY "${path}" OR IS_SYMLINK "${path}"
+      OR entry IN_LIST toolchain_runtimes)
+    continue()
+  endif()
+  file(READ "${path}" magic LIMIT 4 HEX)
+  if(magic STREQUAL "7f454c46")
+    fsim_elf_stripped("${path}" stripped)
+  elseif(magic MATCHES "^4d5a")
+    fsim_pe_stripped("${path}" stripped)
+  else()
+    continue()
+  endif()
+  if(NOT stripped)
+    list(APPEND unstripped "${entry}")
+  endif()
+endforeach()
+if(unstripped)
+  string(REPLACE ";" "\n  " unstripped "${unstripped}")
+  message(FATAL_ERROR "v3 installed archive has unstripped binaries:\n  ${unstripped}")
+endif()
+
 execute_process(COMMAND ${launcher} "${prefix}/bin/fsim${suffix}" --version
   RESULT_VARIABLE version_result OUTPUT_VARIABLE version ERROR_VARIABLE version_error)
 string(STRIP "${version}" version)
@@ -213,6 +379,38 @@ if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 3.0.0 (C API 1)")
   message(FATAL_ERROR
     "v3 installed archive version failed with ${version_result}: "
     "${version}${version_error}")
+endif()
+if(suffix STREQUAL ".exe")
+  # The bundled compiler builds and links C++20 against the bundled runtime
+  # with the prefix include directory searched, as for a plug-in, and nothing
+  # else on PATH.
+  set(compile_root "${FSIM_WORK_ROOT}/bundled-compiler")
+  file(MAKE_DIRECTORY "${compile_root}")
+  file(WRITE "${compile_root}/probe.cpp"
+    "#include <format>\n#include <iostream>\n"
+    "int main() { std::cout << std::format(\"BUNDLED_{}\", 20) << '\\n'; }\n")
+  execute_process(
+    COMMAND ${launcher} "${prefix}/bin/clang++.exe" -std=c++20
+      "-I${prefix}/include"
+      "${compile_root}/probe.cpp" -o "${compile_root}/probe.exe"
+    RESULT_VARIABLE compile_result
+    OUTPUT_VARIABLE compile_output ERROR_VARIABLE compile_error)
+  if(NOT compile_result EQUAL 0)
+    message(FATAL_ERROR
+      "v3 installed archive compiler failed with ${compile_result}: "
+      "${compile_output}${compile_error}")
+  endif()
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env "PATH=${prefix}/bin"
+      "${compile_root}/probe.exe"
+    RESULT_VARIABLE probe_result
+    OUTPUT_VARIABLE probe_output ERROR_VARIABLE probe_error)
+  if(NOT probe_result EQUAL 0 OR NOT probe_output MATCHES "BUNDLED_20")
+    message(FATAL_ERROR
+      "v3 installed archive compiler output failed with ${probe_result}: "
+      "${probe_output}${probe_error}")
+  endif()
+  file(REMOVE_RECURSE "${compile_root}")
 endif()
 file(READ "${prefix}/lib/pkgconfig/fsim.pc" pc)
 foreach(token IN ITEMS "Version: 3.0.0" "Libs: -L\${libdir} -lfsim_api")
@@ -260,6 +458,29 @@ fsim_installed_workspace_command("" library delete work)
 fsim_installed_workspace_command("WORKSPACE_ARCHIVE_PASS" simulate --engine interpreter)
 fsim_installed_workspace_command("WORKSPACE_ARCHIVE_PASS"
   simulate --snapshot retained --engine interpreter)
+if(suffix STREQUAL ".exe")
+  # SystemC plug-ins build and link with the bundled compiler by default, not
+  # the compiler that built fsim.
+  file(COPY_FILE
+    "${FSIM_SOURCE_DIR}/examples/three_language_hierarchy/mixed_bridge.cpp"
+    "${workspace}/bridge.cpp")
+  execute_process(
+    COMMAND ${launcher} "${prefix}/bin/fsim${suffix}"
+      systemc compile -v --library models bridge.cpp
+    WORKING_DIRECTORY "${workspace}"
+    TIMEOUT 7200
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  string(REPLACE "\\" "/" reported "${output}")
+  string(TOLOWER "${reported}" reported)
+  string(TOLOWER "  compiler: ${prefix}/bin/clang++.exe (default)\n" expected)
+  string(FIND "${reported}" "${expected}" offset)
+  if(NOT result EQUAL 0 OR offset EQUAL -1)
+    message(FATAL_ERROR
+      "installed SystemC compile did not use the bundled compiler "
+      "(${result}): ${output}${error}")
+  endif()
+  fsim_installed_workspace_command("" systemc link --library models)
+endif()
 file(REMOVE_RECURSE "${workspace}")
 file(REMOVE_RECURSE "${prefix}")
 if(EXISTS "${prefix}")
