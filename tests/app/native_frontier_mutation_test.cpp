@@ -1195,8 +1195,10 @@ void require_same_frames(
 
 void test_frontier_force_and_deposit_at_foreign_cut()
 {
-    const auto nonce = std::filesystem::file_time_type::clock::now()
-        .time_since_epoch().count();
+    // libc++'s file clock counts in __int128, which to_string does not take.
+    const auto nonce = static_cast<long long>(
+        std::filesystem::file_time_type::clock::now()
+            .time_since_epoch().count());
     TemporaryDirectory root { std::filesystem::temp_directory_path()
         / ("fsim-native-frontier-force-deposit-"
             + std::to_string(nonce)) };

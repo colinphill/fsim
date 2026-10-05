@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/support/atomic_shared_ptr.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <concepts>
@@ -703,7 +705,7 @@ private:
         std::atomic_flag& lock_;
     };
 
-    mutable std::atomic<std::shared_ptr<Control>> storage_ { };
+    mutable fsim::support::AtomicSharedPtr<Control> storage_ { };
     mutable std::vector<T> exposed_values_;
     mutable std::atomic<bool> exposed_ { false };
     mutable std::atomic_flag transition_lock_ = ATOMIC_FLAG_INIT;

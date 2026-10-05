@@ -43,6 +43,7 @@ namespace tcl_detail {
 
     constexpr int kUnavailable = 3;
 
+#if defined(_WIN32)
     // Without long path support, SetCurrentDirectoryW accepts MAX_PATH - 2
     // characters before it appends a separator and the terminator.
     constexpr std::size_t kWindowsWorkingDirectoryLimit = 258;
@@ -52,6 +53,7 @@ namespace tcl_detail {
         "maximum-file-path-limitation"
         "#enable-long-paths-in-windows-10-version-1607-and-later"
     };
+#endif
 
     std::optional<std::string> windows_long_path_cd_note(
         const std::string_view requested_directory,

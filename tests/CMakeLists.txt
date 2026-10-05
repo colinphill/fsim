@@ -1151,6 +1151,8 @@ fsim_add_single_source_test_target(
   app/runtime_shared_body_codec_test.cpp
   fsim_application
 )
+# The test includes the artifact codec, which uses Boost.PFR.
+target_link_libraries(fsim_runtime_shared_body_codec_tests PRIVATE fsim_boost_pfr_headers)
 fsim_register_simple_test(
   fsim.application.runtime-shared-body-codec
   fsim_runtime_shared_body_codec_tests
@@ -1162,6 +1164,8 @@ fsim_add_single_source_test_target(
   app/runtime_direct_artifact_rows_test.cpp
   fsim_application
 )
+# The test includes the artifact codec, which uses Boost.PFR.
+target_link_libraries(fsim_runtime_direct_artifact_rows_tests PRIVATE fsim_boost_pfr_headers)
 fsim_register_simple_test(
   fsim.application.runtime-direct-artifact-rows
   fsim_runtime_direct_artifact_rows_tests
@@ -1173,6 +1177,8 @@ fsim_add_single_source_test_target(
   app/runtime_lazy_process_materialization_failure_test.cpp
   fsim_application
 )
+# The test includes the artifact codec, which uses Boost.PFR.
+target_link_libraries(fsim_runtime_lazy_process_materialization_failure_tests PRIVATE fsim_boost_pfr_headers)
 fsim_register_simple_test(
   fsim.application.runtime-lazy-process-materialization-failure
   fsim_runtime_lazy_process_materialization_failure_tests

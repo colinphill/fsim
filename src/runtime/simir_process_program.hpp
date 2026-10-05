@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_driver_inventory.hpp"
+#include "fsim/support/atomic_shared_ptr.hpp"
 
 #include <atomic>
 #include <memory>
@@ -93,7 +94,7 @@ public:
     void release_registration_identity() noexcept;
 
 private:
-    mutable std::atomic<std::shared_ptr<const OperationList>>
+    mutable fsim::support::AtomicSharedPtr<const OperationList>
         materialized_operations_;
     std::optional<OperationList> registration_identity_;
 };
@@ -121,7 +122,7 @@ struct ProcessStartupWriteBank {
     [[nodiscard]] const OperationList& operations() const;
 
 private:
-    mutable std::atomic<std::shared_ptr<const OperationList>>
+    mutable fsim::support::AtomicSharedPtr<const OperationList>
         materialized_operations;
 };
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/logic.hpp"
+#include "fsim/support/atomic_shared_ptr.hpp"
 
 #include <array>
 #include <atomic>
@@ -134,7 +135,7 @@ struct PackedLogic4PlaneCell final {
     {
     }
 
-    std::atomic<std::shared_ptr<PackedLogic4PlaneBlock>> current;
+    fsim::support::AtomicSharedPtr<PackedLogic4PlaneBlock> current;
 
     [[nodiscard]] std::shared_ptr<PackedLogic4PlaneBlock>
     acquire_read_block() const noexcept;

@@ -563,6 +563,7 @@ include/fsim/semantic/model.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/vhdl_hir.hpp
+include/fsim/support/atomic_shared_ptr.hpp
 include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/environment.hpp
