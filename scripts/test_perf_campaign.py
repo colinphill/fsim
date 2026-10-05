@@ -161,11 +161,14 @@ def throughput_output(duplicate_summary: bool = False) -> str:
 
 class ProfileEnvironmentTests(unittest.TestCase):
     def test_llvm_module_option_is_isolated_from_preflight_and_timing(self) -> None:
-        with patch.dict(os.environ, {"FSIM_PROFILE_LLVM_MODULES": "1"}):
+        with patch.dict(os.environ, {"FSIM_PROFILE_LLVM_MODULES": "1",
+                                     "FSIM_TRACE_SCHEDULER": "1"}):
             campaign_environment, removed = campaign.stable_environment()
 
         self.assertIn("FSIM_PROFILE_LLVM_MODULES", removed)
         self.assertNotIn("FSIM_PROFILE_LLVM_MODULES", campaign_environment)
+        self.assertIn("FSIM_TRACE_SCHEDULER", removed)
+        self.assertNotIn("FSIM_TRACE_SCHEDULER", campaign_environment)
         timed_environment = campaign_environment.copy()
         preflight_environment = campaign_environment.copy()
 
@@ -751,6 +754,116 @@ class PreflightReuseTests(unittest.TestCase):
         self.assertEqual(fresh.call_count, 1)
         verdict = json.loads((self.current / "preflight" / self.case["id"] / "pair_verdict.json").read_text())
         self.assertFalse(verdict["passed"])
+
+
+class PairedOrderTests(unittest.TestCase):
+    def test_order_is_reproducible_and_balanced(self) -> None:
+        labels = ("control", "candidate")
+        for count in (1, 5, 7, 20):
+            with self.subTest(count=count):
+                orders = campaign.randomized_pair_orders(labels, count, 42, "fixture")
+                self.assertEqual(len(orders), count)
+                self.assertEqual(orders, campaign.randomized_pair_orders(
+                    labels, count, 42, "fixture"))
+                self.assertTrue(all(set(order) == set(labels) for order in orders))
+                self.assertLessEqual(abs(orders.count(labels)
+                                         - orders.count(tuple(reversed(labels)))), 1)
+
+    def test_randomization_can_break_strict_alternation(self) -> None:
+        orders = [campaign.randomized_pair_orders(("a", "b"), 20, seed, "fixture")
+                  for seed in range(4)]
+        self.assertGreater(len({tuple(order) for order in orders}), 1)
+        self.assertTrue(any(left == right for order in orders
+                            for left, right in zip(order, order[1:])))
+
+    def test_invalid_pair_request_rejected(self) -> None:
+        for labels, count in ((("a", "a"), 5), (("a", "b"), 0)):
+            with self.assertRaises(campaign.CampaignError):
+                campaign.randomized_pair_orders(labels, count, 42, "fixture")
+
+
+class PhaseProfileTests(unittest.TestCase):
+    def test_nested_and_repeated_process_local_spans(self) -> None:
+        text = ("unrelated diagnostic\n"
+                "FSIM-PHASE name=elaboration start_ms=2 end_ms=5 elapsed_ms=3\n"
+                "FSIM-PHASE name=project_build start_ms=0 end_ms=6 elapsed_ms=6\n"
+                "FSIM-PHASE name=elaboration start_ms=7 end_ms=9 elapsed_ms=2")
+        self.assertEqual(campaign.parse_phase_spans(text), [
+            {"name": "elaboration", "start_ms": 2.0, "end_ms": 5.0, "elapsed_ms": 3.0},
+            {"name": "project_build", "start_ms": 0.0, "end_ms": 6.0, "elapsed_ms": 6.0},
+            {"name": "elaboration", "start_ms": 7.0, "end_ms": 9.0, "elapsed_ms": 2.0},
+        ])
+        self.assertEqual(campaign.parse_phase_spans("unrelated diagnostic"), [])
+        rounded = ("FSIM-PHASE name=elaboration start_ms=1.000001 "
+                   "end_ms=2.000000 elapsed_ms=1.000000")
+        self.assertEqual(len(campaign.parse_phase_spans(rounded)), 1)
+
+    def test_invalid_spans_are_rejected(self) -> None:
+        valid = "FSIM-PHASE name=elaboration start_ms=2 end_ms=5 elapsed_ms=3"
+        invalid = (
+            valid + " name=duplicate", valid + " extra=1", valid + " garbage",
+            "FSIM-PHASE name=elaboration start_ms=2 end_ms=5",
+            "FSIM-PHASE ", valid.replace("name=elaboration", "name=bad-name"),
+            valid.replace("start_ms=2", "start_ms=nan"),
+            valid.replace("end_ms=5", "end_ms=inf"),
+            valid.replace("elapsed_ms=3", "elapsed_ms=-1"),
+            valid.replace("start_ms=2", "start_ms=6"),
+            valid.replace("elapsed_ms=3", "elapsed_ms=2"),
+            valid.replace("end_ms=5", "end_ms=not_a_number"),
+        )
+        for text in invalid:
+            with self.subTest(text=text):
+                with self.assertRaises(campaign.CampaignError):
+                    campaign.parse_phase_spans(text)
+
+    def test_legacy_and_extended_phase_records(self) -> None:
+        legacy = "FSIM-PROFILE setup_ms=2 run_ms=5 native_await_ms=0"
+        self.assertEqual(campaign.parse_phase_profile(legacy),
+                         {"setup": 2.0, "run": 5.0, "native_await": 0.0})
+        extended = (legacy + " prepare_ms=3 run_begin_ms=5 run_end_ms=10"
+                    " finalize_ms=1e-2")
+        self.assertEqual(campaign.parse_phase_profile("HDL output\n" + extended),
+                         {"setup": 2.0, "run": 5.0, "native_await": 0.0,
+                          "prepare": 3.0, "run_begin": 5.0, "run_end": 10.0,
+                          "finalize": 0.01})
+
+    def test_ambiguous_or_invalid_records_are_not_measurements(self) -> None:
+        valid = "FSIM-PROFILE setup_ms=2 run_ms=5 native_await_ms=0"
+        for text in ("", valid + "\n" + valid, valid + " setup_ms=3",
+                     valid + " prepare_ms=nan", valid + " prepare_ms=inf",
+                     valid + " prepare_ms=-1", valid + " garbage",
+                     "FSIM-PROFILE setup_ms=2 run_ms=5"):
+            with self.subTest(text=text):
+                self.assertIsNone(campaign.parse_phase_profile(text))
+
+
+class MeasurementBinaryTests(unittest.TestCase):
+    def test_instrumented_binary_is_diagnostic_only(self) -> None:
+        version = "fsim 1.0 (C API 1) [allocation-profiling-build]"
+        campaign.require_wall_measurement_binary(version, preflight_only=True)
+        campaign.require_wall_measurement_binary("fsim 1.0 (C API 1)", preflight_only=False)
+        with self.assertRaisesRegex(campaign.CampaignError, "cannot provide Wall"):
+            campaign.require_wall_measurement_binary(version, preflight_only=False)
+
+
+class SampleDispersionTests(unittest.TestCase):
+    def test_iqr_uses_inclusive_quartiles(self) -> None:
+        rows = [{"case": "fixture", "configuration": "llvm_o2",
+                 "engine": engine, "sample": sample,
+                 "elapsed_seconds": elapsed, "peak_rss_kib": 10}
+                for engine in ("fsim", "vivado")
+                for sample, elapsed in enumerate((1.0, 2.0, 3.0, 4.0, 100.0))]
+        summary = campaign.summarize_samples(rows)[0]
+        self.assertEqual(summary["engines"]["fsim"]["iqr_seconds"], 2.0)
+
+    def test_single_observation_has_no_dispersion_estimate(self) -> None:
+        rows = [{"case": "fixture", "configuration": "llvm_o2",
+                 "engine": engine, "sample": 0,
+                 "elapsed_seconds": 1.0, "peak_rss_kib": 10}
+                for engine in ("fsim", "vivado")]
+        summary = campaign.summarize_samples(rows)[0]
+        self.assertIsNone(summary["engines"]["fsim"]["iqr_seconds"])
+        self.assertIsNone(summary["paired_speedup_95pct_bootstrap_ci"])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_mixed_verilog.hpp"
 #include "sdf_diagnostic.hpp"
+#include "sdf_process_rows.hpp"
 
 #include <algorithm>
 #include <ranges>
@@ -14,8 +15,8 @@ namespace fsim::app {
 namespace {
     using frontend::Diagnostic;
     using frontend::SourceSpan;
-    using runtime::simir::Process;
     using runtime::simir::ProcessId;
+    using runtime::simir::ProcessProgramView;
     using runtime::simir::SignalId;
 
     using sdf_detail::diagnose;
@@ -42,20 +43,21 @@ namespace {
     }
 
     [[nodiscard]] bool process_drives(
-        const Process& process, const SignalId signal)
+        const ProcessProgramView& process, const SignalId signal)
     {
-        if (std::ranges::any_of(process.driver_regions,
+        if (std::ranges::any_of(process.driver_regions(),
                 [signal](const auto& region) { return region.signal == signal; })) {
             return true;
         }
-        return process.switch_target == signal
-            || (process.switch_bidirectional && process.switch_source == signal);
+        return process.switch_target() == signal
+            || (process.switch_bidirectional()
+                && process.switch_source() == signal);
     }
 
     [[nodiscard]] bool process_loads(
-        const Process& process, const SignalId signal)
+        const ProcessProgramView& process, const SignalId signal)
     {
-        return std::ranges::any_of(process.static_sensitivity,
+        return std::ranges::any_of(process.static_sensitivity(),
             [signal](const auto& sensitivity) {
                 return sensitivity.signal == signal;
             });
@@ -66,11 +68,16 @@ namespace {
         const elaboration::ElaboratedDesign& elaborated, const SignalId signal,
         Predicate predicate, const std::optional<ProcessId> excluded = std::nullopt)
     {
+        [[maybe_unused]] const auto process_rows
+            = sdf_detail::retain_published_process_rows(elaborated);
         std::vector<ProcessId> result;
-        for (const auto& process : elaborated.processes()) {
-            if ((!excluded || process.id != *excluded)
+        for (std::size_t index = 0; index < elaborated.process_count(); ++index) {
+            const auto process
+                = elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+                    elaborated, index);
+            if ((!excluded || process.id() != *excluded)
                 && predicate(process, signal)) {
-                result.push_back(process.id);
+                result.push_back(process.id());
             }
         }
         std::ranges::sort(result);
@@ -137,10 +144,18 @@ namespace {
         }
         if (!conversion.process)
             return conversion.formal_signal == conversion.actual_signal;
-        const auto found = std::ranges::find(
-            elaborated.processes(), *conversion.process, &Process::id);
-        return found != elaborated.processes().end()
-            && process_loads(*found, source) && process_drives(*found, destination);
+        [[maybe_unused]] const auto process_rows
+            = sdf_detail::retain_published_process_rows(elaborated);
+        for (std::size_t index = 0; index < elaborated.process_count(); ++index) {
+            const auto process
+                = elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+                    elaborated, index);
+            if (process.id() == *conversion.process) {
+                return process_loads(process, source)
+                    && process_drives(process, destination);
+            }
+        }
+        return false;
     }
 
     [[nodiscard]] bool endpoint_languages(

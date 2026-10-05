@@ -29,7 +29,7 @@ using codec_detail::Writer;
 
 constexpr std::string_view kRuntimeMagic = "FSIMRUN1";
 constexpr std::string_view kCode = "FSIM-ART-0013";
-constexpr std::uint32_t kSchema = 64U;
+constexpr std::uint32_t kSchema = kRuntimeStateSchema;
 constexpr std::uint8_t kInlinePathMode = 0U;
 constexpr std::uint8_t kExternalPathMode = 1U;
 constexpr std::uint32_t kInvalidPathId
@@ -40,6 +40,8 @@ struct RuntimeStatePathWireDto {
     // placeholders on the wire and are restored from these explicit IDs.
     std::vector<std::uint32_t> path_ids;
     State state;
+    std::shared_ptr<elaboration::detail::RuntimeProcessProgramTable>
+        process_table;
 };
 
 struct PreparedRuntimeState {
@@ -47,6 +49,22 @@ struct PreparedRuntimeState {
     std::string path_binding;
     RuntimeStatePathWireDto dto;
 };
+
+template <typename Path>
+void clear_path(Path& path)
+{
+    path = std::remove_cvref_t<Path> { };
+}
+
+template <typename Path>
+void assign_path(Path& path, const std::string_view spelling)
+{
+    if constexpr (requires { path.assign(spelling); }) {
+        path.assign(spelling);
+    } else {
+        path = spelling;
+    }
+}
 
 void report_error(
     diagnostic::Engine& diagnostics,
@@ -90,8 +108,9 @@ void report_error(
     return "unknown path-table error";
 }
 
-template <typename StateType, typename Callback>
-bool visit_runtime_paths(StateType& state, Callback&& callback)
+template <typename StateType, typename ProcessRange, typename Callback>
+bool visit_runtime_paths(
+    StateType& state, ProcessRange& processes, Callback&& callback)
 {
     const auto visit = [&](auto& path, const bool empty_allowed) {
         return std::invoke(callback, path, empty_allowed);
@@ -153,7 +172,14 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
             return false;
         }
     }
-    for (auto& process : state.processes) {
+    for (auto& process_row : processes) {
+        auto& process = [&]() -> auto& {
+            if constexpr (requires { process_row.instance; }) {
+                return process_row.instance;
+            } else {
+                return process_row;
+            }
+        }();
         if (!visit(process.name, false)) {
             return false;
         }
@@ -185,6 +211,9 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
                         return visit_operation_path(
                             value.instance_context,
                             !value.selector.has_value());
+                    } else if constexpr (std::same_as<Operation,
+                                             runtime::simir::DebugPoint>) {
+                        return visit_operation_path(value.scope, true);
                     } else {
                         return true;
                     }
@@ -245,6 +274,13 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
     return true;
 }
 
+template <typename StateType, typename Callback>
+bool visit_runtime_paths(StateType& state, Callback&& callback)
+{
+    return visit_runtime_paths(
+        state, state.processes, std::forward<Callback>(callback));
+}
+
 [[nodiscard]] bool account_path_table_allocations(
     DecodeBudget& budget,
     const std::string_view encoded_table)
@@ -297,12 +333,162 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
     return true;
 }
 
+[[nodiscard]] State copy_runtime_state_without_processes(const State& state)
+{
+    return State {
+        state.top, state.roots, state.signal_info,
+        state.boundary_conversions, state.signals,
+        state.string_object_info, state.string_objects,
+        state.container_object_info, state.container_objects,
+        state.container_signal_aliases,
+        state.container_element_signal_aliases,
+        state.container_aggregate_signal_aliases,
+        state.vhdl_protected_object_info, { }, state.specializations,
+        state.udp_tables, state.verilog_specify_paths,
+        state.verilog_timing_checks, state.systemc_instances,
+        state.systemc_processes, state.systemc_objects,
+        state.signal_names, state.string_names, state.container_names,
+        state.code_coverage_inventory, state.signal_driver_inventory
+    };
+}
+
+[[nodiscard]] std::shared_ptr<const
+    elaboration::detail::RuntimeProcessProgramTable>
+process_table_from_design(
+    const elaboration::ElaboratedDesign& design,
+    diagnostic::Engine& diagnostics)
+{
+    try {
+        auto table
+            = std::make_shared<elaboration::detail::RuntimeProcessProgramTable>();
+        const auto process_count
+            = elaboration::detail::ElaboratedDesignProcessAccess::process_count(
+                design);
+        table->rows.reserve(process_count);
+        runtime::simir::ProcessProgramTemplatePool templates;
+        std::unordered_map<const runtime::simir::ProcessProgramTemplate*,
+            std::uint32_t> template_ids;
+        template_ids.reserve(process_count);
+        for (std::size_t index = 0; index < process_count; ++index) {
+            const auto process
+                = elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+                    design, index);
+            if (!process.valid()) {
+                report_error(diagnostics,
+                    "runtime design contains an invalid process row");
+                return { };
+            }
+            auto process_template = templates.intern(process);
+            auto position = template_ids.find(process_template.get());
+            if (position == template_ids.end()) {
+                if (table->templates.size()
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                    report_error(diagnostics,
+                        "runtime process template table exceeds the portable "
+                        "index range");
+                    return { };
+                }
+                const auto template_id
+                    = static_cast<std::uint32_t>(table->templates.size());
+                table->templates.push_back(process_template);
+                position = template_ids.emplace(
+                    process_template.get(), template_id).first;
+            }
+            table->rows.push_back({
+                position->second,
+                runtime::simir::ProcessInstanceProgram { process }
+            });
+        }
+        return table;
+    } catch (const std::bad_alloc&) {
+        report_error(diagnostics,
+            "runtime process row allocation failed while serializing");
+    } catch (const std::length_error&) {
+        report_error(diagnostics,
+            "runtime process row allocation exceeds a host container limit");
+    }
+    return { };
+}
+
 [[nodiscard]] std::optional<PreparedRuntimeState> prepare_runtime_state(
     const State& state,
+    std::shared_ptr<const elaboration::detail::RuntimeProcessProgramTable>
+        process_table,
     const Paths* const external_paths,
     diagnostic::Engine& diagnostics)
 {
     try {
+        if (process_table && !state.processes.empty()) {
+            report_error(diagnostics,
+                "runtime state supplies both process rows and facade records");
+            return std::nullopt;
+        }
+        std::shared_ptr<elaboration::detail::RuntimeProcessProgramTable>
+            projected_process_table;
+        if (!process_table) {
+            projected_process_table
+                = std::make_shared<elaboration::detail::RuntimeProcessProgramTable>();
+            runtime::simir::ProcessProgramTemplatePool templates;
+            std::unordered_map<const runtime::simir::ProcessProgramTemplate*,
+                std::uint32_t> template_ids;
+            projected_process_table->rows.reserve(state.processes.size());
+            template_ids.reserve(state.processes.size());
+            for (const auto& process : state.processes) {
+                auto process_template = templates.intern(process);
+                auto position = template_ids.find(process_template.get());
+                if (position == template_ids.end()) {
+                    if (projected_process_table->templates.size()
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                        report_error(diagnostics,
+                            "runtime process template table exceeds the "
+                            "portable index range");
+                        return std::nullopt;
+                    }
+                    const auto template_id
+                        = static_cast<std::uint32_t>(
+                            projected_process_table->templates.size());
+                    projected_process_table->templates.push_back(
+                        process_template);
+                    position = template_ids.emplace(
+                        process_template.get(), template_id).first;
+                }
+                projected_process_table->rows.push_back({
+                    position->second,
+                    runtime::simir::ProcessInstanceProgram { process }
+                });
+            }
+            process_table = projected_process_table;
+        }
+        if (process_table->rows.size()
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<runtime::simir::ProcessId>::max())
+                    + 1U) {
+            report_error(diagnostics,
+                "runtime process rows exceed the dense process-ID range");
+            return std::nullopt;
+        }
+        std::size_t next_template_id { };
+        for (std::size_t index = 0;
+            index < process_table->rows.size(); ++index) {
+            const auto& row = process_table->rows[index];
+            if (row.template_id >= process_table->templates.size()
+                || !process_table->templates[row.template_id]
+                || row.instance.id != index
+                || row.template_id > next_template_id) {
+                report_error(diagnostics,
+                    "runtime process row table is not canonical");
+                return std::nullopt;
+            }
+            if (row.template_id == next_template_id) {
+                ++next_template_id;
+            }
+        }
+        if (next_template_id != process_table->templates.size()) {
+            report_error(diagnostics,
+                "runtime process template table contains an unused entry");
+            return std::nullopt;
+        }
+
         PreparedRuntimeState prepared;
         prepared.path_mode = external_paths == nullptr
             ? kInlinePathMode
@@ -311,7 +497,8 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         auto& ids = prepared.dto.path_ids;
         std::optional<std::string> path_error;
         const bool paths_visited = visit_runtime_paths(
-            state, [&](const auto& path, const bool empty_allowed) {
+            state, process_table->rows,
+            [&](const auto& path, const bool empty_allowed) {
                 const std::string_view spelling { path };
                 if (spelling.empty()) {
                     if (!empty_allowed) {
@@ -381,11 +568,20 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         } else {
             prepared.path_binding = std::move(payload->digest);
         }
-        prepared.dto.state = state;
+        prepared.dto.state = copy_runtime_state_without_processes(state);
+        // Path projection clears process names and path-bearing operations in
+        // the wire DTO. Keep the design's immutable runtime rows untouched.
+        if (!projected_process_table) {
+            projected_process_table
+                = std::make_shared<elaboration::detail::RuntimeProcessProgramTable>(
+                    *process_table);
+        }
+        prepared.dto.process_table = std::move(projected_process_table);
         std::size_t cleared_paths { };
         const bool cleared = visit_runtime_paths(
-            prepared.dto.state, [&](auto& path, const bool) {
-                path.clear();
+            prepared.dto.state, prepared.dto.process_table->rows,
+            [&](auto& path, const bool) {
+                clear_path(path);
                 ++cleared_paths;
                 return true;
             });
@@ -412,16 +608,20 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
 void write_prepared_runtime_state(
     Writer& writer, const PreparedRuntimeState& prepared)
 {
+    writer.set_runtime_path_projection(true);
+    writer.set_runtime_operation_body_sharing(true);
+    writer.set_runtime_process_layout_sharing(true);
     writer.raw(kRuntimeMagic);
     writer.write(kSchema);
     writer.write(prepared.path_mode);
     writer.write(prepared.path_binding);
     writer.write(prepared.dto.path_ids);
     writer.write(prepared.dto.state);
+    writer.write(prepared.dto.process_table);
 }
 
 template <typename ReaderType>
-std::optional<State> read_runtime_state(
+std::optional<DecodedRuntimeProgramState> read_runtime_state(
     ReaderType& reader,
     DecodeBudget& budget,
     const std::string_view source_name,
@@ -441,6 +641,8 @@ std::optional<State> read_runtime_state(
             source_name);
         return std::nullopt;
     }
+    reader.set_runtime_operation_body_sharing(true);
+    reader.set_runtime_process_layout_sharing(true);
 
     std::uint8_t path_mode { };
     std::string path_binding;
@@ -506,8 +708,16 @@ std::optional<State> read_runtime_state(
     path_table = &path_payload->paths;
 
     RuntimeStatePathWireDto dto;
-    if (!reader.read(dto.path_ids) || !reader.read(dto.state)) {
+    std::shared_ptr<elaboration::detail::RuntimeProcessProgramTable>
+        mutable_process_table;
+    if (!reader.read(dto.path_ids) || !reader.read(dto.state)
+        || !reader.read(mutable_process_table)) {
         report_error(diagnostics, reader.failure(), source_name);
+        return std::nullopt;
+    }
+    if (!mutable_process_table || !dto.state.processes.empty()) {
+        report_error(diagnostics,
+            "runtime state is missing its process-row table", source_name);
         return std::nullopt;
     }
     if (reader.remaining() != 0U) {
@@ -518,7 +728,8 @@ std::optional<State> read_runtime_state(
 
     std::size_t next_path { };
     std::optional<std::string> reference_error;
-    const bool restored = visit_runtime_paths(dto.state,
+    const bool restored = visit_runtime_paths(
+        dto.state, mutable_process_table->rows,
         [&](auto& path, const bool empty_allowed) {
             if (!path.empty()) {
                 reference_error
@@ -540,7 +751,7 @@ std::optional<State> read_runtime_state(
                           "required hierarchy path";
                     return false;
                 }
-                path.clear();
+                clear_path(path);
                 return true;
             }
             const auto id
@@ -564,7 +775,7 @@ std::optional<State> read_runtime_state(
                       "aggregate decode allocation budget";
                 return false;
             }
-            path.assign(spelling);
+            assign_path(path, spelling);
             return true;
         });
     if (!restored) {
@@ -580,11 +791,45 @@ std::optional<State> read_runtime_state(
             source_name);
         return std::nullopt;
     }
-    return std::move(dto.state);
+    std::size_t next_template_id { };
+    if (mutable_process_table->rows.size()
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<runtime::simir::ProcessId>::max())
+                + 1U) {
+        report_error(diagnostics,
+            "runtime process rows exceed the dense process-ID range",
+            source_name);
+        return std::nullopt;
+    }
+    for (std::size_t index = 0;
+        index < mutable_process_table->rows.size(); ++index) {
+        const auto& row = mutable_process_table->rows[index];
+        if (row.template_id >= mutable_process_table->templates.size()
+            || !mutable_process_table->templates[row.template_id]
+            || row.instance.id != index
+            || row.template_id > next_template_id) {
+            report_error(diagnostics,
+                "runtime process row table is not canonical", source_name);
+            return std::nullopt;
+        }
+        if (row.template_id == next_template_id) {
+            ++next_template_id;
+        }
+    }
+    if (next_template_id != mutable_process_table->templates.size()) {
+        report_error(diagnostics,
+            "runtime process template table contains an unused entry",
+            source_name);
+        return std::nullopt;
+    }
+    dto.process_table = std::move(mutable_process_table);
+    return DecodedRuntimeProgramState {
+        std::move(dto.state), std::move(dto.process_table)
+    };
 }
 
 template <typename ReaderFactory>
-std::optional<State> decode_runtime_payload(
+std::optional<DecodedRuntimeProgramState> decode_runtime_payload(
     ReaderFactory&& make_reader,
     const std::uint64_t size,
     std::string source_name,
@@ -618,6 +863,50 @@ std::optional<State> decode_runtime_payload(
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<State> materialize_public_runtime_state(
+    DecodedRuntimeProgramState decoded,
+    const std::string_view source_name,
+    diagnostic::Engine& diagnostics)
+{
+    try {
+        if (!decoded.process_rows || !decoded.state.processes.empty()) {
+            report_error(diagnostics,
+                "runtime state cannot materialize an invalid process table",
+                source_name);
+            return std::nullopt;
+        }
+        auto& processes = decoded.state.processes;
+        processes.reserve(decoded.process_rows->rows.size());
+        for (const auto& row : decoded.process_rows->rows) {
+            if (row.template_id >= decoded.process_rows->templates.size()
+                || !decoded.process_rows->templates[row.template_id]) {
+                report_error(diagnostics,
+                    "runtime process row references an unknown template",
+                    source_name);
+                return std::nullopt;
+            }
+            processes.push_back(runtime::simir::ProcessProgramView(
+                *decoded.process_rows->templates[row.template_id],
+                row.instance).materialize());
+        }
+        return std::move(decoded.state);
+    } catch (const std::bad_alloc&) {
+        report_error(diagnostics,
+            "runtime Process facade allocation failed while decoding",
+            source_name);
+    } catch (const std::length_error&) {
+        report_error(diagnostics,
+            "runtime Process facade allocation exceeds a host limit",
+            source_name);
+    } catch (const std::exception& error) {
+        report_error(diagnostics,
+            "runtime Process facade reconstruction failed: "
+                + std::string { error.what() },
+            source_name);
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 std::optional<std::string> serialize_runtime_path_state(
@@ -625,7 +914,8 @@ std::optional<std::string> serialize_runtime_path_state(
     const semantic::HierarchyPathTable* const external_paths,
     diagnostic::Engine& diagnostics)
 {
-    auto prepared = prepare_runtime_state(state, external_paths, diagnostics);
+    auto prepared = prepare_runtime_state(
+        state, { }, external_paths, diagnostics);
     if (!prepared) {
         return std::nullopt;
     }
@@ -647,13 +937,66 @@ std::optional<std::string> serialize_runtime_path_state(
     return std::move(writer).finish();
 }
 
+std::optional<std::string> serialize_runtime_design_state(
+    const elaboration::ElaboratedDesign& design,
+    const semantic::HierarchyPathTable* const external_paths,
+    diagnostic::Engine& diagnostics)
+{
+    try {
+        auto state
+            = elaboration::detail::ElaboratedDesignProcessAccess::artifact_state(
+                design);
+        auto process_table
+            = elaboration::detail::ElaboratedDesignProcessAccess::process_table(
+                design);
+        if (!process_table) {
+            process_table = process_table_from_design(design, diagnostics);
+            if (!process_table) {
+                return std::nullopt;
+            }
+        }
+        auto prepared = prepare_runtime_state(
+            state, std::move(process_table), external_paths, diagnostics);
+        if (!prepared) {
+            return std::nullopt;
+        }
+        const auto output_capacity = codec_detail::add_serialization_capacity(
+            kRuntimeMagic.size() + sizeof(std::uint32_t) + sizeof(std::uint8_t),
+            codec_detail::add_serialization_capacity(
+                prepared->path_binding.size(),
+                codec_detail::add_serialization_capacity(
+                    codec_detail::serialization_capacity_hint(
+                        prepared->dto.path_ids),
+                    codec_detail::add_serialization_capacity(
+                        codec_detail::serialization_capacity_hint(
+                            prepared->dto.state),
+                        codec_detail::serialization_capacity_hint(
+                            prepared->dto.process_table)))));
+        Writer writer { output_capacity };
+        write_prepared_runtime_state(writer, *prepared);
+        if (!writer.failure().empty()) {
+            report_error(diagnostics, writer.failure());
+            return std::nullopt;
+        }
+        return std::move(writer).finish();
+    } catch (const std::bad_alloc&) {
+        report_error(diagnostics,
+            "runtime state allocation failed while serializing design rows");
+    } catch (const std::length_error&) {
+        report_error(diagnostics,
+            "runtime state allocation exceeds a host container limit");
+    }
+    return std::nullopt;
+}
+
 bool serialize_runtime_path_state(
     const elaboration::ElaboratedDesignState& state,
     const semantic::HierarchyPathTable* const external_paths,
     std::ostream& output,
     diagnostic::Engine& diagnostics)
 {
-    auto prepared = prepare_runtime_state(state, external_paths, diagnostics);
+    auto prepared = prepare_runtime_state(
+        state, { }, external_paths, diagnostics);
     if (!prepared) {
         return false;
     }
@@ -671,7 +1014,8 @@ std::optional<std::string> runtime_path_state_checksum(
     const semantic::HierarchyPathTable* const external_paths,
     diagnostic::Engine& diagnostics)
 {
-    auto prepared = prepare_runtime_state(state, external_paths, diagnostics);
+    auto prepared = prepare_runtime_state(
+        state, { }, external_paths, diagnostics);
     if (!prepared) {
         return std::nullopt;
     }
@@ -692,6 +1036,21 @@ deserialize_runtime_path_state(
     const semantic::HierarchyPathTable* const external_paths,
     diagnostic::Engine& diagnostics)
 {
+    auto decoded = deserialize_runtime_program_state(
+        bytes, source_name, external_paths, diagnostics);
+    if (!decoded) {
+        return std::nullopt;
+    }
+    return materialize_public_runtime_state(
+        std::move(*decoded), source_name, diagnostics);
+}
+
+std::optional<DecodedRuntimeProgramState> deserialize_runtime_program_state(
+    const std::string_view bytes,
+    std::string source_name,
+    const semantic::HierarchyPathTable* const external_paths,
+    diagnostic::Engine& diagnostics)
+{
     if (bytes.size() > kMaximumPayloadBytes) {
         report_error(diagnostics,
             "runtime state exceeds the maximum payload size", source_name);
@@ -706,6 +1065,22 @@ deserialize_runtime_path_state(
 
 std::optional<elaboration::ElaboratedDesignState>
 deserialize_runtime_path_state(
+    std::istream& input,
+    const std::uint64_t size,
+    std::string source_name,
+    const semantic::HierarchyPathTable* const external_paths,
+    diagnostic::Engine& diagnostics)
+{
+    auto decoded = deserialize_runtime_program_state(
+        input, size, source_name, external_paths, diagnostics);
+    if (!decoded) {
+        return std::nullopt;
+    }
+    return materialize_public_runtime_state(
+        std::move(*decoded), source_name, diagnostics);
+}
+
+std::optional<DecodedRuntimeProgramState> deserialize_runtime_program_state(
     std::istream& input,
     const std::uint64_t size,
     std::string source_name,

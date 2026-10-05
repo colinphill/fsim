@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_mixed_verilog.hpp"
+#include "sdf_row_backed_test_support.hpp"
 
 #include <iostream>
 #include <memory>
@@ -100,9 +101,7 @@ fsim::elaboration::ElaboratedDesign make_design()
             frontend::ValueDomain::Logic9, frontend::ValueDomain::Logic4,
             false, false, true, std::nullopt, std::nullopt, std::nullopt,
             std::nullopt, span("top.sv"), span("cell.vhd"), span("top.sv") });
-    auto design = elaboration::ElaboratedDesign::from_state(std::move(state));
-    require(design.has_value(), "mixed-language design fixture must be valid");
-    return std::move(*design);
+    return app::sdf_row_backed_test::make_row_backed_design(std::move(state));
 }
 
 std::shared_ptr<const fsim::app::SdfAnnotationSummary> make_summary(
@@ -259,6 +258,28 @@ void test_direction_conversion_and_ownership()
         "mixed-language timing publication must not mutate elaboration state");
 }
 
+void test_row_backed_identity_survives_mixed_planning()
+{
+    using namespace fsim;
+    auto design = make_design();
+    const auto identity
+        = app::sdf_row_backed_test::capture_process_row_identity(design);
+    const auto interconnect
+        = app::apply_sdf_interconnect_timing(make_plan(), design);
+    require(interconnect.ok(),
+        "row-backed mixed planning must build the base interconnect layer");
+    require(app::sdf_row_backed_test::same_process_row_identity(
+                design, identity),
+        "interconnect planning must preserve the shared runtime row table");
+    const auto result
+        = app::apply_sdf_mixed_verilog(interconnect.application, design);
+    require(result.ok() && result.application->boundaries().size() == 2U,
+        "row-backed mixed planning must retain both converted boundaries");
+    require(app::sdf_row_backed_test::same_process_row_identity(
+                design, identity),
+        "mixed ownership scans must preserve row and common-program identities");
+}
+
 void test_stale_topology_and_resource_rejection()
 {
     using namespace fsim;
@@ -305,6 +326,7 @@ int main()
 {
     try {
         test_direction_conversion_and_ownership();
+        test_row_backed_identity_survives_mixed_planning();
         test_stale_topology_and_resource_rejection();
     } catch (const std::exception& error) {
         std::cerr << "sdf mixed Verilog test failure: " << error.what() << '\n';

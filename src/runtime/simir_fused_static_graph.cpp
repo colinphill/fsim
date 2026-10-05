@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 #include "simir_execution_context.hpp"
+#include "fsim/runtime/simir_fused_branch_safety.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <new>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <stdexcept>
@@ -50,41 +54,64 @@ bool candidate_body_operation(const Operation& operation)
     }, operation);
 }
 
-bool pure_static_body(const Process& process)
+bool generic_scheduling_operations(const ProcessProgramView& process)
 {
-    const auto count = process.operations.size();
-    if (count < 3U || process.static_sensitivity.empty()
-        || process.final || process.observed || process.reactive
-        || process.postponed || process.switch_source
-        || process.switch_target || process.switch_control
-        || process.switch_bidirectional || process.switch_resistive
-        || process.drive_strength != DriveStrength { }
-        || process.string_register_count != 0U
-        || process.container_register_count != 0U
-        || !process.debug_locals.empty()
-        || !process.debug_string_locals.empty()
-        || !process.debug_container_locals.empty()
-        || !process.static_trigger_regions.empty()
-        || !operation_holds<WaitSensitivity>(
-            process.operations.expanded(count - 2U))) {
+    if (process.scheduling_domain() != ProcessSchedulingDomain::generic) {
         return false;
     }
-    const auto tail = process.operations.expanded(count - 1U);
+    const auto& operations = process.operations();
+    for (std::size_t index = 0U; index < operations.size(); ++index) {
+        const auto operation = operations.expanded(index);
+        const bool generic_domain = visit_operation([](const auto& value) {
+            if constexpr (requires { value.domain; }) {
+                return value.domain == SignalUpdateDomain::generic;
+            }
+            return true;
+        }, operation);
+        if (!generic_domain) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool pure_static_body(const ProcessProgramView& process)
+{
+    const auto register_value_kinds
+        = process_layout_detail::ProcessLayoutAccess::view(process.register_value_kinds());
+    const auto count = process.operations().size();
+    if (count < 3U || process.static_sensitivity().empty()
+        || process.final() || process.observed() || process.reactive()
+        || process.postponed() || process.switch_source()
+        || process.switch_target() || process.switch_control()
+        || process.switch_bidirectional() || process.switch_resistive()
+        || process.drive_strength() != DriveStrength { }
+        || process.string_register_count() != 0U
+        || process.container_register_count() != 0U
+        || !process.debug_locals().empty()
+        || !process.debug_string_locals().empty()
+        || !process.debug_container_locals().empty()
+        || !process.static_trigger_regions().empty()
+        || !operation_holds<WaitSensitivity>(
+            process.operations().expanded(count - 2U))) {
+        return false;
+    }
+    const auto tail = process.operations().expanded(count - 1U);
     const auto* jump = operation_get_if<Jump>(&tail);
     if (jump == nullptr || jump->target != 0U) {
         return false;
     }
     for (std::size_t index = 0U; index + 2U < count; ++index) {
-        if (!candidate_body_operation(process.operations.expanded(index))) {
+        if (!candidate_body_operation(process.operations().expanded(index))) {
             return false;
         }
     }
     const bool uses_logic9 = std::ranges::any_of(
-        process.register_value_kinds,
+        register_value_kinds,
         [](const auto kind) { return kind == ValueKind::logic9; });
     if (uses_logic9) {
         for (std::size_t index = 0U; index + 2U < count; ++index) {
-            if (operation_holds<Reduction>(process.operations.expanded(index))) {
+            if (operation_holds<Reduction>(process.operations().expanded(index))) {
                 return false;
             }
         }
@@ -92,15 +119,26 @@ bool pure_static_body(const Process& process)
     return true;
 }
 
+struct MaskedAllActiveOutput {
+    SignalId signal { };
+    std::uint32_t offset { };
+    std::uint32_t width { };
+    bool projected { };
+};
+
 } // namespace
 
 void Interpreter::Impl::build_fused_static_cohort_plans()
 {
     fused_static_cohorts.clear();
     fused_static_cohorts.resize(static_sensitivity_cohorts.size());
+    fused_static_certified_plan_count = 0U;
     fused_static_counts = { };
-    const bool trace = std::getenv("FSIM_PROFILE_FUSED_STATIC") != nullptr;
-    if (process_profile_enabled || execution_point_hook
+    fused_static_trace_enabled
+        = std::getenv("FSIM_PROFILE_FUSED_STATIC") != nullptr;
+    const bool trace = fused_static_trace_enabled;
+    if (!process_signal_access_inventory_complete
+        || process_profile_enabled || execution_point_hook
         || driver_change_hook || signal_change_hook
         || stored_signal_change_hook || scalar_signal_change_hook
         || container_object_change_hook
@@ -121,78 +159,168 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
     }
     std::array<std::uint64_t, 4U> admission { };
 
-    // Static sensitivities are trigger metadata, not a complete reader set.
-    // Inspect every expanded body operation and conservatively mark every
-    // non-current, dynamic, or otherwise observable signal reference.
+    // Share the complete elaborated read/observation inventory. Range and
+    // partial projected routes retain their existing conservative exclusion.
+    const auto& graph = region_graph.value();
     std::vector<std::vector<ProcessId>> readers(signals.size());
     std::vector<std::uint8_t> observed(signals.size(), 0U);
-    const auto observe = [&](const SignalId signal) {
-        if (signal < observed.size()) {
-            observed[signal] = 1U;
-        }
-    };
-    for (std::size_t id = 0U; id < processes.size(); ++id) {
-        const auto& process = processes[id].program();
-        for (const auto& sensitivity : process.static_sensitivity) {
-            if (sensitivity.edge != EdgeKind::any) {
-                observe(sensitivity.signal);
-            }
-            if (sensitivity.signal < readers.size()) {
-                readers[sensitivity.signal].push_back(
-                    static_cast<ProcessId>(id));
+    for (SignalId signal = 0U; signal < signals.size(); ++signal) {
+        const auto& node = graph.signals()[signal];
+        observed[signal] = node.observations != RegionObservation::none
+            || node.writers_unknown || node.partial_projected_transactions;
+        auto& ids = readers[signal];
+        for (const auto& reader : node.readers) {
+            if (ids.empty() || ids.back() != reader.process) {
+                ids.push_back(reader.process);
             }
         }
-        for (std::size_t index = 0U; index < process.operations.size();
-             ++index) {
-            const auto operation = process.operations.expanded(index);
-            visit_operation([&](const auto& value) {
+    }
+
+    const auto masked_all_active_body = [&](const ProcessProgramView& process,
+                                           const OwnedDriverSpan& owner)
+        -> std::optional<MaskedAllActiveOutput> {
+        const auto count = process.operations().size();
+        if (count < 3U || process.static_sensitivity().empty()
+            || process.final() || process.observed() || process.reactive()
+            || process.postponed() || process.switch_source()
+            || process.switch_target() || process.switch_control()
+            || process.switch_bidirectional() || process.switch_resistive()
+            || process.drive_strength() != DriveStrength { }
+            || process.register_count() == 0U
+            || process.string_register_count() != 0U
+            || process.container_register_count() != 0U
+            || !process.debug_locals().empty()
+            || !process.debug_string_locals().empty()
+            || !process.debug_container_locals().empty()
+            || !process.static_trigger_regions().empty()
+            || process.driver_regions().size() != 1U
+            || !operation_holds<WaitSensitivity>(
+                process.operations().expanded(count - 2U))) {
+            return std::nullopt;
+        }
+        const auto tail = process.operations().expanded(count - 1U);
+        const auto* jump = operation_get_if<Jump>(&tail);
+        if (jump == nullptr || jump->target != 0U) {
+            return std::nullopt;
+        }
+        if (!detail::masked_forward_control_flow_is_valid(
+                process.operations())) {
+            return std::nullopt;
+        }
+        if (!detail::masked_branch_conditions_are_proven_known(
+                process.operations(), process.register_count())) {
+            return std::nullopt;
+        }
+        auto output = std::optional<MaskedAllActiveOutput> { };
+        for (std::size_t index = 0U; index + 2U < count; ++index) {
+            const auto operation = process.operations().expanded(index);
+            const auto accepted = visit_operation([&](const auto& value) {
                 using Type = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<Type, ReadSignal>) {
-                    if (value.signal < readers.size()) {
-                        readers[value.signal].push_back(
-                            static_cast<ProcessId>(id));
+                if constexpr (std::is_same_v<Type, DebugPoint>) {
+                    return true;
+                } else if constexpr (std::is_same_v<Type, LoadConstant>) {
+                    return !value.value.is_logic9();
+                } else if constexpr (std::is_same_v<Type, ReadSignal>) {
+                    return value.signal < signals.size()
+                        && signals[value.signal].value_kind
+                            == ValueKind::logic4
+                        && !has_container_signal_alias(value.signal)
+                        && value.kind == SignalReadKind::current
+                        && value.ticks == 1U && !value.clock && !value.gate;
+                } else if constexpr (std::is_same_v<Type, CopyRegister>
+                    || std::is_same_v<Type, Extract>
+                    || std::is_same_v<Type, Concatenate>
+                    || std::is_same_v<Type, ConditionalSelect>
+                    || std::is_same_v<Type, Jump>) {
+                    return true;
+                } else if constexpr (std::is_same_v<Type, Branch>) {
+                    // The shared dataflow proof above rejects an error policy
+                    // whenever this reaching condition may contain X/Z.
+                    return value.unknown_policy == UnknownBranchPolicy::error
+                        || value.unknown_policy
+                            == UnknownBranchPolicy::when_false;
+                } else if constexpr (std::is_same_v<Type, Binary>) {
+                    return value.operation == BinaryOperator::bit_and
+                        || value.operation == BinaryOperator::bit_or
+                        || value.operation == BinaryOperator::bit_xor
+                        || value.operation == BinaryOperator::equal
+                        || value.operation == BinaryOperator::case_equal;
+                } else if constexpr (std::is_same_v<Type, Reduction>) {
+                    return value.operation == ReductionOperator::bit_and
+                        || value.operation == ReductionOperator::bit_or
+                        || value.operation == ReductionOperator::bit_xor;
+                } else if constexpr (std::is_same_v<Type, WriteUpdate>) {
+                    if (output || value.signal != owner.signal
+                        || owner.offset != 0U
+                        || value.signal >= signals.size()
+                        || signals[value.signal].value_kind
+                            != ValueKind::logic4) {
+                        return false;
                     }
-                    if (value.kind != SignalReadKind::current
-                        || value.clock || value.gate) {
-                        observe(value.signal);
+                    const auto& region = process.driver_regions().front();
+                    const auto width
+                        = signals[value.signal].initial_value.width();
+                    if (region.signal != owner.signal || !region.whole
+                        || region.offset != 0U
+                        || (region.width != 0U && region.width != width)
+                        || owner.width != width) {
+                        return false;
                     }
-                    if (value.clock) {
-                        observe(*value.clock);
+                    output = MaskedAllActiveOutput {
+                        value.signal, 0U, static_cast<std::uint32_t>(width),
+                        false
+                    };
+                    return true;
+                } else if constexpr (std::is_same_v<Type,
+                                     WriteUpdateSlice>) {
+                    if (output || owner.width == 0U
+                        || value.signal != owner.signal
+                        || value.offset != owner.offset
+                        || value.signal >= signals.size()
+                        || signals[value.signal].value_kind
+                            != ValueKind::logic4) {
+                        return false;
                     }
-                    if (value.gate) {
-                        observe(*value.gate);
+                    const auto& region = process.driver_regions().front();
+                    if (region.signal != owner.signal || region.whole
+                        || region.offset != owner.offset
+                        || region.width != owner.width) {
+                        return false;
                     }
-                } else if constexpr (std::is_same_v<Type, WaitOn>
-                    || std::is_same_v<Type, WaitPla>) {
-                    for (const auto signal : value.signals) {
-                        observe(signal);
+                    output = MaskedAllActiveOutput {
+                        owner.signal, owner.offset, owner.width, false
+                    };
+                    return true;
+                } else if constexpr (std::is_same_v<Type, WriteProjected>) {
+                    if (output || value.delay != 0U || value.rejection != 0U
+                        || value.mode != ProjectedDelayMode::inertial
+                        || value.signal >= signals.size()
+                        || signals[value.signal].value_kind
+                            != ValueKind::logic4) {
+                        return false;
                     }
-                } else if constexpr (std::is_same_v<Type, WaitOrder>) {
-                    for (const auto signal : value.events) {
-                        observe(signal);
+                    const auto& region = process.driver_regions().front();
+                    const auto width
+                        = signals[value.signal].initial_value.width();
+                    if (region.signal != value.signal || !region.whole
+                        || region.offset != 0U
+                        || (region.width != 0U && region.width != width)) {
+                        return false;
                     }
-                } else if constexpr (std::is_same_v<Type, MonitorInstall>) {
-                    for (const auto& item : value.values) {
-                        if (item.kind == MonitorValueKind::signal) {
-                            observe(item.signal);
-                        }
-                    }
-                } else if constexpr (std::is_same_v<Type, WriteUpdate>
-                    || std::is_same_v<Type, WriteUpdateSlice>
-                    || std::is_same_v<Type, WriteProjected>) {
-                    // Writers are checked against the owned-driver graph.
-                } else if constexpr (requires { value.signal; }) {
-                    observe(value.signal);
+                    output = MaskedAllActiveOutput {
+                        value.signal, 0U, static_cast<std::uint32_t>(width),
+                        true
+                    };
+                    return true;
                 }
+                return false;
             }, operation);
+            if (!accepted) {
+                return std::nullopt;
+            }
         }
-    }
-    for (auto& signal_readers : readers) {
-        std::ranges::sort(signal_readers);
-        signal_readers.erase(
-            std::ranges::unique(signal_readers).begin(),
-            signal_readers.end());
-    }
+        return output;
+    };
 
     for (std::size_t cohort_id = 0U;
          cohort_id < static_sensitivity_cohorts.size(); ++cohort_id) {
@@ -205,23 +333,94 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
         std::set<SignalId> outputs;
         std::vector<SignalId> output_order;
         std::map<SignalId, std::vector<std::uint64_t>> write_masks;
+        std::map<SignalId,
+            std::map<ProcessId, std::vector<std::uint64_t>>>
+            member_write_masks;
         std::map<SignalId, ProcessId> projected_owners;
         std::uint64_t owned_stage_calls { };
         bool all_projected_members = true;
+        std::optional<bool> masked_all_active_route;
+        bool masked_all_active_eligible = true;
         bool valid = true;
         for (const auto id : source.members) {
-            const auto& process = processes[id].program();
-            if (!pure_static_body(process)
-                || id >= owned_driver_spans.size()) {
+            const auto& process = processes.program_view(id);
+            if (id >= owned_driver_spans.size()
+                || !generic_scheduling_operations(process)) {
                 valid = false;
                 break;
             }
+            auto owner = owned_driver_spans[id];
+            if ((owner.signal >= signals.size() || owner.width == 0U)
+                && process.driver_regions().size() == 1U) {
+                const auto& region = process.driver_regions().front();
+                if (region.signal < signals.size()) {
+                    const auto width
+                        = signals[region.signal].initial_value.width();
+                    if (region.whole) {
+                        owner = { region.signal, 0U,
+                            static_cast<std::uint32_t>(width) };
+                    } else if (region.width != 0U
+                        && region.offset <= width
+                        && region.width <= width - region.offset) {
+                        owner = { region.signal, region.offset, region.width };
+                    }
+                }
+            }
+            if (owner.signal >= signals.size() || owner.width == 0U) {
+                valid = false;
+                break;
+            }
+            const bool pure_static = pure_static_body(process);
             plan.resume_instructions.push_back(
                 static_cast<InstructionIndex>(
-                    process.operations.size() - 1U));
-            const auto& owner = owned_driver_spans[id];
+                    process.operations().size() - 1U));
+            const auto masked_output = masked_all_active_body(process, owner);
+            masked_all_active_eligible &= masked_output.has_value();
+            const bool masked_all_active
+                = !pure_static && masked_output.has_value();
+            if (!pure_static && !masked_output) {
+                valid = false;
+                break;
+            }
+            if (masked_all_active_route
+                && *masked_all_active_route != masked_all_active) {
+                valid = false;
+                break;
+            }
+            masked_all_active_route = masked_all_active;
+            if (masked_all_active) {
+                const auto signal = masked_output->signal;
+                const auto width = signals[signal].initial_value.width();
+                if (masked_output->offset > width
+                    || masked_output->width > width - masked_output->offset) {
+                    valid = false;
+                    break;
+                }
+                auto& mask = write_masks[signal];
+                mask.resize((width + 63U) / 64U);
+                auto& member_mask = member_write_masks[signal][id];
+                member_mask.resize(mask.size());
+                for (std::size_t bit = masked_output->offset;
+                     bit < static_cast<std::size_t>(masked_output->offset)
+                         + masked_output->width; ++bit) {
+                    const auto bit_mask = UINT64_C(1) << (bit % 64U);
+                    mask[bit / 64U] |= bit_mask;
+                    member_mask[bit / 64U] |= bit_mask;
+                }
+                if (masked_output->projected
+                    && !projected_owners.try_emplace(signal, id).second) {
+                    valid = false;
+                    break;
+                }
+                all_projected_members &= masked_output->projected;
+                if (outputs.insert(signal).second) {
+                    output_order.push_back(signal);
+                }
+                owned_stage_calls += !masked_output->projected;
+                continue;
+            }
             auto widths = std::vector<std::uint32_t>(
-                process.register_count, 0U);
+                process.register_count(), 0U);
             std::set<SignalId> written_signals;
             std::size_t projected_write_count { };
             std::size_t write_operation_count { };
@@ -249,10 +448,14 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
                 }
                 auto& masks = write_masks[signal];
                 masks.resize((width + 63U) / 64U);
+                auto& member_mask = member_write_masks[signal][id];
+                member_mask.resize(masks.size());
                 for (std::size_t bit = offset;
                      bit < static_cast<std::size_t>(offset)
                          + widths[source_register]; ++bit) {
-                    masks[bit / 64U] |= UINT64_C(1) << (bit % 64U);
+                    const auto bit_mask = UINT64_C(1) << (bit % 64U);
+                    masks[bit / 64U] |= bit_mask;
+                    member_mask[bit / 64U] |= bit_mask;
                 }
                 if (outputs.insert(signal).second) {
                     output_order.push_back(signal);
@@ -261,8 +464,8 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
                 return true;
             };
             for (std::size_t index = 0U;
-                 index + 2U < process.operations.size(); ++index) {
-                const auto operation = process.operations.expanded(index);
+                 index + 2U < process.operations().size(); ++index) {
+                const auto operation = process.operations().expanded(index);
                 if (const auto* load
                     = operation_get_if<LoadConstant>(&operation)) {
                     valid = load->destination < widths.size();
@@ -274,6 +477,7 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
                     = operation_get_if<ReadSignal>(&operation)) {
                     valid = read->destination < widths.size()
                         && read->signal < signals.size()
+                        && !has_container_signal_alias(read->signal)
                         && (signals[read->signal].value_kind
                                 == ValueKind::logic4
                             || signals[read->signal].value_kind
@@ -351,10 +555,10 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
                         && known(projected->source)
                         && widths[projected->source]
                             == signals[projected->signal].initial_value.width()
-                        && process.driver_regions.size() == 1U
-                        && process.driver_regions.front().signal
+                        && process.driver_regions().size() == 1U
+                        && process.driver_regions().front().signal
                             == projected->signal
-                        && process.driver_regions.front().whole
+                        && process.driver_regions().front().whole
                         && mark_write(projected->signal,
                             projected->source, 0U, true);
                     if (valid) {
@@ -388,6 +592,16 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
             continue;
         }
         const bool projected_route = !projected_owners.empty();
+        if ((masked_all_active_route.value_or(false)
+                || masked_all_active_eligible)
+            && projected_route
+            && output_order.size() != source.members.size()) {
+            if (masked_all_active_route.value_or(false)) {
+                ++admission[2];
+                continue;
+            }
+            masked_all_active_eligible = false;
+        }
         plan.owner_stage_calls_total = projected_route
             ? 0U : owned_stage_calls;
         for (const auto signal : output_order) {
@@ -408,6 +622,7 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
                 valid = false;
                 break;
             }
+            const auto width = get_signal(signal).initial_value.width();
             if (projected_route) {
                 const auto owner_id = projected_owners.at(signal);
                 const auto& table = driver_values[signal];
@@ -432,27 +647,117 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
                     valid = false;
                     break;
                 }
-            } else if (!owned_driver_active(signal)
-                || get_signal(signal).value_kind != ValueKind::logic4) {
+            } else if (owned_driver_active(signal)) {
+                // The static cohort executor publishes only through the
+                // original-owner A4 route. Signals that still require the
+                // legacy aggregate-owned composite remain on checked process
+                // execution.
                 valid = false;
                 break;
+            } else {
+                RegionAuthoritativeComponentState* authoritative_state { };
+                if (get_signal(signal).value_kind != ValueKind::logic4
+                    || !can_try_wide_disjoint_signal_commit(
+                        signal, &authoritative_state)
+                    || authoritative_state == nullptr
+                    || !authoritative_state->values().layout().contains(
+                        signal)) {
+                    valid = false;
+                    break;
+                }
+                const auto& layout = authoritative_state->values().layout();
+                const auto layout_owners = layout.owners(signal);
+                const auto member_owners = member_write_masks.find(signal);
+                if (layout_owners.size() < 2U
+                    || member_owners == member_write_masks.end()
+                    || member_owners->second.size() < 2U) {
+                    valid = false;
+                    break;
+                }
+                auto selected_union
+                    = std::vector<std::uint64_t>(write_masks.at(signal).size(),
+                        0U);
+                auto disjoint_owners
+                    = std::vector<FusedStaticCohortPlan::Output::DisjointOwner> { };
+                disjoint_owners.reserve(member_owners->second.size());
+                for (const auto& [process, member_mask]
+                    : member_owners->second) {
+                    const auto layout_owner = std::ranges::find(
+                        layout_owners, process,
+                        &SignalDriverOwnerLayout::process);
+                    const auto layout_mask = layout.owner_mask_words(
+                        signal, process);
+                    if (layout_owner == layout_owners.end()
+                        || member_mask.size() != selected_union.size()
+                        || layout_mask.size() != member_mask.size()
+                        || !std::ranges::equal(layout_mask, member_mask)
+                        || !can_try_wide_disjoint_owner_commit(
+                            process, signal)) {
+                        valid = false;
+                        break;
+                    }
+                    const auto* const record
+                        = driver_values[signal].find(process);
+                    if (record == nullptr
+                        || record->strength != DriveStrength { }
+                        || record->value.width() != width
+                        || record->value.is_logic9()) {
+                        valid = false;
+                        break;
+                    }
+                    for (std::size_t word = 0U;
+                         word < member_mask.size(); ++word) {
+                        if ((selected_union[word] & member_mask[word]) != 0U) {
+                            valid = false;
+                            break;
+                        }
+                        selected_union[word] |= member_mask[word];
+                    }
+                    if (!valid) {
+                        break;
+                    }
+                    auto& staged_owner = disjoint_owners.emplace_back();
+                    staged_owner.process = process;
+                    staged_owner.mask = member_mask;
+                    staged_owner.staged_value = PackedLogic4 {
+                        width, Logic4::z
+                    };
+                }
+                if (!valid || disjoint_owners.size() < 2U
+                    || selected_union != write_masks.at(signal)) {
+                    valid = false;
+                    break;
+                }
+                auto& output = plan.outputs.emplace_back();
+                output.signal = signal;
+                output.width = static_cast<std::uint32_t>(width);
+                output.owner_masks = write_masks.at(signal);
+                output.disjoint_owners = std::move(disjoint_owners);
+                output.route = FusedStaticCohortPlan::Output::Route::
+                    disjoint_owner_group_logic4;
             }
-            const auto width = get_signal(signal).initial_value.width();
-            auto& output = plan.outputs.emplace_back();
-            output.signal = signal;
-            output.width = static_cast<std::uint32_t>(width);
-            output.owner_masks = write_masks.at(signal);
-            if (projected_route) {
-                output.original_owner = projected_owners.at(signal);
-                output.route = get_signal(signal).value_kind
-                        == ValueKind::logic9
-                    ? FusedStaticCohortPlan::Output::Route::projected_logic9
-                    : FusedStaticCohortPlan::Output::Route::projected_logic4;
+            if (!valid) {
+                break;
+            }
+            const auto output_found = std::ranges::find(plan.outputs, signal,
+                &FusedStaticCohortPlan::Output::signal);
+            if (output_found == plan.outputs.end()) {
+                auto& output = plan.outputs.emplace_back();
+                output.signal = signal;
+                output.width = static_cast<std::uint32_t>(width);
+                output.owner_masks = write_masks.at(signal);
+                if (projected_route) {
+                    output.original_owner = projected_owners.at(signal);
+                    output.route = get_signal(signal).value_kind
+                            == ValueKind::logic9
+                        ? FusedStaticCohortPlan::Output::Route::projected_logic9
+                        : FusedStaticCohortPlan::Output::Route::projected_logic4;
+                }
             }
             bool private_signal = !observed[signal]
                 && !readers[signal].empty();
             for (const auto reader : readers[signal]) {
-                if (!pure_static_body(processes[reader].program())) {
+                if (!pure_static_body(processes.program_view(reader))) {
                     private_signal = false;
                 }
             }
@@ -471,7 +776,13 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
         plan.candidate.members = source.members;
         plan.candidate.outputs = std::move(output_order);
         plan.candidate.projected = projected_route;
+        plan.candidate.masked_all_active
+            = masked_all_active_route.value_or(false);
+        plan.candidate.masked_all_active_eligible
+            = masked_all_active_eligible;
+        assert(!plan.certified);
         plan.certified = true;
+        ++fused_static_certified_plan_count;
         ++fused_static_counts.candidates;
     }
     if (trace) {
@@ -485,85 +796,102 @@ void Interpreter::Impl::build_fused_static_cohort_plans()
 void Interpreter::Impl::invalidate_fused_static_cohorts() noexcept
 {
     for (auto& plan : fused_static_cohorts) {
-        plan.certified = false;
+        if (plan.certified) {
+            assert(fused_static_certified_plan_count != 0U);
+            --fused_static_certified_plan_count;
+            plan.certified = false;
+        }
     }
-    invalidate_fused_masked_regions();
+    assert(fused_static_certified_plan_count == 0U);
 }
 
 void Interpreter::Impl::invalidate_fused_static_cohorts_for_fork(
     const ProcessId child)
 {
     const auto& program = processes.at(child).program();
-    auto writes = std::vector<std::uint8_t>(signals.size(), 0U);
-    auto reads = std::vector<std::uint8_t>(signals.size(), 0U);
-    for (const auto& region : program.driver_regions) {
-        if (region.signal < writes.size()) {
-            writes[region.signal] = 1U;
+    const auto log_fork = [&](const std::size_t same_cohort,
+                              const std::size_t output_writer,
+                              const std::size_t private_reader,
+                              const std::size_t survivors) {
+        if (!fused_static_trace_enabled) {
+            return;
         }
-    }
-    for (const auto& sensitivity : program.static_sensitivity) {
-        if (sensitivity.signal < reads.size()) {
-            reads[sensitivity.signal] = 1U;
+        std::cerr << "fsim fused-static fork: child=" << child
+                  << " time=" << scheduler.now()
+                  << " delta=" << scheduler.delta()
+                  << " same_cohort=" << same_cohort
+                  << " output_writer=" << output_writer
+                  << " private_reader=" << private_reader
+                  << " surviving=" << survivors << '\n';
+    };
+    if (fused_static_certified_plan_count == 0U) {
+        if (fused_static_counters_enabled) {
+            ++fused_static_counts.fork_events;
+            fused_static_counts.fork_plans_surviving_after_last = 0U;
         }
+        log_fork(0U, 0U, 0U, 0U);
+        return;
     }
-    for (std::size_t index = 0U; index < program.operations.size();
+    auto writes = std::vector<SignalId> { };
+    auto reads = std::vector<SignalId> { };
+    const auto mark_signal = [&](auto& touched, const SignalId signal) {
+        if (signal < signals.size()) {
+            touched.push_back(signal);
+        }
+    };
+    for (const auto& region : program.driver_regions()) {
+        mark_signal(writes, region.signal);
+    }
+    for (const auto& sensitivity : program.static_sensitivity()) {
+        mark_signal(reads, sensitivity.signal);
+    }
+    for (std::size_t index = 0U; index < program.operations().size();
          ++index) {
-        const auto operation = program.operations.expanded(index);
+        const auto operation = program.operations().expanded(index);
         if (const auto signal = output_signal(operation)) {
-            if (*signal < writes.size()) {
-                writes[*signal] = 1U;
-            }
+            mark_signal(writes, *signal);
         }
         visit_operation([&](const auto& value) {
             using Type = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<Type, ReadSignal>) {
-                if (value.signal < reads.size()) {
-                    reads[value.signal] = 1U;
+                mark_signal(reads, value.signal);
+                if (value.clock) {
+                    mark_signal(reads, *value.clock);
                 }
-                if (value.clock && *value.clock < reads.size()) {
-                    reads[*value.clock] = 1U;
-                }
-                if (value.gate && *value.gate < reads.size()) {
-                    reads[*value.gate] = 1U;
+                if (value.gate) {
+                    mark_signal(reads, *value.gate);
                 }
             } else if constexpr (std::is_same_v<Type, WaitOn>
                 || std::is_same_v<Type, WaitPla>) {
                 for (const auto signal : value.signals) {
-                    if (signal < reads.size()) {
-                        reads[signal] = 1U;
-                    }
+                    mark_signal(reads, signal);
                 }
             } else if constexpr (std::is_same_v<Type, WaitOrder>) {
                 for (const auto signal : value.events) {
-                    if (signal < reads.size()) {
-                        reads[signal] = 1U;
-                    }
+                    mark_signal(reads, signal);
                 }
             } else if constexpr (std::is_same_v<Type, MonitorInstall>) {
                 for (const auto& item : value.values) {
-                    if (item.kind == MonitorValueKind::signal
-                        && item.signal < reads.size()) {
-                        reads[item.signal] = 1U;
+                    if (item.kind == MonitorValueKind::signal) {
+                        mark_signal(reads, item.signal);
                     }
                 }
             } else if constexpr (std::is_same_v<Type, EventTriggered>) {
-                if (value.event < reads.size()) {
-                    reads[value.event] = 1U;
-                }
+                mark_signal(reads, value.event);
             } else if constexpr (std::is_same_v<Type, EventAlias>) {
-                if (value.target < reads.size()) {
-                    reads[value.target] = 1U;
-                }
-                if (value.has_source && value.source < reads.size()) {
-                    reads[value.source] = 1U;
+                mark_signal(reads, value.target);
+                if (value.has_source) {
+                    mark_signal(reads, value.source);
                 }
             } else if constexpr (requires { value.signal; }) {
-                if (value.signal < reads.size()) {
-                    reads[value.signal] = 1U;
-                }
+                mark_signal(reads, value.signal);
             }
         }, operation);
     }
+    std::ranges::sort(writes);
+    writes.erase(std::ranges::unique(writes).begin(), writes.end());
+    std::ranges::sort(reads);
+    reads.erase(std::ranges::unique(reads).begin(), reads.end());
 
     const auto child_cohort = child < static_sensitivity_cohort_by_process.size()
         ? static_sensitivity_cohort_by_process[child]
@@ -581,11 +909,17 @@ void Interpreter::Impl::invalidate_fused_static_cohorts_for_fork(
         const bool joins_cohort = child_cohort == cohort;
         const bool writes_output = std::ranges::any_of(
             plan.candidate.outputs,
-            [&](const SignalId signal) { return writes[signal] != 0U; });
+            [&](const SignalId signal) {
+                return std::ranges::binary_search(writes, signal);
+            });
         const bool reads_private = std::ranges::any_of(
             plan.candidate.private_outputs,
-            [&](const SignalId signal) { return reads[signal] != 0U; });
+            [&](const SignalId signal) {
+                return std::ranges::binary_search(reads, signal);
+            });
         if (joins_cohort || writes_output || reads_private) {
+            assert(fused_static_certified_plan_count != 0U);
+            --fused_static_certified_plan_count;
             plan.certified = false;
             same_cohort += joins_cohort;
             output_writer += writes_output;
@@ -601,15 +935,8 @@ void Interpreter::Impl::invalidate_fused_static_cohorts_for_fork(
         ++fused_static_counts.fork_events;
         fused_static_counts.fork_plans_surviving_after_last = survivors;
     }
-    if (std::getenv("FSIM_PROFILE_FUSED_STATIC") != nullptr) {
-        std::cerr << "fsim fused-static fork: child=" << child
-                  << " time=" << scheduler.now()
-                  << " delta=" << scheduler.delta()
-                  << " same_cohort=" << same_cohort
-                  << " output_writer=" << output_writer
-                  << " private_reader=" << private_reader
-                  << " surviving=" << survivors << '\n';
-    }
+    assert(fused_static_certified_plan_count == survivors);
+    log_fork(same_cohort, output_writer, private_reader, survivors);
 }
 
 std::optional<std::size_t>
@@ -618,7 +945,8 @@ Interpreter::Impl::try_execute_fused_static_cohort(
     std::size_t& offered_tasks)
 {
     offered_tasks = 0U;
-    if (task_payloads.empty() || !static_phase_batches_enabled
+    if (!process_signal_access_inventory_complete
+        || task_payloads.empty() || !static_phase_batches_enabled
         || process_profile_enabled || update_profile_enabled
         || execution_point_hook
         || (native_signal_observation_any_hook
@@ -626,9 +954,7 @@ Interpreter::Impl::try_execute_fused_static_cohort(
         return std::nullopt;
     }
     const auto raw = task_payloads.front();
-    if ((raw & (pure_wave_singleton_payload
-            | native_static_region_payload)) != 0U
-        || raw >= fused_static_cohorts.size()) {
+    if (raw >= fused_static_cohorts.size()) {
         return std::nullopt;
     }
     const auto cohort = static_cast<std::size_t>(raw);
@@ -662,25 +988,154 @@ Interpreter::Impl::try_execute_fused_static_cohort(
         }
     }
     for (const auto& output : plan.outputs) {
-        const bool owned = output.route
-            == FusedStaticCohortPlan::Output::Route::owned_logic4;
+        const bool disjoint_owner_group = output.route
+            == FusedStaticCohortPlan::Output::Route::
+                disjoint_owner_group_logic4;
         const bool unresolved_logic4 = output.route
             == FusedStaticCohortPlan::Output::Route::projected_logic4;
-        const auto* record = owned || unresolved_logic4 ? nullptr
-            : driver_values[output.signal].find(output.original_owner);
-        if ((owned && !owned_driver_active(output.signal))
+        const auto* record = disjoint_owner_group || unresolved_logic4
+            ? nullptr : driver_values[output.signal].find(output.original_owner);
+        bool route_valid = true;
+        if (disjoint_owner_group) {
+            RegionAuthoritativeComponentState* authoritative_state { };
+            route_valid = !owned_driver_active(output.signal)
+                && get_signal(output.signal).value_kind == ValueKind::logic4
+                && can_try_wide_disjoint_signal_commit(
+                    output.signal, &authoritative_state)
+                && authoritative_state != nullptr
+                && output.disjoint_owners.size() >= 2U;
+            if (route_valid) {
+                const auto& layout = authoritative_state->values().layout();
+                route_valid = layout.contains(output.signal);
+                for (const auto& owner : output.disjoint_owners) {
+                    if (!route_valid) {
+                        break;
+                    }
+                    const auto* const owner_record
+                        = driver_values[output.signal].find(owner.process);
+                    const auto layout_mask = layout.owner_mask_words(
+                        output.signal, owner.process);
+                    route_valid = can_try_wide_disjoint_owner_commit(
+                            owner.process, output.signal)
+                        && owner.mask.size() == output.owner_masks.size()
+                        && layout_mask.size() == owner.mask.size()
+                        && std::ranges::equal(layout_mask, owner.mask)
+                        && owner_record != nullptr
+                        && owner_record->strength == DriveStrength { }
+                        && owner_record->value.width() == output.width
+                        && !owner_record->value.is_logic9()
+                        && owner.staged_value.width() == output.width
+                        && !owner.staged_value.is_logic9();
+                }
+            }
+        } else if (unresolved_logic4) {
+            route_valid = signal_writer_counts[output.signal] == 1U
+                && stable_single_writer_processes[output.signal]
+                    == output.original_owner;
+        } else {
+            route_valid = record != nullptr
+                && driver_values[output.signal].size() == 1U;
+        }
+        if (!route_valid
             || (unresolved_logic4
                 && (signal_writer_counts[output.signal] != 1U
                     || stable_single_writer_processes[output.signal]
                         != output.original_owner))
-            || (!owned
+            || (!disjoint_owner_group
                 && (forced_values[output.signal]
                     || forced_driver_values[output.signal]
                     || external_driver_values[output.signal]))
-            || (!owned
-                && !unresolved_logic4
+            || (!disjoint_owner_group && !unresolved_logic4
                 && (record == nullptr
                     || driver_values[output.signal].size() != 1U))) {
+            if (fused_static_counters_enabled) {
+                ++fused_static_counts.fallbacks;
+            }
+            return std::nullopt;
+        }
+    }
+
+    const auto owner_group_output_count = static_cast<std::size_t>(
+        std::ranges::count_if(plan.outputs, [](const auto& output) {
+            return output.route
+                == FusedStaticCohortPlan::Output::Route::
+                    disjoint_owner_group_logic4;
+        }));
+    if (owner_group_output_count != 0U) {
+        try {
+            if (driver_update_scratch.size() < signals.size()) {
+                driver_update_scratch.resize(signals.size());
+            }
+            if (resolved_update_marked.size() < signals.size()) {
+                resolved_update_marked.resize(signals.size());
+            }
+            driver_update_signals.reserve(
+                driver_update_signals.size() + owner_group_output_count);
+            resolved_update_signals.reserve(
+                resolved_update_signals.size() + owner_group_output_count);
+            for (auto& output : plan.outputs) {
+                if (output.route
+                    != FusedStaticCohortPlan::Output::Route::
+                        disjoint_owner_group_logic4) {
+                    continue;
+                }
+                auto& staged = driver_update_scratch[output.signal];
+                if (staged.empty()) {
+                    if (resolved_update_marked[output.signal]
+                        || std::ranges::find(driver_update_signals,
+                               output.signal)
+                            != driver_update_signals.end()
+                        || std::ranges::find(resolved_update_signals,
+                               output.signal)
+                            != resolved_update_signals.end()
+                        || std::ranges::any_of(pending_updates,
+                               [&](const auto& pending) {
+                                   return pending.signal == output.signal;
+                               })) {
+                        if (fused_static_counters_enabled) {
+                            ++fused_static_counts.fallbacks;
+                        }
+                        return std::nullopt;
+                    }
+                    staged.reserve(output.disjoint_owners.size());
+                    // A prior checked fallback may have moved a copy of
+                    // this value into the raw DriverRecord. Detach and
+                    // reset the plan-owned scratch before entering the
+                    // optional executor so the post-execution fill/set
+                    // sequence cannot allocate. A retained retry group
+                    // takes the other branch and keeps its exact values.
+                    for (auto& owner : output.disjoint_owners) {
+                        owner.staged_value.fill(Logic4::z);
+                    }
+                    continue;
+                }
+                bool retryable_group { !update_commit_scheduled
+                    && staged.size() == output.disjoint_owners.size()
+                    && resolved_update_marked[output.signal]
+                    && std::ranges::find(driver_update_signals,
+                           output.signal)
+                        != driver_update_signals.end()
+                    && std::ranges::find(resolved_update_signals,
+                           output.signal)
+                        != resolved_update_signals.end() };
+                for (const auto& owner : output.disjoint_owners) {
+                    const auto update = std::ranges::find(staged,
+                        std::optional<ProcessId> { owner.process },
+                        &PendingDriverCommit::driver);
+                    retryable_group &= update != staged.end()
+                        && update->fused_cohort == cohort
+                        && !update->owned_composite
+                        && update->value.width() == output.width
+                        && !update->value.is_logic9();
+                }
+                if (!retryable_group) {
+                    if (fused_static_counters_enabled) {
+                        ++fused_static_counts.fallbacks;
+                    }
+                    return std::nullopt;
+                }
+            }
+        } catch (const std::bad_alloc&) {
             if (fused_static_counters_enabled) {
                 ++fused_static_counts.fallbacks;
             }
@@ -718,8 +1173,28 @@ Interpreter::Impl::try_execute_fused_static_cohort(
     // failure retires the original task and its queued members, as with the
     // existing native batch continuation contract.
     offered_tasks = 1U;
+    bool completion_available { };
     try {
-        const auto completion = plan.executor->resume(native_context);
+        std::optional<FusedStaticCohortResume> completion;
+        if (plan.candidate.masked_all_active) {
+            const auto member_count = plan.candidate.members.size();
+            const auto expected_words = member_count / 64U
+                + static_cast<std::size_t>(member_count % 64U != 0U);
+            if (member_count == 0U
+                || plan.candidate.masked_all_active_words.size()
+                    != expected_words) {
+                offered_tasks = 0U;
+                if (fused_static_counters_enabled) {
+                    ++fused_static_counts.fallbacks;
+                }
+                return std::nullopt;
+            }
+            completion = plan.executor->resume_masked_all_active(
+                native_context,
+                plan.candidate.masked_all_active_words);
+        } else {
+            completion = plan.executor->resume(native_context);
+        }
         if (!completion) {
             offered_tasks = 0U;
             if (fused_static_counters_enabled) {
@@ -727,6 +1202,7 @@ Interpreter::Impl::try_execute_fused_static_cohort(
             }
             return std::nullopt;
         }
+        completion_available = true;
         if (plan.candidate.projected) {
             if (!completion->aggregate_slots.empty()
                 || completion->projected_writes.size()
@@ -768,8 +1244,34 @@ Interpreter::Impl::try_execute_fused_static_cohort(
             for (std::size_t index = 0U;
                  index < completion->aggregate_slots.size(); ++index) {
                 const auto& slot = completion->aggregate_slots[index];
-                if (slot.signal != plan.outputs[index].signal
-                    || !valid_fused_owned_slot(cohort, slot)) {
+                const auto& output = plan.outputs[index];
+                bool valid_slot = slot.signal == output.signal;
+                if (valid_slot
+                    && output.route
+                        == FusedStaticCohortPlan::Output::Route::
+                            disjoint_owner_group_logic4) {
+                    valid_slot = slot.width == output.width
+                        && slot.word_count == output.owner_masks.size()
+                        && slot.active != nullptr && slot.aval != nullptr
+                        && slot.bval != nullptr && slot.mask != nullptr
+                        && *slot.active != 0U
+                        && !signal_transaction_observed[slot.signal];
+                    for (std::size_t word = 0U;
+                         valid_slot && word < slot.word_count; ++word) {
+                        const auto begin = word * 64U;
+                        const auto size = std::min<std::size_t>(
+                            64U, slot.width - begin);
+                        const auto valid = size == 64U
+                            ? std::numeric_limits<std::uint64_t>::max()
+                            : (UINT64_C(1) << size) - 1U;
+                        valid_slot = (slot.mask[word] & valid)
+                                == output.owner_masks[word]
+                            && (slot.mask[word] & ~valid) == 0U;
+                    }
+                } else {
+                    valid_slot = false;
+                }
+                if (!valid_slot) {
                     throw std::logic_error {
                         "fused cohort returned an invalid aggregate slot"
                     };
@@ -779,20 +1281,106 @@ Interpreter::Impl::try_execute_fused_static_cohort(
                 driver_update_scratch.resize(signals.size());
                 resolved_update_marked.resize(signals.size());
             }
-            bool changed = false;
+            bool owner_group_staged { };
             for (const auto& slot : completion->aggregate_slots) {
-                const auto outcome = stage_fused_owned_slot(cohort, slot);
-                if (outcome == OwnedDriverStage::unsupported) {
-                    throw std::logic_error {
-                        "fused cohort lost its aggregate owner certificate"
+                auto& output = *std::ranges::find(plan.outputs,
+                    slot.signal, &FusedStaticCohortPlan::Output::signal);
+                if (output.route
+                    == FusedStaticCohortPlan::Output::Route::
+                        disjoint_owner_group_logic4) {
+                    auto& staged = driver_update_scratch[slot.signal];
+                    if (!staged.empty()) {
+                        for (const auto& owner : output.disjoint_owners) {
+                            const auto update = std::ranges::find(staged,
+                                std::optional<ProcessId> { owner.process },
+                                &PendingDriverCommit::driver);
+                            if (update == staged.end()
+                                || update->fused_cohort != cohort
+                                || update->owned_composite) {
+                                throw std::logic_error {
+                                    "fused owner-group retry lost its staging rows"
+                                };
+                            }
+                            for (std::size_t bit = 0U;
+                                 bit < output.width; ++bit) {
+                                const auto mask_word = bit / 64U;
+                                const auto in_word
+                                    = static_cast<unsigned>(bit % 64U);
+                                const auto expected = [&]() {
+                                    if ((owner.mask[mask_word]
+                                            & (UINT64_C(1) << in_word)) == 0U) {
+                                        return Logic4::z;
+                                    }
+                                    const auto aval
+                                        = (slot.aval[mask_word] >> in_word)
+                                        & 1U;
+                                    const auto bval
+                                        = (slot.bval[mask_word] >> in_word)
+                                        & 1U;
+                                    return bval != 0U
+                                        ? (aval != 0U ? Logic4::x : Logic4::z)
+                                        : (aval != 0U
+                                                ? Logic4::one : Logic4::zero);
+                                }();
+                                if (update->value.get(bit) != expected) {
+                                    throw std::logic_error {
+                                        "fused owner-group retry changed its slot"
+                                    };
+                                }
+                            }
+                        }
+                        owner_group_staged = true;
+                        if (fused_static_counters_enabled) {
+                            ++fused_static_counts.aggregate_signals_staged;
+                        }
+                        continue;
+                    }
+
+                    const auto decode_bit = [&](const std::size_t bit) {
+                        const auto word = bit / 64U;
+                        const auto in_word
+                            = static_cast<unsigned>(bit % 64U);
+                        const auto aval
+                            = (slot.aval[word] >> in_word) & 1U;
+                        const auto bval
+                            = (slot.bval[word] >> in_word) & 1U;
+                        return bval != 0U
+                            ? (aval != 0U ? Logic4::x : Logic4::z)
+                            : (aval != 0U
+                                    ? Logic4::one : Logic4::zero);
                     };
+                    for (auto& owner : output.disjoint_owners) {
+                        auto& owner_value = owner.staged_value;
+                        owner_value.fill(Logic4::z);
+                        for (std::size_t bit = 0U;
+                             bit < output.width; ++bit) {
+                            if ((owner.mask[bit / 64U]
+                                    & (UINT64_C(1) << (bit % 64U))) != 0U) {
+                                owner_value.set(bit, decode_bit(bit));
+                            }
+                        }
+                        staged.emplace_back(owner.process, owner_value,
+                            false, cohort);
+                    }
+                    if (resolved_update_marked[slot.signal]) {
+                        throw std::logic_error {
+                            "fused owner-group resolved marker was already set"
+                        };
+                    }
+                    driver_update_signals.push_back(slot.signal);
+                    resolved_update_signals.push_back(slot.signal);
+                    resolved_update_marked[slot.signal] = true;
+                    owner_group_staged = true;
+                    if (fused_static_counters_enabled) {
+                        ++fused_static_counts.aggregate_signals_staged;
+                    }
+                    continue;
                 }
-                changed |= outcome == OwnedDriverStage::changed;
-                if (fused_static_counters_enabled) {
-                    ++fused_static_counts.aggregate_signals_staged;
-                }
+                throw std::logic_error {
+                    "fused cohort output has no A4 owner-group route"
+                };
             }
-            if (changed) {
+            if (owner_group_staged) {
                 schedule_update_commit();
             }
         }
@@ -800,6 +1388,7 @@ Interpreter::Impl::try_execute_fused_static_cohort(
         source.pending = { };
         for (std::size_t index = 0U; index < ready.size(); ++index) {
             auto& state = processes[ready[index]];
+            state.region_kernel_completion_boundary_validated = false;
             state.queued = false;
             state.pc = plan.resume_instructions[index];
             clear_wait_timeout(state);
@@ -809,11 +1398,29 @@ Interpreter::Impl::try_execute_fused_static_cohort(
         }
         if (fused_static_counters_enabled) {
             ++fused_static_counts.invocations;
+            fused_static_counts.masked_all_active_invocations
+                += plan.candidate.masked_all_active;
             fused_static_counts.represented_members += ready.size();
             fused_static_counts.owner_stage_calls_avoided
                 += plan.owner_stage_calls_total;
         }
         return 1U;
+    } catch (const std::bad_alloc&) {
+        if (completion_available && !plan.candidate.projected) {
+            // The native body has returned its complete value set, but one
+            // or more output slots may not have been staged yet. Keep the
+            // original cohort snapshot and queued states so the scheduler
+            // can replay this pure fused activation. Staged owner prefixes
+            // are idempotent and their pending markers survive the retry.
+            offered_tasks = 0U;
+            throw;
+        }
+        cohort_snapshots.release(source.pending);
+        source.pending = { };
+        for (const auto id : ready) {
+            processes[id].queued = false;
+        }
+        throw;
     } catch (...) {
         cohort_snapshots.release(source.pending);
         source.pending = { };

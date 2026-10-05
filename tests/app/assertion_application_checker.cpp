@@ -121,11 +121,12 @@ endmodule
             assert(std::ranges::all_of(
                 capture->events,
                 [](const auto& event) {
+                    // Reactive SystemVerilog rounds do not advance generic delta.
                     return event.outcome
                         == fsim::app::ConcurrentAssertionOutcome::pass
                         && !event.instance_identity.empty()
                         && event.source_span != 0U
-                        && event.time == 1 && event.delta == 1;
+                        && event.time == 1 && event.delta == 0;
                 }));
         }
         assert(interpreted.events == compiled.events);

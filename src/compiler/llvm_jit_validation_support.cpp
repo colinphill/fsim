@@ -30,6 +30,8 @@ void validate_process_shape(
     const std::span<const runtime::simir::ValueKind> signal_value_kinds)
 {
     using namespace runtime::simir;
+    const auto register_value_kinds
+        = process_layout_detail::ProcessLayoutAccess::view(process.register_value_kinds);
     if (process.operations.empty())
         throw LlvmJitError { "cannot JIT an empty SimIR process" };
     if (process.operations.size()
@@ -41,8 +43,8 @@ void validate_process_shape(
         throw LlvmJitUnsupportedError {
             "SimIR process has too many registers for the JIT ABI"
         };
-    if (!process.register_value_kinds.empty()
-        && process.register_value_kinds.size() != process.register_count)
+    if (!register_value_kinds.empty()
+        && register_value_kinds.size() != process.register_count)
         throw LlvmJitError {
             "SimIR register value-domain metadata count does not match "
             "register_count"
@@ -562,6 +564,8 @@ std::optional<std::string> validate_file_scan_metadata(
     std::vector<PackedRegisterValidation>& registers)
 {
     using namespace runtime::simir;
+    const auto register_value_kinds
+        = process_layout_detail::ProcessLayoutAccess::view(process.register_value_kinds);
     if (operation.string_source && operation.source >= process.string_register_count)
         return "FileScan source string register is out of range";
     if (operation.conversions.empty() || operation.conversions.size() > 64U
@@ -627,8 +631,8 @@ std::optional<std::string> validate_file_scan_metadata(
         if (conversion.target.kind == InputScanTargetKind::packed_register) {
             if (conversion.target.id >= process.register_count)
                 return "FileScan packed target register is out of range";
-            if (!process.register_value_kinds.empty()) {
-                const auto kind = process.register_value_kinds[conversion.target.id];
+            if (!register_value_kinds.empty()) {
+                const auto kind = register_value_kinds[conversion.target.id];
                 if (kind == ValueKind::logic9)
                     return "FileScan packed target value domain is inconsistent";
             }
@@ -658,6 +662,8 @@ std::optional<std::string> validate_file_binary_metadata(
     std::vector<PackedRegisterValidation>& registers)
 {
     using namespace runtime::simir;
+    const auto container_register_types
+        = process_layout_detail::ProcessLayoutAccess::view(process.container_register_types);
     if (operation.target_kind > FileBinaryTargetKind::container_object
         || operation.width == 0
         || (operation.has_count && !operation.has_start))
@@ -688,9 +694,9 @@ std::optional<std::string> validate_file_binary_metadata(
             return "FileBinaryRead packed signal metadata is invalid";
     } else if (operation.target_kind
         == FileBinaryTargetKind::container_register) {
-        if (operation.target >= process.container_register_types.size())
+        if (operation.target >= container_register_types.size())
             return "FileBinaryRead container register is out of range";
-        const auto& type = process.container_register_types[operation.target];
+        const auto& type = container_register_types[operation.target];
         if (!type.fixed || type.dimensions.size() != 1U
             || type.element_width != operation.width
             || type.two_state != operation.two_state
@@ -819,6 +825,8 @@ std::optional<std::string> validate_file_position_metadata(
         return "code coverage counter runtime callback failed";
     case JitGeneratedRuntimeErrorReason::native_service_callback_failure:
         return "native SimIR service callback failed";
+    case JitGeneratedRuntimeErrorReason::fused_activation_invalid:
+        return "fused member activation bitmap is invalid";
     }
     return "unknown generated runtime error";
 }
@@ -855,6 +863,7 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept
     case JitGeneratedRuntimeErrorReason::signal_callback_failure:
     case JitGeneratedRuntimeErrorReason::coverage_callback_failure:
     case JitGeneratedRuntimeErrorReason::native_service_callback_failure:
+    case JitGeneratedRuntimeErrorReason::fused_activation_invalid:
         return reason;
     }
     return std::nullopt;

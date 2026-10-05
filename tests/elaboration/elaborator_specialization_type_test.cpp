@@ -222,8 +222,9 @@ module invalid_comparison;
   initial same = first == second;
 endmodule
 
-module invalid_multidimensional_index;
+module ignored_out_of_range_multidimensional_write;
   logic [3:0] matrix[1:0][0:2];
+  // IEEE 1800-2017 7.4.5 requires this invalid write to be ignored.
   initial matrix[1][3] = 4'h0;
 endmodule
 
@@ -281,9 +282,10 @@ endmodule
         invalid_aggregate.design, "sv:work.invalid_cast");
     const auto invalid_comparison = compile_and_elaborate(
         invalid_aggregate.design, "sv:work.invalid_comparison");
-    const auto invalid_multidimensional_index = compile_and_elaborate(
-        invalid_aggregate.design,
-        "sv:work.invalid_multidimensional_index");
+    const auto ignored_out_of_range_multidimensional_write
+        = compile_and_elaborate(
+            invalid_aggregate.design,
+            "sv:work.ignored_out_of_range_multidimensional_write");
     const auto invalid_multidimensional_rank = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_multidimensional_rank");
@@ -317,9 +319,9 @@ endmodule
         && has_diagnostic(
             invalid_comparison, "FSIM-ELAB-SVTYPE-005"));
     assert(
-        !invalid_multidimensional_index.ok()
-        && has_diagnostic(
-            invalid_multidimensional_index,
+        ignored_out_of_range_multidimensional_write.ok()
+        && !has_diagnostic(
+            ignored_out_of_range_multidimensional_write,
             "FSIM-ELAB-SVMDARRAY-003"));
     assert(
         !invalid_multidimensional_rank.ok()

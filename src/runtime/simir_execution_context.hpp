@@ -193,6 +193,10 @@ struct Interpreter::Impl::ExecutionContext final
 
     void write_update(
         const SignalId signal, PackedLogic4 value) override;
+    void write_update_in_domain(
+        const SignalId signal,
+        PackedLogic4 value,
+        const SignalUpdateDomain domain) override;
 
     void write_update_word(
         const SignalId signal,
@@ -202,6 +206,11 @@ struct Interpreter::Impl::ExecutionContext final
         const SignalId signal,
         PackedLogic4 value,
         const std::size_t offset) override;
+    void write_update_slice_in_domain(
+        const SignalId signal,
+        PackedLogic4 value,
+        const std::size_t offset,
+        const SignalUpdateDomain domain) override;
 
     void write_update_slice_word(
         const SignalId signal,
@@ -222,9 +231,6 @@ struct Interpreter::Impl::ExecutionContext final
     bool write_validated_update_slot_batches(
         const std::span<const ProcessUpdateSlotBatch> batches) override;
 
-    bool write_validated_prepared_update_slot_batches(
-        std::span<const PureWavePreparedMember* const>) override;
-
     bool write_validated_logic9_update_batch(
         const ProcessLogic9UpdateBatch& batch) override;
 
@@ -237,6 +243,11 @@ struct Interpreter::Impl::ExecutionContext final
         const SignalId signal,
         PackedLogic4 value,
         const SimulationTick delay) override;
+    void write_after_in_domain(
+        const SignalId signal,
+        PackedLogic4 value,
+        const SimulationTick delay,
+        const SignalUpdateDomain domain) override;
 
     void write_after_word(
         const SignalId signal,
@@ -248,6 +259,12 @@ struct Interpreter::Impl::ExecutionContext final
         PackedLogic4 value,
         const std::size_t offset,
         const SimulationTick delay) override;
+    void write_after_slice_in_domain(
+        const SignalId signal,
+        PackedLogic4 value,
+        const std::size_t offset,
+        const SimulationTick delay,
+        const SignalUpdateDomain domain) override;
 
     void write_after_slice_word(
         const SignalId signal,
@@ -259,12 +276,23 @@ struct Interpreter::Impl::ExecutionContext final
         const SignalId signal,
         PackedLogic4 value,
         const TransitionDelays& delays) override;
+    void write_inertial_in_domain(
+        const SignalId signal,
+        PackedLogic4 value,
+        const TransitionDelays& delays,
+        const SignalUpdateDomain domain) override;
 
     void write_inertial_slice(
         const SignalId signal,
         PackedLogic4 value,
         const std::size_t offset,
         const TransitionDelays& delays) override;
+    void write_inertial_slice_in_domain(
+        const SignalId signal,
+        PackedLogic4 value,
+        const std::size_t offset,
+        const TransitionDelays& delays,
+        const SignalUpdateDomain domain) override;
 
     void write_projected(
         const SignalId signal,
@@ -384,7 +412,14 @@ struct Interpreter::Impl::ExecutionContext final
         const InstructionIndex instruction, const VitalTimingCheck& operation) override;
     void execute_vital_delay(const InstructionIndex instruction,
         const VitalDelay& operation, const VitalDelayRuntimeValues& values) override;
+    [[nodiscard]] bool direct_signal_planes_available() const noexcept;
+    [[nodiscard]] bool direct_signal_logic9_planes_available() const noexcept;
+    [[nodiscard]] bool direct_wide_signal_logic9_planes_available() const noexcept;
     [[nodiscard]] bool execution_points_enabled() const noexcept override;
+    [[nodiscard]] bool supports_direct_signal_read(
+        SignalId signal) const noexcept override;
+    [[nodiscard]] DirectSignalReadCapabilityKey
+    direct_signal_read_capability_key() const noexcept override;
 };
 
 } // namespace fsim::runtime::simir

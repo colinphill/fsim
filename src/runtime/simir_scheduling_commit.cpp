@@ -3,6 +3,7 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <optional>
 
@@ -77,9 +78,37 @@ void insert_force_value(
 
 } // namespace
 
-void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
+void Interpreter::Impl::commit(
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const SignalChangeOrigin origin)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        auto replacement = read_container_object_value(object);
+        if (replacement.type.element_kind
+                != ContainerElementKind::Packed
+            || replacement.type.dimensions.empty()
+            || replacement.type.element_width == 0U) {
+            throw std::logic_error {
+                "aggregate signal has no packed element projection"
+            };
+        }
+        auto normalized = normalize_signal_value(
+            signal_id, std::move(value));
+        unpack_container_signal_value(replacement, normalized);
+        write_container_object_value(
+            object, replacement, std::nullopt, origin);
+        return;
+    }
     const auto& signal = get_signal(signal_id);
+    if (signal.event_variable) {
+        require_all_region_forwarding_role_journals_flushed();
+    }
     if (driven_values[signal_id].width() != value.width()) {
         throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
@@ -92,13 +121,16 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
         }
         const auto old_value = signals[signal_id].initial_value;
         const auto& members = event_identity_members.at(*identity);
+        prepare_region_authoritative_write(
+            std::span<const SignalId> { members });
         for (const auto member : members) {
             const bool stored_changed = driven_values[member] != value;
             driven_values[member] = value;
             if (stored_changed && stored_signal_change_hook) {
                 stored_signal_change_hook(member, scheduler.now());
             }
-            publish_normalized(member, apply_force(member, value), false);
+            publish_normalized(
+                member, apply_force(member, value), false, origin);
             mark_switch_network_dirty(member);
         }
         auto transition = StaticTransitionMatches { };
@@ -120,7 +152,7 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
                         || !transition.matches(sensitivity.edge))) {
                     continue;
                 }
-                queue_static_next_delta(sensitivity.process);
+                queue_static_next_delta(sensitivity.process, origin);
             }
         }
         const auto dynamic = dynamic_fanout.at(*identity);
@@ -129,20 +161,26 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)
             if (dynamic_wait_satisfied(
                     process, *identity, sensitivity)) {
                 mark_dynamic_event_resume(process);
-                queue_next_delta(sensitivity.process);
+                queue_next_delta(sensitivity.process, origin);
             }
         }
         refresh_switch_network();
         return;
     }
+    prepare_region_authoritative_write(signal_id);
     const bool stored_changed = driven_values[signal_id] != value;
     driven_values[signal_id] = value;
+    mirror_region_stored(signal_id);
+    if (stored_changed) {
+        note_aggregate_leaf_stored_change(signal_id);
+    }
     if (stored_changed && stored_signal_change_hook) {
         stored_signal_change_hook(signal_id, scheduler.now());
     }
-    publish_normalized(signal_id, apply_force(signal_id, std::move(value)));
+    publish_normalized(
+        signal_id, apply_force(signal_id, std::move(value)), true, origin);
     if (stored_changed) {
-        publish_container_signal_aliases(signal_id);
+        publish_container_signal_aliases(signal_id, origin);
     }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
@@ -151,6 +189,8 @@ void Interpreter::Impl::commit_direct_single_driver(
     const SignalId signal_id,
     PackedLogic4 value)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     // This path is selected only for a prevalidated native write to an
     // unforced, strength-free SystemVerilog net with one driver. The generic
     // resolved-net path would normalize the value, resolve the sole driver,
@@ -161,8 +201,13 @@ void Interpreter::Impl::commit_direct_single_driver(
         commit_resolved(signal_id, std::move(value));
         return;
     }
+    prepare_region_authoritative_write(signal_id);
     const bool stored_changed = driven_values[signal_id] != value;
     driven_values[signal_id] = value;
+    mirror_region_stored(signal_id);
+    if (stored_changed) {
+        note_aggregate_leaf_stored_change(signal_id);
+    }
     if (stored_changed && stored_signal_change_hook) {
         stored_signal_change_hook(signal_id, scheduler.now());
     }
@@ -175,16 +220,89 @@ void Interpreter::Impl::commit_direct_single_driver(
 }
 
 void Interpreter::Impl::publish_container_signal_aliases(
-    const SignalId signal_id)
+    const SignalId signal_id,
+    const SignalChangeOrigin origin,
+    const bool stored_changed)
 {
     for (const auto object : signal_container_aliases.at(signal_id)) {
         for (const auto process : container_dynamic_fanout.at(object)) {
-            queue_next_delta(process);
+            queue_next_delta(process, origin);
         }
         if (container_object_change_hook) {
             container_object_change_hook(object, scheduler.now());
         }
     }
+    if (const auto& alias = signal_container_element_aliases.at(signal_id);
+        alias) {
+        const auto [object, ordinal] = *alias;
+        auto batch_active = false;
+        if (object < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[object]) {
+            const auto proxy
+                = container_aggregate_signal_aliases[object]->signal;
+            auto& batch = aggregate_signal_batches[proxy];
+            batch_active = batch.depth != 0U;
+            if (batch_active && stored_changed) {
+                batch.stored_changed = true;
+                batch.origin = origin;
+            }
+        }
+        if (!batch_active) {
+            for (const auto process : container_dynamic_fanout.at(object)) {
+                queue_next_delta(process, origin);
+            }
+        }
+        if (auto* observer = container_alias_leaf_observer(signal_id)) {
+            observer->element_changed = true;
+            container_alias_write_batches[object].frames.back().changed = true;
+        } else if (container_element_change_hook) {
+            container_element_change_hook(
+                object, ordinal, get_signal(signal_id).initial_value,
+                scheduler.now());
+        }
+        const bool alias_write_batch_active
+            = object < container_alias_write_batches.size()
+            && !container_alias_write_batches[object].frames.empty();
+        if (!batch_active && !alias_write_batch_active
+            && container_object_change_hook) {
+            container_object_change_hook(object, scheduler.now());
+        }
+        if (stored_changed && !batch_active
+            && object < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[object]
+            && stored_signal_change_hook) {
+            stored_signal_change_hook(
+                container_aggregate_signal_aliases[object]->signal,
+                scheduler.now());
+        }
+    }
+}
+
+void Interpreter::Impl::publish_aggregate_leaf_driver_change(
+    const ProcessId process,
+    const SignalId signal_id)
+{
+    if (!driver_change_hook
+        || signal_id >= signal_container_element_aliases.size()
+        || !signal_container_element_aliases[signal_id]) {
+        return;
+    }
+    const auto object
+        = signal_container_element_aliases[signal_id]->first;
+    if (object >= container_aggregate_signal_aliases.size()
+        || !container_aggregate_signal_aliases[object]) {
+        return;
+    }
+    const auto proxy = container_aggregate_signal_aliases[object]->signal;
+    auto& batch = aggregate_signal_batches[proxy];
+    if (batch.depth != 0U) {
+        batch.driver_changed = true;
+        batch.driver = process;
+        return;
+    }
+    driver_change_hook(
+        process, container_aggregate_signal_aliases[object]->signal,
+        scheduler.now());
 }
 
 void Interpreter::Impl::invalidate_switch_components()
@@ -324,12 +442,19 @@ void Interpreter::Impl::refresh_switch_network()
     std::ranges::sort(endpoints);
     endpoints.erase(
         std::unique(endpoints.begin(), endpoints.end()), endpoints.end());
+    for (const auto signal : endpoints) {
+        require_region_forwarding_role_journal_flushed_for_signal(signal);
+    }
     std::vector<std::pair<SignalId, PackedLogic4>> values;
     values.reserve(endpoints.size());
     for (const auto signal : endpoints) {
         values.emplace_back(signal, resolved_driver_value(signal));
     }
 
+    for (const auto& [signal, value] : values) {
+        (void)value;
+        prepare_region_authoritative_write(signal);
+    }
     const auto refreshing_components
         = std::move(dirty_switch_components);
     dirty_switch_components.clear();
@@ -342,6 +467,10 @@ void Interpreter::Impl::refresh_switch_network()
         for (auto& [signal, value] : values) {
             const bool stored_changed = driven_values[signal] != value;
             driven_values[signal] = value;
+            mirror_region_stored(signal);
+            if (stored_changed) {
+                note_aggregate_leaf_stored_change(signal);
+            }
             if (stored_changed && stored_signal_change_hook) {
                 stored_signal_change_hook(signal, scheduler.now());
             }
@@ -396,11 +525,81 @@ PackedLogic4 Interpreter::Impl::apply_force(
     return value;
 }
 
+void Interpreter::Impl::update_container_alias_force(
+    const ContainerObjectId object,
+    const PackedLogic4* value,
+    const std::size_t offset,
+    const std::size_t width)
+{
+    const auto& aliases = container_element_signal_aliases.at(object);
+    const auto element_width
+        = get_container_object(object).initial_value.type.element_width;
+    std::vector<ContainerAliasForceUpdate> updates(aliases.size());
+    std::vector<PackedLogic4> current;
+    current.reserve(aliases.size());
+    const auto end = offset + width;
+    bool any_update { };
+    invalidate_fused_static_cohorts();
+
+    for (std::size_t ordinal = 0U; ordinal < aliases.size(); ++ordinal) {
+        const auto signal = aliases[ordinal]->signal;
+        materialize_direct_signal(signal);
+        const auto base = (aliases.size() - ordinal - 1U) * element_width;
+        const auto begin = std::max(offset, base);
+        const auto finish = std::min(end, base + element_width);
+        if (begin >= finish || (value == nullptr && !forced_values[signal])) {
+            current.push_back(signals[signal].initial_value);
+            continue;
+        }
+
+        demote_owned_driver(signal);
+        auto& update = updates[ordinal];
+        update.active = true;
+        any_update = true;
+        update.value = std::make_unique<PackedLogic4>(
+            forced_values[signal]
+                ? *forced_values[signal] : driven_values[signal]);
+        update.mask = forced_masks[signal]
+            ? std::make_unique<PackedLogic4>(*forced_masks[signal])
+            : std::make_unique<PackedLogic4>(element_width, Logic4::zero);
+        if (value != nullptr) {
+            auto fragment = coerce_value_kind(
+                value->extract_bits(begin - offset, finish - begin),
+                signals[signal].value_kind);
+            insert_force_value(*update.value, fragment, begin - base);
+        }
+        update_force_mask(
+            *update.mask, begin - base, finish - begin, value != nullptr);
+        if (value == nullptr && !has_forced_bits(*update.mask)) {
+            update.value.reset();
+            update.mask.reset();
+        }
+
+        auto effective = driven_values[signal];
+        if (update.mask) {
+            for (std::size_t bit = 0U; bit < effective.width(); ++bit) {
+                if (update.mask->get(bit) == Logic4::one) {
+                    effective.set(bit, update.value->get(bit));
+                }
+            }
+        }
+        current.push_back(std::move(effective));
+    }
+    if (!any_update) {
+        return;
+    }
+    // No force mask has changed yet. The shared publication path stages all
+    // current values and projections before installing these masks together.
+    publish_container_alias_family(object, current, { }, updates);
+}
+
 void Interpreter::Impl::force_slice(
     const SignalId signal_id,
     PackedLogic4 value,
     const std::size_t offset)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
         && (offset != 0 || value.width() != signal.initial_value.width())) {
@@ -411,6 +610,49 @@ void Interpreter::Impl::force_slice(
     if (offset > signal.initial_value.width()
         || value.width() > signal.initial_value.width() - offset) {
         throw std::invalid_argument("SimIR signal force slice is out of range");
+    }
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        if (can_stage_container_alias_deposit(object)) {
+            update_container_alias_force(object, &value, offset, value.width());
+            return;
+        }
+        const auto& aliases = container_element_signal_aliases.at(object);
+        const auto element_width
+            = get_container_object(object).initial_value.type.element_width;
+        const auto end = offset + value.width();
+        prepare_region_authoritative_family_write(object);
+        begin_aggregate_signal_batch(signal_id);
+        try {
+            for (std::size_t ordinal = 0U;
+                ordinal < aliases.size(); ++ordinal) {
+                const auto& alias = *aliases[ordinal];
+                const auto base = (aliases.size() - ordinal - 1U)
+                    * element_width;
+                const auto leaf_end = base + element_width;
+                const auto begin = std::max(offset, base);
+                const auto finish = std::min(end, leaf_end);
+                if (begin >= finish) {
+                    continue;
+                }
+                force_slice(
+                    alias.signal,
+                    value.extract_bits(begin - offset, finish - begin),
+                    begin - base);
+            }
+        } catch (...) {
+            finish_aggregate_signal_batch(signal_id);
+            throw;
+        }
+        finish_aggregate_signal_batch(signal_id);
+        return;
+    }
+    prepare_region_authoritative_write(signal_id);
+    if (signal_id < region_authoritative_component_by_signal.size()) {
+        demote_region_authoritative_slots(
+            region_authoritative_component_by_signal[signal_id], false);
     }
     invalidate_fused_static_cohorts();
     demote_owned_driver(signal_id);
@@ -424,9 +666,13 @@ void Interpreter::Impl::force_slice(
     insert_force_value(*forced_values[signal_id], value, offset);
     update_force_mask(*forced_masks[signal_id], offset, value.width(), true);
     refresh_direct_single_driver_route(signal_id);
-    publish(
-        signal_id,
-        apply_force(signal_id, driven_values[signal_id]));
+    auto effective = apply_force(signal_id, driven_values[signal_id]);
+    const bool current_changed = signal.initial_value != effective;
+    publish(signal_id, std::move(effective));
+    if (current_changed && signal_container_element_aliases[signal_id]) {
+        // Force changes the logical element without changing its stored driver.
+        publish_container_signal_aliases(signal_id, { }, false);
+    }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
 }
@@ -436,6 +682,8 @@ void Interpreter::Impl::release_slice(
     const std::size_t offset,
     const std::size_t width)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
         && (offset != 0 || width != signal.initial_value.width())) {
@@ -447,10 +695,50 @@ void Interpreter::Impl::release_slice(
         || width > signal.initial_value.width() - offset) {
         throw std::invalid_argument("SimIR signal release slice is out of range");
     }
-    invalidate_fused_static_cohorts();
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        if (can_stage_container_alias_deposit(object)) {
+            update_container_alias_force(object, nullptr, offset, width);
+            return;
+        }
+        const auto& aliases = container_element_signal_aliases.at(object);
+        const auto element_width
+            = get_container_object(object).initial_value.type.element_width;
+        const auto end = offset + width;
+        prepare_region_authoritative_family_write(object);
+        begin_aggregate_signal_batch(signal_id);
+        try {
+            for (std::size_t ordinal = 0U;
+                ordinal < aliases.size(); ++ordinal) {
+                const auto& alias = *aliases[ordinal];
+                const auto base = (aliases.size() - ordinal - 1U)
+                    * element_width;
+                const auto leaf_end = base + element_width;
+                const auto begin = std::max(offset, base);
+                const auto finish = std::min(end, leaf_end);
+                if (begin >= finish) {
+                    continue;
+                }
+                release_slice(alias.signal, begin - base, finish - begin);
+            }
+        } catch (...) {
+            finish_aggregate_signal_batch(signal_id);
+            throw;
+        }
+        finish_aggregate_signal_batch(signal_id);
+        return;
+    }
     if (!forced_values[signal_id]) {
         return;
     }
+    prepare_region_authoritative_write(signal_id);
+    if (signal_id < region_authoritative_component_by_signal.size()) {
+        demote_region_authoritative_slots(
+            region_authoritative_component_by_signal[signal_id], false);
+    }
+    invalidate_fused_static_cohorts();
     update_force_mask(*forced_masks[signal_id], offset, width, false);
     const bool any_forced = has_forced_bits(*forced_masks[signal_id]);
     if (!any_forced) {
@@ -458,9 +746,13 @@ void Interpreter::Impl::release_slice(
         forced_masks[signal_id].reset();
     }
     refresh_direct_single_driver_route(signal_id);
-    publish(
-        signal_id,
-        apply_force(signal_id, driven_values[signal_id]));
+    auto effective = apply_force(signal_id, driven_values[signal_id]);
+    const bool current_changed = signal.initial_value != effective;
+    publish(signal_id, std::move(effective));
+    if (current_changed && signal_container_element_aliases[signal_id]) {
+        // Force changes the logical element without changing its stored driver.
+        publish_container_signal_aliases(signal_id, { }, false);
+    }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
 }
@@ -468,17 +760,30 @@ void Interpreter::Impl::release_slice(
 PackedLogic4 Interpreter::Impl::apply_driver_force(
     const SignalId signal_id,
     const ProcessId process,
-    PackedLogic4 value) const
+    PackedLogic4 value,
+    const ForcedDriverMapView* const override_maps) const
 {
-    const auto& values = forced_driver_values.at(signal_id);
-    if (!values) {
+    const auto* const values = override_maps == nullptr
+        ? forced_driver_values.at(signal_id).get()
+        : override_maps->values;
+    if (values == nullptr) {
+        if (override_maps != nullptr && override_maps->masks != nullptr) {
+            throw std::logic_error {
+                "driver force masks have no prepared value map"
+            };
+        }
         return value;
+    }
+    const auto* const masks = override_maps == nullptr
+        ? forced_driver_masks.at(signal_id).get()
+        : override_maps->masks;
+    if (masks == nullptr) {
+        throw std::logic_error { "forced drivers have no force-mask map" };
     }
     const auto forced = values->find(process);
     if (forced == values->end()) {
         return value;
     }
-    const auto& masks = forced_driver_masks.at(signal_id);
     const auto mask = masks->find(process);
     if (mask == masks->end()) {
         throw std::logic_error { "forced driver has no force mask" };
@@ -537,6 +842,8 @@ void Interpreter::Impl::force_driver_slice(
     PackedLogic4 value,
     const std::size_t offset)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (offset > signal.initial_value.width()
         || value.width() > signal.initial_value.width() - offset) {
@@ -544,10 +851,61 @@ void Interpreter::Impl::force_driver_slice(
             "SimIR driver force slice is out of range"
         };
     }
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        if (update_container_alias_driver_force(
+                object, process, &value, offset, value.width())) {
+            return;
+        }
+        const auto& aliases = container_element_signal_aliases.at(object);
+        const auto element_width
+            = get_container_object(object).initial_value.type.element_width;
+        const auto end = offset + value.width();
+        prepare_region_authoritative_family_write(object);
+        begin_aggregate_signal_batch(
+            signal_id, capture_signal_change_origin(process));
+        try {
+            for (std::size_t ordinal = 0U;
+                ordinal < aliases.size(); ++ordinal) {
+                const auto& alias = *aliases[ordinal];
+                const auto base = (aliases.size() - ordinal - 1U)
+                    * element_width;
+                const auto leaf_end = base + element_width;
+                const auto begin = std::max(offset, base);
+                const auto finish = std::min(end, leaf_end);
+                if (begin >= finish) {
+                    continue;
+                }
+                force_driver_slice(
+                    process, alias.signal,
+                    value.extract_bits(begin - offset, finish - begin),
+                    begin - base);
+            }
+        } catch (...) {
+            finish_aggregate_signal_batch(signal_id);
+            throw;
+        }
+        finish_aggregate_signal_batch(signal_id);
+        return;
+    }
     if (signal.resolution == ResolutionKind::none) {
         force_slice(signal_id, std::move(value), offset);
         return;
     }
+    if (started && systemverilog_region_kernel_enabled) {
+        // A forced-driver map changes the certified writer set even when the
+        // currently resolved value happens to stay equal. Do not let this
+        // writer-policy mutation inherit the value-only recertification latch.
+        request_full_region_recertification();
+    }
+    prepare_region_authoritative_write(signal_id);
+    if (signal_id < region_authoritative_component_by_signal.size()) {
+        demote_region_authoritative_slots(
+            region_authoritative_component_by_signal[signal_id], false);
+    }
+    invalidate_fused_static_cohorts();
     value = coerce_value_kind(std::move(value), signal.value_kind);
     auto& forced = forced_driver_values.at(signal_id);
     auto& masks = forced_driver_masks.at(signal_id);
@@ -567,8 +925,16 @@ void Interpreter::Impl::force_driver_slice(
     update_force_mask(mask, offset, value.width(), true);
     refresh_direct_single_driver_route(signal_id);
     auto resolved = resolved_driver_value(signal_id);
+    const bool stored_changed = driven_values[signal_id] != resolved;
     driven_values[signal_id] = resolved;
+    mirror_region_stored(signal_id);
+    if (stored_changed) {
+        note_aggregate_leaf_stored_change(signal_id);
+    }
     publish(signal_id, apply_force(signal_id, std::move(resolved)));
+    if (stored_changed) {
+        publish_container_signal_aliases(signal_id);
+    }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
 }
@@ -579,12 +945,51 @@ void Interpreter::Impl::release_driver_slice(
     const std::size_t offset,
     const std::size_t width)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (offset > signal.initial_value.width()
         || width > signal.initial_value.width() - offset) {
         throw std::invalid_argument {
             "SimIR driver release slice is out of range"
         };
+    }
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        if (update_container_alias_driver_force(
+                object, process, nullptr, offset, width)) {
+            return;
+        }
+        const auto& aliases = container_element_signal_aliases.at(object);
+        const auto element_width
+            = get_container_object(object).initial_value.type.element_width;
+        const auto end = offset + width;
+        prepare_region_authoritative_family_write(object);
+        begin_aggregate_signal_batch(
+            signal_id, capture_signal_change_origin(process));
+        try {
+            for (std::size_t ordinal = 0U;
+                ordinal < aliases.size(); ++ordinal) {
+                const auto& alias = *aliases[ordinal];
+                const auto base = (aliases.size() - ordinal - 1U)
+                    * element_width;
+                const auto leaf_end = base + element_width;
+                const auto begin = std::max(offset, base);
+                const auto finish = std::min(end, leaf_end);
+                if (begin >= finish) {
+                    continue;
+                }
+                release_driver_slice(
+                    process, alias.signal, begin - base, finish - begin);
+            }
+        } catch (...) {
+            finish_aggregate_signal_batch(signal_id);
+            throw;
+        }
+        finish_aggregate_signal_batch(signal_id);
+        return;
     }
     if (signal.resolution == ResolutionKind::none) {
         release_slice(signal_id, offset, width);
@@ -600,6 +1005,17 @@ void Interpreter::Impl::release_driver_slice(
     if (forced_entry == forced->end() || mask_entry == masks->end()) {
         return;
     }
+    if (started && systemverilog_region_kernel_enabled) {
+        // Releasing a force changes the certified writer set too; require a
+        // full graph snapshot before the new driver policy can be admitted.
+        request_full_region_recertification();
+    }
+    prepare_region_authoritative_write(signal_id);
+    if (signal_id < region_authoritative_component_by_signal.size()) {
+        demote_region_authoritative_slots(
+            region_authoritative_component_by_signal[signal_id], false);
+    }
+    invalidate_fused_static_cohorts();
     update_force_mask(mask_entry->second, offset, width, false);
     const bool any_forced = has_forced_bits(mask_entry->second);
     if (!any_forced) {
@@ -612,10 +1028,219 @@ void Interpreter::Impl::release_driver_slice(
     }
     refresh_direct_single_driver_route(signal_id);
     auto resolved = resolved_driver_value(signal_id);
+    const bool stored_changed = driven_values[signal_id] != resolved;
     driven_values[signal_id] = resolved;
+    mirror_region_stored(signal_id);
+    if (stored_changed) {
+        note_aggregate_leaf_stored_change(signal_id);
+    }
     publish(signal_id, apply_force(signal_id, std::move(resolved)));
+    if (stored_changed) {
+        publish_container_signal_aliases(signal_id);
+    }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
+}
+
+bool Interpreter::Impl::update_container_alias_driver_force(
+    const ContainerObjectId object,
+    const ProcessId process,
+    const PackedLogic4* value,
+    const std::size_t offset,
+    const std::size_t width)
+{
+    if (!can_stage_container_alias_deposit(object)
+        || process >= processes.size()
+        || has_bidirectional_switches) {
+        return false;
+    }
+
+    const auto& container = get_container_object(object).initial_value;
+    const auto& type = container.type;
+    const auto& aliases = container_element_signal_aliases.at(object);
+    const auto proxy_signal
+        = container_aggregate_signal_aliases.at(object)->signal;
+    const auto proxy_width = static_cast<std::size_t>(
+        get_signal(proxy_signal).initial_value.width());
+    if (!type.fixed || type.dimensions.empty()
+        || type.element_kind != ContainerElementKind::Packed
+        || type.element_width == 0U || aliases.empty()
+        || aliases.size() != container.elements.size()
+        || offset > proxy_width
+        || width > proxy_width - offset) {
+        return false;
+    }
+
+    const auto& program = processes.program_view(process);
+    if (program.switch_source() || program.switch_bidirectional()
+        || program.switch_target()) {
+        return false;
+    }
+
+    const auto end = offset + width;
+    const auto element_width = static_cast<std::size_t>(type.element_width);
+    if (proxy_width % element_width != 0U
+        || proxy_width / element_width != aliases.size()) {
+        return false;
+    }
+
+    // Decide admission for the entire family before allocating replacements or
+    // changing any driver-force state. Resolution reuses the ordinary packed
+    // resolver with a view of the prepared force maps. Implicit, charge, owned,
+    // and switch-connected drivers remain on the conservative fallback.
+    std::vector<std::uint8_t> selected(aliases.size());
+    for (std::size_t ordinal = 0U; ordinal < aliases.size(); ++ordinal) {
+        const auto& alias = *aliases[ordinal];
+        const auto signal_id = alias.signal;
+        const auto base = (aliases.size() - ordinal - 1U) * element_width;
+        const auto begin = std::max(offset, base);
+        const auto finish = std::min(end, base + element_width);
+        const auto& signal = get_signal(signal_id);
+        const auto& records = driver_values.at(signal_id);
+        if (signal.resolution != ResolutionKind::sv_wire
+            || signal.value_kind != ValueKind::logic4
+            || signal.initial_value.width() != type.element_width
+            || signal.has_implicit_driver || signal.has_charge_strength
+            || owned_driver_active(signal_id)) {
+            return false;
+        }
+        const auto& external = external_driver_values.at(signal_id);
+        if (external
+            && (external->is_logic9()
+                || external->width() != signal.initial_value.width())) {
+            return false;
+        }
+        bool compatible_records = true;
+        records.for_each_in_process_order(
+            [&](const DriverRecord& record) {
+                compatible_records = compatible_records
+                    && !record.value.is_logic9()
+                    && record.value.width() == signal.initial_value.width();
+            });
+        if (!compatible_records) {
+            return false;
+        }
+        if (begin >= finish) {
+            continue;
+        }
+        const auto* owner_record = records.find(process);
+        if (owner_record == nullptr) {
+            return false;
+        }
+        const auto has_values = static_cast<bool>(
+            forced_driver_values.at(signal_id));
+        const auto has_masks = static_cast<bool>(
+            forced_driver_masks.at(signal_id));
+        if (has_values != has_masks) {
+            return false;
+        }
+        if (has_values
+            && forced_driver_values.at(signal_id)->contains(process)
+                != forced_driver_masks.at(signal_id)->contains(process)) {
+            return false;
+        }
+        if (value != nullptr
+            || (has_values
+                && forced_driver_values.at(signal_id)->contains(process))) {
+            selected[ordinal] = 1U;
+        }
+    }
+
+    std::vector<ContainerAliasDriverForceUpdate> updates(aliases.size());
+    std::vector<PackedLogic4> resolved_values;
+    resolved_values.reserve(aliases.size());
+    for (const auto& alias : aliases) {
+        resolved_values.push_back(driven_values.at(alias->signal));
+    }
+
+    bool any_update { };
+    for (std::size_t ordinal = 0U; ordinal < aliases.size(); ++ordinal) {
+        if (selected[ordinal] == 0U) {
+            continue;
+        }
+        const auto signal_id = aliases[ordinal]->signal;
+        const auto base = (aliases.size() - ordinal - 1U) * element_width;
+        const auto begin = std::max(offset, base);
+        const auto finish = std::min(end, base + element_width);
+        const auto local_offset = begin - base;
+        const auto local_width = finish - begin;
+        const auto& records = driver_values.at(signal_id);
+        const auto* owner_record = records.find(process);
+        if (owner_record == nullptr) {
+            return false;
+        }
+
+        auto& update = updates[ordinal];
+        const auto& old_values = forced_driver_values.at(signal_id);
+        const auto& old_masks = forced_driver_masks.at(signal_id);
+        if (old_values) {
+            update.values = std::make_unique<ForcedDriverMap>(*old_values);
+            update.masks = std::make_unique<ForcedDriverMap>(*old_masks);
+        } else if (value != nullptr) {
+            update.values = std::make_unique<ForcedDriverMap>();
+            update.masks = std::make_unique<ForcedDriverMap>();
+        }
+
+        if (value != nullptr) {
+            auto forced = update.values->find(process);
+            if (forced == update.values->end()) {
+                update.values->emplace(process, owner_record->value);
+                forced = update.values->find(process);
+                update.masks->emplace(
+                    process,
+                    PackedLogic4 {
+                        get_signal(signal_id).initial_value.width(),
+                        Logic4::zero
+                    });
+            }
+            const auto mask = update.masks->find(process);
+            if (mask == update.masks->end()) {
+                return false;
+            }
+            auto fragment = coerce_value_kind(
+                value->extract_bits(begin - offset, local_width),
+                ValueKind::logic4);
+            insert_force_value(forced->second, fragment, local_offset);
+            update_force_mask(
+                mask->second, local_offset, local_width, true);
+        } else {
+            auto forced = update.values->find(process);
+            auto mask = update.masks->find(process);
+            if (forced == update.values->end()
+                || mask == update.masks->end()) {
+                continue;
+            }
+            update_force_mask(
+                mask->second, local_offset, local_width, false);
+            if (!has_forced_bits(mask->second)) {
+                update.values->erase(forced);
+                update.masks->erase(mask);
+                if (update.values->empty()) {
+                    update.values.reset();
+                    update.masks.reset();
+                }
+            }
+        }
+
+        update.active = true;
+        any_update = true;
+
+        const auto override_maps = ForcedDriverMapView {
+            update.values.get(), update.masks.get()
+        };
+        resolved_values[ordinal] = resolved_local_driver_value(
+            signal_id, &override_maps);
+        update.effective_current = apply_force(
+            signal_id, resolved_values[ordinal]);
+    }
+
+    if (!any_update) {
+        return true;
+    }
+    publish_container_alias_family(
+        object, resolved_values, capture_signal_change_origin(process), { },
+        selected, updates);
+    return true;
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::initial_driver_value(
@@ -651,10 +1276,16 @@ PackedLogic4& Interpreter::Impl::driver_slot(
     if (auto* record = values.find(process)) {
         return record->value;
     }
+    if (started && region_graph) {
+        // Adding an unregistered owner changes the writer topology. Revoke
+        // graph/A4 certificates and detach every borrowed value slot before
+        // DriverTable insertion can change its record storage.
+        prepare_signal_observation(signal_id);
+    }
     const bool inserted = values.insert_if_absent(DriverRecord {
         process,
         initial_driver_value(signal_id),
-        get_process(process).program().drive_strength
+        processes.program_view(process).drive_strength()
     });
     if (inserted) {
         refresh_direct_single_driver_route(signal_id);
@@ -688,7 +1319,8 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         && !switch_adjacency_unknown
         && (!switch_endpoint_adjacency[signal_id].empty()
             || !switch_control_adjacency[signal_id].empty());
-    if (switch_adjacency_unknown || switch_connected
+    if (has_container_signal_alias(signal_id)
+        || switch_adjacency_unknown || switch_connected
         || !identity_single_driver_resolution
         || values.size() != 1U
         || signal.has_implicit_driver
@@ -699,7 +1331,8 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         return;
     }
     const auto* record = values.sole();
-    if (record == nullptr || record->strength != DriveStrength { }) {
+    if (record == nullptr || record->strength != DriveStrength { }
+        || record->scalar_regions) {
         return;
     }
     route.process = record->process;
@@ -708,7 +1341,8 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::resolved_local_driver_value(
-    const SignalId signal_id) const
+    const SignalId signal_id,
+    const ForcedDriverMapView* const override_maps) const
 {
     if (owned_driver_active(signal_id)) {
         return owned_driver_composites[signal_id].committed;
@@ -724,13 +1358,14 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         || signal.resolution == ResolutionKind::std_logic;
     const auto* sole_record = values.sole();
     if (identity_single_driver_resolution
-        && sole_record != nullptr
+        && sole_record != nullptr && !sole_record->scalar_regions
         && !external_driver_values.at(signal_id)
         && !signal.has_implicit_driver
         && !signal.has_charge_strength
         && sole_record->strength == DriveStrength { }) {
         return apply_driver_force(
-            signal_id, sole_record->process, sole_record->value);
+            signal_id, sole_record->process, sole_record->value,
+            override_maps);
     }
     const auto resolution = signal.resolution;
     const auto try_resolve_narrow_logic4 =
@@ -756,7 +1391,8 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
                     return;
                 }
                 const auto effective = apply_driver_force(
-                    signal_id, record.process, record.value);
+                    signal_id, record.process, record.value,
+                    override_maps);
                 if (effective.is_logic9() || effective.width() != width) {
                     incompatible_driver = true;
                     return;
@@ -791,6 +1427,7 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     struct DriverContribution {
         const PackedLogic4* value { };
         DriveStrength strength;
+        const DriverRecord* record { };
     };
     std::vector<PackedLogic4> drivers;
     std::vector<DriverContribution> strength_drivers;
@@ -801,14 +1438,47 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         values.size() + (external_driver_values.at(signal_id) ? 1U : 0U));
     values.for_each_in_process_order([&](const DriverRecord& record) {
         drivers.push_back(apply_driver_force(
-            signal_id, record.process, record.value));
-        strength_drivers.push_back({ &drivers.back(), record.strength });
+            signal_id, record.process, record.value, override_maps));
+        strength_drivers.push_back({ &drivers.back(), record.strength, &record });
     });
     if (external_driver_values.at(signal_id)) {
         drivers.push_back(
             *external_driver_values.at(signal_id));
         strength_drivers.push_back(
             { &*external_driver_values.at(signal_id), { } });
+    }
+    if (resolution == ResolutionKind::std_logic
+        && signal.value_kind == ValueKind::logic9
+        && std::ranges::any_of(strength_drivers,
+            [](const DriverContribution& driver) {
+                return driver.record != nullptr && driver.record->scalar_regions;
+            })) {
+        // Scalar subelements without a source retain their unforced stored
+        // value. Reading current here could persist a temporary signal force.
+        auto result = driven_values.at(signal_id);
+        for (std::size_t bit = 0U; bit < result.width(); ++bit) {
+            bool has_source { };
+            auto resolved = Logic9::z;
+            for (const auto& driver : strength_drivers) {
+                if (driver.record != nullptr && driver.record->scalar_regions
+                    && std::ranges::none_of(*driver.record->scalar_regions,
+                        [bit](const Process::DriverRegion& region) {
+                            return bit >= region.offset
+                                && bit - region.offset < region.width;
+                        })) {
+                    continue;
+                }
+                const auto value = driver.value->get_logic9(bit);
+                // std_logic_1164 retains every state, including '-', for
+                // one source. Only actual overlapping sources are resolved.
+                resolved = has_source ? runtime::resolve(resolved, value) : value;
+                has_source = true;
+            }
+            if (has_source) {
+                result.set_logic9(bit, resolved);
+            }
+        }
+        return result;
     }
     if (resolution == ResolutionKind::sv_user_first) {
         return drivers.front();
@@ -1143,11 +1813,14 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
 PackedLogic4& Interpreter::Impl::external_driver_slot(
     const SignalId signal_id)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     demote_owned_driver(signal_id);
     auto& value = external_driver_values.at(signal_id);
     if (!value) {
-        value = std::make_unique<PackedLogic4>(
+        auto replacement = std::make_unique<PackedLogic4>(
             initial_driver_value(signal_id));
+        note_region_graph_policy_change();
+        value = std::move(replacement);
     }
     return *value;
 }
@@ -1211,13 +1884,14 @@ DriveStrength Interpreter::Impl::resolved_signal_strength(
 
 DriveStrength Interpreter::signal_strength(const SignalId signal) const
 {
+    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     return impl_->resolved_signal_strength(signal);
 }
 
 bool Interpreter::Impl::switch_process(const ProcessId process) const
 {
     return process < processes.size()
-        && processes[process].program().switch_bidirectional;
+        && processes.program_view(process).switch_bidirectional();
 }
 
 void Interpreter::Impl::reset_switch_drivers(
@@ -1227,6 +1901,10 @@ void Interpreter::Impl::reset_switch_drivers(
         return;
     }
     for (const auto signal : switch_components[component].signals) {
+        require_region_forwarding_role_journal_flushed_for_signal(signal);
+    }
+    for (const auto signal : switch_components[component].signals) {
+        prepare_region_authoritative_write(signal);
         driver_values[signal].for_each_in_process_order(
             [&](DriverRecord& record) {
                 if (switch_process(record.process)) {
@@ -1240,8 +1918,10 @@ void Interpreter::Impl::register_driver(
     const ProcessId process,
     const SignalId signal_id,
     const std::span<const Process::DriverRegion> regions,
-    const DriveStrength strength)
+    const DriveStrength strength,
+    std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     demote_owned_driver(signal_id);
     const auto& signal = get_signal(signal_id);
     for (const auto& region : regions) {
@@ -1266,7 +1946,9 @@ void Interpreter::Impl::register_driver(
         auto selected = PackedLogic4 {
             initial.width(), Logic4::z
         };
-        selected.fill(Logic9::z);
+        if (signal.value_kind == ValueKind::logic9) {
+            selected.fill(Logic9::z);
+        }
         for (const auto& region : regions) {
             selected = insert_value(
                 std::move(selected),
@@ -1275,27 +1957,71 @@ void Interpreter::Impl::register_driver(
         }
         initial = std::move(selected);
     }
+    const std::array changed_signals { signal_id };
+    auto container_reference_refresh
+        = prepare_container_value_reference_refresh(changed_signals);
     auto& values = driver_values.at(signal_id);
+    const bool adds_driver_owner = values.find(process) == nullptr;
+    if (!adds_driver_owner) {
+        return;
+    }
+    prepare_region_authoritative_write(signal_id);
+    if (started && adds_driver_owner) {
+        note_region_graph_policy_change();
+    }
     const bool inserted = values.insert_if_absent(DriverRecord {
-        process, std::move(initial), strength
+        process, std::move(initial), strength, std::move(scalar_regions)
     });
     if (!inserted) {
         return;
     }
     refresh_direct_single_driver_route(signal_id);
     auto resolved = resolved_driver_value(signal_id);
+    const bool stored_changed = driven_values[signal_id] != resolved;
+    const bool current_changed
+        = signals[signal_id].initial_value != resolved;
     driven_values[signal_id] = resolved;
     signals[signal_id].initial_value = resolved;
+    if (stored_changed) {
+        note_aggregate_leaf_stored_change(signal_id);
+    }
+    if (current_changed) {
+        note_aggregate_leaf_current_change(signal_id);
+    }
     refresh_direct_signal_planes(signal_id);
     signal_last_values[signal_id] = std::move(resolved);
+    ActiveContainerReferenceRefresh active_refresh;
+    begin_container_value_reference_refresh(
+        active_refresh, changed_signals, container_reference_refresh);
+    synchronize_container_value_references(
+        changed_signals, container_reference_refresh);
+    end_container_value_reference_refresh(active_refresh);
 }
 
 void Interpreter::Impl::set_driver(
     const ProcessId process,
     const SignalId signal_id,
-    PackedLogic4 value)
+    PackedLogic4 value,
+    const bool preserve_wide_authority)
 {
-    demote_owned_driver(signal_id);
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
+    bool can_preserve_wide_authority
+        = preserve_wide_authority && !owned_driver_active(signal_id);
+    if (can_preserve_wide_authority) {
+        const auto program = processes.program_view(process);
+        const bool has_switch_behavior
+            = program.switch_source() || program.switch_target()
+            || program.switch_bidirectional();
+        can_preserve_wide_authority = !has_switch_behavior;
+    }
+    can_preserve_wide_authority
+        = can_preserve_wide_authority
+        && (can_try_wide_single_owner_commit(process, signal_id)
+            || can_try_wide_disjoint_owner_commit(process, signal_id));
+    if (!can_preserve_wide_authority) {
+        demote_owned_driver(signal_id);
+    }
     const auto& signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
         throw std::invalid_argument(
@@ -1306,9 +2032,9 @@ void Interpreter::Impl::set_driver(
     const bool driver_already_registered
         = driver_values.at(signal_id).find(process) != nullptr;
     std::optional<DriveStrength> switch_strength;
-    if (const auto source = get_process(process).program().switch_source) {
+    if (const auto source = processes.program_view(process).switch_source()) {
         auto strength = resolved_signal_strength(*source);
-        if (get_process(process).program().switch_resistive) {
+        if (processes.program_view(process).switch_resistive()) {
             const auto reduce = [](const StrengthRank rank) {
                 switch (rank) {
                 case StrengthRank::supply:
@@ -1333,6 +2059,27 @@ void Interpreter::Impl::set_driver(
         }
         switch_strength = strength;
     }
+    can_preserve_wide_authority
+        = can_preserve_wide_authority && !switch_strength;
+    if (can_preserve_wide_authority && driver_already_registered) {
+        // A registered wide record may be the bound owner-role facade itself.
+        // Publish its new raw value through the versioned A4 plane so a
+        // retained owner snapshot stays immutable and the later value phase
+        // can still observe the raw-before-value ordering.
+        const auto* const record
+            = driver_values.at(signal_id).find(process);
+        if (record == nullptr) {
+            throw std::logic_error {
+                "wide owner route lost its registered driver record"
+            };
+        }
+        if (record->value == value) {
+            return;
+        }
+        if (try_publish_wide_owner_raw(process, signal_id, value)) {
+            return;
+        }
+    }
     auto& slot = driver_slot(process, signal_id);
     if (switch_strength && driver_already_registered) {
         auto* record = driver_values.at(signal_id).find(process);
@@ -1345,37 +2092,783 @@ void Interpreter::Impl::set_driver(
         return;
     }
     slot = std::move(value);
+    mirror_region_owner(signal_id, process, slot);
     if (driver_change_hook) {
         driver_change_hook(process, signal_id, scheduler.now());
+        publish_aggregate_leaf_driver_change(process, signal_id);
     }
+}
+
+bool Interpreter::Impl::try_publish_wide_owner_raw(
+    const ProcessId process,
+    const SignalId signal_id,
+    const PackedLogic4& value)
+{
+    const bool single_owner_route
+        = can_try_wide_single_owner_commit(process, signal_id);
+    const bool disjoint_owner_route
+        = !single_owner_route
+        && can_try_wide_disjoint_owner_commit(process, signal_id);
+    if (!single_owner_route && !disjoint_owner_route) {
+        if (signal_id < region_authoritative_component_by_signal.size()) {
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal_id], false);
+        }
+        return false;
+    }
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    auto* const state = region_authoritative_state_for_signal(signal_id);
+    if (state == nullptr
+        || !state->values().packed_owner_slot_bound(signal_id, process)) {
+        demote_region_authoritative_slots(component, false);
+        return false;
+    }
+
+    auto& mutation = state->wide_mutation_scratch();
+    try {
+        state->values().prepare_owner_change_into(mutation, signal_id,
+            process, value, signals[signal_id].initial_value,
+            driven_values[signal_id]);
+        if (!state->values().begin_prepared_publication(mutation)) {
+            state->values().cancel_prepared_publication(mutation);
+            demote_region_authoritative_slots(component, false);
+            return false;
+        }
+    } catch (const std::bad_alloc&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    } catch (const std::invalid_argument&) {
+        state->values().cancel_prepared_publication(mutation);
+        if (disjoint_owner_route) {
+            demote_region_authoritative_slots(component, false);
+            return false;
+        }
+        throw;
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        throw;
+    }
+
+    const bool owner_changed = mutation.any_owner_changed;
+    state->values().publish(std::move(mutation));
+    if (!state->valid()) {
+        demote_region_authoritative_slots(component, false);
+        return false;
+    }
+    if (owner_changed) {
+        note_region_authoritative_mirror();
+        if (systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+            ++systemverilog_wave_profile_a4_owner_mirrors;
+        }
+    }
+    return true;
+}
+
+bool Interpreter::Impl::try_publish_wide_owner_slice_raw(
+    const ProcessId process,
+    const SignalId signal_id,
+    const PackedLogic4& slice_value,
+    const std::size_t offset,
+    const WideDisjointOwnerCommitContext& context)
+{
+    if (context.process != process || context.signal != signal_id
+        || context.state == nullptr) {
+        return false;
+    }
+    const auto component = context.component;
+    auto* const state = context.state;
+
+    auto& mutation = state->wide_mutation_scratch();
+    try {
+        state->values().prepare_owner_slice_change_into(
+            mutation, signal_id, process, slice_value, offset,
+            signals[signal_id].initial_value, driven_values[signal_id]);
+        if (!state->values().begin_prepared_publication(mutation)) {
+            state->values().cancel_prepared_publication(mutation);
+            demote_region_authoritative_slots(component, false);
+            return false;
+        }
+    } catch (const std::bad_alloc&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    } catch (const std::invalid_argument&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        throw;
+    }
+
+    const bool owner_changed = mutation.any_owner_changed;
+    state->values().publish(std::move(mutation));
+    if (!state->valid()) {
+        demote_region_authoritative_slots(component, false);
+        return false;
+    }
+    if (owner_changed) {
+        note_region_authoritative_mirror();
+        if (systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+            ++systemverilog_wave_profile_a4_owner_mirrors;
+        }
+    }
+    return true;
 }
 
 void Interpreter::Impl::commit_driver(
     const ProcessId process,
     const SignalId signal_id,
-    PackedLogic4 value)
+    PackedLogic4 value,
+    const std::optional<SignalChangeOrigin> origin,
+    const bool route_path,
+    const bool allow_wide_single_owner_commit)
 {
-    if (route_module_path_update(
-            process, signal_id, value, std::nullopt)) {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
+    const auto change_origin = origin.value_or(
+        capture_signal_change_origin(process));
+    if (route_path && route_module_path_update(
+            process, signal_id, value, std::nullopt,
+            nullptr, 0, change_origin)) {
+        return;
+    }
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        auto replacement = read_container_object_value(object);
+        auto normalized = normalize_signal_value(
+            signal_id, std::move(value));
+        unpack_container_signal_value(replacement, normalized);
+        write_container_object_value(
+            object, replacement, process, change_origin);
+        return;
+    }
+    if (allow_wide_single_owner_commit
+        && try_commit_wide_single_owner(
+            process, signal_id, value, change_origin, false)) {
         return;
     }
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
-        commit(signal_id, std::move(value));
+        if (change_origin.process_domain
+                == ProcessSchedulingDomain::systemverilog
+            && change_origin.phase == SchedulerPhase::active
+            && try_commit_wide_unresolved_owner_alias(
+                process, signal_id, value, change_origin)) {
+            return;
+        }
+        commit(signal_id, std::move(value), change_origin);
         return;
     }
+    // The versioned wide-slot specialization may decline because tracing,
+    // observation, or an unsupported runtime effect became active. Detach
+    // those slots before the ordinary path changes its original raw driver;
+    // set_driver itself mirrors the raw value before commit_resolved begins.
+    prepare_region_authoritative_write(signal_id);
     set_driver(process, signal_id, std::move(value));
-    commit_resolved(signal_id, resolved_driver_value(signal_id));
+    commit_resolved(
+        signal_id, resolved_driver_value(signal_id), change_origin);
+}
+
+bool Interpreter::Impl::try_commit_wide_single_owner(
+    const ProcessId process,
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const SignalChangeOrigin origin,
+    const bool raw_owner_already_mirrored)
+{
+    if (!can_try_wide_single_owner_commit(process, signal_id)
+        || value.width() != signals[signal_id].initial_value.width()) {
+        return false;
+    }
+
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    auto* const state = region_authoritative_state_for_signal(signal_id);
+    if (state == nullptr) {
+        return false;
+    }
+
+    auto& mutation = state->wide_mutation_scratch();
+    try {
+        value = normalize_signal_value(signal_id, std::move(value));
+        if (raw_owner_already_mirrored) {
+            state->values().prepare_owner_value_change_into(
+                mutation, signal_id, process, value);
+        } else {
+            state->values().prepare_owner_change_into(mutation, signal_id,
+                process, value, value, value);
+        }
+        if (!state->values().begin_prepared_publication(mutation)) {
+            state->values().cancel_prepared_publication(mutation);
+            demote_region_authoritative_slots(component, false);
+            return false;
+        }
+    } catch (const std::bad_alloc&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    }
+
+    const bool current_changed = mutation.any_current_changed;
+    try {
+        // This path admits no trace hook, transaction observer, alias, or
+        // other callback. Queueing transaction waiters therefore remains
+        // internal bookkeeping while every versioned role is locked.
+        note_signal_transaction(signal_id, true, origin, true);
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        throw;
+    }
+
+    state->values().publish(std::move(mutation));
+    if (!state->valid()) {
+        demote_region_authoritative_slots(component, false);
+        throw std::logic_error {
+            "preflighted wide A4 publication became invalid"
+        };
+    }
+    if (current_changed) {
+        refresh_direct_signal_planes(signal_id);
+        publish_value_change(signal_id, true, origin);
+    }
+    return true;
+}
+
+bool Interpreter::Impl::try_commit_wide_unresolved_owner_alias(
+    const ProcessId process,
+    const SignalId signal_id,
+    const PackedLogic4& value,
+    const SignalChangeOrigin origin)
+{
+    // A same-kind non-scalar Logic4 or Logic9 payload is already normalized
+    // for this route. Kind coercions decline and retain ordinary commit's
+    // normalization behavior.
+    if (!can_try_wide_unresolved_owner_alias(process, signal_id, origin)
+        || value.is_logic9()
+            != (signals[signal_id].value_kind == ValueKind::logic9)
+        || value.width() != signals[signal_id].initial_value.width()) {
+        return false;
+    }
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    auto* const state = region_authoritative_state_for_signal(signal_id);
+    if (state == nullptr) {
+        return false;
+    }
+
+    auto& mutation = state->wide_mutation_scratch();
+    try {
+        state->values().prepare_owner_change_into(
+            mutation, signal_id, process, value, value, value);
+        if (!state->values().begin_prepared_publication(mutation)) {
+            state->values().cancel_prepared_publication(mutation);
+            demote_region_authoritative_slots(component, false);
+            return false;
+        }
+    } catch (const std::bad_alloc&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    } catch (const std::invalid_argument&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        throw;
+    }
+
+    const bool current_changed = mutation.any_current_changed;
+    try {
+        // The no-resolution owner aliases the stored/raw role, so this is a
+        // single prepared publication with the ordinary transaction-before-
+        // current-change ordering and no fabricated DriverRecord.
+        note_signal_transaction(signal_id, true, origin, true);
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        throw;
+    }
+
+    state->values().publish(std::move(mutation));
+    if (!state->valid()) {
+        demote_region_authoritative_slots(component, false);
+        throw std::logic_error {
+            "preflighted unresolved wide A4 publication became invalid"
+        };
+    }
+    if (systemverilog_wave_profile_enabled) {
+        ++systemverilog_wave_profile_a4_unresolved_owner_alias_commits;
+    }
+    if (current_changed) {
+        refresh_direct_signal_planes(signal_id);
+        publish_value_change(signal_id, true, origin);
+    }
+    return true;
+}
+
+bool Interpreter::Impl::can_try_wide_unresolved_owner_alias(
+    const ProcessId process,
+    const SignalId signal_id,
+    const SignalChangeOrigin origin)
+{
+    if (!a4_wide_single_owner_commit_enabled || !started
+        || !region_graph || scheduler.trace_hook_installed()
+        || signal_id >= signals.size()
+        || signal_id >= driven_values.size()
+        || signal_id >= driver_values.size()
+        || signal_id >= external_driver_values.size()
+        || signal_id >= forced_values.size()
+        || signal_id >= forced_driver_values.size()
+        || signal_id >= signal_transaction_observed.size()
+        || signal_id >= signal_value_revisions.size()
+        || signal_id >= direct_signal_materialization_pending.size()
+        || !process_signal_access_inventory_complete
+        || !process_signal_access_is_complete(process)
+        || has_bidirectional_switches || !module_timing_checks.empty()
+        || signal_change_hook || stored_signal_change_hook
+        || driver_change_hook || scalar_signal_change_hook
+        || container_object_change_hook || container_element_change_hook
+        || native_signal_observation_required_hook
+        || native_signal_observation_any_hook || execution_point_hook) {
+        return false;
+    }
+
+    const auto& signal = signals[signal_id];
+    if (signal.initial_value.width() <= 64U
+        || (signal.value_kind != ValueKind::logic4
+            && signal.value_kind != ValueKind::logic9)
+        || signal.resolution != ResolutionKind::none
+        || signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || owned_driver_active(signal_id)
+        || external_driver_values[signal_id] || forced_values[signal_id]
+        || forced_driver_values[signal_id]
+        || direct_signal_materialization_pending[signal_id] != 0U
+        || native_signal_has_runtime_dependency(signal_id)
+        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
+        || !signal_container_aliases[signal_id].empty()
+        || signal_transaction_observed[signal_id]
+        || !driver_values[signal_id].empty()) {
+        return false;
+    }
+
+    if (process >= region_graph->processes().size()
+        || signal_id >= region_graph->signals().size()
+        || signal_id >= region_authoritative_component_by_signal.size()) {
+        return false;
+    }
+    const auto& process_node = region_graph->processes()[process];
+    const bool vhdl_projected_owner
+        = process_node.scheduling_domain == ProcessSchedulingDomain::generic
+        && process_node.update_kind == RegionUpdateKind::vhdl_projected;
+    const bool systemverilog_active_owner
+        = process_node.scheduling_domain
+            == ProcessSchedulingDomain::systemverilog
+        && process_node.update_kind
+            == RegionUpdateKind::systemverilog_active;
+    const bool original_vhdl_origin
+        = vhdl_projected_owner
+        && origin.process_domain == ProcessSchedulingDomain::generic;
+    const bool original_active_origin
+        = systemverilog_active_owner
+        && origin.process_domain == ProcessSchedulingDomain::systemverilog
+        && origin.phase == SchedulerPhase::active;
+    if (!original_vhdl_origin && !original_active_origin) {
+        return false;
+    }
+    const auto& signal_node = region_graph->signals()[signal_id];
+    if (signal_node.drivers != RegionDriverClass::single_whole
+        || signal_node.writers.size() != 1U
+        || signal_node.writers.front().process != process
+        || signal_node.writers.front().offset != 0U
+        || (signal_node.writers.front().width != 0U
+            && signal_node.writers.front().width != signal.initial_value.width())
+        || signal_node.writers_unknown
+        || signal_node.dynamic_fork_writers
+        || signal_node.partial_projected_transactions
+        || signal_node.observations != RegionObservation::none) {
+        return false;
+    }
+
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    if (component >= region_authoritative_state_by_component.size()
+        || component >= region_graph->certificate_inventory()
+                            .components.size()) {
+        return false;
+    }
+    const auto* const state
+        = region_authoritative_state_for_signal(signal_id);
+    if (state == nullptr || !state->valid()
+        || state->generation() != region_runtime_generation
+        || !state->values().packed_slots_bound()
+        || !state->values().packed_signal_slots_bound(signal_id)
+        || !state->values().packed_owner_slot_bound(signal_id, process)
+        || !region_graph->component_epochs_current(component)) {
+        return false;
+    }
+    const auto& certificate = region_graph->certificate_inventory()
+        .components[component];
+    if (!region_graph->certificate_inventory().access_inventory_complete
+        || certificate.status
+            == RegionComponentCertificateStatus::incomplete_access_inventory
+        || !std::ranges::binary_search(certificate.members, process)) {
+        return false;
+    }
+    const auto& layout_signal = state->values().layout().signal(signal_id);
+    const auto owners = state->values().layout().owners(signal_id);
+    return layout_signal.storage_class
+            == SignalDriverStorageClass::single_owner
+        && owners.size() == 1U && owners.front().process == process
+        && owners.front().aliases_stored;
+}
+
+bool Interpreter::Impl::can_try_wide_single_owner_commit(
+    const ProcessId process,
+    const SignalId signal_id)
+{
+    if (!a4_wide_single_owner_commit_enabled || !started
+        || !region_graph || scheduler.trace_hook_installed()
+        || signal_id >= signals.size()
+        || signal_id >= driven_values.size()
+        || signal_id >= driver_values.size()
+        || signal_id >= direct_single_driver_routes.size()
+        || signal_id >= external_driver_values.size()
+        || signal_id >= forced_values.size()
+        || signal_id >= forced_driver_values.size()
+        || signal_id >= signal_transactions.size()
+        || signal_id >= signal_value_revisions.size()
+        || signal_id >= direct_signal_materialization_pending.size()
+        || !process_signal_access_inventory_complete
+        || !process_signal_access_is_complete(process)
+        || has_bidirectional_switches || !module_timing_checks.empty()
+        || signal_change_hook || stored_signal_change_hook
+        || driver_change_hook || scalar_signal_change_hook
+        || container_object_change_hook || container_element_change_hook
+        || native_signal_observation_required_hook
+        || native_signal_observation_any_hook || execution_point_hook) {
+        return false;
+    }
+
+    const auto& signal = signals[signal_id];
+    if (signal.initial_value.width() <= 64U
+        || signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || owned_driver_active(signal_id)
+        || external_driver_values[signal_id] || forced_values[signal_id]
+        || forced_driver_values[signal_id]
+        || direct_signal_materialization_pending[signal_id] != 0U
+        || native_signal_has_runtime_dependency(signal_id)
+        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
+        || !signal_container_aliases[signal_id].empty()
+        || (signal_id < signal_transaction_observed.size()
+            && signal_transaction_observed[signal_id])) {
+        return false;
+    }
+    if ((signal.value_kind == ValueKind::logic4
+            && signal.resolution != ResolutionKind::sv_wire)
+        || (signal.value_kind == ValueKind::logic9
+            && signal.resolution != ResolutionKind::std_logic)
+        || (signal.value_kind != ValueKind::logic4
+            && signal.value_kind != ValueKind::logic9)) {
+        return false;
+    }
+
+    if (signal_id >= region_authoritative_component_by_signal.size()) {
+        return false;
+    }
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    if (component >= region_authoritative_state_by_component.size()
+        || component >= region_graph->certificate_inventory()
+                            .components.size()) {
+        return false;
+    }
+    const auto& route = direct_single_driver_routes[signal_id];
+    const auto* const record = direct_single_driver_record(signal_id);
+    auto* const state = region_authoritative_state_for_signal(signal_id);
+    if (!route.active || route.process != process || record == nullptr
+        || record->strength != DriveStrength { }
+        || driver_values[signal_id].size() != 1U || state == nullptr
+        || !state->valid() || state->generation() != region_runtime_generation
+        || !state->values().packed_slots_bound()
+        || !state->values().packed_signal_slots_bound(signal_id)
+        || !state->values().packed_owner_slot_bound(signal_id, process)
+        || !region_graph->component_epochs_current(component)) {
+        return false;
+    }
+    const auto& certificate = region_graph->certificate_inventory()
+        .components[component];
+    if (!region_graph->certificate_inventory().access_inventory_complete
+        || certificate.status
+            == RegionComponentCertificateStatus::incomplete_access_inventory) {
+        return false;
+    }
+    // The mapped single-owner layout is an independent storage proof. A
+    // public std_logic boundary need not have an executable cone program.
+    const auto& layout_signal = state->values().layout().signal(signal_id);
+    const auto owners = state->values().layout().owners(signal_id);
+    if (layout_signal.storage_class != SignalDriverStorageClass::single_owner
+        || owners.size() != 1U || owners.front().process != process) {
+        return false;
+    }
+    return true;
+}
+
+bool Interpreter::Impl::can_try_wide_disjoint_signal_commit(
+    const SignalId signal_id,
+    RegionAuthoritativeComponentState** const eligible_state)
+{
+    if (eligible_state != nullptr) {
+        *eligible_state = nullptr;
+    }
+    if (!a4_wide_disjoint_owner_commit_enabled || !started
+        || !region_graph || scheduler.trace_hook_installed()
+        || signal_id >= signals.size()
+        || signal_id >= driven_values.size()
+        || signal_id >= driver_values.size()
+        || signal_id >= direct_single_driver_routes.size()
+        || signal_id >= external_driver_values.size()
+        || signal_id >= forced_values.size()
+        || signal_id >= forced_driver_values.size()
+        || signal_id >= signal_transactions.size()
+        || signal_id >= signal_value_revisions.size()
+        || signal_id >= direct_signal_materialization_pending.size()
+        || !process_signal_access_inventory_complete
+        || !region_graph->certificate_inventory().access_inventory_complete
+        || has_bidirectional_switches || !module_timing_checks.empty()
+        || signal_change_hook || stored_signal_change_hook
+        || driver_change_hook || scalar_signal_change_hook
+        || container_object_change_hook || container_element_change_hook
+        || native_signal_observation_required_hook
+        || native_signal_observation_any_hook || execution_point_hook) {
+        return false;
+    }
+
+    const auto& signal = signals[signal_id];
+    if (signal.initial_value.width() == 0U
+        || signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || owned_driver_active(signal_id)
+        || external_driver_values[signal_id] || forced_values[signal_id]
+        || forced_driver_values[signal_id]
+        || direct_signal_materialization_pending[signal_id] != 0U
+        || native_signal_has_runtime_dependency(signal_id)
+        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
+        || !signal_container_aliases[signal_id].empty()
+        || (signal_id < signal_transaction_observed.size()
+            && signal_transaction_observed[signal_id])) {
+        return false;
+    }
+    if ((signal.value_kind == ValueKind::logic4
+            && signal.resolution != ResolutionKind::sv_wire)
+        || (signal.value_kind == ValueKind::logic9
+            && signal.resolution != ResolutionKind::std_logic)
+        || (signal.value_kind != ValueKind::logic4
+            && signal.value_kind != ValueKind::logic9)) {
+        return false;
+    }
+
+    if (signal_id >= region_authoritative_component_by_signal.size()) {
+        return false;
+    }
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    if (component >= region_authoritative_state_by_component.size()
+        || component >= region_graph->certificate_inventory()
+                            .components.size()
+        || direct_single_driver_routes[signal_id].active) {
+        return false;
+    }
+    auto* const state
+        = region_authoritative_state_for_signal(signal_id);
+    const auto component_status
+        = region_graph->certificate_inventory().components[component].status;
+    const bool status_allows_disjoint_boundary_state
+        = a4_wide_disjoint_owner_commit_enabled
+        && component_status
+            != RegionComponentCertificateStatus::incomplete_access_inventory;
+    if (state == nullptr || !state->valid()
+        || state->generation() != region_runtime_generation
+        || !state->values().packed_slots_bound()
+        || !state->values().packed_signal_slots_bound(signal_id)
+        || !region_graph->component_epochs_current(component)
+        || (component_status
+                != RegionComponentCertificateStatus::structural_candidate
+            && !status_allows_disjoint_boundary_state)) {
+        return false;
+    }
+
+    const auto& layout = state->values().layout();
+    if (!layout.contains(signal_id)) {
+        return false;
+    }
+    const auto& layout_signal = layout.signal(signal_id);
+    const auto owners = layout.owners(signal_id);
+    if (layout_signal.storage_class
+            != SignalDriverStorageClass::disjoint_owner
+        || layout_signal.width != signal.initial_value.width()
+        || layout_signal.value_kind != signal.value_kind
+        || owners.size() < 2U
+        || driver_values[signal_id].size() != owners.size()) {
+        return false;
+    }
+    for (const auto& owner : owners) {
+        const auto* const record
+            = driver_values[signal_id].find(owner.process);
+        if (record == nullptr || record->strength != DriveStrength { }) {
+            return false;
+        }
+    }
+    if (eligible_state != nullptr) {
+        *eligible_state = state;
+    }
+    return true;
+}
+
+bool Interpreter::Impl::can_try_wide_disjoint_owner_commit(
+    const ProcessId process,
+    const SignalId signal_id)
+{
+    if (!can_try_wide_disjoint_signal_commit(signal_id)
+        || !process_signal_access_is_complete(process)) {
+        return false;
+    }
+    const auto* const state
+        = region_authoritative_state_for_signal(signal_id);
+    if (state == nullptr) {
+        return false;
+    }
+    const auto owners = state->values().layout().owners(signal_id);
+    return std::ranges::find(owners, process,
+               &SignalDriverOwnerLayout::process)
+        != owners.end();
+}
+
+bool Interpreter::Impl::prepare_wide_disjoint_owner_commit_context(
+    const ProcessId process,
+    const SignalId signal_id,
+    WideDisjointOwnerCommitContext& context)
+{
+    context = { };
+    // Preserve the ordinary fast rejection before consulting executor code.
+    if (!can_try_wide_disjoint_signal_commit(signal_id)
+        || !process_signal_access_is_complete(process)) {
+        return false;
+    }
+    // The binding accessor is virtual. Revalidate after it returns so a
+    // reentrant executor cannot leave this context holding a stale graph or
+    // A4 state view.
+    RegionAuthoritativeComponentState* state { };
+    if (!can_try_wide_disjoint_signal_commit(signal_id, &state)
+        || state == nullptr) {
+        return false;
+    }
+    const auto component
+        = region_authoritative_component_by_signal[signal_id];
+    const auto owners = state->values().layout().owners(signal_id);
+    if (std::ranges::find(owners, process,
+            &SignalDriverOwnerLayout::process)
+        == owners.end()) {
+        return false;
+    }
+    context = { process, signal_id, component, state };
+    return true;
+}
+
+bool Interpreter::Impl::try_commit_wide_disjoint_value(
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const SignalChangeOrigin origin,
+    const WideDisjointOwnerCommitContext* const context)
+{
+    if (context != nullptr) {
+        if (context->signal != signal_id || context->state == nullptr) {
+            return false;
+        }
+    } else if (!can_try_wide_disjoint_signal_commit(signal_id)) {
+        return false;
+    }
+    if (value.width() != signals[signal_id].initial_value.width()
+        || value.is_logic9()
+            != (signals[signal_id].value_kind == ValueKind::logic9)) {
+        return false;
+    }
+
+    const auto component = context != nullptr
+        ? context->component
+        : region_authoritative_component_by_signal[signal_id];
+    auto* const state = context != nullptr
+        ? context->state
+        : region_authoritative_state_for_signal(signal_id);
+    if (state == nullptr) {
+        return false;
+    }
+
+    auto& mutation = state->wide_mutation_scratch();
+    try {
+        state->values().prepare_value_change_into(
+            mutation, signal_id, value, value);
+        if (!state->values().begin_prepared_publication(mutation)) {
+            state->values().cancel_prepared_publication(mutation);
+            demote_region_authoritative_slots(component, false);
+            return false;
+        }
+    } catch (const std::bad_alloc&) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        return false;
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        throw;
+    }
+
+    const bool current_changed = mutation.any_current_changed;
+    try {
+        note_signal_transaction(signal_id, true, origin, true);
+    } catch (...) {
+        state->values().cancel_prepared_publication(mutation);
+        demote_region_authoritative_slots(component, false);
+        throw;
+    }
+
+    state->values().publish(std::move(mutation));
+    if (!state->valid()) {
+        demote_region_authoritative_slots(component, false);
+        throw std::logic_error {
+            "preflighted disjoint-wide A4 publication became invalid"
+        };
+    }
+    if (current_changed) {
+        refresh_direct_signal_planes(signal_id);
+        publish_value_change(signal_id, true, origin);
+    }
+    return true;
 }
 
 void Interpreter::Impl::commit_resolved(
     const SignalId signal_id,
-    PackedLogic4 value)
+    PackedLogic4 value,
+    const SignalChangeOrigin origin)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     auto& handle = charge_decay_handles.at(signal_id);
     if (!signal.has_charge_strength) {
-        commit(signal_id, std::move(value));
+        commit(signal_id, std::move(value), origin);
         return;
     }
     const auto& cold = get_signal_cold(signal_id);
@@ -1435,19 +2928,15 @@ void Interpreter::Impl::commit_resolved(
             }
             value = resolved_driver_value(signal_id);
         }
-        commit(signal_id, std::move(value));
+        commit(signal_id, std::move(value), origin);
         return;
     }
 
-    commit(signal_id, std::move(value));
+    commit(signal_id, std::move(value), origin);
     if (!cold.charge_decay) {
         return;
     }
-    handle = scheduler.schedule_after_cancelable(
-        *cold.charge_decay,
-        SchedulerPhase::update,
-        signal_id,
-        [this, signal_id](Scheduler&) {
+    auto decay = [this, signal_id, origin](Scheduler&) {
             charge_decay_handles.at(signal_id).reset();
             auto& decaying_charge = *charge_values.at(signal_id);
             const auto active = [&](const std::size_t bit) {
@@ -1482,8 +2971,18 @@ void Interpreter::Impl::commit_resolved(
                 if (!active(bit))
                     decaying_charge.set(bit, Logic4::z);
             }
-            commit(signal_id, resolved_driver_value(signal_id));
-        });
+            commit(signal_id, resolved_driver_value(signal_id), origin);
+        };
+    if (origin.process_domain
+        == ProcessSchedulingDomain::systemverilog) {
+        handle = scheduler.schedule_systemverilog_after_cancelable(
+            *cold.charge_decay, SchedulerPhase::active, signal_id,
+            std::move(decay));
+    } else {
+        handle = scheduler.schedule_after_cancelable(
+            *cold.charge_decay, SchedulerPhase::update, signal_id,
+            std::move(decay));
+    }
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::underlying_driver_value(
@@ -1525,8 +3024,11 @@ void Interpreter::Impl::commit_resolved(
 void Interpreter::Impl::commit_slice(
     const SignalId signal_id,
     PackedLogic4 value,
-    const std::size_t offset)
+    const std::size_t offset,
+    const SignalChangeOrigin origin)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
     if (get_signal(signal_id).systemverilog_scalar
         != SystemVerilogScalarKind::None) {
         throw std::invalid_argument {
@@ -1536,30 +3038,173 @@ void Interpreter::Impl::commit_slice(
     commit(
         signal_id,
         insert_value(
-            driven_values[signal_id], value, offset));
+            driven_values[signal_id], value, offset),
+        origin);
 }
 
 void Interpreter::Impl::commit_driver_slice(
     const ProcessId process,
     const SignalId signal_id,
     PackedLogic4 value,
-    const std::size_t offset)
+    const std::size_t offset,
+    const std::optional<SignalChangeOrigin> origin,
+    const bool route_path)
 {
-    if (route_module_path_update(
-            process, signal_id, value, offset)) {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    require_writable_aggregate_signal(signal_id);
+    const auto change_origin = origin.value_or(
+        capture_signal_change_origin(process));
+    if (route_path && route_module_path_update(
+            process, signal_id, value, offset,
+            nullptr, 0, change_origin)) {
+        return;
+    }
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        const auto object
+            = *signal_container_aggregate_aliases[signal_id];
+        const auto& aliases = container_element_signal_aliases.at(object);
+        const auto element_width
+            = get_container_object(object).initial_value.type.element_width;
+        if (offset > get_signal(signal_id).initial_value.width()
+            || value.width()
+                > get_signal(signal_id).initial_value.width() - offset) {
+            throw std::invalid_argument {
+                "SimIR driver slice is outside its aggregate signal"
+            };
+        }
+        const auto end = offset + value.width();
+        const auto& container = get_container_object(object).initial_value;
+        const auto& type = container.type;
+        const auto proxy_width
+            = static_cast<std::size_t>(get_signal(signal_id).initial_value.width());
+        const auto& program = processes.program_view(process);
+        const bool supported_family_shape
+            = type.fixed && !type.dimensions.empty()
+            && type.element_kind == ContainerElementKind::Packed
+            && type.element_width != 0U && !aliases.empty()
+            && aliases.size() == container.elements.size()
+            && proxy_width % type.element_width == 0U
+            && proxy_width / type.element_width == aliases.size()
+            && std::ranges::all_of(aliases, [&](const auto& alias) {
+                   return alias && alias->readable && alias->writable
+                       && alias->signal < signals.size()
+                       && signals[alias->signal].initial_value.width()
+                           == type.element_width;
+               });
+        if (supported_family_shape
+            && can_stage_container_alias_deposit(object)
+            && !program.switch_source() && !program.switch_bidirectional()
+            && !program.switch_target()) {
+            std::vector<std::uint8_t> selected_leaves(aliases.size());
+            std::vector<PackedLogic4> leaf_values;
+            leaf_values.reserve(aliases.size());
+            for (const auto& alias : aliases) {
+                leaf_values.push_back(driven_values.at(alias->signal));
+            }
+
+            for (std::size_t ordinal = 0U;
+                ordinal < aliases.size(); ++ordinal) {
+                const auto& alias = *aliases[ordinal];
+                const auto base = (aliases.size() - ordinal - 1U)
+                    * static_cast<std::size_t>(type.element_width);
+                const auto leaf_end
+                    = base + static_cast<std::size_t>(type.element_width);
+                const auto begin = std::max(offset, base);
+                const auto finish = std::min(end, leaf_end);
+                if (begin >= finish) {
+                    continue;
+                }
+
+                auto driver_value = initial_driver_value(alias.signal);
+                if (owned_driver_active(alias.signal)
+                    && process < owned_driver_spans.size()
+                    && owned_driver_spans[process].signal == alias.signal) {
+                    driver_value = owned_driver_value(
+                        process, alias.signal);
+                } else if (const auto* record
+                    = driver_values.at(alias.signal).find(process)) {
+                    driver_value = record->value;
+                }
+                auto fragment
+                    = value.extract_bits(begin - offset, finish - begin);
+                leaf_values[ordinal] = insert_value(
+                    std::move(driver_value), fragment, begin - base);
+                selected_leaves[ordinal] = 1U;
+            }
+
+            if (std::ranges::any_of(
+                    selected_leaves, [](const std::uint8_t selected) {
+                        return selected != 0U;
+                    })) {
+                auto prepared = prepare_container_alias_driver_family(
+                    object, process, leaf_values, change_origin,
+                    selected_leaves);
+                begin_container_alias_driver_family(prepared);
+                install_container_alias_driver_family(prepared);
+                notify_container_alias_driver_family_raw(prepared);
+                finish_container_alias_driver_family_raw(prepared);
+                finalize_container_alias_driver_family(prepared);
+                return;
+            }
+        }
+
+        prepare_region_authoritative_family_write(object);
+        begin_aggregate_signal_batch(signal_id, change_origin);
+        try {
+            for (std::size_t ordinal = 0U;
+                ordinal < aliases.size(); ++ordinal) {
+                const auto& alias = *aliases[ordinal];
+                const auto base = (aliases.size() - ordinal - 1U)
+                    * element_width;
+                const auto leaf_end = base + element_width;
+                const auto begin = std::max(offset, base);
+                const auto finish = std::min(end, leaf_end);
+                if (begin >= finish) {
+                    continue;
+                }
+                commit_driver_slice(
+                    process, alias.signal,
+                    value.extract_bits(begin - offset, finish - begin),
+                    begin - base, change_origin, false);
+            }
+        } catch (...) {
+            finish_aggregate_signal_batch(signal_id);
+            throw;
+        }
+        finish_aggregate_signal_batch(signal_id);
         return;
     }
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
         commit_slice(
-            signal_id, std::move(value), offset);
+            signal_id, std::move(value), offset, change_origin);
         return;
     }
+    WideDisjointOwnerCommitContext wide_disjoint_context;
+    if (prepare_wide_disjoint_owner_commit_context(
+            process, signal_id, wide_disjoint_context)) {
+        if (try_publish_wide_owner_slice_raw(
+                process, signal_id, value, offset,
+                wide_disjoint_context)) {
+            auto resolved = resolved_driver_value(signal_id);
+            if (try_commit_wide_disjoint_value(
+                    signal_id, resolved, change_origin,
+                    &wide_disjoint_context)) {
+                return;
+            }
+            prepare_region_authoritative_write(signal_id);
+            commit_resolved(signal_id, std::move(resolved), change_origin);
+            return;
+        }
+    }
+    prepare_region_authoritative_write(signal_id);
     const auto updated = insert_value(
         driver_slot(process, signal_id),
         value,
         offset);
-    commit_driver(process, signal_id, std::move(updated));
+    commit_driver(
+        process, signal_id, std::move(updated), change_origin, false, false);
 }
 
 } // namespace fsim::runtime::simir

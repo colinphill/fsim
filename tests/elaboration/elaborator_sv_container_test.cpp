@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
-#include "fsim/runtime/simir_fused_container_reads.hpp"
 
 #include <algorithm>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -998,12 +998,517 @@ endmodule
         memory_word_output_parsed.design,
         "memory_word_output");
     assert(memory_word_output_elaborated.ok());
+    const auto memory_word_container
+        = memory_word_output_elaborated.design->find_container(
+            "memory_word_output.words");
+    assert(memory_word_container);
+    const auto memory_word_state
+        = memory_word_output_elaborated.design->state();
+    const auto memory_word_aliases
+        = memory_word_output_elaborated.design->container_element_signal_aliases();
+    assert(std::ranges::count_if(
+        memory_word_aliases, [&](const auto& alias) {
+            return alias.object == *memory_word_container;
+        }) == 2);
+    assert(std::ranges::count_if(
+        memory_word_state.container_signal_aliases,
+        [&](const auto& alias) {
+            return alias.object == *memory_word_container;
+        }) == 0);
+    const auto memory_word_aggregate
+        = memory_word_output_elaborated.design->find_signal(
+            "memory_word_output.words");
+    assert(memory_word_aggregate);
+    assert(std::ranges::count_if(
+        memory_word_output_elaborated.design
+            ->container_aggregate_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *memory_word_container
+                && alias.signal == *memory_word_aggregate;
+        }) == 1);
+    const auto memory_word_zero
+        = memory_word_output_elaborated.design->find_signal(
+            "memory_word_output.words[0]");
+    const auto memory_word_one
+        = memory_word_output_elaborated.design->find_signal(
+            "memory_word_output.words[1]");
+    assert(memory_word_zero && memory_word_one);
+    assert(std::ranges::any_of(
+        memory_word_output_elaborated.design->processes(),
+        [&](const Process& process) {
+            return std::ranges::any_of(
+                process.operations, [&](const Operation& operation) {
+                    const auto* read
+                        = operation_get_if<ReadSignal>(&operation);
+                    return read != nullptr
+                        && read->signal == *memory_word_one
+                        && read->kind == SignalReadKind::current;
+                });
+        }));
+    assert(std::ranges::any_of(
+        memory_word_output_elaborated.design->processes(),
+        [&](const Process& process) {
+            const bool reads_leaf = std::ranges::any_of(
+                process.operations, [&](const Operation& operation) {
+                    const auto* read
+                        = operation_get_if<ReadSignal>(&operation);
+                    return read != nullptr
+                        && read->signal == *memory_word_one;
+                });
+            const bool waits_on_leaf = std::ranges::any_of(
+                process.static_sensitivity,
+                [&](const Sensitivity& sensitivity) {
+                    return sensitivity.signal == *memory_word_one
+                        && sensitivity.offset == 0U
+                        && sensitivity.width == 8U;
+                });
+            return reads_leaf && waits_on_leaf;
+        }));
+    assert(std::ranges::any_of(
+        memory_word_output_elaborated.design->processes(),
+        [&](const Process& process) {
+            const bool writes_leaf_directly = std::ranges::any_of(
+                process.operations,
+                [&](const Operation& operation) {
+                    if (const auto* write
+                        = operation_get_if<WriteBlocking>(&operation)) {
+                        return write->signal == *memory_word_one;
+                    }
+                    if (const auto* write
+                        = operation_get_if<WriteUpdate>(&operation)) {
+                        return write->signal == *memory_word_one;
+                    }
+                    return false;
+                });
+            const bool owns_leaf_region = std::ranges::any_of(
+                process.driver_regions,
+                [&](const Process::DriverRegion& region) {
+                    return region.signal == *memory_word_one
+                        && region.whole;
+                });
+            const bool retains_object_element_write
+                = std::ranges::any_of(
+                    process.operations,
+                    [&](const Operation& operation) {
+                        const auto* write
+                            = operation_get_if<WriteContainerObjectElement>(
+                                &operation);
+                        return write != nullptr
+                            && write->object == *memory_word_container;
+                    });
+            return writes_leaf_directly
+                && owns_leaf_region
+                && !retains_object_element_write;
+        }));
     auto memory_word_output_interpreter = memory_word_output_elaborated.design->create_interpreter();
     const auto memory_word_output_result = memory_word_output_interpreter->run();
-    assert(
+    assert((
         memory_word_output_result.status
             == fsim::runtime::RunStatus::completed
-        && memory_word_output_result.time == 1);
+        && memory_word_output_result.time == 1
+        && memory_word_output_interpreter->signal_value(
+               *memory_word_aggregate)
+            == fsim::runtime::PackedLogic4::from_msb_string(
+                "ZZZZZZZZ01011010")
+        && memory_word_output_interpreter->container_object_value(
+               *memory_word_container).elements
+            == std::vector<fsim::runtime::PackedLogic4> {
+                fsim::runtime::PackedLogic4::from_msb_string("ZZZZZZZZ"),
+                fsim::runtime::PackedLogic4::from_msb_string("01011010")
+            }));
+
+    const auto dynamic_net_array_write_parsed = fsim::frontend::parse_text(
+        "physical-net-array-dynamic-write.sv",
+        R"(
+module physical_net_array_dynamic_word_source(
+    input wire [7:0] value,
+    output wire [7:0] driven);
+  assign driven = value;
+endmodule
+module physical_net_array_dynamic_write(
+    input wire select,
+    input wire [7:0] value);
+  wire [7:0] words[0:1];
+  physical_net_array_dynamic_word_source source(
+      .value(value), .driven(words[select]));
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_net_array_write_parsed.ok());
+    const auto dynamic_net_array_write_elaborated = compile_and_elaborate(
+        dynamic_net_array_write_parsed.design,
+        "physical_net_array_dynamic_write");
+    assert(dynamic_net_array_write_elaborated.ok());
+    const auto dynamic_net_array_write_object
+        = dynamic_net_array_write_elaborated.design->find_container("words");
+    assert(dynamic_net_array_write_object);
+    assert(std::ranges::count_if(
+        dynamic_net_array_write_elaborated.design
+            ->container_element_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *dynamic_net_array_write_object;
+        }) == 2);
+    assert(std::ranges::any_of(
+        dynamic_net_array_write_elaborated.design->processes(),
+        [&](const Process& process) {
+            for (std::size_t index = 1U;
+                index < process.operations.size();
+                ++index) {
+                const auto* write
+                    = operation_get_if<WriteContainerObjectElement>(
+                        &process.operations[index]);
+                if (write == nullptr
+                    || write->object != *dynamic_net_array_write_object
+                    || write->linear_index
+                    || write->dynamic_part
+                    || write->transaction_signal) {
+                    continue;
+                }
+                const auto* previous
+                    = operation_get_if<LoadConstant>(
+                        &process.operations[index - 1U]);
+                if (previous == nullptr
+                    || previous->destination != write->index) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+
+    const auto linear_net_array_write_parsed = fsim::frontend::parse_text(
+        "physical-net-array-linear-write.sv",
+        R"(
+module physical_net_array_linear_word_source(
+    output wire [7:0] driven);
+  assign driven = 8'h5a;
+endmodule
+module physical_net_array_linear_write;
+  wire [7:0] words[0:1][0:1];
+  physical_net_array_linear_word_source source(
+      .driven(words[0][1]));
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(linear_net_array_write_parsed.ok());
+    const auto linear_net_array_write_elaborated = compile_and_elaborate(
+        linear_net_array_write_parsed.design,
+        "physical_net_array_linear_write");
+    assert(linear_net_array_write_elaborated.ok());
+    const auto linear_net_array_write_object
+        = linear_net_array_write_elaborated.design->find_container("words");
+    assert(linear_net_array_write_object);
+    assert(std::ranges::count_if(
+        linear_net_array_write_elaborated.design
+            ->container_element_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *linear_net_array_write_object;
+        }) == 4U);
+    const auto linear_proxy = linear_net_array_write_elaborated.design
+        ->find_signal("physical_net_array_linear_write.words");
+    const auto linear_leaf = linear_net_array_write_elaborated.design
+        ->find_signal("physical_net_array_linear_write.words[0][1]");
+    assert(linear_proxy && linear_leaf);
+    auto linear_runtime = linear_net_array_write_elaborated.design
+        ->create_interpreter();
+    assert(linear_runtime->run().status == fsim::runtime::RunStatus::completed);
+    assert(linear_runtime->signal_value(*linear_leaf).to_msb_string()
+        == "01011010");
+    assert(linear_runtime->signal_value(*linear_proxy).to_msb_string()
+        == "ZZZZZZZZ01011010ZZZZZZZZZZZZZZZZ");
+    assert(linear_runtime->container_object_value(*linear_net_array_write_object)
+        .elements.at(1U).to_msb_string() == "01011010");
+    assert(std::ranges::any_of(
+        linear_net_array_write_elaborated.design->processes(),
+        [&](const Process& process) {
+            return std::ranges::any_of(
+                process.operations,
+                [&](const Operation& operation) {
+                    const auto* write
+                        = operation_get_if<WriteContainerObjectElement>(
+                            &operation);
+                    return write != nullptr
+                        && write->object == *linear_net_array_write_object
+                        && write->linear_index;
+                });
+        }));
+
+    const auto three_dimensional_parsed = fsim::frontend::parse_text(
+        "physical-net-array-three-dimensional.sv",
+        R"(
+module physical_net_array_three_dimensional;
+  localparam int ROW = 0;
+  localparam int COLUMN = -1;
+  wire flags [1:0][-2:-1][4:3];
+  wire [64:0] wide [0:1][-1:0];
+  wire flags_copy;
+  wire [64:0] wide_copy;
+  logic [64:0] backing [1:0][-1:0];
+  wire [64:0] backing_copy;
+  wire [64:0] generated_copy [0:1];
+  assign flags_copy = flags[0][-1][3];
+  assign wide_copy = wide[ROW][COLUMN];
+  assign backing_copy = backing[1][-1];
+  for (genvar g = 0; g < 2; g = g + 1) begin : reads
+    assign generated_copy[g] = wide[g][-1];
+  end
+  assign flags[0][-1][3] = 1'b1;
+  assign flags[1][-2][4] = 1'b0;
+  assign flags[1][-2][4] = 1'b1;
+  assign wide[0][-1][64:1] = 64'hffffffffffffffff;
+  assign wide[0][-1][0] = 1'b1;
+  assign wide[1][-1] = 65'h10000000000000000;
+  initial begin
+    backing[1][-1] = 65'h10000000000000001;
+    #1;
+    assert (flags_copy === 1'b1);
+    assert (wide_copy === 65'h1ffffffffffffffff);
+    assert (backing_copy === 65'h10000000000000001);
+    assert (generated_copy[0] === 65'h1ffffffffffffffff);
+    assert (generated_copy[1] === 65'h10000000000000000);
+    assert (flags[0][-1][3] === 1'b1);
+    assert (flags[1][-2][4] === 1'bx);
+    assert (wide[0][-1] === 65'h1ffffffffffffffff);
+    assert (wide[1][-1] === 65'h10000000000000000);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(three_dimensional_parsed.ok());
+    const auto three_dimensional = compile_and_elaborate(
+        three_dimensional_parsed.design,
+        "physical_net_array_three_dimensional");
+    assert(three_dimensional.ok());
+    const auto flags_object = three_dimensional.design->find_container("flags");
+    const auto wide_object = three_dimensional.design->find_container("wide");
+    assert(flags_object && wide_object);
+    const auto& dimensions = three_dimensional.design
+        ->container_objects().at(*flags_object).type.dimensions;
+    assert((dimensions == std::vector<std::pair<std::int32_t, std::int32_t>> {
+        { 1, 0 }, { -2, -1 }, { 4, 3 }
+    }));
+    assert(std::ranges::count_if(
+        three_dimensional.design->container_element_signal_aliases(),
+        [&](const auto& alias) { return alias.object == *flags_object; }) == 8U);
+    assert(std::ranges::count_if(
+        three_dimensional.design->container_element_signal_aliases(),
+        [&](const auto& alias) { return alias.object == *wide_object; }) == 4U);
+    const std::vector<std::string> flag_suffixes {
+        "[1][-2][4]", "[1][-2][3]", "[1][-1][4]", "[1][-1][3]",
+        "[0][-2][4]", "[0][-2][3]", "[0][-1][4]", "[0][-1][3]"
+    };
+    for (std::size_t ordinal = 0U; ordinal < flag_suffixes.size(); ++ordinal) {
+        const auto leaf = three_dimensional.design->find_signal(
+            "physical_net_array_three_dimensional.flags" + flag_suffixes[ordinal]);
+        assert(leaf);
+        assert(std::ranges::any_of(
+            three_dimensional.design->container_element_signal_aliases(),
+            [&](const auto& alias) {
+                return alias.object == *flags_object
+                    && alias.ordinal == ordinal && alias.signal == *leaf;
+            }));
+    }
+    const auto find_copy_writer = [&](const std::string_view name) -> const Process& {
+        const auto output = three_dimensional.design->find_signal(name);
+        assert(output);
+        const auto writer = std::ranges::find_if(three_dimensional.design->processes(),
+            [&](const Process& process) {
+                return std::ranges::any_of(process.driver_regions,
+                    [&](const auto& region) { return region.signal == *output; });
+            });
+        assert(writer != three_dimensional.design->processes().end());
+        assert(std::ranges::none_of(writer->operations,
+            [](const Operation& operation) {
+                return operation_holds<ReadContainerObject>(operation)
+                    || operation_holds<ContainerRead>(operation);
+            }));
+        return *writer;
+    };
+    const auto require_leaf_read = [&](const std::string_view output,
+                                       const std::string_view source) {
+        const auto leaf = three_dimensional.design->find_signal(source);
+        assert(leaf);
+        const auto& writer = find_copy_writer(output);
+        assert(std::ranges::any_of(writer.operations,
+            [&](const Operation& operation) {
+                const auto* read = operation_get_if<ReadSignal>(&operation);
+                return read != nullptr && read->signal == *leaf;
+            }));
+        assert(std::ranges::any_of(writer.static_sensitivity,
+            [&](const Sensitivity& sensitivity) {
+                return sensitivity.signal == *leaf && sensitivity.edge == EdgeKind::any;
+            }));
+    };
+    require_leaf_read("flags_copy", "flags[0][-1][3]");
+    require_leaf_read("wide_copy", "wide[0][-1]");
+    require_leaf_read("generated_copy[0]", "wide[0][-1]");
+    require_leaf_read("generated_copy[1]", "wide[1][-1]");
+    const auto& backing_writer = find_copy_writer("backing_copy");
+    const auto backing_signal = three_dimensional.design->find_signal("backing");
+    assert(backing_signal);
+    assert(std::ranges::any_of(backing_writer.static_sensitivity,
+        [&](const Sensitivity& sensitivity) {
+            return sensitivity.signal == *backing_signal
+                && sensitivity.offset == 195U && sensitivity.width == 65U;
+        }));
+    auto restored_three_dimensional = fsim::elaboration::ElaboratedDesign::from_state(
+        three_dimensional.design->state());
+    assert(restored_three_dimensional);
+    assert(restored_three_dimensional->container_element_signal_aliases()
+        == three_dimensional.design->container_element_signal_aliases());
+    auto invalid_name_state = three_dimensional.design->state();
+    const auto first_alias = invalid_name_state.container_element_signal_aliases.front();
+    invalid_name_state.signal_info[first_alias.signal].name += "[0]";
+    invalid_name_state.signals[first_alias.signal].name += "[0]";
+    assert(!fsim::elaboration::ElaboratedDesign::from_state(std::move(invalid_name_state)));
+    auto three_dimensional_runtime = restored_three_dimensional->create_interpreter();
+    assert(three_dimensional_runtime->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto& flags = three_dimensional_runtime->container_object_value(*flags_object);
+    assert(flags.elements.size() == 8U);
+    for (std::size_t ordinal = 0U; ordinal < flags.elements.size(); ++ordinal) {
+        assert(flags.elements[ordinal].to_msb_string() == (ordinal == 7U ? "1" : ordinal == 0U ? "X" : "Z"));
+    }
+    const auto& wide_elements = three_dimensional_runtime
+        ->container_object_value(*wide_object).elements;
+    assert(wide_elements.size() == 4U);
+    assert(wide_elements[0U].to_msb_string() == std::string(65U, '1'));
+    assert(wide_elements[2U].width() == 65U);
+    assert(wide_elements[2U].to_msb_string() == "1" + std::string(64U, '0'));
+
+    const auto dynamic_net_array_parsed = fsim::frontend::parse_text(
+        "physical-net-array-dynamic.sv",
+        R"(
+module physical_net_array_dynamic;
+  wire [7:0] words[0:1];
+  integer index;
+  logic [7:0] dynamic_value;
+  logic whole_changed;
+  assign words[0] = 8'h11;
+  assign words[1] = 8'h22;
+  always_comb dynamic_value = words[index];
+  always @(words) whole_changed = ~whole_changed;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_net_array_parsed.ok());
+    const auto dynamic_net_array_elaborated = compile_and_elaborate(
+        dynamic_net_array_parsed.design,
+        "physical_net_array_dynamic");
+    assert(dynamic_net_array_elaborated.ok());
+    const auto dynamic_net_object
+        = dynamic_net_array_elaborated.design->find_container("words");
+    const auto dynamic_net_proxy
+        = dynamic_net_array_elaborated.design->find_signal("words");
+    assert(dynamic_net_object && dynamic_net_proxy);
+    assert(std::ranges::count_if(
+        dynamic_net_array_elaborated.design->container_element_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *dynamic_net_object;
+        }) == 2);
+    assert(std::ranges::any_of(
+        dynamic_net_array_elaborated.design->processes(),
+        [&](const Process& process) {
+            const bool dynamic_read = std::ranges::any_of(
+                process.operations, [&](const Operation& operation) {
+                    const auto* read
+                        = operation_get_if<ReadContainerObject>(&operation);
+                    if (read == nullptr || read->object != *dynamic_net_object) {
+                        return false;
+                    }
+                    return std::ranges::any_of(
+                        process.operations, [&](const Operation& candidate) {
+                            const auto* element_read
+                                = operation_get_if<ContainerRead>(&candidate);
+                            return element_read != nullptr
+                                && element_read->source == read->destination;
+                        });
+                });
+            const bool public_proxy_dependency = std::ranges::any_of(
+                process.static_sensitivity,
+                [&](const Sensitivity& sensitivity) {
+                    return sensitivity.signal == *dynamic_net_proxy
+                        && sensitivity.width == 0U;
+                });
+            return dynamic_read && public_proxy_dependency;
+        }));
+
+    const auto specify_unrelated_parsed = fsim::frontend::parse_text(
+        "physical-net-array-unrelated-specify.sv",
+        R"(
+module physical_net_array_unrelated_specify(input wire a, output wire z);
+  wire [7:0] words[0:1];
+  assign words[0] = {8{a}};
+  assign words[1] = 8'h00;
+  assign z = words[0][0];
+  specify (a => z) = 1; endspecify
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(specify_unrelated_parsed.ok());
+    const auto specify_unrelated_elaborated = compile_and_elaborate(
+        specify_unrelated_parsed.design,
+        "physical_net_array_unrelated_specify");
+    assert(specify_unrelated_elaborated.ok());
+    const auto specify_unrelated_object
+        = specify_unrelated_elaborated.design->find_container("words");
+    const auto specify_unrelated_proxy
+        = specify_unrelated_elaborated.design->find_signal("words");
+    const auto specify_unrelated_source
+        = specify_unrelated_elaborated.design->find_signal("a");
+    const auto specify_unrelated_destination
+        = specify_unrelated_elaborated.design->find_signal("z");
+    assert(specify_unrelated_object && specify_unrelated_proxy);
+    assert(specify_unrelated_source && specify_unrelated_destination);
+    const auto& specify_unrelated_paths
+        = specify_unrelated_elaborated.design->verilog_specify_paths();
+    assert(specify_unrelated_paths.size() == 1U);
+    assert(specify_unrelated_paths.front().identity
+        == "sdf:iopath:physical_net_array_unrelated_specify:0");
+    assert(specify_unrelated_paths.front().sources.size() == 1U);
+    assert(specify_unrelated_paths.front().destinations.size() == 1U);
+    assert(specify_unrelated_paths.front().sources.front().signal
+        == *specify_unrelated_source);
+    assert(specify_unrelated_paths.front().destinations.front().signal
+        == *specify_unrelated_destination);
+    // This fixture's specify path references a and z, not words. It checks
+    // that an unrelated timing path does not disable physical word aliases.
+    assert(std::ranges::count_if(
+        specify_unrelated_elaborated.design
+            ->container_element_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *specify_unrelated_object;
+        }) == 2);
+    assert(std::ranges::any_of(
+        specify_unrelated_elaborated.design
+            ->container_aggregate_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *specify_unrelated_object
+                && alias.signal == *specify_unrelated_proxy;
+        }));
+
+    const auto wand_fallback_parsed = fsim::frontend::parse_text(
+        "physical-net-array-wand-fallback.sv",
+        R"(
+module physical_net_array_wand_fallback;
+  wand [7:0] words[0:1];
+  assign words[0] = 8'hff;
+  assign words[1] = 8'h00;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(wand_fallback_parsed.ok());
+    const auto wand_fallback_elaborated = compile_and_elaborate(
+        wand_fallback_parsed.design,
+        "physical_net_array_wand_fallback");
+    assert(wand_fallback_elaborated.ok());
+    const auto wand_fallback_object
+        = wand_fallback_elaborated.design->find_container("words");
+    assert(wand_fallback_object);
+    assert(std::ranges::none_of(
+        wand_fallback_elaborated.design->container_element_signal_aliases(),
+        [&](const auto& alias) {
+            return alias.object == *wand_fallback_object;
+        }));
 
     const auto procedural_memory_parsed = fsim::frontend::parse_text(
         "procedural-memory.sv",
@@ -2273,16 +2778,17 @@ void test_systemverilog_static_typed_container_reads()
   logic [W-1:0] blocking_values[1:0];
   int selector;
   logic [W-1:0] literal_result, parameter_result, arithmetic_result;
-  logic [W-1:0] truncated_result, wrapped_result, unsigned_result;
-  logic [W-1:0] signed_result, unknown_result, dynamic_result;
+  logic [W-1:0] wide_out_of_range_result, wrapped_result, unsigned_result;
+  logic [W-1:0] int_cast_result, signed_result, unknown_result, dynamic_result;
   logic [W-1:0] signed_in_range_result, out_of_range_result;
   logic [W-1:0] blocking_result;
   assign literal_result = down_values[2];
   assign parameter_result = down_values[PICK];
   assign arithmetic_result = up_values[1 + 1];
-  assign truncated_result = down_values[64'h100000001];
+  assign wide_out_of_range_result = down_values[64'h100000001];
   assign wrapped_result = up_values[8'(8'hff + 8'd2)];
   assign unsigned_result = high_values[8'hff];
+  assign int_cast_result = high_values[int'(8'hff)];
   assign signed_result = high_values[$signed(8'hff)];
   assign signed_in_range_result = up_values[$signed(8'hff)];
   assign unknown_result = down_values[2'bx1];
@@ -2301,26 +2807,7 @@ endmodule
         const auto elaborated = compile_and_elaborate(
             parsed.design, "static_typed_container_reads");
         assert(elaborated.ok());
-        auto normalized_state = elaborated.design->state();
-        std::vector<FusedMaskedContainerRead> bindings;
-        for (const auto& alias : normalized_state.container_signal_aliases) {
-            assert(alias.readable && alias.writable);
-            const auto& object = normalized_state.container_objects[alias.object];
-            assert(!object.slice_alias);
-            bindings.push_back({ alias.object, alias.signal,
-                &object.initial_value.type,
-                static_cast<std::uint32_t>(
-                    normalized_state.signal_info[alias.signal].width) });
-        }
-        for (auto& process : normalized_state.processes) {
-            if (auto normalized = normalize_fused_container_reads(process, bindings)) {
-                assert(normalized->id == process.id);
-                assert(normalized->static_sensitivity == process.static_sensitivity);
-                assert(normalized->operations.size() == process.operations.size());
-                assert(normalized->container_register_count == 0U);
-                process = std::move(*normalized);
-            }
-        }
+        auto lowered_state = elaborated.design->state();
 
         const auto signal = [&](const std::string_view name) {
             const auto found = elaborated.design->find_signal(name);
@@ -2337,41 +2824,53 @@ endmodule
                     });
             });
         assert(literal_writer != elaborated.design->processes().end());
-        assert(normalize_fused_container_reads(*literal_writer, bindings));
-        auto malformed = *literal_writer;
-        malformed.static_sensitivity.clear();
-        assert(!normalize_fused_container_reads(malformed, bindings));
-        const auto blocking_writer = std::ranges::find_if(
-            elaborated.design->processes(), [&](const Process& process) {
-                return std::ranges::any_of(process.operations,
-                    [&](const Operation& operation) {
-                        const auto* write = operation_get_if<WriteUpdate>(&operation);
-                        const auto* blocking
-                            = operation_get_if<WriteBlocking>(&operation);
-                        return (write != nullptr
-                                   && write->signal == signal("blocking_result"))
-                            || (blocking != nullptr
-                                && blocking->signal == signal("blocking_result"));
-                    });
+        assert(literal_writer->scheduling_domain
+            == ProcessSchedulingDomain::systemverilog);
+        assert(literal_writer->container_register_count == 0U);
+        assert(std::ranges::none_of(
+            literal_writer->operations,
+            [](const Operation& operation) {
+                return operation_holds<ReadContainerObject>(operation)
+                    || operation_holds<ContainerRead>(operation);
+            }));
+        const auto literal_source = signal("down_values");
+        const auto literal_read = std::ranges::find_if(
+            literal_writer->operations,
+            [&](const Operation& operation) {
+                const auto* read = operation_get_if<ReadSignal>(&operation);
+                return read != nullptr && read->signal == literal_source;
             });
-        assert(blocking_writer != elaborated.design->processes().end());
-        assert(!normalize_fused_container_reads(*blocking_writer, bindings));
-        auto duplicate_bindings = bindings;
-        duplicate_bindings.insert(duplicate_bindings.end(), bindings.begin(),
-            bindings.end());
-        assert(!normalize_fused_container_reads(*literal_writer,
-            duplicate_bindings));
-        auto no_bindings = std::vector<FusedMaskedContainerRead> { };
-        assert(!normalize_fused_container_reads(*literal_writer, no_bindings));
-        malformed = *literal_writer;
-        for (auto& operation : malformed.operations) {
-            if (const auto* read = operation_get_if<ReadContainerObject>(&operation)) {
-                operation = WriteContainerObject {
-                    read->object, read->destination, std::nullopt };
-                break;
-            }
-        }
-        assert(!normalize_fused_container_reads(malformed, bindings));
+        assert(literal_read != literal_writer->operations.end());
+        const auto* literal_signal_read
+            = operation_get_if<ReadSignal>(&*literal_read);
+        assert(literal_signal_read != nullptr);
+        const auto literal_extract = std::ranges::find_if(
+            literal_writer->operations,
+            [&](const Operation& operation) {
+                const auto* extract = operation_get_if<Extract>(&operation);
+                return extract != nullptr
+                    && extract->source == literal_signal_read->destination
+                    && extract->offset == 3U * width
+                    && extract->width == width;
+            });
+        assert(literal_extract != literal_writer->operations.end());
+        assert(std::ranges::any_of(
+            literal_writer->static_sensitivity,
+            [&](const Sensitivity& entry) {
+                return entry.signal == literal_source
+                    && entry.edge == EdgeKind::any
+                    && entry.offset == 3U * width
+                    && entry.width == width;
+            }));
+        assert(std::ranges::any_of(
+            literal_writer->operations,
+            [](const Operation& operation) {
+                const auto* write = operation_get_if<WriteUpdate>(&operation);
+                return write != nullptr
+                    && write->domain
+                        == SignalUpdateDomain::systemverilog_active;
+            }));
+
         const auto expect_read = [&](const std::string_view output_name,
                                      const std::string_view input_name,
                                      const std::optional<std::uint32_t> offset,
@@ -2379,7 +2878,7 @@ endmodule
             const auto output = signal(output_name);
             const auto input = signal(input_name);
             std::size_t writers { };
-            for (const auto& process : normalized_state.processes) {
+            for (const auto& process : lowered_state.processes) {
                 const auto writes_output = std::ranges::any_of(
                     process.operations, [&](const Operation& operation) {
                         const auto* write
@@ -2402,6 +2901,36 @@ endmodule
                         continue;
                     }
                     ++signal_reads;
+                    if (!offset) {
+                        std::cerr << "typed container reader " << output_name
+                                  << " expected a container fallback for "
+                                  << input_name << " (offset=dynamic, width="
+                                  << width << ", backing_width="
+                                  << backing_width
+                                  << ") but found a direct signal read; aliases:";
+                        for (const auto& alias : lowered_state
+                                 .container_signal_aliases) {
+                            if (alias.object
+                                < lowered_state.container_objects.size()) {
+                                std::cerr << " object="
+                                          << lowered_state
+                                                 .container_objects[alias.object]
+                                                 .name;
+                            }
+                            std::cerr << " signal=" << alias.signal
+                                      << " readable=" << alias.readable
+                                      << " writable=" << alias.writable;
+                            if (alias.signal
+                                < lowered_state.signal_info.size()) {
+                                std::cerr << ':'
+                                          << lowered_state
+                                                 .signal_info[alias.signal]
+                                                 .name;
+                            }
+                            std::cerr << ';';
+                        }
+                        std::cerr << '\n';
+                    }
                     assert(offset);
                     assert(read->kind == SignalReadKind::current);
                     assert(elaborated.design->signals()[input].width
@@ -2431,23 +2960,29 @@ endmodule
         expect_read("literal_result", "down_values", 3U * width, 4U * width);
         expect_read("parameter_result", "down_values", 2U * width, 4U * width);
         expect_read("arithmetic_result", "up_values", 0U, 4U * width);
-        expect_read("truncated_result", "down_values", 2U * width, 4U * width);
-        // Arithmetic that survives lowering keeps the original container path.
-        expect_read("wrapped_result", "up_values", std::nullopt, 4U * width);
-        // Extension operations also remain outside the constant proof tier.
-        expect_read("unsigned_result", "high_values", std::nullopt, 2U * width);
+        // Keep the 64-bit index intact: it is outside this unpacked range.
+        // Narrowing is covered separately by explicit sized and int casts.
+        expect_read("wide_out_of_range_result", "down_values",
+            std::nullopt, 4U * width);
+        // Sized constant arithmetic is range-checked after its result width is
+        // applied, so this index wraps to one and selects a static element.
+        expect_read("wrapped_result", "up_values", width, 4U * width);
+        // A resolved unsigned literal and explicit integer cast select their
+        // declared element before the array range is checked.
+        expect_read("unsigned_result", "high_values", width, 2U * width);
+        expect_read("int_cast_result", "high_values", width, 2U * width);
         expect_read("signed_result", "high_values", std::nullopt, 2U * width);
-        expect_read("signed_in_range_result", "up_values", std::nullopt,
+        expect_read("signed_in_range_result", "up_values", 3U * width,
             4U * width);
         expect_read("unknown_result", "down_values", std::nullopt, 4U * width);
         expect_read("out_of_range_result", "down_values", std::nullopt,
             4U * width);
         expect_read("dynamic_result", "down_values", std::nullopt, 4U * width);
 
-        const auto normalized_design = fsim::elaboration::ElaboratedDesign::from_state(
-            std::move(normalized_state));
-        assert(normalized_design);
-        auto interpreter = normalized_design->create_interpreter();
+        const auto lowered_design = fsim::elaboration::ElaboratedDesign::from_state(
+            std::move(lowered_state));
+        assert(lowered_design);
+        auto interpreter = lowered_design->create_interpreter();
         auto original_interpreter = elaborated.design->create_interpreter();
         for (std::size_t round { }; round < 2U; ++round) {
             auto down = PackedLogic4(4U * width, Logic4::zero);
@@ -2483,9 +3018,11 @@ endmodule
             expect_value("literal_result", down.extract_bits(3U * width, width));
             expect_value("parameter_result", down.extract_bits(2U * width, width));
             expect_value("arithmetic_result", up.extract_bits(0U, width));
-            expect_value("truncated_result", down.extract_bits(2U * width, width));
+            expect_value("wide_out_of_range_result",
+                PackedLogic4(width, Logic4::x));
             expect_value("wrapped_result", up.extract_bits(width, width));
             expect_value("unsigned_result", high.extract_bits(width, width));
+            expect_value("int_cast_result", high.extract_bits(width, width));
             expect_value("signed_in_range_result", up.extract_bits(3U * width,
                 width));
             expect_value("dynamic_result", down.extract_bits(2U * width, width));

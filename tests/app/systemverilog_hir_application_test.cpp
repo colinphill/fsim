@@ -2728,9 +2728,18 @@ package resolver_pkg;
   let with_mask(value, mask = 8'h0f) = value | mask;
 endpackage
 
+module nettype_output_actual_leaf (user_resolved, unresolved);
+  output logic [7:0] user_resolved = 8'ha5;
+  output logic [7:0] unresolved = 8'h3c;
+endmodule
+
 module nettype_execution;
   import resolver_pkg::*;
   first_net resolved;
+  first_net port_actual;
+  uwire [7:0] uwire_port_actual;
+  logic [7:0] port_observed;
+  logic [7:0] uwire_port_observed;
   logic [7:0] observed;
   logic [7:0] let_observed;
   logic [7:0] qualified_let_observed;
@@ -2748,6 +2757,9 @@ module nettype_execution;
   logic [7:0] generated_alias_observed;
   logic [7:0] generated_let_observed;
   let local_bias = 8'h80;
+  nettype_output_actual_leaf port_child (
+    .user_resolved(port_actual), .unresolved(uwire_port_actual)
+  );
   alias alias_source = alias_view;
   alias reverse_source = reverse_view;
   alias partial_source[7:4] = partial_view[3:0];
@@ -2775,6 +2787,8 @@ module nettype_execution;
   initial begin
     #1 begin
       observed = resolved;
+      port_observed = port_actual;
+      uwire_port_observed = uwire_port_actual;
       let_observed = with_mask(resolved) | local_bias;
       qualified_let_observed = resolver_pkg::with_mask(resolved, 8'h30);
       alias_observed = alias_view;
@@ -2819,6 +2833,14 @@ endmodule
         assert(execution_project && !execution_diagnostics.has_error());
         const auto resolved = execution_project->design.find_signal(
             "nettype_execution.resolved");
+        const auto port_actual = execution_project->design.find_signal(
+            "nettype_execution.port_actual");
+        const auto uwire_port_actual = execution_project->design.find_signal(
+            "nettype_execution.uwire_port_actual");
+        const auto port_formal = execution_project->design.find_signal(
+            "nettype_execution.port_child.user_resolved");
+        const auto uwire_port_formal = execution_project->design.find_signal(
+            "nettype_execution.port_child.unresolved");
         const auto alias_source = execution_project->design.find_signal(
             "nettype_execution.alias_source");
         const auto alias_view = execution_project->design.find_signal(
@@ -2832,7 +2854,9 @@ endmodule
         const auto partial_view = execution_project->design.find_signal(
             "nettype_execution.partial_view");
         assert(
-            resolved && alias_source && alias_view
+            resolved && port_actual && uwire_port_actual
+            && port_formal && uwire_port_formal
+            && alias_source && alias_view
             && reverse_source && reverse_view
             && partial_source && partial_view);
         assert(alias_source == alias_view);
@@ -2840,6 +2864,44 @@ endmodule
         assert(partial_source != partial_view);
         assert(execution_project->design.signals().at(*resolved).resolution
             == fsim::runtime::simir::ResolutionKind::sv_user_first);
+        assert(*port_actual != *port_formal);
+        assert(*uwire_port_actual != *uwire_port_formal);
+        assert(execution_project->design.signals().at(*port_actual).resolution
+            == fsim::runtime::simir::ResolutionKind::sv_user_first);
+        assert(execution_project->design.signals().at(*uwire_port_actual)
+                   .resolution
+            == fsim::runtime::simir::ResolutionKind::none);
+        const auto design_state = execution_project->design.state();
+        assert(design_state.signals.at(*port_actual)
+                   .initial_value.to_msb_string()
+            == "ZZZZZZZZ");
+        assert(design_state.signals.at(*uwire_port_actual)
+                   .initial_value.to_msb_string()
+            == "ZZZZZZZZ");
+        assert(design_state.signals.at(*port_formal)
+                   .initial_value.to_msb_string()
+            == "XXXXXXXX");
+        assert(design_state.signals.at(*uwire_port_formal)
+                   .initial_value.to_msb_string()
+            == "XXXXXXXX");
+        const auto has_initializer = [&](
+                                         const std::string_view suffix,
+                                         const fsim::runtime::simir::SignalId target) {
+            return std::ranges::any_of(
+                design_state.processes,
+                [&](const auto& process) {
+                    return process.name.ends_with(suffix)
+                        && std::ranges::any_of(
+                            process.driver_regions,
+                            [&](const auto& region) {
+                                return region.signal == target;
+                            });
+                });
+        };
+        assert(has_initializer(
+            "$declaration_initializer_user_resolved", *port_formal));
+        assert(has_initializer(
+            "$declaration_initializer_unresolved", *uwire_port_formal));
         fsim::diagnostic::Engine artifact_diagnostics;
         const auto runtime_state = fsim::app::serialize_runtime_state(
             execution_project->design, artifact_diagnostics);
@@ -2864,6 +2926,12 @@ endmodule
             execution_config.run.max_deltas,
             engine
         };
+        if (engine == fsim::app::SimulationEngine::compiled) {
+            execution.await_all_native_compilation();
+            assert(execution.compiled_process_count() != 0U);
+        } else {
+            assert(execution.compiled_process_count() == 0U);
+        }
         const auto nettype_observed = execution.find_signal(
             "nettype_execution.observed");
         const auto let_observed = execution.find_signal(
@@ -2882,11 +2950,26 @@ endmodule
             "nettype_execution.generated_alias_observed");
         const auto generated_let_observed = execution.find_signal(
             "nettype_execution.generated_let_observed");
+        const auto port_observed = execution.find_signal(
+            "nettype_execution.port_observed");
+        const auto uwire_port_observed = execution.find_signal(
+            "nettype_execution.uwire_port_observed");
         assert(
             nettype_observed && let_observed && qualified_let_observed
             && alias_observed && alias_roundtrip
             && partial_alias_observed && shuffled_alias_observed
-            && generated_alias_observed && generated_let_observed);
+            && generated_alias_observed && generated_let_observed
+            && port_observed && uwire_port_observed);
+        const auto startup = execution.run(0U);
+        assert(startup.status == fsim::runtime::RunStatus::time_limit);
+        assert(execution.read_signal(*port_formal).to_msb_string()
+            == "10100101");
+        assert(execution.read_signal(*uwire_port_formal).to_msb_string()
+            == "00111100");
+        assert(execution.read_signal(*port_actual).to_msb_string()
+            == "10100101");
+        assert(execution.read_signal(*uwire_port_actual).to_msb_string()
+            == "00111100");
         const auto result = execution.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);
         assert(result.time == 2);
@@ -2903,13 +2986,17 @@ endmodule
             + ":"
             + execution.read_signal(*generated_alias_observed).to_msb_string()
             + ":"
-            + execution.read_signal(*generated_let_observed).to_msb_string();
+            + execution.read_signal(*generated_let_observed).to_msb_string()
+            + ":" + execution.read_signal(*port_observed).to_msb_string()
+            + ":"
+            + execution.read_signal(*uwire_port_observed).to_msb_string();
     };
     const auto nettype_reference = execute_nettype(
         fsim::app::SimulationEngine::interpreter,
         fsim::project::Optimization::o0);
     assert(nettype_reference
-        == "00010010:10011111:00110010:01011010:10100101:1010:1001:11000011:11100011");
+        == "00010010:10011111:00110010:01011010:10100101:1010:1001:"
+           "11000011:11100011:10100101:00111100");
     assert(execute_nettype(
                fsim::app::SimulationEngine::compiled,
                fsim::project::Optimization::o0)

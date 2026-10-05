@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
+#include "integral_identity_memo.hpp"
 
 #include <algorithm>
 #include <array>
@@ -953,7 +954,9 @@ std::optional<std::int64_t> parse_based_literal(
         static_cast<std::size_t>(effective_width), is_signed);
 }
 
-std::optional<std::int64_t> parse_integral_identity(
+std::optional<std::int64_t> parse_integral_identity(std::string_view);
+
+std::optional<std::int64_t> parse_integral_identity_uncached(
     const std::string_view input)
 {
     if (const auto canonical = parse_systemverilog_canonical(input)) {
@@ -982,6 +985,39 @@ std::optional<std::int64_t> parse_integral_identity(
         return std::nullopt;
     }
     return value;
+}
+
+std::optional<std::int64_t> parse_integral_identity_direct(
+    const std::string_view input)
+{
+    if (input.starts_with("svconst-v3:")) {
+        return parse_systemverilog_canonical(input);
+    }
+    std::int64_t value { };
+    const auto parsed = std::from_chars(
+        input.data(), input.data() + input.size(), value, 10);
+    return parsed.ec == std::errc { }
+            && parsed.ptr == input.data() + input.size()
+        ? std::optional { value } : std::nullopt;
+}
+
+std::optional<std::int64_t> parse_integral_identity(
+    const std::string_view input)
+{
+    // Only canonical identities and complete decimal values use the pure
+    // parser. A failed direct parse still takes the original locale-sensitive
+    // normalization path, so changing LC_CTYPE cannot stale its result.
+    if (!input.empty()
+        && (input.starts_with("svconst-v3:") || input.front() == '-'
+            || (input.front() >= '0' && input.front() <= '9'))) {
+        static constinit thread_local detail::IntegralIdentityMemo memo {
+            &parse_integral_identity_direct
+        };
+        if (const auto value = memo.parse(input)) {
+            return value;
+        }
+    }
+    return parse_integral_identity_uncached(input);
 }
 
 std::optional<bool> systemverilog_unbounded_identity(

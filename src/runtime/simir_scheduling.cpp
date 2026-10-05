@@ -12,10 +12,35 @@ void Interpreter::Impl::stage_update_unrouted(
     const std::optional<ProcessId> driver,
     const SignalId signal,
     PackedLogic4 value,
-    const std::optional<std::size_t> offset)
+    const std::optional<std::size_t> offset,
+    const SignalChangeOrigin origin)
 {
+    if (origin.process_domain
+        == ProcessSchedulingDomain::systemverilog) {
+        scheduler.schedule_systemverilog(
+            origin.phase, driver.value_or(signal),
+            [this, driver, signal, value = std::move(value), offset,
+                origin](Scheduler&) mutable {
+                if (driver) {
+                    if (offset) {
+                        commit_driver_slice(
+                            *driver, signal, std::move(value), *offset,
+                            origin, false);
+                    } else {
+                        commit_driver(
+                            *driver, signal, std::move(value), origin, false);
+                    }
+                } else if (offset) {
+                    commit_slice(
+                        signal, std::move(value), *offset, origin);
+                } else {
+                    commit(signal, std::move(value), origin);
+                }
+            });
+        return;
+    }
     if (driver && (process_profile_enabled || update_profile_enabled)) {
-        processes[*driver].cold().profile_updates += 1U;
+        processes.add_profile_updates(*driver, 1U);
     }
     const auto value_index = pending_update_values.size();
     pending_update_values.push_back(std::move(value));
@@ -35,8 +60,11 @@ bool Interpreter::Impl::route_module_path_update(
     const PackedLogic4& value,
     const std::optional<std::size_t> offset,
     const TransitionDelays* intrinsic_delays,
-    const SimulationTick fixed_delay)
+    const SimulationTick fixed_delay,
+    const std::optional<SignalChangeOrigin> origin)
 {
+    const auto change_origin = origin.value_or(
+        capture_signal_change_origin(driver));
     const auto write_offset = offset.value_or(0U);
     const auto write_end = write_offset + value.width();
     const bool has_routed_destination = std::ranges::any_of(
@@ -201,7 +229,9 @@ bool Interpreter::Impl::route_module_path_update(
                     driver,
                     signal,
                     static_cast<std::uint32_t>(target_bit),
-                    1U
+                    1U,
+                    change_origin.process_domain,
+                    change_origin.phase
                 };
                 const auto projected = pending_module_path_writes.find(projected_key);
                 const auto transition_before = projected == pending_module_path_writes.end()
@@ -247,7 +277,9 @@ bool Interpreter::Impl::route_module_path_update(
         const auto target_bit = write_offset + bit;
         if (!selected[bit]) {
             if (!intrinsic_delays && fixed_delay == 0) {
-                stage_update_unrouted(driver, signal, std::move(scalar), target_bit);
+                stage_update_unrouted(
+                    driver, signal, std::move(scalar), target_bit,
+                    change_origin);
                 continue;
             }
             selected[bit] = accumulated_delay(
@@ -255,7 +287,12 @@ bool Interpreter::Impl::route_module_path_update(
             orders[bit] = std::numeric_limits<std::uint32_t>::max();
         }
         const InertialDriverKey key {
-            driver, signal, static_cast<std::uint32_t>(target_bit), 1U
+            driver,
+            signal,
+            static_cast<std::uint32_t>(target_bit),
+            1U,
+            change_origin.process_domain,
+            change_origin.phase
         };
         bool force_recovery = false;
         if (const auto pending = pending_module_path_writes.find(key);
@@ -301,15 +338,31 @@ bool Interpreter::Impl::route_module_path_update(
                 }
                 if (!pending->second.retain_delay
                     || x_delay < *selected[bit]) {
-                    scheduler.schedule_after(
-                        x_delay, SchedulerPhase::update, orders[bit],
-                        [this, driver, signal, target_bit](Scheduler&) {
+                    auto update_x = [this, driver, signal, target_bit,
+                                        change_origin](Scheduler&) {
+                        if (change_origin.process_domain
+                            == ProcessSchedulingDomain::systemverilog) {
+                            commit_driver_slice(
+                                driver, signal,
+                                PackedLogic4 { 1U, Logic4::x },
+                                target_bit, change_origin, false);
+                        } else {
                             stage_update_unrouted(
-                                driver,
-                                signal,
+                                driver, signal,
                                 PackedLogic4 { 1U, Logic4::x },
                                 target_bit);
-                        });
+                        }
+                    };
+                    if (change_origin.process_domain
+                        == ProcessSchedulingDomain::systemverilog) {
+                        scheduler.schedule_systemverilog_after(
+                            x_delay, SchedulerPhase::active, orders[bit],
+                            std::move(update_x));
+                    } else {
+                        scheduler.schedule_after(
+                            x_delay, SchedulerPhase::update, orders[bit],
+                            std::move(update_x));
+                    }
                 }
             }
             pending_module_path_writes.erase(pending);
@@ -322,7 +375,9 @@ bool Interpreter::Impl::route_module_path_update(
             continue;
         }
         if (*selected[bit] == 0) {
-            stage_update_unrouted(driver, signal, std::move(scalar), target_bit);
+            stage_update_unrouted(
+                driver, signal, std::move(scalar), target_bit,
+                change_origin);
             continue;
         }
         const auto now = scheduler.now();
@@ -350,14 +405,31 @@ bool Interpreter::Impl::route_module_path_update(
                 show_cancelled[bit] });
         (void)inserted;
         try {
-            pending->second.handle = scheduler.schedule_after_cancelable(
-                *selected[bit], SchedulerPhase::update, orders[bit],
-                [this, key, driver, signal, target_bit,
-                    scalar = std::move(scalar)](Scheduler&) mutable {
+            auto mature = [this, key, driver, signal, target_bit,
+                              scalar = std::move(scalar), change_origin](
+                             Scheduler&) mutable {
                     pending_module_path_writes.erase(key);
-                    stage_update_unrouted(
-                        driver, signal, std::move(scalar), target_bit);
-                });
+                    if (change_origin.process_domain
+                        == ProcessSchedulingDomain::systemverilog) {
+                        commit_driver_slice(
+                            driver, signal, std::move(scalar), target_bit,
+                            change_origin, false);
+                    } else {
+                        stage_update_unrouted(
+                            driver, signal, std::move(scalar), target_bit);
+                    }
+                };
+            if (change_origin.process_domain
+                == ProcessSchedulingDomain::systemverilog) {
+                pending->second.handle
+                    = scheduler.schedule_systemverilog_after_cancelable(
+                        *selected[bit], SchedulerPhase::active, orders[bit],
+                        std::move(mature));
+            } else {
+                pending->second.handle = scheduler.schedule_after_cancelable(
+                    *selected[bit], SchedulerPhase::update, orders[bit],
+                    std::move(mature));
+            }
         } catch (...) {
             pending_module_path_writes.erase(pending);
             throw;
@@ -370,8 +442,29 @@ void Interpreter::Impl::stage_update_slice(
     const ProcessId process,
     const SignalId signal_id,
     PackedLogic4 value,
-    const std::size_t offset)
+    const std::size_t offset,
+    const SignalUpdateDomain domain)
 {
+    if (domain != SignalUpdateDomain::generic) {
+        (void)get_signal(signal_id);
+        const auto target_width = driven_values[signal_id].width();
+        if (get_signal(signal_id).systemverilog_scalar
+            != SystemVerilogScalarKind::None) {
+            throw std::invalid_argument {
+                "SimIR scalar signals do not support partial update"
+            };
+        }
+        if (value.width() == 0 || offset > target_width
+            || value.width() > target_width - offset) {
+            throw std::invalid_argument(
+                "partial update range is outside its target signal");
+        }
+        value = coerce_value_kind(
+            std::move(value), get_signal(signal_id).value_kind);
+        schedule_systemverilog_update(
+            process, signal_id, std::move(value), offset, domain);
+        return;
+    }
     stage_update_slice(
         std::optional<ProcessId> { process },
         signal_id,
@@ -384,8 +477,10 @@ void Interpreter::Impl::schedule_inertial(
     const SignalId signal,
     PackedLogic4 value,
     const std::optional<std::size_t> offset,
-    const TransitionDelays& delays)
+    const TransitionDelays& delays,
+    const SignalUpdateDomain domain)
 {
+    const auto origin = capture_signal_change_origin(process, domain);
     (void)get_signal(signal);
     const auto target_width = driven_values[signal].width();
     if (value.width() == 0
@@ -403,14 +498,16 @@ void Interpreter::Impl::schedule_inertial(
     value = coerce_value_kind(
         std::move(value), get_signal(signal).value_kind);
     if (route_module_path_update(
-            process, signal, value, offset, &delays)) {
+            process, signal, value, offset, &delays, 0, origin)) {
         return;
     }
     const InertialDriverKey key {
         process,
         signal,
         static_cast<std::uint32_t>(offset.value_or(0)),
-        static_cast<std::uint32_t>(value.width())
+        static_cast<std::uint32_t>(value.width()),
+        origin.process_domain,
+        origin.phase
     };
     if (const auto pending = pending_inertial_writes.find(key);
         pending != pending_inertial_writes.end()) {
@@ -439,18 +536,25 @@ void Interpreter::Impl::schedule_inertial(
             ScheduledTaskHandle { }, value });
     (void)inserted;
     try {
-        pending->second.handle = scheduler.schedule_after_cancelable(
-            *delay,
-            SchedulerPhase::update,
-            process,
-            [this,
-                key,
-                process,
-                signal,
-                offset,
-                value = std::move(value)](Scheduler&) mutable {
+        auto mature = [this,
+                          key,
+                          process,
+                          signal,
+                          offset,
+                          value = std::move(value),
+                          origin](Scheduler&) mutable {
                 pending_inertial_writes.erase(key);
-                if (offset) {
+                if (origin.process_domain
+                    == ProcessSchedulingDomain::systemverilog) {
+                    if (offset) {
+                        commit_driver_slice(
+                            process, signal, std::move(value), *offset,
+                            origin, false);
+                    } else {
+                        commit_driver(
+                            process, signal, std::move(value), origin, false);
+                    }
+                } else if (offset) {
                     stage_update_slice(
                         process,
                         signal,
@@ -460,7 +564,16 @@ void Interpreter::Impl::schedule_inertial(
                     stage_update(
                         process, signal, std::move(value));
                 }
-            });
+            };
+        if (origin.process_domain
+            == ProcessSchedulingDomain::systemverilog) {
+            pending->second.handle
+                = scheduler.schedule_systemverilog_after_cancelable(
+                    *delay, origin.phase, process, std::move(mature));
+        } else {
+            pending->second.handle = scheduler.schedule_after_cancelable(
+                *delay, SchedulerPhase::update, process, std::move(mature));
+        }
     } catch (...) {
         pending_inertial_writes.erase(pending);
         throw;
@@ -889,7 +1002,7 @@ void Interpreter::Impl::handle_external_boundary(
 {
     if (suspension.kind
         != ExternalSuspendKind::validated_wait_sensitivity) {
-        if (instruction >= process.program().operations.size()) {
+        if (instruction >= process.program().operations().size()) {
             process.pc = instruction;
             fail(process, "executor returned an invalid dynamic boundary instruction");
         }
@@ -903,7 +1016,9 @@ void Interpreter::Impl::handle_external_boundary(
         }
     }
     process.pc = next_instruction;
-    clear_wait_timeout(process);
+    if (suspension.kind != ExternalSuspendKind::wait_on) {
+        clear_wait_timeout(process);
+    }
 
     switch (suspension.kind) {
     case ExternalSuspendKind::simir_boundary:
@@ -912,7 +1027,7 @@ void Interpreter::Impl::handle_external_boundary(
     case ExternalSuspendKind::wait_for:
         process.status = ProcessStatus::waiting;
         if (suspension.delay == 0) {
-            queue_next_delta(process.id);
+            queue_zero_delay_resume(process);
         } else {
             if (suspension.delay
                 > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
@@ -923,30 +1038,35 @@ void Interpreter::Impl::handle_external_boundary(
         }
         break;
     case ExternalSuspendKind::wait_on: {
-        process.status = ProcessStatus::waiting;
         if (suspension.sensitivity.empty()) {
+            clear_wait_timeout(process);
             process.pc = instruction;
             fail(process, "dynamic wait requires at least one event");
         }
+        const auto resume_pc = process.pc;
+        process.pc = instruction;
+        auto* dynamic_wait = &process.cold().ensure_dynamic_wait_state();
+        process.pc = resume_pc;
+        clear_wait_timeout(process);
+        process.status = ProcessStatus::waiting;
         process.waiting_on_signal = true;
-        auto& cold = process.cold();
-        cold.dynamic_sensitivity = suspension.sensitivity;
+        dynamic_wait->dynamic_sensitivity = suspension.sensitivity;
         std::sort(
-            cold.dynamic_sensitivity.begin(),
-            cold.dynamic_sensitivity.end(),
+            dynamic_wait->dynamic_sensitivity.begin(),
+            dynamic_wait->dynamic_sensitivity.end(),
             [](const Sensitivity& lhs, const Sensitivity& rhs) {
                 return lhs.signal < rhs.signal
                     || (lhs.signal == rhs.signal && lhs.edge < rhs.edge);
             });
-        cold.dynamic_sensitivity.erase(
+        dynamic_wait->dynamic_sensitivity.erase(
             std::unique(
-                cold.dynamic_sensitivity.begin(),
-                cold.dynamic_sensitivity.end()),
-            cold.dynamic_sensitivity.end());
-        cold.dynamic_wait_all = suspension.wait_all;
-        cold.dynamic_triggered.assign(
-            cold.dynamic_sensitivity.size(), false);
-        for (const auto& sensitivity : cold.dynamic_sensitivity) {
+                dynamic_wait->dynamic_sensitivity.begin(),
+                dynamic_wait->dynamic_sensitivity.end()),
+            dynamic_wait->dynamic_sensitivity.end());
+        dynamic_wait->dynamic_wait_all = suspension.wait_all;
+        dynamic_wait->dynamic_triggered.assign(
+            dynamic_wait->dynamic_sensitivity.size(), false);
+        for (const auto& sensitivity : dynamic_wait->dynamic_sensitivity) {
             (void)get_signal(sensitivity.signal);
             if (sensitivity.edge != EdgeKind::any) {
                 process.pc = instruction;
@@ -964,7 +1084,7 @@ void Interpreter::Impl::handle_external_boundary(
     case ExternalSuspendKind::validated_wait_sensitivity:
         process.status = ProcessStatus::waiting;
         if (suspension.kind == ExternalSuspendKind::wait_sensitivity
-            && process.program().static_sensitivity.empty()) {
+            && process.program().static_sensitivity().empty()) {
             process.pc = instruction;
             fail(process, "dynamic static wait has no sensitivity list");
         }

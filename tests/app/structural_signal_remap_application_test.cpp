@@ -1,19 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#if defined(FSIM_HAS_LLVM)
+#include "../../src/app/application_internal.hpp"
+#endif
 
 #include <array>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+
+#if defined(FSIM_HAS_LLVM)
+namespace fsim::app::application_detail {
+
+struct SignalCallbackOperandTestAccess {
+  [[nodiscard]] static std::uint32_t mapped_signal(
+      const bool actual_ids, const std::uint32_t signal)
+  {
+    using Executor = LlvmProcessExecutor;
+    using Mapping = Executor::SignalRemap::value_type;
+    const std::array<Mapping, 2U> remap {{{ 7U, 65U }, { 65U, 1000U }}};
+    Executor::CallbackState state { actual_ids };
+    state.signal_remap = remap;
+    return Executor::mapped_signal(state, signal);
+  }
+};
+
+}  // namespace fsim::app::application_detail
+#endif
 
 namespace {
 
@@ -165,8 +189,11 @@ void test_vhdl_projected_slice_level(
                                   repeated_logic9_pattern("HLWZ10XU-", 65U)}));
 #if defined(FSIM_HAS_LLVM)
   assert(reference.process_count == 131);
-  assert(compiled.compiled_processes == 4);
-  assert(compiled.compiled_modules == 1);
+  // The four structurally identical projected-slice leaf instances share one
+  // template; the independently eligible 35-operation top stimulus is the
+  // fifth compiled process in its own module.
+  assert(compiled.compiled_processes == 5);
+  assert(compiled.compiled_modules == 2);
 #else
   assert(compiled.compiled_processes == 0);
   assert(compiled.compiled_modules == 0);
@@ -250,12 +277,13 @@ void test_large_bound_literal_sharing(
     std::ofstream output(source);
     output << R"(
 module bound_literal_leaf #(parameter integer VALUE = 0)(
+  input logic [7:0] source,
   output logic [7:0] result
 );
   logic [7:0] memory [0:1];
   initial begin
     memory[0] = VALUE;
-    result = memory[0];
+    result = memory[0] ^ source;
   end
 endmodule
 
@@ -265,10 +293,12 @@ module bound_literal_dummy;
 endmodule
 
 module bound_literal_sharing_top;
+  logic [7:0] source_a = 8'h0f;
+  logic [7:0] source_b = 8'hf0;
   wire [7:0] result_a;
   wire [7:0] result_b;
-  bound_literal_leaf #(.VALUE(8'h21)) a(result_a);
-  bound_literal_leaf #(.VALUE(8'hd4)) b(result_b);
+  bound_literal_leaf #(.VALUE(8'h21)) a(source_a, result_a);
+  bound_literal_leaf #(.VALUE(8'hd4)) b(source_b, result_b);
 )";
     for (std::size_t index = 0; index < 126U; ++index) {
       output << "  bound_literal_dummy dummy_" << index << "();\n";
@@ -299,6 +329,9 @@ module bound_literal_sharing_top;
   require(project.has_value(), "cannot build bound-literal fixture");
   auto state = std::move(project->design).state();
   std::size_t padded = 0U;
+  std::array<bool, 2U> memory_instances_seen { };
+  std::array<fsim::runtime::simir::ContainerObjectId, 2U>
+      memory_object_ids { };
   for (auto& process : state.processes) {
     const auto has_container_write = std::ranges::any_of(
         process.operations,
@@ -309,8 +342,56 @@ module bound_literal_sharing_top;
     if (!has_container_write) {
       continue;
     }
-    require(process.container_register_count != 0U,
-        "bound-literal fixture has no container registers");
+    std::optional<fsim::runtime::simir::ContainerObjectId>
+        written_memory_object;
+    for (const auto& operation : process.operations) {
+      const auto* const write
+          = fsim::runtime::simir::operation_get_if<
+              fsim::runtime::simir::WriteContainerObjectElement>(
+              &operation);
+      if (write == nullptr) {
+        continue;
+      }
+      require(!written_memory_object.has_value(),
+          "bound-literal process writes multiple container objects");
+      written_memory_object = write->object;
+    }
+    require(written_memory_object.has_value(),
+        "bound-literal process lost its container-object write");
+    const auto object_index
+        = static_cast<std::size_t>(*written_memory_object);
+    require(object_index < state.container_objects.size()
+            && object_index < state.container_object_info.size(),
+        "bound-literal write has no retained container-object backing");
+    const auto& object = state.container_objects[object_index];
+    const auto& object_info = state.container_object_info[object_index];
+    require(object_info.id == *written_memory_object
+            && object_info.name == object.name
+            && object.initial_value.type == object_info.type,
+        "bound-literal container-object metadata is inconsistent");
+    const auto& memory_type = object.initial_value.type;
+    require(memory_type.fixed
+            && memory_type.element_kind
+                == fsim::runtime::simir::ContainerElementKind::Packed
+            && memory_type.element_width == 8U
+            && memory_type.dimensions.size() == 1U
+            && memory_type.dimensions.front().first == 0
+            && memory_type.dimensions.front().second == 1
+            && object.initial_value.elements.size() == 2U
+            && !object.slice_alias.has_value(),
+        "bound-literal instance memory has the wrong retained shape");
+    const auto instance_index
+        = object.name == "bound_literal_sharing_top.a.memory"
+        ? std::optional<std::size_t> { 0U }
+        : object.name == "bound_literal_sharing_top.b.memory"
+        ? std::optional<std::size_t> { 1U }
+        : std::nullopt;
+    require(instance_index.has_value(),
+        "bound-literal write does not target either leaf memory");
+    require(!memory_instances_seen[*instance_index],
+        "bound-literal leaf memory has multiple padded writers");
+    memory_instances_seen[*instance_index] = true;
+    memory_object_ids[*instance_index] = *written_memory_object;
     require(process.static_sensitivity.empty(),
         "bound-literal fixture is recurring");
     while (process.operations.size() < 8191U) {
@@ -320,6 +401,9 @@ module bound_literal_sharing_top;
     ++padded;
   }
   require(padded == 2U, "bound-literal fixture did not select two leaves");
+  require(memory_instances_seen[0] && memory_instances_seen[1]
+          && memory_object_ids[0] != memory_object_ids[1],
+      "bound-literal leaves do not retain distinct memory objects");
   auto restored = fsim::elaboration::ElaboratedDesign::from_state(
       std::move(state));
   require(restored.has_value(), "cannot restore bound-literal fixture");
@@ -356,10 +440,33 @@ module bound_literal_sharing_top;
   require(reference.first == compiled.first,
       "bound-literal shared instance values differ from interpreter");
   require((compiled.first == std::array<std::string, 2>{
-      "00100001", "11010100"}),
+      "00101110", "00100100"}),
       "bound-literal shared instance values are wrong");
   require(compiled.second == 1U,
       "bound-literal instances did not share one large native module");
+#endif
+}
+
+void test_signal_callback_operand_remap_capability()
+{
+#if defined(FSIM_HAS_LLVM)
+  using Access =
+      fsim::app::application_detail::SignalCallbackOperandTestAccess;
+  const auto require = [](const bool condition, const char* message) {
+    if (!condition) {
+      throw std::runtime_error(message);
+    }
+  };
+  require(Access::mapped_signal(false, 7U) == 65U,
+      "canonical callback ID 7 was not remapped to 65");
+  require(Access::mapped_signal(false, 65U) == 1000U,
+      "canonical callback ID 65 was not remapped to 1000");
+  require(Access::mapped_signal(true, 65U) == 65U,
+      "bound actual callback ID 65 was remapped a second time");
+  require(Access::mapped_signal(true, 1000U) == 1000U,
+      "bound actual callback ID 1000 was remapped a second time");
+  require(Access::mapped_signal(true, UINT32_MAX) == UINT32_MAX,
+      "an optional callback signal sentinel was remapped");
 #endif
 }
 
@@ -427,8 +534,13 @@ module shared_container_error_top;
   std::optional<fsim::runtime::simir::ProcessId> representative_process;
   std::optional<fsim::runtime::simir::ProcessId> failing_process;
   std::size_t padded = 0U;
+  std::size_t synthetic_error_guards = 0U;
   for (auto& process : state.processes) {
-    for (const auto& operation : process.operations) {
+    std::optional<std::size_t> selected_write;
+    for (std::size_t operation_index = 0U;
+         operation_index < process.operations.size();
+         ++operation_index) {
+      const auto& operation = process.operations[operation_index];
       const auto* write = fsim::runtime::simir::operation_get_if<
           fsim::runtime::simir::WriteContainerObjectElement>(&operation);
       if (write == nullptr) {
@@ -438,11 +550,65 @@ module shared_container_error_top;
           "shared-container-error object ID is invalid");
       const auto& name = state.container_objects[write->object].name;
       if (name.find(".a.memory") != std::string::npos) {
+        require(!selected_write.has_value(),
+            "shared-container-error representative has multiple writes");
         representative_process = process.id;
+        selected_write = operation_index;
       }
       if (name.find(".b.memory") != std::string::npos) {
+        require(!selected_write.has_value(),
+            "shared-container-error failing process has multiple writes");
         failing_process = process.id;
+        selected_write = operation_index;
       }
+    }
+    if (selected_write) {
+      require(*selected_write >= 3U,
+          "shared-container-error write has no fixed-index guard");
+      const auto guard_index = *selected_write - 1U;
+      const auto* guard = fsim::runtime::simir::operation_get_if<
+          fsim::runtime::simir::Branch>(&process.operations[guard_index]);
+      const auto* comparison = fsim::runtime::simir::operation_get_if<
+          fsim::runtime::simir::Binary>(&process.operations[guard_index - 1U]);
+      const auto* sentinel = fsim::runtime::simir::operation_get_if<
+          fsim::runtime::simir::LoadConstant>(
+              &process.operations[guard_index - 2U]);
+      const auto* write = fsim::runtime::simir::operation_get_if<
+          fsim::runtime::simir::WriteContainerObjectElement>(
+              &process.operations[*selected_write]);
+      std::optional<std::int64_t> sentinel_value;
+      if (sentinel != nullptr) {
+        sentinel_value = sentinel->value.known_signed_value();
+      }
+      const auto write_target = guard == nullptr
+          ? fsim::runtime::simir::InstructionIndex { }
+          : guard->when_true;
+      require(guard != nullptr
+              && guard->when_true == *selected_write
+              && guard->when_false == *selected_write + 1U
+              && guard->unknown_policy
+                  == fsim::runtime::simir::UnknownBranchPolicy::when_false
+              && comparison != nullptr
+              && comparison->operation
+                  == fsim::runtime::simir::BinaryOperator::not_equal
+              && guard->condition == comparison->destination
+              && write != nullptr
+              && sentinel != nullptr
+              && sentinel_value.has_value()
+              && *sentinel_value == std::numeric_limits<std::int64_t>::min()
+              && ((comparison->lhs == write->index
+                      && comparison->rhs == sentinel->destination)
+                  || (comparison->rhs == write->index
+                      && comparison->lhs == sentinel->destination)),
+          "shared-container-error lost the generated sentinel skip guard");
+
+      // The HDL lowering correctly skips an X-index write. For this test of
+      // shared-code callback error identity, bypass only the final generated
+      // sentinel guard in both leaf programs so the checked container write
+      // receives the invalid-index sentinel and reports the actual process.
+      process.operations[guard_index]
+          = fsim::runtime::simir::Jump { write_target };
+      ++synthetic_error_guards;
     }
     const auto has_container_write = std::ranges::any_of(
         process.operations,
@@ -461,7 +627,8 @@ module shared_container_error_top;
     process.operations.push_back(fsim::runtime::simir::Halt{});
     ++padded;
   }
-  require(padded == 2U && representative_process.has_value()
+  require(padded == 2U && synthetic_error_guards == 2U
+          && representative_process.has_value()
           && failing_process.has_value()
           && *representative_process < *failing_process,
       "shared-container-error fixture did not identify two leaves");
@@ -469,6 +636,100 @@ module shared_container_error_top;
       std::move(state));
   require(restored.has_value(), "cannot restore shared-container-error fixture");
   project->design = std::move(*restored);
+
+  // The shared A process is a valid representative. Give only the later B
+  // instance malformed expression-profile metadata so the compiler must
+  // validate that candidate instead of inheriting the representative's
+  // supports_process result.
+  auto invalid_candidate_project = *project;
+  auto invalid_candidate_state = invalid_candidate_project.design.state();
+  const auto find_process = [&](const fsim::runtime::simir::ProcessId id) {
+    return std::ranges::find_if(
+        invalid_candidate_state.processes,
+        [id](const fsim::runtime::simir::Process& process) {
+          return process.id == id;
+        });
+  };
+  const auto representative_before = find_process(*representative_process);
+  const auto candidate_before = find_process(*failing_process);
+  require(representative_before != invalid_candidate_state.processes.end()
+          && candidate_before != invalid_candidate_state.processes.end(),
+      "shared-container-error metadata fixture lost a selected process");
+  const auto representative_body
+      = representative_before->operations.body_identity();
+  const auto representative_operation_count
+      = representative_before->operations.size();
+  const auto representative_profiles
+      = representative_before->expression_profiles;
+  const auto candidate_body = candidate_before->operations.body_identity();
+  const auto candidate_operation_count = candidate_before->operations.size();
+  const auto candidate_profiles = candidate_before->expression_profiles;
+  require(representative_body != nullptr && candidate_body != nullptr,
+      "shared-container-error process bodies are missing");
+  const fsim::runtime::simir::ExpressionProfile invalid_profile {
+      fsim::runtime::simir::SourceLocation {
+          "shared-container-candidate.sv", 1U, 1U },
+      1U,
+      false,
+      static_cast<fsim::runtime::simir::ExpressionSizingKind>(99U),
+      fsim::runtime::simir::ExpressionValueDomain::four_state };
+  bool invalid_profile_installed = false;
+  for (auto& process : invalid_candidate_state.processes) {
+    if (process.id != *failing_process) {
+      continue;
+    }
+    process.expression_profiles.push_back(invalid_profile);
+    invalid_profile_installed = true;
+  }
+  require(invalid_profile_installed,
+      "shared-container-error candidate process was not found");
+  const auto representative_after = find_process(*representative_process);
+  const auto candidate_after = find_process(*failing_process);
+  require(representative_after != invalid_candidate_state.processes.end()
+          && representative_after->operations.body_identity()
+              == representative_body
+          && representative_after->operations.size()
+              == representative_operation_count
+          && representative_after->expression_profiles
+              == representative_profiles
+          && candidate_after != invalid_candidate_state.processes.end()
+          && candidate_after->operations.body_identity() == candidate_body
+          && candidate_after->operations.size() == candidate_operation_count,
+      "candidate metadata mutation changed a selected process body");
+  auto old_profile = candidate_profiles.begin();
+  auto new_profile = candidate_after->expression_profiles.begin();
+  for (; old_profile != candidate_profiles.end(); ++old_profile) {
+    require(new_profile != candidate_after->expression_profiles.end()
+            && *old_profile == *new_profile,
+        "candidate metadata mutation changed its existing profiles");
+    ++new_profile;
+  }
+  require(new_profile != candidate_after->expression_profiles.end()
+          && *new_profile == invalid_profile
+          && ++new_profile == candidate_after->expression_profiles.end(),
+      "candidate metadata mutation was not limited to one invalid profile");
+  auto invalid_candidate_design
+      = fsim::elaboration::ElaboratedDesign::from_state(
+          std::move(invalid_candidate_state));
+  require(invalid_candidate_design.has_value(),
+      "design-state validation rejected the JIT-only candidate metadata");
+  invalid_candidate_project.design = std::move(*invalid_candidate_design);
+  bool candidate_validation_rejected = false;
+  try {
+    fsim::app::Simulation invalid_candidate_simulation(
+        std::move(invalid_candidate_project), 1000U,
+        fsim::app::SimulationEngine::compiled);
+    invalid_candidate_simulation.await_all_native_compilation();
+  } catch (const std::exception& error) {
+    constexpr std::string_view expected
+        = "expression profile has an invalid sizing kind";
+    require(std::string_view { error.what() }.find(expected)
+            != std::string_view::npos,
+        "candidate metadata failed for a reason other than JIT validation");
+    candidate_validation_rejected = true;
+  }
+  require(candidate_validation_rejected,
+      "candidate reused the valid representative's validation result");
 
   const auto run = [&](fsim::app::BuiltProject built,
                       const fsim::app::SimulationEngine engine) {
@@ -656,6 +917,7 @@ end architecture;
   test_vhdl_projected_slice_level(
       directory.path, vhdl_source, fsim::project::Optimization::o2);
   test_large_bound_literal_sharing(directory.path);
+  test_signal_callback_operand_remap_capability();
   test_shared_container_error_process_identity(directory.path);
   return 0;
 }

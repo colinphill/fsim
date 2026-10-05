@@ -35,17 +35,41 @@ void lower_masked_member_gates(llvm::Function& function,
         return builder.CreateInBoundsGEP(i8, object,
             llvm::ConstantInt::get(i64, offset));
     };
-    auto* size = builder.CreateLoad(i32,
-        builder.CreateStructGEP(runtime_type, runtime, 1U));
-    builder.CreateCondBr(builder.CreateICmpUGE(size,
-        llvm::ConstantInt::get(i32, sizeof(fsim_jit_runtime_v1))), check_mask, invalid);
+    auto* size = builder.CreateLoad(
+        i32,
+        runtime_instance_field_address(
+            builder,
+            runtime_type,
+            runtime,
+            JitRuntimeInstanceField::struct_size));
+    builder.CreateCondBr(
+        builder.CreateICmpUGE(
+            size,
+            llvm::ConstantInt::get(
+                i32, sizeof(fsim_jit_runtime_instance_v2))),
+        check_mask,
+        invalid);
     builder.SetInsertPoint(check_mask);
-    auto* words = builder.CreateLoad(pointer,
-        builder.CreateStructGEP(runtime_type, runtime, 116U), "activation.words");
-    auto* count = builder.CreateLoad(i32,
-        builder.CreateStructGEP(runtime_type, runtime, 117U));
-    auto* pc = builder.CreateLoad(i32,
-        offset_pointer(function.getArg(1U), offsetof(fsim_jit_frame_v1, program_counter)));
+    auto* words = builder.CreateLoad(
+        pointer,
+        runtime_instance_field_address(
+            builder,
+            runtime_type,
+            runtime,
+            JitRuntimeInstanceField::fused_activation_words),
+        "activation.words");
+    auto* count = builder.CreateLoad(
+        i32,
+        runtime_instance_field_address(
+            builder,
+            runtime_type,
+            runtime,
+            JitRuntimeInstanceField::fused_activation_word_count));
+    auto* pc = builder.CreateLoad(
+        i32,
+        offset_pointer(
+            function.getArg(1U),
+            offsetof(fsim_jit_frame_v2, program_counter)));
     auto* valid_pc = builder.CreateOr(
         builder.CreateICmpEQ(pc, llvm::ConstantInt::get(i32, 0U)),
         builder.CreateICmpEQ(pc,
@@ -56,13 +80,32 @@ void lower_masked_member_gates(llvm::Function& function,
             llvm::ConstantInt::get(i32, (gates.size() + 63U) / 64U)));
     builder.CreateCondBr(builder.CreateAnd(valid_pc, valid_words), original_entry, invalid);
     builder.SetInsertPoint(invalid);
-    builder.CreateStore(llvm::ConstantInt::get(i32, FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR),
-        offset_pointer(function.getArg(2U), offsetof(fsim_jit_resume_result_v1, status)));
-    builder.CreateStore(llvm::ConstantInt::get(i32, 0U),
-        offset_pointer(function.getArg(2U), offsetof(fsim_jit_resume_result_v1, instruction)));
-    builder.CreateStore(llvm::ConstantInt::get(i64, 0U),
-        offset_pointer(function.getArg(2U), offsetof(fsim_jit_resume_result_v1, delay)));
-    builder.CreateRet(llvm::ConstantInt::get(i32, FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR));
+    constexpr auto error_reason
+        = JitGeneratedRuntimeErrorReason::fused_activation_invalid;
+    const auto error_value = static_cast<std::uint64_t>(error_reason);
+    builder.CreateStore(llvm::ConstantInt::get(i32, error_value),
+        offset_pointer(function.getArg(1U),
+            offsetof(fsim_jit_frame_v2, program_counter)));
+    builder.CreateStore(llvm::ConstantInt::get(
+            i32, FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2),
+        offset_pointer(function.getArg(1U), offsetof(fsim_jit_frame_v2, state)));
+    builder.CreateStore(llvm::ConstantInt::get(
+            i32, FSIM_JIT_INVALID_INSTRUCTION_V2),
+        offset_pointer(function.getArg(1U),
+            offsetof(fsim_jit_frame_v2, last_instruction)));
+    builder.CreateStore(llvm::ConstantInt::get(
+            i32, FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2),
+        offset_pointer(function.getArg(2U),
+            offsetof(fsim_jit_resume_result_v2, status)));
+    builder.CreateStore(llvm::ConstantInt::get(
+            i32, FSIM_JIT_INVALID_INSTRUCTION_V2),
+        offset_pointer(function.getArg(2U),
+            offsetof(fsim_jit_resume_result_v2, instruction)));
+    builder.CreateStore(llvm::ConstantInt::get(i64, error_value),
+        offset_pointer(function.getArg(2U),
+            offsetof(fsim_jit_resume_result_v2, delay)));
+    builder.CreateRet(llvm::ConstantInt::get(
+        i32, FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2));
 
     // The preflight becomes LLVM's entry block. Keep fixed scratch allocas
     // there so normal SROA/mem2reg can still promote the register storage.

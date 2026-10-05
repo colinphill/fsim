@@ -79,6 +79,7 @@ enum class SystemVerilogVpiCallbackError {
     NotFound,
     NotActive,
     ReentrantDispatch,
+    ObservationPreparationFailure,
 };
 
 enum class SystemVerilogVpiCallbackStatus {
@@ -161,6 +162,12 @@ struct SystemVerilogVpiCallbackStatusResult {
     }
 };
 
+/// Synchronously materialize and invalidate affected compiled state before a
+/// registration becomes visible. Called without the manager lock; the host is
+/// responsible for executing this on its simulation owner thread.
+using SystemVerilogVpiObservationPrepareHook = std::function<void(
+    SystemVerilogVpiCallbackKind, std::optional<fsim_vpi_handle_v1>)>;
+
 class SystemVerilogVpiCallbackManager final {
 public:
     SystemVerilogVpiCallbackManager(
@@ -168,6 +175,12 @@ public:
         Scheduler& scheduler,
         SystemVerilogVpiTimeService& time_service,
         StableOrder stable_order_base = 0);
+    SystemVerilogVpiCallbackManager(
+        SystemVerilogVpiObjectRegistry& registry,
+        Scheduler& scheduler,
+        SystemVerilogVpiTimeService& time_service,
+        StableOrder stable_order_base,
+        SystemVerilogVpiObservationPrepareHook prepare_observation);
     ~SystemVerilogVpiCallbackManager();
 
     SystemVerilogVpiCallbackManager(

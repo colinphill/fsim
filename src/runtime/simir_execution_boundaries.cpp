@@ -378,7 +378,7 @@ void Interpreter::Impl::execute_scope_randomize(
                 solver,
                 variables,
                 operation.inline_constraints,
-                process.program().name + "::std::randomize@"
+                process.program().name() + "::std::randomize@"
                     + std::to_string(instruction));
         };
     }
@@ -411,13 +411,20 @@ void Interpreter::Impl::handle_boundary(
     const InstructionIndex instruction,
     const InstructionIndex next_instruction)
 {
-    if (instruction >= process.program().operations.size()) {
+    if (instruction >= process.program().operations().size()) {
         process.pc = instruction;
         fail(process, "executor returned an invalid boundary instruction");
     }
 
     const auto& operation
-        = std::as_const(process.program().operations)[instruction];
+        = std::as_const(process.program().operations())[instruction];
+    const auto ensure_dynamic_wait_state = [&]() -> ProcessDynamicWaitState& {
+        const auto resume_pc = process.pc;
+        process.pc = instruction;
+        auto& dynamic_wait = process.cold().ensure_dynamic_wait_state();
+        process.pc = resume_pc;
+        return dynamic_wait;
+    };
     const auto* dynamic_call = fsim::runtime::simir::operation_get_if<Call>(&operation);
     const auto* dynamic_return = fsim::runtime::simir::operation_get_if<Return>(&operation);
     const auto* frame_push = fsim::runtime::simir::operation_get_if<CallableFramePush>(&operation);
@@ -849,11 +856,13 @@ void Interpreter::Impl::handle_boundary(
         return;
     }
     if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
-        const auto& actual_point = process.program().operations.debug_point(
+        const auto& actual_point = process.program().operations().debug_point(
             instruction, *point);
         clear_wait_timeout(process);
-        process.cold().current_source = actual_point.source;
-        process.cold().current_scope = process.program().operations.debug_scope(
+        auto& cold = process.cold();
+        process.clear_frontier_debug_token();
+        cold.current_source = actual_point.source;
+        cold.current_scope = process.program().operations().debug_scope(
             actual_point.scope);
         auto kind = ExecutionPointKind::statement;
         switch (actual_point.kind) {
@@ -903,10 +912,14 @@ void Interpreter::Impl::handle_boundary(
                     state.queued = false;
                     scheduled.owner->execute(scheduled.process);
                 }>(ProcessResumeTask { this, process.id });
-        scheduler.schedule_internal(
-            wait->phase,
-            process.id,
-            task);
+        if (process.program().scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_internal_systemverilog(
+                wait->phase, process.id, task);
+        } else {
+            scheduler.schedule_internal(
+                wait->phase, process.id, task);
+        }
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
             process.cold().current_source);
@@ -929,29 +942,7 @@ void Interpreter::Impl::handle_boundary(
         }
         if (delay == 0) {
             process.status = ProcessStatus::waiting;
-            if (process.program().postponed) {
-                queue_next_delta(process.id);
-            } else {
-                process.queued = true;
-                struct ProcessResumeTask {
-                    Interpreter::Impl* owner { };
-                    ProcessId process { };
-                };
-                const auto task =
-                    fsim::runtime::detail::make_scheduler_task_descriptor<
-                        ProcessResumeTask,
-                        +[](Scheduler&,
-                            const ProcessResumeTask& scheduled) {
-                            auto& state = scheduled.owner->get_process(
-                                scheduled.process);
-                            state.queued = false;
-                            scheduled.owner->execute(scheduled.process);
-                        }>(ProcessResumeTask { this, process.id });
-                scheduler.schedule_internal(
-                    SchedulerPhase::inactive,
-                    process.id,
-                    task);
-            }
+            queue_zero_delay_resume(process);
             notify_execution_point(
                 process, instruction, ExecutionPointKind::process_suspend,
                 process.cold().current_source);
@@ -1004,7 +995,7 @@ void Interpreter::Impl::handle_boundary(
                     "WaitOn timeout origin must precede its rearm");
             }
             const auto* origin = fsim::runtime::simir::operation_get_if<WaitOn>(
-                &std::as_const(process.program().operations)[
+                &std::as_const(process.program().operations())[
                     *wait->timeout_origin]);
             if (origin == nullptr
                 || !origin->timeout
@@ -1020,11 +1011,11 @@ void Interpreter::Impl::handle_boundary(
                     "WaitOn timeout rearm does not match its origin");
             }
         }
+        auto& dynamic_wait = ensure_dynamic_wait_state();
         process.waiting_on_signal = true;
         process.status = ProcessStatus::waiting;
-        auto& cold = process.cold();
-        cold.dynamic_sensitivity.clear();
-        cold.dynamic_sensitivity.reserve(wait->signals.size());
+        dynamic_wait.dynamic_sensitivity.clear();
+        dynamic_wait.dynamic_sensitivity.reserve(wait->signals.size());
         for (std::size_t index = 0; index < wait->signals.size(); ++index) {
             const auto source_signal = wait->signals[index];
             const auto& source = get_signal(source_signal);
@@ -1047,26 +1038,27 @@ void Interpreter::Impl::handle_boundary(
                 fail(process, "WaitOn has an invalid edge kind");
             }
             if (identity) {
-                cold.dynamic_sensitivity.push_back({ *identity, edge });
+                dynamic_wait.dynamic_sensitivity.push_back(
+                    { *identity, edge });
             }
         }
         std::sort(
-            cold.dynamic_sensitivity.begin(),
-            cold.dynamic_sensitivity.end(),
+            dynamic_wait.dynamic_sensitivity.begin(),
+            dynamic_wait.dynamic_sensitivity.end(),
             [](const Sensitivity& lhs, const Sensitivity& rhs) {
                 return lhs.signal < rhs.signal
                     || (lhs.signal == rhs.signal
                         && lhs.edge < rhs.edge);
             });
-        cold.dynamic_sensitivity.erase(
+        dynamic_wait.dynamic_sensitivity.erase(
             std::unique(
-                cold.dynamic_sensitivity.begin(),
-                cold.dynamic_sensitivity.end(),
+                dynamic_wait.dynamic_sensitivity.begin(),
+                dynamic_wait.dynamic_sensitivity.end(),
                 [](const Sensitivity& lhs, const Sensitivity& rhs) {
                     return lhs.signal == rhs.signal
                         && lhs.edge == rhs.edge;
                 }),
-            cold.dynamic_sensitivity.end());
+            dynamic_wait.dynamic_sensitivity.end());
         register_dynamic_wait_fanout(process);
         if (wait->timeout) {
             if (wait->timeout_origin) {
@@ -1094,25 +1086,25 @@ void Interpreter::Impl::handle_boundary(
             &operation)) {
         clear_wait_timeout(process);
         (void)get_container_object(wait->memory);
+        auto& dynamic_wait = ensure_dynamic_wait_state();
         process.waiting_on_signal = true;
         process.status = ProcessStatus::waiting;
-        auto& cold = process.cold();
-        cold.waiting_on_container = wait->memory;
-        cold.dynamic_sensitivity.clear();
-        cold.dynamic_sensitivity.reserve(wait->signals.size());
+        dynamic_wait.waiting_on_container = wait->memory;
+        dynamic_wait.dynamic_sensitivity.clear();
+        dynamic_wait.dynamic_sensitivity.reserve(wait->signals.size());
         for (const auto signal : wait->signals) {
             (void)get_signal(signal);
-            cold.dynamic_sensitivity.push_back(
+            dynamic_wait.dynamic_sensitivity.push_back(
                 { signal, EdgeKind::any });
         }
         std::ranges::sort(
-            cold.dynamic_sensitivity,
+            dynamic_wait.dynamic_sensitivity,
             [](const Sensitivity& lhs, const Sensitivity& rhs) {
                 return lhs.signal < rhs.signal;
             });
-        cold.dynamic_sensitivity.erase(
-            std::ranges::unique(cold.dynamic_sensitivity).begin(),
-            cold.dynamic_sensitivity.end());
+        dynamic_wait.dynamic_sensitivity.erase(
+            std::ranges::unique(dynamic_wait.dynamic_sensitivity).begin(),
+            dynamic_wait.dynamic_sensitivity.end());
         register_dynamic_wait_fanout(process);
         auto& memory_waiters = container_dynamic_fanout.at(wait->memory);
         if (std::ranges::find(memory_waiters, process.id)
@@ -1131,15 +1123,15 @@ void Interpreter::Impl::handle_boundary(
             fail(process, "WaitOrder requires at least one event");
         }
         clear_wait_timeout(process);
+        auto& dynamic_wait = ensure_dynamic_wait_state();
         process.waiting_on_signal = true;
         process.status = ProcessStatus::waiting;
-        auto& cold = process.cold();
-        cold.wait_order_events.clear();
-        cold.wait_order_events.reserve(wait->events.size());
-        cold.wait_order_index = 0;
-        cold.wait_order_result = wait->result;
-        cold.dynamic_sensitivity.clear();
-        cold.dynamic_sensitivity.reserve(wait->events.size());
+        dynamic_wait.wait_order_events.clear();
+        dynamic_wait.wait_order_events.reserve(wait->events.size());
+        dynamic_wait.wait_order_index = 0;
+        dynamic_wait.wait_order_result = wait->result;
+        dynamic_wait.dynamic_sensitivity.clear();
+        dynamic_wait.dynamic_sensitivity.reserve(wait->events.size());
         for (const auto event : wait->events) {
             const auto& signal = get_signal(event);
             if (!signal.event_variable) {
@@ -1147,20 +1139,20 @@ void Interpreter::Impl::handle_boundary(
                 fail(process, "WaitOrder requires named-event variables");
             }
             const auto identity = event_identities.at(event);
-            cold.wait_order_events.push_back(identity);
+            dynamic_wait.wait_order_events.push_back(identity);
             if (identity) {
-                cold.dynamic_sensitivity.push_back(
+                dynamic_wait.dynamic_sensitivity.push_back(
                     { *identity, EdgeKind::any });
             }
         }
         std::ranges::sort(
-            cold.dynamic_sensitivity,
+            dynamic_wait.dynamic_sensitivity,
             [](const Sensitivity& lhs, const Sensitivity& rhs) {
                 return lhs.signal < rhs.signal;
             });
-        cold.dynamic_sensitivity.erase(
-            std::ranges::unique(cold.dynamic_sensitivity).begin(),
-            cold.dynamic_sensitivity.end());
+        dynamic_wait.dynamic_sensitivity.erase(
+            std::ranges::unique(dynamic_wait.dynamic_sensitivity).begin(),
+            dynamic_wait.dynamic_sensitivity.end());
         register_dynamic_wait_fanout(process);
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
@@ -1169,7 +1161,7 @@ void Interpreter::Impl::handle_boundary(
     }
     if (fsim::runtime::simir::operation_holds<WaitSensitivity>(operation)) {
         clear_wait_timeout(process);
-        if (process.program().static_sensitivity.empty()) {
+        if (process.program().static_sensitivity().empty()) {
             process.pc = instruction;
             fail(process, "WaitSensitivity requires a static sensitivity list");
         }
@@ -1707,7 +1699,7 @@ void Interpreter::Impl::handle_boundary(
             for (std::size_t cursor = *returns; cursor != 0U; --cursor) {
                 const auto candidate = cursor - 1U;
                 const auto* call = operation_get_if<Call>(
-                    &process.program().operations[candidate]);
+                    &std::as_const(process.program().operations())[candidate]);
                 if (call == nullptr || call->return_target != *returns) {
                     continue;
                 }
@@ -1715,9 +1707,9 @@ void Interpreter::Impl::handle_boundary(
                     debug_cursor != 0U; --debug_cursor) {
                     const auto debug_candidate = debug_cursor - 1U;
                     const auto* point = operation_get_if<DebugPoint>(
-                        &process.program().operations[debug_candidate]);
+                        &std::as_const(process.program().operations())[debug_candidate]);
                     if (point != nullptr) {
-                        caller = &process.program().operations.debug_point(
+                        caller = &process.program().operations().debug_point(
                             debug_candidate, *point);
                         break;
                     }
@@ -1727,7 +1719,7 @@ void Interpreter::Impl::handle_boundary(
             if (caller != nullptr) {
                 frames.push_back(VhdlCallPathFrame {
                     caller->source,
-                    process.program().operations.debug_scope(
+                    process.program().operations().debug_scope(
                         caller->scope).str() });
             }
         }
@@ -1737,8 +1729,11 @@ void Interpreter::Impl::handle_boundary(
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentGetCallPath>(&operation)) {
         try {
-            const auto& type = process.program().container_register_types.at(
-                get_call_path->destination);
+            const auto container_register_types
+                = process_layout_detail::ProcessLayoutAccess::view(
+                    process.program().container_register_types());
+            const auto& type
+                = container_register_types.at(get_call_path->destination);
             if (type.element_kind != ContainerElementKind::Aggregate
                 || type.element_types.size() != 4U
                 || type.member_names != std::vector<std::string> {
@@ -1765,7 +1760,7 @@ void Interpreter::Impl::handle_boundary(
                     .lexically_normal();
                 element.nested_elements[0].string_elements[0]
                     = frames[index].scope.empty()
-                    ? process.program().name : frames[index].scope;
+                    ? process.program().name() : frames[index].scope;
                 element.nested_elements[1].string_elements[0]
                     = path.filename().generic_string();
                 element.nested_elements[2].string_elements[0]
@@ -1864,7 +1859,7 @@ void Interpreter::Impl::handle_boundary(
             const auto path = std::filesystem::path { frame.source.path.str() }
                 .lexically_normal().generic_string();
             const auto name = frame.scope.empty()
-                ? process.program().name : frame.scope;
+                ? process.program().name() : frame.scope;
             const auto line = std::to_string(frame.source.line);
             const auto required = name.size() + path.size() + line.size()
                 + 4U + (index == 0U ? 0U : separator.size());
@@ -1914,7 +1909,7 @@ void Interpreter::Impl::handle_boundary(
                     : std::string { });
         }
         const auto handle = class_allocate_hook(
-            process.program().name,
+            process.program().name(),
             class_allocate->specialization_identity,
             class_allocate->declared_type,
             actuals,

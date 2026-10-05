@@ -442,7 +442,8 @@ void test_vhdl_falling_edge(
             "0",
             "0",
             "0",
-            "1",
+            // The t=2 ns zero-time wait resumes after the 1 ns delayed fall.
+            "0",
             "0",
             "1",
             "1",
@@ -729,12 +730,22 @@ void test_systemverilog_sampled_values(
         *build(), fsim::app::SimulationEngine::compiled, paths);
     const auto expected = std::vector<std::string> {
         "00101XX", "110010X", "0010110",
-        "00XX", "110X", "0110",
+        "00XX", "1100", "0110",
         "X0101", "01001", "10101",
         "11001", "00101", "11001"
     };
     assert(interpreted.result.status == fsim::runtime::RunStatus::stopped);
     assert(interpreted.result.time == 6);
+    if (interpreted.values != expected) {
+        for (std::size_t index = 0; index < expected.size(); ++index) {
+            std::cerr << "sampled " << paths[index]
+                      << " expected=" << expected[index]
+                      << " interpreted=" << interpreted.values[index]
+                      << " compiled_cold=" << compiled_cold.values[index]
+                      << " compiled_warm=" << compiled_warm.values[index]
+                      << '\n';
+        }
+    }
     assert(interpreted.values == expected);
     assert(compiled_cold.values == expected);
     assert(compiled_warm.values == expected);

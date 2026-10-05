@@ -888,9 +888,9 @@ HierarchyBuilder::construct_systemc_description(
         for (const auto& external : instance.processes) {
             runtime::simir::Process process;
             process.id = static_cast<ProcessId>(
-                design_.processes_.size());
+                design_.process_count());
             if (static_cast<std::size_t>(process.id)
-                != design_.processes_.size()) {
+                != design_.process_count()) {
                 report(
                     "FSIM-ELAB-008",
                     "the design has too many processes",
@@ -974,7 +974,7 @@ HierarchyBuilder::construct_systemc_description(
                 std::nullopt,
                 process.id,
                 {}});
-            design_.processes_.push_back(std::move(process));
+            design_.append_process_record(std::move(process));
         }
 
         for (const auto& child : instance.native_children) {

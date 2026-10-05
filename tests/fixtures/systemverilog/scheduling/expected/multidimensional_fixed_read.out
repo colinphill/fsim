@@ -1,0 +1,14 @@
+INITIAL rank2=xxxx rank3=xxxx
+VALID ascending=0010 descending=1010 rank3=0101
+SIBLING before=0010
+SIBLING after=0010
+UNKNOWN first=xxxx second=xxxx
+WIDE index64=xxxx index65=xxxx
+SIGNED negative=xxxx
+TWO_STATE invalid=0000
+SIDE_EFFECT dynamic_first count=2 result=0011
+SIDE_EFFECT count=1 result=xxxx
+DYNAMIC initial_x comb=xxxx continuous=xxxx
+DYNAMIC valid ascending=0010 descending=1010 rank3=0101 comb=0010 continuous=0010
+DYNAMIC unrelated comb=0010 continuous=0010 reran=1
+DYNAMIC selected comb=1100 continuous=1100 reran=1

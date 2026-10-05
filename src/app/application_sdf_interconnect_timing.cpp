@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_interconnect_timing.hpp"
 #include "sdf_diagnostic.hpp"
+#include "sdf_process_rows.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,27 +53,33 @@ namespace {
     }
 
     [[nodiscard]] bool process_drives(
-        const runtime::simir::Process& process,
+        const runtime::simir::ProcessProgramView& process,
         const runtime::simir::SignalId signal)
     {
-        if (std::ranges::any_of(process.driver_regions,
+        if (std::ranges::any_of(process.driver_regions(),
                 [signal](const auto& region) { return region.signal == signal; })) {
             return true;
         }
-        return process.switch_target == signal
-            || (process.switch_bidirectional && process.switch_source == signal);
+        return process.switch_target() == signal
+            || (process.switch_bidirectional()
+                && process.switch_source() == signal);
     }
 
     [[nodiscard]] std::vector<runtime::simir::ProcessId> driver_processes(
         const elaboration::ElaboratedDesign& elaborated,
         const std::vector<SdfResolvedEndpoint>& endpoints)
     {
+        [[maybe_unused]] const auto process_rows
+            = sdf_detail::retain_published_process_rows(elaborated);
         std::vector<runtime::simir::ProcessId> result;
-        for (const auto& process : elaborated.processes()) {
+        for (std::size_t index = 0; index < elaborated.process_count(); ++index) {
+            const auto process
+                = elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+                    elaborated, index);
             if (std::ranges::any_of(endpoints, [&](const auto& endpoint) {
                     return process_drives(process, endpoint.signal);
                 })) {
-                result.push_back(process.id);
+                result.push_back(process.id());
             }
         }
         std::ranges::sort(result);

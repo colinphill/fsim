@@ -604,6 +604,89 @@ void test_simir_fork_process_lifecycle()
 
     {
         Interpreter interpreter;
+        const auto observed = interpreter.add_signal(
+            Signal { "fork.filter.mutable", PackedLogic4::from_msb_string("00") });
+        Process process;
+        process.id = 0U;
+        process.name = "fork_filter_retains_mutable_callback_state";
+        process.register_count = 1U;
+        process.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("01") },
+            WriteBlocking { observed, 0U },
+            Fork { { 9U }, ForkJoinKind::none },
+            LoadConstant { 0U, PackedLogic4::from_msb_string("10") },
+            WriteBlocking { observed, 0U },
+            Fork { { 10U }, ForkJoinKind::none },
+            Halt { }, Halt { }, Halt { }, ForkEnd { }, ForkEnd { },
+        };
+        (void)interpreter.add_process(std::move(process));
+
+        std::vector<std::size_t> invocation_counts;
+        std::vector<std::string> observed_values;
+        interpreter.set_fork_spawn_filter(
+            [&, invocation_count = 0U](const ProcessId) mutable {
+                ++invocation_count;
+                invocation_counts.push_back(invocation_count);
+                observed_values.push_back(
+                    interpreter.signal_value(observed).to_msb_string() + "/"
+                    + interpreter.stored_signal_value(observed).to_msb_string());
+                return false;
+            });
+
+        const auto result = interpreter.run();
+        require(result.status == RunStatus::completed
+                && invocation_counts == std::vector<std::size_t> { 1U, 2U }
+                && observed_values
+                    == std::vector<std::string> { "01/01", "10/10" },
+            "one fork filter instance keeps mutable state and reads fresh state");
+    }
+
+    {
+        Interpreter interpreter;
+        const auto observed = interpreter.add_signal(
+            Signal { "fork.filter.observed", PackedLogic4::from_msb_string("00") });
+        Process process;
+        process.id = 0U;
+        process.name = "fork_filter_observes_each_invocation";
+        process.register_count = 1U;
+        process.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("01") },
+            WriteBlocking { observed, 0U },
+            Fork { { 9U }, ForkJoinKind::none },
+            LoadConstant { 0U, PackedLogic4::from_msb_string("10") },
+            WriteBlocking { observed, 0U },
+            Fork { { 10U }, ForkJoinKind::none },
+            Halt { }, Halt { }, Halt { }, ForkEnd { }, ForkEnd { },
+        };
+        (void)interpreter.add_process(std::move(process));
+
+        std::vector<std::string> first_filter_values;
+        std::vector<std::string> replacement_filter_values;
+        interpreter.set_fork_spawn_filter([&](const ProcessId) {
+            first_filter_values.push_back(
+                interpreter.signal_value(observed).to_msb_string() + "/"
+                + interpreter.stored_signal_value(observed).to_msb_string());
+            interpreter.set_fork_spawn_filter([&](const ProcessId) {
+                replacement_filter_values.push_back(
+                    interpreter.signal_value(observed).to_msb_string() + "/"
+                    + interpreter.stored_signal_value(observed).to_msb_string());
+                return false;
+            });
+            return false;
+        });
+
+        const auto result = interpreter.run();
+        require(result.status == RunStatus::completed
+                && first_filter_values == std::vector<std::string> { "01/01" }
+                && replacement_filter_values
+                    == std::vector<std::string> { "10/10" }
+                && interpreter.signal_value(observed).to_msb_string() == "10",
+            "fork filters observe current state on every call and may replace "
+            "the callback reentrantly");
+    }
+
+    {
+        Interpreter interpreter;
         Process root;
         root.id = 0;
         root.name = "nested_attempt_identity_root";

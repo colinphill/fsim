@@ -4,9 +4,11 @@
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "../../src/semantic/integral_identity_memo.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +16,7 @@
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -29,6 +32,97 @@
 namespace {
 
 using namespace fsim::semantic;
+
+
+std::size_t integral_memo_parser_calls { };
+
+std::optional<std::int64_t> parse_memo_test_integer(
+    const std::string_view input)
+{
+    ++integral_memo_parser_calls;
+    if (input == "throw") {
+        throw std::runtime_error { "literal parser test failure" };
+    }
+    std::int64_t value { };
+    const auto parsed = std::from_chars(
+        input.data(), input.data() + input.size(), value);
+    return parsed.ec == std::errc { }
+            && parsed.ptr == input.data() + input.size()
+        ? std::optional { value } : std::nullopt;
+}
+
+void test_integral_identity_memo()
+{
+    using Memo = fsim::semantic::detail::IntegralIdentityMemo;
+    Memo memo { &parse_memo_test_integer };
+    integral_memo_parser_calls = 0U;
+    std::string source { "123" };
+    assert(memo.parse(source) == 123);
+    assert(memo.parse(source) == 123);
+    assert(integral_memo_parser_calls == 1U);
+    source.assign("456");
+    assert(memo.parse(source) == 456);
+    assert(memo.parse("123") == 123);
+
+    auto before = integral_memo_parser_calls;
+    assert(!memo.parse("not-an-integer"));
+    assert(!memo.parse("not-an-integer"));
+    assert(integral_memo_parser_calls == before + 1U);
+    const std::string embedded_null { "123\0tail", 8U };
+    assert(!memo.parse(embedded_null));
+    assert(memo.parse("123") == 123);
+
+    // Find a real hash collision, then alternate complete keys. Replacement
+    // may cost another parse but must never return the other key's value.
+    const auto bucket = std::hash<std::string_view> { }("123") % Memo::capacity;
+    std::string collision;
+    for (std::uint32_t value = 1000U; value < 100000U; ++value) {
+        auto key = std::to_string(value);
+        if (std::hash<std::string_view> { }(key) % Memo::capacity == bucket) {
+            collision = std::move(key);
+            break;
+        }
+    }
+    assert(!collision.empty());
+    const auto collision_value = std::stoll(collision);
+    for (unsigned repetition = 0U; repetition < 3U; ++repetition) {
+        assert(memo.parse(collision) == collision_value);
+        assert(memo.parse("123") == 123);
+    }
+
+    const std::string non_ascii(1U, static_cast<char>(0xa0));
+    before = integral_memo_parser_calls;
+    assert(!memo.parse(non_ascii));
+    assert(!memo.parse(non_ascii));
+    assert(integral_memo_parser_calls == before + 1U);
+    const std::string longest_cached_identity(Memo::maximum_key_bytes, '0');
+    before = integral_memo_parser_calls;
+    assert(memo.parse(longest_cached_identity) == 0);
+    assert(memo.parse(longest_cached_identity) == 0);
+    assert(integral_memo_parser_calls == before + 1U);
+    const std::string long_identity(Memo::maximum_key_bytes + 1U, '0');
+    before = integral_memo_parser_calls;
+    assert(memo.parse(long_identity) == 0);
+    assert(memo.parse(long_identity) == 0);
+    assert(integral_memo_parser_calls == before + 2U);
+    before = integral_memo_parser_calls;
+    for (unsigned attempt = 0U; attempt < 2U; ++attempt) {
+        bool caught { };
+        try {
+            static_cast<void>(memo.parse("throw"));
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        assert(caught);
+    }
+    assert(integral_memo_parser_calls == before + 2U);
+    assert(memo.parse("-9223372036854775808")
+        == std::numeric_limits<std::int64_t>::min());
+    assert(memo.parse("9223372036854775807")
+        == std::numeric_limits<std::int64_t>::max());
+    assert(!memo.parse("9223372036854775808"));
+    assert(!memo.parse("9223372036854775808"));
+}
 
 struct LinkBundleBuilder {
     Model model;
@@ -10104,6 +10198,7 @@ void run_compiled_design_tests()
     test_compiled_systemverilog_resolver_enum_literal_duplicates();
     test_compiled_systemverilog_resolver_expression_targets();
     test_compiled_systemverilog_resolver_synthetic_type_designator();
+    test_integral_identity_memo();
     test_compiled_design_specialization();
     test_compiled_design_resolver_generic_callable_profile();
     test_compiled_vhdl_resolver_retained_time_layout();

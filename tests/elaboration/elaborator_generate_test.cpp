@@ -1,15 +1,359 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "../../src/elaboration/elaborated_design_process_access.hpp"
 
+#include <algorithm>
+#include <array>
+#include <memory>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace fsim::tests::elaboration {
+
+namespace {
+
+namespace Simir = fsim::runtime::simir;
+
+struct GeneratedConstantSliceTrace {
+    std::array<Simir::SignalId, 2U> signals { };
+    std::array<fsim::runtime::SchedulerTraceRecord, 32U> events { };
+    std::size_t event_count { };
+    bool overflow { };
+    bool nonzero_time_event { };
+
+    static void receive(
+        void* const context,
+        const fsim::runtime::SchedulerTraceRecord& record) noexcept
+    {
+        if (record.kind
+                != fsim::runtime::SchedulerTraceKind::signal_transaction
+            && record.kind
+                != fsim::runtime::SchedulerTraceKind::signal_change) {
+            return;
+        }
+        auto& trace = *static_cast<GeneratedConstantSliceTrace*>(context);
+        for (std::size_t index = 0U; index < trace.signals.size(); ++index) {
+            if (record.signal != trace.signals[index]) {
+                continue;
+            }
+            trace.nonzero_time_event
+                = trace.nonzero_time_event || record.time != 0U;
+            if (trace.event_count == trace.events.size()) {
+                trace.overflow = true;
+            } else {
+                trace.events[trace.event_count++] = record;
+            }
+            return;
+        }
+    }
+};
+
+[[nodiscard]] bool same_trace_record(
+    const fsim::runtime::SchedulerTraceRecord& left,
+    const fsim::runtime::SchedulerTraceRecord& right)
+{
+    return left.kind == right.kind && left.time == right.time
+        && left.delta == right.delta && left.phase == right.phase
+        && left.order == right.order && left.sequence == right.sequence
+        && left.count == right.count && left.signal == right.signal
+        && left.systemverilog_round == right.systemverilog_round
+        && left.systemverilog == right.systemverilog
+        && left.end_of_time_slot == right.end_of_time_slot;
+}
+
+void test_generated_verilog_constant_slice_startup()
+{
+    using ProcessAccess
+        = fsim::elaboration::detail::ElaboratedDesignProcessAccess;
+
+    const auto parsed = fsim::frontend::parse_text(
+        "generated_constant_slice_startup.v",
+        R"(
+module generated_constant_slice_leaf #(
+  parameter [7:0] VALUE = 8'hA5
+) (
+  output wire [7:0] q
+);
+  genvar part;
+  generate
+    for (part = 0; part < 2; part = part + 1) begin : slices
+      assign q[part * 4 +: 4] = VALUE[part * 4 +: 4];
+    end
+  endgenerate
+endmodule
+
+module generated_constant_slice_top(
+  output wire [7:0] first_value,
+  output wire [7:0] second_value
+);
+  generated_constant_slice_leaf #(.VALUE(8'hA5)) first_leaf(
+    .q(first_value));
+  generated_constant_slice_leaf #(.VALUE(8'h3C)) second_leaf(
+    .q(second_value));
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(parsed.ok());
+
+    const auto elaborated = compile_and_elaborate(
+        parsed.design, "generated_constant_slice_top");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+    const auto first_signal
+        = elaborated.design->find_signal("first_value");
+    const auto second_signal
+        = elaborated.design->find_signal("second_value");
+    assert(first_signal && second_signal);
+    assert(*first_signal != *second_signal);
+
+    const std::array<Simir::SignalId, 2U> target_signals {
+        *first_signal, *second_signal
+    };
+    const std::array<std::string_view, 2U> expected_values {
+        "10100101", "00111100"
+    };
+    for (const auto signal : target_signals) {
+        const auto& info
+            = elaborated.design->signals().at(signal);
+        assert(info.width == 8U);
+        assert(info.source_domain
+            == fsim::frontend::ValueDomain::Logic4);
+        assert(info.systemverilog_scalar
+            == fsim::frontend::SystemVerilogScalarKind::None);
+    }
+    struct Owner {
+        Simir::ProcessId process { };
+        std::uint32_t offset { };
+    };
+    std::array<std::vector<Owner>, 2U> owners;
+    std::unordered_set<Simir::ProcessId> owner_ids;
+    const auto original_process_table
+        = ProcessAccess::process_table(*elaborated.design);
+    assert(ProcessAccess::row_backed(*elaborated.design));
+    assert(original_process_table);
+    assert(original_process_table->rows.size()
+        == ProcessAccess::process_count(*elaborated.design));
+    for (std::size_t process_index = 0U;
+         process_index < ProcessAccess::process_count(*elaborated.design);
+         ++process_index) {
+        const auto process
+            = ProcessAccess::process_view(*elaborated.design, process_index);
+        assert(process.name().find("continuous_fused_")
+            == std::string::npos);
+        if (process.driver_regions().size() != 1U) {
+            continue;
+        }
+        const auto& region = process.driver_regions().front();
+        const auto target = std::ranges::find(
+            target_signals, region.signal);
+        if (target == target_signals.end()) {
+            continue;
+        }
+        const auto target_index = static_cast<std::size_t>(
+            target - target_signals.begin());
+        assert(region.offset == 0U || region.offset == 4U);
+        assert(region.width == 4U && !region.whole);
+        assert(process.initialize());
+        assert(process.scheduling_domain()
+            == Simir::ProcessSchedulingDomain::systemverilog);
+        assert(process.static_sensitivity().empty());
+        assert(process.static_trigger_regions().empty());
+        assert(!process.reactive() && !process.postponed() && !process.final());
+        assert(!process.observed() && !process.program_owner());
+        assert(process.register_count() == 1U);
+        assert(process.register_value_kinds().size() == 1U);
+        assert(process.register_value_kinds().front()
+            == Simir::ValueKind::logic4);
+        const auto& operations = process.operations();
+        assert(operations.size() == 4U || operations.size() == 5U);
+
+        const auto* entry
+            = Simir::operation_get_if<Simir::DebugPoint>(
+                &operations[0U]);
+        assert(entry != nullptr);
+        assert(entry->kind == Simir::DebugPointKind::process_entry);
+        const auto statement_offset = operations.size() == 5U ? 1U : 0U;
+        if (statement_offset != 0U) {
+            const auto* statement
+                = Simir::operation_get_if<Simir::DebugPoint>(
+                    &operations[1U]);
+            assert(statement != nullptr);
+            assert(statement->kind == Simir::DebugPointKind::statement);
+        }
+        const auto* load
+            = Simir::operation_get_if<Simir::LoadConstant>(
+                &operations[1U + statement_offset]);
+        const auto* write
+            = Simir::operation_get_if<Simir::WriteUpdateSlice>(
+                &operations[2U + statement_offset]);
+        const auto* halt
+            = Simir::operation_get_if<Simir::Halt>(
+                &operations[3U + statement_offset]);
+        assert(load != nullptr && write != nullptr && halt != nullptr);
+        assert(load->destination == 0U && load->value.width() == 4U);
+        assert(write->source == 0U);
+        assert(write->signal == region.signal);
+        assert(write->offset == region.offset);
+        assert(write->domain
+            == Simir::SignalUpdateDomain::systemverilog_active);
+        assert(!halt->program_exit);
+
+        const auto expected
+            = fsim::runtime::PackedLogic4::from_msb_string(
+                  expected_values[target_index])
+                  .extract_bits(region.offset, region.width);
+        assert(load->value == expected);
+        assert(owner_ids.insert(process.id()).second);
+        owners[target_index].push_back({ process.id(), region.offset });
+    }
+
+    assert(owners[0U].size() == 2U && owners[1U].size() == 2U);
+    for (std::size_t target_index = 0U;
+         target_index < target_signals.size(); ++target_index) {
+        std::ranges::sort(owners[target_index],
+            [](const Owner& left, const Owner& right) {
+                return left.offset < right.offset;
+            });
+        for (std::size_t owner_index = 0U;
+             owner_index < owners[target_index].size(); ++owner_index) {
+            const auto& owner = owners[target_index][owner_index];
+            const auto offset = static_cast<std::uint32_t>(
+                owner_index * 4U);
+            assert(owner.offset == offset);
+        }
+    }
+
+    // Clone only the instance table for a checked reference. Each added
+    // debug point is unreachable after the original Halt, so the normal
+    // interpreter executes the same source operations while compact startup
+    // recognition declines the modified operation-list shape.
+    auto checked_rows = std::make_shared<
+        fsim::elaboration::detail::RuntimeProcessProgramTable>(
+            *original_process_table);
+    std::size_t checked_owner_count { };
+    for (auto& row : checked_rows->rows) {
+        if (!owner_ids.contains(row.instance.id)) {
+            continue;
+        }
+        const auto original = ProcessAccess::process_view(
+            *elaborated.design, row.instance.id);
+        row.instance.operations = original.operations();
+        row.instance.operations.push_back(Simir::DebugPoint {
+            Simir::DebugPointKind::statement, { }
+        });
+        ++checked_owner_count;
+    }
+    assert(checked_owner_count == owner_ids.size());
+    auto checked_state = ProcessAccess::artifact_state(*elaborated.design);
+    assert(checked_state.processes.empty());
+    auto checked_design = ProcessAccess::from_state(
+        std::move(checked_state), checked_rows, false);
+    assert(checked_design && ProcessAccess::row_backed(*checked_design));
+
+    auto interpreter = elaborated.design->create_interpreter();
+    auto checked_interpreter = checked_design->create_interpreter();
+    interpreter->start();
+    checked_interpreter->start();
+    for (const auto& target_owners : owners) {
+        for (const auto& owner : target_owners) {
+            assert(fsim::runtime::simir::InterpreterProgramAccess::
+                    data_only_startup_write(*interpreter, owner.process));
+            assert(!fsim::runtime::simir::InterpreterProgramAccess::
+                    data_only_startup_write(
+                        *checked_interpreter, owner.process));
+        }
+    }
+
+    GeneratedConstantSliceTrace trace;
+    trace.signals = target_signals;
+    GeneratedConstantSliceTrace checked_trace;
+    checked_trace.signals = target_signals;
+    interpreter->scheduler().set_trace_hook(
+        &trace, &GeneratedConstantSliceTrace::receive);
+    checked_interpreter->scheduler().set_trace_hook(
+        &checked_trace, &GeneratedConstantSliceTrace::receive);
+    const auto run = interpreter->run();
+    const auto checked_run = checked_interpreter->run();
+    interpreter->scheduler().set_trace_hook(nullptr, nullptr);
+    checked_interpreter->scheduler().set_trace_hook(nullptr, nullptr);
+    assert(run.status == fsim::runtime::RunStatus::completed);
+    assert(checked_run.status == fsim::runtime::RunStatus::completed);
+    assert(run.time == checked_run.time && run.delta == checked_run.delta
+        && run.callbacks_executed == checked_run.callbacks_executed);
+    assert(!trace.overflow && !checked_trace.overflow);
+    assert(!trace.nonzero_time_event && !checked_trace.nonzero_time_event);
+    assert(trace.event_count == checked_trace.event_count);
+    for (std::size_t index = 0U; index < trace.event_count; ++index) {
+        assert(same_trace_record(
+            trace.events[index], checked_trace.events[index]));
+    }
+    assert(ProcessAccess::row_backed(*elaborated.design));
+    assert(ProcessAccess::process_table(*elaborated.design)
+        == original_process_table);
+
+    for (std::size_t target_index = 0U;
+         target_index < target_signals.size(); ++target_index) {
+        const auto expected_full
+            = fsim::runtime::PackedLogic4::from_msb_string(
+                expected_values[target_index]);
+        assert(
+            interpreter->signal_value_snapshot(target_signals[target_index])
+            == expected_full);
+        assert(interpreter->signal_value_snapshot(
+                target_signals[target_index])
+            == checked_interpreter->signal_value_snapshot(
+                target_signals[target_index]));
+        assert(interpreter->stored_signal_value(
+                target_signals[target_index])
+            == checked_interpreter->stored_signal_value(
+                target_signals[target_index]));
+        std::size_t transaction_count { };
+        std::size_t change_count { };
+        for (std::size_t event_index = 0U;
+             event_index < trace.event_count; ++event_index) {
+            const auto& event = trace.events[event_index];
+            if (event.signal != target_signals[target_index]) {
+                continue;
+            }
+            if (event.kind
+                == fsim::runtime::SchedulerTraceKind::signal_transaction) {
+                ++transaction_count;
+            } else if (event.kind
+                == fsim::runtime::SchedulerTraceKind::signal_change) {
+                ++change_count;
+            }
+        }
+        assert(transaction_count != 0U && change_count != 0U);
+        for (const auto& owner : owners[target_index]) {
+            const auto expected_slice
+                = expected_full.extract_bits(
+                    owner.offset, 4U);
+            fsim::runtime::PackedLogic4 expected_driver(
+                8U, fsim::runtime::Logic4::z);
+            expected_driver.insert_bits(expected_slice, owner.offset);
+            const auto actual_driver = interpreter->driver_value(
+                owner.process, target_signals[target_index]);
+            assert(actual_driver == expected_driver);
+            assert(actual_driver == checked_interpreter->driver_value(
+                owner.process, target_signals[target_index]));
+        }
+    }
+}
+
+} // namespace
 
 void test_generate_slice_and_case_closure(
     const fsim::frontend::ParsedDesign& generated_design);
 
 void test_generate_elaboration() {
+    test_generated_verilog_constant_slice_startup();
 auto generated_sv = fsim::frontend::parse_text(
         "generated-mixed.sv",
         R"(

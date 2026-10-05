@@ -43,14 +43,14 @@ void ControlFlowOperationLowerer::lower(const Call& operation)
                 depth,
                 llvm::ConstantInt::get(
                     llvm::cast<llvm::IntegerType>(i32),
-                    FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1)),
+                    FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V2)),
             JitGeneratedRuntimeErrorReason::call_stack_overflow,
             "native.call.stack.overflow");
         auto* stack = builder.CreateStructGEP(
             frame_type, frame_argument, 15);
         auto* target_pointer = builder.CreateInBoundsGEP(
             llvm::ArrayType::get(
-                i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1),
+                i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V2),
             stack,
             { llvm::ConstantInt::get(
                   llvm::cast<llvm::IntegerType>(i32), 0),
@@ -71,10 +71,10 @@ void ControlFlowOperationLowerer::lower(const Call& operation)
     }
     if (operation.stack.capacity == 0) {
         return_result(
-            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
             instruction,
             0,
-            FSIM_JIT_FRAME_STATE_READY,
+            FSIM_JIT_FRAME_STATE_READY_V2,
             instruction);
         return;
     }
@@ -153,7 +153,7 @@ void ControlFlowOperationLowerer::lower(const Return& operation)
             frame_type, frame_argument, 15);
         auto* target_pointer = builder.CreateInBoundsGEP(
             llvm::ArrayType::get(
-                i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1),
+                i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V2),
             stack,
             { llvm::ConstantInt::get(
                   llvm::cast<llvm::IntegerType>(i32), 0),
@@ -176,10 +176,10 @@ void ControlFlowOperationLowerer::lower(const Return& operation)
     }
     if (operation.stack.capacity == 0) {
         return_result(
-            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
             instruction,
             0,
-            FSIM_JIT_FRAME_STATE_READY,
+            FSIM_JIT_FRAME_STATE_READY_V2,
             instruction);
         return;
     }
@@ -246,10 +246,10 @@ void ControlFlowOperationLowerer::lower(const CallableFramePush&)
         return;
     }
     return_result(
-        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
         instruction,
         0,
-        FSIM_JIT_FRAME_STATE_READY,
+        FSIM_JIT_FRAME_STATE_READY_V2,
         instruction);
 }
 
@@ -260,10 +260,10 @@ void ControlFlowOperationLowerer::lower(const CallableFramePop&)
         return;
     }
     return_result(
-        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
         instruction,
         0,
-        FSIM_JIT_FRAME_STATE_READY,
+        FSIM_JIT_FRAME_STATE_READY_V2,
         instruction);
 }
 
@@ -298,10 +298,10 @@ void ControlFlowOperationLowerer::lower(const Branch& operation)
     builder.SetInsertPoint(unknown_block);
     constexpr auto reason = JitGeneratedRuntimeErrorReason::unknown_branch_condition;
     return_result(
-        FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR,
+        FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2,
         instruction,
         static_cast<std::uint64_t>(reason),
-        FSIM_JIT_FRAME_STATE_RUNTIME_ERROR,
+        FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2,
         static_cast<std::uint32_t>(reason));
 }
 

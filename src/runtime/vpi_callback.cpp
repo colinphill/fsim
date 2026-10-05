@@ -7,6 +7,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -137,6 +138,7 @@ struct SystemVerilogVpiCallbackManager::Impl {
     SystemVerilogVpiObjectRegistry* registry { };
     Scheduler* scheduler { };
     SystemVerilogVpiTimeService* time_service { };
+    SystemVerilogVpiObservationPrepareHook prepare_observation;
     mutable std::mutex mutex;
     std::map<std::uint64_t, Record> records;
     std::map<fsim_vpi_handle_v1, std::vector<std::uint64_t>>
@@ -346,6 +348,17 @@ SystemVerilogVpiCallbackManager::SystemVerilogVpiCallbackManager(
     Scheduler& scheduler,
     SystemVerilogVpiTimeService& time_service,
     const StableOrder stable_order_base)
+    : SystemVerilogVpiCallbackManager(
+        registry, scheduler, time_service, stable_order_base, { })
+{
+}
+
+SystemVerilogVpiCallbackManager::SystemVerilogVpiCallbackManager(
+    SystemVerilogVpiObjectRegistry& registry,
+    Scheduler& scheduler,
+    SystemVerilogVpiTimeService& time_service,
+    const StableOrder stable_order_base,
+    SystemVerilogVpiObservationPrepareHook prepare_observation)
     : impl_(std::make_shared<Impl>())
 {
     impl_->owner = next_callback_manager_owner.fetch_add(
@@ -354,6 +367,7 @@ SystemVerilogVpiCallbackManager::SystemVerilogVpiCallbackManager(
     impl_->registry = &registry;
     impl_->scheduler = &scheduler;
     impl_->time_service = &time_service;
+    impl_->prepare_observation = std::move(prepare_observation);
     const std::weak_ptr<Impl> weak = impl_;
     const auto observer = registry.add_value_observer(
         [weak](const fsim_vpi_handle_v1 object,
@@ -479,6 +493,20 @@ SystemVerilogVpiCallbackManager::register_callback(
                 SystemVerilogVpiCallbackError::NoFutureTime);
         }
         scheduled_delay = *next - impl_->scheduler->now();
+    }
+
+    // Preparation may query the manager or materialize host state. It must
+    // finish before publishing the registration, and must not hold our lock.
+    // Failure leaves no record, activity bit, ID, or scheduled callback behind.
+    if (impl_->prepare_observation) {
+        try {
+            impl_->prepare_observation(registration.kind, registration.object);
+        } catch (const std::bad_alloc&) {
+            return registration_failure(SystemVerilogVpiCallbackError::ResourceLimit);
+        } catch (...) {
+            return registration_failure(
+                SystemVerilogVpiCallbackError::ObservationPreparationFailure);
+        }
     }
 
     std::scoped_lock lock { impl_->mutex };

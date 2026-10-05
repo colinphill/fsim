@@ -227,89 +227,95 @@ extern "C" std::uint32_t container_write_packed(
         const std::uint32_t word_count);
 
 [[nodiscard]] std::array<std::uint64_t, 4> logic9_value(
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value);
 
 void store_logic9_value(
-        fsim_jit_logic9_word_v1* destination,
+        fsim_jit_logic9_word_v2* destination,
         const std::array<std::uint64_t, 4>& value);
 
 extern "C" void read_signal_logic9(
         void* opaque,
         const std::uint32_t signal,
-        fsim_jit_logic9_word_v1* value);
+        fsim_jit_logic9_word_v2* value);
 
 extern "C" void write_signal_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value);
 
 extern "C" void write_update_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value,
+        std::uint32_t update_domain);
 
 extern "C" void write_after_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value,
-        const std::uint64_t);
+        const fsim_jit_logic9_word_v2* value,
+        const std::uint64_t,
+        std::uint32_t update_domain);
 
 void write_signal_slice_logic9_impl(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value);
 
 extern "C" void write_signal_slice_logic9(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value);
 
 extern "C" void write_update_slice_logic9(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value,
+        std::uint32_t update_domain);
 
 extern "C" void write_after_slice_logic9(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value,
-        const std::uint64_t);
+        const fsim_jit_logic9_word_v2* value,
+        const std::uint64_t,
+        std::uint32_t update_domain);
 
 extern "C" void signal_last_value_logic9(
         void* opaque,
         const std::uint32_t signal,
-        fsim_jit_logic9_word_v1* value);
+        fsim_jit_logic9_word_v2* value);
 
 extern "C" void write_inertial_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
-        const std::uint64_t);
+        const std::uint64_t,
+        std::uint32_t update_domain);
 
 extern "C" void write_inertial_slice_logic9(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
-        const std::uint64_t);
+        const std::uint64_t,
+        std::uint32_t update_domain);
 
 extern "C" void write_projected_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
         const std::uint32_t);
@@ -319,7 +325,7 @@ extern "C" void write_projected_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
         const std::uint32_t);
@@ -328,7 +334,7 @@ extern "C" void write_projected_waveform_logic9(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t,
-        const fsim_jit_logic9_projected_element_v1* elements,
+        const fsim_jit_logic9_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t,
         const std::uint32_t);
@@ -338,7 +344,7 @@ extern "C" void write_projected_waveform_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_projected_element_v1* elements,
+        const fsim_jit_logic9_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t,
         const std::uint32_t);
@@ -348,7 +354,7 @@ extern "C" void write_formatted_logic9(
         const std::uint32_t,
         const std::uint32_t,
         const std::uint32_t,
-        const fsim_jit_logic9_word_v1* value);
+        const fsim_jit_logic9_word_v2* value);
 
 extern "C" std::uint64_t read_signal(void* opaque,
         const std::uint32_t signal,
@@ -374,7 +380,7 @@ extern "C" std::uint32_t read_signal_dynamic_part(
         const std::uint32_t base_offset,
         const std::uint32_t width,
         const std::uint32_t flags,
-        fsim_jit_logic9_word_v1* const result);
+        fsim_jit_logic9_word_v2* const result);
 
 extern "C" std::uint32_t write_signal_packed(
         void* opaque,
@@ -386,7 +392,8 @@ extern "C" std::uint32_t write_signal_packed(
         const std::uint64_t* const aval,
         const std::uint64_t* const bval,
         const std::uint64_t* const logic9_plane2,
-        const std::uint64_t* const logic9_plane3);
+        const std::uint64_t* const logic9_plane3,
+        std::uint32_t update_domain);
 
 extern "C" void write_signal(void* opaque, const std::uint32_t signal,
         const std::uint64_t aval,
@@ -399,12 +406,14 @@ extern "C" void assert_failed(void* opaque, const std::uint32_t process,
 
 extern "C" void write_update(void* opaque, const std::uint32_t signal,
         const std::uint64_t aval,
-        const std::uint64_t bval);
+        const std::uint64_t bval,
+        std::uint32_t update_domain);
 
 extern "C" void write_after(void* opaque, const std::uint32_t signal,
         const std::uint64_t aval,
         const std::uint64_t bval,
-        const std::uint64_t delay);
+        const std::uint64_t delay,
+        std::uint32_t update_domain);
 
 [[nodiscard]] std::uint64_t low_mask(const std::uint32_t width);
 
@@ -428,7 +437,8 @@ extern "C" void write_update_slice(
         const std::uint32_t offset,
         const std::uint32_t width,
         const std::uint64_t aval,
-        const std::uint64_t bval);
+        const std::uint64_t bval,
+        std::uint32_t update_domain);
 
 extern "C" void write_after_slice(
         void* opaque,
@@ -437,7 +447,8 @@ extern "C" void write_after_slice(
         const std::uint32_t width,
         const std::uint64_t aval,
         const std::uint64_t bval,
-        const std::uint64_t delay);
+        const std::uint64_t delay,
+        std::uint32_t update_domain);
 
 extern "C" std::uint32_t signal_event(
         void*, const std::uint32_t);
@@ -467,7 +478,7 @@ extern "C" std::uint64_t signal_driving_value(
 extern "C" void signal_driving_value_logic9(
         void* opaque,
         const std::uint32_t signal,
-        fsim_jit_logic9_word_v1* value);
+        fsim_jit_logic9_word_v2* value);
 
 extern "C" std::uint64_t read_simulation_time(void* opaque);
 
@@ -538,7 +549,8 @@ extern "C" void write_inertial(
         const std::uint64_t bval,
         const std::uint64_t rise,
         const std::uint64_t fall,
-        const std::uint64_t turnoff);
+        const std::uint64_t turnoff,
+        std::uint32_t update_domain);
 
 extern "C" void write_inertial_slice(
         void* opaque,
@@ -549,7 +561,8 @@ extern "C" void write_inertial_slice(
         const std::uint64_t bval,
         const std::uint64_t rise,
         const std::uint64_t fall,
-        const std::uint64_t turnoff);
+        const std::uint64_t turnoff,
+        std::uint32_t update_domain);
 
 extern "C" void write_projected(
         void* opaque,
@@ -575,7 +588,7 @@ extern "C" void write_projected_waveform(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t width,
-        const fsim_jit_projected_element_v1* elements,
+        const fsim_jit_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t rejection,
         const std::uint32_t mode);
@@ -585,7 +598,7 @@ extern "C" void write_projected_waveform_slice(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_projected_element_v1* elements,
+        const fsim_jit_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t rejection,
         const std::uint32_t mode);
@@ -673,23 +686,30 @@ extern "C" std::uint32_t sample_coverage(
         void* opaque,
         std::uint32_t process,
         std::uint32_t instruction,
-        fsim_jit_frame_v1* frame) noexcept;
+        fsim_jit_frame_v2* frame) noexcept;
 
 extern "C" std::uint32_t execute_class_property_operation(
         void* opaque,
         std::uint32_t process,
         std::uint32_t instruction,
-        fsim_jit_frame_v1* frame) noexcept;
+        fsim_jit_frame_v2* frame) noexcept;
 
 extern "C" std::uint32_t query_event_triggered(
         void* opaque,
         std::uint32_t process,
         std::uint32_t instruction,
-        fsim_jit_frame_v1* frame) noexcept;
+        fsim_jit_frame_v2* frame) noexcept;
 
-[[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime& runtime);
+[[nodiscard]] fsim_jit_runtime_instance_v2 abi(TestRuntime& runtime);
 
-[[nodiscard]] fsim_jit_resume_result_v1 new_resume_result();
+[[nodiscard]] inline fsim_jit_services_v2 copy_jit_services(
+    const fsim_jit_runtime_instance_v2& runtime)
+{
+    assert(runtime.services != nullptr);
+    return *runtime.services;
+}
+
+[[nodiscard]] fsim_jit_resume_result_v2 new_resume_result();
 
 [[nodiscard]] Process make_arithmetic_process();
 
@@ -752,6 +772,12 @@ template <class Function>
             assert(false && "malformed IR or ABI failure was typed unsupported");
         } catch (const LlvmJitError& error) {
             rejected = true;
+            if (std::string_view { error.what() }.find(fragment)
+                == std::string_view::npos) {
+                std::cerr << "unexpected LLVM fatal error: expected fragment '"
+                          << fragment << "', actual '" << error.what()
+                          << "'\n";
+            }
             assert(std::string_view { error.what() }.find(fragment) != std::string_view::npos);
         }
         assert(rejected);
@@ -813,9 +839,11 @@ void test_resumable_at_level(
 void test_process_cohort_resume_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
-void test_logic4_bit_and_cohort_at_level(
-    fsim::compiler::JitOptimizationLevel optimization);
-void test_fused_static_process_at_level(
+void test_ordered_cohort_cache_budget();
+void test_backend_tier_and_fast_isel_census();
+void test_fast_isel_codegen_preparation();
+void test_fast_isel_census_native_fallback();
+void test_fused_masked_all_active_process_at_level(
     fsim::compiler::JitOptimizationLevel optimization);
 void test_fused_masked_process_at_level(
     fsim::compiler::JitOptimizationLevel optimization);
@@ -848,6 +876,9 @@ void test_optimized_frame_initialization_elision_at_level(
 void test_wide_signal_read_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_element_alias_wide_direct_read_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_wide_signal_attributes_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
@@ -859,7 +890,13 @@ void test_wide_container_operations_at_level(
     std::string_view symbol);
 void test_fused_container_object_read_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
-    std::string_view symbol);
+    std::string_view symbol,
+    std::size_t index_width = 32U,
+    bool logic9_index = false);
+void test_fused_container_object_native_frame_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol,
+    bool native_isolated);
 void test_wide_value_operations_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
@@ -879,6 +916,15 @@ void test_wide_single_bit_dynamic_part_select_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wide_dynamic_part_select_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_dynamic_part_interval_operations_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_dynamic_part_write_closed_form_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_dynamic_single_bit_operations_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_wildcard_case_matching_at_level(
@@ -920,6 +966,13 @@ void test_initialized_bval_slot(
 void test_direct_signal_read_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_required_direct_signal_reads_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_required_direct_read_cache_identity();
+void test_required_direct_read_lease_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_direct_update_accumulator_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
@@ -934,6 +987,10 @@ void test_debug_point_instrumentation();
 void test_logic9_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_wide_bitwise_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_wide_bitwise_profile();
 void test_vital_timing_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
@@ -964,6 +1021,8 @@ void test_procedural_update_cache_identity(
     const std::filesystem::path& cache_directory);
 void test_container_construction_cache_identity(
     const std::filesystem::path& cache_directory);
+void test_jit_nounwind_contract();
+void test_compilation_context_reuse();
 void test_rejections();
 void test_display_at_level(
     fsim::compiler::JitOptimizationLevel optimization,

@@ -24,12 +24,15 @@ ContainerOperationLowerer::ContainerOperationLowerer(
     llvm::Value* context_pointer_value,
     const std::uint32_t process_value,
     const std::uint32_t instruction_value,
-    llvm::StructType* runtime_type,
-    llvm::Value* runtime_argument,
+    llvm::StructType* services_type,
+    llvm::Value* services_argument,
     const std::span<const runtime::simir::ContainerType> container_types_value,
     llvm::Value* result_aval_value,
     llvm::Value* result_bval_value,
+    llvm::Value* wide_callback_scratch_value,
+    const std::uint32_t wide_callback_scratch_word_stride_value,
     const std::uint32_t fused_container_object_read_distance_value,
+    const bool fused_container_object_read_single_use_value,
     std::function<void(
         llvm::Value*,
         JitGeneratedRuntimeErrorReason,
@@ -46,33 +49,43 @@ ContainerOperationLowerer::ContainerOperationLowerer(
     , context_pointer(context_pointer_value)
     , process(process_value)
     , instruction(instruction_value)
-    , runtime_type_value(runtime_type)
-    , runtime_argument_value(runtime_argument)
+    , services_type_value(services_type)
+    , services_argument_value(services_argument)
     , container_types(container_types_value)
     , result_aval(result_aval_value)
     , result_bval(result_bval_value)
+    , wide_callback_scratch(wide_callback_scratch_value)
+    , wide_callback_scratch_word_stride(
+          wide_callback_scratch_word_stride_value)
     , fused_container_object_read_distance(
           fused_container_object_read_distance_value)
+    , fused_container_object_read_single_use(
+          fused_container_object_read_single_use_value)
     , runtime_error_if(std::move(runtime_error_if_value))
     , branch_to_next(std::move(branch_to_next_value))
 {
     auto* pointer = llvm::PointerType::getUnqual(context);
-    callback = builder.CreateLoad(
-        pointer,
-        builder.CreateStructGEP(
-            runtime_type, runtime_argument, 62U),
+    callback = load_jit_service_callback(
+        builder,
+        services_type,
+        services_argument,
+        JitServiceField::container_operation,
         "container.callback");
     callback_type = llvm::FunctionType::get(
         i32,
         { pointer, i32, i32, i64, i64, i64, i64, pointer, pointer },
         false);
-    read_word_callback = builder.CreateLoad(
-        pointer,
-        builder.CreateStructGEP(runtime_type, runtime_argument, 77U),
+    read_word_callback = load_jit_service_callback(
+        builder,
+        services_type,
+        services_argument,
+        JitServiceField::container_read_word,
         "container.read-word.callback");
-    write_word_callback = builder.CreateLoad(
-        pointer,
-        builder.CreateStructGEP(runtime_type, runtime_argument, 78U),
+    write_word_callback = load_jit_service_callback(
+        builder,
+        services_type,
+        services_argument,
+        JitServiceField::container_write_word,
         "container.write-word.callback");
     read_word_callback_type = llvm::FunctionType::get(
         i32,
@@ -255,7 +268,8 @@ void ContainerOperationLowerer::lower(
                 == runtime::simir::ContainerElementKind::Packed
             || type.element_kind
                 == runtime::simir::ContainerElementKind::Scalar)
-        && registers[value.index].width == 32U
+        && (registers[value.index].width == 32U
+            || registers[value.index].width == 64U)
         && registers[value.index].kind
             == runtime::simir::ValueKind::logic4
         && registers[value.destination].kind
@@ -265,9 +279,17 @@ void ContainerOperationLowerer::lower(
         const auto index = load_register(builder, registers, value.index);
         const std::uint32_t flags = (value.linear_index ? 1U : 0U)
             | ((type.fixed || value.signed_index) ? 2U : 0U)
+            | (fused_container_object_read_single_use ? 4U : 0U)
             | (fused_container_object_read_distance << 8U);
         const auto& destination = registers[value.destination];
         if (type.element_width > 64U) {
+            const auto words = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(type.element_width) + 63U) / 64U);
+            if (wide_callback_scratch == nullptr
+                || wide_callback_scratch_word_stride < words) {
+                throw LlvmJitUnsupportedError(
+                    "wide container read has no callback scratch storage");
+            }
             auto* aval = builder.CreateGEP(
                 i64, destination.aval_base,
                 constant_i64(context, destination.word_offset),
@@ -276,14 +298,32 @@ void ContainerOperationLowerer::lower(
                 i64, destination.bval_base,
                 constant_i64(context, destination.word_offset),
                 "container.read-packed.bval");
-            const auto words = static_cast<std::uint32_t>(
-                (type.element_width + 63U) / 64U);
+            auto* scratch_aval = builder.CreateInBoundsGEP(
+                i64,
+                wide_callback_scratch,
+                constant_i64(context, 0U),
+                "container.read-packed.scratch.aval");
+            auto* scratch_bval = builder.CreateInBoundsGEP(
+                i64,
+                wide_callback_scratch,
+                constant_i64(
+                    context, wide_callback_scratch_word_stride),
+                "container.read-packed.scratch.bval");
+            const auto byte_count
+                = static_cast<std::uint64_t>(words) * sizeof(std::uint64_t);
+            builder.CreateMemCpy(
+                scratch_aval, llvm::Align(8), aval, llvm::Align(8), byte_count);
+            builder.CreateMemCpy(
+                scratch_bval, llvm::Align(8), bval, llvm::Align(8), byte_count);
             auto* status = builder.CreateCall(
                 read_packed_callback_type,
-                builder.CreateLoad(
-                    llvm::PointerType::getUnqual(context),
-                    builder.CreateStructGEP(
-                        runtime_type_value, runtime_argument_value, 79U),
+                load_jit_service_callback(
+                    builder,
+                    services_type_value,
+                    services_argument_value,
+                    registers[value.index].width == 64U
+                        ? JitServiceField::container_read_packed_index64
+                        : JitServiceField::container_read_packed,
                     "container.read-packed.callback"),
                 { context_pointer,
                     id(i32, process),
@@ -292,9 +332,16 @@ void ContainerOperationLowerer::lower(
                     id(i32, flags),
                     index.aval,
                     index.bval,
-                    aval,
-                    bval,
+                    scratch_aval,
+                    scratch_bval,
                     id(i32, words) });
+            // Preserve partial callback writes even when the callback reports
+            // failure; the generated error edge used to leave those writes in
+            // the destination register planes.
+            builder.CreateMemCpy(
+                aval, llvm::Align(8), scratch_aval, llvm::Align(8), byte_count);
+            builder.CreateMemCpy(
+                bval, llvm::Align(8), scratch_bval, llvm::Align(8), byte_count);
             runtime_error_if(
                 builder.CreateICmpNE(status, id(i32, 0)),
                 JitGeneratedRuntimeErrorReason::container_callback_failure,
@@ -314,18 +361,41 @@ void ContainerOperationLowerer::lower(
         auto* zero = constant_i64(context, 0);
         builder.CreateStore(zero, result_aval);
         builder.CreateStore(zero, result_bval);
-        auto* status = builder.CreateCall(
-            read_word_callback_type,
-            read_word_callback,
-            { context_pointer,
-                id(i32, process),
-                id(i32, instruction),
-                id(i32, value.source),
-                id(i32, flags),
-                index.aval,
-                index.bval,
-                result_aval,
-                result_bval });
+        llvm::Value* status { };
+        if (registers[value.index].width == 64U) {
+            auto* packed_index64_callback = load_jit_service_callback(
+                builder,
+                services_type_value,
+                services_argument_value,
+                JitServiceField::container_read_packed_index64,
+                "container.read-packed-index64.callback");
+            status = builder.CreateCall(
+                read_packed_callback_type,
+                packed_index64_callback,
+                { context_pointer,
+                    id(i32, process),
+                    id(i32, instruction),
+                    id(i32, value.source),
+                    id(i32, flags),
+                    index.aval,
+                    index.bval,
+                    result_aval,
+                    result_bval,
+                    id(i32, 1U) });
+        } else {
+            status = builder.CreateCall(
+                read_word_callback_type,
+                read_word_callback,
+                { context_pointer,
+                    id(i32, process),
+                    id(i32, instruction),
+                    id(i32, value.source),
+                    id(i32, flags),
+                    index.aval,
+                    index.bval,
+                    result_aval,
+                    result_bval });
+        }
         runtime_error_if(
             builder.CreateICmpNE(status, id(i32, 0)),
             JitGeneratedRuntimeErrorReason::container_callback_failure,
@@ -365,6 +435,13 @@ void ContainerOperationLowerer::lower(
             | ((type.fixed || value.signed_index) ? 2U : 0U);
         const auto& source_slot = registers[value.source];
         if (type.element_width > 64U) {
+            const auto words = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(type.element_width) + 63U) / 64U);
+            if (wide_callback_scratch == nullptr
+                || wide_callback_scratch_word_stride < words) {
+                throw LlvmJitUnsupportedError(
+                    "wide container write has no callback scratch storage");
+            }
             auto* aval = builder.CreateGEP(
                 i64, source_slot.aval_base,
                 constant_i64(context, source_slot.word_offset),
@@ -373,14 +450,30 @@ void ContainerOperationLowerer::lower(
                 i64, source_slot.bval_base,
                 constant_i64(context, source_slot.word_offset),
                 "container.write-packed.bval");
-            const auto words = static_cast<std::uint32_t>(
-                (type.element_width + 63U) / 64U);
+            auto* scratch_aval = builder.CreateInBoundsGEP(
+                i64,
+                wide_callback_scratch,
+                constant_i64(context, 0U),
+                "container.write-packed.scratch.aval");
+            auto* scratch_bval = builder.CreateInBoundsGEP(
+                i64,
+                wide_callback_scratch,
+                constant_i64(
+                    context, wide_callback_scratch_word_stride),
+                "container.write-packed.scratch.bval");
+            const auto byte_count
+                = static_cast<std::uint64_t>(words) * sizeof(std::uint64_t);
+            builder.CreateMemCpy(
+                scratch_aval, llvm::Align(8), aval, llvm::Align(8), byte_count);
+            builder.CreateMemCpy(
+                scratch_bval, llvm::Align(8), bval, llvm::Align(8), byte_count);
             auto* status = builder.CreateCall(
                 write_packed_callback_type,
-                builder.CreateLoad(
-                    llvm::PointerType::getUnqual(context),
-                    builder.CreateStructGEP(
-                        runtime_type_value, runtime_argument_value, 80U),
+                load_jit_service_callback(
+                    builder,
+                    services_type_value,
+                    services_argument_value,
+                    JitServiceField::container_write_packed,
                     "container.write-packed.callback"),
                 { context_pointer,
                     id(i32, process),
@@ -389,8 +482,8 @@ void ContainerOperationLowerer::lower(
                     id(i32, flags),
                     index.aval,
                     index.bval,
-                    aval,
-                    bval,
+                    scratch_aval,
+                    scratch_bval,
                     id(i32, words) });
             runtime_error_if(
                 builder.CreateICmpNE(status, id(i32, 0)),

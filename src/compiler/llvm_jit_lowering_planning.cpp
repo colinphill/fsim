@@ -132,7 +132,7 @@ using namespace runtime::simir;
         }
     }
     if (safe_identities.size()
-        > FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V1) {
+        > FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V2) {
         safe_identities.clear();
     }
     if (std::ranges::any_of(

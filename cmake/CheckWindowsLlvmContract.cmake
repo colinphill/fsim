@@ -12,8 +12,11 @@ set(FSIM_JIT "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit.cpp")
 set(FSIM_JIT_KEY "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key.cpp")
 set(FSIM_CACHE "${FSIM_SOURCE_DIR}/src/compiler/object_cache.cpp")
 set(FSIM_LIBRARY "${FSIM_SOURCE_DIR}/src/platform/dynamic_library.cpp")
-set(FSIM_ABI "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime.h")
+set(FSIM_ABI "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime_v1.h")
+set(FSIM_ABI_V2 "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime_v2.h")
 set(FSIM_ABI_TEST "${FSIM_SOURCE_DIR}/tests/compiler/jit_runtime_c_test.c")
+set(FSIM_ABI_V2_TEST
+    "${FSIM_SOURCE_DIR}/tests/compiler/jit_runtime_v2_layout_test.c")
 set(FSIM_JIT_TEST "${FSIM_SOURCE_DIR}/tests/compiler/llvm_jit_cache_test.cpp")
 set(FSIM_SCV_ADAPTER "${FSIM_SOURCE_DIR}/cmake/FsimScv.cmake")
 set(FSIM_TCL_MINGW_ADAPTER "${FSIM_SOURCE_DIR}/cmake/BuildTclMinGW.cmake")
@@ -35,7 +38,9 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CACHE}"
     "${FSIM_LIBRARY}"
     "${FSIM_ABI}"
+    "${FSIM_ABI_V2}"
     "${FSIM_ABI_TEST}"
+    "${FSIM_ABI_V2_TEST}"
     "${FSIM_JIT_TEST}"
     "${FSIM_SCV_ADAPTER}"
     "${FSIM_TCL_MINGW_ADAPTER}"
@@ -64,7 +69,9 @@ file(READ "${FSIM_JIT_KEY}" FSIM_JIT_KEY_CONTENTS)
 file(READ "${FSIM_CACHE}" FSIM_CACHE_CONTENTS)
 file(READ "${FSIM_LIBRARY}" FSIM_LIBRARY_CONTENTS)
 file(READ "${FSIM_ABI}" FSIM_ABI_CONTENTS)
+file(READ "${FSIM_ABI_V2}" FSIM_ABI_V2_CONTENTS)
 file(READ "${FSIM_ABI_TEST}" FSIM_ABI_TEST_CONTENTS)
+file(READ "${FSIM_ABI_V2_TEST}" FSIM_ABI_V2_TEST_CONTENTS)
 file(READ "${FSIM_JIT_TEST}" FSIM_JIT_TEST_CONTENTS)
 file(READ "${FSIM_SCV_ADAPTER}" FSIM_SCV_ADAPTER_CONTENTS)
 file(READ "${FSIM_TCL_MINGW_ADAPTER}" FSIM_TCL_MINGW_ADAPTER_CONTENTS)
@@ -222,6 +229,32 @@ foreach(FSIM_ABI_EVIDENCE IN ITEMS
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "strict C ABI test lost layout evidence: ${FSIM_ABI_EVIDENCE}")
+  endif()
+endforeach()
+foreach(FSIM_ABI_V2_POLICY IN ITEMS
+    "FSIM_JIT_SERVICES_ABI_VERSION_V2"
+    "FSIM_JIT_RUNTIME_ABI_VERSION_V2"
+    "fsim_jit_services_v2"
+    "fsim_jit_runtime_instance_v2"
+    "uint32_t update_domain")
+  string(FIND "${FSIM_ABI_V2_CONTENTS}" "${FSIM_ABI_V2_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR "JIT C ABI v2 lost boundary policy: ${FSIM_ABI_V2_POLICY}")
+  endif()
+endforeach()
+foreach(FSIM_ABI_V2_EVIDENCE IN ITEMS
+    "sizeof(fsim_jit_services_v2) == 680U"
+    "sizeof(fsim_jit_runtime_instance_v2) == 232U"
+    "offsetof(fsim_jit_services_v2, write_update) == 32U"
+    "offsetof(fsim_jit_services_v2, write_signal_packed) == 624U"
+    "offsetof(fsim_jit_runtime_instance_v2, services) == 8U")
+  string(FIND
+    "${FSIM_ABI_V2_TEST_CONTENTS}"
+    "${FSIM_ABI_V2_EVIDENCE}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "strict C ABI v2 test lost layout evidence: ${FSIM_ABI_V2_EVIDENCE}")
   endif()
 endforeach()
 

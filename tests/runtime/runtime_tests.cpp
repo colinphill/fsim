@@ -12,11 +12,58 @@ int main(const int argc, const char* const* argv)
     using namespace fsim::tests::runtime;
     try {
         if (argc == 2) {
-            if (std::string_view { argv[1] } != "vpi_reference_plugins") {
+            const std::string_view selection { argv[1] };
+            if (selection == "vpi_reference_plugins") {
+                test_systemverilog_vpi_reference_plugins();
+                std::cout << "VPI C/C++ reference plug-in tests passed\n";
+                return EXIT_SUCCESS;
+            }
+            if (selection == "a4_signal_state") {
+                test_a4_signal_state();
+            } else if (selection == "executor_provenance_contract") {
+                test_executor_provenance_contract();
+            } else if (selection == "generic_queue_ordering_control") {
+                test_generic_queue_ordering_control();
+            } else if (selection == "generic_update_region") {
+                test_generic_update_region_runtime();
+            } else if (selection == "resolved_driver_slots") {
+                test_resolved_driver_slots();
+            } else if (selection == "aggregate_proxy_native_fallback") {
+                test_aggregate_proxy_native_fallback();
+            } else if (selection == "element_alias_direct_read_planes") {
+                test_element_alias_direct_read_planes();
+            } else if (selection == "aggregate_proxy_driver_family") {
+                test_aggregate_proxy_driver_family();
+            } else if (
+                selection == "aggregate_proxy_driver_region_registration") {
+                test_aggregate_proxy_driver_region_registration();
+            } else if (selection == "aggregate_proxy_leaf_publications_are_not_coalesced") {
+                test_aggregate_proxy_leaf_publications_are_not_coalesced();
+            } else if (
+                selection == "aggregate_proxy_leaf_write_differential") {
+                test_aggregate_proxy_leaf_write_differential();
+            } else if (
+                selection
+                == "aggregate_proxy_sampled_data_matches_packed_reference") {
+                test_aggregate_proxy_sampled_data_matches_packed_reference();
+            } else if (
+                selection
+                == "aggregate_proxy_sampled_clock_matches_packed_reference") {
+                test_aggregate_proxy_sampled_clock_matches_packed_reference();
+            } else if (selection == "resolved_driver_hook_maturity_and_reentrancy") {
+                test_simir_resolved_driver_hook_maturity_and_reentrancy();
+            } else if (selection == "element_alias_observation_atomicity") {
+                test_element_alias_observation_atomicity();
+            } else if (
+                selection == "aggregate_force_release_observation_atomicity") {
+                test_aggregate_force_release_observation_atomicity();
+            } else if (
+                selection == "aggregate_force_release_followup") {
+                test_aggregate_force_release_followup();
+            } else {
                 throw std::runtime_error { "unknown runtime test selection" };
             }
-            test_systemverilog_vpi_reference_plugins();
-            std::cout << "VPI C/C++ reference plug-in tests passed\n";
+            std::cout << "runtime selected test passed: " << selection << '\n';
             return EXIT_SUCCESS;
         }
         if (argc != 1) {
@@ -28,6 +75,11 @@ int main(const int argc, const char* const* argv)
         // FSIM-CONFORMANCE CF-COMMON-VCD-001 source=SRC-COCOTB expectation=execute
         test_logic();
         test_packed_values();
+        test_sensitivity_ranges();
+        test_region_graph();
+        test_a4_signal_state();
+        test_process_state_storage();
+        test_executor_provenance_contract();
         test_systemverilog_scalar_values();
         test_systemverilog_dpi_scalar_marshalling();
         test_systemverilog_dpi_real_string_chandle_marshalling();
@@ -84,17 +136,21 @@ int main(const int argc, const char* const* argv)
         test_scheduler_phase_order();
         test_scheduler_private_region_scheduler_contract();
         test_private_signal_regions();
-        test_runtime_fused_masked_global_frontier();
-        test_fused_masked_terminal_regions();
+        test_runtime_fused_masked_fallback_interleaving();
+        test_fused_masked_fallback_semantics();
         test_fused_static_cohorts();
         test_fused_projected_cohorts();
+        test_generic_update_region_runtime();
         test_scheduler_stop_resume();
         test_scheduler_ownership_and_failure_containment();
         test_scheduler_batch_contract();
+        test_scheduler_trace();
+        test_scheduler_systemverilog();
         test_scheduler_time_limit_before_future_event();
         test_scheduler_safe_point_scheduling();
         test_scheduler_delta_limit();
         test_simir();
+        test_public_value_reference_snapshot_contract();
         test_simir_permanent_wait();
         test_simir_update_coalescing();
         test_simir_diagnostic_environment_snapshot();
@@ -131,6 +187,20 @@ int main(const int argc, const char* const* argv)
         test_simir_mutable_strings();
         test_simir_text_files();
         test_simir_containers();
+        test_element_alias_observation_atomicity();
+        test_aggregate_force_release_observation_atomicity();
+        test_aggregate_force_release_followup();
+        test_generic_queue_ordering_control();
+        test_aggregate_proxy_leaf_publications_are_not_coalesced();
+        test_aggregate_proxy_leaf_write_differential();
+        test_aggregate_proxy_sampled_data_matches_packed_reference();
+        test_aggregate_proxy_sampled_clock_matches_packed_reference();
+        test_aggregate_proxy_native_fallback();
+        test_element_alias_direct_read_planes();
+        test_aggregate_proxy_driver_family();
+        test_aggregate_proxy_driver_region_registration();
+        test_simir_retained_commit_hook_phase_and_alias_materialization();
+        test_simir_resolved_driver_hook_maturity_and_reentrancy();
         test_systemverilog_class_heap();
         test_systemverilog_uvm_object();
         test_systemverilog_uvm_object_policies();
@@ -189,25 +259,18 @@ int main(const int argc, const char* const* argv)
         test_simir_alternate_executor_validated_logic9_std_logic_batch();
         test_simir_alternate_executor_native_blocking_then_update_slice();
         test_simir_alternate_executor_zero_delay_and_frame();
+        test_simir_static_sensitivity_domain_cohorts();
         test_simir_alternate_executor_cpp_exception_containment();
         test_simir_alternate_executor_validation();
         test_simir_external_executor_boundary_validation();
         test_simir_validated_static_wait_completion();
-        test_simir_pure_wave_pending_snapshot_and_whole_task_prefix();
-        test_simir_pure_wave_incompatible_middle_falls_back();
-        test_simir_pure_wave_unsupported_middle_keeps_task_prefix();
-        test_simir_pure_wave_uses_refreshed_ready_span();
-        test_simir_pure_wave_reprepares_stale_member_context_and_generation();
-        test_simir_pure_wave_respects_hooks_and_scheduler_phases();
-        test_simir_pure_wave_exception_is_not_replayed();
-        test_simir_pure_wave_lazy_update_flush_preserves_member_order();
-        test_simir_pure_wave_lazy_update_flush_failure_is_not_replayed();
         test_simir_deferred_executor_state_handoff();
         test_simir_alternate_executor_event_replacement_and_cancel();
         test_simir_alternate_executor_notify_delayed();
         test_simir_alternate_executor_primitive_channel_updates();
         test_simir_alternate_executor_signal_event_window();
         test_simir_alternate_executor_event_lists();
+        test_simir_named_event_origin_cross_domain();
         test_simir_assertion_metadata();
         test_simir_execution_point_ordering();
         test_simir_system_command();

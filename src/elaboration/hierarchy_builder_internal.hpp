@@ -4,16 +4,20 @@
 #include "elaborator_internal.hpp"
 #include "hierarchy_sv_generate_internal.hpp"
 #include "scoped_bindings.hpp"
+#include "systemverilog_template_bindings.hpp"
+#include "../runtime/simir_process_program.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <tuple>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace fsim::elaboration {
@@ -285,6 +289,10 @@ private:
         ReadOnlySignalSet read_only_signals;
         std::unordered_set<std::string> declared_signal_names;
         std::vector<BlockInputAdapter> block_input_adapters;
+        std::string generate_relative_discriminator;
+        // Declaration identities from all enclosing generated regions and
+        // this region, retained so descendant processes can bind local reads.
+        std::vector<semantic::DeclarationId> signal_declarations;
     };
 
     struct VhdlGeneratedBlockMaterializationContext {
@@ -302,6 +310,8 @@ private:
         std::vector<std::pair<std::string, std::string>>&
             vhdl_port_shape_identities;
         std::vector<VhdlHirMaterialization>& generated_materializations;
+        std::span<const semantic::DeclarationId>
+            ancestor_signal_declarations;
     };
 
     enum class CompiledVhdlGeneratedOccurrenceStatus {
@@ -595,6 +605,7 @@ private:
 
     bool lower_compiled_vhdl_generated_processes(
         std::vector<VhdlHirMaterialization>& materializations,
+        const semantic::vhdl::Unit& entity,
         const semantic::vhdl::Unit& architecture,
         StringMap& string_objects,
         ReadOnlyStringSet& read_only_strings,
@@ -927,7 +938,63 @@ private:
         std::size_t first_path,
         std::span<const ProcessId> processes);
 
+    void record_lowering_census(
+        std::size_t& counter,
+        std::size_t amount = 1U) noexcept
+    {
+        if (lowering_census_enabled_) {
+            counter += amount;
+        }
+    }
+
+    struct ElementNetRewriteCensus {
+        std::size_t shape_qualified_families { };
+        std::size_t shape_qualified_leaves { };
+        std::size_t invalid_initial_cache_shape_fallback_families { };
+        std::size_t resolver_fallback_families { };
+        std::size_t ordinal_range_fallback_families { };
+        std::size_t name_collision_fallback_families { };
+        std::size_t candidate_families { };
+        std::size_t candidate_leaves { };
+        std::size_t terminal_fallback_families { };
+        std::size_t terminal_fallback_leaves { };
+        std::size_t projected_write_operations { };
+        std::size_t projected_fallback_families { };
+        std::size_t projected_fallback_leaves { };
+        std::size_t eligible_families { };
+        std::size_t eligible_leaves { };
+        std::size_t capacity_fallback_families { };
+        std::size_t capacity_fallback_leaves { };
+        std::size_t physical_families { };
+        std::size_t physical_leaves { };
+        std::size_t proxy_read_operations { };
+        std::size_t leaf_read_rewrites { };
+        std::size_t read_no_extract_fallbacks { };
+        std::size_t read_width_fallbacks { };
+        std::size_t read_context_or_use_fallbacks { };
+        std::size_t read_range_fallbacks { };
+        std::size_t proxy_sensitivity_entries { };
+        std::size_t leaf_sensitivity_rewrites { };
+        std::size_t sensitivity_range_fallbacks { };
+        std::size_t proxy_element_write_operations { };
+        std::size_t leaf_element_write_rewrites { };
+        std::size_t element_write_dynamic_fallbacks { };
+        std::size_t element_write_transaction_fallbacks { };
+        std::size_t element_write_index_fallbacks { };
+        std::size_t element_write_width_fallbacks { };
+        std::size_t element_write_context_fallbacks { };
+        std::size_t proxy_slice_write_operations { };
+        std::size_t leaf_slice_write_rewrites { };
+        std::size_t slice_write_region_fallbacks { };
+        std::size_t slice_write_width_fallbacks { };
+        std::size_t slice_write_range_fallbacks { };
+        std::size_t physical_families_with_leaf_writes { };
+        std::size_t physical_alias_only_families { };
+    };
+
     void finish();
+    [[nodiscard]] ElementNetRewriteCensus
+    rewrite_eligible_element_net_families();
     static ResolutionKind native_resolution(const SignalInfo& signal);
     std::optional<ResolutionKind> explicit_resolution(SignalId signal);
     void register_systemverilog_resolution_functions(
@@ -935,15 +1002,127 @@ private:
     void set_resolution(SignalId signal, ResolutionKind resolution);
     void validate_process_drivers();
     void canonicalize_process_operations(Process& process);
-    [[nodiscard]] std::optional<Process>
-    lower_cached_vhdl_concurrent_statement(
+    void canonicalize_process_operations(
+        const std::shared_ptr<const ProcessProgramTemplate>& common,
+        ProcessInstanceProgram& instance);
+    struct VhdlProcessOccurrence {
+        std::optional<Process> process;
+        std::shared_ptr<const ProcessProgramTemplate> common;
+        std::optional<ProcessInstanceProgram> instance;
+
+        VhdlProcessOccurrence(Process value)
+            : process { std::move(value) }
+        {
+        }
+        VhdlProcessOccurrence(
+            std::shared_ptr<const ProcessProgramTemplate> common_value,
+            ProcessInstanceProgram instance_value)
+            : common { std::move(common_value) }
+            , instance { std::move(instance_value) }
+        {
+        }
+    };
+
+    [[nodiscard]] std::optional<VhdlProcessOccurrence>
+    lower_cached_vhdl_occurrence(
         const semantic::vhdl::Unit& entity,
         const semantic::vhdl::Unit& owner,
         const semantic::SpecializedHirUnit& specialized,
         Lowerer& lowerer,
         semantic::StatementId statement,
         std::string_view path,
-        std::size_t order);
+        std::size_t order,
+        std::optional<semantic::ProcessId> process_source = std::nullopt,
+        // Empty for ordinary VHDL; generated callers retain the unit-relative
+        // generate path/index in this template discriminator.
+        std::string_view generate_relative_discriminator = { },
+        std::span<const semantic::DeclarationId> additional_declarations = { });
+    struct SystemVerilogConcurrentProcessOccurrence {
+        std::optional<Process> process;
+        std::shared_ptr<const ProcessProgramTemplate> common;
+        std::optional<ProcessInstanceProgram> instance;
+
+        SystemVerilogConcurrentProcessOccurrence(Process value)
+            : process { std::move(value) }
+        {
+        }
+        SystemVerilogConcurrentProcessOccurrence(
+            std::shared_ptr<const ProcessProgramTemplate> common_value,
+            ProcessInstanceProgram instance_value)
+            : common { std::move(common_value) }
+            , instance { std::move(instance_value) }
+        {
+        }
+    };
+
+    [[nodiscard]] std::optional<SystemVerilogConcurrentProcessOccurrence>
+    lower_cached_systemverilog_concurrent_statement(
+        const semantic::sv::Unit& unit,
+        const semantic::SpecializedHirUnit& specialized,
+        Lowerer& lowerer,
+        semantic::StatementId statement,
+        frontend::Language source_language,
+        std::span<const semantic::DeclarationId> signal_declarations,
+        std::string_view path,
+        std::size_t order,
+        std::optional<std::uint32_t> program_owner);
+    struct SystemVerilogProcessReplay {
+        std::shared_ptr<const ProcessProgramTemplate> common;
+        ProcessInstanceProgram instance;
+    };
+
+    [[nodiscard]] std::optional<SystemVerilogProcessReplay>
+    replay_systemverilog_process_template(
+        const semantic::sv::Unit& unit,
+        const semantic::SpecializedHirUnit& specialized,
+        const semantic::sv::Process& source,
+        Lowerer& lowerer,
+        std::span<const semantic::DeclarationId> signal_declarations,
+        frontend::Language source_language,
+        bool generated_occurrence,
+        std::string_view module_hierarchy,
+        std::string_view path,
+        std::optional<std::uint32_t> program_owner);
+    [[nodiscard]] bool remember_systemverilog_process_template(
+        const semantic::sv::Unit& unit,
+        const semantic::SpecializedHirUnit& specialized,
+        const semantic::sv::Process& source,
+        const Lowerer& lowerer,
+        std::span<const semantic::DeclarationId> signal_declarations,
+        frontend::Language source_language,
+        bool generated_occurrence,
+        std::string_view module_hierarchy,
+        std::string_view hierarchy,
+        std::uint32_t callable_invocation_before,
+        std::uint32_t callable_invocation_after,
+        const Process& process);
+    struct SystemVerilogGeneratedProcessIdentity {
+        // Paths are relative to the owning module instance so repeated
+        // instances can share the same generate occurrence.
+        std::string relative_path;
+        // Exact hierarchy-local constants, including enclosing genvars, keep
+        // lanes with different specialized bodies in separate key entries.
+        std::vector<std::pair<std::string, std::string>> constant_bindings;
+
+        [[nodiscard]] bool operator<(
+            const SystemVerilogGeneratedProcessIdentity& other) const
+        {
+            return std::tie(relative_path, constant_bindings)
+                < std::tie(other.relative_path, other.constant_bindings);
+        }
+    };
+    [[nodiscard]] std::optional<SystemVerilogGeneratedProcessIdentity>
+    systemverilog_generated_process_identity(
+        const semantic::SpecializedHirOverlay& overlay,
+        std::string_view module_hierarchy,
+        std::string_view occurrence_path) const;
+    [[nodiscard]] std::optional<std::vector<
+        SystemVerilogTemplateSignalRole>>
+    systemverilog_process_signal_roles(
+        const Process& process,
+        const Lowerer& lowerer,
+        const semantic::SpecializedHirUnit& specialized,
+        std::span<const semantic::DeclarationId> signal_declarations) const;
 
     struct ConcurrentProcessTemplate {
         semantic::UnitId unit;
@@ -952,11 +1131,44 @@ private:
         std::string language_standard;
         std::string compatibility_profile;
         std::string hierarchy;
-        Process process;
+        // All admitted VHDL replay entries retain one shared template and
+        // an instance-local row. Ineligible occurrences bypass this cache.
+        std::shared_ptr<const ProcessProgramTemplate> common;
+        ProcessInstanceProgram instance;
         std::uint32_t callable_invocation_before { };
         std::uint32_t callable_invocation_after { };
         std::vector<std::pair<semantic::DeclarationId, SignalId>> formals;
         std::vector<bool> read_only_roles;
+        std::optional<semantic::ProcessId> process_source;
+        std::string generate_relative_discriminator;
+        // Branch-selected declaration identities distinguish otherwise
+        // matching generated occurrences with different selected bodies.
+        std::vector<semantic::DeclarationId> selected_generates;
+    };
+
+    struct SystemVerilogConcurrentProcessTemplate {
+        semantic::SpecializedHirOverlay overlay;
+        std::string language_standard;
+        std::string compatibility_profile;
+        std::string hierarchy;
+        // Every accepted concurrent template retains a shared body and an
+        // instance row. Full Processes remain transient fallback values.
+        std::shared_ptr<const ProcessProgramTemplate> common;
+        ProcessInstanceProgram instance;
+        std::vector<SystemVerilogTemplateSignalRole> signal_roles;
+    };
+
+    struct SystemVerilogProcessTemplate {
+        semantic::SpecializedHirOverlay overlay;
+        semantic::sv::Process source;
+        std::string language_standard;
+        std::string compatibility_profile;
+        std::string hierarchy;
+        std::shared_ptr<const ProcessProgramTemplate> common;
+        ProcessInstanceProgram program;
+        std::vector<SystemVerilogTemplateSignalRole> signal_roles;
+        std::uint32_t callable_invocation_before { };
+        std::uint32_t callable_invocation_after { };
     };
 
     struct ProcessOperationGroupingKey {
@@ -1028,6 +1240,9 @@ private:
         ReadOnlySignalSet read_only_signals;
         std::unordered_set<std::string> declared_signal_names;
         SystemVerilogAliasPlan alias_plan;
+        // Overlay pointers in this map are borrowed from the owning root or
+        // generated specialization for the synchronous lowering pass.
+        ContainerDeclarationBindings container_declaration_bindings;
     };
 
     // Specialization pointers borrow root/generated owners and are drained
@@ -1092,6 +1307,7 @@ private:
 
     bool materialize_compiled_systemverilog_declaration(
         const semantic::sv::Unit& unit,
+        semantic::DeclarationId declaration_id,
         SystemVerilogHirMaterialization& materialization,
         const semantic::sv::Declaration& declaration,
         const std::string& path,
@@ -1307,10 +1523,61 @@ private:
         process_operation_representatives_;
     OperationList::Storage operation_scratch_;
     std::vector<ConcurrentProcessTemplate> concurrent_process_templates_;
+    bool lowering_census_enabled_ { };
+    std::size_t vhdl_process_lower_requests_ { };
+    std::size_t vhdl_process_template_occurrences_ { };
+    std::size_t vhdl_process_template_hits_ { };
+    std::size_t vhdl_process_template_misses_ { };
+    std::size_t vhdl_process_template_rejections_ { };
+    std::uint64_t vhdl_process_template_lower_cpu_ns_ { };
+    std::size_t vhdl_generated_process_lower_requests_ { };
+    std::size_t systemverilog_process_lower_requests_ { };
+    std::size_t systemverilog_generated_process_lower_requests_ { };
+    std::size_t systemverilog_generated_process_occurrences_ { };
+    std::size_t systemverilog_generated_process_templates_lowered_ { };
+    std::size_t systemverilog_generated_process_template_replays_ { };
+    std::size_t systemverilog_generated_process_template_rejections_ { };
+    std::size_t systemverilog_ordinary_process_template_occurrences_ { };
+    std::size_t systemverilog_ordinary_process_template_lower_requests_ { };
+    std::size_t systemverilog_ordinary_process_templates_lowered_ { };
+    std::size_t systemverilog_ordinary_process_template_replays_ { };
+    std::size_t systemverilog_ordinary_process_template_rejections_ { };
+    std::size_t systemverilog_clocking_process_occurrences_ { };
+    std::size_t vhdl_lowerer_generated_processes_ { };
+    std::size_t systemverilog_lowerer_generated_processes_ { };
+    std::size_t vhdl_generated_input_actual_occurrences_ { };
+    std::size_t vhdl_port_input_actual_occurrences_ { };
+    std::size_t vhdl_port_output_actual_occurrences_ { };
+    std::size_t vhdl_generated_concurrent_occurrences_ { };
+    std::size_t vhdl_concurrent_template_occurrences_ { };
+    std::size_t systemverilog_concurrent_occurrences_ { };
+    std::size_t systemverilog_generated_concurrent_occurrences_ { };
+    std::size_t systemverilog_generated_concurrent_replays_ { };
     std::size_t concurrent_template_misses_ { };
     std::size_t concurrent_template_hits_ { };
     std::size_t concurrent_template_rejections_ { };
     std::uint64_t concurrent_template_lower_cpu_ns_ { };
+    using SystemVerilogConcurrentProcessTemplateKey = std::tuple<
+        semantic::UnitId,
+        semantic::StatementId,
+        frontend::Language>;
+    std::map<SystemVerilogConcurrentProcessTemplateKey,
+        std::vector<SystemVerilogConcurrentProcessTemplate>>
+        systemverilog_concurrent_process_templates_;
+    using SystemVerilogProcessTemplateKey = std::tuple<
+        semantic::UnitId,
+        semantic::ProcessId,
+        frontend::Language,
+        bool,
+        SystemVerilogGeneratedProcessIdentity>;
+    std::map<SystemVerilogProcessTemplateKey,
+        std::vector<SystemVerilogProcessTemplate>>
+        systemverilog_process_templates_;
+    std::size_t systemverilog_concurrent_template_misses_ { };
+    std::size_t systemverilog_concurrent_template_hits_ { };
+    std::size_t systemverilog_concurrent_template_rejections_ { };
+    std::size_t systemverilog_concurrent_templates_lowered_ { };
+    std::size_t systemverilog_concurrent_templates_replayed_ { };
 };
 
 } // namespace fsim::elaboration

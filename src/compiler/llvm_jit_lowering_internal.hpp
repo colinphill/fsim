@@ -4,18 +4,101 @@
 #include "llvm_jit_internal.hpp"
 
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/DataLayout.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <functional>
 #include <string_view>
+#include <optional>
 #include <vector>
 
 namespace fsim::compiler::llvm_detail {
 
-[[nodiscard]] llvm::StructType* create_jit_runtime_type(
+enum class JitServiceField : unsigned {
+#define FSIM_JIT_SERVICE_FIELD(name) name,
+    FSIM_JIT_SERVICES_V2_CALLBACK_FIELDS(FSIM_JIT_SERVICE_FIELD)
+#undef FSIM_JIT_SERVICE_FIELD
+    count
+};
+
+enum class JitRuntimeInstanceField : unsigned {
+    abi_version,
+    struct_size,
+    services,
+    context,
+    flags,
+    reserved,
+    direct_update_slots,
+    direct_update_slot_count,
+    direct_update_reserved,
+    direct_signal_aval,
+    direct_signal_bval,
+    direct_read_signals,
+    direct_read_signal_count,
+    direct_signal_count,
+    direct_signal_reserved,
+    direct_wide_signal_aval,
+    direct_wide_signal_bval,
+    direct_wide_signal_offsets,
+    direct_wide_signal_offset_count,
+    direct_wide_word_count,
+    direct_update_active_words,
+    direct_update_active_word_count,
+    direct_update_active_reserved,
+    static_trigger_mask,
+    direct_wide_signal_logic9_plane2,
+    direct_wide_signal_logic9_plane3,
+    direct_signal_logic9_plane0,
+    direct_signal_logic9_plane1,
+    direct_signal_logic9_plane2,
+    direct_signal_logic9_plane3,
+    code_coverage_hit_counters,
+    code_coverage_counter_values,
+    code_coverage_hit_count,
+    code_coverage_counter_count,
+    fused_activation_words,
+    fused_activation_word_count,
+    fused_activation_reserved,
+    count
+};
+
+struct JitAbiV2Types {
+    llvm::ArrayType* service_callbacks;
+    llvm::StructType* services;
+    llvm::StructType* runtime_instance;
+    llvm::StructType* update_slot;
+    llvm::StructType* frame;
+    llvm::StructType* resume_result;
+    llvm::StructType* projected_element;
+    llvm::StructType* logic9_word;
+    llvm::StructType* logic9_projected_element;
+};
+
+[[nodiscard]] JitAbiV2Types create_jit_abi_v2_types(
     llvm::LLVMContext& context);
+void validate_jit_abi_v2_layout(
+    const llvm::DataLayout& data_layout,
+    const JitAbiV2Types& types);
+[[nodiscard]] llvm::Value* runtime_instance_field_address(
+    llvm::IRBuilder<>& builder,
+    llvm::StructType* instance_type,
+    llvm::Value* instance,
+    JitRuntimeInstanceField field);
+[[nodiscard]] llvm::Value* jit_service_callback_address(
+    llvm::IRBuilder<>& builder,
+    llvm::StructType* services_type,
+    llvm::Value* services,
+    JitServiceField field);
+[[nodiscard]] llvm::Value* load_jit_service_callback(
+    llvm::IRBuilder<>& builder,
+    llvm::StructType* services_type,
+    llvm::Value* services,
+    JitServiceField field,
+    std::string_view name);
 
 void lower_masked_member_gates(llvm::Function& function,
     llvm::StructType* runtime_type,
@@ -56,6 +139,7 @@ struct RegisterSlot {
         runtime::simir::ValueKind::logic4
     };
     ConstantPlaneForwarding* constant_planes { };
+    bool known_logic4 { };
 };
 
 struct EncodedBit {
@@ -79,6 +163,46 @@ struct EncodedDynamicPartWrite {
     const runtime::simir::DynamicPartIndex& selection,
     runtime::simir::ValueKind signal_kind);
 
+[[nodiscard]] bool dynamic_part_offsets_increase(
+    std::int64_t left,
+    std::int64_t right,
+    bool source_descending) noexcept;
+
+[[nodiscard]] std::optional<EncodedValue>
+lower_dynamic_part_select_interval(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Type* i32,
+    llvm::Type* i64,
+    const std::vector<RegisterSlot>& registers,
+    const runtime::simir::DynamicPartSelect& operation);
+
+[[nodiscard]] std::optional<EncodedValue>
+lower_dynamic_part_insert_interval(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Type* i32,
+    llvm::Type* i64,
+    const std::vector<RegisterSlot>& registers,
+    const runtime::simir::DynamicPartInsert& operation);
+
+[[nodiscard]] EncodedValue load_wide_register_bit(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    const std::vector<RegisterSlot>& registers,
+    runtime::simir::RegisterId id,
+    llvm::Value* safe_offset);
+
+void store_wide_dynamic_insert_words(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    const std::vector<RegisterSlot>& registers,
+    runtime::simir::RegisterId destination,
+    runtime::simir::RegisterId target,
+    EncodedValue source,
+    llvm::Value* valid,
+    llvm::Value* safe_offset);
+
 [[nodiscard]] runtime::simir::ShiftOperator reverse_shift(
     runtime::simir::ShiftOperator operation) noexcept;
 
@@ -87,20 +211,37 @@ struct EncodedDynamicPartWrite {
     const std::vector<RegisterSlot>& registers,
     runtime::simir::RegisterId id);
 
+[[nodiscard]] bool try_lower_wide_bitwise_binary(
+    llvm::IRBuilder<>& builder,
+    const std::vector<RegisterSlot>& registers,
+    runtime::simir::BinaryOperator operation,
+    runtime::simir::RegisterId destination,
+    runtime::simir::RegisterId lhs,
+    runtime::simir::RegisterId rhs);
+
+[[nodiscard]] bool try_lower_wide_bitwise_not(
+    llvm::IRBuilder<>& builder,
+    const std::vector<RegisterSlot>& registers,
+    runtime::simir::RegisterId destination,
+    runtime::simir::RegisterId source);
+
 [[nodiscard]] EncodedValue coerce_value_kind(
     llvm::IRBuilder<>& builder,
     EncodedValue value,
     runtime::simir::ValueKind destination_kind);
+
+[[nodiscard]] EncodedValue canonicalize_logic9_value(
+    llvm::IRBuilder<>& builder,
+    EncodedValue value);
 
 [[nodiscard]] llvm::Value* logic9_state_mask(
     llvm::IRBuilder<>& builder,
     const EncodedValue& value,
     std::uint8_t state);
 
-[[nodiscard]] EncodedValue map_logic9_unary(
+[[nodiscard]] EncodedValue lower_logic9_not(
     llvm::IRBuilder<>& builder,
-    const EncodedValue& value,
-    const std::array<runtime::Logic9, 9>& table);
+    const EncodedValue& value);
 
 [[nodiscard]] EncodedValue lower_logic9_binary(
     llvm::IRBuilder<>& builder,
@@ -193,6 +334,8 @@ struct ValueOperationLowerer {
     llvm::Value* read_signal_dynamic_part_callback;
     llvm::FunctionType* read_signal_dynamic_part_type;
     llvm::Value* logic9_word_slot;
+    llvm::function_ref<llvm::Value*(runtime::simir::SignalId)>
+        callback_signal_id;
 
     void lower(const runtime::simir::CopyRegister& operation);
     void lower(const runtime::simir::ConvertToTwoState& operation);
@@ -246,8 +389,8 @@ struct StringOperationLowerer {
         llvm::Value* context_pointer,
         std::uint32_t process,
         std::uint32_t instruction,
-        llvm::StructType* runtime_type,
-        llvm::Value* runtime_argument,
+        llvm::StructType* services_type,
+        llvm::Value* services_argument,
         std::function<void(
             llvm::Value*,
             JitGeneratedRuntimeErrorReason,
@@ -301,8 +444,8 @@ struct FileOperationLowerer {
         llvm::Value* context_pointer,
         std::uint32_t process,
         std::uint32_t instruction,
-        llvm::StructType* runtime_type,
-        llvm::Value* runtime_argument,
+        llvm::StructType* services_type,
+        llvm::Value* services_argument,
         std::function<void(
             llvm::Value*,
             JitGeneratedRuntimeErrorReason,
@@ -351,8 +494,8 @@ struct ContainerOperationLowerer {
     llvm::FunctionType* callback_type;
     llvm::Value* read_word_callback;
     llvm::Value* write_word_callback;
-    llvm::StructType* runtime_type_value;
-    llvm::Value* runtime_argument_value;
+    llvm::StructType* services_type_value;
+    llvm::Value* services_argument_value;
     llvm::FunctionType* read_word_callback_type;
     llvm::FunctionType* write_word_callback_type;
     llvm::FunctionType* read_packed_callback_type;
@@ -360,7 +503,10 @@ struct ContainerOperationLowerer {
     std::span<const runtime::simir::ContainerType> container_types;
     llvm::Value* result_aval;
     llvm::Value* result_bval;
+    llvm::Value* wide_callback_scratch;
+    std::uint32_t wide_callback_scratch_word_stride;
     std::uint32_t fused_container_object_read_distance;
+    bool fused_container_object_read_single_use;
     std::function<void(
         llvm::Value*,
         JitGeneratedRuntimeErrorReason,
@@ -379,12 +525,15 @@ struct ContainerOperationLowerer {
         llvm::Value*,
         std::uint32_t,
         std::uint32_t,
-        llvm::StructType*,
-        llvm::Value*,
+        llvm::StructType* services_type,
+        llvm::Value* services_argument,
         std::span<const runtime::simir::ContainerType>,
         llvm::Value*,
         llvm::Value*,
+        llvm::Value*,
         std::uint32_t,
+        std::uint32_t,
+        bool,
         std::function<void(
             llvm::Value*,
             JitGeneratedRuntimeErrorReason,
@@ -487,6 +636,7 @@ struct SignalOperationLowerer {
     llvm::Value* direct_update_slots;
     llvm::Value* direct_update_active_words;
     bool require_direct_update_slots;
+    bool require_direct_read_signals;
     llvm::LLVMContext& context;
     llvm::Type* i32;
     llvm::Type* i64;
@@ -543,12 +693,16 @@ struct SignalOperationLowerer {
     llvm::FunctionType* read_type;
     llvm::FunctionType* read_logic9_type;
     llvm::FunctionType* write_type;
+    llvm::FunctionType* write_update_type;
     llvm::FunctionType* write_after_type;
     llvm::FunctionType* write_logic9_type;
+    llvm::FunctionType* write_update_logic9_type;
     llvm::FunctionType* write_after_logic9_type;
     llvm::FunctionType* write_slice_type;
+    llvm::FunctionType* write_update_slice_type;
     llvm::FunctionType* write_after_slice_type;
     llvm::FunctionType* write_slice_logic9_type;
+    llvm::FunctionType* write_update_slice_logic9_type;
     llvm::FunctionType* write_after_slice_logic9_type;
     llvm::FunctionType* release_slice_type;
     llvm::FunctionType* write_projected_waveform_type;
@@ -582,6 +736,8 @@ struct SignalOperationLowerer {
         runtime_error_if;
     std::function<llvm::Value*(const runtime::simir::DynamicIndex&)>
         dynamic_offset;
+    llvm::function_ref<llvm::Value*(runtime::simir::SignalId)>
+        callback_signal_id;
 
     [[nodiscard]] bool begin_direct_update(
         runtime::simir::SignalId signal,

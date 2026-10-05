@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -15,6 +16,10 @@ struct DriverRecord {
     ProcessId process { };
     PackedLogic4 value;
     DriveStrength strength { };
+    // Null means a whole-signal source. VHDL static partial assignments
+    // contribute only to these scalar subelements; Z padding in value is
+    // a public representation, not an additional driver on other bits.
+    std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions { };
 };
 
 /// Inline-first storage for the drivers of one signal.

@@ -254,247 +254,6 @@ namespace {
 
 } // namespace
 
-void Interpreter::Impl::build_native_static_regions()
-{
-    if (native_static_regions_built) {
-        return;
-    }
-    native_static_regions_built = true;
-    const auto no_region = std::numeric_limits<std::size_t>::max();
-    native_static_region_by_process.assign(processes.size(), no_region);
-    native_static_region_offset_by_process.assign(processes.size(), no_region);
-    if (!native_static_regions_enabled
-        || process_profile_enabled || execution_point_hook) {
-        return;
-    }
-
-    std::vector<bool> candidate(processes.size(), false);
-    const auto no_cohort = std::numeric_limits<std::size_t>::max();
-    for (std::size_t id = 0; id < processes.size(); ++id) {
-        auto& state = processes[id];
-        const auto& process = state.program();
-        const auto cohort = id < static_sensitivity_cohort_by_process.size()
-            ? static_sensitivity_cohort_by_process[id]
-            : no_cohort;
-        const auto wait_count = std::ranges::count_if(
-            process.operations,
-            [](const auto& operation) {
-                return operation_holds<WaitSensitivity>(operation);
-            });
-        const bool static_region_shape
-            = !process.static_sensitivity.empty()
-            && wait_count == 1
-            && !process.postponed && !process.reactive && !process.observed
-            && (cohort == no_cohort
-                || static_sensitivity_cohorts[cohort].members.size() < 2U);
-        if (!static_region_shape) {
-            continue;
-        }
-        if (!state.executor && state.cold().deferred_executor
-            && can_install_deferred_executor(state)
-            && state.cold().deferred_executor->ready()) {
-            install_deferred_executor(state);
-        }
-        candidate[id] = state.executor
-            && state.executor->cohort_domain() != nullptr
-            && state.executor->cohort_manages_process_state();
-    }
-    std::vector<std::size_t> parent(processes.size());
-    std::iota(parent.begin(), parent.end(), std::size_t { });
-    const auto root = [&](std::size_t id) {
-        while (parent[id] != id) {
-            parent[id] = parent[parent[id]];
-            id = parent[id];
-        }
-        return id;
-    };
-    const auto join = [&](const std::size_t left,
-                          const std::size_t right) {
-        const auto left_root = root(left);
-        const auto right_root = root(right);
-        if (left_root != right_root) {
-            parent[right_root] = left_root;
-        }
-    };
-    for (std::size_t id = 0; id < processes.size(); ++id) {
-        if (!candidate[id]) {
-            continue;
-        }
-        std::set<SignalId> outputs;
-        for (const auto& driver : processes[id].program().driver_regions) {
-            outputs.insert(driver.signal);
-        }
-        if (outputs.empty()) {
-            for (const auto& operation : processes[id].program().operations) {
-                if (const auto signal = output_signal(operation)) {
-                    outputs.insert(*signal);
-                }
-            }
-        }
-        for (const auto signal : outputs) {
-            if (!can_publish_native_word(
-                    signal, static_cast<ProcessId>(id))) {
-                continue;
-            }
-            for (const auto& fanout : static_fanout_for(signal)) {
-                const auto target
-                    = static_cast<std::size_t>(fanout.process);
-                if (fanout.edge == EdgeKind::any
-                    && target < candidate.size() && candidate[target]) {
-                    join(id, target);
-                }
-            }
-        }
-    }
-
-    std::map<std::size_t, std::vector<ProcessId>> components;
-    for (std::size_t id = 0; id < candidate.size(); ++id) {
-        if (candidate[id]) {
-            components[root(id)].push_back(static_cast<ProcessId>(id));
-        }
-    }
-    for (auto& [component, members] : components) {
-        (void)component;
-        if (members.size() < 2U) {
-            continue;
-        }
-        const auto region_id = native_static_regions.size();
-        NativeStaticRegion region;
-        region.members = std::move(members);
-        region.active.assign(region.members.size(), 0U);
-        region.ready_offsets.reserve(region.members.size());
-        region.contexts.reserve(region.members.size());
-        region.entries.resize(region.members.size());
-        for (std::size_t offset = 0; offset < region.members.size();
-             ++offset) {
-            const auto id = region.members[offset];
-            region.contexts.push_back(
-                std::make_unique<ExecutionContext>(*this, id));
-            auto& state = get_process(id);
-            region.entries[offset] = ProcessCohortResumeEntry {
-                state.executor.get(), region.contexts[offset].get(), state.pc,
-                { }, { }, &state.queued, &state.waiting_on_static,
-                &state.status, &region.active[offset]
-            };
-            native_static_region_by_process[id] = region_id;
-            native_static_region_offset_by_process[id] = offset;
-        }
-        native_static_regions.push_back(std::move(region));
-    }
-}
-
-std::size_t Interpreter::Impl::execute_native_static_region(
-    const std::size_t region_id,
-    const std::span<const ProcessId> ready)
-{
-    ++native_static_region_attempts;
-    native_static_region_ready += ready.size();
-    if (region_id >= native_static_regions.size() || ready.size() < 2U
-        || scheduler.stop_requested()) {
-        ++native_static_region_declines[0];
-        return 0U;
-    }
-    auto& region = native_static_regions[region_id];
-    std::ranges::fill(region.active, UINT8_C(0));
-    region.ready_offsets.clear();
-    struct ClearOffsets {
-        std::vector<std::size_t>& offsets;
-
-        ~ClearOffsets()
-        {
-            offsets.clear();
-        }
-    } clear_offsets { region.ready_offsets };
-    for (const auto id : ready) {
-        if (id >= native_static_region_by_process.size()
-            || native_static_region_by_process[id] != region_id) {
-            return 0U;
-        }
-        const auto offset = native_static_region_offset_by_process[id];
-        region.active[offset] = 1U;
-        region.ready_offsets.push_back(offset);
-    }
-    if (!region.prepared) {
-        for (std::size_t offset = 0; offset < region.members.size();
-             ++offset) {
-            auto& state = get_process(region.members[offset]);
-            restore_callable_context(state);
-            if (!state.executor && state.cold().deferred_executor
-                && can_install_deferred_executor(state)
-                && state.cold().deferred_executor->ready()) {
-                install_deferred_executor(state);
-            }
-            if (!state.executor
-                || state.executor->cohort_domain() == nullptr
-                || !state.executor->cohort_manages_process_state()) {
-                ++native_static_region_declines[1];
-                return 0U;
-            }
-            auto& entry = region.entries[offset];
-            entry.executor = state.executor.get();
-            entry.start_instruction = state.pc;
-        }
-        region.prepared = true;
-    }
-    for (const auto id : ready) {
-        auto& state = get_process(id);
-        const auto offset = native_static_region_offset_by_process[id];
-        auto& entry = region.entries[offset];
-        if (state.executor.get() != entry.executor || state.suspended
-            || state.halted || !state.waiting_on_static) {
-            ++native_static_region_declines[2];
-            return 0U;
-        }
-        restore_callable_context(state);
-        entry.start_instruction = state.pc;
-        entry.result = { };
-        entry.failure = { };
-    }
-
-    const auto scanned = region.entries.front().executor->resume_region(
-        region.entries, region.ready_offsets);
-    if (scanned == 0U || scanned > region.entries.size()) {
-        ++native_static_region_declines[3];
-        return 0U;
-    }
-    ++native_static_region_calls;
-    std::size_t consumed { };
-    for (const auto id : ready) {
-        const auto offset = native_static_region_offset_by_process[id];
-        if (offset >= scanned) {
-            break;
-        }
-        auto& state = get_process(id);
-        auto& entry = region.entries[offset];
-        if (entry.failure) {
-            std::rethrow_exception(entry.failure);
-        }
-        if (native_process_count_profile_enabled) {
-            ++native_process_resume_counts[id];
-            ++native_process_single_resume_counts[id];
-            ++native_process_single_boundary_counts[
-                external_suspension_profile_index(
-                    entry.result.external.kind)];
-            if (is_static_wait_suspension(
-                    entry.result.external.kind)) {
-                ++native_process_single_static_wait_counts[id];
-            }
-        }
-        if (handle_executor_resume(state, entry.result)) {
-            execute(id);
-        }
-        ++consumed;
-        if (scheduler.stop_requested()) {
-            break;
-        }
-    }
-    native_static_region_consumed += consumed;
-    if (consumed != ready.size()) {
-        ++native_static_region_declines[4];
-    }
-    return consumed;
-}
-
 void Interpreter::Impl::execute_vhdl_report(
     ProcessState& process,
     const InstructionIndex instruction,
@@ -516,7 +275,7 @@ void Interpreter::Impl::execute_vhdl_report(
     }
     const auto formatted = format_vhdl_assert_message(
         vhdl_assert_formats[level], message, severity,
-        process.program().name, scheduler.now(),
+        process.program().name(), scheduler.now(),
         time_format.resolution_femtoseconds);
     if (report_hook) {
         report_hook(
@@ -1224,10 +983,36 @@ SchedulerBatchResult Interpreter::Impl::execute(
     Scheduler& runtime,
     const std::span<const std::uint64_t> cohort_ids)
 {
+    if (!cohort_ids.empty()
+        && (cohort_ids.front() & systemverilog_wave_payload) != 0U) {
+        return execute_systemverilog_wave(cohort_ids);
+    }
     SchedulerBatchResult result;
     const auto phase_revision = runtime.current_phase_revision();
     std::size_t batch_index { };
     while (batch_index < cohort_ids.size()) {
+        if ((cohort_ids[batch_index]
+                & generic_projected_region_payload) != 0U) {
+            auto region = execute_generic_projected_region(
+                cohort_ids.subspan(batch_index), batch_index);
+            if (region.failure) {
+                // Preserve a prefix whose deferred Update rows were secured.
+                // The scheduler must not replay those publications.
+                result.executed += region.executed;
+                result.failure = region.failure;
+                break;
+            }
+            if (region.executed == 0U) {
+                break;
+            }
+            result.executed += region.executed;
+            batch_index += region.executed;
+            if (runtime.stop_requested()
+                || runtime.current_phase_revision() != phase_revision) {
+                break;
+            }
+            continue;
+        }
         std::size_t offered_tasks { };
         try {
             if (const auto completed = try_execute_fused_static_cohort(
@@ -1241,118 +1026,16 @@ SchedulerBatchResult Interpreter::Impl::execute(
                 }
                 continue;
             }
-            if (const auto completed = try_execute_pure_wave(
-                    cohort_ids.subspan(batch_index), offered_tasks)) {
-                result.executed += *completed;
-                batch_index += *completed;
-                if (runtime.stop_requested()
-                    || runtime.current_phase_revision()
-                        != phase_revision) {
-                    break;
-                }
-                continue;
-            }
         } catch (...) {
             result.failure = std::current_exception();
-            result.executed += std::max(std::size_t { 1U }, offered_tasks);
+            // A prepared executor sets offered_tasks only after accepting a
+            // task prefix. Zero means admission/staging failed before any
+            // task was accepted, so leave the scheduler's whole suffix
+            // available for retry.
+            result.executed += offered_tasks;
             break;
         }
         const auto raw_cohort = cohort_ids[batch_index];
-        if ((raw_cohort & native_static_region_payload) != 0U) {
-            const auto process = static_cast<ProcessId>(
-                raw_cohort & ~native_static_region_payload);
-            const auto no_region = std::numeric_limits<std::size_t>::max();
-            const auto region
-                = process < native_static_region_by_process.size()
-                ? native_static_region_by_process[process]
-                : no_region;
-            if (region == no_region) {
-                result.failure = std::make_exception_ptr(
-                    std::logic_error(
-                        "scheduler batch references an invalid native "
-                        "static-region process"));
-                ++result.executed;
-                break;
-            }
-            auto end = batch_index + 1U;
-            while (end < cohort_ids.size()
-                && (cohort_ids[end] & native_static_region_payload) != 0U) {
-                const auto candidate = static_cast<ProcessId>(
-                    cohort_ids[end] & ~native_static_region_payload);
-                if (candidate >= native_static_region_by_process.size()
-                    || native_static_region_by_process[candidate] != region) {
-                    break;
-                }
-                ++end;
-            }
-            auto& ready = native_region_ready_scratch;
-            ready.clear();
-            struct ClearReady {
-                std::vector<ProcessId>& members;
-
-                ~ClearReady()
-                {
-                    members.clear();
-                }
-            } clear_ready { ready };
-            ready.reserve(end - batch_index);
-            for (auto index = batch_index; index < end; ++index) {
-                ready.push_back(static_cast<ProcessId>(
-                    cohort_ids[index] & ~native_static_region_payload));
-            }
-            std::size_t consumed { };
-            try {
-                consumed = execute_native_static_region(region, ready);
-            } catch (...) {
-                result.failure = std::current_exception();
-            }
-            if (result.failure) {
-                break;
-            }
-            if (consumed == 0U) {
-                if (result.executed == 0U) {
-                    return result;
-                }
-                break;
-            }
-            if (consumed > ready.size()) {
-                result.failure = std::make_exception_ptr(
-                    std::logic_error(
-                        "native static region consumed an invalid process "
-                        "count"));
-                break;
-            }
-            result.executed += consumed;
-            batch_index += consumed;
-            if (consumed != ready.size()) {
-                break;
-            }
-            if (runtime.stop_requested()
-                || runtime.current_phase_revision() != phase_revision) {
-                break;
-            }
-            continue;
-        }
-        if ((raw_cohort & pure_wave_singleton_payload) != 0U) {
-            const auto process = static_cast<ProcessId>(
-                raw_cohort & ~pure_wave_singleton_payload);
-            try {
-                auto& state = get_process(process);
-                state.queued = false;
-                state.waiting_on_static = false;
-                remove_dynamic_wait(state);
-                execute(process);
-            } catch (...) {
-                result.failure = std::current_exception();
-            }
-            ++result.executed;
-            ++batch_index;
-            if (result.failure || runtime.stop_requested()
-                || runtime.current_phase_revision() != phase_revision) {
-                break;
-            }
-            continue;
-        }
         if (raw_cohort >= static_sensitivity_cohorts.size()) {
             result.failure = std::make_exception_ptr(
                 std::logic_error(

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/compiler/fused_masked_process.hpp"
+#include "fsim/runtime/simir_fused_branch_safety.hpp"
 #include "llvm_jit_internal.hpp"
 
 #include <algorithm>
@@ -65,6 +66,10 @@ bool append_member(FusedMaskedProcess& result, const Process& member,
     try {
         validated = llvm_detail::validate_process(member, widths, kinds);
     } catch (const LlvmJitError&) {
+        return false;
+    }
+    if (!runtime::simir::detail::masked_branch_conditions_are_proven_known(
+            member.operations, member.register_count)) {
         return false;
     }
     const auto count = member.operations.size() - 2U;
@@ -243,11 +248,13 @@ bool append_member(FusedMaskedProcess& result, const Process& member,
         static_cast<std::uint32_t>(result.gates.size()) });
     result.process.register_count += member.register_count;
     result.process.register_value_kinds.resize(base, ValueKind::logic4);
-    if (member.register_value_kinds.empty()) {
+    const auto member_register_value_kinds
+        = process_layout_detail::ProcessLayoutAccess::view(member.register_value_kinds);
+    if (member_register_value_kinds.empty()) {
         result.process.register_value_kinds.resize(result.process.register_count, ValueKind::logic4);
     } else {
         result.process.register_value_kinds.insert(result.process.register_value_kinds.end(),
-            member.register_value_kinds.begin(), member.register_value_kinds.end());
+            member_register_value_kinds.begin(), member_register_value_kinds.end());
     }
     return true;
 }

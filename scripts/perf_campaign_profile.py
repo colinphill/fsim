@@ -114,19 +114,24 @@ def _run(command: list[str], cwd: Path, environment: dict[str, str],
 
 def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
                    cpu: int, stem: Path, timeout: float = 7200,
-                   frequency: int = 99, dwarf_stack_bytes: int = 8192) -> dict[str, Any]:
+                   frequency: int = 99, dwarf_stack_bytes: int = 8192,
+                   event: str = 'cycles:u') -> dict[str, Any]:
     """Run a fresh-workspace phase with sampling and retained JIT attribution.
 
     The caller creates the fresh workspace, checks HDL results against its
     preflight, and keeps this entire invocation separate from timing samples.
     The record has the usual phase fields plus a diagnostic-only sampling
     payload. Profile RSS includes the sampler process and is not baseline RSS.
+    Hardware cycles are the default. A caller may explicitly select cpu-clock
+    on hosts without a PMU; errors never silently rerun a workload on fallback.
     """
     perf_name = shutil.which('perf', path=environment.get('PATH'))
     if perf_name is None:
         raise SamplingError('perf is required for CPU sampling')
     if frequency <= 0 or timeout <= 0 or dwarf_stack_bytes <= 0:
         raise SamplingError('frequency, timeout, and DWARF stack size must be positive')
+    if event not in ('cycles:u', 'cpu-clock:u'):
+        raise SamplingError('sampling event must be cycles:u or cpu-clock:u')
     if cpu not in os.sched_getaffinity(0):
         raise SamplingError(f'CPU {cpu} is outside the permitted affinity')
     perf = Path(perf_name).resolve()
@@ -150,7 +155,7 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
         'INVOLUNTARY_CONTEXT_SWITCHES=%c',
         '-o', str(rss_path),
         '--', str(perf), 'record', '--no-buildid-cache',
-        '-e', 'cpu-clock:u', '-F', str(frequency),
+        '-e', event, '-F', str(frequency),
         '--call-graph', f'dwarf,{dwarf_stack_bytes}', '-o', str(data_path), '--', *command,
     ]
     try:
@@ -237,7 +242,7 @@ def sample_command(command: list[str], cwd: Path, environment: dict[str, str],
         'instrumented': True,
         'sampling': {
             **attribution,
-            'event': 'cpu-clock:u', 'frequency_hz': frequency,
+            'event': event, 'frequency_hz': frequency,
             'call_graph': f'dwarf,{dwarf_stack_bytes}', 'cpu_affinity': [cpu],
             'perf': str(perf), 'perf_sha256': _hash_file(perf),
             'perf_data': str(data_path), 'self_report': str(report_path),

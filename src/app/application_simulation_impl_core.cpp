@@ -792,13 +792,16 @@ void Simulation::Impl::require_vpi_value(
 {
     std::scoped_lock bridge_lock { vpi_bridge_mutex };
     try {
+        if (vpi_read_only_container_words.contains(update.object)) {
+            return runtime::SystemVerilogVpiValueError::ReadOnly;
+        }
         const auto word = vpi_word_handles.find(update.object);
         if (word != vpi_word_handles.end()) {
             if (update.forced_value) {
                 return runtime::SystemVerilogVpiValueError::ReadOnly;
             }
-            auto value
-                = interpreter->container_object_value(word->second.first);
+            auto value = interpreter->container_object_value_snapshot(
+                word->second.first);
             auto& element = value.elements.at(word->second.second);
             const auto replacement = systemverilog_vpi_packed_value(
                 update.value,
@@ -843,7 +846,8 @@ void Simulation::Impl::require_vpi_value(
                 }
             }
         }
-        if (interpreter->stored_signal_value(signal->second) != stored) {
+        if (interpreter->stored_signal_value_snapshot(signal->second)
+            != stored) {
             interpreter->deposit_signal(signal->second, stored);
         }
         if (update.forced_value) {
@@ -852,7 +856,8 @@ void Simulation::Impl::require_vpi_value(
                 vpi_scalar_kinds.at(signal->second),
                 vpi_categories.at(signal->second));
             if (!interpreter->signal_is_forced(signal->second)
-                || interpreter->signal_value(signal->second) != forced) {
+                || interpreter->signal_value_snapshot(signal->second)
+                    != forced) {
                 interpreter->force_signal(signal->second, forced);
             }
             vpi_forced_signals.insert(signal->second);
@@ -886,7 +891,7 @@ void Simulation::Impl::publish_vpi_stored_signal(const SignalId signal)
             vpi_registry->update_bound_value(
                 object,
                 vpi_value(signal,
-                    interpreter->stored_signal_value(signal))),
+                    interpreter->stored_signal_value_snapshot(signal))),
             "stored-value publication");
     }
     const auto drivers = vpi_driver_bindings.find(signal);
@@ -936,7 +941,8 @@ void Simulation::Impl::publish_vpi_container(
     if (words == vpi_container_words.end()) {
         return;
     }
-    const auto& value = interpreter->container_object_value(object);
+    const auto value
+        = interpreter->container_object_value_snapshot(object);
     for (const auto& [handle, ordinal] : words->second) {
         require_vpi_value(
             vpi_registry->update_bound_value(handle,
@@ -996,7 +1002,7 @@ void Simulation::Impl::publish_vpi_signal(
                 vpi_registry->update_bound_value(
                     object,
                     vpi_value(signal,
-                        interpreter->stored_signal_value(signal))),
+                        interpreter->stored_signal_value_snapshot(signal))),
                 "effective-value publication");
         }
         if (vpi_forced_signals.erase(signal) != 0U) {

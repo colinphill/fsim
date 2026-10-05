@@ -1832,6 +1832,7 @@ scheduler.
 | `FSIM-ELAB-0001` | error | No unique executable top can be inferred; set `project.top` or `--top`. |
 | `FSIM-ELAB-0002` | error | The effective programmatic or command-line root list contains an empty target, missing or unsafe alias, duplicate alias, or invalid legacy/list combination. |
 | `FSIM-ELAB-HIR-001` | error | Retained compiled HIR is malformed, incomplete, or requires a syntax adapter that is prohibited after compilation. |
+| `FSIM-ELAB-DRIVER-001` | error | The validated elaborated design's immutable signal-driver ownership inventory could not be constructed. |
 | `FSIM-ELAB-001` | error | The requested top-level design unit was not found. |
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
@@ -2603,7 +2604,6 @@ scheduler.
 | `FSIM-ELAB-SVTOLERANCE-001` | error | An inside tolerance range is used outside the exact SystemVerilog-2023 profile. |
 | `FSIM-ELAB-SVMDARRAY-001` | error | A multidimensional static-array access does not supply exactly one index per declared unpacked dimension. |
 | `FSIM-ELAB-SVMDARRAY-002` | error | A runtime multidimensional static-array index cannot lower to a signed 32-bit integral value. |
-| `FSIM-ELAB-SVMDARRAY-003` | error | A multidimensional static-array index is outside its declared range or cannot be flattened within the bounded capacity. |
 | `FSIM-ELAB-SVREPL-001` | error | A replication concatenation has a nonconstant/nonpositive count, no statically sized operands, or an overflowing expanded width. |
 | `FSIM-ELAB-SVSPEC-001` | error | A specify parameter, condition operand, path delay, or timing-check value is not locally static after specialization. |
 | `FSIM-ELAB-SVSPEC-002` | error | A specify terminal does not name a direct signal or port in its owning module instance. |

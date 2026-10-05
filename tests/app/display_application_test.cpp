@@ -3,8 +3,10 @@
 #include "application_workflow_test_support.hpp"
 #include "path_test_support.hpp"
 
+#include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +16,12 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -26,6 +34,85 @@ struct TemporaryDirectory {
         std::filesystem::remove_all(path, error);
     }
 };
+
+class ScopedStdoutCapture final {
+public:
+    ScopedStdoutCapture()
+        : output_ { std::tmpfile() }
+    {
+        assert(output_ != nullptr);
+        std::cout.flush();
+        const auto flush_status = std::fflush(stdout);
+        assert(flush_status == 0);
+#if defined(_WIN32)
+        descriptor_ = ::_fileno(stdout);
+        saved_descriptor_ = ::_dup(descriptor_);
+        assert(saved_descriptor_ >= 0);
+        const auto redirect_status
+            = ::_dup2(::_fileno(output_), descriptor_);
+        assert(redirect_status == 0);
+#else
+        descriptor_ = ::fileno(stdout);
+        saved_descriptor_ = ::dup(descriptor_);
+        assert(saved_descriptor_ >= 0);
+        const auto redirect_status
+            = ::dup2(::fileno(output_), descriptor_);
+        assert(redirect_status >= 0);
+#endif
+    }
+
+    ScopedStdoutCapture(const ScopedStdoutCapture&) = delete;
+    ScopedStdoutCapture& operator=(const ScopedStdoutCapture&) = delete;
+
+    ~ScopedStdoutCapture()
+    {
+        std::cout.flush();
+        const auto flush_status = std::fflush(stdout);
+        assert(flush_status == 0);
+#if defined(_WIN32)
+        (void)::_dup2(saved_descriptor_, descriptor_);
+        (void)::_close(saved_descriptor_);
+#else
+        (void)::dup2(saved_descriptor_, descriptor_);
+        (void)::close(saved_descriptor_);
+#endif
+        std::fclose(output_);
+    }
+
+    [[nodiscard]] std::string contents()
+    {
+        std::cout.flush();
+        const auto stdout_flush_status = std::fflush(stdout);
+        const auto output_flush_status = std::fflush(output_);
+        const auto seek_status = std::fseek(output_, 0, SEEK_SET);
+        assert(stdout_flush_status == 0);
+        assert(output_flush_status == 0);
+        assert(seek_status == 0);
+        std::string result;
+        char buffer[256];
+        while (const auto count = std::fread(buffer, 1U, sizeof(buffer), output_)) {
+            result.append(buffer, count);
+        }
+        return result;
+    }
+
+private:
+    FILE* output_ { };
+    int descriptor_ { -1 };
+    int saved_descriptor_ { -1 };
+};
+
+std::string normalize_line_endings(std::string text)
+{
+    for (std::size_t index = 0U; index + 1U < text.size();) {
+        if (text[index] == '\r' && text[index + 1U] == '\n') {
+            text.erase(index, 1U);
+        } else {
+            ++index;
+        }
+    }
+    return text;
+}
 
 struct OutputEvent {
     fsim::runtime::simir::ProcessId process { };
@@ -126,6 +213,245 @@ Capture execute(
         });
     capture.result = simulation.run();
     return capture;
+}
+
+struct HookReplacementCapture {
+    fsim::runtime::RunResult result;
+    std::vector<OutputEvent> output;
+    std::vector<std::array<std::string, 2U>> observed_signal_values;
+};
+
+HookReplacementCapture execute_after_builtin_hook_replacement(
+    fsim::app::BuiltProject project,
+    const fsim::app::SimulationEngine engine)
+{
+    fsim::app::Simulation simulation {
+        std::move(project), 1000, engine
+    };
+    const auto marker = simulation.find_signal("stdio_marker_test.marker");
+    const auto sideband = simulation.find_signal("stdio_marker_test.sideband");
+    assert(marker && sideband);
+
+    HookReplacementCapture capture;
+    simulation.set_builtin_stdout_output();
+    simulation.set_output_hook(
+        [&capture, &simulation, marker_signal = *marker,
+            sideband_signal = *sideband](
+            const fsim::runtime::simir::ProcessId process,
+            const std::string_view text,
+            const bool newline,
+            const fsim::runtime::SimulationTick time,
+            const std::uint64_t delta) {
+            capture.output.push_back(
+                { process, std::string { text }, newline, time, delta });
+            capture.observed_signal_values.push_back({
+                simulation.read_signal_snapshot(marker_signal).to_msb_string(),
+                simulation.read_signal_snapshot(sideband_signal).to_msb_string()
+            });
+        });
+    capture.result = simulation.run();
+    return capture;
+}
+
+int run_streamed_application_cli(
+    const std::vector<std::string>& arguments,
+    std::istream& input,
+    std::ostream& output,
+    std::ostream& error)
+{
+    std::vector<const char*> raw;
+    raw.reserve(arguments.size());
+    for (const auto& argument : arguments) {
+        raw.push_back(argument.c_str());
+    }
+    return fsim::cli::run(
+        static_cast<int>(raw.size()),
+        raw.data(),
+        fsim::app::make_cli_services(input),
+        output,
+        error);
+}
+
+int run_stdio_application_cli(const std::vector<std::string>& arguments)
+{
+    std::vector<const char*> raw;
+    raw.reserve(arguments.size());
+    for (const auto& argument : arguments) {
+        raw.push_back(argument.c_str());
+    }
+    return fsim::cli::run(
+        static_cast<int>(raw.size()),
+        raw.data(),
+        fsim::app::make_stdio_cli_services());
+}
+
+class ScopedCurrentDirectory final {
+public:
+    explicit ScopedCurrentDirectory(const std::filesystem::path& path)
+        : previous_ { std::filesystem::current_path() }
+    {
+        std::filesystem::current_path(path);
+    }
+
+    ScopedCurrentDirectory(const ScopedCurrentDirectory&) = delete;
+    ScopedCurrentDirectory& operator=(const ScopedCurrentDirectory&) = delete;
+
+    ~ScopedCurrentDirectory()
+    {
+        std::error_code error;
+        std::filesystem::current_path(previous_, error);
+    }
+
+private:
+    std::filesystem::path previous_;
+};
+
+void test_stdio_marker_and_builtin_hook_replacement(
+    const std::filesystem::path& directory)
+{
+    const auto workspace = directory / "stdio-marker-workspace";
+    const auto workspace_created = std::filesystem::create_directory(workspace);
+    assert(workspace_created);
+    const auto source = workspace / "stdio_marker_test.sv";
+    {
+        std::ofstream output(source);
+        output << R"(
+module stdio_marker_test;
+  timeunit 1ns;
+  timeprecision 1ps;
+  logic [3:0] marker;
+  logic [1:0] sideband;
+  initial begin
+    marker = 4'b10xz;
+    sideband = 2'b01;
+    $printtimescale;
+    $display("before=%b/%b", marker, sideband);
+    #1 marker = 4'bz01x;
+    sideband = 2'b1x;
+    $display("after=%b/%b", marker, sideband);
+    $finish;
+  end
+endmodule
+)";
+    }
+
+    ScopedCurrentDirectory current_directory { workspace };
+
+    std::istringstream input;
+    std::ostringstream ordinary_output;
+    std::ostringstream ordinary_error;
+    const auto compile_status = run_streamed_application_cli(
+        { "fsim", "compile", "--library", "work", "stdio_marker_test.sv" },
+        input,
+        ordinary_output,
+        ordinary_error);
+    assert(compile_status == 0);
+    assert(ordinary_error.str().empty());
+    const auto elaborate_status = run_streamed_application_cli(
+        { "fsim", "elaborate", "work.stdio_marker_test", "--snapshot", "default" },
+        input,
+        ordinary_output,
+        ordinary_error);
+    assert(elaborate_status == 0);
+    assert(ordinary_error.str().empty());
+
+    const std::vector<std::string> arguments { "fsim", "simulate" };
+    ordinary_output.str({ });
+    ordinary_output.clear();
+    const auto ordinary_status = run_streamed_application_cli(
+        arguments, input, ordinary_output, ordinary_error);
+    assert(ordinary_status == 0);
+    assert(ordinary_error.str().empty());
+    const auto ordinary_transcript = ordinary_output.str();
+    assert(ordinary_transcript.find(
+        "Time scale of (stdio_marker_test) is 1ns / 1ps\n")
+        != std::string::npos);
+    assert(ordinary_transcript.find("before=10xz/01\nafter=z01x/1x\n")
+        != std::string::npos);
+    assert(ordinary_transcript.find('\x1f') == std::string::npos);
+
+    int stdio_status { -1 };
+    std::string stdio_transcript;
+    {
+        ScopedStdoutCapture capture;
+        stdio_status = run_stdio_application_cli(arguments);
+        std::cout.flush();
+        std::fflush(stdout);
+        stdio_transcript = normalize_line_endings(capture.contents());
+    }
+    assert(stdio_status == 0);
+    assert(stdio_transcript == ordinary_transcript);
+    assert(stdio_transcript.find(
+        "Time scale of (stdio_marker_test) is 1ns / 1ps\n")
+        != std::string::npos);
+    assert(stdio_transcript.find("before=10xz/01\nafter=z01x/1x\n")
+        != std::string::npos);
+    assert(stdio_transcript.find('\x1f') == std::string::npos);
+
+    fsim::project::Config config;
+    config.base_directory = workspace;
+    config.project.name = "stdio-marker-test";
+    config.project.top = "sv:work.stdio_marker_test";
+    config.project.time_resolution = "auto";
+    config.build.optimization = fsim::project::Optimization::o2;
+    config.build.cache_path = workspace / ".fsim" / "cache";
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    fsim::diagnostic::Engine diagnostics;
+    auto reference_project = fsim::app::build_project(config, diagnostics);
+    auto replacement_project = fsim::app::build_project(config, diagnostics);
+    assert(reference_project && replacement_project);
+    const auto reference = execute(
+        std::move(*reference_project), fsim::app::SimulationEngine::interpreter);
+    HookReplacementCapture replacement;
+    std::string escaped_stdout;
+    {
+        ScopedStdoutCapture capture;
+        replacement = execute_after_builtin_hook_replacement(
+            std::move(*replacement_project), fsim::app::SimulationEngine::compiled);
+        escaped_stdout = capture.contents();
+    }
+    assert(escaped_stdout.empty());
+    assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+    assert(replacement.result.status == fsim::runtime::RunStatus::stopped);
+    assert(reference.result.time == 1000);
+    assert(replacement.result.time == 1000);
+    assert(reference.output == replacement.output);
+    assert(replacement.output.size() == 5U);
+    assert(replacement.output[0].text
+        == "Time scale of (stdio_marker_test) is 1ns / 1ps");
+    assert(replacement.output[1].text == "before=10xz");
+    assert(replacement.output[2].text == "/01");
+    assert(replacement.output[3].text == "after=z01x");
+    assert(replacement.output[4].text == "/1x");
+    const std::array<fsim::runtime::SimulationTick, 5U> expected_times {
+        0U, 0U, 0U, 1000U, 1000U
+    };
+    const std::array<std::uint64_t, 5U> expected_deltas {
+        0U, 0U, 0U, 0U, 0U
+    };
+    const std::array<bool, 5U> expected_newlines {
+        true, false, true, false, true
+    };
+    for (std::size_t index = 0U; index < replacement.output.size(); ++index) {
+        assert(replacement.output[index].time == expected_times[index]);
+        assert(replacement.output[index].delta == expected_deltas[index]);
+        assert(replacement.output[index].newline == expected_newlines[index]);
+    }
+    const std::vector<std::array<std::string, 2U>> expected_states {
+        { "10XZ", "01" },
+        { "10XZ", "01" },
+        { "10XZ", "01" },
+        { "Z01X", "1X" },
+        { "Z01X", "1X" }
+    };
+    assert(replacement.observed_signal_values == expected_states);
 }
 
 FailureCapture execute_failure(
@@ -746,6 +1072,8 @@ end architecture;
                 "simulation stopped at tick 4")
             != std::string::npos);
     }
+
+    test_stdio_marker_and_builtin_hook_replacement(directory.path);
 
     test_display(
         directory.path, source, fsim::project::Optimization::o0);

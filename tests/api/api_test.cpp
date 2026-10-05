@@ -586,7 +586,31 @@ max_deltas = 1000
             fsim::support::path_to_utf8(manifest_path).c_str())
         == FSIM_STATUS_OK);
     assert(fsim_session_check(legacy_callback_session) == FSIM_STATUS_OK);
-    assert(fsim_session_build(legacy_callback_session) == FSIM_STATUS_OK);
+    const auto legacy_build_status
+        = fsim_session_build(legacy_callback_session);
+    if (legacy_build_status != FSIM_STATUS_OK) {
+        std::size_t diagnostic_count { };
+        const auto count_status = fsim_session_diagnostic_count(
+            legacy_callback_session, &diagnostic_count);
+        std::cerr << "legacy callback build status="
+                  << legacy_build_status << " diagnostic_count_status="
+                  << count_status << " diagnostic_count="
+                  << diagnostic_count << '\n';
+        for (std::size_t index = 0; index < diagnostic_count; ++index) {
+            fsim_diagnostic_t diagnostic { };
+            diagnostic.struct_size = sizeof(diagnostic);
+            diagnostic.api_version = FSIM_API_VERSION;
+            const auto status = fsim_session_get_diagnostic(
+                legacy_callback_session, index, &diagnostic);
+            std::cerr << "diagnostic " << index << " status=" << status
+                      << " code=" << std::string_view(
+                             diagnostic.code.data, diagnostic.code.size)
+                      << " message=" << std::string_view(
+                             diagnostic.message.data,
+                             diagnostic.message.size) << '\n';
+        }
+    }
+    assert(legacy_build_status == FSIM_STATUS_OK);
     assert(
         fsim_session_run(legacy_callback_session, 10)
         == FSIM_STATUS_STOPPED);

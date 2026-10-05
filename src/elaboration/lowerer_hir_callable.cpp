@@ -1486,7 +1486,9 @@ bool Lowerer::lower_hir_container_copy_out(
     const semantic::ExpressionId target,
     const ContainerRegisterId source)
 {
-    const auto source_type = process_.container_register_types.at(source);
+    const auto source_type
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+            process_.container_register_types, source);
     auto write = [&](const HirContainerObjectBinding& destination,
                      const ContainerRegisterId value) {
         if (destination.read_only) {
@@ -2393,9 +2395,7 @@ bool Lowerer::can_lower_hir_class_method_call(
                 *target, process_scope, false);
             return binding
                 && (binding->kind == HirRuntimeBindingKind::local
-                    || (binding->signal
-                        && !read_only_signals_.contains(
-                            *binding->signal)));
+                    || signal_binding_is_writable(*binding));
         });
 }
 
@@ -2940,9 +2940,11 @@ bool Lowerer::lower_hir_class_task_call(
         index < profile->actuals.size(); ++index) {
         const auto& actual = profile->actuals[index];
         if (actual.container) {
-            const auto formal_type = process_.container_register_types.at(
-                hir_callable_frames_[frame_index]
-                    .container_arguments[index]);
+            const auto formal_type
+                = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+                    process_.container_register_types,
+                    hir_callable_frames_[frame_index]
+                        .container_arguments[index]);
             const auto storage = allocate_container_register(formal_type);
             lowered_container_actuals[index] = storage;
             if (callable_copy_in(actual.direction)) {
@@ -4861,8 +4863,7 @@ bool Lowerer::can_lower_hir_dpi_function_call(
             : std::nullopt;
         if (!binding || binding->width != actual.width
             || (binding->kind != HirRuntimeBindingKind::local
-                && (!binding->signal
-                    || read_only_signals_.contains(*binding->signal)))) {
+                && !signal_binding_is_writable(*binding))) {
             return false;
         }
     }
@@ -5050,9 +5051,7 @@ bool Lowerer::can_lower_hir_function_call(
                             == semantic::vhdl::ExpressionKind::name));
             const auto writable = target_binding
                 && (target_binding->kind == HirRuntimeBindingKind::local
-                    || (target_binding->signal
-                        && !read_only_signals_.contains(
-                            *target_binding->signal)));
+                    || signal_binding_is_writable(*target_binding));
             if (!name || !writable
                 || target_binding->width != binding->width) {
                 return false;
@@ -5640,8 +5639,10 @@ Lowerer::lower_hir_function_call_value(
     for (std::size_t index = 0U; index < actuals->size(); ++index) {
         const auto& frame = hir_callable_frames_[frame_index];
         if (frame.argument_is_container[index]) {
-            const auto formal_type = process_.container_register_types.at(
-                frame.container_arguments[index]);
+            const auto formal_type
+                = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+                    process_.container_register_types,
+                    frame.container_arguments[index]);
             const auto actual = allocate_container_register(formal_type);
             lowered_container_actuals[index] = actual;
             if (callable_copy_in(frame.directions[index])) {
@@ -6213,8 +6214,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     for (std::size_t index { }; index < actuals->size(); ++index) {
         const auto& frame = hir_callable_frames_[frame_index];
         if (frame.argument_is_container[index]) {
-            const auto formal_type = process_.container_register_types.at(
-                frame.container_arguments[index]);
+            const auto formal_type
+                = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+                    process_.container_register_types,
+                    frame.container_arguments[index]);
             lowered_container_actuals[index]
                 = allocate_container_register(formal_type);
             if (callable_copy_in(frame.directions[index])) {
@@ -6639,9 +6642,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             : std::nullopt;
         const auto writable = target_binding
             && (target_binding->kind == HirRuntimeBindingKind::local
-                || (target_binding->signal
-                    && !read_only_signals_.contains(
-                        *target_binding->signal)));
+                || signal_binding_is_writable(*target_binding));
         if (actual && actual->vhdl != nullptr && writable) {
             continue;
         }
@@ -7058,7 +7059,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         if (index < initial_frame.argument_is_container.size()
             && initial_frame.argument_is_container[index]) {
             const auto storage = initial_frame.container_arguments[index];
-            const auto& type = process_.container_register_types.at(storage);
+            const auto type
+                = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+                    process_.container_register_types, storage);
             hir_local_container_registers_.insert_or_assign(
                 formal.value(), storage);
             hir_local_container_types_.insert_or_assign(

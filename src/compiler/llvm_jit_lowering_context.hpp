@@ -52,16 +52,20 @@ struct ProcessLoweringContext {
     std::span<const runtime::simir::InstructionIndex> bound_literal_sites;
     bool debug_instrumentation;
     bool require_direct_update_slots;
+    bool require_direct_read_signals;
+    ProcessLoweringMode mode;
     llvm::LLVMContext& context;
     llvm::IntegerType* i32;
     llvm::IntegerType* i64;
     llvm::PointerType* pointer;
     llvm::StructType * runtime_type;
+    llvm::StructType* services_type;
     llvm::StructType* direct_update_slot_type;
     llvm::StructType* frame_type;
     llvm::Function* function;
     llvm::IRBuilder<>& builder;
     llvm::Value* runtime_argument;
+    llvm::Value* services_argument;
     llvm::Value* frame_argument;
     llvm::Value* context_pointer;
     llvm::Value* read_callback;
@@ -132,6 +136,7 @@ struct ProcessLoweringContext {
     llvm::Value * exact_signal_callback;
     llvm::Value * read_signal_packed_callback;
     llvm::Value * write_signal_packed_callback;
+    llvm::Value* write_projected_signal_packed_callback;
     llvm::Value* read_signal_dynamic_part_callback;
     llvm::Value * write_projected_callback;
     llvm::Value * write_projected_slice_callback;
@@ -154,9 +159,11 @@ struct ProcessLoweringContext {
     llvm::Value * write_formatted_logic9_callback;
     llvm::FunctionType* read_type;
     llvm::FunctionType* write_type;
+    llvm::FunctionType* write_update_type;
     llvm::FunctionType* assert_type;
     llvm::FunctionType* write_after_type;
     llvm::FunctionType* write_slice_type;
+    llvm::FunctionType* write_update_slice_type;
     llvm::FunctionType* write_after_slice_type;
     llvm::FunctionType* release_slice_type;
     llvm::FunctionType* write_inertial_type;
@@ -165,6 +172,7 @@ struct ProcessLoweringContext {
     llvm::FunctionType* read_signal_packed_type;
     llvm::FunctionType* read_signal_dynamic_part_type;
     llvm::FunctionType* write_signal_packed_type;
+    llvm::FunctionType* write_projected_signal_packed_type;
     llvm::FunctionType* write_projected_type;
     llvm::FunctionType* write_projected_slice_type;
     llvm::StructType* projected_element_type;
@@ -187,8 +195,10 @@ struct ProcessLoweringContext {
     llvm::FunctionType* random_value_type;
     llvm::FunctionType* read_logic9_type;
     llvm::FunctionType* write_logic9_type;
+    llvm::FunctionType* write_update_logic9_type;
     llvm::FunctionType* write_after_logic9_type;
     llvm::FunctionType* write_slice_logic9_type;
+    llvm::FunctionType* write_update_slice_logic9_type;
     llvm::FunctionType* write_after_slice_logic9_type;
     llvm::FunctionType* write_inertial_logic9_type;
     llvm::FunctionType* write_inertial_slice_logic9_type;
@@ -210,6 +220,8 @@ struct ProcessLoweringContext {
     llvm::Value* logic9_word_slot;
     llvm::Value* container_result_aval_slot;
     llvm::Value* container_result_bval_slot;
+    llvm::Value* wide_callback_scratch;
+    std::uint32_t wide_callback_scratch_word_stride;
     llvm::function_ref<void(llvm::Value*, EncodedValue)> store_logic9_word;
     llvm::function_ref<EncodedValue(llvm::Value*, std::uint32_t)> load_logic9_word;
     llvm::function_ref<void(std::uint32_t, std::uint32_t, std::uint64_t, std::uint32_t, std::uint32_t)> return_result;
@@ -218,6 +230,7 @@ struct ProcessLoweringContext {
     std::vector<const runtime::PackedLogic4 *>& constant_part_select_sources;
     std::vector<std::optional<runtime::simir::SignalId>>& dynamic_part_signal_sources;
     std::vector<std::uint32_t>& fused_container_object_reads;
+    std::vector<bool>& fused_container_object_single_use_reads;
     std::vector<llvm::BasicBlock *>& instruction_blocks;
     std::vector<std::vector<llvm::BasicBlock *>>& instruction_regions;
     std::vector<const runtime::simir::Process::StaticTriggerRegion *>& static_trigger_region_entries;
@@ -225,6 +238,10 @@ struct ProcessLoweringContext {
     llvm::BasicBlock* invalid_pc;
     std::vector<ConstantPlaneForwarding>& constant_plane_forwarding;
     std::size_t& suppressed_false_guards;
+    bool signal_callback_ids_are_actual;
+    std::span<const runtime::simir::SignalId> signal_callback_operands;
+    std::uint32_t signal_callback_operand_word_base;
+    llvm::Value* frame_register_aval;
 };
 
 struct OperationLoweringContext {
@@ -241,22 +258,28 @@ struct OperationLoweringContext {
         execute_native_service_callback;
     llvm::function_ref<void(const runtime::simir::ReadSignal&)> read_wide_signal;
     llvm::function_ref<void(std::uint32_t, runtime::simir::RegisterId,
-        std::uint32_t, std::uint32_t, runtime::SimulationTick)> write_wide_signal;
+        std::uint32_t, std::uint32_t, runtime::SimulationTick,
+        runtime::simir::SignalUpdateDomain)> write_wide_signal;
     llvm::function_ref<llvm::Value*(const runtime::simir::DynamicIndex&)>
         dynamic_offset;
     llvm::function_ref<llvm::Value*(const runtime::simir::DynamicIndex&)>
         dynamic_offset_i32;
     llvm::function_ref<void(std::uint32_t, runtime::simir::RegisterId,
-        llvm::Value*, llvm::Value*, llvm::Value*)> emit_dynamic_slice;
+        llvm::Value*, llvm::Value*, llvm::Value*,
+        std::optional<runtime::simir::SignalUpdateDomain>)> emit_dynamic_slice;
     llvm::function_ref<void(std::uint32_t, runtime::simir::RegisterId,
         const runtime::simir::DynamicPartIndex&, llvm::Value*, llvm::Value*,
-        std::optional<runtime::SimulationTick>)> emit_dynamic_part_slice;
+        std::optional<runtime::SimulationTick>,
+        std::optional<runtime::simir::SignalUpdateDomain>)>
+        emit_dynamic_part_slice;
     llvm::function_ref<void(const runtime::simir::WriteAfterDynamicSlice&,
         llvm::Value*)> emit_dynamic_after_slice;
     llvm::function_ref<void(const runtime::simir::WriteInertialDynamicSlice&,
         llvm::Value*)> emit_dynamic_inertial_slice;
     llvm::function_ref<void(const runtime::simir::WriteProjectedDynamicSlice&,
         llvm::Value*)> emit_dynamic_projected_slice;
+    llvm::function_ref<llvm::Value*(runtime::simir::SignalId)>
+        callback_signal_id;
     ValueOperationLowerer& value_lowerer;
     SignalOperationLowerer& signal_lowerer;
     OutputOperationLowerer& output_lowerer;

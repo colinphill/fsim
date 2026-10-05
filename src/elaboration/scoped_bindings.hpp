@@ -3,6 +3,7 @@
 
 #include "fsim/elaboration/elaborator.hpp"
 
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <ranges>
@@ -13,11 +14,22 @@
 #include <utility>
 #include <vector>
 
+namespace fsim::semantic {
+struct SpecializedHirOverlay;
+}
+
 namespace fsim::elaboration::elaboration_detail {
 
 using runtime::simir::ContainerObjectId;
 using runtime::simir::SignalId;
 using runtime::simir::StringObjectId;
+
+struct ContainerDeclarationBinding {
+    ContainerObjectId object { };
+    bool read_only { };
+    // Borrowed identity for the overlay which materialized this object.
+    const semantic::SpecializedHirOverlay* overlay { };
+};
 
 /// A parent-linked binding map with an owned local overlay.
 ///
@@ -304,6 +316,8 @@ using StringObjectBindings
     = ScopedBindingMap<std::string, StringObjectId>;
 using ContainerObjectBindings
     = ScopedBindingMap<std::string, ContainerObjectId>;
+using ContainerDeclarationBindings
+    = ScopedBindingMap<std::uint32_t, ContainerDeclarationBinding>;
 using ReadOnlySignalBindings = ScopedBindingSet<SignalId>;
 using ReadOnlyStringBindings = ScopedBindingSet<StringObjectId>;
 using ReadOnlyContainerBindings = ScopedBindingSet<std::string>;

@@ -17,6 +17,9 @@ void validate_prefix_operation(
     const std::size_t index)
 {
     const auto& process = context.process;
+    const auto container_register_types
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.container_register_types);
     auto& result = context.result;
     const auto signal_widths = context.signal_widths;
     const auto signal_value_kinds = context.signal_value_kinds;
@@ -716,8 +719,8 @@ void validate_prefix_operation(
                     constrain_width(operation.size, 32U, index);
                     if (operation.allow_queue
                         && operation.target
-                            < process.container_register_types.size()
-                        && (!process.container_register_types[operation.target].queue
+                            < container_register_types.size()
+                        && (!container_register_types[operation.target].queue
                             || operation.initializer)) {
                         reject(
                             process, index,
@@ -741,15 +744,15 @@ void validate_prefix_operation(
                     record_use(operation.condition, index);
                     constrain_width(operation.condition, 1U, index);
                     if (operation.destination
-                            < process.container_register_types.size()
+                            < container_register_types.size()
                         && operation.when_true
-                            < process.container_register_types.size()
+                            < container_register_types.size()
                         && operation.when_false
-                            < process.container_register_types.size()
-                        && (process.container_register_types[operation.destination]
-                                != process.container_register_types[operation.when_true]
-                            || process.container_register_types[operation.destination]
-                                != process.container_register_types[operation.when_false])) {
+                            < container_register_types.size()
+                        && (container_register_types[operation.destination]
+                                != container_register_types[operation.when_true]
+                            || container_register_types[operation.destination]
+                                != container_register_types[operation.when_false])) {
                         reject(
                             process, index,
                             "ConditionalContainerSelect profiles differ");
@@ -760,10 +763,10 @@ void validate_prefix_operation(
                     validate_container_register(operation.rhs, index, "rhs");
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
-                    if (operation.lhs < process.container_register_types.size()
-                        && operation.rhs < process.container_register_types.size()
-                        && process.container_register_types[operation.lhs]
-                            != process.container_register_types[operation.rhs]) {
+                    if (operation.lhs < container_register_types.size()
+                        && operation.rhs < container_register_types.size()
+                        && container_register_types[operation.lhs]
+                            != container_register_types[operation.rhs]) {
                         reject(process, index, "CompareContainers profiles differ");
                     }
                 } else if constexpr (std::is_same_v<OperationType, ReadContainerObject>) {
@@ -795,15 +798,15 @@ void validate_prefix_operation(
                     }
                     record_definition(operation.destination, index);
                     if (operation.source
-                        < process.container_register_types.size()) {
+                        < container_register_types.size()) {
                         if (const auto error = validate_container_reduction_metadata(
                                 operation,
-                                process.container_register_types[operation.source])) {
+                                container_register_types[operation.source])) {
                             reject(process, index, *error);
                         }
                         constrain_width(
                             operation.destination,
-                            process.container_register_types[operation.source]
+                            container_register_types[operation.source]
                                 .element_width,
                             index);
                     }
@@ -814,17 +817,17 @@ void validate_prefix_operation(
                             ContainerOrderingOperator::shuffle)) {
                         reject(process, index, "OrderContainer has an invalid operator");
                     }
-                    if (operation.target < process.container_register_types.size()
-                        && process.container_register_types[operation.target]
+                    if (operation.target < container_register_types.size()
+                        && container_register_types[operation.target]
                             .associative) {
                         reject(process, index,
                             "OrderContainer does not support associative arrays");
                     }
                     if (operation.target
-                        < process.container_register_types.size()) {
+                        < container_register_types.size()) {
                         if (const auto error = validate_container_ordering_metadata(
                                 operation,
-                                process.container_register_types[operation.target])) {
+                                container_register_types[operation.target])) {
                             reject(process, index, *error);
                         }
                     }
@@ -834,18 +837,18 @@ void validate_prefix_operation(
                         "destination");
                     validate_container_register(operation.source, index, "source");
                     if (operation.destination
-                            < process.container_register_types.size()
+                            < container_register_types.size()
                         && operation.source
-                            < process.container_register_types.size()) {
+                            < container_register_types.size()) {
                         if (const auto error = validate_container_locator_metadata(
                                 operation,
-                                process.container_register_types[operation.destination],
-                                process.container_register_types[operation.source])) {
+                                container_register_types[operation.destination],
+                                container_register_types[operation.source])) {
                             reject(process, index, *error);
                         }
                         if (const auto error = validate_container_locator_transformation_metadata(
                                 operation,
-                                process.container_register_types[operation.source])) {
+                                container_register_types[operation.source])) {
                             reject(process, index, *error);
                         }
                     }
@@ -861,8 +864,8 @@ void validate_prefix_operation(
                         record_use(operation.index, index);
                     }
                     if (operation.source
-                        < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[operation.source];
+                        < container_register_types.size()) {
+                        const auto& type = container_register_types[operation.source];
                         if (type.string_indices != operation.string_index) {
                             reject(process, index,
                                 "container read index kind does not match its profile");
@@ -875,7 +878,7 @@ void validate_prefix_operation(
                     record_definition(operation.destination, index);
                     constrain_width(
                         operation.destination,
-                        process.container_register_types[operation.source].element_width,
+                        container_register_types[operation.source].element_width,
                         index);
                 } else if constexpr (std::is_same_v<OperationType, ContainerWrite>) {
                     result.uses_containers = true;
@@ -889,8 +892,8 @@ void validate_prefix_operation(
                         record_use(operation.index, index);
                     }
                     if (operation.target
-                        < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[operation.target];
+                        < container_register_types.size()) {
+                        const auto& type = container_register_types[operation.target];
                         if (type.string_indices != operation.string_index) {
                             reject(process, index,
                                 "container write index kind does not match its profile");
@@ -903,7 +906,7 @@ void validate_prefix_operation(
                     record_use(operation.source, index);
                     constrain_width(
                         operation.source,
-                        process.container_register_types[operation.target].element_width,
+                        container_register_types[operation.target].element_width,
                         index);
                 } else if constexpr (std::is_same_v<
                                          OperationType,
@@ -958,8 +961,8 @@ void validate_prefix_operation(
                     } else {
                         record_use(operation.index, index);
                     }
-                    if (container < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[container];
+                    if (container < container_register_types.size()) {
+                        const auto& type = container_register_types[container];
                         if (type.string_indices != operation.string_index) {
                             reject(process, index,
                                 "string element index kind does not match its profile");
@@ -1049,9 +1052,9 @@ void validate_prefix_operation(
                     validate_container_register(container, index, "outer");
                     validate_container_register(element, index, "nested");
                     record_use(operation.index, index);
-                    if (container < process.container_register_types.size()
-                        && element < process.container_register_types.size()) {
-                        const auto& outer = process.container_register_types[container];
+                    if (container < container_register_types.size()
+                        && element < container_register_types.size()) {
+                        const auto& outer = container_register_types[container];
                         if (outer.fixed || outer.associative) {
                             constrain_width(
                                 operation.index,
@@ -1061,7 +1064,7 @@ void validate_prefix_operation(
                         if (outer.element_kind != ContainerElementKind::Container
                             || outer.element_types.size() != 1
                             || outer.element_types.front()
-                                != process.container_register_types[element]) {
+                                != container_register_types[element]) {
                             reject(
                                 process, index,
                                 "nested container element profiles differ");
@@ -1088,8 +1091,8 @@ void validate_prefix_operation(
                             ? "source"
                             : "target");
                     record_use(operation.index, index);
-                    if (container < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[container];
+                    if (container < container_register_types.size()) {
+                        const auto& type = container_register_types[container];
                         if (type.fixed || type.associative) {
                             constrain_width(
                                 operation.index,
@@ -1139,11 +1142,11 @@ void validate_prefix_operation(
                     record_use(operation.target_index, index);
                     record_use(operation.source_index, index);
                     if (operation.target
-                            < process.container_register_types.size()
+                            < container_register_types.size()
                         && operation.source
-                            < process.container_register_types.size()) {
-                        const auto& target_type = process.container_register_types[operation.target];
-                        const auto& source_type = process.container_register_types[operation.source];
+                            < container_register_types.size()) {
+                        const auto& target_type = container_register_types[operation.target];
+                        const auto& source_type = container_register_types[operation.source];
                         if (target_type.fixed || target_type.associative) {
                             constrain_width(
                                 operation.target_index,
@@ -1177,8 +1180,8 @@ void validate_prefix_operation(
                             record_use(*operation.index, index);
                         }
                         if (operation.target
-                            < process.container_register_types.size()) {
-                            const auto& type = process.container_register_types[operation.target];
+                            < container_register_types.size()) {
+                            const auto& type = container_register_types[operation.target];
                             if (type.string_indices != operation.string_index) {
                                 reject(process, index,
                                     "container delete index kind does not match its profile");
@@ -1206,8 +1209,8 @@ void validate_prefix_operation(
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 32U, index);
                     if (operation.source
-                        < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[operation.source];
+                        < container_register_types.size()) {
+                        const auto& type = container_register_types[operation.source];
                         if (type.string_indices != operation.string_index) {
                             reject(process, index,
                                 "container exists index kind does not match its profile");
@@ -1231,8 +1234,8 @@ void validate_prefix_operation(
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 32U, index);
                     if (operation.source
-                        < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[operation.source];
+                        < container_register_types.size()) {
+                        const auto& type = container_register_types[operation.source];
                         if (type.string_indices != operation.string_index) {
                             reject(process, index,
                                 "container traversal index kind does not match its profile");
@@ -1249,8 +1252,8 @@ void validate_prefix_operation(
                         operation.target, index, "target");
                     validate_string_register(
                         operation.path, index, "path");
-                    if (operation.target < process.container_register_types.size()) {
-                        const auto& type = process.container_register_types[operation.target];
+                    if (operation.target < container_register_types.size()) {
+                        const auto& type = container_register_types[operation.target];
                         if (!type.fixed)
                             reject(process, index,
                                 "LoadMemory target must be a fixed static array");
@@ -1287,7 +1290,7 @@ void validate_prefix_operation(
                     record_use(operation.source, index);
                     constrain_width(
                         operation.source,
-                        process.container_register_types[operation.target].element_width,
+                        container_register_types[operation.target].element_width,
                         index);
                     if (operation.index) {
                         record_use(*operation.index, index);
@@ -1300,7 +1303,7 @@ void validate_prefix_operation(
                     record_definition(operation.destination, index);
                     constrain_width(
                         operation.destination,
-                        process.container_register_types[operation.target].element_width,
+                        container_register_types[operation.target].element_width,
                         index);
                 } else if constexpr (std::is_same_v<OperationType, FileOpen>) {
                     result.uses_files = true;

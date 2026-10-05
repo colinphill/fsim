@@ -1002,6 +1002,7 @@ bool Lowerer::lower_hir_force_release(
                 dynamic_selection,
                 vhdl_driving_value,
             });
+            record_readonly_vhdl_output_write(*binding);
             return true;
         }
         auto force_value = lowered_value;
@@ -1033,6 +1034,7 @@ bool Lowerer::lower_hir_force_release(
             dynamic_selection,
             vhdl_driving_value,
         });
+        record_readonly_vhdl_output_write(*binding);
         return true;
     }
     if (expression->systemverilog == nullptr) {
@@ -1225,6 +1227,7 @@ bool Lowerer::lower_hir_force_release(
             dynamic_selection,
             false,
         });
+        record_readonly_vhdl_output_write(*binding);
         return true;
     }
     auto force_value = lowered_value;
@@ -1265,6 +1268,7 @@ bool Lowerer::lower_hir_force_release(
         dynamic_selection,
         false,
     });
+    record_readonly_vhdl_output_write(*binding);
     return true;
 }
 
@@ -1574,7 +1578,7 @@ bool Lowerer::lower_hir_statement(
                     ? SignalReadKind::sampled
                     : SignalReadKind::current,
             });
-            implicit_signal_dependencies_.push_back(*binding.signal);
+            record_implicit_signal_dependency(*binding.signal);
             return destination;
         };
         const auto declaration
@@ -1614,7 +1618,7 @@ bool Lowerer::lower_hir_statement(
                 ? SignalReadKind::sampled
                 : SignalReadKind::current,
         });
-        implicit_signal_dependencies_.push_back(signal->second);
+        record_implicit_signal_dependency(signal->second);
         return destination;
     };
     const auto lower_statement_packed_expression
@@ -2136,6 +2140,13 @@ bool Lowerer::lower_hir_statement(
     };
     const auto lower_assignment = [&](const bool signal_assignment,
                                       const bool nonblocking) {
+        const auto update_domain = nonblocking
+            ? SignalUpdateDomain::systemverilog_nba
+            : signal_assignment
+                && process_.scheduling_domain
+                    == ProcessSchedulingDomain::systemverilog
+            ? SignalUpdateDomain::systemverilog_active
+            : SignalUpdateDomain::generic;
         const auto trace_assignment_failure =
             [&](const std::string_view reason) {
                 if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
@@ -2483,6 +2494,223 @@ bool Lowerer::lower_hir_statement(
                 && !statement->systemverilog->delay
                 && statement->systemverilog->update_kind
                     == semantic::sv::UpdateKind::none;
+            if (signal_assignment && packed_element
+                && direct_container_object && !element->local
+                && element->type != nullptr
+                && element->selected_type == element->type
+                && element->type->fixed
+                && !element->type->associative
+                && !element->type->string_indices
+                && !element->type->dimensions.empty()
+                && element->type->dimensions.size()
+                    == element->indices.size()
+                && element->type->element_width != 0U
+                && element->width == element->type->element_width
+                && !element->read_only
+                && statement->systemverilog->assignment_kind
+                    == semantic::sv::AssignmentKind::continuous
+                && statement->systemverilog->assignment_control
+                    == semantic::sv::AssignmentControl::none
+                && !statement->systemverilog->delay
+                && statement->systemverilog->update_kind
+                    == semantic::sv::UpdateKind::none) {
+                const auto selection = hir_constant_selection(
+                    *target, hir_process_scope_);
+                if (selection && selection->width != 0U
+                    && selection->width
+                        <= std::numeric_limits<std::uint32_t>::max()
+                    && selection->offset
+                        <= std::numeric_limits<std::uint32_t>::max()
+                    && selection->offset <= element->width
+                    && selection->width
+                        <= element->width - selection->offset) {
+                    std::size_t element_count { 1U };
+                    std::size_t element_ordinal { };
+                    bool static_element { true };
+                    for (std::size_t dimension { };
+                        dimension < element->indices.size(); ++dimension) {
+                        const auto& bounds
+                            = element->type->dimensions[dimension];
+                        const auto element_index_value = hir_constant_integer(
+                            element->indices[dimension]);
+                        const auto low = std::min(
+                            bounds.first, bounds.second);
+                        const auto high = std::max(
+                            bounds.first, bounds.second);
+                        if (!element_index_value
+                            || *element_index_value < low
+                            || *element_index_value > high) {
+                            static_element = false;
+                            break;
+                        }
+                        const auto extent = index_distance(high, low) + 1U;
+                        const auto selected_distance = index_distance(
+                            bounds.first, *element_index_value);
+                        if (extent == 0U
+                            || extent
+                                > std::numeric_limits<std::size_t>::max()
+                            || selected_distance
+                                > std::numeric_limits<std::size_t>::max()
+                            || element_count
+                                > std::numeric_limits<std::size_t>::max()
+                                    / static_cast<std::size_t>(extent)
+                            || element_ordinal
+                                > (std::numeric_limits<std::size_t>::max()
+                                      - static_cast<std::size_t>(selected_distance))
+                                    / static_cast<std::size_t>(extent)) {
+                            static_element = false;
+                            break;
+                        }
+                        element_ordinal = element_ordinal
+                                * static_cast<std::size_t>(extent)
+                            + static_cast<std::size_t>(selected_distance);
+                        element_count *= static_cast<std::size_t>(extent);
+                    }
+
+                    if (element_ordinal >= element_count) {
+                        static_element = false;
+                    }
+
+                    const bool has_element_aliases
+                        = std::ranges::any_of(
+                            design_.container_element_signal_aliases_,
+                            [&](const ContainerElementSignalAlias& candidate) {
+                                return candidate.object == element->object;
+                            });
+
+                    const ContainerElementSignalAlias* leaf_alias { };
+                    bool duplicate_leaf_alias { };
+                    if (static_element) {
+                        for (const auto& candidate
+                            : design_.container_element_signal_aliases_) {
+                            if (candidate.object != element->object
+                                || candidate.ordinal != element_ordinal) {
+                                continue;
+                            }
+                            if (leaf_alias != nullptr
+                                || !candidate.writable) {
+                                duplicate_leaf_alias = true;
+                                break;
+                            }
+                            leaf_alias = &candidate;
+                        }
+                    }
+
+                    SignalId target_signal { };
+                    std::size_t base_offset { };
+                    std::size_t target_width { };
+                    bool target_found = static_element
+                        && !duplicate_leaf_alias;
+                    if (target_found && has_element_aliases
+                        && leaf_alias == nullptr) {
+                        target_found = false;
+                    } else if (target_found && leaf_alias != nullptr) {
+                        target_signal = leaf_alias->signal;
+                        if (target_signal >= design_.signal_info_.size()
+                            || target_signal >= design_.signals_.size()
+                            || design_.signal_info_[target_signal].width
+                                != element->width
+                            || design_.signals_[target_signal]
+                                    .initial_value.width()
+                                != element->width) {
+                            target_found = false;
+                        } else {
+                            target_width = element->width;
+                        }
+                    } else if (target_found) {
+                        const auto aggregate_alias
+                            = std::ranges::find_if(
+                                design_.container_signal_aliases_.rbegin(),
+                                design_.container_signal_aliases_.rend(),
+                                [&](const ContainerSignalAlias& candidate) {
+                                    return candidate.object == element->object
+                                        && candidate.writable;
+                                });
+                        if (aggregate_alias
+                            == design_.container_signal_aliases_.rend()
+                            || element->object
+                                >= design_.container_objects_.size()
+                            || element_count
+                                > std::numeric_limits<std::size_t>::max()
+                                    / element->width) {
+                            target_found = false;
+                        } else {
+                            target_signal = aggregate_alias->signal;
+                            target_width
+                                = element_count * element->width;
+                            base_offset
+                                = (element_count - element_ordinal - 1U)
+                                * element->width;
+                            if (target_signal
+                                    >= design_.signal_info_.size()
+                                || target_signal >= design_.signals_.size()
+                                || design_.signal_info_[target_signal].width
+                                    != target_width
+                                || design_.signals_[target_signal]
+                                        .initial_value.width()
+                                    != target_width) {
+                                target_found = false;
+                            }
+                        }
+                    }
+
+                    std::size_t packed_offset { };
+                    if (target_found
+                        && base_offset
+                            > std::numeric_limits<std::size_t>::max()
+                                - selection->offset) {
+                        target_found = false;
+                    } else if (target_found) {
+                        packed_offset = base_offset + selection->offset;
+                    }
+                    if (target_found
+                        && (base_offset
+                                > std::numeric_limits<std::uint32_t>::max()
+                            || packed_offset
+                                > std::numeric_limits<std::uint32_t>::max()
+                            || packed_offset > target_width
+                            || selection->width
+                                > target_width - packed_offset)) {
+                        target_found = false;
+                    }
+                    if (target_found) {
+                        auto lowered = lower_hir_expression(
+                            *value, selection->width);
+                        if (!lowered) {
+                            return false;
+                        }
+                        if (register_width(*lowered) != selection->width) {
+                            lowered = resize_register(
+                                *lowered, selection->width,
+                                hir_expression_signed(*value));
+                        }
+                        if (register_domain(*lowered) != element->domain) {
+                            const auto converted = allocate_register(
+                                selection->width, element->domain);
+                            if (const auto constant
+                                    = hir_constant_integer(*value);
+                                constant && specialization_integer(*value)) {
+                                process_.operations.emplace_back(LoadConstant {
+                                    converted,
+                                    integer_value(
+                                        *constant, selection->width),
+                                });
+                            } else {
+                                process_.operations.emplace_back(CopyRegister {
+                                    converted, *lowered });
+                            }
+                            lowered = converted;
+                        }
+                        process_.operations.emplace_back(WriteUpdateSlice {
+                            target_signal,
+                            *lowered,
+                            static_cast<std::uint32_t>(packed_offset),
+                            update_domain,
+                        });
+                        return true;
+                    }
+                }
+            }
             if (packed_element && !dynamic_memory_part) {
                 const auto& input = *statement->systemverilog;
                 const auto selection = hir_constant_selection(
@@ -3080,6 +3308,8 @@ bool Lowerer::lower_hir_statement(
                 if (!lower_intra_assignment_control()) {
                     return false;
                 }
+                const auto write_guard = begin_hir_fixed_array_write(
+                    *element, *element_index);
                 process_.operations.emplace_back(
                     WriteContainerObjectElement {
                         element->object,
@@ -3100,6 +3330,7 @@ bool Lowerer::lower_hir_statement(
                             dynamic->left >= dynamic->right,
                         },
                     });
+                end_hir_fixed_array_write(write_guard);
                 return true;
             }
         }
@@ -3124,6 +3355,11 @@ bool Lowerer::lower_hir_statement(
                 const auto declaration
                     = specialized_hir_unit_->find_declaration(
                         element->declaration);
+                const bool has_element_alias = std::ranges::any_of(
+                    design_.container_element_signal_aliases_,
+                    [&](const ContainerElementSignalAlias& candidate) {
+                        return candidate.object == element->object;
+                    });
                 const auto alias = std::ranges::find_if(
                     design_.container_signal_aliases_.rbegin(),
                     design_.container_signal_aliases_.rend(),
@@ -3144,8 +3380,10 @@ bool Lowerer::lower_hir_statement(
                     || !element->type->fixed || !packed_or_scalar
                     || element->type->dimensions.size()
                         != element->indices.size()
-                    || alias == design_.container_signal_aliases_.rend()
-                    || alias->signal >= design_.signal_info_.size()
+                    || (!has_element_alias
+                        && (alias == design_.container_signal_aliases_.rend()
+                            || alias->signal
+                                >= design_.signal_info_.size()))
                     || element->width == 0U) {
                     trace_generated("fixed-net-guard");
                     if (trace_generated_assignment) {
@@ -3207,20 +3445,55 @@ bool Lowerer::lower_hir_statement(
                     element_count *= count;
                     ordinal = ordinal * count + selected;
                 }
-                const auto& signal = design_.signal_info_[alias->signal];
-                if (element_count
-                        > std::numeric_limits<std::size_t>::max()
-                            / element->width
-                    || signal.width != element_count * element->width
-                    || ordinal >= element_count) {
+                if (ordinal >= element_count) {
                     trace_generated("fixed-net-signal-shape");
                     return false;
                 }
-                const auto offset
-                    = (element_count - ordinal - 1U) * element->width;
-                if (offset > std::numeric_limits<std::uint32_t>::max()) {
-                    trace_generated("fixed-net-offset");
-                    return false;
+                SignalId target_signal { };
+                std::uint32_t offset { };
+                if (has_element_alias) {
+                    const ContainerElementSignalAlias* selected_alias { };
+                    for (const auto& candidate
+                        : design_.container_element_signal_aliases_) {
+                        if (candidate.object != element->object
+                            || candidate.ordinal != ordinal) {
+                            continue;
+                        }
+                        if (selected_alias != nullptr
+                            || !candidate.writable) {
+                            trace_generated("fixed-net-element-alias");
+                            return false;
+                        }
+                        selected_alias = &candidate;
+                    }
+                    if (selected_alias == nullptr
+                        || selected_alias->signal
+                            >= design_.signal_info_.size()
+                        || design_.signal_info_[selected_alias->signal].width
+                            != element->width) {
+                        trace_generated("fixed-net-element-shape");
+                        return false;
+                    }
+                    target_signal = selected_alias->signal;
+                } else {
+                    const auto& signal
+                        = design_.signal_info_[alias->signal];
+                    if (element_count
+                            > std::numeric_limits<std::size_t>::max()
+                                / element->width
+                        || signal.width != element_count * element->width) {
+                        trace_generated("fixed-net-signal-shape");
+                        return false;
+                    }
+                    const auto aggregate_offset
+                        = (element_count - ordinal - 1U) * element->width;
+                    if (aggregate_offset
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                        trace_generated("fixed-net-offset");
+                        return false;
+                    }
+                    target_signal = alias->signal;
+                    offset = static_cast<std::uint32_t>(aggregate_offset);
                 }
                 auto lowered = lower_hir_expression(
                     *value, element->width);
@@ -3253,11 +3526,13 @@ bool Lowerer::lower_hir_statement(
                     }
                     lowered = converted;
                 }
-                process_.operations.emplace_back(WriteUpdateSlice {
-                    alias->signal,
-                    *lowered,
-                    static_cast<std::uint32_t>(offset),
-                });
+                if (has_element_alias) {
+                    process_.operations.emplace_back(WriteUpdate {
+                        target_signal, *lowered, update_domain });
+                } else {
+                    process_.operations.emplace_back(WriteUpdateSlice {
+                        target_signal, *lowered, offset, update_domain });
+                }
                 return true;
             }
             if (element->selected_type != nullptr
@@ -3538,6 +3813,8 @@ bool Lowerer::lower_hir_statement(
                     converted, *lowered });
                 lowered = converted;
             }
+            const auto write_guard = begin_hir_fixed_array_write(
+                *element, *element_index);
             if (element->local) {
                 if (nonblocking) {
                     return false;
@@ -3584,6 +3861,7 @@ bool Lowerer::lower_hir_statement(
                         std::nullopt,
                     });
             }
+            end_hir_fixed_array_write(write_guard);
             return true;
         }
         if (target_expression->systemverilog != nullptr
@@ -3592,7 +3870,14 @@ bool Lowerer::lower_hir_statement(
             const auto& input = *statement->systemverilog;
             const auto width = hir_expression_width(
                 *target, hir_process_scope_);
-            if (signal_assignment || nonblocking
+            const bool continuous_assignment = signal_assignment
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::continuous;
+            const auto packed_copy_out_mode = continuous_assignment
+                ? HirPackedCopyOutMode::systemverilog_active_update
+                : HirPackedCopyOutMode::blocking;
+            if ((signal_assignment && !continuous_assignment)
+                || nonblocking
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
@@ -3608,7 +3893,8 @@ bool Lowerer::lower_hir_statement(
                 lowered = resize_register(
                     *lowered, *width, hir_expression_signed(*value));
             }
-            return lower_hir_packed_copy_out(*target, *lowered);
+            return lower_hir_packed_copy_out(
+                *target, *lowered, packed_copy_out_mode);
         }
         if (target_expression->systemverilog != nullptr
             && target_expression->systemverilog->kind
@@ -5453,6 +5739,7 @@ bool Lowerer::lower_hir_statement(
                     projected.mode,
                 });
             }
+            record_readonly_vhdl_output_write(*binding);
             return true;
         }
         std::optional<RegisterId> disconnected_value;
@@ -5742,6 +6029,7 @@ bool Lowerer::lower_hir_statement(
                 *lowered,
                 static_cast<std::uint32_t>(constant_selection->offset),
                 *transition_delays,
+                update_domain,
             });
         } else if (index && dynamic_selection && transition_delays) {
             process_.operations.emplace_back(WriteInertialDynamicSlice {
@@ -5749,6 +6037,7 @@ bool Lowerer::lower_hir_statement(
                 *lowered,
                 *dynamic_selection,
                 *transition_delays,
+                update_domain,
             });
         } else if (slice && dynamic_selection && dynamic_part_width
             && transition_delays) {
@@ -5767,6 +6056,7 @@ bool Lowerer::lower_hir_statement(
                             >= dynamic_selection->right,
                     },
                     *transition_delays,
+                    update_domain,
                 });
         } else if (dynamic_vhdl_selection && transition_delays) {
             process_.operations.emplace_back(
@@ -5775,10 +6065,12 @@ bool Lowerer::lower_hir_statement(
                     *lowered,
                     *dynamic_vhdl_selection,
                     *transition_delays,
+                    update_domain,
                 });
         } else if (transition_delays) {
             process_.operations.emplace_back(WriteInertial {
-                *binding->signal, *lowered, *transition_delays });
+                *binding->signal, *lowered, *transition_delays,
+                update_domain });
         } else if (constant_selection && procedural_delay
             && delayed_nonblocking_assignment) {
             process_.operations.emplace_back(WriteAfterSlice {
@@ -5786,6 +6078,7 @@ bool Lowerer::lower_hir_statement(
                 *lowered,
                 static_cast<std::uint32_t>(constant_selection->offset),
                 *procedural_delay,
+                update_domain,
             });
         } else if (index && dynamic_selection && procedural_delay
             && delayed_nonblocking_assignment) {
@@ -5794,6 +6087,7 @@ bool Lowerer::lower_hir_statement(
                 *lowered,
                 *dynamic_selection,
                 *procedural_delay,
+                update_domain,
             });
         } else if (slice && dynamic_selection && dynamic_part_width
             && procedural_delay && delayed_nonblocking_assignment) {
@@ -5812,6 +6106,7 @@ bool Lowerer::lower_hir_statement(
                             >= dynamic_selection->right,
                     },
                     *procedural_delay,
+                    update_domain,
                 });
         } else if (dynamic_vhdl_selection && procedural_delay
             && delayed_nonblocking_assignment) {
@@ -5821,15 +6116,18 @@ bool Lowerer::lower_hir_statement(
                     *lowered,
                     *dynamic_vhdl_selection,
                     *procedural_delay,
+                    update_domain,
                 });
         } else if (procedural_delay && delayed_nonblocking_assignment) {
             process_.operations.emplace_back(WriteAfter {
-                *binding->signal, *lowered, *procedural_delay });
+                *binding->signal, *lowered, *procedural_delay,
+                update_domain });
         } else if (constant_selection && update) {
             process_.operations.emplace_back(WriteUpdateSlice {
                 *binding->signal,
                 *lowered,
                 static_cast<std::uint32_t>(constant_selection->offset),
+                update_domain,
             });
         } else if (constant_selection) {
             process_.operations.emplace_back(WriteBlockingSlice {
@@ -5839,7 +6137,8 @@ bool Lowerer::lower_hir_statement(
             });
         } else if (index && dynamic_selection && update) {
             process_.operations.emplace_back(WriteUpdateDynamicSlice {
-                *binding->signal, *lowered, *dynamic_selection });
+                *binding->signal, *lowered, *dynamic_selection,
+                update_domain });
         } else if (index && dynamic_selection) {
             process_.operations.emplace_back(WriteBlockingDynamicSlice {
                 *binding->signal, *lowered, *dynamic_selection });
@@ -5856,7 +6155,7 @@ bool Lowerer::lower_hir_statement(
             if (update) {
                 process_.operations.emplace_back(
                     WriteUpdateDynamicPartSlice {
-                        *binding->signal, *lowered, part });
+                        *binding->signal, *lowered, part, update_domain });
             } else {
                 process_.operations.emplace_back(
                     WriteBlockingDynamicPartSlice {
@@ -5869,6 +6168,7 @@ bool Lowerer::lower_hir_statement(
                         *binding->signal,
                         *lowered,
                         *dynamic_vhdl_selection,
+                        update_domain,
                     });
             } else {
                 process_.operations.emplace_back(
@@ -5880,11 +6180,12 @@ bool Lowerer::lower_hir_statement(
             }
         } else if (update) {
             process_.operations.emplace_back(
-                WriteUpdate { *binding->signal, *lowered });
+                WriteUpdate { *binding->signal, *lowered, update_domain });
         } else {
             process_.operations.emplace_back(
                 WriteBlocking { *binding->signal, *lowered });
         }
+        record_readonly_vhdl_output_write(*binding);
         return true;
     };
     const auto lower_if = [&] {
@@ -11167,10 +11468,17 @@ bool Lowerer::lower_hir_statement(
                         return false;
                     }
                     process_.operations.emplace_back(WriteAfter {
-                        *event, toggled, *delay });
+                        *event,
+                        toggled,
+                        *delay,
+                        SignalUpdateDomain::systemverilog_nba,
+                    });
                 } else {
                     process_.operations.emplace_back(WriteUpdate {
-                        *event, toggled });
+                        *event,
+                        toggled,
+                        SignalUpdateDomain::systemverilog_nba,
+                    });
                 }
             } else {
                 process_.operations.emplace_back(WriteBlocking {
@@ -12868,7 +13176,7 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
                 hir_source_span(assignment.source));
             continue;
         }
-        const auto process_index = design_.processes_.size()
+        const auto process_index = design_.process_count()
             + 1U + generated_processes_.size();
         if (process_index > std::numeric_limits<ProcessId>::max()) {
             report(

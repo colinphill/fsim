@@ -13,10 +13,12 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace fsim::tests::runtime {
 
@@ -1435,6 +1437,193 @@ void test_deterministic_random_values()
         per_process.signal_value(first_process_output)
             != per_process.signal_value(second_process_output),
         "stable process IDs derive independent random streams");
+}
+
+void test_simir_named_event_origin_cross_domain()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    class DeferredProducer final : public ProcessExecutor {
+    public:
+        explicit DeferredProducer(const SignalId event)
+            : event_(event)
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext& context,
+            InstructionIndex) override
+        {
+            context.notify_event(
+                event_, 1U, EventNotificationKind::timed);
+            ProcessResumeResult result { 0, 1 };
+            result.external.kind = ExternalSuspendKind::halt;
+            return result;
+        }
+
+    private:
+        SignalId event_ { };
+    };
+
+    struct Observation {
+        ProcessId process { };
+        SimulationTick time { };
+        std::uint64_t delta { };
+        std::uint64_t systemverilog_round { };
+        SchedulerPhase phase { SchedulerPhase::active };
+        std::string text;
+    };
+
+    Interpreter interpreter;
+    Signal named_event {
+        "named_event_origin.event", PackedLogic4::from_msb_string("0")
+    };
+    named_event.event_variable = true;
+    const auto event = interpreter.add_signal(std::move(named_event));
+
+    const auto add_output = [&](const std::string_view name) {
+        return interpreter.add_signal({
+            std::string { name }, PackedLogic4::from_msb_string("0")
+        });
+    };
+    const auto generic_first = add_output("generic.first");
+    const auto generic_inactive = add_output("generic.inactive");
+    const auto generic_later = add_output("generic.later");
+    const auto sv_first = add_output("systemverilog.first");
+    const auto sv_inactive = add_output("systemverilog.inactive");
+    const auto sv_later = add_output("systemverilog.later");
+
+    Process producer;
+    producer.id = 0U;
+    producer.name = "named_event_origin_reactive_producer";
+    producer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    producer.reactive = true;
+    producer.operations = { Halt { } };
+    const auto producer_id = interpreter.add_process(std::move(producer));
+    interpreter.set_process_executor(
+        producer_id, std::make_unique<DeferredProducer>(event));
+
+    std::vector<Observation> observations;
+    const auto add_consumer = [&](const ProcessId id,
+                                  const std::string_view name,
+                                  const ProcessSchedulingDomain domain,
+                                  const SignalId first,
+                                  const SignalId inactive,
+                                  const SignalId later) {
+        Process consumer;
+        consumer.id = id;
+        consumer.name = std::string { name };
+        consumer.scheduling_domain = domain;
+        consumer.register_count = 1U;
+        consumer.operations = {
+            WaitOn { { event } },
+            EventTriggered { 0U, event },
+            WriteBlocking { first, 0U },
+            Display { std::string { name } + ".first", true },
+            WaitFor { 0U },
+            EventTriggered { 0U, event },
+            WriteBlocking { inactive, 0U },
+            Display { std::string { name } + ".inactive", true },
+            WaitFor { 1U },
+            EventTriggered { 0U, event },
+            WriteBlocking { later, 0U },
+            Display { std::string { name } + ".later", true },
+            Halt { },
+        };
+        return interpreter.add_process(std::move(consumer));
+    };
+    const auto generic_consumer = add_consumer(
+        1U, "generic", ProcessSchedulingDomain::generic,
+        generic_first, generic_inactive, generic_later);
+    const auto systemverilog_consumer = add_consumer(
+        2U, "systemverilog", ProcessSchedulingDomain::systemverilog,
+        sv_first, sv_inactive, sv_later);
+
+    std::optional<SchedulerPhase> notification_phase;
+    SimulationTick notification_time { };
+    interpreter.set_event_trigger_hook(
+        [&](const SignalId triggered, const SimulationTick time) {
+            require(triggered == event,
+                "the deferred named event keeps its identity");
+            notification_phase = interpreter.scheduler().current_phase()
+                .value_or(SchedulerPhase::active);
+            notification_time = time;
+        });
+    interpreter.set_output_hook(
+        [&](const ProcessId process,
+            const std::string_view text,
+            const bool,
+            const SimulationTick time,
+            const std::uint64_t) {
+            const auto phase = interpreter.scheduler().current_phase();
+            require(phase.has_value(),
+                "named-event observations execute in a scheduler phase");
+            observations.push_back({
+                process, time, interpreter.scheduler().delta(),
+                interpreter.scheduler().systemverilog_round(), *phase,
+                std::string { text }
+            });
+        });
+
+    const auto result = interpreter.run();
+    const auto find_observation = [&](const ProcessId process,
+                                      const std::string_view text) {
+        return std::ranges::find_if(observations,
+            [&](const Observation& observation) {
+                return observation.process == process
+                    && observation.text == text;
+            });
+    };
+    const auto generic_first_observation
+        = find_observation(generic_consumer, "generic.first");
+    const auto generic_inactive_observation
+        = find_observation(generic_consumer, "generic.inactive");
+    const auto generic_later_observation
+        = find_observation(generic_consumer, "generic.later");
+    const auto sv_first_observation
+        = find_observation(systemverilog_consumer, "systemverilog.first");
+    const auto sv_inactive_observation
+        = find_observation(systemverilog_consumer, "systemverilog.inactive");
+    const auto sv_later_observation
+        = find_observation(systemverilog_consumer, "systemverilog.later");
+
+    require(
+        result.status == RunStatus::completed && result.time == 2U
+            && notification_time == 1U
+            && notification_phase == SchedulerPhase::reactive,
+        "a timed named-event notification retains its captured Reactive origin");
+    require(
+        interpreter.signal_value(generic_first).to_msb_string() == "1"
+            && interpreter.signal_value(generic_inactive).to_msb_string() == "1"
+            && interpreter.signal_value(generic_later).to_msb_string() == "0"
+            && interpreter.signal_value(sv_first).to_msb_string() == "1"
+            && interpreter.signal_value(sv_inactive).to_msb_string() == "1"
+            && interpreter.signal_value(sv_later).to_msb_string() == "0",
+        "named-event triggered remains set across same-slot delta regions only");
+    require(
+        generic_first_observation != observations.end()
+            && generic_first_observation->time == 1U
+            && generic_first_observation->phase == SchedulerPhase::active
+            && generic_first_observation->delta > 0U
+            && generic_inactive_observation != observations.end()
+            && generic_inactive_observation->time == 1U
+            && generic_inactive_observation->delta
+                > generic_first_observation->delta
+            && generic_later_observation != observations.end()
+            && generic_later_observation->time == 2U,
+        "SV named-event wakeups cross into the generic next cycle");
+    require(
+        sv_first_observation != observations.end()
+            && sv_first_observation->time == 1U
+            && sv_first_observation->phase == SchedulerPhase::active
+            && sv_first_observation->systemverilog_round > 0U
+            && sv_inactive_observation != observations.end()
+            && sv_inactive_observation->time == 1U
+            && sv_inactive_observation->phase == SchedulerPhase::inactive
+            && sv_later_observation != observations.end()
+            && sv_later_observation->time == 2U,
+        "SV named-event wakeups retain SV Active and Inactive regions");
 }
 
 } // namespace fsim::tests::runtime

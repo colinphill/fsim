@@ -2553,11 +2553,12 @@ end architecture;
     assert(changed_formal
         != output_formal.vhdl_hir.mutable_declarations().end());
     changed_formal->direction = semantic::vhdl::Direction::output;
-    const auto unsupported_result = elaborate_compiled(
+    const auto readonly_actual_result = elaborate_compiled(
         output_formal,
         "vhdl:work.hir_direct_vhdl(rtl)",
         "hir_direct_vhdl");
-    assert(has_diagnostic(unsupported_result, "FSIM-ELAB-HIR-001"));
+    assert(!readonly_actual_result.ok());
+    assert(has_diagnostic(readonly_actual_result, "FSIM-ELAB-SVIFACE-006"));
 
     auto equality_compiled = compiled;
     const auto value_expression = equality_compiled.find_expression(value);

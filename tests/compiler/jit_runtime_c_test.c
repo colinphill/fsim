@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-#include "fsim/compiler/jit_runtime.h"
+#include "fsim/compiler/jit_runtime_v1.h"
 
 #include <stddef.h>
 

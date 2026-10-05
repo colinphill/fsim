@@ -2,9 +2,243 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 
 namespace fsim::runtime::simir {
+
+namespace {
+
+template <typename ImplType, typename StatePointer>
+[[nodiscard]] bool prepare_native_a4_single_owner_publication(
+    ImplType& implementation,
+    const SignalId signal_id,
+    const ValueKind expected_kind,
+    const ResolutionKind expected_resolution,
+    StatePointer& a4_state,
+    ProcessId& a4_owner)
+{
+    if (implementation.scheduler.trace_hook_installed()
+        || implementation.native_signal_observation_any_hook
+        || implementation.native_signal_observation_required_hook
+        || implementation.signal_change_hook
+        || implementation.stored_signal_change_hook
+        || implementation.driver_change_hook
+        || implementation.scalar_signal_change_hook
+        || implementation.container_object_change_hook
+        || implementation.container_element_change_hook
+        || implementation.region_recertification_pending
+        || implementation.region_recertification_requires_snapshot
+        || implementation.region_authoritative_recertification_waiting
+        || signal_id >= implementation.signals.size()
+        || signal_id >= implementation.direct_single_driver_routes.size()
+        || signal_id
+            >= implementation.direct_signal_materialization_pending.size()
+        || signal_id >= implementation.direct_wide_signal_offsets.size()
+        || signal_id
+            >= implementation.native_signal_publication_shape_certificate.size()
+        || implementation.native_signal_publication_shape_certificate[
+               signal_id]
+            == 0U
+        || implementation.direct_signal_materialization_pending[signal_id]
+            != 0U
+        || implementation.native_signal_has_runtime_dependency(signal_id)
+        || implementation.has_dynamic_waits(signal_id)
+        || implementation.monitor_watches(signal_id)
+        || signal_id >= implementation.external_driver_values.size()
+        || signal_id >= implementation.forced_values.size()
+        || signal_id >= implementation.forced_masks.size()
+        || signal_id >= implementation.forced_driver_values.size()
+        || signal_id >= implementation.forced_driver_masks.size()
+        || implementation.external_driver_values[signal_id]
+        || implementation.forced_values[signal_id]
+        || implementation.forced_masks[signal_id]
+        || implementation.forced_driver_values[signal_id]
+        || implementation.forced_driver_masks[signal_id]) {
+        return false;
+    }
+
+    const auto wide_offset
+        = implementation.direct_wide_signal_offsets[signal_id];
+    if (wide_offset >= implementation.direct_wide_signal_aval.size()
+        || wide_offset >= implementation.direct_wide_signal_bval.size()
+        || signal_id >= implementation.signal_last_values.size()
+        || signal_id >= implementation.driven_values.size()) {
+        return false;
+    }
+    if (expected_kind == ValueKind::logic4) {
+        if (signal_id >= implementation.direct_signal_aval.size()
+            || signal_id >= implementation.direct_signal_bval.size()
+            || signal_id >= implementation.direct_signal_last_aval.size()
+            || signal_id >= implementation.direct_signal_last_bval.size()) {
+            return false;
+        }
+    } else if (signal_id
+                   >= implementation.direct_signal_logic9_plane0.size()
+        || signal_id
+            >= implementation.direct_signal_logic9_plane1.size()
+        || signal_id
+            >= implementation.direct_signal_logic9_plane2.size()
+        || signal_id
+            >= implementation.direct_signal_logic9_plane3.size()
+        || signal_id
+            >= implementation.direct_signal_last_logic9_plane0.size()
+        || signal_id
+            >= implementation.direct_signal_last_logic9_plane1.size()
+        || signal_id
+            >= implementation.direct_signal_last_logic9_plane2.size()
+        || signal_id
+            >= implementation.direct_signal_last_logic9_plane3.size()
+        || wide_offset
+            >= implementation.direct_wide_signal_logic9_plane2.size()
+        || wide_offset
+            >= implementation.direct_wide_signal_logic9_plane3.size()) {
+        return false;
+    }
+
+    const auto& signal = implementation.signals[signal_id];
+    const auto& route = implementation.direct_single_driver_routes[signal_id];
+    const auto* const driver
+        = implementation.direct_single_driver_record(signal_id);
+    const auto width = signal.initial_value.width();
+    if (!route.active || driver == nullptr
+        || signal.resolution != expected_resolution
+        || signal.value_kind != expected_kind
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength || width == 0U || width > 64U) {
+        return false;
+    }
+
+    auto* const candidate_state
+        = implementation.region_authoritative_state_for_signal(signal_id);
+    if (candidate_state == nullptr || !candidate_state->valid()
+        || candidate_state->generation()
+            != implementation.region_runtime_generation
+        || !candidate_state->values().requires_prewrite_unbind()
+        || !candidate_state->values().packed_slots_bound()
+        || !candidate_state->values().packed_signal_slots_bound(signal_id)
+        || !candidate_state->values().packed_owner_slot_bound(
+            signal_id, route.process)
+        || candidate_state->wide_mutation_scratch().words.capacity() < 1U) {
+        return false;
+    }
+
+    const auto& layout = candidate_state->values().layout();
+    const auto owners = layout.owners(signal_id);
+    const auto owner_mask
+        = layout.owner_mask_words(signal_id, route.process);
+    const auto valid_mask = width == 64U
+        ? std::numeric_limits<std::uint64_t>::max()
+        : (UINT64_C(1) << width) - UINT64_C(1);
+    if (owners.size() != 1U || owners.front().process != route.process
+        || owners.front().aliases_stored || owner_mask.size() != 1U
+        || owner_mask.front() != valid_mask
+        || layout.signal(signal_id).storage_class
+            != SignalDriverStorageClass::single_owner) {
+        return false;
+    }
+
+    if (expected_kind == ValueKind::logic4) {
+        const auto current = Logic4Word {
+            width, implementation.direct_signal_aval[signal_id],
+            implementation.direct_signal_bval[signal_id]
+        };
+        const auto previous = Logic4Word {
+            width, implementation.direct_signal_last_aval[signal_id],
+            implementation.direct_signal_last_bval[signal_id]
+        };
+        if (signal.initial_value.unchecked_low_word() != current
+            || implementation.signal_last_values[signal_id]
+                    .unchecked_low_word() != previous
+            || candidate_state->values().current(signal_id)
+                != signal.initial_value
+            || candidate_state->values().previous(signal_id)
+                != implementation.signal_last_values[signal_id]
+            || candidate_state->values().stored(signal_id)
+                != implementation.driven_values[signal_id]
+            || candidate_state->values().owner_value(
+                signal_id, route.process) != driver->value) {
+            return false;
+        }
+    } else {
+        const auto current = Logic9Word {
+            width,
+            { implementation.direct_signal_logic9_plane0[signal_id],
+                implementation.direct_signal_logic9_plane1[signal_id],
+                implementation.direct_signal_logic9_plane2[signal_id],
+                implementation.direct_signal_logic9_plane3[signal_id] }
+        };
+        const auto previous = Logic9Word {
+            width,
+            { implementation.direct_signal_last_logic9_plane0[signal_id],
+                implementation.direct_signal_last_logic9_plane1[signal_id],
+                implementation.direct_signal_last_logic9_plane2[signal_id],
+                implementation.direct_signal_last_logic9_plane3[signal_id] }
+        };
+        if (!current.has_canonical_codes()
+            || !previous.has_canonical_codes()
+            || !signal.initial_value.is_logic9()
+            || !implementation.signal_last_values[signal_id].is_logic9()
+            || !implementation.driven_values[signal_id].is_logic9()
+            || !driver->value.is_logic9()) {
+            return false;
+        }
+        const auto current_value = PackedLogic4::from_logic9_word(current);
+        const auto previous_value = PackedLogic4::from_logic9_word(previous);
+        if (signal.initial_value != current_value
+            || implementation.signal_last_values[signal_id]
+                != previous_value
+            || candidate_state->values().current(signal_id)
+                != signal.initial_value
+            || candidate_state->values().previous(signal_id)
+                != implementation.signal_last_values[signal_id]
+            || candidate_state->values().stored(signal_id)
+                != implementation.driven_values[signal_id]
+            || candidate_state->values().owner_value(
+                signal_id, route.process) != driver->value) {
+            return false;
+        }
+    }
+
+    a4_state = candidate_state;
+    a4_owner = route.process;
+    return true;
+}
+
+template <typename ImplType, typename StatePointer>
+[[nodiscard]] bool publish_native_a4_single_owner_value(
+    ImplType& implementation,
+    const SignalId signal_id,
+    StatePointer* const a4_state,
+    const ProcessId a4_owner,
+    const PackedLogic4& value)
+{
+    if (a4_state == nullptr
+        || signal_id
+            >= implementation.region_authoritative_component_by_signal.size()) {
+        return false;
+    }
+    if (a4_state->values().packed_slots_bound()
+        && implementation.systemverilog_wave_profile_enabled) {
+        ++implementation.systemverilog_wave_profile_a4_authoritative_slot_writes;
+    }
+    const auto revision = a4_state->values().revision();
+    a4_state->values().mirror_owner_into(
+        a4_state->wide_mutation_scratch(), signal_id, a4_owner,
+        value, value, value);
+    return a4_state->valid()
+        && a4_state->generation() == implementation.region_runtime_generation
+        && implementation.region_authoritative_state_for_signal(signal_id)
+            == a4_state
+        && a4_state->values().requires_prewrite_unbind()
+        && a4_state->values().packed_slots_bound()
+        && a4_state->values().packed_signal_slots_bound(signal_id)
+        && a4_state->values().packed_owner_slot_bound(signal_id, a4_owner)
+        && a4_state->values().revision() == revision + 1U;
+}
+
+} // namespace
 
 [[nodiscard]] std::size_t Interpreter::Impl::InertialDriverKeyHash::operator()(
     const InertialDriverKey& key) const noexcept
@@ -17,6 +251,12 @@ namespace fsim::runtime::simir {
         + UINT64_C(0x9e3779b97f4a7c15)
         + (result << 6U) + (result >> 2U);
     result ^= static_cast<std::size_t>(key.width)
+        + UINT64_C(0x9e3779b97f4a7c15)
+        + (result << 6U) + (result >> 2U);
+    result ^= static_cast<std::size_t>(key.process_domain)
+        + UINT64_C(0x9e3779b97f4a7c15)
+        + (result << 6U) + (result >> 2U);
+    result ^= static_cast<std::size_t>(key.phase)
         + UINT64_C(0x9e3779b97f4a7c15)
         + (result << 6U) + (result >> 2U);
     return result;
@@ -35,34 +275,72 @@ namespace fsim::runtime::simir {
     return result;
 }
 
+void Interpreter::Impl::retire_forwarding_epoch_after_scheduler_discard() noexcept
+{
+    bool pending_role_flush { };
+    for (const auto& local : region_local_wave_state_by_component) {
+        if (!local || !local->forwarding_results) {
+            continue;
+        }
+        auto& bank = *local->forwarding_results;
+        const bool applied_roles = !bank.applied_role_mutations.empty()
+            || !bank.applied_role_metadata.empty();
+        bank.discard();
+        if (applied_roles) {
+            bank.private_epoch_retired = true;
+            pending_role_flush = true;
+        }
+    }
+    region_forwarding_role_flush_pending_after_discard = pending_role_flush
+        || region_forwarding_role_journal_nonempty_components != 0U;
+}
+
 void Interpreter::Impl::discard_scheduler_work() noexcept
 {
+    clear_systemverilog_update_pool();
     cohort_snapshots.discard();
     active_cohort_ready.clear();
-    native_region_ready_scratch.clear();
     for (auto& cohort : static_sensitivity_cohorts) {
         cohort.pending = { };
         cohort.ready.clear();
     }
-    for (auto& process : processes) {
-        process.queued = false;
-    }
-    for (auto& region : native_static_regions) {
-        std::ranges::fill(region.active, UINT8_C(0));
-        region.ready_offsets.clear();
-    }
-    for (auto& region : fused_masked_regions) {
-        for (auto& bucket : region.ready_buckets) {
-            bucket.ready.clear();
+    for (ProcessId id = 0U; id < processes.size(); ++id) {
+        if (auto* compact = processes.compact_constant(id)) {
+            compact->queued = false;
+        } else {
+            processes[id].queued = false;
         }
     }
-    for (auto& bucket : fused_masked_global_frontiers) {
-        bucket.heads.clear();
-        std::ranges::fill(bucket.positions,
-            std::numeric_limits<std::size_t>::max());
-        bucket.callback.reset();
-        bucket.callback_key.reset();
+    for (const auto& runtime : region_frontier_runtime_by_component) {
+        if (!runtime || runtime->execution_mode
+                != RegionFrontierExecutionModeV2::generic_deferred_update) {
+            continue;
+        }
+        std::ranges::fill(runtime->generic_queued_ready_words, UINT64_C(0));
+        std::ranges::fill(runtime->generic_queued_members,
+            RegionFrontierComponentRuntime::GenericQueuedMember { });
+        runtime->generic_prefix_processes.clear();
+        runtime->generic_prefix_members.clear();
     }
+    for (const auto& readiness : vhdl_projected_readiness_by_component) {
+        if (!readiness) {
+            continue;
+        }
+        for (auto& member : readiness->members) {
+            member.receipt = { };
+            member.static_trigger_mask = 0U;
+        }
+        std::ranges::fill(readiness->ticket_member_offsets,
+            std::numeric_limits<std::size_t>::max());
+    }
+    std::ranges::fill(region_readiness_mask_words, 0U);
+    for (auto& queued : region_readiness_queued_by_process) {
+        queued = { };
+    }
+    // Scheduler entries are gone and the update pool has canceled only their
+    // unapplied tokens. Applied role rows stay in the banks until a checked
+    // read, write, or later slot start can materialize them.
+    retire_forwarding_epoch_after_scheduler_discard();
 }
 
 [[nodiscard]] SignalHot& Interpreter::Impl::get_signal(SignalId id)
@@ -105,7 +383,8 @@ DriverRecord* Interpreter::Impl::direct_single_driver_record(
     const SignalId signal_id) noexcept
 {
     if (signal_id >= direct_single_driver_routes.size()
-        || signal_id >= driver_values.size()) {
+        || signal_id >= driver_values.size()
+        || has_container_signal_alias(signal_id)) {
         return nullptr;
     }
     const auto& route = direct_single_driver_routes[signal_id];
@@ -118,7 +397,8 @@ const DriverRecord* Interpreter::Impl::direct_single_driver_record(
     const SignalId signal_id) const noexcept
 {
     if (signal_id >= direct_single_driver_routes.size()
-        || signal_id >= driver_values.size()) {
+        || signal_id >= driver_values.size()
+        || has_container_signal_alias(signal_id)) {
         return nullptr;
     }
     const auto& route = direct_single_driver_routes[signal_id];
@@ -127,12 +407,51 @@ const DriverRecord* Interpreter::Impl::direct_single_driver_record(
         : nullptr;
 }
 
+bool Interpreter::Impl::is_aggregate_signal_proxy(
+    const SignalId signal_id) const noexcept
+{
+    return signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id].has_value();
+}
+
+bool Interpreter::Impl::has_container_signal_alias(
+    const SignalId signal_id) const noexcept
+{
+    if (is_aggregate_signal_proxy(signal_id)
+        || (signal_id < signal_container_element_aliases.size()
+            && signal_container_element_aliases[signal_id])) {
+        return true;
+    }
+    return signal_id < signal_container_aliases.size()
+        && !signal_container_aliases[signal_id].empty();
+}
+
+void Interpreter::Impl::revoke_stable_writer_shadow_for_container_alias(
+    const SignalId signal_id)
+{
+    if (signal_id >= stable_single_writer_processes.size()
+        || stable_single_writer_processes[signal_id]
+            == std::numeric_limits<ProcessId>::max()) {
+        return;
+    }
+    if (signal_writer_revision
+        == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error {
+            "SimIR signal-writer topology revision overflow"
+        };
+    }
+    stable_single_writer_processes[signal_id]
+        = std::numeric_limits<ProcessId>::max();
+    ++signal_writer_revision;
+}
+
 void Interpreter::Impl::materialize_direct_signal(const SignalId id)
 {
     if (id >= direct_signal_materialization_pending.size()
         || direct_signal_materialization_pending[id] == 0U) {
         return;
     }
+    prepare_region_authoritative_write(id);
     const auto width = signals[id].initial_value.width();
     if (signals[id].value_kind == ValueKind::logic9) {
         const auto current = Logic9Word {
@@ -179,7 +498,394 @@ Interpreter::Impl::get_process(ProcessId id)
     if (id >= processes.size()) {
         throw std::out_of_range("invalid SimIR process ID");
     }
-    return processes[id];
+    return processes.promote_state(id);
+}
+
+void Interpreter::Impl::ProcessTable::reserve_initial(
+    const std::size_t capacity)
+{
+    if (!slots_.empty() || frozen_) {
+        throw std::logic_error {
+            "cannot reserve process table after registration"
+        };
+    }
+    slots_.reserve(capacity);
+    stable_full_.reserve_initial(capacity);
+}
+
+void Interpreter::Impl::ProcessTable::push_back(ProcessState&& process)
+{
+    if (process.id != slots_.size()) {
+        throw std::invalid_argument {
+            "SimIR process table IDs must remain dense and ordered"
+        };
+    }
+    const auto& program_template
+        = process.cold().program_storage().program_template;
+    const auto scheduling_domain = program_template != nullptr
+        ? program_template->scheduling_domain
+        : ProcessSchedulingDomain::generic;
+    const auto full_index = stable_full_.size();
+    if (slots_.size() == slots_.capacity()) {
+        const auto next_capacity = std::max<std::size_t>(
+            4U, slots_.capacity() * 2U);
+        slots_.reserve(next_capacity);
+    }
+    stable_full_.push_back(std::move(process));
+    slots_.push_back(
+        Slot { SlotKind::full, scheduling_domain, full_index });
+}
+
+void Interpreter::Impl::ProcessTable::push_compact(
+    ConstantDriverStartupEntry&& process)
+{
+    if (frozen_ || process.id != slots_.size()) {
+        throw std::logic_error {
+            "compact constant processes are admitted before start"
+        };
+    }
+    const auto scheduling_domain
+        = process.program_storage->program_template->scheduling_domain;
+    if (slots_.size() == slots_.capacity()) {
+        const auto next_capacity = std::max<std::size_t>(
+            4U, slots_.capacity() * 2U);
+        slots_.reserve(next_capacity);
+    }
+    const auto compact_index = compact_constants_.size();
+    compact_constants_.push_back(std::move(process));
+    try {
+        slots_.push_back(Slot {
+            SlotKind::compact_constant, scheduling_domain, compact_index });
+    } catch (...) {
+        compact_constants_.pop_back();
+        throw;
+    }
+    ++active_compact_constants_;
+}
+
+void Interpreter::Impl::ProcessTable::freeze_initial_storage()
+{
+    frozen_ = true;
+}
+
+Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::full_state(const std::size_t index)
+{
+    return stable_full_[index];
+}
+
+const Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::full_state(const std::size_t index) const
+{
+    return stable_full_[index];
+}
+
+Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::promote(const std::size_t id)
+{
+    if (id >= slots_.size()) {
+        throw std::out_of_range { "invalid SimIR process ID" };
+    }
+    auto& slot = slots_[id];
+    if (slot.kind == SlotKind::full) {
+        return full_state(slot.index);
+    }
+
+    const auto compact_index = slot.index;
+    const auto scheduling_domain = slot.scheduling_domain;
+    auto& compact = compact_constants_[compact_index];
+    std::optional<OperationList> restored_startup_body;
+    if (compact.startup_write_bank != nullptr) {
+        // Reconstruct before appending or publishing full state. Allocation
+        // failure leaves the compact descriptor and any borrowed views live.
+        restored_startup_body.emplace(
+            compact.startup_write_bank->operations());
+    }
+    ProcessState promoted;
+    promoted.id = compact.id;
+    promoted.generation = compact.generation;
+    promoted.pc = compact.pc;
+    promoted.execution_phase = compact.execution_phase;
+    promoted.status = compact.status;
+    promoted.static_trigger_mask = compact.static_trigger_mask;
+    promoted.queued = compact.queued;
+    promoted.waiting_on_static = compact.waiting_on_static;
+    promoted.waiting_on_signal = compact.waiting_on_signal;
+    promoted.halted = compact.halted;
+    promoted.suspended = compact.suspended;
+    promoted.suspended_wake = compact.suspended_wake;
+    promoted.killed = compact.killed;
+    promoted.suspended_status = compact.suspended_status;
+    promoted.cold().design_process = compact.id;
+    promoted.cold().random_state = compact.random_state;
+    promoted.clear_frontier_debug_token();
+    promoted.cold().current_source = compact.current_source;
+    promoted.cold().current_scope = compact.current_scope;
+    promoted.cold().track_interpreter_operations
+        = compact.track_interpreter_operations;
+    promoted.cold().interpreter_operations
+        = compact.interpreter_operations;
+    promoted.cold().profile_calls = compact.profile_calls;
+    promoted.cold().profile_interpreter_operations
+        = compact.profile_interpreter_operations;
+    promoted.cold().profile_updates = compact.profile_updates;
+    promoted.cold().profile_total_nanoseconds
+        = compact.profile_total_nanoseconds;
+    const auto full_index = stable_full_.size();
+    stable_full_.push_back(std::move(promoted));
+    if (restored_startup_body) {
+        compact.program_storage->instance_program.operations
+            = std::move(*restored_startup_body);
+    }
+    full_state(full_index).cold().retained_program_storage
+        = std::move(compact.program_storage);
+
+    slot = Slot { SlotKind::full, scheduling_domain, full_index };
+    --active_compact_constants_;
+    return full_state(full_index);
+}
+
+Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::operator[](const std::size_t index)
+{
+    if (index >= slots_.size()) {
+        throw std::out_of_range { "invalid SimIR process ID" };
+    }
+    if (slots_[index].kind != SlotKind::full) {
+        throw std::logic_error {
+            "compact process access requires explicit promotion"
+        };
+    }
+    return full_state(slots_[index].index);
+}
+
+const Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::operator[](const std::size_t index) const
+{
+    if (index >= slots_.size()) {
+        throw std::out_of_range { "invalid SimIR process ID" };
+    }
+    if (slots_[index].kind != SlotKind::full) {
+        throw std::logic_error {
+            "compact constant process has no full ProcessState"
+        };
+    }
+    return full_state(slots_[index].index);
+}
+
+Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::at(const std::size_t index)
+{
+    return (*this)[index];
+}
+
+const Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::at(const std::size_t index) const
+{
+    return (*this)[index];
+}
+
+Interpreter::Impl::ProcessState&
+Interpreter::Impl::ProcessTable::promote_state(const std::size_t index)
+{
+    return promote(index);
+}
+
+Interpreter::Impl::ProcessState*
+Interpreter::Impl::ProcessTable::full_state_if_present(
+    const ProcessId id) noexcept
+{
+    if (id >= slots_.size() || slots_[id].kind != SlotKind::full) {
+        return nullptr;
+    }
+    return std::addressof(full_state(slots_[id].index));
+}
+
+const Interpreter::Impl::ProcessState*
+Interpreter::Impl::ProcessTable::full_state_if_present(
+    const ProcessId id) const noexcept
+{
+    if (id >= slots_.size() || slots_[id].kind != SlotKind::full) {
+        return nullptr;
+    }
+    return std::addressof(full_state(slots_[id].index));
+}
+
+ProcessProgramView Interpreter::Impl::ProcessTable::program_view(
+    const ProcessId id) const
+{
+    if (id >= slots_.size()) {
+        throw std::out_of_range { "invalid SimIR process ID" };
+    }
+    const auto& slot = slots_[id];
+    if (slot.kind == SlotKind::full) {
+        return full_state(slot.index).program();
+    }
+    const auto& compact = compact_constants_[slot.index];
+    const auto& storage = *compact.program_storage;
+    return ProcessProgramView {
+        *storage.program_template, storage.instance_program,
+        compact.startup_write_bank.get()
+    };
+}
+
+const Process& Interpreter::Impl::ProcessTable::public_program(
+    const ProcessId id) const
+{
+    if (id >= slots_.size()) {
+        throw std::out_of_range { "invalid SimIR process ID" };
+    }
+    if (slots_[id].kind == SlotKind::full) {
+        return full_state(slots_[id].index).cold().public_program();
+    }
+    auto& storage = *compact_constants_[slots_[id].index].program_storage;
+    if (!storage.public_program_facade) {
+        storage.public_program_facade
+            = std::make_unique<Process>(program_view(id).materialize());
+    }
+    return *storage.public_program_facade;
+}
+
+std::size_t Interpreter::Impl::ProcessTable::operation_count(
+    const ProcessId id) const
+{
+    if (id >= slots_.size()) {
+        throw std::out_of_range { "invalid SimIR process ID" };
+    }
+    if (const auto* const compact = compact_constant(id)) {
+        if (compact->startup_write_bank != nullptr) {
+            return compact->startup_write_bank->operation_count;
+        }
+        return compact->program_storage->instance_program.operations.size();
+    }
+    return program_view(id).operations().size();
+}
+
+Interpreter::Impl::ConstantDriverStartupEntry*
+Interpreter::Impl::ProcessTable::compact_constant(
+    const ProcessId id) noexcept
+{
+    if (id >= slots_.size()
+        || slots_[id].kind != SlotKind::compact_constant) {
+        return nullptr;
+    }
+    return std::addressof(compact_constants_[slots_[id].index]);
+}
+
+const Interpreter::Impl::ConstantDriverStartupEntry*
+Interpreter::Impl::ProcessTable::compact_constant(
+    const ProcessId id) const noexcept
+{
+    if (id >= slots_.size()
+        || slots_[id].kind != SlotKind::compact_constant) {
+        return nullptr;
+    }
+    return std::addressof(compact_constants_[slots_[id].index]);
+}
+
+bool Interpreter::Impl::ProcessTable::is_compact_constant(
+    const ProcessId id) const noexcept
+{
+    return compact_constant(id) != nullptr;
+}
+
+std::size_t Interpreter::Impl::ProcessTable::compact_constant_count() const noexcept
+{
+    return active_compact_constants_;
+}
+
+bool Interpreter::Impl::ProcessTable::public_facade_materialized(
+    const ProcessId id) const noexcept
+{
+    if (id >= slots_.size()) {
+        return false;
+    }
+    const auto& slot = slots_[id];
+    if (slot.kind == SlotKind::full) {
+        return full_state(slot.index).cold()
+            .program_storage().public_program_facade != nullptr;
+    }
+    return compact_constants_[slot.index].program_storage
+        ->public_program_facade != nullptr;
+}
+
+void Interpreter::Impl::ProcessTable::add_profile_updates(
+    const ProcessId id, const std::size_t count)
+{
+    if (auto* compact = compact_constant(id)) {
+        compact->profile_updates += count;
+        return;
+    }
+    full_state_if_present(id)->cold().profile_updates += count;
+}
+
+std::uint64_t Interpreter::Impl::ProcessTable::profile_updates(
+    const ProcessId id) const
+{
+    if (const auto* compact = compact_constant(id)) {
+        return compact->profile_updates;
+    }
+    return full_state_if_present(id)->cold().profile_updates;
+}
+
+std::uint64_t Interpreter::Impl::ProcessTable::profile_total_nanoseconds(
+    const ProcessId id) const
+{
+    if (const auto* compact = compact_constant(id)) {
+        return compact->profile_total_nanoseconds;
+    }
+    return full_state_if_present(id)->cold().profile_total_nanoseconds;
+}
+
+std::uint64_t Interpreter::Impl::ProcessTable::profile_calls(
+    const ProcessId id) const
+{
+    if (const auto* compact = compact_constant(id)) {
+        return compact->profile_calls;
+    }
+    return full_state_if_present(id)->cold().profile_calls;
+}
+
+std::uint64_t
+Interpreter::Impl::ProcessTable::profile_interpreter_operations(
+    const ProcessId id) const
+{
+    if (const auto* compact = compact_constant(id)) {
+        return compact->profile_interpreter_operations;
+    }
+    return full_state_if_present(id)->cold().profile_interpreter_operations;
+}
+
+std::uint64_t Interpreter::Impl::ProcessTable::interpreter_operations(
+    const ProcessId id) const
+{
+    if (const auto* compact = compact_constant(id)) {
+        return compact->interpreter_operations;
+    }
+    return full_state_if_present(id)->cold().interpreter_operations;
+}
+
+std::uint64_t Interpreter::Impl::ProcessTable::profile_native_resumes(
+    const ProcessId id) const
+{
+    return compact_constant(id) != nullptr
+        ? 0U
+        : full_state_if_present(id)->cold().profile_native_resumes;
+}
+
+std::uint64_t Interpreter::Impl::ProcessTable::profile_native_nanoseconds(
+    const ProcessId id) const
+{
+    return compact_constant(id) != nullptr
+        ? 0U
+        : full_state_if_present(id)->cold().profile_native_nanoseconds;
+}
+
+bool Interpreter::Impl::ProcessTable::has_executor(
+    const ProcessId id) const noexcept
+{
+    const auto* state = full_state_if_present(id);
+    return state != nullptr && static_cast<bool>(state->executor);
 }
 
 [[nodiscard]] Interpreter::Impl::ProcessFrame&
@@ -191,12 +897,15 @@ Interpreter::Impl::ensure_process_frame(ProcessState& process)
 
     auto frame = std::make_shared<ProcessFrame>();
     frame->registers.assign(
-        process.program().register_count, PackedLogic4 { });
+        process.program().register_count(), PackedLogic4 { });
     frame->string_registers.assign(
-        process.program().string_register_count, { });
+        process.program().string_register_count(), { });
     frame->container_registers.reserve(
-        process.program().container_register_count);
-    for (const auto& type : process.program().container_register_types) {
+        process.program().container_register_count());
+    const auto container_register_types
+        = process_layout_detail::ProcessLayoutAccess::view(
+            process.program().container_register_types());
+    for (const auto& type : container_register_types) {
         frame->container_registers.push_back(
             default_container_register(type));
     }
@@ -354,10 +1063,11 @@ Interpreter::Impl::get_container_object(
     const ProcessState& process,
     const RegisterId id)
 {
-    if (process.program().register_value_kinds.empty()) {
+    if (process.program().register_value_kinds().empty()) {
         return ValueKind::logic4;
     }
-    return process.program().register_value_kinds.at(id);
+    return process_layout_detail::ProcessLayoutAccess::copy_at(
+        process.program().register_value_kinds(), id);
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::coerce_value_kind(
@@ -404,23 +1114,31 @@ Interpreter::Impl::get_container_object(
 void Interpreter::Impl::remove_dynamic_wait_nonempty(ProcessState& process)
 {
     auto& cold = process.cold();
-    const auto old_wait_generation = cold.dynamic_wait_generation;
-    if (cold.dynamic_wait_generation
+    auto* const dynamic_wait = cold.dynamic_wait_state_if_present();
+    if (dynamic_wait == nullptr) {
+        process.waiting_on_signal = false;
+        return;
+    }
+    const auto old_wait_generation = dynamic_wait->dynamic_wait_generation;
+    if (dynamic_wait->dynamic_wait_generation
         == std::numeric_limits<std::uint64_t>::max()) {
         fail(process, "dynamic wait generation overflow");
     }
-    ++cold.dynamic_wait_generation;
+    ++dynamic_wait->dynamic_wait_generation;
     ensure_dynamic_fanout_counts();
     for (std::size_t sensitivity_index = 0;
-        sensitivity_index < cold.dynamic_sensitivity.size();
+        sensitivity_index < dynamic_wait->dynamic_sensitivity.size();
         ++sensitivity_index) {
-        const auto signal = cold.dynamic_sensitivity[sensitivity_index].signal;
+        const auto signal
+            = dynamic_wait->dynamic_sensitivity[sensitivity_index].signal;
         if (signal >= dynamic_fanout.size()
-            || sensitivity_index >= cold.dynamic_fanout_positions.size()) {
+            || sensitivity_index
+                >= dynamic_wait->dynamic_fanout_positions.size()) {
             continue;
         }
         auto& fanout = dynamic_fanout[signal];
-        const auto position = cold.dynamic_fanout_positions[sensitivity_index];
+        const auto position
+            = dynamic_wait->dynamic_fanout_positions[sensitivity_index];
         if (position >= fanout.size()) {
             continue;
         }
@@ -440,17 +1158,18 @@ void Interpreter::Impl::remove_dynamic_wait_nonempty(ProcessState& process)
         ++dynamic_fanout_tombstone_counts[signal];
         compact_dynamic_fanout(signal);
     }
-    cold.dynamic_sensitivity.clear();
-    cold.dynamic_triggered.clear();
-    cold.dynamic_fanout_positions.clear();
-    cold.dynamic_wait_all = false;
-    cold.wait_order_events.clear();
-    cold.wait_order_index = 0;
-    cold.wait_order_result.reset();
-    if (cold.waiting_on_container) {
-        auto& fanout = container_dynamic_fanout[*cold.waiting_on_container];
+    dynamic_wait->dynamic_sensitivity.clear();
+    dynamic_wait->dynamic_triggered.clear();
+    dynamic_wait->dynamic_fanout_positions.clear();
+    dynamic_wait->dynamic_wait_all = false;
+    dynamic_wait->wait_order_events.clear();
+    dynamic_wait->wait_order_index = 0;
+    dynamic_wait->wait_order_result.reset();
+    if (dynamic_wait->waiting_on_container) {
+        auto& fanout
+            = container_dynamic_fanout[*dynamic_wait->waiting_on_container];
         std::erase(fanout, process.id);
-        cold.waiting_on_container.reset();
+        dynamic_wait->waiting_on_container.reset();
     }
     process.waiting_on_signal = false;
 }
@@ -468,24 +1187,31 @@ void Interpreter::Impl::ensure_dynamic_fanout_counts()
 void Interpreter::Impl::register_dynamic_wait_fanout(ProcessState& process)
 {
     auto& cold = process.cold();
-    cold.dynamic_fanout_positions.clear();
-    cold.dynamic_fanout_positions.reserve(cold.dynamic_sensitivity.size());
-    for (const auto& sensitivity : cold.dynamic_sensitivity) {
+    auto* const dynamic_wait = cold.dynamic_wait_state_if_present();
+    if (dynamic_wait == nullptr) {
+        throw std::logic_error {
+            "dynamic wait registration has no process-side wait state"
+        };
+    }
+    dynamic_wait->dynamic_fanout_positions.clear();
+    dynamic_wait->dynamic_fanout_positions.reserve(
+        dynamic_wait->dynamic_sensitivity.size());
+    for (const auto& sensitivity : dynamic_wait->dynamic_sensitivity) {
         if (sensitivity.signal >= dynamic_fanout.size()) {
             fail(process, "dynamic wait references an invalid signal");
         }
     }
-    if (cold.dynamic_wait_generation
+    if (dynamic_wait->dynamic_wait_generation
         == std::numeric_limits<std::uint64_t>::max()) {
         fail(process, "dynamic wait generation overflow");
     }
-    ++cold.dynamic_wait_generation;
+    ++dynamic_wait->dynamic_wait_generation;
     ensure_dynamic_fanout_counts();
     std::size_t registered = 0;
     try {
         for (std::size_t index = 0;
-            index < cold.dynamic_sensitivity.size(); ++index) {
-            const auto& sensitivity = cold.dynamic_sensitivity[index];
+            index < dynamic_wait->dynamic_sensitivity.size(); ++index) {
+            const auto& sensitivity = dynamic_wait->dynamic_sensitivity[index];
             compact_dynamic_fanout(sensitivity.signal);
             auto& active = dynamic_fanout_active_counts[sensitivity.signal];
             if (active == std::numeric_limits<std::size_t>::max()) {
@@ -496,30 +1222,32 @@ void Interpreter::Impl::register_dynamic_wait_fanout(ProcessState& process)
             fanout.push_back({
                 process.id,
                 process.generation,
-                cold.dynamic_wait_generation,
+                dynamic_wait->dynamic_wait_generation,
                 sensitivity.edge,
                 index,
                 true
             });
-            cold.dynamic_fanout_positions.push_back(position);
+            dynamic_wait->dynamic_fanout_positions.push_back(position);
             ++active;
             ++registered;
         }
     } catch (...) {
         for (std::size_t index = 0; index < registered; ++index) {
-            const auto signal = cold.dynamic_sensitivity[index].signal;
-            const auto position = cold.dynamic_fanout_positions[index];
+            const auto signal
+                = dynamic_wait->dynamic_sensitivity[index].signal;
+            const auto position
+                = dynamic_wait->dynamic_fanout_positions[index];
             auto& fanout = dynamic_fanout[signal];
             if (position < fanout.size() && fanout[position].active
                 && fanout[position].process == process.id
                 && fanout[position].wait_generation
-                    == cold.dynamic_wait_generation) {
+                    == dynamic_wait->dynamic_wait_generation) {
                 fanout[position].active = false;
                 --dynamic_fanout_active_counts[signal];
                 ++dynamic_fanout_tombstone_counts[signal];
             }
         }
-        cold.dynamic_fanout_positions.clear();
+        dynamic_wait->dynamic_fanout_positions.clear();
         throw;
     }
 }
@@ -536,12 +1264,15 @@ void Interpreter::Impl::register_dynamic_wait_fanout(ProcessState& process)
         || process.halted || !process.waiting_on_signal) {
         return false;
     }
-    const auto& cold = process.cold();
-    if (cold.dynamic_wait_generation != registration.wait_generation
-        || registration.sensitivity_index >= cold.dynamic_sensitivity.size()) {
+    const auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
+    if (dynamic_wait == nullptr
+        || dynamic_wait->dynamic_wait_generation != registration.wait_generation
+        || registration.sensitivity_index
+            >= dynamic_wait->dynamic_sensitivity.size()) {
         return false;
     }
-    const auto& sensitivity = cold.dynamic_sensitivity[
+    const auto& sensitivity = dynamic_wait->dynamic_sensitivity[
         registration.sensitivity_index];
     return sensitivity.signal == signal
         && sensitivity.edge == registration.edge;
@@ -572,12 +1303,14 @@ void Interpreter::Impl::compact_dynamic_fanout(const SignalId signal)
             continue;
         }
         auto& process = processes[registration.process];
-        auto& cold = process.cold();
-        if (registration.sensitivity_index
-                < cold.dynamic_fanout_positions.size()
+        auto* const dynamic_wait
+            = process.cold().dynamic_wait_state_if_present();
+        if (dynamic_wait != nullptr
+            && registration.sensitivity_index
+                < dynamic_wait->dynamic_fanout_positions.size()
             && dynamic_wait_registration_is_current(
                 process, registration, signal)) {
-            cold.dynamic_fanout_positions[
+            dynamic_wait->dynamic_fanout_positions[
                 registration.sensitivity_index] = index;
         }
     }
@@ -621,28 +1354,34 @@ void Interpreter::Impl::write_process_register(
 
 void Interpreter::Impl::clear_wait_timeout_nonempty(ProcessState& process)
 {
-    auto& cold = process.cold();
-    if (cold.wait_timeout_generation
+    auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
+    if (dynamic_wait == nullptr) {
+        process.wait_timeout_origin.reset();
+        return;
+    }
+    if (dynamic_wait->wait_timeout_generation
         == std::numeric_limits<std::uint64_t>::max()) {
         fail(process, "wait timeout generation overflow");
     }
-    ++cold.wait_timeout_generation;
+    ++dynamic_wait->wait_timeout_generation;
     process.wait_timeout_origin.reset();
-    cold.wait_timeout_deadline.reset();
-    cold.wait_timeout_result.reset();
+    dynamic_wait->wait_timeout_deadline.reset();
+    dynamic_wait->wait_timeout_result.reset();
 }
 
 void Interpreter::Impl::set_wait_timeout_result(
     Interpreter::Impl::ProcessState& process,
     const bool timed_out)
 {
-    auto& cold = process.cold();
-    if (!cold.wait_timeout_result) {
+    auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
+    if (dynamic_wait == nullptr || !dynamic_wait->wait_timeout_result) {
         return;
     }
     write_process_register(
         process,
-        *cold.wait_timeout_result,
+        *dynamic_wait->wait_timeout_result,
         PackedLogic4::from_msb_string(
             timed_out ? "1" : "0"));
 }
@@ -654,23 +1393,23 @@ void Interpreter::Impl::begin_wait_timeout(
     const std::optional<RegisterId> result)
 {
     clear_wait_timeout(process);
-    auto& cold = process.cold();
     if (delay
         > std::numeric_limits<SimulationTick>::max()
             - scheduler.now()) {
         process.pc = origin;
         fail(process, "simulation time overflow in WaitOn timeout");
     }
-    if (cold.wait_timeout_generation
+    auto& dynamic_wait = process.cold().ensure_dynamic_wait_state();
+    if (dynamic_wait.wait_timeout_generation
         == std::numeric_limits<std::uint64_t>::max()) {
         process.pc = origin;
         fail(process, "wait timeout generation overflow");
     }
-    const auto generation = ++cold.wait_timeout_generation;
+    const auto generation = ++dynamic_wait.wait_timeout_generation;
     const auto deadline = scheduler.now() + delay;
     process.wait_timeout_origin = origin;
-    cold.wait_timeout_deadline = deadline;
-    cold.wait_timeout_result = result;
+    dynamic_wait.wait_timeout_deadline = deadline;
+    dynamic_wait.wait_timeout_result = result;
     set_wait_timeout_result(process, false);
 
     struct WaitTimeoutTask {
@@ -685,8 +1424,10 @@ void Interpreter::Impl::begin_wait_timeout(
             +[](Scheduler&, const WaitTimeoutTask& scheduled) {
                 auto& state = scheduled.owner->get_process(
                     scheduled.process);
-                auto& timeout = state.cold();
-                if (timeout.wait_timeout_generation
+                auto* const timeout
+                    = state.cold().dynamic_wait_state_if_present();
+                if (timeout == nullptr
+                    || timeout->wait_timeout_generation
                         != scheduled.generation
                     || state.wait_timeout_origin
                         != std::optional { scheduled.origin }) {
@@ -694,23 +1435,29 @@ void Interpreter::Impl::begin_wait_timeout(
                 }
                 scheduled.owner->set_wait_timeout_result(state, true);
                 state.wait_timeout_origin.reset();
-                timeout.wait_timeout_deadline.reset();
-                timeout.wait_timeout_result.reset();
+                timeout->wait_timeout_deadline.reset();
+                timeout->wait_timeout_result.reset();
                 scheduled.owner->queue_active_current(
                     scheduled.process);
             }>(WaitTimeoutTask {
                 this, process.id, origin, generation });
+    const bool systemverilog_process
+        = process.program().scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog;
     if (delay == 0) {
-        scheduler.schedule_internal(
-            SchedulerPhase::inactive,
-            process.id,
-            task);
+        if (systemverilog_process) {
+            scheduler.schedule_internal_systemverilog(
+                SchedulerPhase::inactive, process.id, task);
+        } else {
+            scheduler.schedule_internal(
+                SchedulerPhase::inactive, process.id, task);
+        }
+    } else if (systemverilog_process) {
+        scheduler.schedule_internal_systemverilog_at(
+            deadline, SchedulerPhase::active, process.id, task);
     } else {
         scheduler.schedule_internal_at(
-            deadline,
-            SchedulerPhase::active,
-            process.id,
-            task);
+            deadline, SchedulerPhase::active, process.id, task);
     }
 }
 
@@ -720,22 +1467,24 @@ void Interpreter::Impl::rearm_wait_timeout(
     const InstructionIndex origin,
     const std::optional<RegisterId> result)
 {
-    const auto& cold = process.cold();
+    const auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
     if (process.wait_timeout_origin
             != std::optional { origin }
-        || !cold.wait_timeout_deadline) {
+        || dynamic_wait == nullptr
+        || !dynamic_wait->wait_timeout_deadline) {
         process.pc = instruction;
         fail(
             process,
             "WaitOn timeout rearm has no matching active deadline");
     }
-    if (cold.wait_timeout_result != result) {
+    if (dynamic_wait->wait_timeout_result != result) {
         process.pc = instruction;
         fail(
             process,
             "WaitOn timeout rearm result register mismatch");
     }
-    if (*cold.wait_timeout_deadline < scheduler.now()) {
+    if (*dynamic_wait->wait_timeout_deadline < scheduler.now()) {
         process.pc = instruction;
         fail(process, "WaitOn timeout deadline was missed");
     }
@@ -744,9 +1493,11 @@ void Interpreter::Impl::rearm_wait_timeout(
 void Interpreter::Impl::mark_dynamic_event_resume(
     Interpreter::Impl::ProcessState& process)
 {
-    const auto& cold = process.cold();
-    const auto timed_out = cold.wait_timeout_deadline
-        && *cold.wait_timeout_deadline <= scheduler.now();
+    const auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
+    const auto timed_out = dynamic_wait != nullptr
+        && dynamic_wait->wait_timeout_deadline
+        && *dynamic_wait->wait_timeout_deadline <= scheduler.now();
     set_wait_timeout_result(process, timed_out);
 }
 
@@ -759,89 +1510,85 @@ void Interpreter::Impl::mark_dynamic_event_resume(
             process, registration, signal)) {
         return false;
     }
-    auto& cold = process.cold();
-    if (cold.wait_order_result) {
-        if (cold.wait_order_index >= cold.wait_order_events.size()) {
+    auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
+    if (dynamic_wait == nullptr) {
+        return false;
+    }
+    if (dynamic_wait->wait_order_result) {
+        if (dynamic_wait->wait_order_index
+            >= dynamic_wait->wait_order_events.size()) {
             throw std::logic_error {
                 "wait_order state has no expected event"
             };
         }
         if (signal
-            == cold.wait_order_events[cold.wait_order_index]) {
-            ++cold.wait_order_index;
-            if (cold.wait_order_index != cold.wait_order_events.size()) {
+            == dynamic_wait->wait_order_events[
+                dynamic_wait->wait_order_index]) {
+            ++dynamic_wait->wait_order_index;
+            if (dynamic_wait->wait_order_index
+                != dynamic_wait->wait_order_events.size()) {
                 return false;
             }
             write_process_register(
                 process,
-                *cold.wait_order_result,
+                *dynamic_wait->wait_order_result,
                 PackedLogic4::from_aval_bval(1, 1, 0));
             return true;
         }
         write_process_register(
             process,
-            *cold.wait_order_result,
+            *dynamic_wait->wait_order_result,
             PackedLogic4::from_aval_bval(1, 0, 0));
         return true;
     }
-    if (!cold.dynamic_wait_all) {
+    if (!dynamic_wait->dynamic_wait_all) {
         return true;
     }
-    if (registration.sensitivity_index >= cold.dynamic_triggered.size()) {
+    if (registration.sensitivity_index
+        >= dynamic_wait->dynamic_triggered.size()) {
         throw std::logic_error {
             "dynamic wait-all state has no matching sensitivity"
         };
     }
-    cold.dynamic_triggered[registration.sensitivity_index] = true;
+    dynamic_wait->dynamic_triggered[registration.sensitivity_index] = true;
     return std::all_of(
-        cold.dynamic_triggered.begin(),
-        cold.dynamic_triggered.end(),
+        dynamic_wait->dynamic_triggered.begin(),
+        dynamic_wait->dynamic_triggered.end(),
         [](const bool triggered) { return triggered; });
 }
 
 void Interpreter::Impl::register_static_sensitivity_cohort(
     const ProcessId id)
 {
-    const auto& process = get_process(id).program();
+    const auto process = processes.program_view(id);
     static_sensitivity_cohort_by_process.resize(
         processes.size(), std::numeric_limits<std::size_t>::max());
-    if (process.static_sensitivity.empty()) {
+    if (process.static_sensitivity().empty()) {
         return;
     }
 
-    auto sensitivity = process.static_sensitivity;
-    std::ranges::sort(
-        sensitivity,
-        { },
-        [](const Sensitivity& entry) {
-            return std::pair {
-                entry.signal,
-                static_cast<std::underlying_type_t<EdgeKind>>(entry.edge)
-            };
-        });
-    sensitivity.erase(
-        std::ranges::unique(
-            sensitivity,
-            { },
-            [](const Sensitivity& entry) {
-                return std::pair {
-                    entry.signal,
-                    static_cast<std::underlying_type_t<EdgeKind>>(entry.edge)
-                };
-            })
-            .begin(),
-        sensitivity.end());
+    auto sensitivity = process.static_sensitivity();
+    normalize_sensitivities(sensitivity);
 
     std::string key;
-    key += process.postponed ? 'p'
-        : process.reactive ? 'r'
-        : process.observed ? 'o'
+    key += process.postponed() ? 'p'
+        : process.reactive() ? 'r'
+        : process.observed() ? 'o'
                            : 'a';
+    key += process.scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog
+        ? 's'
+        : 'g';
     for (const auto& entry : sensitivity) {
         key += std::to_string(static_cast<std::size_t>(entry.signal));
         key += ':';
         key += std::to_string(static_cast<std::underlying_type_t<EdgeKind>>(
             entry.edge));
+        key += ':';
+        key += std::to_string(entry.offset);
+        key += ':';
+        key += std::to_string(entry.width);
         key += ';';
     }
     const auto [found, inserted]
@@ -869,7 +1616,8 @@ void Interpreter::Impl::rebuild_static_fanout()
     for (std::size_t process_index = 0;
          process_index < processes.size(); ++process_index) {
         for (const auto& sensitivity :
-             processes[process_index].program().static_sensitivity) {
+             processes.program_view(
+                 static_cast<ProcessId>(process_index)).static_sensitivity()) {
             if (sensitivity.signal >= counts.size()) {
                 throw std::logic_error {
                     "static sensitivity references a missing signal"
@@ -945,22 +1693,24 @@ void Interpreter::Impl::rebuild_static_fanout()
     }
     for (std::size_t process_index = 0;
          process_index < processes.size(); ++process_index) {
-        const auto& process = processes[process_index].program();
+        const auto process = processes.program_view(
+            static_cast<ProcessId>(process_index));
         const auto id = static_cast<ProcessId>(process_index);
         for (std::size_t sensitivity_index = 0;
-             sensitivity_index < process.static_sensitivity.size();
+             sensitivity_index < process.static_sensitivity().size();
              ++sensitivity_index) {
             const auto& sensitivity
-                = process.static_sensitivity[sensitivity_index];
+                = process.static_sensitivity()[sensitivity_index];
             const auto trigger_mask
                 = sensitivity_index < 63U
-                    && !process.static_trigger_regions.empty()
+                    && !process.static_trigger_regions().empty()
                 ? UINT64_C(1) << sensitivity_index
                 : Process::full_static_trigger_mask;
             const auto category = static_cast<std::size_t>(sensitivity.edge);
             const auto entry_index = next[sensitivity.signal]++;
             entries[entry_index] = {
-                id, sensitivity.edge, trigger_mask
+                id, sensitivity.edge, trigger_mask,
+                sensitivity.offset, sensitivity.width
             };
             category_entries[
                 category_next[sensitivity.signal][category]++] = entry_index;
@@ -1004,6 +1754,198 @@ Interpreter::Impl::static_fanout_indices_for(
         .subspan(span.begin, span.count);
 }
 
+RegionAuthoritativeComponentState*
+Interpreter::Impl::region_authoritative_state_for_signal(
+    const SignalId signal) noexcept
+{
+    if (!region_graph
+        || signal >= region_authoritative_component_by_signal.size()) {
+        return nullptr;
+    }
+    const auto component = region_authoritative_component_by_signal[signal];
+    if (component >= region_authoritative_state_by_component.size()
+        || component >= region_graph->certificate_inventory().components.size()
+        || !region_graph->component_epochs_current(component)) {
+        return nullptr;
+    }
+    auto* const state
+        = region_authoritative_state_by_component[component].get();
+    if (state == nullptr || !state->valid()
+        || state->generation() != region_runtime_generation) {
+        return nullptr;
+    }
+    return state;
+}
+
+void Interpreter::Impl::note_region_authoritative_mirror() noexcept
+{
+    if (region_authoritative_recertification_waiting) {
+        // A previous quiet-point reseed found a checked value that the A4
+        // planes cannot represent. Retry only after subsequent state traffic,
+        // rather than rebuilding the whole snapshot at every quiet point.
+        request_full_region_recertification();
+    }
+}
+
+bool Interpreter::Impl::region_has_fanout_member(
+    const SignalId signal, const ProcessId process) noexcept
+{
+    auto* const state = region_authoritative_state_for_signal(signal);
+    if (state == nullptr || process >= region_authoritative_member_index_by_process.size()
+        || process >= region_component_by_process.size()) {
+        return false;
+    }
+    const auto component = region_authoritative_component_by_signal[signal];
+    return region_component_by_process[process] == component
+        && region_authoritative_member_index_by_process[process]
+            < state->readiness().member_count();
+}
+
+bool Interpreter::Impl::region_take_ready(
+    const SignalId signal,
+    const ProcessId process,
+    std::uint64_t& trigger_mask) noexcept
+{
+    trigger_mask = 0U;
+    if (!region_has_fanout_member(signal, process)) {
+        return false;
+    }
+    const auto component = region_authoritative_component_by_signal[signal];
+    auto& state = *region_authoritative_state_by_component[component];
+    const auto member = region_authoritative_member_index_by_process[process];
+    if (!state.readiness().ready(member)) {
+        return false;
+    }
+    trigger_mask = state.readiness().trigger_mask(member);
+    state.readiness().clear(member);
+    if (trigger_mask != 0U && systemverilog_wave_profile_enabled) {
+        ++systemverilog_wave_profile_a4_ready_consumptions;
+    }
+    return trigger_mask != 0U;
+}
+
+void Interpreter::Impl::mark_region_value_change(
+    const SignalId signal,
+    const PackedLogic4& previous,
+    const PackedLogic4& current) noexcept
+{
+    auto* const state = region_authoritative_state_for_signal(signal);
+    if (state == nullptr) {
+        return;
+    }
+    if (systemverilog_wave_profile_enabled) {
+        ++systemverilog_wave_profile_a4_value_marks;
+    }
+    state->fanout().mark_transition(signal, previous, current,
+        EdgeKind::any, state->readiness());
+    if (previous.width() != 1U || current.width() != 1U) {
+        return;
+    }
+    const auto low_logic4 = [](const PackedLogic4& value) {
+        return value.is_logic9()
+            ? to_logic4(value.get_logic9(0U)) : value.get(0U);
+    };
+    const auto transition = decode_static_transition(
+        low_logic4(previous), low_logic4(current));
+    if (transition.posedge) {
+        state->fanout().mark_transition(signal, previous, current,
+            EdgeKind::posedge, state->readiness());
+    }
+    if (transition.negedge) {
+        state->fanout().mark_transition(signal, previous, current,
+            EdgeKind::negedge, state->readiness());
+    }
+}
+
+void Interpreter::Impl::mirror_region_stored(
+    const SignalId signal) noexcept
+{
+    note_region_authoritative_mirror();
+    if (auto* const state = region_authoritative_state_for_signal(signal)) {
+        if (state->values().packed_slots_bound()
+            && systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+        }
+        if (systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_stored_mirrors;
+        }
+        const bool was_valid = state->valid();
+        state->values().mirror_stored(signal, driven_values[signal]);
+        if (!state->valid()) {
+            request_full_region_recertification();
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal], true);
+            if (was_valid && systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_a4_invalidations;
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::mirror_region_visible(
+    const SignalId signal) noexcept
+{
+    note_region_authoritative_mirror();
+    if (auto* const state = region_authoritative_state_for_signal(signal)) {
+        if (state->values().packed_slots_bound()
+            && systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+        }
+        if (systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_visible_mirrors;
+        }
+        const bool was_valid = state->valid();
+        state->values().mirror_visible(signal,
+            signal_last_values[signal], signals[signal].initial_value);
+        if (!state->valid()) {
+            request_full_region_recertification();
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal], true);
+            if (was_valid && systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_a4_invalidations;
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::mirror_region_owner(
+    const SignalId signal,
+    const ProcessId process,
+    const PackedLogic4& value) noexcept
+{
+    note_region_authoritative_mirror();
+    if (auto* const state = region_authoritative_state_for_signal(signal)) {
+        if (state->values().packed_slots_bound()
+            && systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+        }
+        if (systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_owner_mirrors;
+        }
+        const bool was_valid = state->valid();
+        const bool reusable_wide_storage
+            = signals[signal].initial_value.width() > 64U
+            && state->values().requires_prewrite_unbind()
+            && state->values().packed_signal_slots_bound(signal)
+            && state->values().packed_owner_slot_bound(signal, process);
+        if (reusable_wide_storage) {
+            state->values().mirror_owner_into(
+                state->wide_mutation_scratch(), signal, process, value,
+                signals[signal].initial_value, driven_values[signal]);
+        } else {
+            state->values().mirror_owner(signal, process, value);
+        }
+        if (!state->valid()) {
+            request_full_region_recertification();
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal], true);
+            if (was_valid && systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_a4_invalidations;
+            }
+        }
+    }
+}
+
 Interpreter::Impl::StaticTransitionMatches
 Interpreter::Impl::decode_static_transition(
     const Logic4 old_value,
@@ -1018,18 +1960,58 @@ Interpreter::Impl::decode_static_transition(
 void Interpreter::Impl::notify_static_value_change(
     const SignalId signal_id,
     const StaticTransitionMatches transition,
-    const bool count_native_word_profile)
+    const bool count_native_word_profile,
+    const SignalChangeOrigin origin,
+    const bool region_value_prepared)
 {
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
     const auto visit = next_static_fanout_visit();
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
+    auto* const region_state
+        = region_authoritative_state_for_signal(signal_id);
+    // Grouped fanout compares the packed previous/current values below. A
+    // deferred direct publication can change a boundary signal without an
+    // A4 component state to trigger its usual materialization.
+    materialize_direct_signal(signal_id);
     const auto visit_category = [&](const EdgeKind edge) {
+        if (region_state != nullptr && !region_value_prepared) {
+            region_state->fanout().mark_transition(signal_id,
+                signal_last_values[signal_id],
+                signals[signal_id].initial_value, edge,
+                region_state->readiness());
+        }
+        if (edge == EdgeKind::any
+            && schedule_systemverilog_grouped_fanout(signal_id,
+                signal_last_values[signal_id],
+                signals[signal_id].initial_value, origin)) {
+            return;
+        }
         for (const auto entry_index :
              static_fanout_indices_for(signal_id, edge)) {
             const auto& sensitivity = static_fanout_entries[entry_index];
+            if (sensitivity.width != 0U) {
+                // Native word publication may leave packed storage deferred.
+                // Materialize current and previous values before inspecting a
+                // retained aggregate range; no stale packed copy is authoritative.
+                materialize_direct_signal(signal_id);
+                if (!sensitivity_range_changed(signal_last_values[signal_id],
+                        signals[signal_id].initial_value,
+                        sensitivity.offset, sensitivity.width)) {
+                    continue;
+                }
+            }
             auto& triggered_process = get_process(sensitivity.process);
-            triggered_process.static_trigger_mask
-                |= sensitivity.static_trigger_mask;
+            std::uint64_t grouped_trigger_mask { };
+            if (region_take_ready(signal_id, sensitivity.process,
+                    grouped_trigger_mask)) {
+                triggered_process.static_trigger_mask
+                    |= grouped_trigger_mask;
+            } else {
+                triggered_process.static_trigger_mask
+                    |= sensitivity.static_trigger_mask;
+            }
+            merge_generic_frontier_ready_mask(sensitivity.process,
+                triggered_process.static_trigger_mask);
 
             if (native_process_count_profile_enabled) {
                 if (count_native_word_profile) {
@@ -1065,15 +2047,55 @@ void Interpreter::Impl::notify_static_value_change(
             if (group_static_fanout && cohort != no_cohort
                 && static_sensitivity_cohorts[cohort].members.size() >= 2U) {
                 auto& grouped = static_sensitivity_cohorts[cohort];
+                bool all_generic_update_members =
+                    origin.process_domain == ProcessSchedulingDomain::generic
+                    && triggered_process.program().scheduling_domain()
+                        == ProcessSchedulingDomain::generic
+                    && region_graph.has_value();
+                if (all_generic_update_members) {
+                    const auto& graph_processes = region_graph->processes();
+                    for (const auto member : grouped.members) {
+                        if (member >= graph_processes.size()
+                            || graph_processes[member].scheduling_domain
+                                != ProcessSchedulingDomain::generic
+                            || graph_processes[member].update_kind
+                                != RegionUpdateKind::generic) {
+                            all_generic_update_members = false;
+                            break;
+                        }
+                    }
+                }
+                if (all_generic_update_members) {
+                    // Generic Update members must reach their per-member
+                    // region admission before the legacy shared-cohort path.
+                    // Queue each triggered member at its original key so its
+                    // trigger mask and queued state remain member-specific.
+                    if (triggered_process.waiting_on_static) {
+                        queue_static_next_delta(sensitivity.process, origin);
+                    }
+                    continue;
+                }
                 if (grouped.fanout_visit != visit) {
                     grouped.fanout_visit = visit;
-                    queue_static_cohort_next_delta(cohort);
+                    if (origin.process_domain
+                            == ProcessSchedulingDomain::generic
+                        && triggered_process.program().scheduling_domain()
+                            == ProcessSchedulingDomain::generic) {
+                        queue_static_cohort_next_delta(cohort);
+                    } else {
+                        for (const auto member : grouped.members) {
+                            auto& candidate = get_process(member);
+                            if (candidate.waiting_on_static) {
+                                queue_static_next_delta(member, origin);
+                            }
+                        }
+                    }
                 }
                 continue;
             }
 
             if (triggered_process.waiting_on_static) {
-                queue_static_next_delta(sensitivity.process);
+                queue_static_next_delta(sensitivity.process, origin);
             }
         }
     };
@@ -1089,6 +2111,42 @@ void Interpreter::Impl::notify_static_value_change(
 
 void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
 {
+    if (auto* const compact = processes.compact_constant(id)) {
+        if (compact->halted || compact->queued) {
+            return;
+        }
+        compact->queued = true;
+        const auto phase = compact->execution_phase;
+        struct ProcessQueueTask {
+            Interpreter::Impl* owner { };
+            ProcessId process { };
+        };
+        const auto task =
+            fsim::runtime::detail::make_scheduler_task_descriptor<
+                ProcessQueueTask,
+                +[](Scheduler&, const ProcessQueueTask& scheduled) {
+                    if (auto* state = scheduled.owner->processes
+                            .compact_constant(scheduled.process)) {
+                        state->queued = false;
+                        state->waiting_on_static = false;
+                    } else {
+                        auto& full_state = scheduled.owner->get_process(
+                            scheduled.process);
+                        full_state.queued = false;
+                        full_state.waiting_on_static = false;
+                        scheduled.owner->remove_dynamic_wait(full_state);
+                    }
+                    scheduled.owner->execute(scheduled.process);
+                }>(ProcessQueueTask { this, id });
+        if (processes.program_view(id).scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_internal_systemverilog_at(
+                time, phase, id, task);
+        } else {
+            scheduler.schedule_internal_at(time, phase, id, task);
+        }
+        return;
+    }
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
@@ -1103,17 +2161,31 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
         fsim::runtime::detail::make_scheduler_task_descriptor<
             ProcessQueueTask,
             +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                auto& state = scheduled.owner->get_process(
-                    scheduled.process);
-                state.queued = false;
-                state.waiting_on_static = false;
-                scheduled.owner->remove_dynamic_wait(state);
+                if (auto* compact = scheduled.owner->processes
+                        .compact_constant(scheduled.process)) {
+                    compact->queued = false;
+                    compact->waiting_on_static = false;
+                } else {
+                    auto& state = scheduled.owner->get_process(
+                        scheduled.process);
+                    state.queued = false;
+                    state.waiting_on_static = false;
+                    scheduled.owner->remove_dynamic_wait(state);
+                }
                 scheduled.owner->execute(scheduled.process);
             }>(ProcessQueueTask { this, id });
-    scheduler.schedule_internal_at(time, phase, id, task);
+    if (process.program().scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        scheduler.schedule_internal_systemverilog_at(
+            time, phase, id, task);
+    } else {
+        scheduler.schedule_internal_at(time, phase, id, task);
+    }
 }
 
-void Interpreter::Impl::queue_next_delta(ProcessId id)
+void Interpreter::Impl::queue_next_delta(
+    const ProcessId id,
+    const SignalChangeOrigin origin)
 {
     auto& process = get_process(id);
     if (process.halted || process.queued) {
@@ -1136,16 +2208,115 @@ void Interpreter::Impl::queue_next_delta(ProcessId id)
                 scheduled.owner->remove_dynamic_wait(state);
                 scheduled.owner->execute(scheduled.process);
             }>(ProcessQueueTask { this, id });
+    if (process.program().scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        if (origin.process_domain
+            == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_internal_systemverilog_next_delta(
+                phase, id, task);
+        } else {
+            scheduler.schedule_next_delta(
+                SchedulerPhase::active, id,
+                [this, id, phase](Scheduler& runtime) {
+                    auto& state = get_process(id);
+                    bool queued_as_wave { };
+                    if (phase == SchedulerPhase::active) {
+                        // This callback is already the generic-origin
+                        // next-delta boundary. Requeue only the final SV
+                        // activation as a receipt-bearing wave entry so an
+                        // eligible static member can use the native frontier.
+                        state.queued = false;
+                        try {
+                            queued_as_wave = queue_systemverilog_wave(id);
+                        } catch (...) {
+                            // Restore local queue state before propagating a
+                            // scheduler exception.
+                            state.queued = true;
+                            throw;
+                        }
+                    }
+                    if (queued_as_wave) {
+                        return;
+                    }
+                    state.queued = true;
+                    runtime.schedule_systemverilog(
+                        phase, id,
+                        [this, id](Scheduler&) {
+                            auto& state = get_process(id);
+                            state.queued = false;
+                            state.waiting_on_static = false;
+                            remove_dynamic_wait(state);
+                            execute(id);
+                        });
+                });
+        }
+        return;
+    }
     scheduler.schedule_internal_next_delta(phase, id, task);
 }
 
-void Interpreter::Impl::queue_static_next_delta(const ProcessId id)
+void Interpreter::Impl::queue_zero_delay_resume(
+    ProcessState& process)
+{
+    if (process.halted || process.queued) {
+        return;
+    }
+    if (process.program().postponed()
+        || process.program().scheduling_domain()
+            != ProcessSchedulingDomain::systemverilog) {
+        queue_next_delta(process.id);
+        return;
+    }
+
+    process.queued = true;
+    struct ProcessResumeTask {
+        Interpreter::Impl* owner { };
+        ProcessId process { };
+    };
+    const auto task =
+        fsim::runtime::detail::make_scheduler_task_descriptor<
+            ProcessResumeTask,
+            +[](Scheduler&, const ProcessResumeTask& scheduled) {
+                auto& state = scheduled.owner->get_process(
+                    scheduled.process);
+                state.queued = false;
+                state.waiting_on_static = false;
+                scheduled.owner->remove_dynamic_wait(state);
+                scheduled.owner->execute(scheduled.process);
+            }>(ProcessResumeTask { this, process.id });
+    scheduler.schedule_internal_systemverilog(
+        SchedulerPhase::inactive, process.id, task);
+}
+
+void Interpreter::Impl::queue_static_next_delta(
+    const ProcessId id,
+    const SignalChangeOrigin origin)
 {
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
     }
-    if (queue_fused_masked_member(id)) {
+    const auto scheduling_domain
+        = processes.scheduling_origin(id).process_domain;
+    if (scheduling_domain == ProcessSchedulingDomain::systemverilog
+        && origin.process_domain == ProcessSchedulingDomain::systemverilog
+        && queue_systemverilog_wave(id)) {
+        return;
+    }
+    if (scheduling_domain != ProcessSchedulingDomain::generic
+        || origin.process_domain
+            != ProcessSchedulingDomain::generic) {
+        queue_next_delta(id, origin);
+        return;
+    }
+    const bool generic_update = region_graph
+        && id < region_graph->processes().size()
+        && region_graph->processes()[id].update_kind
+            == RegionUpdateKind::generic;
+    if (generic_update && queue_generic_projected_region(id)) {
+        return;
+    }
+    if (!generic_update && queue_generic_projected_region(id)) {
         return;
     }
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
@@ -1154,49 +2325,9 @@ void Interpreter::Impl::queue_static_next_delta(const ProcessId id)
         : no_cohort;
     if (cohort == no_cohort
         || static_sensitivity_cohorts[cohort].members.size() < 2U) {
-        const auto no_region = std::numeric_limits<std::size_t>::max();
-        const auto region = id < native_static_region_by_process.size()
-            ? native_static_region_by_process[id]
-            : no_region;
-        if (region != no_region) {
-            process.queued = true;
-            const auto offset = native_static_region_offset_by_process[id];
-            native_static_regions[region].active[offset] = 1U;
-            const auto fallback = [this, id, region, offset](Scheduler&) {
-                native_static_regions[region].active[offset] = 0U;
-                auto& state = get_process(id);
-                state.queued = false;
-                state.waiting_on_static = false;
-                remove_dynamic_wait(state);
-                execute(id);
-            };
-            scheduler.schedule_next_delta_batchable(
-                SchedulerPhase::active, id, *this,
-                native_static_region_payload
-                    | static_cast<std::uint64_t>(id),
-                fallback);
-            return;
-        }
-        if (static_phase_batches_enabled) {
-            process.queued = true;
-            const auto execute_one = [this, id](Scheduler&) {
-                auto& state = get_process(id);
-                state.queued = false;
-                state.waiting_on_static = false;
-                remove_dynamic_wait(state);
-                execute(id);
-            };
-            scheduler.schedule_next_delta_batchable(
-                process.execution_phase, id, *this,
-                pure_wave_singleton_payload
-                    | static_cast<std::uint64_t>(id),
-                execute_one);
-            return;
-        }
-        queue_next_delta(id);
+        queue_next_delta(id, origin);
         return;
     }
-
     queue_static_cohort_next_delta(cohort);
 }
 
@@ -1231,7 +2362,7 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     try {
         if (static_phase_batches_enabled) {
             static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
-            if (cohort_id >= pure_wave_singleton_payload) {
+            if (cohort_id >= generic_projected_region_payload) {
                 throw std::overflow_error(
                     "static cohort identifier exceeds scheduler payload");
             }
@@ -1284,6 +2415,38 @@ std::uint64_t Interpreter::Impl::next_static_fanout_visit()
 
 void Interpreter::Impl::queue_current(ProcessId id)
 {
+    if (auto* const compact = processes.compact_constant(id)) {
+        if (compact->halted || compact->queued) {
+            return;
+        }
+        compact->queued = true;
+        const auto phase
+            = scheduler.current_phase().value_or(SchedulerPhase::active);
+        struct ProcessQueueTask {
+            Interpreter::Impl* owner { };
+            ProcessId process { };
+        };
+        const auto task =
+            fsim::runtime::detail::make_scheduler_task_descriptor<
+                ProcessQueueTask,
+                +[](Scheduler&, const ProcessQueueTask& scheduled) {
+                    if (auto* state = scheduled.owner->processes
+                            .compact_constant(scheduled.process)) {
+                        state->queued = false;
+                    } else {
+                        scheduled.owner->get_process(
+                            scheduled.process).queued = false;
+                    }
+                    scheduled.owner->execute(scheduled.process);
+                }>(ProcessQueueTask { this, id });
+        if (processes.program_view(id).scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_internal_systemverilog(phase, id, task);
+        } else {
+            scheduler.schedule_internal(phase, id, task);
+        }
+        return;
+    }
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
@@ -1298,12 +2461,21 @@ void Interpreter::Impl::queue_current(ProcessId id)
         fsim::runtime::detail::make_scheduler_task_descriptor<
             ProcessQueueTask,
             +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                auto& state = scheduled.owner->get_process(
-                    scheduled.process);
-                state.queued = false;
+                if (auto* compact = scheduled.owner->processes
+                        .compact_constant(scheduled.process)) {
+                    compact->queued = false;
+                } else {
+                    scheduled.owner->get_process(
+                        scheduled.process).queued = false;
+                }
                 scheduled.owner->execute(scheduled.process);
             }>(ProcessQueueTask { this, id });
-    scheduler.schedule_internal(phase, id, task);
+    if (process.program().scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        scheduler.schedule_internal_systemverilog(phase, id, task);
+    } else {
+        scheduler.schedule_internal(phase, id, task);
+    }
 }
 
 void Interpreter::Impl::queue_active_current(ProcessId id)
@@ -1329,13 +2501,25 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
                 scheduled.owner->remove_dynamic_wait(state);
                 scheduled.owner->execute(scheduled.process);
             }>(ProcessQueueTask { this, id });
-    scheduler.schedule_internal(phase, id, task);
+    if (process.program().scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        scheduler.schedule_internal_systemverilog(phase, id, task);
+    } else {
+        scheduler.schedule_internal(phase, id, task);
+    }
 }
 
 void Interpreter::Impl::queue_static_active_current(const ProcessId id)
 {
     auto& process = get_process(id);
     if (process.halted || process.queued) {
+        return;
+    }
+    if (process.program().scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        if (!queue_systemverilog_wave(id)) {
+            queue_active_current(id);
+        }
         return;
     }
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
@@ -1433,21 +2617,30 @@ void Interpreter::Impl::set_event_identity(
     current_identity = identity;
 }
 
-void Interpreter::Impl::trigger_event(const SignalId event)
+void Interpreter::Impl::trigger_event(
+    const SignalId event,
+    const SignalChangeOrigin origin)
 {
     const auto& source = get_signal(event);
     if (event_trigger_hook) {
         event_trigger_hook(event, scheduler.now());
     }
     const auto update_member = [&](const SignalId member) {
-        signal_events[member] = std::pair {
-            scheduler.now(), scheduler.delta()
-        };
+        record_signal_event(member, scheduler.delta(), origin);
         for (const auto& sensitivity : static_fanout_for(member)) {
             auto& process = get_process(sensitivity.process);
             process.static_trigger_mask |= sensitivity.static_trigger_mask;
+            merge_systemverilog_readiness_mask(
+                sensitivity.process, sensitivity.static_trigger_mask);
+            merge_generic_frontier_ready_mask(sensitivity.process,
+                process.static_trigger_mask);
             if (process.waiting_on_static) {
-                queue_static_active_current(sensitivity.process);
+                if (process.program().scheduling_domain()
+                    == origin.process_domain) {
+                    queue_static_active_current(sensitivity.process);
+                } else {
+                    queue_static_next_delta(sensitivity.process, origin);
+                }
             }
         }
     };
@@ -1468,9 +2661,38 @@ void Interpreter::Impl::trigger_event(const SignalId event)
         if (dynamic_wait_satisfied(
                 process, event, registration)) {
             mark_dynamic_event_resume(process);
-            queue_active_current(registration.process);
+            if (process.program().scheduling_domain()
+                == origin.process_domain) {
+                queue_active_current(registration.process);
+            } else {
+                queue_next_delta(registration.process, origin);
+            }
         }
     }
+}
+
+void Interpreter::Impl::stamp_signal_event(
+    const SignalId signal,
+    const std::uint64_t generic_delta,
+    const SignalChangeOrigin origin)
+{
+    signal_events.at(signal)
+        = std::pair { scheduler.now(), generic_delta };
+    const auto systemverilog_round
+        = origin.process_domain == ProcessSchedulingDomain::systemverilog
+        ? scheduler.systemverilog_round()
+        : std::uint64_t { };
+    signal_event_scheduling_stamps.at(signal)
+        = SignalEventSchedulingStamp { origin, systemverilog_round };
+}
+
+void Interpreter::Impl::record_signal_event(
+    const SignalId signal,
+    const std::uint64_t generic_delta,
+    const SignalChangeOrigin origin)
+{
+    stamp_signal_event(signal, generic_delta, origin);
+    capture_sampled_history_clock(signal, generic_delta, origin);
 }
 
 [[nodiscard]] std::uint64_t Interpreter::Impl::invalidate_event(
@@ -1486,6 +2708,7 @@ void Interpreter::Impl::trigger_event(const SignalId event)
     }
     state.kind = PendingEventKind::none;
     state.due = 0;
+    state.origin = { };
     return ++state.generation;
 }
 
@@ -1504,7 +2727,8 @@ void Interpreter::Impl::notify_event(
     const SignalId event,
     const SimulationTick delay,
     const EventNotificationKind kind,
-    const StableOrder order)
+    const StableOrder order,
+    const SignalChangeOrigin origin)
 {
     const auto& signal = get_signal(event);
     const auto identity = signal.event_variable
@@ -1535,7 +2759,7 @@ void Interpreter::Impl::notify_event(
             };
         }
         (void)invalidate_event(notified_event);
-        trigger_event(notified_event);
+        trigger_event(notified_event, origin);
         return;
     }
 
@@ -1551,11 +2775,11 @@ void Interpreter::Impl::notify_event(
         const auto generation = invalidate_event(notified_event);
         state.kind = PendingEventKind::delta;
         state.due = scheduler.now();
+        state.origin = origin;
         struct PendingEventTask {
             Interpreter::Impl* owner { };
             SignalId event { };
             std::uint64_t generation { };
-            SimulationTick due { };
         };
         const auto task =
             fsim::runtime::detail::make_scheduler_task_descriptor<
@@ -1570,13 +2794,20 @@ void Interpreter::Impl::notify_event(
                     }
                     pending.kind = PendingEventKind::none;
                     pending.due = 0;
-                    scheduled.owner->trigger_event(scheduled.event);
+                    const auto origin = pending.origin;
+                    pending.origin = { };
+                    scheduled.owner->trigger_event(
+                        scheduled.event, origin);
                 }>(PendingEventTask {
-                    this, notified_event, generation, state.due });
-        scheduler.schedule_internal_next_delta(
-            SchedulerPhase::active,
-            order,
-            task);
+                    this, notified_event, generation });
+        if (origin.process_domain
+            == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_internal_systemverilog_next_delta(
+                origin.phase, order, task);
+        } else {
+            scheduler.schedule_internal_next_delta(
+                SchedulerPhase::active, order, task);
+        }
         return;
     }
 
@@ -1601,6 +2832,7 @@ void Interpreter::Impl::notify_event(
     const auto generation = invalidate_event(notified_event);
     state.kind = PendingEventKind::timed;
     state.due = due;
+    state.origin = origin;
     struct PendingEventTask {
         Interpreter::Impl* owner { };
         SignalId event { };
@@ -1620,14 +2852,20 @@ void Interpreter::Impl::notify_event(
                 }
                 pending.kind = PendingEventKind::none;
                 pending.due = 0;
-                scheduled.owner->trigger_event(scheduled.event);
+                const auto origin = pending.origin;
+                pending.origin = { };
+                scheduled.owner->trigger_event(
+                    scheduled.event, origin);
             }>(PendingEventTask {
                 this, notified_event, generation, due });
-    scheduler.schedule_internal_at(
-        due,
-        SchedulerPhase::active,
-        order,
-        task);
+    if (origin.process_domain
+        == ProcessSchedulingDomain::systemverilog) {
+        scheduler.schedule_internal_systemverilog_at(
+            due, origin.phase, order, task);
+    } else {
+        scheduler.schedule_internal_at(
+            due, SchedulerPhase::active, order, task);
+    }
 }
 
 void Interpreter::Impl::notify_execution_point(
@@ -1637,17 +2875,29 @@ void Interpreter::Impl::notify_execution_point(
     const SourceLocation& source,
     const std::string_view scope)
 {
+    notify_execution_point(
+        process.id, process.cold().design_process, process.program(),
+        instruction, kind, source,
+        scope.empty() ? std::string_view { process.cold().current_scope }
+                      : scope);
+}
+
+void Interpreter::Impl::notify_execution_point(
+    const ProcessId process,
+    const ProcessId design_process,
+    const ProcessProgramView program,
+    const InstructionIndex instruction,
+    const ExecutionPointKind kind,
+    const SourceLocation& source,
+    const std::string_view scope)
+{
     if (execution_point_hook) {
-        const auto effective_scope = scope.empty()
-            ? std::string_view { process.cold().current_scope }
-            : scope;
         execution_point_hook(
             scheduler,
             ExecutionPoint {
-                process.id, process.cold().design_process,
-                instruction, kind, source, std::string { effective_scope },
-                process.program().language_standard,
-                process.program().compatibility_profile });
+                process, design_process, instruction, kind, source,
+                std::string { scope }, program.language_standard(),
+                program.compatibility_profile() });
     }
 }
 
@@ -1703,13 +2953,45 @@ void Interpreter::Impl::schedule_monitor_publication()
     if (!monitor || !monitor_enabled) {
         return;
     }
+    const auto generation = monitor_generation;
+    const auto process = monitor_process;
+    if (processes.program_view(process).scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        const auto publication = scheduler.now();
+        if (monitor_systemverilog_publication == publication) {
+            return;
+        }
+        monitor_systemverilog_publication = publication;
+        scheduler.schedule_end_of_time_slot(
+            process,
+            [this, generation, process](Scheduler& runtime) {
+                if (generation != monitor_generation
+                    || !monitor_enabled || !monitor) {
+                    return;
+                }
+                monitor_systemverilog_publication.reset();
+                if (monitor_file_handle) {
+                    write_file(
+                        process,
+                        *monitor_file_handle,
+                        render_monitor(*monitor),
+                        monitor->newline);
+                } else if (output_hook) {
+                    output_hook(
+                        process,
+                        render_monitor(*monitor),
+                        monitor->newline,
+                        runtime.now(),
+                        runtime.delta());
+                }
+            });
+        return;
+    }
     const auto publication = std::pair { scheduler.now(), scheduler.delta() };
     if (monitor_publication == publication) {
         return;
     }
     monitor_publication = publication;
-    const auto generation = monitor_generation;
-    const auto process = monitor_process;
     scheduler.schedule(
         SchedulerPhase::postponed,
         process,
@@ -1745,10 +3027,8 @@ void Interpreter::Impl::install_monitor(
               get_process(process), *registration.file_handle) }
         : std::nullopt;
     if (registration.one_shot) {
-        scheduler.schedule(
-            SchedulerPhase::postponed,
-            process,
-            [this, process, registration, file_handle](Scheduler& runtime) {
+        auto publish = [this, process, registration, file_handle](
+                           Scheduler& runtime) {
                 if (file_handle) {
                     write_file(
                         process,
@@ -1763,7 +3043,14 @@ void Interpreter::Impl::install_monitor(
                         runtime.now(),
                         runtime.delta());
                 }
-            });
+            };
+        if (processes.program_view(process).scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_end_of_time_slot(process, std::move(publish));
+        } else {
+            scheduler.schedule(
+                SchedulerPhase::postponed, process, std::move(publish));
+        }
         return;
     }
     if (monitor_generation
@@ -1789,6 +3076,7 @@ void Interpreter::Impl::install_monitor(
     monitor_file_handle = file_handle;
     monitor_enabled = true;
     monitor_publication.reset();
+    monitor_systemverilog_publication.reset();
     schedule_monitor_publication();
 }
 
@@ -1801,6 +3089,7 @@ void Interpreter::Impl::set_monitor_enabled(const bool enabled)
     ++monitor_generation;
     monitor_enabled = enabled;
     monitor_publication.reset();
+    monitor_systemverilog_publication.reset();
     if (enabled) {
         schedule_monitor_publication();
     }
@@ -1937,6 +3226,7 @@ void Interpreter::Impl::publish(
     SignalId signal_id, PackedLogic4 value,
     const bool notify_fanout)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     auto& signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
         throw std::invalid_argument("SimIR signal assignment width mismatch");
@@ -1948,28 +3238,65 @@ void Interpreter::Impl::publish(
 void Interpreter::Impl::publish_normalized(
     const SignalId signal_id,
     PackedLogic4 value,
-    const bool notify_fanout)
+    const bool notify_fanout,
+    const SignalChangeOrigin origin)
 {
-    note_signal_transaction(signal_id, notify_fanout);
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    prepare_region_authoritative_write(signal_id);
+    const std::array<SignalId, 1U> changed_signals { signal_id };
+    auto reference_refresh
+        = prepare_container_value_reference_refresh(changed_signals);
+    ActiveContainerReferenceRefresh active_refresh;
+    begin_container_value_reference_refresh(
+        active_refresh, changed_signals, reference_refresh);
+    const auto finish_refresh = [this](
+                                    ActiveContainerReferenceRefresh* frame) noexcept {
+        end_container_value_reference_refresh(*frame);
+    };
+    const std::unique_ptr<ActiveContainerReferenceRefresh,
+        decltype(finish_refresh)> refresh_scope(
+        &active_refresh, finish_refresh);
+    note_signal_transaction(signal_id, notify_fanout, origin);
     auto& signal = signals[signal_id];
     if (signal.initial_value == value) {
+        synchronize_container_value_references(changed_signals, reference_refresh);
         return;
     }
     signal_last_values[signal_id] = std::move(signal.initial_value);
     signal.initial_value = std::move(value);
+    mirror_region_visible(signal_id);
     refresh_direct_signal_planes(signal_id);
-    publish_value_change(signal_id, notify_fanout);
+    synchronize_container_value_references(changed_signals, reference_refresh);
+    publish_value_change(signal_id, notify_fanout, origin);
 }
 
 void Interpreter::Impl::publish_normalized_word(
     const SignalId signal_id,
     const Logic4Word value,
-    const bool notify_fanout)
+    const bool notify_fanout,
+    const SignalChangeOrigin origin)
 {
-    note_signal_transaction(signal_id, notify_fanout);
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+    prepare_region_authoritative_write(signal_id);
+    const std::array<SignalId, 1U> changed_signals { signal_id };
+    auto reference_refresh
+        = prepare_container_value_reference_refresh(changed_signals);
+    ActiveContainerReferenceRefresh active_refresh;
+    begin_container_value_reference_refresh(
+        active_refresh, changed_signals, reference_refresh);
+    const auto finish_refresh = [this](
+                                    ActiveContainerReferenceRefresh* frame) noexcept {
+        end_container_value_reference_refresh(*frame);
+    };
+    const std::unique_ptr<ActiveContainerReferenceRefresh,
+        decltype(finish_refresh)> refresh_scope(
+        &active_refresh, finish_refresh);
+    note_signal_transaction(signal_id, notify_fanout, origin);
     auto& signal = signals[signal_id];
+    const auto width = signal.initial_value.width();
     const auto current = signal.initial_value.unchecked_low_word();
     if (current == value) {
+        synchronize_container_value_references(changed_signals, reference_refresh);
         return;
     }
     if (native_process_count_profile_enabled) {
@@ -1977,10 +3304,27 @@ void Interpreter::Impl::publish_normalized_word(
     }
     signal_last_values[signal_id].assign_word(current);
     signal.initial_value.assign_word(value);
+    if (auto* const state
+        = region_authoritative_state_for_signal(signal_id)) {
+        if (state->values().packed_slots_bound()
+            && systemverilog_wave_profile_enabled) {
+            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+        }
+        state->values().mirror_logic4_word(signal_id,
+            Logic4Word { width, current.aval, current.bval },
+            value,
+            driven_values[signal_id].unchecked_low_word());
+        if (!state->valid()) {
+            request_full_region_recertification();
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal_id], true);
+        }
+    }
     const auto encoded = signal.initial_value.unchecked_low_word();
     direct_signal_aval[signal_id] = encoded.aval;
     direct_signal_bval[signal_id] = encoded.bval;
-    publish_value_change(signal_id, notify_fanout);
+    synchronize_container_value_references(changed_signals, reference_refresh);
+    publish_value_change(signal_id, notify_fanout, origin);
 }
 
 bool Interpreter::Impl::can_publish_native_word(
@@ -1996,7 +3340,8 @@ bool Interpreter::Impl::can_publish_native_word(
         }
     } else if (signal_change_hook || stored_signal_change_hook
         || driver_change_hook || scalar_signal_change_hook
-        || container_object_change_hook) {
+        || container_object_change_hook
+        || container_element_change_hook) {
         if (native_phase_profile_enabled) {
             ++native_phase_profile_rejected_observer;
         }
@@ -2015,15 +3360,46 @@ bool Interpreter::Impl::native_word_publication_phase_eligible() noexcept
     }
     return !signal_change_hook && !stored_signal_change_hook
         && !driver_change_hook && !scalar_signal_change_hook
-        && !container_object_change_hook;
+        && !container_object_change_hook
+        && !container_element_change_hook;
 }
 
 bool Interpreter::Impl::native_signal_has_runtime_dependency(
-    const SignalId signal_id) const noexcept
+    const SignalId signal_id,
+    const bool region_graph_has_exact_sensitivity_ranges) const noexcept
 {
     if (signal_id >= signals.size()
+        || signals[signal_id].public_value_reference_exposed
+        || signal_id >= signal_container_element_aliases.size()
+        || signal_id >= signal_container_aggregate_aliases.size()
         || native_signal_dependencies_unknown
         || native_signal_dependency_mask.size() != signals.size()) {
+        return true;
+    }
+    // Element aliases publish logical-container changes and may feed dynamic
+    // array readers through the ContainerObject interface. Aggregate proxies
+    // are callback-backed views of those leaves. Native word and fused
+    // publication routes do not prove either bridge, so keep both on the
+    // ordinary checked publication path.
+    if (signal_container_element_aliases[signal_id]
+        || signal_container_aggregate_aliases[signal_id]) {
+        return true;
+    }
+    return native_signal_has_non_alias_runtime_dependency(signal_id,
+        region_graph_has_exact_sensitivity_ranges);
+}
+
+bool Interpreter::Impl::native_signal_has_non_alias_runtime_dependency(
+    const SignalId signal_id,
+    const bool region_graph_has_exact_sensitivity_ranges) const noexcept
+{
+    if (signal_id >= signals.size()
+        || signals[signal_id].public_value_reference_exposed
+        || native_signal_dependencies_unknown
+        || native_signal_dependency_mask.size() != signals.size()
+        || (region_graph_has_exact_sensitivity_ranges
+            && native_signal_non_range_dependency_mask.size()
+                != signals.size())) {
         return true;
     }
     if (requires_sampled_values) {
@@ -2048,30 +3424,39 @@ bool Interpreter::Impl::native_signal_has_runtime_dependency(
     if (monitor_watches(signal_id)) {
         return true;
     }
-    return native_signal_dependency_mask[signal_id] != 0U;
+    return region_graph_has_exact_sensitivity_ranges
+        ? native_signal_non_range_dependency_mask[signal_id] != 0U
+        : native_signal_dependency_mask[signal_id] != 0U;
 }
 
 void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
 {
     native_signal_dependencies_unknown = false;
     native_signal_dependency_mask.clear();
+    native_signal_non_range_dependency_mask.clear();
     module_path_destination_mask.clear();
     try {
         native_signal_dependency_mask.assign(signals.size(), 0U);
+        native_signal_non_range_dependency_mask.assign(signals.size(), 0U);
         module_path_destination_mask.assign(signals.size(), 0U);
     } catch (...) {
         native_signal_dependency_mask.clear();
+        native_signal_non_range_dependency_mask.clear();
         module_path_destination_mask.clear();
         native_signal_dependencies_unknown = true;
         return;
     }
 
-    const auto mark_signal = [&](const SignalId signal) {
+    const auto mark_signal = [&](const SignalId signal,
+                                 const bool non_range_dependency = true) {
         if (signal >= native_signal_dependency_mask.size()) {
             native_signal_dependencies_unknown = true;
             return;
         }
         native_signal_dependency_mask[signal] = 1U;
+        if (non_range_dependency) {
+            native_signal_non_range_dependency_mask[signal] = 1U;
+        }
     };
     const auto mark_terminal = [&](const ModulePathTerminal& terminal) {
         mark_signal(terminal.signal);
@@ -2109,6 +3494,16 @@ void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
         mark_terminal(event.terminal);
         mark_expression(event.condition);
     };
+
+    // Legacy native publication/cone routes lack range-aware readiness proofs.
+    // Keep these signals on checked publication until RegionGraph certifies them.
+    for (ProcessId id = 0U; id < processes.size(); ++id) {
+        const auto program = processes.program_view(id);
+        for (const auto& sensitivity : program.static_sensitivity()) {
+            if (sensitivity.width != 0U)
+                mark_signal(sensitivity.signal, false);
+        }
+    }
 
     for (const auto& path : module_paths) {
         for (const auto& source : path.sources) {
@@ -2148,17 +3543,72 @@ void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
     }
 }
 
+void Interpreter::Impl::build_native_signal_publication_shape_certificate()
+    noexcept
+{
+    native_signal_publication_shape_certificate.clear();
+    if (native_signal_dependencies_unknown
+        || native_signal_dependency_mask.size() != signals.size()
+        || (requires_sampled_values
+            && (sampled_value_dependencies_unknown
+                || sampled_value_dependency_mask.size() != signals.size()))
+        || signal_container_aliases.size() != signals.size()
+        || signal_container_element_aliases.size() != signals.size()
+        || signal_container_aggregate_aliases.size() != signals.size()
+        || (has_bidirectional_switches
+            && (switch_endpoint_adjacency.size() != signals.size()
+                || switch_control_adjacency.size() != signals.size()))) {
+        return;
+    }
+
+    try {
+        std::vector<std::uint8_t> prepared(signals.size(), 0U);
+        for (std::size_t index = 0U; index < signals.size(); ++index) {
+            if (native_signal_dependency_mask[index] != 0U
+                || (requires_sampled_values
+                    && sampled_value_dependency_mask[index] != 0U)
+                || !signal_container_aliases[index].empty()
+                || signal_container_element_aliases[index]
+                || signal_container_aggregate_aliases[index]) {
+                continue;
+            }
+            if (has_bidirectional_switches
+                && (!switch_endpoint_adjacency[index].empty()
+                    || !switch_control_adjacency[index].empty())) {
+                continue;
+            }
+            prepared[index] = 1U;
+        }
+        native_signal_publication_shape_certificate.swap(prepared);
+    } catch (...) {
+        // The certificate only permits an optimization. Allocation or
+        // topology-shape failures leave every signal on checked publication.
+        native_signal_publication_shape_certificate.clear();
+    }
+}
+
 bool Interpreter::Impl::can_publish_native_word_prevalidated(
     const SignalId signal_id,
     const ProcessId process) noexcept
 {
-    if (signal_id >= signals.size()
+    const bool shape_certified
+        = signal_id < signals.size()
+        && signal_id < native_signal_publication_shape_certificate.size()
+        && native_signal_publication_shape_certificate[signal_id] != 0U;
+    if (native_phase_profile_enabled) {
+        if (shape_certified) {
+            ++native_phase_profile_shape_certificate_hits;
+        } else {
+            ++native_phase_profile_shape_certificate_misses;
+        }
+    }
+    if (!shape_certified
         || signal_id >= direct_single_driver_routes.size()
         || signal_id >= dynamic_fanout.size()
         || signal_id >= signal_container_aliases.size()
-        || native_signal_has_runtime_dependency(signal_id)
-        || has_dynamic_waits(signal_id)
-        || !signal_container_aliases[signal_id].empty()) {
+        || signals[signal_id].public_value_reference_exposed
+        || monitor_watches(signal_id)
+        || has_dynamic_waits(signal_id)) {
         if (native_phase_profile_enabled) {
             ++native_phase_profile_rejected_structure;
         }
@@ -2244,7 +3694,8 @@ bool Interpreter::Impl::can_publish_blocking_word(
         }
     } else if (signal_change_hook || stored_signal_change_hook
         || driver_change_hook || scalar_signal_change_hook
-        || container_object_change_hook) {
+        || container_object_change_hook
+        || container_element_change_hook) {
         return false;
     }
     const auto& signal = signals[signal_id];
@@ -2262,10 +3713,25 @@ bool Interpreter::Impl::can_publish_blocking_word(
 
 void Interpreter::Impl::publish_native_word(
     const SignalId signal_id,
-    Logic4Word value)
+    Logic4Word value,
+    const SignalChangeOrigin origin)
 {
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
+
+    const auto wide_offset = direct_wide_signal_offsets[signal_id];
+    RegionAuthoritativeComponentState* a4_state { };
+    ProcessId a4_owner { };
+    const bool use_a4_direct_publication
+        = prepare_native_a4_single_owner_publication(*this, signal_id,
+            ValueKind::logic4, ResolutionKind::sv_wire, a4_state, a4_owner);
+    if (!use_a4_direct_publication) {
+        prepare_region_authoritative_write(signal_id);
+    }
+    note_region_authoritative_mirror();
+
     const bool has_static_fanout = !static_fanout_for(signal_id).empty();
-    note_signal_transaction(signal_id, has_static_fanout);
+    note_signal_transaction(signal_id, has_static_fanout, origin,
+        use_a4_direct_publication);
     const auto width = signals[signal_id].initial_value.width();
     const auto mask = width == 64U
         ? std::numeric_limits<std::uint64_t>::max()
@@ -2279,33 +3745,82 @@ void Interpreter::Impl::publish_native_word(
         return;
     }
 
+    std::optional<PackedLogic4> packed_value;
+    if (use_a4_direct_publication) {
+        packed_value.emplace(PackedLogic4::from_aval_bval(
+            width, value.aval, value.bval));
+    }
+
+    completed_callback_observation_generation = 0U;
     direct_signal_last_aval[signal_id] = current.aval;
     direct_signal_last_bval[signal_id] = current.bval;
     direct_signal_aval[signal_id] = value.aval;
     direct_signal_bval[signal_id] = value.bval;
-    const auto wide_offset = direct_wide_signal_offsets[signal_id];
     direct_wide_signal_aval[wide_offset] = value.aval;
     direct_wide_signal_bval[wide_offset] = value.bval;
-    direct_signal_materialization_pending[signal_id] = 1U;
+
+    bool a4_direct_publication_completed { };
+    if (use_a4_direct_publication) {
+        a4_direct_publication_completed
+            = publish_native_a4_single_owner_value(
+                *this, signal_id, a4_state, a4_owner, *packed_value);
+        if (!a4_direct_publication_completed) {
+            request_full_region_recertification();
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal_id], true);
+        }
+    }
+
+    if (a4_direct_publication_completed) {
+        mark_region_value_change(signal_id,
+            signal_last_values[signal_id], signals[signal_id].initial_value);
+    } else {
+        direct_signal_materialization_pending[signal_id] = 1U;
+        if (use_a4_direct_publication) {
+            materialize_direct_signal(signal_id);
+        }
+        if (auto* const state
+            = region_authoritative_state_for_signal(signal_id)) {
+            materialize_direct_signal(signal_id);
+            if (state->values().packed_slots_bound()
+                && systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+            }
+            state->values().mirror_logic4_word(signal_id, current, value,
+                driven_values[signal_id].unchecked_low_word());
+            const auto& route = direct_single_driver_routes[signal_id];
+            if (route.active) {
+                if (const auto* const record
+                    = direct_single_driver_record(signal_id)) {
+                    state->values().mirror_owner(
+                        signal_id, route.process, record->value);
+                }
+            }
+            if (!state->valid()) {
+                request_full_region_recertification();
+                demote_region_authoritative_slots(
+                    region_authoritative_component_by_signal[signal_id], true);
+            }
+            mark_region_value_change(signal_id,
+                signal_last_values[signal_id],
+                signals[signal_id].initial_value);
+        }
+    }
 
     ++signal_value_revisions[signal_id];
+    note_aggregate_leaf_current_change(signal_id);
     if (signal_value_revisions[signal_id] == 0U) {
         signal_value_revisions[signal_id] = 1U;
         std::ranges::fill(
             container_materialized_revisions, std::nullopt);
     }
-    signal_events[signal_id]
-        = std::pair { scheduler.now(), scheduler.delta() + 1U };
+    record_signal_event(
+        signal_id, scheduler.delta() + 1U, origin);
     scheduler.note_signal_change(signal_id);
 
     if (!has_static_fanout) {
         return;
     }
-    if (private_signal_bridge_active(signal_id)) {
-        notify_private_signal_bridge(signal_id);
-        return;
-    }
-
     const auto decode_low = [](const Logic4Word word) {
         const bool aval = (word.aval & UINT64_C(1)) != 0U;
         const bool bval = (word.bval & UINT64_C(1)) != 0U;
@@ -2322,15 +3837,16 @@ void Interpreter::Impl::publish_native_word(
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
     }
-    notify_static_value_change(signal_id, transition, true);
+    notify_static_value_change(
+        signal_id, transition, true, origin, true);
 }
 
 void Interpreter::Impl::publish_native_logic9_word(
     const SignalId signal_id,
-    Logic9Word value)
+    Logic9Word value,
+    const SignalChangeOrigin origin)
 {
-    const bool has_static_fanout = !static_fanout_for(signal_id).empty();
-    note_signal_transaction(signal_id, has_static_fanout);
+    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     const auto width = signals[signal_id].initial_value.width();
     const auto mask = width == 64U
         ? std::numeric_limits<std::uint64_t>::max()
@@ -2339,6 +3855,24 @@ void Interpreter::Impl::publish_native_logic9_word(
     for (auto& plane : value.planes) {
         plane &= mask;
     }
+
+    RegionAuthoritativeComponentState* a4_state { };
+    ProcessId a4_owner { };
+    const bool use_a4_direct_publication
+        = value.has_canonical_codes()
+        && prepare_native_a4_single_owner_publication(*this, signal_id,
+            ValueKind::logic9, ResolutionKind::std_logic, a4_state, a4_owner);
+    if (!use_a4_direct_publication) {
+        prepare_region_authoritative_write(signal_id);
+    }
+    note_region_authoritative_mirror();
+    const bool has_static_fanout = !static_fanout_for(signal_id).empty();
+    note_signal_transaction(signal_id, has_static_fanout, origin,
+        use_a4_direct_publication);
+
+    // Preserve the checked runtime value even if a raw native plane contains
+    // a reserved code. The A4 mirror declines this component until a later
+    // quiet-point snapshot can seed valid checked values again.
     const auto current = Logic9Word {
         width,
         { direct_signal_logic9_plane0[signal_id],
@@ -2354,6 +3888,11 @@ void Interpreter::Impl::publish_native_logic9_word(
         == 0U) {
         return;
     }
+    completed_callback_observation_generation = 0U;
+    std::optional<PackedLogic4> packed_value;
+    if (use_a4_direct_publication) {
+        packed_value.emplace(PackedLogic4::from_logic9_word(value));
+    }
     direct_signal_last_logic9_plane0[signal_id] = current.planes[0];
     direct_signal_last_logic9_plane1[signal_id] = current.planes[1];
     direct_signal_last_logic9_plane2[signal_id] = current.planes[2];
@@ -2362,26 +3901,74 @@ void Interpreter::Impl::publish_native_logic9_word(
     direct_signal_logic9_plane1[signal_id] = value.planes[1];
     direct_signal_logic9_plane2[signal_id] = value.planes[2];
     direct_signal_logic9_plane3[signal_id] = value.planes[3];
-    direct_signal_materialization_pending[signal_id] = 1U;
+
+    const auto wide_offset = direct_wide_signal_offsets[signal_id];
+    bool a4_direct_publication_completed { };
+    if (use_a4_direct_publication) {
+        direct_wide_signal_aval[wide_offset] = value.planes[0U];
+        direct_wide_signal_bval[wide_offset] = value.planes[1U];
+        direct_wide_signal_logic9_plane2[wide_offset] = value.planes[2U];
+        direct_wide_signal_logic9_plane3[wide_offset] = value.planes[3U];
+        a4_direct_publication_completed
+            = publish_native_a4_single_owner_value(
+                *this, signal_id, a4_state, a4_owner, *packed_value);
+        if (!a4_direct_publication_completed) {
+            request_full_region_recertification();
+            demote_region_authoritative_slots(
+                region_authoritative_component_by_signal[signal_id], true);
+        }
+    }
+
+    if (!a4_direct_publication_completed) {
+        direct_signal_materialization_pending[signal_id] = 1U;
+        if (use_a4_direct_publication) {
+            materialize_direct_signal(signal_id);
+        }
+        if (auto* const state
+            = region_authoritative_state_for_signal(signal_id)) {
+            materialize_direct_signal(signal_id);
+            if (state->values().packed_slots_bound()
+                && systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_a4_authoritative_slot_writes;
+            }
+            state->values().mirror_logic9_word(signal_id, current, value,
+                driven_values[signal_id].logic9_low_word());
+            const auto& route = direct_single_driver_routes[signal_id];
+            if (route.active) {
+                if (const auto* const record
+                    = direct_single_driver_record(signal_id)) {
+                    state->values().mirror_owner(
+                        signal_id, route.process, record->value);
+                }
+            }
+            if (!state->valid()) {
+                request_full_region_recertification();
+                demote_region_authoritative_slots(
+                    region_authoritative_component_by_signal[signal_id],
+                    true);
+            }
+            mark_region_value_change(signal_id,
+                signal_last_values[signal_id], signals[signal_id].initial_value);
+        }
+    } else {
+        mark_region_value_change(signal_id,
+            signal_last_values[signal_id], signals[signal_id].initial_value);
+    }
 
     ++signal_value_revisions[signal_id];
+    note_aggregate_leaf_current_change(signal_id);
     if (signal_value_revisions[signal_id] == 0U) {
         signal_value_revisions[signal_id] = 1U;
         std::ranges::fill(
             container_materialized_revisions, std::nullopt);
     }
-    signal_events[signal_id]
-        = std::pair { scheduler.now(), scheduler.delta() + 1U };
+    record_signal_event(
+        signal_id, scheduler.delta() + 1U, origin);
     scheduler.note_signal_change(signal_id);
 
     if (!has_static_fanout) {
         return;
     }
-    if (private_signal_bridge_active(signal_id)) {
-        notify_private_signal_bridge(signal_id);
-        return;
-    }
-
     const auto decode_low = [](const Logic9Word& word) {
         std::uint8_t encoded { };
         for (std::size_t plane = 0; plane < word.planes.size(); ++plane) {
@@ -2404,15 +3991,51 @@ void Interpreter::Impl::publish_native_logic9_word(
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
     }
-    notify_static_value_change(signal_id, transition);
+    notify_static_value_change(
+        signal_id, transition, false, origin, true);
 }
 
 void Interpreter::Impl::note_signal_transaction(
     const SignalId signal_id,
-    const bool notify_fanout)
+    const bool notify_fanout,
+    const SignalChangeOrigin origin,
+    const bool authoritative_write_prepared)
 {
+    if (!authoritative_write_prepared) {
+        prepare_region_authoritative_write(signal_id);
+        mirror_region_stored(signal_id);
+    }
+    if (notify_fanout) {
+        if (auto* const region_state
+            = region_authoritative_state_for_signal(signal_id)) {
+            if (systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_a4_transaction_marks;
+            }
+            region_state->fanout().mark_transaction(
+                signal_id, region_state->readiness());
+        }
+    }
+    scheduler.note_signal_transaction(signal_id);
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
     signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
+    if (signal_id < signal_container_element_aliases.size()
+        && signal_container_element_aliases[signal_id]) {
+        const auto object
+            = signal_container_element_aliases[signal_id]->first;
+        if (object < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[object]) {
+            const auto proxy
+                = container_aggregate_signal_aliases[object]->signal;
+            auto& batch = aggregate_signal_batches[proxy];
+            if (batch.depth != 0U) {
+                batch.transaction_changed = true;
+                batch.notify_fanout = batch.notify_fanout || notify_fanout;
+                batch.origin = origin;
+            } else {
+                note_signal_transaction(proxy, notify_fanout, origin);
+            }
+        }
+    }
     const auto transaction_fanout
         = static_fanout_indices_for(signal_id, EdgeKind::transaction);
     if (notify_fanout && !transaction_fanout.empty()) {
@@ -2421,8 +4044,17 @@ void Interpreter::Impl::note_signal_transaction(
         for (const auto entry_index : transaction_fanout) {
             const auto& sensitivity = static_fanout_entries[entry_index];
             auto& triggered_process = get_process(sensitivity.process);
-            triggered_process.static_trigger_mask
-                |= sensitivity.static_trigger_mask;
+            std::uint64_t grouped_trigger_mask { };
+            if (region_take_ready(signal_id, sensitivity.process,
+                    grouped_trigger_mask)) {
+                triggered_process.static_trigger_mask
+                    |= grouped_trigger_mask;
+            } else {
+                triggered_process.static_trigger_mask
+                    |= sensitivity.static_trigger_mask;
+            }
+            merge_generic_frontier_ready_mask(sensitivity.process,
+                triggered_process.static_trigger_mask);
             const auto cohort
                 = sensitivity.process
                         < static_sensitivity_cohort_by_process.size()
@@ -2433,15 +4065,175 @@ void Interpreter::Impl::note_signal_transaction(
                 && static_sensitivity_cohorts[cohort].members.size()
                     >= 2U) {
                 auto& grouped = static_sensitivity_cohorts[cohort];
+                bool all_generic_update_members =
+                    origin.process_domain == ProcessSchedulingDomain::generic
+                    && triggered_process.program().scheduling_domain()
+                        == ProcessSchedulingDomain::generic
+                    && region_graph.has_value();
+                if (all_generic_update_members) {
+                    const auto& graph_processes = region_graph->processes();
+                    for (const auto member : grouped.members) {
+                        if (member >= graph_processes.size()
+                            || graph_processes[member].scheduling_domain
+                                != ProcessSchedulingDomain::generic
+                            || graph_processes[member].update_kind
+                                != RegionUpdateKind::generic) {
+                            all_generic_update_members = false;
+                            break;
+                        }
+                    }
+                }
+                if (all_generic_update_members) {
+                    if (triggered_process.waiting_on_static) {
+                        queue_static_next_delta(sensitivity.process, origin);
+                    }
+                    continue;
+                }
                 if (grouped.fanout_visit != visit) {
                     grouped.fanout_visit = visit;
-                    queue_static_cohort_next_delta(cohort);
+                    if (origin.process_domain
+                            == ProcessSchedulingDomain::generic
+                        && triggered_process.program().scheduling_domain()
+                            == ProcessSchedulingDomain::generic) {
+                        queue_static_cohort_next_delta(cohort);
+                    } else {
+                        for (const auto member : grouped.members) {
+                            auto& candidate = get_process(member);
+                            if (candidate.waiting_on_static) {
+                                queue_static_next_delta(member, origin);
+                            }
+                        }
+                    }
                 }
                 continue;
             }
             auto& process = get_process(sensitivity.process);
             if (process.waiting_on_static) {
-                queue_static_next_delta(sensitivity.process);
+                queue_static_next_delta(sensitivity.process, origin);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::publish_aggregate_leaf_value_change(
+    const SignalId signal_id,
+    const bool notify_fanout,
+    const SignalChangeOrigin origin)
+{
+    if (signal_id >= signal_container_element_aliases.size()
+        || !signal_container_element_aliases[signal_id]) {
+        return;
+    }
+    const auto object
+        = signal_container_element_aliases[signal_id]->first;
+    if (object >= container_aggregate_signal_aliases.size()
+        || !container_aggregate_signal_aliases[object]) {
+        return;
+    }
+    const auto proxy = container_aggregate_signal_aliases[object]->signal;
+    auto& batch = aggregate_signal_batches[proxy];
+    if (batch.depth != 0U) {
+        batch.changed = true;
+        batch.notify_fanout = batch.notify_fanout || notify_fanout;
+        batch.origin = origin;
+        return;
+    }
+    publish_aggregate_signal_value_change(proxy, notify_fanout, origin);
+}
+
+void Interpreter::Impl::publish_aggregate_signal_value_change(
+    const SignalId proxy,
+    const bool notify_fanout,
+    const SignalChangeOrigin origin,
+    std::exception_ptr* observer_error,
+    const bool event_prepared)
+{
+    prepare_region_authoritative_write(proxy);
+    // Whole-family writes can preinstall the stamp and history before traces.
+    if (!event_prepared) {
+        record_signal_event(proxy, scheduler.delta() + 1U, origin);
+    }
+    scheduler.note_signal_change(proxy);
+
+    if (observer_error == nullptr) {
+        const auto& previous = aggregate_signal_last_value(proxy);
+        const auto& current = aggregate_signal_current_value(proxy);
+        evaluate_module_timing_checks(proxy, previous, current);
+        if (signal_change_hook) {
+            signal_change_hook(proxy, current, scheduler.now());
+        }
+        if (monitor_watches(proxy)) {
+            schedule_monitor_publication();
+        }
+        if (!notify_fanout) {
+            return;
+        }
+        const auto static_entries = static_fanout_for(proxy);
+        const auto dynamic_entries = dynamic_fanout.at(proxy);
+        if (static_entries.empty() && dynamic_entries.empty()) {
+            return;
+        }
+        signals[proxy].initial_value = current;
+        signal_last_values[proxy] = previous;
+        refresh_direct_signal_planes(proxy);
+        notify_static_value_change(proxy, { }, false, origin);
+        for (const auto& registration : dynamic_entries) {
+            if (registration.edge != EdgeKind::any) {
+                continue;
+            }
+            if (registration.process >= processes.size()) {
+                continue;
+            }
+            auto& process = get_process(registration.process);
+            if (dynamic_wait_satisfied(process, proxy, registration)) {
+                mark_dynamic_event_resume(process);
+                queue_next_delta(registration.process, origin);
+            }
+        }
+        return;
+    }
+
+    const auto& previous = aggregate_signal_last_value(proxy);
+    const auto& current = aggregate_signal_current_value(proxy);
+    std::optional<PackedLogic4> observer_value;
+    if (signal_change_hook) {
+        observer_value.emplace(current);
+    }
+    evaluate_module_timing_checks(proxy, previous, current);
+    if (monitor_watches(proxy)) {
+        schedule_monitor_publication();
+    }
+    if (notify_fanout) {
+        const auto static_entries = static_fanout_for(proxy);
+        const auto dynamic_entries = dynamic_fanout.at(proxy);
+        if (!static_entries.empty() || !dynamic_entries.empty()) {
+            signals[proxy].initial_value = current;
+            signal_last_values[proxy] = previous;
+            refresh_direct_signal_planes(proxy);
+            notify_static_value_change(proxy, { }, false, origin);
+            for (const auto& registration : dynamic_entries) {
+                if (registration.edge != EdgeKind::any) {
+                    continue;
+                }
+                if (registration.process >= processes.size()) {
+                    continue;
+                }
+                auto& process = get_process(registration.process);
+                if (dynamic_wait_satisfied(process, proxy, registration)) {
+                    mark_dynamic_event_resume(process);
+                    queue_next_delta(registration.process, origin);
+                }
+            }
+        }
+    }
+
+    if (observer_value) {
+        try {
+            signal_change_hook(
+                proxy, *observer_value, scheduler.now());
+        } catch (...) {
+            if (!*observer_error) {
+                *observer_error = std::current_exception();
             }
         }
     }
@@ -2449,42 +4241,61 @@ void Interpreter::Impl::note_signal_transaction(
 
 void Interpreter::Impl::publish_value_change(
     const SignalId signal_id,
-    const bool notify_fanout)
+    const bool notify_fanout,
+    const SignalChangeOrigin origin,
+    const bool state_prepared)
 {
     auto& signal = signals[signal_id];
     const auto& old_value = signal_last_values[signal_id];
-    ++signal_value_revisions[signal_id];
-    if (signal_value_revisions[signal_id] == 0U) {
-        signal_value_revisions[signal_id] = 1U;
-        std::ranges::fill(
-            container_materialized_revisions, std::nullopt);
+    if (!state_prepared) {
+        ++signal_value_revisions[signal_id];
+        note_aggregate_leaf_current_change(signal_id);
+        if (signal_value_revisions[signal_id] == 0U) {
+            signal_value_revisions[signal_id] = 1U;
+            std::ranges::fill(
+                container_materialized_revisions, std::nullopt);
+        }
+        record_signal_event(
+            signal_id, scheduler.delta() + 1U, origin);
     }
-    signal_events[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
+    if (notify_fanout) {
+        mark_region_value_change(
+            signal_id, old_value, signal.initial_value);
+    }
     scheduler.note_signal_change(signal_id);
     evaluate_module_timing_checks(signal_id, old_value, signal.initial_value);
-    if (signal_change_hook) {
+    auto* alias_observer = container_alias_leaf_observer(signal_id);
+    if (signal_change_hook && alias_observer) {
+        alias_observer->current_changed = true;
+        const auto object
+            = signal_container_element_aliases[signal_id]->first;
+        container_alias_write_batches[object].frames.back().changed = true;
+    } else if (signal_change_hook) {
         signal_change_hook(signal_id, signal.initial_value, scheduler.now());
     }
     if (scalar_signal_change_hook
         && signal.systemverilog_scalar != SystemVerilogScalarKind::None) {
-        const auto scalar = decode_systemverilog_scalar_payload(
-            signal.initial_value, signal.systemverilog_scalar);
-        if (!scalar) {
-            throw std::logic_error {
-                "SimIR scalar signal published an invalid payload"
-            };
+        if (alias_observer) {
+            alias_observer->scalar_changed = true;
+        } else {
+            const auto scalar = decode_systemverilog_scalar_payload(
+                signal.initial_value, signal.systemverilog_scalar);
+            if (!scalar) {
+                throw std::logic_error {
+                    "SimIR scalar signal published an invalid payload"
+                };
+            }
+            scalar_signal_change_hook(
+                signal_id, scalar.value, scheduler.now());
         }
-        scalar_signal_change_hook(signal_id, scalar.value, scheduler.now());
     }
     if (monitor_watches(signal_id)) {
         schedule_monitor_publication();
     }
 
+    publish_aggregate_leaf_value_change(signal_id, notify_fanout, origin);
+
     if (notify_fanout) {
-        if (private_signal_bridge_active(signal_id)) {
-            notify_private_signal_bridge(signal_id);
-            return;
-        }
         auto transition = StaticTransitionMatches { };
         bool transition_decoded { };
         const bool has_static_edge_fanout
@@ -2498,7 +4309,8 @@ void Interpreter::Impl::publish_value_change(
                 old_value.get(0), signal.initial_value.get(0));
             transition_decoded = true;
         }
-        notify_static_value_change(signal_id, transition);
+        notify_static_value_change(
+            signal_id, transition, false, origin, true);
 
         // Copy because queue_next_delta removes a process from every dynamic list.
         const auto dynamic = dynamic_fanout[signal_id];
@@ -2524,7 +4336,7 @@ void Interpreter::Impl::publish_value_change(
             if (dynamic_wait_satisfied(
                     process, signal_id, registration)) {
                 mark_dynamic_event_resume(process);
-                queue_next_delta(registration.process);
+                queue_next_delta(registration.process, origin);
             }
         }
     }

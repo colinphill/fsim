@@ -1,5 +1,798 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
+> **Cache252 current source checkpoint — 2026-10-04 08:58 UTC.**
+> The reviewed alias-leaf boundary classifier (`9f71e1c9`, with mechanical
+> compile repair `62050795` to live `simir_region_program.cpp` `81075e51`),
+> SV exact-full-width boundary planner (`72174a09`, candidate `df7eb80c`),
+> and compiler companion (`55f3401a`, candidate `36d2731f`) are integrated.
+> Release fsim/compiler targets built 767/767 and
+> `fsim.llvm.region-frontier` passed (`/tmp/fsim-alias-boundary-compiler-test-r1.log`,
+> SHA-256 `72d63391`). The new graph/app/failure companions have not yet run.
+> A separate fresh-cache canonical O2 startup diagnostic on this source
+> found zero preparation declines, but activation programs fell 422 to 410,
+> backend pool entries 26 to 20, and SV V2 runtimes remained 20/39 with zero
+> native member dispatches (`/tmp/fsim-alias-boundary-startup-route-r1/simulate.stderr`,
+> SHA-256 `0d03c8f5`). The six formerly rejected kernels now disappear before
+> preparation; this is an unresolved admission regression, not V2 route
+> success. The preceding 92/92 coherent gate predates this alias change and
+> is not current-source qualification. A bounded classifier rejection census
+> is pending. The 08:21 checkpoint below is historical. Full canonical
+> original/mixed parity, paired Wall, and hosted CI remain unqualified.
+
+> **Cache252 historical source checkpoint — 2026-10-04 08:21 UTC.**
+> Host full-width admission, the packed-owner binding index, local
+> wide-disjoint eligibility context, and the synthetic full-width native
+> route witness are integrated. Release all-target built 2066/2066 and the
+> exact coherent selector passed 92/92 on that semantic source
+> (`/tmp/fsim-host-index-context-coherent92/test.log`, SHA-256 `3c65fd60`).
+> Later profile-only probes found the six remaining 36-member V2 preparation
+> declines at `prepared-successor-mapping-invalid`. Every first failing edge
+> is an aliased 8-bit internal leaf whose access inventory is complete but
+> whose grouped and prepared successor maps are empty
+> (`/tmp/fsim-frontier-prepare-reason-startup-r3/simulate.stderr`, SHA-256
+> `eb5d0d19`). Source inspection attributes this to structural alias leaves
+> entering `kernel.internal_signals` while grouped-fanout publication excludes
+> aliased signals. The guard remains intact; this establishes a missing V2
+> route, not a simulation-value failure. The two verbose diagnostic patches
+> were removed exactly; the basic bounded decline-reason census remains.
+> The 08:00 checkpoint below is historical. Canonical original/mixed
+> transcript parity, paired Wall, and hosted CI remain unqualified.
+
+> **Cache252 historical source checkpoint — 2026-10-04 08:00 UTC.**
+> Reviewed host full-width predicates (`6c754258`), packed-owner index
+> (`2b728049`), and local wide-disjoint eligibility context (`1ff11476`)
+> are integrated. The synthetic pre-registration `(0,9)` host witness
+> (`18fbb0ab`) passed in `fsim.application.native-frontier-random-dag`;
+> it asserts actual native dispatch and strict parsed `(0,8)` fallback,
+> without claiming a parsed exact-full-width tuple. Release all-target built
+> 2066/2066 and the exact coherent 92-name selector passed 92/92
+> (`/tmp/fsim-host-index-context-coherent92/test.log`, SHA-256 `3c65fd60`).
+> The profile-only preparation-reason patch (`2c8eb049`) then built and
+> passed an observation smoke test. A separate fresh-cache, 15-second
+> cooperative startup diagnostic found the same six 36-member components
+> declining at `prepared-successor-mapping-invalid`
+> (`/tmp/fsim-frontier-prepare-reason-startup-r1/simulate.stderr`, SHA-256
+> `41861158`). V2 native dispatch on the canonical workload therefore remains
+> unproven; this diagnostic is not a full-parity or speed result. The earlier
+> owner-slot sample changed from 25.48% to 3.71% self across different
+> prefixes, which is call-path evidence only. The 07:43 checkpoint below is
+> historical. Full canonical original/mixed parity, paired Wall, and hosted
+> CI remain unqualified.
+
+> **Cache252 historical source checkpoint — 2026-10-04 07:43 UTC.**
+> The reviewed host exact-full-width predicates (`6c754258`), packed-owner
+> binding index (`2b728049`), and stack-local wide-disjoint eligibility
+> context (`1ff11476`) are integrated. The context source passed a Release
+> fsim build and 14/14 affected A4, native, alias, observation, blocking,
+> and failure gates (`/tmp/fsim-wide-disjoint-context-focused14-test-r1.log`,
+> SHA-256 `653a359d`). The prior 92/92 coherent run predates these changes;
+> the parsed host full-width route companion is still pending.
+> A pre-context ThinLTO host/index executable is frozen at
+> `cache252-host-fullwidth-owner-slot-candidate-20261004T0735Z` (receipt
+> SHA-256 `c83cd976`, binary `4e5ed7aa`). Its fresh-cache, 60-second
+> cooperative diagnostic still found six 36-member V2 preparation declines,
+> 20 SV runtimes, and zero native V2 member dispatches; A2 forwarding stayed
+> active (`/tmp/fsim-host-fullwidth-owner-slot-quiet-profile-r1/route-summary.json`).
+> The sampled owner-slot self share was 3.71% versus 25.48% in an earlier,
+> different-prefix sample. That supports call-path attribution only, not a
+> throughput gain. The 06:55 checkpoint below is historical. Full canonical
+> original/mixed parity, paired Wall, and hosted CI remain unqualified.
+
+> **Cache252 historical source checkpoint — 2026-10-04 06:55 UTC.**
+> The reviewed fork-child access attestation repair (`93295d61`) and its
+> recertification witness (`df690891`) are integrated. A bounded pre-fix
+> census identified all 12 incomplete records as concrete fork children with
+> inherited bindings (`registered_match=0`, `forked_match=1`). The post-fix
+> census finds 0 incomplete records among 85,559 processes, complete graph
+> access inventory, 450 structural candidates, and 1,249 candidate internal
+> signals (`/tmp/fsim-fork-access-postfix-census-r1/postfix-summary.json`).
+> Current Release all-target build passed 2116/2116 and the exact 92-name
+> coherent selector passed 92/92 in 203.47 seconds
+> (`/tmp/fsim-fork-access-coherent92/test.log`, SHA-256 `a3aea8fd`);
+> `fsim.application.fork` also passed separately. The ThinLTO executable
+> built successfully (binary SHA-256 `b660c46c`) but is not yet frozen as a
+> timing candidate. In the bounded post-fix run A2 forwarding remained
+> active while V2 native member dispatches were still 0; the remaining
+> preparation/precedence gate is under source audit. The 06:15 checkpoint
+> below is historical and its fork-mismatch hypothesis is now measured and
+> repaired. Full canonical original/mixed parity, paired Wall, and hosted CI
+> remain unqualified.
+
+> **Cache252 historical source checkpoint — 2026-10-04 06:15 UTC.**
+> Exact-full-width internal `Any` sensitivity is now admitted under a scoped
+> frontier cache key; strict internal subranges remain rejected. The reviewed
+> compiler positive/equivalence/negative companion passed. The pre-Slot source
+> built all Release targets (2087/2087) and passed the exact coherent 92-name
+> selector (92/92; `/tmp/fsim-scheduling-origin-fullwidth-coherent92/test.log`).
+> The later Slot-domain accessor cache is the current live runtime source
+> (`simir_internal.hpp` `1100081f`, `simir_state.cpp` `0eaba4ca`): its targeted
+> build passed 1009/1009 and focused semantic selector passed 10/10.
+> Its ThinLTO executable is frozen at `cache252-slot-domain-candidate-20261004T0611Z`
+> (receipt `6da392e4`, binary `5351f74c`). A fresh-cache, profiled 30-second
+> cooperative stop on that binary saw zero frontier planner refusals but also
+> zero V2 native member dispatches. Graph access inventory was incomplete for
+> all 1030 components, with 12 unknown-dependency process exclusions; A2
+> forwarding remained active. A fork-child binding mismatch is a source-level
+> hypothesis under audit, with no repair integrated yet. This diagnostic is
+> partial route evidence, not an end-to-end speedup or correctness verdict.
+> The older 05:21 internal-width refusal and 05:08 in-progress preflight
+> statements below describe superseded source and completed historical runs.
+> That prior unprofiled canonical attempt ended at its 601.7-second cutoff
+> with five exact-control summaries, instance 0 incomplete, and mixed unrun.
+> Current-source full canonical parity, paired Wall, and hosted CI remain
+> unqualified.
+
+> **Cache252 frozen-candidate preflight and quiet profile — 2026-10-04 05:21 UTC.**
+> The unprofiled canonical original-case preflight on frozen binary
+> `41a8333f` stopped at the approved 601.7-second supervisor cutoff.
+> Its 9,420,800-byte partial transcript (SHA-256 `b520ddc97fe883579b6f614cf5a2aa1474af1144165fcf4a42dee9d8dd0d67bb`)
+> contains five completed stimulus summaries, all exactly matching the
+> canonical control; instance 0 remained incomplete near ready cycle 36,427,
+> and mixed was not run. This is incomplete parity, not a semantic failure.
+> A separate 90-second quiet diagnostic using the same frozen ThinLTO binary,
+> copied libraries and fresh native cache omitted `+PERF_PREFLIGHT` and
+> captured 20 seconds of userspace cycles with a JIT map. Its strongest
+> sampled self costs were `ProcessTable::program_view` 7.57%,
+> `queue_static_next_delta` 7.47%, `PackedLogic4` storage initialization
+> 7.11%, and native executor resume 7.06%
+> (`/tmp/fsim-geometric-boundary-quiet-profile-r1/active-20s.caller.txt`).
+> The gated frontier refusals now identify intentionally unsupported
+> internal partial sensitivity (offset 0, width 8), distinct from the
+> external ranged boundary newly admitted. The quiet diagnostic has no
+> completed output or phase-summary verdict; it is not paired Wall evidence.
+> Full original/mixed canonical parity and paired throughput remain pending.
+
+> **Cache252 geometric queue and ranged-boundary gate — 2026-10-04 05:08 UTC.**
+> The reviewed WorkQueue geometric-growth repair and scoped external
+> ranged-boundary frontier admission are integrated. Current pins are
+> `scheduler_internal.hpp` `1d8cf179`, frontier planner `275b2d4c`, and
+> frontier compiler `364947be`; the new app witness is `f2dac8b5`.
+> The reused Release all-target build passed 2046/2046. An exact 18-name
+> scheduler/order/failure/allocation selector passed 18/18, the independent
+> compiler frontier and queue-growth failure suites passed, and the
+> deduplicated coherent selector passed 91/91 with only the then-failing
+> boundary app witness excluded (`/tmp/fsim-geometric-boundary-coherent91-test-r1.log`,
+> SHA-256 `6f6e910850771518e1d5bfd70a017dfb6061500c5ed528083b20d700185c99cc`).
+> The corrected app witness then passed separately, establishing passing
+> receipts for all 92 distinct selected names on unchanged production
+> (`/tmp/fsim-boundary-range-readiness-r4-app-test-r1.log`). It retains exact
+> two-member native dispatch, off-slice non-dispatch, four-state and metadata
+> parity. The frontier cache key adds
+> `whole-any+read-only-boundary-ranges-v1`; global cache252, runtime schema71,
+> and HIR revision9 remain unchanged.
+>
+> The rebuilt ThinLTO candidate is frozen at
+> `build/performance-campaign/simulation-architecture/cache252-geometric-boundary-candidate-20261004T0505Z/receipt.json`
+> (receipt SHA-256 `33b9e22047c0c57307a4fc9df88c6b0552e469650c971d740556a13e0f60abd3`,
+> binary SHA-256 `41a8333f8d3b17c3561b7674c2d21274784209e6f8cad32e8ff04a690e791832`).
+> Its untimed full original/mixed canonical preflight is in progress with fresh
+> caches and a 600-second candidate-simulation cap. No current candidate
+> transcript parity, paired Wall, or hosted-CI result is claimed. The
+> separate A1 invalid-index oracle remains **partial external deviation**:
+> XSim reached `$finish` with 12/14 normalized lines matching; IEEE
+> 1800-2023 §7.4.5/Table 7-1 supports the retained X expectations for the
+> two invalid X/Z or out-of-range lines, so expected outputs are unchanged.
+
+> **Cache252 observation and alias checkpoint — 2026-10-04 04:15 UTC.**
+> The reviewed completed-observation cache, alias-family plane slab, and
+> value-only recertification clear are integrated. The corrected native
+> invalidation witness passed, the reused all-target build passed 1937/1937,
+> and the exact current-source coherent selector passed 90/90
+> (`/tmp/fsim-observation-cache-alias-slab-recert-coherent90-test-r1.log`,
+> SHA-256 `901332684f9e19bdc686095726f4b3ab7df317dfb262d37689419fe857b6bef6`).
+> Current runtime pins include `simir_internal.hpp` `d13c8caf`,
+> `simir_region_graph_runtime.cpp` `e0a71034`, and the native-observation
+> test `1310b9a2`. The opt-in compiler refusal diagnostic changes logging
+> only: all six canonical original-case candidate kernels reject a ranged
+> boundary sensitivity at offset 128, width 8, against a present 136-bit
+> Logic4 input; no admission change is claimed.
+>
+> The frozen combined ThinLTO candidate (`cache252-observation-slab-candidate-20261004T0327Z`,
+> binary SHA-256 `7430393b`) predates the later recertification and diagnostic
+> source. Its untimed canonical original-case preflight reached the approved
+> 600-second cutoff: five completed summaries matched the passing control,
+> instance 0 and the mixed case remain incomplete. A separate quiet
+> ThinLTO 20-second CPU sample attributes 32.93% self to scheduler
+> `vector<Entry>::reserve` and 29.22% to variant movement on the
+> SystemVerilog update-enqueue path; it is diagnostic evidence, not paired
+> Wall or full transcript parity. Hosted CI is unqualified.
+
+> **Cache252 recycler coherent gate — 2026-10-04 03:02 UTC.**
+> The exact frozen 90-name selector passed 90/90 on the reviewed recycler and
+> immediate slot-reuse companion source (`/tmp/fsim-readiness-targeted-recycle-coherent90-test-r1.log`,
+> SHA-256 `4a74f71aa2b2eeb527c3575ea1569bee7359d12ca6eeef4f306e03a9d21d3ded`).
+> The preceding all-target build, focused 20-name scheduler/native selector,
+> and companion runtime suite also pass. The existing ThinLTO candidate freeze
+> predates this scheduler repair and its full candidate preflight remains
+> incomplete after the bounded cutoff; rebuild/refreeze and canonical parity
+> are required before any paired throughput decision. No Wall or hosted-CI
+> qualification is claimed.
+
+> **Cache252 targeted-readiness recycle checkpoint — 2026-10-04 02:45 UTC.**
+> The reviewed scheduler change releases an exhausted readiness ticket at its
+> exact cursor-advancement site while retaining the SV phase-drain sweep. It
+> built across the reused all-target tree (2054/2054;
+> `/tmp/fsim-readiness-targeted-recycle-alltarget-build-r1.log`) and passed the
+> exact 20-name scheduler/Generic/SV/native focused selector (20/20;
+> `/tmp/fsim-readiness-targeted-recycle-focused20-test-r1.log`). The approved
+> immediate slot-reuse companion then built and passed its containing
+> `fsim.runtime` suite (`/tmp/fsim-readiness-targeted-recycle-companion-test-r1.log`).
+> No JIT ABI or cache identity changed. The prior compact-validator 90/90
+> receipt and ThinLTO candidate freeze predate this scheduler source change;
+> the frozen candidate's full canonical preflight remains incomplete after a
+> 600-second diagnostic cutoff. A subsequent candidate must be rebuilt and
+> refrozen before paired throughput, and no current-source coherent90 or Wall
+> result is claimed for the recycler revision.
+
+> **Cache252 canonical-preflight diagnostic — 2026-10-04 02:22 UTC.**
+> The configuration-matched ThinLTO `fsim` candidate linked 966/966 and was
+> frozen with source, build, dependency, and cache-identity provenance at
+> `build/performance-campaign/simulation-architecture/cache252-compact-candidate-20261004T0204Z/receipt.json`
+> (receipt SHA-256 `4114d9d68a3295ef8b365496091859a9528e111c5969c61c726059b31ff3d06e`).
+> Untimed full-fixture preflight of the frozen `ede7c24e` control passed
+> original and mixed fsim/Vivado canonical stimulus and correctness parity
+> (`cache252-control-full-preflight-20261004T0206Z`). Candidate original
+> fsim simulation produced a growing partial transcript but was stopped at
+> the approved 600-second diagnostic cutoff before a verdict; mixed was not
+> run (`cache252-candidate-full-preflight-20261004T0208Z`). This is an
+> incomplete candidate preflight, not a correctness failure or paired Wall
+> result. A 20-second userspace cycle sample during that run localized this
+> interval mainly to observation preparation and readiness-ticket recycling
+> (`/tmp/fsim-compact-candidate-original-active-20s.callgraph.txt`). An
+> opt-in no-task generated-entry screen measured the current validator at
+> about 85 microseconds for 65 members and 321 microseconds for 129 members
+> per call, with no baseline-relative claim; its test source was restored
+> byte-for-byte. Current-source coherent90 and strict allocation remain PASS.
+> Canonical candidate parity, call-path attribution and paired throughput
+> remain open; no hosted-CI or throughput claim is made.
+
+> **Cache252 compact-validator coherent gate — 2026-10-04 01:59 UTC.**
+> The compact runtime-pair validator passed the reused Release all-target
+> build (1930/1930; `/tmp/fsim-compact-validator-alltarget-build-r1.log`),
+> the unprofiled 65/129-member Generic O0/O2 fixture (29.05 seconds;
+> `/tmp/fsim-compact-validator-large-unprofiled-test-r1.log`), and the exact
+> current-source 90-name coherent selector (90/90, zero failures;
+> `/tmp/fsim-compact-validator-coherent90-test-r1.log`, SHA-256
+> `39d8957151805bc24a21bed4e7216d1cea6d5c27d7ae6fc1f6d19b43a52aa06f`).
+> The strict warmed allocation gate passed separately on the mirror repair
+> before this codegen change, and passed again among the five affected focused
+> compact-validator gates. Raw-IR and LLVM pass timings remain diagnostic,
+> separate from uninstrumented paired throughput. The ThinLTO candidate link,
+> canonical transcript/fingerprint preflight, runtime-cost comparison and
+> hosted CI remain pending; no throughput result is claimed.
+
+> **Cache252 compact-validator trial checkpoint — 2026-10-04 01:54 UTC.**
+> The reviewed compact runtime-pair validator and mechanical unused-overload
+> removal built in the reused Release tree. Five affected LLVM, native,
+> Generic-failure, strict-allocation, and region-route gates passed
+> (`/tmp/fsim-compact-validator-focused-test-r1.log`). The unprofiled
+> `fsim.application.native-frontier-v2-first-generic` fixture passed its
+> 65/129-member O0/O2 cases in 29.05 seconds
+> (`/tmp/fsim-compact-validator-large-unprofiled-test-r1.log`). A separate
+> profiled raw-IR diagnostic reduced the 65-member frontier from 507,260 to
+> 56,350 instructions and recorded 163.6 ms O2 optimization; the 129-member
+> frontier recorded 109,534 instructions and 315.4 ms O2 optimization. The
+> earlier 120-second baseline process cutoff occurred while 65-member O2
+> InstCombine was active; it did not reach 129 members. These are compile
+> diagnostics, not paired throughput timings. The earlier 90/90 coherent
+> selector and strict warmed allocation gate passed before this codegen trial;
+> broader post-trial regression and runtime-cost comparison are pending. The
+> scoped frontier validator identity changed without a global cache252 bump.
+> No benchmark or hosted-CI claim is made.
+
+> **Cache252 coherent correctness checkpoint — 2026-10-04 01:38 UTC.**
+> The reviewed A4 mirror role-source repair and COW-failure companion built
+> cleanly, and strict `fsim.application.native-frontier-steady-allocation`
+> passed its unchanged warmed width 1/65/129 O0/O2 zero-allocation windows
+> (`/tmp/fsim-a4-generic-bridge-route-test-r1.log`). A bounded bridge census
+> showed one actual A2 forwarding-member consumption after its saved SV
+> receipt; the test now credits either successful A2 or V2 native work while
+> retaining exact key and interpreter parity. The reused all-target build
+> passed 2119/2119 (`/tmp/fsim-a4-mirror-alltarget-build-r1.log`), followed by
+> the exact 90-name coherent regression selector at 90/90 PASS
+> (`/tmp/fsim-cache252-coherent90-run-20261004/results.log`; selection proved
+> by the pinned name list and CTest index file). The newly added independent
+> range-validation adversarial tests then passed on unchanged codegen via
+> `fsim.llvm.region-frontier`
+> (`/tmp/fsim-frontier-range-validator-baseline-test-r1.log`). A separate
+> 120-second profiling run captured 65-member O2 raw IR and stopped in LLVM
+> InstCombine; it did not reach the 129-member O2 case
+> (`/tmp/fsim-generic129-o2-short-large-diagnostic-r1.log`). The long 129 O2
+> qualification and paired throughput remain outstanding; no timing or
+> hosted-CI claim is made.
+
+> **Cache252 wide-role qualification checkpoint — 2026-10-04 01:05 UTC.**
+> Reviewed A4 owned-snapshot rebinding and its exact wide-slot ownership
+> companion are integrated; `fsim.runtime.a4_wide_slot_ownership` passed
+> (`/tmp/fsim-a4-snapshot-focused-test-r1.log`). The diamond, multioutput,
+> wide failure/retry, and unequal-depth native-region capture helpers now
+> account for deferred private role rows; the clean
+> `fsim.application.native-region-route` gate passed 1/1
+> (`/tmp/fsim-a4-wide-passive-final-test-r1.log`, source SHA
+> `594ebd546c8d9a6c047c056fc11c9249c328d54fd2c838257ccf7b5527931155`).
+> Strict steady allocation remains red: width 65 O0 now has zero allocations
+> with value-only rebind, but width 129 O0 window 0 has 45. A fixed-buffer
+> census and first-allocation LLDB stack locate repeated wide
+> `mirror_region_owner` materialization during private-output publication
+> (`/tmp/fsim-steady-width129-sites-test-r1.log`,
+> `/tmp/fsim-steady-width129-first112-lldb-r2.log`). The next bounded action is
+> a reviewed reuse/ownership repair and unchanged strict gate. The previous
+> 86/90 selector predates these source changes; Generic 129-member O2
+> optimization remains incomplete. No coherent green or throughput claim.
+
+> **Cache252 allocation repair checkpoint — 2026-10-04 00:30 UTC.**
+> The reviewed Generic queue and A4 scratch changes built across all targets
+> with -j12 (2881/2881; `/tmp/fsim-a4-generic-alloc-batch-build-r1.log`).
+> The exact focused selector passed 10/11, including strict Generic 129-member
+> zero-allocation and five-cut failure gates; #289 reached a later diamond
+> assertion after its original O0/O2 native zero-allocation windows passed
+> (`/tmp/fsim-a4-generic-alloc-focused-r1.log`). The diamond helper read
+> passive roles while five private rows remained; a public read flushed all
+> five and produced the expected value/parity
+> (`/tmp/fsim-diamond-public-census-test-r1.log`). Strict steady-allocation
+> #290 passes width 1 but fails the first O0 width-65 window with 1,490
+> allocations (`/tmp/fsim-steady-recert-census-test-r1.log`). Its quiet
+> value-only rebind rejects a retained snapshot on wide_stage0 LAST, then
+> publishes a full generation-6 snapshot
+> (`/tmp/fsim-steady-rebind-guard-test-r2.log`,
+> `/tmp/fsim-steady-a4-binding-test-r1.log`). Temporary probes were restored
+> byte-exactly and their affected targets rebuilt cleanly. The prior 86/90
+> selector remains historical; Generic 129-member O2 optimization is still
+> incomplete. No coherent green, throughput, timing, or hosted-CI claim is
+> made.
+
+> **Cache252 focused repair checkpoint — 2026-10-03 23:32 UTC.**
+> The clog2 startup-bank assertion was corrected from the measured zero
+> compiled processes/modules/cache entries, retaining its exact O0/O2
+> values and scheduling; `fsim.application.expressions` passed
+> (`/tmp/fsim-clog2-startup-bank-test-r1.log`). The masked-route control now
+> explicitly tests the legacy route with region admission disabled, while
+> default VHDL projected widths 1/65/129 require accepted native backend
+> completions and metadata parity. A reused -j12 build passed 826/826 and
+> `fsim.application.core_simulation` plus `fsim.application.vhdl_projected`
+> passed (`/tmp/fsim-341-route-split-build-r1.log`,
+> `/tmp/fsim-341-route-split-test-r1.log`). The preceding 86/90 selector is
+> historical and has not been rerun on these edits. Strict warmed allocation
+> gates #289 (18 per O0 wave) and #456 (65 queue reserves) remain red; the
+> Generic 129-member O2 optimization gate remains incomplete. No coherent
+> green, throughput, timing, or hosted-CI claim is made.
+
+> **Cache252 bounded regression checkpoint — 2026-10-03 23:12 UTC.**
+> Current-source consumer relinking passed 2373/2373
+> (`/tmp/fsim-cache252-postfocused-alltarget-build-r1.log`). The reviewed A1
+> physical-net aggregate read witness was integrated and rebuilt; its existing
+> `sv_containers` case passed. The exact 90-name selector ran 86 passes and
+> four failures (`/tmp/fsim-cache252-coherent90-r1.log`): native-region route
+> #289 and Generic 129-ticket #456 violate strict warmed zero-allocation
+> checks; core simulation #341 has a masked-route counter premise; expressions
+> #350 expects compiled clog2 processes although O0 reports zero. Bounded
+> diagnostic evidence pins #456 to 65 one-step Generic queue reserves after
+> capacity 64, #289 to 18 A4 plane/copy allocations per measured O0 wave,
+> #341 to accepted projected-ticket native commits, and #350 to zero O0
+> compiled modules/processes/cache entries with correct output values
+> (`/tmp/fsim-coherent90-diagnostics-test-r1.log`,
+> `/tmp/fsim-masked-dispatch-diagnostics-test-r2.log`,
+> `/tmp/fsim-generic-queue-capacity-r2.log`,
+> `/tmp/fsim-native-route-alloc-sites-r2.log`). Temporary diagnostics were
+> restored byte-exactly. The Generic 129-member O2 optimization gate remains
+> incomplete after its approved 900-second cutoff. No coherent green,
+> throughput, timing, or hosted-CI claim is made.
+
+> **Cache252 focused checkpoint — 2026-10-03 22:36 UTC.**
+> The clean core prewrite and Generic future-sidecar gates passed
+> (`/tmp/fsim-core-generic-vhdl-companions-focused3-r1.log`). The selected
+> VHDL projected-output guard passed the full projected application test,
+> including the foreign-cut and metadata witness
+> (`/tmp/fsim-vhdl-selected-reentry-r4-focused2-r1.log`). The blocking
+> immediate, precommit-failure, and later native-reentry tests passed together
+> after the scheduler-key/journal-ordinal fixture correction
+> (`/tmp/fsim-a2-blocking-reentry-r5-focused3-r1.log`). These are focused
+> receipts for certified subsets; unsupported cones and observed effects
+> remain on checked execution. The 90-name bounded coherent selector is
+> staged but unrun pending current-source consumer relinking. The Generic
+> 129-member O2 LLVM optimization gate is incomplete after its approved
+> 900-second cutoff; strict warmed allocation gates remain red at their last
+> measured counts. The J-E audit found no further safe deletion
+> (`/tmp/fsim-a3-a4-je-retirement-audit-addendum-r2-20261003.md`). No
+> coherent green, throughput, timing, or hosted-CI claim is made.
+
+> **Cache252 focused checkpoint — 2026-10-03 22:12 UTC.**
+> The clean core prewrite gate and Generic future-sidecar gate passed
+> (`/tmp/fsim-core-generic-vhdl-companions-focused3-r1.log`). The VHDL basic
+> projected ticket and Logic9 gates retain their passing receipts, but the
+> new foreign-cut VHDL witness is red. A bounded trace shows root process 0
+> executes natively, then the retained middle process 1 declines at
+> `valid_outputs`: the whole-kernel scan treats root signal 1's pending update
+> as a collision even though the selected middle output has none
+> (`/tmp/fsim-vhdl-firstdecline-test-r1.log`). Diagnostic source was restored
+> byte-exactly; a selected-output guard repair is under review. Blocking
+> positive, precommit failure, and fused staging pass. The blocking reentry
+> probe now accepts both private rows after completion cancellation cleanup,
+> but its two-row safe-point cut is still missed by the current scheduler
+> ordering (`/tmp/fsim-blocking-reentry-postcancel-census-r1.log`,
+> `/tmp/fsim-blocking-reentry-helper-stage-census-r1.log`). A5 artifact and
+> startup-bank gates passed at their earlier focused integration checkpoint.
+> The Generic 129-member O2
+> gate remains incomplete after the approved 900-second LLVM optimization
+> cutoff, and strict allocation gates remain red at their last measured
+> counts. The J-E retirement audit found no additional safe deletion
+> (`/tmp/fsim-a3-a4-je-retirement-audit-addendum-r2-20261003.md`). The
+> 90-name bounded coherent selector is staged but unrun; there is no coherent
+> green, throughput, timing, or hosted-CI claim.
+
+> **Cache252 A2/A3/A5 focused checkpoint — 2026-10-03 21:33 UTC.**
+> VHDL projected cycle-ticket admission passed after the reviewed scheduling
+> precedence repair, and the existing VHDL Logic9 gate passed
+> (`/tmp/fsim-core-r10-vhdl-precedence-focused6-r1.log`,
+> `/tmp/fsim-vhdl-precedence-logic9-r1.log`). Blocking immediate and precommit
+> failure, fused staging, and Generic update-failure controls also passed that
+> focused run. Generic future-sidecar R2 built, but its existing interleaving
+> test is red: a root now executes natively before the foreign key, while the
+> old fixture expects checked word staging; its two failure controls passed
+> (`/tmp/fsim-generic-future-sidecar-focused3-r1.log`).
+> Core prewrite R9 and the checked-control provider flag built, but the control
+> never advances either root resume counter at the safe point, so its planned
+> boundary update does not queue. The new blocking reentry test reached time 2
+> and observed one private root row followed by journal retirement before the
+> middle row; its required two-row cut was absent. Blocking immediate/failure
+> remained green (`/tmp/fsim-core-prewrite-reentry-focused4-r1.log`,
+> `/tmp/fsim-core-reentry-census-r1.log`,
+> `/tmp/fsim-blocking-reentry-gate-census-r1.log`). Diagnostic source was
+> restored to pinned bytes. The Generic 129-member O2 optimization gate remains
+> incomplete after its approved 900-second cutoff; strict allocation gates
+> remain red at their last measured counts. No coherent green, timing, or CI
+> claim is made.
+
+> **Cache252 A2/A3/A5 focused checkpoint — 2026-10-03 21:04 UTC.**
+> A5 Bit2-to-Logic4 startup CopyRegister and its runtime companion are
+> integrated. The reused affected-target build passed 1107/1107
+> (`/tmp/fsim-a5-vhdl-core-diagnostic-build-r3.log`); artifact phases and
+> constant-driver startup bank passed the exact focused gate
+> (`/tmp/fsim-a5-vhdl-core-focused4-r1.log`). Core runtime remains red in the
+> later stale-role witness; its reviewed successor is pending.
+> The blocking-failure role-baseline repair and VHDL cycle-ticket fixture R7
+> built 774/774 (`/tmp/fsim-a2-blocking-r7-vhdl-r7-build-r1.log`).
+> Blocking positive, the authentic precommit allocation-failure cut, and the
+> shared Generic update-failure control passed 3/4 focused tests
+> (`/tmp/fsim-a2-blocking-r7-vhdl-r7-focused4-r1.log`). VHDL projected still
+> fails: the standalone VPI-omitted run certifies a three-member component and
+> matches interpreter values and metadata, but physical ticket insertion,
+> elision, and direct-dispatch counters all remain zero. The default VPI-enabled
+> control correctly stays on the observed ordinary route. A ticket scheduling
+> source diagnosis is pending; no VHDL route success is claimed.
+> The 65-member Generic interpreter/O0/O2 and 129-member interpreter/O0
+> subcases reached their assertions, but the 129-member O2 LLVM optimization
+> run was interrupted at the approved 900-second diagnostic cutoff, so the
+> full Generic app gate is incomplete. Strict warmed Generic allocation remains
+> red at 65 measured allocations; older native/steady strict gates last
+> measured 18/46. No coherent post-A2/A3 green, throughput, timing, or
+> hosted-CI result is claimed.
+
+> **Cache252 A2/A3 diagnostic checkpoint — 2026-10-03 20:02 UTC.**
+> Generic logical components beyond 64, the parsed blocking precommit-failure
+> witness, and the core receipt correction are integrated. The reused six-target
+> build passed 875/875 (`/tmp/fsim-a3-generic-logical-core-blocking-build-r6.log`).
+> Its exact focused run passed 2/6: parsed blocking positive and the scheduler
+> compact-ticket test passed; Generic native consumption, the later core
+> stale-role witness, the blocking failure cut, and strict warmed Generic
+> zero-allocation remained red
+> (`/tmp/fsim-a3-generic-logical-core-blocking-focused6-r1.log`).
+> Bounded diagnostics found that Generic native admission compared its 64-event
+> staging frame with a 65-event layout maximum, so every member fell back to
+> checked execution. The reviewed bound correction (`d58690a7`) and core
+> stale-role test correction (`c7d7c933`) have since built successfully
+> (`/tmp/fsim-a3-generic-framecap-core-r7-build-r1.log`); their focused run is
+> in progress. The blocking fault fixture did not capture its root-only row
+> cut; its repair remains under review. The strict Generic allocation gate is
+> still red; the earlier measured count was 65 allocations from queue growth.
+> Diagnostic source was restored byte-exact before the latest build. No
+> coherent post-A2/A3 green, throughput, timing, or hosted-CI result is claimed.
+
+> **Cache252 A2/A3 focused checkpoint — 2026-10-03 19:11 UTC.**
+> The driverless blocking alias, shared absence-aware fixture helper, and
+> exact core receipt assertions are integrated. The reused all-target build
+> passed 2432/2432 (`/tmp/fsim-v252-alias-core-helper-all-build-r1.log`).
+> Focused validation passed 5/7: source manifest, A4 state/wide/rebase, and
+> A2 role journal pass; core runtime and parsed blocking positive remain red
+> (`/tmp/fsim-v252-alias-core-helper-focused7-r1.log`). Core's new
+> after-foreign receipt flag is false while the authentic child receipt is
+> captured, retired, and checked exactly once. Parsed blocking now certifies
+> and enters forwarding but its first callback sees bank.active=0 before
+> retirement, so publication declines without private rows
+> (`/tmp/fsim-v252-core-blocking-cut-diag-test-r1.log`,
+> `/tmp/fsim-v252-blocking-publish-stage-test-r2.log`). The diagnostic source
+> is restored byte-exact; the next qualifying build must recompile it.
+> Generic 65/129 auto-sizing and VHDL Logic9 passed focused gates before this
+> alias batch (`/tmp/fsim-a3-generic-auto-counter-test-r1.log`,
+> `/tmp/fsim-v252-vhdl-ufringe-test-r1.log`). The strict warmed Generic
+> 129-ticket gate remains red at 65 allocations from one-entry queue growth;
+> older native/steady allocation gates last measured 18/46. No coherent
+> post-alias full-suite, throughput, timing, or hosted-CI result is claimed.
+
+> **Cache251 A2/A3/A4 focused checkpoint — 2026-10-03 16:54 UTC.**
+> Single-root DAG, arbitrary-root forest, readiness groups beyond 64 members,
+> quiet value-only A4 rebinding (`72e07e7f`), and the physical grouped-ticket
+> pool (`1ccac4ca`) are integrated. The reused all-target build passed
+> 2865/2865 (`/tmp/fsim-a3-pool-a4-fixture-all-build-r1.log`). The current
+> focused selector passed 10/12: core runtime including pool coverage, A4
+> state/Logic9/wide/rebase, observation invalidation, owned-driver demotion,
+> A2 applied-prefix, scheduler group failure, and source manifest pass
+> (`/tmp/fsim-a3-pool-a4-fixture-focused12.log`). Only the two strict
+> allocation gates fail. Before this batch, bounded raw counts found 18 C++
+> allocations in the first O0 native-region window and 46 in the first width-1
+> steady-frontier window (`/tmp/fsim-a4-native-region-alloc-diag-test.log`,
+> `/tmp/fsim-a4-quiet-steady-raw-test.log`); the current focused run did not
+> recount them. The steady fixture now executes its hook-policy control before
+> the allocation loop, and that control passed. A pre-pool diagnostic selector
+> passed 80/83, including random DAG on quiet-rebind source; its VHDL
+> compiled-module-count fixture still awaits the reviewed correction
+> (`/tmp/fsim-a3-a4-quiet-rebind-diagnostic83.log`). The next bounded batch is
+> the VHDL count correction plus reviewed pool/native companions, followed by
+> their exact gates. Native cache v251, compiled-HIR producer 9, and artifact
+> schema 71 are unchanged. No coherent post-A2 green, throughput, or hosted-CI
+> result is claimed.
+>
+> **Cache251 A2 focused repair checkpoint — 2026-10-03 12:06 UTC.**
+> A2 role journaling, checked barriers, V2-authenticated flattened forwarding,
+> narrow pure-cone admission, single-root fanout, and preallocated wide role
+> seeds are integrated without a native-cache, compiled-HIR, or artifact-schema
+> bump. The reused all-target build passed 1920/1920
+> (`/tmp/fsim-a2-width-fanout-wide-reset-build-r2.log`). Its initial affected
+> selector passed 15/20 (`/tmp/fsim-a2-width-fanout-wide-reset-focused20-r1.log`);
+> the repaired six-case selector then passed four cases, including fanout and
+> both A4 state/ownership cases (`/tmp/fsim-a2-six-fixture-repair-focused-r1.log`).
+> The expanded force/deposit app witness passed after capturing the interpreter's
+> actual child scheduler key, and the width 1/64/65/129/256/1024 X/Z and
+> boundary-deposit role-journal witness passed after accounting for resolved-wire
+> startup LAST=Z (`/tmp/fsim-a2-interpreter-width-repair-focused2.log`,
+> `/tmp/fsim-a2-width-z-baseline-test.log`). These are split passing receipts
+> for 19 of those 20 names; `fsim.runtime` remains red at its unequal-depth
+> join route assertion. The earlier coherent 78/78 receipt predates A2. No
+> throughput or hosted-CI result is claimed.
+>
+> **Cache251 A4 checked-rebase prerequisite — 2026-10-03 08:51 UTC.**
+> Versioned A4 storage now has a checked whole-signal group rebase and
+> publication primitive with exact role baselines, late read-pin COW, and
+> no-mutation decline. Narrow-only storage stays on its existing route; A2
+> private admission is not enabled by this prerequisite. The reused all-target
+> build passed 2114/2114, and the focused A4/consumer selector passed 12/12,
+> including the new fault-sweep witness, existing A4 state and owner tests,
+> native sync/boundary, steady allocation, core runtime, and source-package
+> manifest (`/tmp/fsim-cache251-a4-checked-rebase-full-build-r1.log`,
+> `/tmp/fsim-cache251-a4-checked-rebase-focused-r1.log`).
+> `git diff --check` passed. This is focused qualification; the coherent 78/78
+> receipt below predates this A4 source change. No coherent 79-test, throughput,
+> or hosted-CI result is claimed.
+>
+> **Cache251 Generic compact-readiness qualification — 2026-10-03 08:42 UTC.**
+> Eligible Generic V2 components now use one scheduler-owned Active ticket for
+> multiple logical members, with exact receipt keys, foreign-key prefix cuts,
+> checked fallback, and allocation retry preserved. Native cache v251,
+> compiled-HIR producer 9, and artifact schema 71 are unchanged. The reused
+> all-target build passed 2483/2483; after test-only fixture corrections, the
+> shared-support rebuild passed 1786/1786. The repaired focused gate passed
+> 3/3 and one coherent selected gate passed 78/78, including source-package
+> manifest, random DAG, steady allocation, SystemC, compiler frontier, and
+> compact-ticket failure witnesses
+> (`/tmp/fsim-cache251-generic-compact-full-build-r1.log`,
+> `/tmp/fsim-cache251-generic-compact-repair6-full-build-r1.log`,
+> `/tmp/fsim-cache251-generic-compact-repair3-r5.log`,
+> `/tmp/fsim-cache251-generic-compact-consolidated78-r1.log`).
+> `git diff --check` passed. Ordinary routes remain for ineligible components;
+> no throughput or hosted-CI result is claimed. The next major A2 dependency
+> remains default whole-cone register dataflow with private materialization.
+>
+> **Cache251 parked Generic V2 qualification — 2026-10-03 06:53 UTC.**
+> The host-only V2-first construction, A5 constant-slice startup bank, A1 X/Z
+> sensitivity witness, parked Generic completion, and effectful checked-route
+> fallback are integrated. Native cache v251, compiled-HIR producer 9, and
+> artifact schema 71 remain unchanged. The borrowed-process fixture lifetime
+> and SV net-owner setup were corrected without weakening the native gates.
+> The reused-tree all-target build passed 2101/2101
+> (`/tmp/fsim-cache251-parked-effect-full-build-r2.log`); focused Generic and
+> runtime tests passed 6/6, then one coherent selected gate passed 76/76,
+> including the source-package manifest, random DAG, steady allocation,
+> mutation, SystemC, and compiler frontier
+> (`/tmp/fsim-cache251-parked-effect-focused-r1.log`,
+> `/tmp/fsim-cache251-parked-effect-consolidated76-r1.log`).
+> `git diff --check` passed. This is the latest one-shot selected-source
+> receipt; no throughput or hosted-CI result is claimed.
+>
+> The adopted A1 static/range and A5 shared lowering, program/artifact, and
+> compact constant slices have bounded passing gates; unknown dynamic indices
+> retain conservative fallback and the external X/Z index oracle caveat.
+> At this 06:53 checkpoint, compact Generic readiness and A2 private
+> materialization were pending; later checkpoints above supersede that status.
+> The remaining bounded A3 issue is more than 64 distinct physical Generic
+> tickets; its packages are reviewed but not integrated. No further J-E
+> deletion is justified by current replacement evidence.
+
+> **Cache251 Generic Logic9 split qualification — 2026-10-03 05:58 UTC.**
+> Native object cache schema is v251; compiled-HIR producer 9 and artifact
+> schema 71 are unchanged. The approved Generic Logic9 compiler/ABI/runtime,
+> typed positive and allocation-failure, partial-prefix, local-wave policy,
+> and VHDL occurrence-sharing changes were integrated. The official
+> source-package manifest contains 2405 ordered files and 29 exclusions;
+> its CTest gate and the reused-tree all-target build passed
+> (`/tmp/fsim-cache251-final-source-manifest-test.log`,
+> `/tmp/fsim-cache251-full-build-r4.log`, 1933/1933).
+>
+> The focused selector first passed 10/12; the two failures were fixture
+> premises, repaired without changing production semantics. Executor metadata
+> vectors now outlive borrowed spans; resolved Logic9 boundary descriptors
+> expect their authentic sentinel layout owner; the region-disabled checked
+> path verifies its queued Update scratch and exact values instead of native
+> packed pending rows. The three affected Generic tests then passed 3/3
+> (`/tmp/fsim-cache251-generic-three-checked-stage-test.log`). The other 60
+> consolidated cases passed 60/60, including random DAG, steady allocation,
+> mutation, SystemC, and runtime gates
+> (`/tmp/fsim-cache251-consolidated-remaining-r1.log`). Together with the
+> nine unchanged focused passes, these are split current-source receipts for
+> all 72 selected cases, not a one-shot 72/72 run. `git diff --check` passed.
+> No throughput result is claimed; cache246 below remains the latest fully
+> passing one-shot consolidated 55/55 receipt.
+
+> **Cache250 Generic V2 split qualification — 2026-10-03 05:17 UTC.** Native
+> cache schema is v250; compiled-HIR producer 9 and artifact schema 71 remain.
+> The official source-package manifest gate passed with 2401 owned files and
+> 29 exclusions. The initial all-target build passed 1870/1870
+> (`/tmp/fsim-cache250-full-build-r4-20261003.log`). Startup Generic frontier
+> admission and generated zero-mask preflight defects were fixed; the O0/O2
+> positive and compiler gates passed (`/tmp/fsim-cache250-generic-zero-mask-positive-r1.log`,
+> `/tmp/fsim-cache250-generic-zero-mask-compiler-r1.log`). SystemC and restored
+> elaboration gates passed; the scheduler pre-pop repair, 130-task ordering,
+> cold suffix failure, steady allocation, and Generic positive gates passed
+> their focused checks. The separate-input O0/O2 Generic allocation sweep
+> passed with its actual one-task borrowed frontier and ordinary checked
+> suffix (`/tmp/fsim-cache250-one-task-shape-test.log`).
+>
+> The host error channel and direct input-plane, forwarding, prepared-output,
+> and direct-ready failure witnesses passed. The separate-input and shared-input
+> O0/O2 Generic allocation sweeps passed, including propagated failures,
+> exact-key retries, and the optional recovered reservation cut
+> (`/tmp/fsim-cache250-backend-companion-runtime-test-r1.log`,
+> `/tmp/fsim-cache250-shared-r5-test.log`). The coherent all-target host build
+> passed 2010/2010 (`/tmp/fsim-cache250-final-host-full-build-r1.log`). The
+> last one-shot consolidated selector passed 69/71
+> (`/tmp/fsim-cache250-consolidated-r2.log`). Its two test-only stale fallback
+> expectations were repaired and passed separately: Generic runtime #441
+> proved propagated failure, unchanged state, exact-key retry, and native parity
+> (`/tmp/fsim-cache250-final-two-focused-r1.log`); native-region-route #289
+> proved the full cut sweep and runtime-level same-deadline retries while
+> preserving public Simulation fatal-latch semantics
+> (`/tmp/fsim-cache250-native-route-r3-test.log`). All other direct consumers
+> of the changed allocation interposer plus ordinary Generic runtime passed
+> 19/19 (`/tmp/fsim-cache250-interposer-remaining-19-r1.log`). This is a split
+> current-source qualification, not a one-shot consolidated 71/71 or throughput
+> claim. Cache246 below remains the latest fully passing one-shot 55/55 receipt.
+
+> **Pending cache249 / producer9 checkpoint — 2026-10-03 01:41 UTC.** The
+> approved A1 unpacked-struct index, A5 startup-write bank, unsigned-add
+> forwarding, SystemC callback witness, and narrow A4 disjoint-owner changes
+> are integrated. Native cache schema is v249, compiled-HIR producer revision
+> is 9, and artifact schema remains 71. The reused Release tree passed its
+> all-target build (`/tmp/fsim-cache249-full-build-r5-20261002.log`,
+> 1763/1763). The initial focused selector passed compiled-HIR cache,
+> frontier, and SV containers (3/6); corrected startup-bank and A4 ownership
+> gates then passed individually (`/tmp/fsim-cache249-startup-equal-z-test-20261002.log`,
+> `/tmp/fsim-cache249-a4-stimulus-test.log`). The SystemC executor has no
+> certified signal-access binding, so its opaque callback boundary remains
+> checked; the test's stop/resume receipt assertion is being corrected to that
+> route. The VHDL cycle gate passed with a
+> homogeneous unresolved native-positive companion and the existing mixed
+> resolved checked-parity route (`/tmp/fsim-cache249-vhdl-native-fixture-test.log`).
+> No cache249 consolidated or throughput
+> claim is recorded. Cache246 below remains the latest fully passing
+> consolidated receipt.
+
+> **Pending cache248 V2/J-E checkpoint — 2026-10-03 00:31 UTC.** Native
+> cache schema v248 contains the frontier V2 codegen/ABI and bounded J-E
+> static-fuser replacement; artifact schema71 and compiled-HIR producer8 are
+> unchanged. The reused build tree passed its full all-target build
+> (`/tmp/fsim-cache248-v2-je-full-build-resume6-20261002.log`), and the
+> official source-package generator and manifest gate passed with 2391 owned
+> files and 29 exclusions. After the initial 6/15 focused result, the exact
+> prior consolidated selector plus new V2 tests, excluding native-region-route,
+> passed 64/65 (`/tmp/fsim-cache248-consolidated-incomplete-65-20261002.log`).
+> Its sole stale-boundary test failure was an executor-only sampling assumption:
+> the forwarded root reexecuted at fresh native scheduler keys with exact final
+> parity; the repaired `fsim.runtime` focused gate passed
+> (`/tmp/fsim-cache248-final-two-fixture-focused-20261002.log`). J-E cache,
+> frontier V2, random DAG, steady allocation, mutation, preparation, retained
+> stop/resume, Logic9, adapter, boundary, and manifest gates passed in that
+> selector. Native-region-route remains open at a VHDL cycle fixture assumption
+> that a procedurally written SV source has a raw DriverRecord; phase-cut
+> values and metadata already match the interpreter. Cache246 below remains
+> the latest fully passing consolidated 55/55 receipt; no cache248 green or
+> throughput claim is recorded.
+
+> **Qualified cache246 checkpoint — 2026-10-02 19:34 UTC.** The frontier
+> compiler now lowers Concatenate and certified known Logic4 bodies, handles
+> bounded event capacity above 64 entries, authenticates retained next-round
+> commits, and records the pending boundary write through ACK. Native object
+> cache schema v246 is active at `codex/v3` HEAD `751ac08f`; artifact schema71
+> and compiled-HIR producer8 are unchanged. The reused
+> `build/batch188-release-clang22-final` completed its incremental all-target
+> build (1860/1860), focused frontier/schema/ABI/runtime gate (5/5), and fresh
+> consolidated selector (55/55, 42.00 s). Receipts:
+> `/tmp/fsim-cache246-full-build-20261002.log`,
+> `/tmp/fsim-cache246-focused5-20261002.log`, and
+> `/tmp/fsim-cache246-consolidated55-20261002.log`. The native runtime
+> adapter/provider and scheduler target-round addition remain in scratch
+> validation; no throughput result is claimed for this compiler batch.
+
+> **Qualified cache245 checkpoint — 2026-10-02 18:38 UTC.** The compiler-
+> owned native frontier plan, generated entry, cache identity and adversarial
+> frame tests, scheduler capacity/key handling, and A4 write leases are
+> integrated at `codex/v3` HEAD `751ac08f`. Native cache245 is active;
+> artifact schema71 and compiled-HIR producer8 are unchanged. The generated
+> entry passed actual O0/O2 frame execution across Logic4 widths 1, 65, 129,
+> 256, and 1024; the default Simulation runtime adapter remains a separate
+> implementation slice. The reused Release tree built 2717/2717, focused
+> checks passed 5/5, and the exact serial consolidated gate passed 55/55 in
+> 72.68 seconds. The first A4 test run exposed a width-one fixture helper
+> overrun; bounding its phase digits to the signal width made the test pass
+> without a production change. Receipts: `/tmp/fsim-cache245-full-build-20261002.log`,
+> `/tmp/fsim-cache245-focused5-final-20261002.log`, and
+> `/tmp/fsim-cache245-consolidated55-20261002.log`. This is correctness
+> qualification; no paired throughput claim was made.
+
+> **Qualified cache244 checkpoint — 2026-10-02 16:35 UTC.** Direct
+> template/instance artifact rows, lazy facade materialization, corruption and
+> SystemC retention witnesses, and scheduler native-frontier key tests are
+> integrated at `codex/v3` HEAD `751ac08f`. Runtime artifact schema71 and
+> native cache244 are active; compiled-HIR producer8 is unchanged. The lazy
+> allocation-failure sweep exposed an invalid `noexcept` on allocating
+> `OperationList` copies; the corrected copy path now retries successfully.
+> The reused Release tree built 2288/2288, focused validation passed 7/7,
+> and the exact serial consolidated gate passed 53/53 in 67.02 seconds.
+> Receipts: `/tmp/fsim-cache244-full-final-build.log`,
+> `/tmp/fsim-cache244-focused7.log`, and
+> `/tmp/fsim-cache244-consolidated53.log`. This is correctness qualification;
+> no paired throughput claim was made.
+
+> **Qualified cache243 checkpoint — 2026-10-02 15:33 UTC.** Unresolved
+> SystemVerilog Active owner admission and direct-row runtime registration are
+> integrated at `codex/v3` HEAD `751ac08f`, with native cache243, compiled-HIR
+> producer8, and artifact schema70. The existing Release tree built 2102/2102;
+> after the direct-row storage test and true outside-reader Active boundary
+> witness, affected runtime and A4 tests passed, and the full incremental
+> relink passed 1923/1923. Focused validation passed 6/6. The exact serial
+> consolidated gate passed 51/51 in 64.58 seconds. Receipts are
+> `build-all-cache243.log`, `build-all-cache243-final-refresh.log`,
+> `ctest-focused6-cache243-final.log`, and
+> `ctest-consolidated51-cache243.log` under the active campaign build log
+> directory. No throughput timing is claimed.
+
+> **Qualified cache242 checkpoint — 2026-10-02 14:59 UTC.** ConditionalSelect
+> region lowering and private compiled-HIR revision isolation are integrated at
+> `codex/v3` HEAD `751ac08f`, with native cache242, compiled-HIR producer8, and
+> artifact schema70. The existing Release tree built 2046/2046 for cache241;
+> a missing graph admission for the select consumer was then corrected. The
+> affected build passed 367/367, focused region/schema tests passed 2/2, and
+> the full incremental relink passed 1926/1926. The exact serial consolidated
+> gate passes 51/51 in 62.31 seconds. Receipts are `build-all-cache241.log`,
+> `build-region-schema-cache242.log`, `ctest-region-schema-cache242.log`,
+> `build-all-cache242.log`, and `ctest-consolidated51-cache242.log` under the
+> active campaign build log directory. No throughput timing is claimed.
+
+> **Active architecture implementation — 2026-09-30.** The
+> [architecture contract and disposition ledger](simulation-performance-architecture.md)
+> and [live implementation checkpoint](performance-resume.md) are authoritative.
+> Follow the active goal through M1–M6; historical pause/commit-preparation
+> instructions below are superseded. No commit, push, or hosted CI is authorized.
+> The checkpoint records the frozen `ede7c24e` control, PMU availability,
+> current source receipts, test outcomes, remaining failures and worker ownership.
+> As of 2026-10-02 15:33 UTC, cache243/HIR producer8 passes the refreshed
+> Release build (1923/1923), focused validation (6/6), and the exact serial
+> consolidated gate (51/51, 64.58 seconds). Receipts are
+> `build-all-cache243-final-refresh.log`, `ctest-focused6-cache243-final.log`,
+> and `ctest-consolidated51-cache243.log` under the active campaign build log
+> directory. This is functional qualification, not a throughput measurement.
+> Both full throughput cases must reach ≤15 s median Wall, with Verilog at most
+> 1.05 × mixed, under the agreed parity and seven-pair qualification protocol.
+> No throughput qualification or complete architecture delivery is claimed yet.
+
 > **2026-09-29 CI repair and commit preparation.** The performance campaign
 > remains paused for review; no new benchmark or profiling run was made.
 > [Dated language comparison](performance-throughput-language-comparison-2026-09-29.md)

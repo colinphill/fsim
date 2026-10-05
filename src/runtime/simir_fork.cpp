@@ -73,7 +73,8 @@ namespace {
     }
     if (fsim::runtime::simir::operation_holds<WaitFork>(operation)) {
         clear_wait_timeout(process);
-        if (process.cold().live_children.empty()) {
+        if (!process.cold().fork_state
+            || process.cold().fork_state->live_children.empty()) {
             process.status = ProcessStatus::running;
             queue_current(process.id);
         } else {
@@ -88,7 +89,7 @@ namespace {
     if (const auto* disable_block = fsim::runtime::simir::operation_get_if<DisableBlock>(
             &operation)) {
         if (disable_block->begin >= disable_block->end
-            || disable_block->end > process.program().operations.size()) {
+            || disable_block->end > process.program().operations().size()) {
             process.pc = instruction;
             fail(process, "DisableBlock has an invalid lexical interval");
         }
@@ -99,12 +100,14 @@ namespace {
             owner = &get_process(*owner->cold().fork_parent);
         }
         std::vector<ProcessId> scoped_children;
-        for (const auto child_id : owner->cold().live_children) {
-            const auto& child = get_process(child_id);
-            if (child.cold().fork_site
-                && *child.cold().fork_site >= disable_block->begin
-                && *child.cold().fork_site < disable_block->end) {
-                scoped_children.push_back(child_id);
+        if (const auto* const fork_state = owner->cold().fork_state.get()) {
+            for (const auto child_id : fork_state->live_children) {
+                const auto& child = get_process(child_id);
+                if (child.cold().fork_site
+                    && *child.cold().fork_site >= disable_block->begin
+                    && *child.cold().fork_site < disable_block->end) {
+                    scoped_children.push_back(child_id);
+                }
             }
         }
         for (const auto child_id : scoped_children) {
@@ -121,6 +124,8 @@ namespace {
             owner->cold().waiting_for_children = false;
             owner->pc = disable_block->end;
             if (owner->executor) {
+                owner->region_kernel_completion_boundary_validated = false;
+                advance_process_executor_generation(*owner);
                 owner->executor->redirect(disable_block->end);
             }
             owner->status = ProcessStatus::running;
@@ -139,20 +144,24 @@ namespace {
         cancel_fork_descendants(process);
     } else {
         ProcessState* owner = &process;
-        while (!owner->cold().active_fork_sites.contains(*disable.site)
+        while ((!owner->cold().fork_state
+                   || !owner->cold().fork_state->active_sites.contains(
+                       *disable.site))
             && owner->cold().fork_parent) {
             owner = &get_process(*owner->cold().fork_parent);
         }
-        const auto found = owner->cold().active_fork_sites.find(*disable.site);
-        if (found != owner->cold().active_fork_sites.end()) {
-            const std::vector<ProcessId> children {
-                found->second.begin(), found->second.end()
-            };
-            for (const auto child_id : children) {
-                auto& child = get_process(child_id);
-                cancel_fork_descendants(child);
-                if (!child.halted) {
-                    complete_fork_child(child, ProcessStatus::killed);
+        if (const auto* const fork_state = owner->cold().fork_state.get()) {
+            const auto found = fork_state->active_sites.find(*disable.site);
+            if (found != fork_state->active_sites.end()) {
+                const std::vector<ProcessId> children {
+                    found->second.begin(), found->second.end()
+                };
+                for (const auto child_id : children) {
+                    auto& child = get_process(child_id);
+                    cancel_fork_descendants(child);
+                    if (!child.halted) {
+                        complete_fork_child(child, ProcessStatus::killed);
+                    }
                 }
             }
         }
@@ -229,23 +238,33 @@ void Interpreter::Impl::complete_process(
     process.waiting_on_static = false;
     process.cold().waiting_for_children = false;
     process.cold().waiting_fork_group.reset();
-    if (process.cold().waiting_process) {
-        get_process(*process.cold().waiting_process)
-            .cold().process_waiters.erase(process.id);
-        process.cold().waiting_process.reset();
+    auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present();
+    if (dynamic_wait != nullptr && dynamic_wait->waiting_process) {
+        auto& target = get_process(*dynamic_wait->waiting_process);
+        if (auto* const target_wait
+            = target.cold().dynamic_wait_state_if_present()) {
+            target_wait->process_waiters.erase(process.id);
+        }
+        dynamic_wait->waiting_process.reset();
     }
     remove_dynamic_wait(process);
     clear_wait_timeout(process);
 
-    const auto waiters = std::move(process.cold().process_waiters);
-    process.cold().process_waiters.clear();
+    std::set<ProcessId> waiters;
+    if (dynamic_wait != nullptr) {
+        waiters.swap(dynamic_wait->process_waiters);
+    }
     for (const auto waiter_id : waiters) {
         auto& waiter = get_process(waiter_id);
+        auto* const waiter_wait
+            = waiter.cold().dynamic_wait_state_if_present();
         if (waiter.halted
-            || waiter.cold().waiting_process != process.id) {
+            || waiter_wait == nullptr
+            || waiter_wait->waiting_process != process.id) {
             continue;
         }
-        waiter.cold().waiting_process.reset();
+        waiter_wait->waiting_process.reset();
         waiter.status = ProcessStatus::running;
         queue_active_current(waiter_id);
     }
@@ -304,6 +323,7 @@ void Interpreter::Impl::complete_process(
             || (source != nullptr && !source->event_variable)) {
             fail(process, "EventAlias requires named-event variables");
         }
+        prepare_region_authoritative_write(alias->target);
         set_event_identity(
             alias->target,
             source != nullptr
@@ -315,6 +335,8 @@ void Interpreter::Impl::complete_process(
             signal_last_values.at(alias->target)
                 = signal_last_values.at(alias->source);
             signal_events.at(alias->target) = signal_events.at(alias->source);
+            signal_event_scheduling_stamps.at(alias->target)
+                = signal_event_scheduling_stamps.at(alias->source);
             signal_transactions.at(alias->target)
                 = signal_transactions.at(alias->source);
         }
@@ -348,14 +370,24 @@ void Interpreter::Impl::complete_process(
             process.pc = instruction;
             fail(process, "a process cannot await itself");
         }
-        clear_wait_timeout(process);
         if (target.status == ProcessStatus::finished
             || target.status == ProcessStatus::killed) {
+            clear_wait_timeout(process);
             process.status = ProcessStatus::running;
             queue_current(process.id);
         } else {
-            target.cold().process_waiters.insert(process.id);
-            process.cold().waiting_process = target.id;
+            ProcessDynamicWaitState* target_wait { };
+            ProcessDynamicWaitState* process_wait { };
+            const auto resume_pc = process.pc;
+            process.pc = instruction;
+            target_wait
+                = &target.cold().ensure_dynamic_wait_state();
+            process_wait
+                = &process.cold().ensure_dynamic_wait_state();
+            process.pc = resume_pc;
+            clear_wait_timeout(process);
+            target_wait->process_waiters.insert(process.id);
+            process_wait->waiting_process = target.id;
             process.status = ProcessStatus::waiting;
         }
         notify_execution_point(
@@ -460,11 +492,11 @@ void Interpreter::Impl::spawn_fork(
     if (!parent.frame && !parent.executor) {
         fail(parent, "fork parent has no lexical frame");
     }
-    if (instruction + 1 >= parent.program().operations.size()) {
+    if (instruction + 1 >= parent.program().operations().size()) {
         fail(parent, "fork parent continuation is outside the operation stream");
     }
     for (const auto branch : operation.branches) {
-        if (branch >= parent.program().operations.size()) {
+        if (branch >= parent.program().operations().size()) {
             fail(parent, "fork branch entry is outside the operation stream");
         }
         if (branch <= instruction + 1) {
@@ -485,18 +517,23 @@ void Interpreter::Impl::spawn_fork(
         != operation.branches.size()) {
         fail(parent, "fork branch entry is duplicated");
     }
-    if (fork_spawn_filter
-        && !fork_spawn_filter(parent.cold().design_process)) {
-        parent.status = ProcessStatus::running;
-        queue_current(parent_id);
-        return;
+    const auto selected_fork_spawn_filter = fork_spawn_filter;
+    if (selected_fork_spawn_filter) {
+        prepare_callback_observation();
+        if (!(*selected_fork_spawn_filter)(parent.cold().design_process)) {
+            parent.status = ProcessStatus::running;
+            queue_current(parent_id);
+            return;
+        }
     }
     if (next_fork_group == 0) {
         throw std::overflow_error { "SimIR fork-group identity overflow" };
     }
+    if (!operation.branches.empty() && !parent.cold().fork_state) {
+        parent.cold().fork_state = std::make_unique<ProcessForkState>();
+    }
     const auto group_id = next_fork_group++;
     const auto shared_frame = parent.frame;
-    const auto program = parent.program();
     const auto design_process = parent.cold().design_process;
     auto* const executor = parent.executor.get();
     auto inherited_contexts = parent.cold().escaping_callable_contexts;
@@ -531,30 +568,61 @@ void Interpreter::Impl::spawn_fork(
             throw std::overflow_error { "SimIR process generation overflow" };
         }
         child.generation = next_process_generation++;
-        child.program() = program;
-        child.program().id = child_id;
+        const auto child_index = children.size();
+        child.cold().inherit_fork_program(
+            parent.cold(), child_id, instruction, child_index);
         child.cold().design_process = design_process;
         child.id = child_id;
         child.has_callable_frame_push = parent.has_callable_frame_push;
-        child.pure_wave_operation_count_supported
-            = parent.pure_wave_operation_count_supported;
-        child.program().name += ".$fork[" + std::to_string(instruction)
-            + "].child[" + std::to_string(children.size()) + "]";
-        child.program().initialize = false;
-        child.program().final = false;
         child.execution_phase = process_execution_phase(
-            child.program().observed,
-            child.program().reactive,
-            child.program().postponed);
+            child.program().observed(),
+            child.program().reactive(),
+            child.program().postponed());
         child.pc = branch;
         child.frame = shared_frame;
         child.cold().escaping_callable_contexts = inherited_contexts;
         if (executor != nullptr) {
+            const bool parent_access_complete_before_clone
+                = process_signal_access_is_complete(parent_id);
+            if (!parent_access_complete_before_clone) {
+                process_signal_access_inventory_complete = false;
+                // Do not invoke an unverified nested clone before publishing
+                // the exact hidden signal state it could observe or mutate.
+                prepare_callback_observation();
+            }
+            advance_process_executor_generation(parent);
+            advance_process_executor_generation(child);
             child.executor = executor->fork_clone(branch);
             if (!child.executor) {
                 throw InterpreterError {
                     parent_id, instruction, "fork executor clone is null"
                 };
+            }
+            const auto* const parent_access_binding
+                = executor->program_access_binding();
+            const auto* const access_binding
+                = child.executor->program_access_binding();
+            const bool parent_access_complete_after_clone
+                = parent_access_complete_before_clone
+                && process_signal_access_is_complete(parent_id);
+            if (!parent_access_complete_after_clone
+                || parent_access_binding == nullptr
+                || access_binding == nullptr
+                || !parent_access_binding->same_execution_binding(
+                    *access_binding)
+                || !child.program().matches_forked_binding(
+                    child_id, *parent_access_binding)) {
+                process_signal_access_inventory_complete = false;
+                // A fork clone can introduce arbitrary signal effects even
+                // when its parent executor had a valid binding. Materialize
+                // hidden state before the child becomes runnable.
+                prepare_callback_observation();
+            } else {
+                child.cold().fork_state
+                    = std::make_unique<ProcessForkState>();
+                child.cold().fork_state->access_binding_attestation.emplace(
+                    InterpreterProgramAccess::fork_access_attestation(
+                        *access_binding));
             }
         }
         child.cold().random_state = initial_random_state(root_seed, child_id);
@@ -565,11 +633,9 @@ void Interpreter::Impl::spawn_fork(
         }
         try {
             processes.push_back(std::move(child));
-            pure_wave_prepared_slots.emplace_back();
             static_fanout_dirty = true;
             register_static_sensitivity_cohort(child_id);
             invalidate_fused_static_cohorts_for_fork(child_id);
-            invalidate_fused_masked_regions_for_fork(child_id);
         } catch (...) {
             // Insertion may have changed the graph before failing. Retire
             // every certificate rather than retaining a partial topology.
@@ -584,9 +650,10 @@ void Interpreter::Impl::spawn_fork(
     }
 
     auto& current_parent = get_process(parent_id);
-    current_parent.cold().live_children.insert(children.begin(), children.end());
     if (!children.empty()) {
-        auto& site_children = current_parent.cold().active_fork_sites[instruction];
+        auto& fork_state = *current_parent.cold().fork_state;
+        fork_state.live_children.insert(children.begin(), children.end());
+        auto& site_children = fork_state.active_sites[instruction];
         site_children.insert(children.begin(), children.end());
     }
     if (operation.join != ForkJoinKind::none && !children.empty()) {
@@ -620,17 +687,21 @@ void Interpreter::Impl::complete_fork_child(
     }
 
     auto& parent = get_process(*parent_id);
-    parent.cold().live_children.erase(child_id);
-    for (auto site = parent.cold().active_fork_sites.begin();
-        site != parent.cold().active_fork_sites.end();) {
-        site->second.erase(child_id);
-        if (site->second.empty()) {
-            site = parent.cold().active_fork_sites.erase(site);
-        } else {
-            ++site;
+    if (auto* const fork_state = parent.cold().fork_state.get()) {
+        fork_state->live_children.erase(child_id);
+        for (auto site = fork_state->active_sites.begin();
+             site != fork_state->active_sites.end();) {
+            site->second.erase(child_id);
+            if (site->second.empty()) {
+                site = fork_state->active_sites.erase(site);
+            } else {
+                ++site;
+            }
         }
     }
-    if (parent.cold().waiting_for_children && parent.cold().live_children.empty()) {
+    if (parent.cold().waiting_for_children
+        && (!parent.cold().fork_state
+            || parent.cold().fork_state->live_children.empty())) {
         parent.cold().waiting_for_children = false;
         parent.status = ProcessStatus::running;
         queue_active_current(*parent_id);
@@ -666,6 +737,8 @@ void Interpreter::Impl::cancel_fork_descendants(ProcessState& parent)
 {
     std::vector<ProcessId> children;
     children.reserve(processes.size());
+    // Compact constant processes have no fork operations and therefore never
+    // own fork descendants.
     for (const auto& candidate : processes) {
         if (candidate.cold().fork_parent == parent.id) {
             children.push_back(candidate.id);
@@ -678,8 +751,10 @@ void Interpreter::Impl::cancel_fork_descendants(ProcessState& parent)
             complete_fork_child(child, ProcessStatus::killed);
         }
     }
-    parent.cold().live_children.clear();
-    parent.cold().active_fork_sites.clear();
+    if (auto* const fork_state = parent.cold().fork_state.get()) {
+        fork_state->live_children.clear();
+        fork_state->active_sites.clear();
+    }
     parent.cold().waiting_for_children = false;
     parent.cold().waiting_fork_group.reset();
 }
@@ -689,6 +764,8 @@ void Interpreter::Impl::kill_dynamic_processes(
 {
     std::vector<ProcessId> roots;
     roots.reserve(processes.size());
+    // Compact constants are initialization-only records with no dynamic
+    // fork parent; this state scan intentionally visits full records.
     for (const auto& candidate : processes) {
         if (candidate.halted || !candidate.cold().fork_parent
             || std::ranges::find(
@@ -713,19 +790,20 @@ void Interpreter::Impl::kill_dynamic_processes(
 
 void Interpreter::Impl::exit_program(ProcessState& process)
 {
-    if (!process.program().program_owner) {
+    if (!process.program().program_owner()) {
         fail(process, "$exit requires a SystemVerilog program owner");
     }
-    const auto owner = *process.program().program_owner;
+    const auto owner = *process.program().program_owner();
     if (exited_programs.contains(owner)) {
         return;
     }
 
     std::vector<ProcessId> roots;
+    // Compact constants have no program owner and cannot be program exits.
     for (const auto& candidate : processes) {
         if (!candidate.halted && !candidate.cold().fork_parent
-            && candidate.program().program_owner == owner
-            && !candidate.program().final) {
+            && candidate.program().program_owner() == owner
+            && !candidate.program().final()) {
             roots.push_back(candidate.id);
         }
     }
@@ -746,17 +824,17 @@ void Interpreter::Impl::exit_program(ProcessState& process)
 
 void Interpreter::Impl::complete_program_process(ProcessState& process)
 {
-    if (!process.program().program_owner || process.program().final
+    if (!process.program().program_owner() || process.program().final()
         || process.cold().fork_parent) {
         return;
     }
-    const auto owner = *process.program().program_owner;
+    const auto owner = *process.program().program_owner();
     const bool live_initial = std::ranges::any_of(
         processes,
         [&](const ProcessState& candidate) {
             return !candidate.halted && !candidate.cold().fork_parent
-                && !candidate.program().final
-                && candidate.program().program_owner == owner;
+                && !candidate.program().final()
+                && candidate.program().program_owner() == owner;
         });
     if (!live_initial) {
         exit_program(process);

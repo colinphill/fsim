@@ -94,7 +94,7 @@ Simulation::Impl::Impl(
           built.compiled_systemverilog_class_specializations,
           built.systemverilog_hir,
           class_heap)
-    , interpreter(built.design.create_interpreter(
+    , interpreter(std::move(built.design).create_interpreter(
           runtime::SchedulerOptions { max_deltas, 32 },
           built.seed))
 {
@@ -156,18 +156,19 @@ Simulation::Impl::Impl(
             = inventory ? inventory->total_points : 0U;
         if (!inventory) {
             for (const auto& process_info : built.design_ir.processes()) {
-                const auto& process = interpreter->process_program(
-                    process_info.runtime_index);
+                const auto process =
+                    runtime::simir::InterpreterProgramAccess::view(
+                        *interpreter, process_info.runtime_index);
                 for (std::size_t instruction = 0U;
-                    instruction < process.operations.size(); ++instruction) {
+                    instruction < process.operations().size(); ++instruction) {
                     const auto* hit = runtime::simir::operation_get_if<
                         runtime::simir::CodeCoverageHit>(
-                        &process.operations[instruction]);
+                        &process.operations()[instruction]);
                     if (hit == nullptr) {
                         continue;
                     }
                     const auto counter
-                        = process.operations.code_coverage_counter(
+                        = process.operations().code_coverage_counter(
                             instruction, hit->counter);
                     counter_count = std::max(
                         counter_count,
@@ -204,7 +205,7 @@ Simulation::Impl::Impl(
                                                     -> std::optional<std::size_t> {
                                                    const auto signal = backdoor_signal(path);
                                                    return signal ? std::optional<std::size_t> {
-                                                       interpreter->signal_value(*signal).width()
+                                                       interpreter->signal_value_snapshot(*signal).width()
                                                    }
                                                                  : std::nullopt;
                                                },
@@ -212,7 +213,7 @@ Simulation::Impl::Impl(
             const auto signal = backdoor_signal(path);
             if (!signal)
                 throw std::invalid_argument { "UVM HDL path does not resolve" };
-            return interpreter->signal_value(*signal);
+            return interpreter->signal_value_snapshot(*signal);
         },
         [this](const auto, const std::string_view path, const auto kind,
             const runtime::PackedLogic4& value) {
@@ -595,6 +596,8 @@ Simulation::Impl::Impl(
         vpi_scalar_kinds = std::move(published_vpi.scalar_kinds);
         vpi_categories = std::move(published_vpi.categories);
         vpi_container_words = std::move(published_vpi.container_words);
+        vpi_read_only_container_words
+            = std::move(published_vpi.read_only_container_words);
         vpi_word_handles = std::move(published_vpi.word_handles);
         vpi_container_scalar_kinds
             = std::move(published_vpi.container_scalar_kinds);
@@ -633,7 +636,32 @@ Simulation::Impl::Impl(
             *vpi_registry,
             interpreter->scheduler(),
             *vpi_time,
-            vpi_callback_order);
+            vpi_callback_order,
+            [this](runtime::SystemVerilogVpiCallbackKind,
+                std::optional<fsim_vpi_handle_v1> object) {
+                if (object) {
+                    const auto signal = vpi_handle_signals.find(*object);
+                    if (signal != vpi_handle_signals.end()) {
+                        interpreter->prepare_signal_observation(signal->second);
+                        return;
+                    }
+                }
+                // An object without an exact signal binding may cover a scope
+                // or aggregate. Retain a conservative barrier for all exposed
+                // signal, original-driver, and named-event state.
+                for (const auto& [signal, handles] : vpi_signal_handles) {
+                    (void)handles;
+                    interpreter->prepare_signal_observation(signal);
+                }
+                for (const auto& [signal, drivers] : vpi_driver_bindings) {
+                    (void)drivers;
+                    interpreter->prepare_signal_observation(signal);
+                }
+                for (const auto& [signal, handles] : vpi_event_handles) {
+                    (void)handles;
+                    interpreter->prepare_signal_observation(signal);
+                }
+            });
     vpi_values = std::make_unique<runtime::SystemVerilogVpiValueControl>(
         *vpi_registry, interpreter->scheduler(), vpi_value_order);
     vpi_control
@@ -734,7 +762,7 @@ Simulation::Impl::Impl(
     vhdl_psl = std::make_unique<VhdlPslExecution>(built.vhdl_hir,
         built.semantics, built.design, built.design_ir,
         [this](const runtime::simir::SignalId signal) {
-            return interpreter->signal_value(signal);
+            return interpreter->signal_value_snapshot(signal);
         });
     vhdl_psl->set_completion_hook(
         [this](const runtime::VhdlPslAttemptSnapshot& attempt) {
@@ -831,13 +859,17 @@ Simulation::Impl::Impl(
                 || (concurrent_assertions_enabled
                     && !disabled_vpi_assertion_processes.contains(process));
         });
-    interpreter->set_output_hook(
+    interpreter_output_hook =
         [this](
             const runtime::simir::ProcessId process,
             const std::string_view text,
             const bool newline,
             const SimulationTick time,
             const std::uint64_t delta) {
+            if (trusted_builtin_stdout_output && !text.empty()
+                && text.front() == '\x1f') {
+                interpreter->prepare_output_callback_observation();
+            }
             constexpr std::string_view assertion_marker {
                 "\x1f"
                 "fsim.concurrent-assertion|"
@@ -1290,7 +1322,8 @@ Simulation::Impl::Impl(
             if (output_hook) {
                 output_hook(process, text, newline, time, delta);
             }
-        });
+        };
+    interpreter->set_output_hook(interpreter_output_hook);
     interpreter->set_report_hook(
         [this](
             const runtime::simir::ProcessId process,

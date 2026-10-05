@@ -92,6 +92,10 @@ validate_dynamic_part_index_metadata(const DynamicPartIndex& selection) {
   if (!dynamic_range_width(selection.left, selection.right)) {
     return "dynamic part-select write bounds must fit signed 32-bit integers";
   }
+  if (selection.source_descending
+      != (selection.left >= selection.right)) {
+    return "dynamic part-select write direction conflicts with declared bounds";
+  }
   return std::nullopt;
 }
 

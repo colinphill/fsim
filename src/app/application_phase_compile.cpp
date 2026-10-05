@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_phase_profile.hpp"
 #include "application_workspace.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
@@ -302,7 +303,11 @@ bool compile_object(const project::Config& config,
             "one .fsimobj compile request must contain exactly one HDL source set");
         return false;
     }
-    auto workspace = check_project_for_object(config, diagnostics);
+    ScopedPhaseProfile compile_phase { "object_compile" };
+    auto workspace = [&] {
+        ScopedPhaseProfile check_phase { "project_check" };
+        return check_project_for_object(config, diagnostics);
+    }();
     if (!workspace) {
         return false;
     }

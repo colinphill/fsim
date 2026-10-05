@@ -116,7 +116,7 @@ std::uint32_t LlvmProcessExecutor::concatenate_strings(
         return 1;
     }
     try {
-        if (state.process == nullptr || process != state.generated_process
+        if (!state.process.valid() || process != state.generated_process
             || (operand_count != 0 && operands == nullptr)) {
             throw std::logic_error {
                 "invalid generated string-concatenation callback"
@@ -128,7 +128,7 @@ std::uint32_t LlvmProcessExecutor::concatenate_strings(
             if (value.size()
                 > runtime::simir::maximum_string_bytes - result.size()) {
                 throw runtime::simir::InterpreterError(
-                    state.process->id,
+                    state.process.id(),
                     instruction,
                     "string concatenation exceeds 4096-byte limit");
             }
@@ -208,10 +208,10 @@ std::uint32_t LlvmProcessExecutor::string_index(
     }
     try {
         const auto& value = state.executor->string_registers_.at(source);
-        if (state.process == nullptr || process != state.generated_process
+        if (!state.process.valid() || process != state.generated_process
             || result == nullptr || signed_index > 1 || index_bval != 0) {
             throw runtime::simir::InterpreterError(
-                state.process->id,
+                state.process.id(),
                 instruction,
                 "string index contains X or Z");
         }
@@ -223,7 +223,7 @@ std::uint32_t LlvmProcessExecutor::string_index(
         if (index < 0
             || static_cast<std::uint64_t>(index) >= length) {
             throw runtime::simir::InterpreterError(
-                state.process->id,
+                state.process.id(),
                 instruction,
                 "string index is outside the current byte range");
         }
@@ -253,10 +253,10 @@ std::uint32_t LlvmProcessExecutor::string_replace_byte(
     }
     try {
         auto& value = state.executor->string_registers_.at(target);
-        if (state.process == nullptr || process != state.generated_process
+        if (!state.process.valid() || process != state.generated_process
             || signed_index > 1 || index_bval != 0) {
             throw runtime::simir::InterpreterError(
-                state.process->id,
+                state.process.id(),
                 instruction,
                 "string index contains X or Z");
         }
@@ -268,13 +268,13 @@ std::uint32_t LlvmProcessExecutor::string_replace_byte(
         if (selected < 0
             || static_cast<std::uint64_t>(selected) >= length) {
             throw runtime::simir::InterpreterError(
-                state.process->id,
+                state.process.id(),
                 instruction,
                 "string index is outside the current byte range");
         }
         if (source_bval != 0) {
             throw runtime::simir::InterpreterError(
-                state.process->id,
+                state.process.id(),
                 instruction,
                 "string replacement byte contains X or Z");
         }
@@ -306,7 +306,7 @@ std::uint32_t LlvmProcessExecutor::write_string_output(
         return 1;
     }
     try {
-        if (state.process == nullptr || process != state.generated_process
+        if (!state.process.valid() || process != state.generated_process
             || (prefix_size != 0 && prefix == nullptr)
             || (suffix_size != 0 && suffix == nullptr)
             || newline > 1 || postponed > 1) {
@@ -434,9 +434,9 @@ void LlvmProcessExecutor::write_formatted(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()
+            || instruction >= state.process.operations().size()
             || width == 0
             || width > 64) {
             throw std::logic_error {
@@ -444,7 +444,7 @@ void LlvmProcessExecutor::write_formatted(
             };
         }
         const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (operation == nullptr) {
             throw std::logic_error {
                 "generated formatted-output callback references a "
@@ -476,7 +476,7 @@ void LlvmProcessExecutor::write_formatted_logic9(
     const std::uint32_t process,
     const std::uint32_t instruction,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
@@ -484,9 +484,9 @@ void LlvmProcessExecutor::write_formatted_logic9(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()
+            || instruction >= state.process.operations().size()
             || width == 0 || width > 64
             || value == nullptr) {
             throw std::logic_error {
@@ -494,7 +494,7 @@ void LlvmProcessExecutor::write_formatted_logic9(
             };
         }
         const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (operation == nullptr) {
             throw std::logic_error {
                 "generated Logic9 formatted-output callback references a "
@@ -536,15 +536,15 @@ void LlvmProcessExecutor::write_time(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()) {
+            || instruction >= state.process.operations().size()) {
             throw std::logic_error {
                 "invalid generated time-output callback"
             };
         }
         const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::TimeDisplay>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (operation == nullptr) {
             throw std::logic_error {
                 "generated time-output callback references a "
@@ -576,15 +576,15 @@ void LlvmProcessExecutor::install_monitor(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()) {
+            || instruction >= state.process.operations().size()) {
             throw std::logic_error {
                 "invalid generated monitor-install callback"
             };
         }
         const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::MonitorInstall>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (operation == nullptr) {
             throw std::logic_error {
                 "generated monitor-install callback references a "
@@ -608,15 +608,15 @@ void LlvmProcessExecutor::control_monitor(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()) {
+            || instruction >= state.process.operations().size()) {
             throw std::logic_error {
                 "invalid generated monitor-control callback"
             };
         }
         const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::MonitorControl>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (operation == nullptr) {
             throw std::logic_error {
                 "generated monitor-control callback references a "
@@ -645,15 +645,15 @@ std::uint64_t LlvmProcessExecutor::random_value(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()) {
+            || instruction >= state.process.operations().size()) {
             throw std::logic_error {
                 "invalid generated random-value callback"
             };
         }
         const auto* operation = fsim::runtime::simir::operation_get_if<runtime::simir::RandomValue>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (operation == nullptr) {
             throw std::logic_error {
                 "generated random-value callback references a "

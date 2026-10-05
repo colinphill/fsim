@@ -312,7 +312,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
             process_.operations.emplace_back(
                 ReadSignal { *data_register, *data_signal });
         }
-        implicit_signal_dependencies_.push_back(*data_signal);
+        record_implicit_signal_dependency(*data_signal);
     }
 
     std::size_t num_states = result_width == 1U ? 1U : 0U;

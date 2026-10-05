@@ -5,8 +5,29 @@
 #include <algorithm>
 #include <limits>
 #include <ranges>
+#include <stdexcept>
 
 namespace fsim::runtime::simir {
+namespace {
+
+template <typename Vector>
+void reserve_one_more(Vector& entries)
+{
+    if (entries.size() == entries.max_size()) {
+        throw std::length_error { "fused update staging exceeds capacity" };
+    }
+    const auto required = entries.size() + 1U;
+    if (entries.capacity() >= required) {
+        return;
+    }
+    const auto maximum = entries.max_size();
+    const auto current = entries.capacity();
+    const auto grown = current > maximum / 2U
+        ? maximum : std::max<std::size_t>(1U, current * 2U);
+    entries.reserve(std::max(required, grown));
+}
+
+} // namespace
 
 bool Interpreter::Impl::owned_driver_active(const SignalId signal) const noexcept
 {
@@ -22,12 +43,12 @@ void Interpreter::Impl::build_owned_driver_composites()
         return;
     }
     auto switch_signals = std::vector<std::uint8_t>(signals.size(), 0U);
-    for (const auto& process : processes) {
-        const auto& program = process.program();
+    for (ProcessId id = 0U; id < processes.size(); ++id) {
+        const auto program = processes.program_view(id);
         for (const auto signal : {
-                program.switch_source,
-                program.switch_target,
-                program.switch_control }) {
+                program.switch_source(),
+                program.switch_target(),
+                program.switch_control() }) {
             if (signal && *signal < switch_signals.size()) {
                 switch_signals[*signal] = 1U;
             }
@@ -37,9 +58,27 @@ void Interpreter::Impl::build_owned_driver_composites()
         const auto& signal = get_signal(signal_id);
         const auto width = signal.initial_value.width();
         const auto& table = driver_values[signal_id];
+        const auto* const authoritative_state
+            = a4_wide_disjoint_owner_commit_enabled
+            ? region_authoritative_state_for_signal(signal_id) : nullptr;
+        const bool has_disjoint_authoritative_slots
+            = authoritative_state != nullptr
+            && authoritative_state->values().layout().contains(signal_id)
+            && authoritative_state->values().layout().signal(signal_id)
+                    .storage_class
+                == SignalDriverStorageClass::disjoint_owner
+            && authoritative_state->values()
+                .packed_signal_slots_bound(signal_id);
+        if (has_disjoint_authoritative_slots) {
+            // The versioned sidecar is the sole owner/value authority for
+            // this complete disjoint partition. Do not construct the older
+            // committed/phase composite over the same driver records.
+            continue;
+        }
         if (signal.resolution != ResolutionKind::sv_wire
             || signal.value_kind != ValueKind::logic4
             || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+            || has_container_signal_alias(signal_id)
             || width == 0U || table.size() < 2U
             || switch_signals[signal_id] != 0U
             || signal.has_implicit_driver || signal.has_charge_strength
@@ -71,13 +110,13 @@ void Interpreter::Impl::build_owned_driver_composites()
                 eligible = false;
                 return;
             }
-            const auto& program = get_process(record.process).program();
-            if (program.switch_bidirectional || program.switch_resistive
-                || program.switch_source || program.switch_target
-                || program.switch_control
-                || program.drive_strength != DriveStrength { }
-                || program.driver_regions.empty()
-                || std::ranges::any_of(program.driver_regions,
+            const auto& program = processes.program_view(record.process);
+            if (program.switch_bidirectional() || program.switch_resistive()
+                || program.switch_source() || program.switch_target()
+                || program.switch_control()
+                || program.drive_strength() != DriveStrength { }
+                || program.driver_regions().empty()
+                || std::ranges::any_of(program.driver_regions(),
                     [&](const Process::DriverRegion& region) {
                         return region.signal != signal_id;
                     })) {
@@ -85,7 +124,7 @@ void Interpreter::Impl::build_owned_driver_composites()
                 return;
             }
             auto matching = std::optional<Process::DriverRegion> { };
-            for (const auto& region : program.driver_regions) {
+            for (const auto& region : program.driver_regions()) {
                 if (region.signal == signal_id) {
                     if (matching) {
                         eligible = false;
@@ -149,6 +188,7 @@ PackedLogic4 Interpreter::Impl::owned_driver_value(
 
 void Interpreter::Impl::demote_owned_driver(const SignalId signal)
 {
+    prepare_region_authoritative_write(signal);
     if (!owned_driver_active(signal)) {
         return;
     }
@@ -157,65 +197,20 @@ void Interpreter::Impl::demote_owned_driver(const SignalId signal)
         driver_update_scratch.resize(signals.size());
     }
     auto& staged = driver_update_scratch[signal];
+    static_assert(std::is_nothrow_move_assignable_v<PackedLogic4>);
+    static_assert(noexcept(staged.swap(staged)));
+    std::vector<std::pair<DriverRecord*, PackedLogic4>> committed_drivers;
+    committed_drivers.reserve(driver_values[signal].size());
     driver_values[signal].for_each_in_process_order(
         [&](DriverRecord& record) {
-            record.value = owned_driver_value(record.process, signal);
+            committed_drivers.emplace_back(
+                &record, owned_driver_value(record.process, signal));
         });
     std::vector<PendingDriverCommit> materialized;
     materialized.reserve(staged.size());
-    auto touched_masked_owners = std::vector<std::uint8_t>(
-        processes.size(), 0U);
-    for (auto& update : staged) {
+    for (const auto& update : staged) {
         if (!update.owned_composite) {
-            materialized.push_back(std::move(update));
-            continue;
-        }
-        if (update.fused_masked) {
-            if (!update.fused_cohort
-                || *update.fused_cohort
-                    >= fused_masked_pending_touches.size()) {
-                throw std::logic_error {
-                    "masked owned update has no original owners"
-                };
-            }
-            const auto& touch = fused_masked_pending_touches[
-                *update.fused_cohort];
-            const auto& plan = fused_masked_regions.at(touch.region_id);
-            const auto& phase = owned.phase_active
-                ? owned.phase : owned.committed;
-            for (std::size_t index = 0U;
-                 index < plan.members.size(); ++index) {
-                const auto active = index < 64U
-                    ? (touch.active_low >> index) & UINT64_C(1)
-                    : (touch.active_high[(index - 64U) / 64U]
-                        >> ((index - 64U) % 64U)) & UINT64_C(1);
-                if (!active) {
-                    continue;
-                }
-                const auto id = plan.members[index].process;
-                if (touched_masked_owners[id]) {
-                    continue;
-                }
-                touched_masked_owners[id] = 1U;
-                const auto& span = owned_driver_spans.at(id);
-                if (span.signal != signal) {
-                    continue;
-                }
-                const auto old_bits = owned.committed.extract_bits(
-                    span.offset, span.width);
-                const auto new_bits = phase.extract_bits(
-                    span.offset, span.width);
-                if (old_bits == new_bits) {
-                    continue;
-                }
-                auto value = PackedLogic4 {
-                    owned.committed.width(), Logic4::z
-                };
-                value.insert_bits(new_bits, span.offset);
-                materialized.push_back(PendingDriverCommit {
-                    id, std::move(value), false
-                });
-            }
+            materialized.push_back(update);
             continue;
         }
         if (update.fused_cohort) {
@@ -257,7 +252,13 @@ void Interpreter::Impl::demote_owned_driver(const SignalId signal)
             update.driver, std::move(value), false
         });
     }
-    staged = std::move(materialized);
+    // Everything that can allocate or validate has completed. Publish the
+    // materialized driver table and ordinary pending suffix with no-throw
+    // moves so a failed preparation leaves the owned and staged state intact.
+    for (auto& [record, value] : committed_drivers) {
+        record->value = std::move(value);
+    }
+    staged.swap(materialized);
     owned.active = false;
     owned.phase_active = false;
 }
@@ -283,6 +284,7 @@ Interpreter::Impl::prepare_owned_update_slot(
     const auto& slot = batch.slots[0];
     const auto signal = slot.signal;
     if (signal >= signals.size() || slot.width == 0U
+        || has_container_signal_alias(signal)
         || slot.width > 128U
         || slot.word_count == 0U || slot.word_count > 2U
         || slot.word_count != (slot.width + 63U) / 64U
@@ -347,7 +349,8 @@ Interpreter::Impl::stage_owned_driver_slot_impl(
     const PreparedOwnedUpdateSlot* prepared)
 {
     const auto signal = slot.signal;
-    if (!owned_driver_active(signal)) {
+    if (has_container_signal_alias(signal)
+        || !owned_driver_active(signal)) {
         return OwnedDriverStage::unsupported;
     }
     if ((prepared == nullptr
@@ -431,193 +434,6 @@ Interpreter::Impl::stage_owned_driver_slot_impl(
     return OwnedDriverStage::changed;
 }
 
-Interpreter::Impl::OwnedDriverStage
-Interpreter::Impl::stage_fused_owned_slot(
-    const std::size_t cohort, const ProcessUpdateSlotView& slot)
-{
-    if (!valid_fused_owned_slot(cohort, slot)) {
-        return OwnedDriverStage::unsupported;
-    }
-    auto& owned = owned_driver_composites[slot.signal];
-    const auto& current = owned.phase_active
-        ? owned.phase : owned.committed;
-    bool changed = false;
-    for (std::size_t word = 0U; word < slot.word_count; ++word) {
-        const auto begin = word * 64U;
-        const auto size = std::min<std::size_t>(64U, slot.width - begin);
-        const auto valid = size == 64U
-            ? std::numeric_limits<std::uint64_t>::max()
-            : (UINT64_C(1) << size) - UINT64_C(1);
-        const auto mask = slot.mask[word] & valid;
-        changed |= !current.matches_masked_word(Logic4Word {
-            size, slot.aval[word], slot.bval[word]
-        }, mask, begin);
-    }
-    if (!changed) {
-        return OwnedDriverStage::unchanged;
-    }
-    if (!owned.phase_active) {
-        owned.phase = owned.committed;
-        owned.phase_active = true;
-    }
-    for (std::size_t word = 0U; word < slot.word_count; ++word) {
-        const auto begin = word * 64U;
-        const auto size = std::min<std::size_t>(64U, slot.width - begin);
-        owned.phase.insert_masked_word(Logic4Word {
-            size, slot.aval[word], slot.bval[word]
-        }, slot.mask[word], begin);
-    }
-    auto& staged = driver_update_scratch[slot.signal];
-    if (staged.empty()) {
-        driver_update_signals.push_back(slot.signal);
-    }
-    staged.push_back(PendingDriverCommit {
-        std::nullopt, PackedLogic4 { }, true, cohort
-    });
-    if (!resolved_update_marked[slot.signal]) {
-        resolved_update_marked[slot.signal] = true;
-        if (private_signal_bridge_active(slot.signal)) {
-            if (private_owned_update_marked.size() < signals.size()) {
-                private_owned_update_marked.resize(signals.size());
-            }
-            private_owned_update_marked[slot.signal] = true;
-            private_owned_update_signals.push_back(slot.signal);
-        } else {
-            resolved_update_signals.push_back(slot.signal);
-        }
-    }
-    return OwnedDriverStage::changed;
-}
-
-bool Interpreter::Impl::valid_fused_masked_owned_slot(
-    const std::size_t region_id, const ProcessUpdateSlotView& slot,
-    const std::span<const std::uint64_t> active_members,
-    const std::span<const std::uint64_t> selected_write_mask) const
-{
-    if (region_id >= fused_masked_regions.size()
-        || fused_masked_regions[region_id].candidate.projected
-        || fused_masked_regions[region_id].candidate.outputs.empty()
-        || slot.signal
-            != fused_masked_regions[region_id].candidate.outputs.front()
-        || !owned_driver_active(slot.signal)
-        || slot.width != signals[slot.signal].initial_value.width()
-        || slot.word_count != selected_write_mask.size()
-        || slot.active == nullptr || *slot.active == 0U
-        || slot.aval == nullptr || slot.bval == nullptr
-        || slot.mask == nullptr || active_members.empty()) {
-        return false;
-    }
-    if (signal_transaction_observed[slot.signal]
-        || active_members.size()
-            != fused_masked_regions[region_id].activation_words.size()) {
-        return false;
-    }
-    for (std::size_t word = 0U; word < slot.word_count; ++word) {
-        const auto begin = word * 64U;
-        const auto size = std::min<std::size_t>(64U, slot.width - begin);
-        const auto valid = size == 64U
-            ? std::numeric_limits<std::uint64_t>::max()
-            : (UINT64_C(1) << size) - UINT64_C(1);
-        if ((slot.mask[word] & valid) != selected_write_mask[word]
-            || (slot.mask[word] & ~valid) != 0U) {
-            return false;
-        }
-    }
-    return true;
-}
-
-Interpreter::Impl::OwnedDriverStage
-Interpreter::Impl::stage_fused_masked_owned_slot(
-    const std::size_t region_id, const ProcessUpdateSlotView& slot,
-    const std::span<const std::uint64_t> active_members,
-    const std::span<const std::uint64_t> selected_write_mask)
-{
-    if (!valid_fused_masked_owned_slot(
-            region_id, slot, active_members, selected_write_mask)) {
-        return OwnedDriverStage::unsupported;
-    }
-    auto& owned = owned_driver_composites[slot.signal];
-    const auto& current = owned.phase_active
-        ? owned.phase : owned.committed;
-    bool changed { };
-    for (std::size_t word = 0U; word < slot.word_count; ++word) {
-        const auto begin = word * 64U;
-        const auto size = std::min<std::size_t>(64U, slot.width - begin);
-        changed |= !current.matches_masked_word(Logic4Word {
-            size, slot.aval[word], slot.bval[word]
-        }, slot.mask[word], begin);
-    }
-    if (!changed) {
-        return OwnedDriverStage::unchanged;
-    }
-    if (!owned.phase_active) {
-        owned.phase = owned.committed;
-        owned.phase_active = true;
-    }
-    for (std::size_t word = 0U; word < slot.word_count; ++word) {
-        const auto begin = word * 64U;
-        const auto size = std::min<std::size_t>(64U, slot.width - begin);
-        owned.phase.insert_masked_word(Logic4Word {
-            size, slot.aval[word], slot.bval[word]
-        }, slot.mask[word], begin);
-    }
-    auto touch = FusedMaskedPendingTouch { };
-    touch.region_id = region_id;
-    touch.active_low = active_members.front();
-    if (active_members.size() > 1U) {
-        touch.active_high.assign(active_members.begin() + 1U,
-            active_members.end());
-    }
-    const auto touch_index = fused_masked_pending_touches.size();
-    fused_masked_pending_touches.push_back(std::move(touch));
-    auto& staged = driver_update_scratch[slot.signal];
-    if (staged.empty()) {
-        driver_update_signals.push_back(slot.signal);
-    }
-    auto marker = PendingDriverCommit {
-        std::nullopt, PackedLogic4 { }, true, touch_index
-    };
-    marker.fused_masked = true;
-    staged.push_back(std::move(marker));
-    if (!resolved_update_marked[slot.signal]) {
-        resolved_update_marked[slot.signal] = true;
-        resolved_update_signals.push_back(slot.signal);
-    }
-    return OwnedDriverStage::changed;
-}
-
-bool Interpreter::Impl::valid_fused_owned_slot(
-    const std::size_t cohort, const ProcessUpdateSlotView& slot) const
-{
-    if (cohort >= fused_static_cohorts.size()) {
-        return false;
-    }
-    const auto& plan = fused_static_cohorts[cohort];
-    const auto found = std::ranges::find(
-        plan.outputs, slot.signal, &FusedStaticCohortPlan::Output::signal);
-    if (found == plan.outputs.end() || !owned_driver_active(slot.signal)
-        || slot.width != found->width
-        || slot.word_count != found->owner_masks.size()
-        || slot.active == nullptr || slot.aval == nullptr
-        || slot.bval == nullptr || slot.mask == nullptr
-        || *slot.active == 0U
-        || signal_transaction_observed[slot.signal]) {
-        return false;
-    }
-    for (std::size_t word = 0U; word < slot.word_count; ++word) {
-        const auto begin = word * 64U;
-        const auto size = std::min<std::size_t>(64U, slot.width - begin);
-        const auto valid = size == 64U
-            ? std::numeric_limits<std::uint64_t>::max()
-            : (UINT64_C(1) << size) - UINT64_C(1);
-        if ((slot.mask[word] & valid) != found->owner_masks[word]
-            || (slot.mask[word] & ~valid) != 0U) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool Interpreter::Impl::stage_owned_driver_pending(PendingUpdate& pending)
 {
     const auto signal = pending.signal;
@@ -669,6 +485,7 @@ bool Interpreter::Impl::stage_owned_driver_pending(PendingUpdate& pending)
 
 void Interpreter::Impl::commit_owned_driver(const SignalId signal)
 {
+    prepare_region_authoritative_write(signal);
     auto& owned = owned_driver_composites[signal];
     if (!owned.active || !owned.phase_active) {
         throw std::logic_error { "owned driver lost its staged phase" };

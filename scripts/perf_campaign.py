@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -205,7 +206,8 @@ def prepare_output(requested: Path | None) -> Path:
 
 def stable_environment() -> tuple[dict[str, str], dict[str, str]]:
     removed = {key: value for key, value in os.environ.items()
-               if key.startswith("FSIM_PROFILE_") or key == "FSIM_PERF_MAP"}
+               if key.startswith(("FSIM_PROFILE_", "FSIM_TRACE_"))
+               or key == "FSIM_PERF_MAP"}
     environment = {key: value for key, value in os.environ.items()
                    if key not in removed}
     environment.update({"LANG": "C", "LC_ALL": "C", "TZ": "UTC"})
@@ -435,6 +437,14 @@ def vivado_tools(bin_dir: Path) -> dict[str, Path]:
     if missing:
         raise CampaignError("Vivado simulator tools missing: " + ", ".join(missing))
     return result
+
+
+def require_wall_measurement_binary(version: str, preflight_only: bool) -> None:
+    if not preflight_only and "[allocation-profiling-build]" in version:
+        raise CampaignError(
+            "allocation-profiling builds cannot provide Wall measurements; "
+            "use a build with FSIM_ENABLE_ALLOCATION_PROFILING=OFF, "
+            "or --preflight-only for diagnostics")
 
 
 def configuration_identity(manifest: dict[str, Any], manifest_path: Path,
@@ -1753,6 +1763,22 @@ def run_preflight(cases: list[dict[str, Any]], config: dict[str, Any], fsim: Pat
     return results, validated
 
 
+def randomized_pair_orders(labels: tuple[str, str], samples: int, seed: int,
+                           identity: str) -> list[tuple[str, str]]:
+    """Reproducible, balanced random order without changing HDL stimulus."""
+    if samples <= 0 or len(labels) != 2 or labels[0] == labels[1]:
+        raise CampaignError("paired order requires two distinct labels and positive samples")
+    digest = hashlib.sha256(
+        f"pair-order-v1|{seed}|{identity}".encode("utf-8")).digest()
+    randomizer = random.Random(int.from_bytes(digest, "big"))
+    reverse = (labels[1], labels[0])
+    orders = [labels, reverse] * (samples // 2)
+    if samples % 2:
+        orders.append(randomizer.choice((labels, reverse)))
+    randomizer.shuffle(orders)
+    return orders
+
+
 def run_samples(cases: list[dict[str, Any]], configs: list[dict[str, Any]], fsim: Path,
                 vivado: dict[str, Path], manifest: dict[str, Any], roots: dict[str, Path],
                 overlays: dict[str, Path], output: Path, environment: dict[str, str],
@@ -1763,8 +1789,9 @@ def run_samples(cases: list[dict[str, Any]], configs: list[dict[str, Any]], fsim
     results = []
     for case in cases:
         for config in configs:
-            for sample in range(1, samples + 1):
-                order = ("fsim", "vivado") if sample % 2 else ("vivado", "fsim")
+            orders = randomized_pair_orders(
+                ("fsim", "vivado"), samples, seed, f"{case['id']}|{config['id']}")
+            for sample, order in enumerate(orders, 1):
                 paired: dict[str, dict[str, Any]] = {}
                 for engine in order:
                     print(f"timing {case['id']} {config['id']} sample {sample}/{samples}: {engine}",
@@ -1777,6 +1804,8 @@ def run_samples(cases: list[dict[str, Any]], configs: list[dict[str, Any]], fsim
                         directory, environment, cpu, seed,
                         settle_seconds=settle_seconds,
                     )
+                    result["pair_order"] = list(order)
+                    result["pair_order_scheme"] = "balanced-random-v1"
                     try:
                         transcript = verify_correctness(
                             case, result, case["id"] in overlays, preflight=False,
@@ -1804,6 +1833,7 @@ def run_samples(cases: list[dict[str, Any]], configs: list[dict[str, Any]], fsim
                     results.append({
                         "case": case["id"], "configuration": config["id"],
                         "sample": sample, "engine": engine,
+                        "pair_order": list(order),
                         "elapsed_seconds": result["elapsed_seconds"],
                         "phase_seconds": result["phase_seconds"],
                         "peak_rss_kib": result["peak_rss_kib"],
@@ -1850,6 +1880,7 @@ def run_fsim_profile(case: dict[str, Any], config: dict[str, Any], fsim: Path,
         stderr = Path(record["stderr"]).read_text(encoding="utf-8", errors="replace")
         if ERROR_PATTERN.search(stdout + "\n" + stderr):
             raise CampaignError(f"profiled fsim setup phase emitted ERROR/FATAL for {case['id']}")
+        record["internal_profile_phase_spans"] = parse_phase_spans(stderr)
         phase_record_path = stem.with_suffix(".result.json")
         phase_record_path.write_text(
             json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1883,9 +1914,6 @@ def run_fsim_profile(case: dict[str, Any], config: dict[str, Any], fsim: Path,
         expected_timed_summaries=expected_preflight["fsim"]["summaries"],
         expected_timed_correctness_lines=expected_preflight["fsim"]["correctness_lines"])
     persist_transcript(directory / "profile", result, transcript)
-    phase_line = re.search(
-        r"(?m)^FSIM-PROFILE setup_ms=([0-9.eE+-]+) run_ms=([0-9.eE+-]+) "
-        r"native_await_ms=([0-9.eE+-]+)$", stdout)
     record = {
         "case": case["id"], "configuration": config["id"],
         "instrumented": True,
@@ -1898,14 +1926,12 @@ def run_fsim_profile(case: dict[str, Any], config: dict[str, Any], fsim: Path,
             cache_after_simulation, phases["elaborate"]["elapsed_seconds"]),
         "compile_and_elaborate_phases": phases,
         "sampled_simulation": sampled,
-        "internal_profile_phase_ms": ({
-            "setup": float(phase_line.group(1)), "run": float(phase_line.group(2)),
-            "native_await": float(phase_line.group(3)),
-        } if phase_line else None),
+        "internal_profile_phase_ms": parse_phase_profile(stdout),
         "transcript_canonical": result["transcript_canonical"],
         "interpretation": (
             "diagnostic only; native materialization may overlap run time, and profile "
-            "instrumentation changes scheduling and wall time"
+            "instrumentation changes scheduling and wall time; internal spans are "
+            "inclusive and may nest, with a separate monotonic origin per process"
         ),
     }
     profile_record_path = directory / "profile_result.json"
@@ -1916,6 +1942,58 @@ def run_fsim_profile(case: dict[str, Any], config: dict[str, Any], fsim: Path,
         "workspace": str(workspace), "native_cache": str(cache),
     }], retain_workspaces)
     return record
+
+
+def parse_phase_spans(stderr: str) -> list[dict[str, str | float]]:
+    """Read diagnostic intervals without assuming nonoverlapping or sorted spans."""
+    result: list[dict[str, str | float]] = []
+    required = {"name", "start_ms", "end_ms", "elapsed_ms"}
+    for line in stderr.splitlines():
+        if not line.startswith("FSIM-PHASE "):
+            continue
+        fields: dict[str, str] = {}
+        for field in line.split()[1:]:
+            name, separator, value = field.partition("=")
+            if not separator or name not in required or name in fields:
+                raise CampaignError(f"invalid diagnostic phase span: {line}")
+            fields[name] = value
+        if fields.keys() != required or not re.fullmatch(r"[a-z][a-z0-9_]*", fields["name"]):
+            raise CampaignError(f"invalid diagnostic phase span: {line}")
+        try:
+            times = {name: float(fields[name])
+                     for name in ("start_ms", "end_ms", "elapsed_ms")}
+        except ValueError as error:
+            raise CampaignError(f"invalid diagnostic phase span: {line}") from error
+        if (any(not math.isfinite(value) or value < 0 for value in times.values())
+                or times["end_ms"] < times["start_ms"]
+                or not math.isclose(times["end_ms"] - times["start_ms"],
+                                    times["elapsed_ms"], rel_tol=1e-12, abs_tol=2e-6)):
+            raise CampaignError(f"invalid diagnostic phase span: {line}")
+        result.append({"name": fields["name"], **times})
+    return result
+
+
+def parse_phase_profile(stdout: str) -> dict[str, float] | None:
+    """Read one diagnostic phase record, allowing additional named intervals."""
+    lines = [line for line in stdout.splitlines()
+             if line.startswith("FSIM-PROFILE setup_ms=")]
+    if len(lines) != 1:
+        return None
+    result: dict[str, float] = {}
+    for field in lines[0].split()[1:]:
+        name, separator, value = field.partition("=")
+        if not separator or not name.endswith("_ms") or name[:-3] in result:
+            return None
+        try:
+            elapsed = float(value)
+        except ValueError:
+            return None
+        if not math.isfinite(elapsed) or elapsed < 0:
+            return None
+        result[name[:-3]] = elapsed
+    if not {"setup", "run", "native_await"}.issubset(result):
+        return None
+    return result
 
 
 def run_profiles(cases: list[dict[str, Any]], fsim: Path,
@@ -1952,9 +2030,12 @@ def summarize_samples(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for engine, rows in by_engine.items():
             times = [row["elapsed_seconds"] for row in rows]
             rss = [row["peak_rss_kib"] for row in rows if row["peak_rss_kib"] is not None]
+            quartiles = (statistics.quantiles(times, n=4, method="inclusive")
+                         if len(times) >= 2 else None)
             engine_summary[engine] = {
                 "samples": len(rows), "median_seconds": statistics.median(times),
                 "min_seconds": min(times), "max_seconds": max(times),
+                "iqr_seconds": quartiles[2] - quartiles[0] if quartiles else None,
                 "median_peak_rss_kib": statistics.median(rss) if rss else None,
             }
         fsim_median = engine_summary["fsim"]["median_seconds"]
@@ -2416,6 +2497,8 @@ def main(argv: list[str] | None = None) -> int:
         identities = configuration_identity(
             manifest, manifest_path, cases, configurations, roots,
             fsim, vivado, evidence, environment, cpu, arguments.seed, BASELINE_COMMIT)
+        require_wall_measurement_binary(
+            identities["baseline_binary"]["version"], arguments.preflight_only)
         frozen = identities["frozen_build_identity"]
         if frozen.get("verified") and frozen.get("baseline_commit") == BASELINE_COMMIT:
             identities["executable_provenance"] = {

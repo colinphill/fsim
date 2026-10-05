@@ -277,7 +277,9 @@ Capture run_once(
 struct SliceSharingCapture {
     fsim::runtime::RunResult result;
     std::string values;
+    std::size_t elaborated_processes { };
     std::size_t dynamic_part_inserts { };
+    std::size_t dynamic_part_insert_processes { };
     std::size_t selection_shapes { };
     std::size_t compiled_processes { };
     std::size_t compiled_modules { };
@@ -436,10 +438,11 @@ SliceSharingCapture run_slice_sharing(
     std::vector<SelectionShape> shapes;
     SliceSharingCapture capture;
     for (const auto& process : project->design.processes()) {
+        bool process_has_dynamic_part_insert { };
         for (const auto& operation : process.operations) {
             const auto* insert = fsim::runtime::simir::operation_get_if<
                 fsim::runtime::simir::DynamicPartInsert>(&operation);
-            if (!insert) {
+            if (insert == nullptr) {
                 continue;
             }
             ++capture.dynamic_part_inserts;
@@ -452,9 +455,13 @@ SliceSharingCapture run_slice_sharing(
             if (std::ranges::find(shapes, shape) == shapes.end()) {
                 shapes.push_back(shape);
             }
+            process_has_dynamic_part_insert = true;
         }
+        capture.dynamic_part_insert_processes +=
+            process_has_dynamic_part_insert ? 1U : 0U;
     }
     capture.selection_shapes = shapes.size();
+    capture.elaborated_processes = project->design.processes().size();
     assert(capture.dynamic_part_inserts >= 128U);
 
     fsim::app::Simulation simulation {
@@ -502,11 +509,29 @@ void verify_dynamic_part_insert_template_sharing(
         assert(compiled.dynamic_part_inserts >= 128U);
         assert(compiled.selection_shapes > uniform.selection_shapes);
 #if defined(FSIM_HAS_LLVM)
-        assert(compiled.compiled_processes >= 128U);
-        // The same fixture emits nine modules before DynamicPartInsert
-        // template sharing. Two distinct selection shapes need two here.
-        assert(compiled.compiled_modules == 2U);
-        assert(uniform.compiled_modules == 1U);
+        // Each of 128 leaf instances has two indexed input actuals and
+        // one indexed output actual. Elaboration materializes one adapter
+        // process for each of those three actuals; the clock name actual
+        // aliases directly. The 513 processes are therefore 128 leaf
+        // writers, 384 actual adapters, and the top stimulus process.
+        assert(compiled.elaborated_processes == 513U);
+        assert(uniform.elaborated_processes == 513U);
+        // DynamicPartInsert is emitted for the local dynamic-slice write in
+        // each leaf writer. The top stimulus and port adapters use signal
+        // element operations, not this local-register operation.
+        assert(compiled.dynamic_part_insert_processes == 128U);
+        assert(uniform.dynamic_part_insert_processes == 128U);
+        assert(compiled.selection_shapes == 2U);
+        assert(uniform.selection_shapes == 1U);
+        assert(compiled.compiled_processes == 129U);
+        assert(uniform.compiled_processes == 129U);
+        // The top-level stimulus is one process in a separate specialization
+        // and contributes one registration job. Each distinct writer
+        // selection shape contributes one shared process-template job.
+        assert(compiled.compiled_modules
+            == compiled.selection_shapes + 1U);
+        assert(uniform.compiled_modules
+            == uniform.selection_shapes + 1U);
         assert(compiled.compiled_modules > uniform.compiled_modules);
 #endif
     }
@@ -837,8 +862,10 @@ void verify_dynamic_projected_template_sharing(
                 }));
         }
 #if defined(FSIM_HAS_LLVM)
-        assert(compiled.compiled_processes >= 140U);
-        assert(compiled.compiled_modules == 4U);
+        // The 140 projected writers plus the top-level stimulus are compiled
+        // separately; their four writer shapes and stimulus account for five modules.
+        assert(compiled.compiled_processes == 141U);
+        assert(compiled.compiled_modules == 5U);
 #endif
     }
 }
@@ -1284,15 +1311,15 @@ end architecture;
         assert(compiled.final_values == reference.final_values);
         assert(reference.final_values[0] == std::string(80U, 'Z'));
         assert(reference.final_values[1]
-            == std::string(8U, 'Z') + std::string(72U, 'L')
-                + std::string(8U, 'Z'));
+            == std::string(8U, 'U') + std::string(72U, 'L')
+                + std::string(8U, 'U'));
         assert(std::ranges::find(reference.changes,
             std::tuple { std::string { "whole" }, std::uint64_t { 2U },
                 std::string(80U, 'H') }) != reference.changes.end());
         assert(std::ranges::find(reference.changes,
             std::tuple { std::string { "sliced" }, std::uint64_t { 2U },
-                std::string(8U, 'Z') + std::string(72U, 'X')
-                    + std::string(8U, 'Z') })
+                std::string(8U, 'U') + std::string(72U, 'X')
+                    + std::string(8U, 'U') })
             != reference.changes.end());
 #if defined(FSIM_HAS_LLVM)
         assert(compiled.compiled_processes == compiled.process_count);

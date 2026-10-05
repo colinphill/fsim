@@ -1515,7 +1515,7 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
         + "(" + std::to_string(duration) + ")";
     if (const auto existing = design_.signal_by_name_.find(name);
         existing != design_.signal_by_name_.end()) {
-        implicit_signal_dependencies_.push_back(existing->second);
+        record_implicit_signal_dependency(existing->second);
         return existing->second;
     }
     if (design_.signals_.size()
@@ -1527,7 +1527,7 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
             span);
         return std::nullopt;
     }
-    const auto process_index = design_.processes_.size()
+    const auto process_index = design_.process_count()
         + 1U + generated_processes_.size();
     if (process_index > std::numeric_limits<ProcessId>::max()) {
         report(
@@ -1584,6 +1584,8 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     design_.signal_by_name_.emplace(name, derived);
 
     Process driver;
+    driver.scheduling_domain
+        = ProcessSchedulingDomain::systemverilog;
     driver.id = static_cast<ProcessId>(process_index);
     driver.name = name + ".$implicit_driver";
     driver.initialize = false;
@@ -1606,7 +1608,8 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
         driver.register_value_kinds.assign(2U, ValueKind::logic4);
         driver.operations.emplace_back(ReadSignal { 0U, derived });
         driver.operations.emplace_back(UnaryNot { 1U, 0U });
-        driver.operations.emplace_back(WriteUpdate { derived, 1U });
+        driver.operations.emplace_back(WriteUpdate {
+            derived, 1U, SignalUpdateDomain::systemverilog_active });
     } else if (attribute == "delayed") {
         driver.register_count = 1U;
         driver.register_value_kinds.push_back(
@@ -1636,7 +1639,7 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     driver.operations.emplace_back(WaitSensitivity { });
     driver.operations.emplace_back(Jump { 0U });
     generated_processes_.push_back(std::move(driver));
-    implicit_signal_dependencies_.push_back(derived);
+    record_implicit_signal_dependency(derived);
     return derived;
 }
 
@@ -1758,7 +1761,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
         return resize(destination);
     }
     case HirVhdlSignalAttributeKind::last_value: {
-        implicit_signal_dependencies_.push_back(attribute->signal);
+        record_implicit_signal_dependency(attribute->signal);
         const auto destination = allocate_register(
             attribute->width, attribute->domain);
         process_.operations.emplace_back(SignalLastValue {
@@ -3750,6 +3753,9 @@ std::optional<RegisterId> Lowerer::lower_hir_container_element_index(
             && element.type->dimensions.size() != element.indices.size())) {
         return std::nullopt;
     }
+    if (hir_checked_fixed_array_index(element)) {
+        return lower_hir_fixed_array_index(element);
+    }
     if (element.indices.size() == 1U) {
         if (element.type->string_indices) {
             return lower_hir_string_expression(element.indices.front());
@@ -3837,6 +3843,508 @@ std::optional<RegisterId> Lowerer::lower_hir_container_element_index(
         linear = combined;
     }
     return linear;
+}
+
+bool Lowerer::hir_sv_runtime_container_read_supported(
+    const HirContainerElementBinding& element) const
+{
+    if (process_.scheduling_domain
+            != ProcessSchedulingDomain::systemverilog
+        || element.type == nullptr || element.indices.size() != 1U
+        || element.type->fixed || element.type->associative
+        || element.type->string_indices
+        || element.type->element_width == 0U
+        || element.width != element.type->element_width) {
+        return false;
+    }
+    return element.runtime_read_profile.has_value()
+        || hir_sv_runtime_container_read_profile(element).has_value();
+}
+
+std::optional<RegisterId>
+Lowerer::lower_hir_sv_runtime_container_read_index(
+    const HirContainerElementBinding& element)
+{
+    if (!hir_sv_runtime_container_read_supported(element)) {
+        return std::nullopt;
+    }
+    const auto expression = element.indices.front();
+    const auto width = hir_expression_width(
+        expression, hir_process_scope_);
+    if (!width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
+        return std::nullopt;
+    }
+    auto index = lower_hir_expression(expression, *width);
+    if (!index) {
+        return std::nullopt;
+    }
+    if (register_width(*index) != *width) {
+        index = resize_register(
+            *index, *width, hir_expression_signed(expression));
+    }
+    return index;
+}
+
+void Lowerer::lower_hir_sv_runtime_container_read(
+    const HirContainerElementBinding& element,
+    const ContainerRegisterId container,
+    const RegisterId index,
+    const RegisterId destination)
+{
+    const auto& type = *element.type;
+    const auto expression = element.indices.front();
+    const auto index_width = register_width(index);
+    // Compare before narrowing: high selector bits must not wrap into a
+    // valid low-word index. Container storage bounds keep its size in 32 bits.
+    const auto comparison_width = std::max<std::size_t>(
+        index_width, 32U);
+    const auto compared_index = resize_register(
+        index,
+        comparison_width,
+        hir_expression_signed(expression));
+    const auto container_size = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(runtime::simir::ContainerSize {
+        container_size, container });
+    const auto compared_size = resize_register(
+        container_size, comparison_width, false);
+    const auto in_range = allocate_register(
+        1U, frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(runtime::simir::Binary {
+        runtime::simir::BinaryOperator::less_unsigned,
+        in_range,
+        compared_index,
+        compared_size,
+    });
+    const auto profile = element.runtime_read_profile
+        ? element.runtime_read_profile
+        : hir_sv_runtime_container_read_profile(element);
+    const auto default_value = profile && profile->default_x
+        ? runtime::Logic4::x
+        : runtime::Logic4::zero;
+    process_.operations.emplace_back(runtime::simir::LoadConstant {
+        destination,
+        PackedLogic4(type.element_width, default_value),
+    });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    // X/Z comparisons take the false edge too, leaving the type default.
+    process_.operations.emplace_back(runtime::simir::Branch {
+        in_range,
+        static_cast<InstructionIndex>(branch + 1U),
+        0U,
+        runtime::simir::UnknownBranchPolicy::when_false,
+    });
+    // Only a proven in-range index is narrowed to the container ABI width.
+    const auto safe_index = resize_register(index, 32U, false);
+    process_.operations.emplace_back(runtime::simir::ContainerRead {
+        destination,
+        container,
+        safe_index,
+        false,
+        false,
+        false,
+    });
+    const auto finished = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch] = runtime::simir::Branch {
+        in_range,
+        static_cast<InstructionIndex>(branch + 1U),
+        finished,
+        runtime::simir::UnknownBranchPolicy::when_false,
+    };
+}
+
+bool Lowerer::hir_checked_fixed_array_index(
+    const HirContainerElementBinding& element) const
+{
+    return process_.scheduling_domain
+            == ProcessSchedulingDomain::systemverilog
+        && element.type != nullptr && !element.indices.empty()
+        && (element.indices.size() == 1U
+            || element.type->dimensions.size() == element.indices.size())
+        && element.type->fixed && !element.type->associative
+        && !element.type->queue && !element.type->string_indices
+        && element.type->element_kind == ContainerElementKind::Packed;
+}
+
+std::optional<RegisterId>
+Lowerer::lower_hir_fixed_array_index(
+    const HirContainerElementBinding& element)
+{
+    if (!hir_checked_fixed_array_index(element)) {
+        return std::nullopt;
+    }
+    const auto rank_one = element.indices.size() == 1U;
+    const ContainerDimension rank_one_bounds {
+        element.type->index_left, element.type->index_right };
+    const auto dimensions = rank_one
+        ? std::span { &rank_one_bounds, 1U }
+        : std::span { element.type->dimensions };
+
+    constexpr auto maximum_index = static_cast<std::uint64_t>(
+        std::numeric_limits<std::int64_t>::max());
+    std::vector<std::uint64_t> extents;
+    extents.reserve(dimensions.size());
+    std::uint64_t total_elements { 1U };
+    for (const auto& bounds : dimensions) {
+        const auto difference = bounds.first >= bounds.second
+            ? static_cast<std::int64_t>(bounds.first)
+                - static_cast<std::int64_t>(bounds.second)
+            : static_cast<std::int64_t>(bounds.second)
+                - static_cast<std::int64_t>(bounds.first);
+        const auto extent = static_cast<std::uint64_t>(difference) + 1U;
+        if (extent == 0U || total_elements > maximum_index / extent) {
+            // The existing signed ContainerRead linear-index contract cannot
+            // represent this complete fixed-array extent without wrapping.
+            return std::nullopt;
+        }
+        total_elements *= extent;
+        extents.push_back(extent);
+    }
+
+    std::vector<std::optional<std::int64_t>> constants;
+    constants.reserve(element.indices.size());
+    bool all_constant = true;
+    bool has_constant_invalid { };
+    for (std::size_t dimension { };
+        dimension < element.indices.size(); ++dimension) {
+        const auto expression = element.indices[dimension];
+        auto constant = hir_constant_integer(expression);
+        const auto width = std::max<std::size_t>(
+            hir_expression_width(expression, hir_process_scope_).value_or(32U),
+            1U);
+        const auto signed_index = hir_expression_signed(expression);
+        bool constant_fits { true };
+        if (constant && width < 64U) {
+            if (signed_index) {
+                const auto magnitude = std::uint64_t { 1U }
+                    << (width - 1U);
+                const auto minimum = -static_cast<std::int64_t>(magnitude);
+                const auto maximum = static_cast<std::int64_t>(magnitude - 1U);
+                constant_fits = *constant >= minimum
+                    && *constant <= maximum;
+            } else {
+                constant_fits = *constant >= 0
+                    && static_cast<std::uint64_t>(*constant)
+                        < (std::uint64_t { 1U } << width);
+            }
+        } else if (constant && !signed_index) {
+            constant_fits = *constant >= 0;
+        }
+        // Only use a compile-time integer when it has the same mathematical
+        // value as the expression's declared bit width and signedness. Other
+        // constants stay on the exact-width packed comparison path.
+        if (!constant_fits) {
+            constant.reset();
+        }
+        if (constant) {
+            const auto& bounds = dimensions[dimension];
+            const auto low = std::min(bounds.first, bounds.second);
+            const auto high = std::max(bounds.first, bounds.second);
+            has_constant_invalid |= *constant < low || *constant > high;
+        } else {
+            all_constant = false;
+        }
+        constants.push_back(constant);
+    }
+
+    const auto emit_linear_constant = [&](const std::uint64_t value) {
+        const auto result = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            result, unsigned_value(value, 64U) });
+        return result;
+    };
+    const auto emit_invalid_sentinel = [&]() {
+        const auto result = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            result, integer_value(
+                std::numeric_limits<std::int64_t>::min(), 64U) });
+        return result;
+    };
+
+    const auto constant_linear_index = [&]() -> std::optional<std::uint64_t> {
+        std::uint64_t linear { };
+        for (std::size_t dimension { };
+            dimension < constants.size(); ++dimension) {
+            if (!constants[dimension]) {
+                return std::nullopt;
+            }
+            const auto& bounds = dimensions[dimension];
+            const auto ordinal = bounds.first >= bounds.second
+                ? static_cast<std::uint64_t>(
+                      static_cast<std::int64_t>(bounds.first)
+                      - *constants[dimension])
+                : static_cast<std::uint64_t>(
+                      *constants[dimension]
+                      - static_cast<std::int64_t>(bounds.first));
+            if (linear > (maximum_index - ordinal) / extents[dimension]) {
+                return std::nullopt;
+            }
+            linear = linear * extents[dimension] + ordinal;
+        }
+        return linear;
+    };
+
+    if (all_constant) {
+        if (has_constant_invalid) {
+            return emit_invalid_sentinel();
+        }
+        if (rank_one) {
+            return emit_linear_constant(
+                static_cast<std::uint64_t>(*constants.front()));
+        }
+        const auto linear = constant_linear_index();
+        if (!linear) {
+            return std::nullopt;
+        }
+        return emit_linear_constant(*linear);
+    }
+
+    // Emit every source index expression in order before adding any bounds
+    // branch. In particular, a known-invalid earlier dimension must not skip
+    // a later expression with observable function-call effects.
+    std::vector<RegisterId> indices;
+    indices.reserve(element.indices.size());
+    for (const auto expression : element.indices) {
+        const auto width = std::max<std::size_t>(
+            hir_expression_width(expression, hir_process_scope_).value_or(32U),
+            1U);
+        if (width > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        auto index = lower_hir_expression(expression, width);
+        if (!index) {
+            return std::nullopt;
+        }
+        if (register_width(*index) != width) {
+            index = resize_register(
+                *index, width, hir_expression_signed(expression));
+        }
+        indices.push_back(*index);
+    }
+
+    if (has_constant_invalid) {
+        return emit_invalid_sentinel();
+    }
+
+    std::optional<RegisterId> all_dimensions_valid;
+    for (std::size_t dimension { };
+        dimension < indices.size(); ++dimension) {
+        if (constants[dimension]) {
+            continue;
+        }
+        const auto expression = element.indices[dimension];
+        const auto source_width = register_width(indices[dimension]);
+        const auto signed_index = hir_expression_signed(expression);
+        if (source_width > std::numeric_limits<std::uint32_t>::max()
+            || (!signed_index
+                && source_width
+                    == std::numeric_limits<std::uint32_t>::max())) {
+            return std::nullopt;
+        }
+        const auto comparison_width = std::max<std::size_t>(
+            source_width + static_cast<std::size_t>(!signed_index),
+            32U);
+        if (comparison_width
+            > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        const auto compared_index = resize_register(
+            indices[dimension], comparison_width, signed_index);
+        const auto domain = register_domain(compared_index);
+        const auto& bounds = dimensions[dimension];
+        const auto low = std::min(bounds.first, bounds.second);
+        const auto high = std::max(bounds.first, bounds.second);
+
+        const auto low_register = allocate_register(comparison_width, domain);
+        process_.operations.emplace_back(LoadConstant {
+            low_register, integer_value(low, comparison_width) });
+        const auto above_lower_bound = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::greater_equal_signed,
+            above_lower_bound,
+            compared_index,
+            low_register,
+        });
+
+        const auto high_register = allocate_register(comparison_width, domain);
+        process_.operations.emplace_back(LoadConstant {
+            high_register, integer_value(high, comparison_width) });
+        const auto below_upper_bound = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_equal_signed,
+            below_upper_bound,
+            compared_index,
+            high_register,
+        });
+
+        const auto dimension_valid = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_and,
+            dimension_valid,
+            above_lower_bound,
+            below_upper_bound,
+        });
+        if (!all_dimensions_valid) {
+            all_dimensions_valid = dimension_valid;
+        } else {
+            const auto combined = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(LogicalBinary {
+                LogicalBinaryOperator::logical_and,
+                combined,
+                *all_dimensions_valid,
+                dimension_valid,
+            });
+            all_dimensions_valid = combined;
+        }
+    }
+    if (!all_dimensions_valid) {
+        return std::nullopt;
+    }
+
+    const auto result = emit_invalid_sentinel();
+    if (process_.operations.size()
+        >= std::numeric_limits<InstructionIndex>::max()) {
+        return std::nullopt;
+    }
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        *all_dimensions_valid,
+        static_cast<InstructionIndex>(branch + 1U),
+        0U,
+        UnknownBranchPolicy::when_false,
+    });
+
+    std::optional<RegisterId> linear;
+    for (std::size_t dimension { };
+        dimension < indices.size(); ++dimension) {
+        const auto& bounds = dimensions[dimension];
+        const auto known_index = convert_to_two_state(indices[dimension]);
+        const auto signed_index = hir_expression_signed(
+            element.indices[dimension]);
+        const auto wide_index = resize_register(
+            known_index, 64U, signed_index);
+        if (rank_one) {
+            // Rank one consumes the declared index; higher ranks use ordinals.
+            linear = wide_index;
+            break;
+        }
+        const auto origin = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            origin, integer_value(bounds.first, 64U) });
+        const auto ordinal = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_signed,
+            ordinal,
+            bounds.first >= bounds.second ? origin : wide_index,
+            bounds.first >= bounds.second ? wide_index : origin,
+        });
+        if (!linear) {
+            linear = ordinal;
+            continue;
+        }
+        const auto count = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            count, unsigned_value(extents[dimension], 64U) });
+        const auto scaled = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::multiply_unsigned,
+            scaled,
+            *linear,
+            count,
+        });
+        const auto combined = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned,
+            combined,
+            scaled,
+            ordinal,
+        });
+        linear = combined;
+    }
+
+    process_.operations.emplace_back(CopyRegister { result, *linear });
+    if (process_.operations.size()
+        > std::numeric_limits<InstructionIndex>::max()) {
+        return std::nullopt;
+    }
+    const auto finished = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch] = Branch {
+        *all_dimensions_valid,
+        static_cast<InstructionIndex>(branch + 1U),
+        finished,
+        UnknownBranchPolicy::when_false,
+    };
+    return result;
+}
+
+std::optional<InstructionIndex> Lowerer::begin_hir_fixed_array_write(
+    const HirContainerElementBinding& element, const RegisterId index)
+{
+    if (!hir_checked_fixed_array_index(element)) {
+        return std::nullopt;
+    }
+    if (element.indices.size() == 1U && !process_.operations.empty()) {
+        const auto definition = process_.operations.expanded(
+            process_.operations.size() - 1U);
+        const auto* literal = operation_get_if<LoadConstant>(&definition);
+        if (literal != nullptr && literal->destination == index) {
+            const auto coordinate = literal->value.known_signed_value();
+            const auto low = std::min(
+                element.type->index_left, element.type->index_right);
+            const auto high = std::max(
+                element.type->index_left, element.type->index_right);
+            if (coordinate && *coordinate >= low && *coordinate <= high) {
+                // The checked index is already a valid constant. Keep its
+                // definition adjacent to the write so element-net lowering
+                // can replace it with the original physical leaf driver.
+                return std::nullopt;
+            }
+        }
+    }
+    // All declared bounds fit int32, and a multidimensional ordinal is
+    // nonnegative. INT64_MIN is therefore disjoint from every valid index.
+    // Place this guard after evaluating the RHS and every index expression.
+    const auto invalid = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        invalid, integer_value(std::numeric_limits<std::int64_t>::min(), 64U) });
+    const auto valid = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::not_equal, valid, index, invalid });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        valid, static_cast<InstructionIndex>(branch + 1U), 0U,
+        UnknownBranchPolicy::when_false });
+    return branch;
+}
+
+void Lowerer::end_hir_fixed_array_write(
+    const std::optional<InstructionIndex> branch)
+{
+    if (!branch) {
+        return;
+    }
+    auto operation = operation_get<Branch>(
+        process_.operations.expanded(*branch));
+    operation.when_false = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[*branch] = operation;
 }
 
 std::optional<RegisterId>
@@ -4936,7 +5444,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 ? SignalReadKind::sampled
                 : SignalReadKind::current,
         });
-        implicit_signal_dependencies_.push_back(signal->second);
+        record_implicit_signal_dependency(signal->second);
         if (expected_width != 0U && expected_width != info.width) {
             destination = resize_register(
                 destination, expected_width, info.is_signed);
@@ -4966,7 +5474,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 ? SignalReadKind::sampled
                 : SignalReadKind::current,
         });
-        implicit_signal_dependencies_.push_back(*signal);
+        record_implicit_signal_dependency(*signal);
         if (expected_width != 0U && expected_width != info.width) {
             destination = resize_register(
                 destination, expected_width, info.is_signed);
@@ -6564,8 +7072,32 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         result = aggregate;
     } else if (const auto aggregate_member
         = hir_container_aggregate_selection(expression_id)) {
-        const auto index = lower_hir_container_element_index(
-            aggregate_member->element);
+        const auto guarded_dynamic_read
+            = hir_sv_dynamic_aggregate_member_read_supported(
+                *aggregate_member);
+        std::optional<RegisterId> index;
+        std::size_t index_width { };
+        if (guarded_dynamic_read) {
+            const auto expression_index
+                = aggregate_member->element.indices.front();
+            const auto source_width = hir_expression_width(
+                expression_index, hir_process_scope_);
+            if (!source_width || *source_width == 0U
+                || *source_width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                return std::nullopt;
+            }
+            index_width = *source_width;
+            index = lower_hir_expression(expression_index, index_width);
+            if (index && register_width(*index) != index_width) {
+                index = resize_register(
+                    *index, index_width,
+                    hir_expression_signed(expression_index));
+            }
+        } else {
+            index = lower_hir_container_element_index(
+                aggregate_member->element);
+        }
         if (!index) {
             return std::nullopt;
         }
@@ -6582,27 +7114,79 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             : frontend::ValueDomain::Logic4;
         const auto destination = allocate_register(
             aggregate_member->leaf.element_width, domain);
+
+        std::optional<InstructionIndex> invalid_index_branch;
+        std::optional<RegisterId> invalid_index_condition;
+        auto safe_index = *index;
+        if (guarded_dynamic_read) {
+            const auto comparison_width = std::max<std::size_t>(
+                index_width, 32U);
+            const auto compared_index = resize_register(
+                *index, comparison_width,
+                hir_expression_signed(
+                    aggregate_member->element.indices.front()));
+            const auto container_size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize {
+                container_size, container });
+            const auto compared_size = resize_register(
+                container_size, comparison_width, false);
+            const auto in_range = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_unsigned,
+                in_range,
+                compared_index,
+                compared_size,
+            });
+            // IEEE Std 1800-2023 §7.4.6 and Table 7-1: an invalid
+            // unpacked-array read returns the selected member's type default.
+            const auto default_value = aggregate_member->leaf.two_state
+                ? runtime::Logic4::zero
+                : runtime::Logic4::x;
+            process_.operations.emplace_back(LoadConstant {
+                destination,
+                PackedLogic4(
+                    aggregate_member->leaf.element_width, default_value),
+            });
+            if (process_.operations.size()
+                >= std::numeric_limits<InstructionIndex>::max()) {
+                return std::nullopt;
+            }
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                in_range,
+                static_cast<InstructionIndex>(branch + 1U),
+                0U,
+                UnknownBranchPolicy::when_false,
+            });
+            safe_index = resize_register(*index, 32U, false);
+            invalid_index_branch = branch;
+            invalid_index_condition = in_range;
+        }
         process_.operations.emplace_back(ContainerAggregateRead {
             destination,
             container,
-            *index,
+            safe_index,
             aggregate_member->members,
             aggregate_member->element.indices.size() > 1U
                 || aggregate_member->element.type->signed_indices,
             aggregate_member->element.indices.size() > 1U,
         });
+        if (invalid_index_branch) {
+            const auto finished = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations[*invalid_index_branch] = Branch {
+                *invalid_index_condition,
+                static_cast<InstructionIndex>(*invalid_index_branch + 1U),
+                finished,
+                UnknownBranchPolicy::when_false,
+            };
+        }
         if (!aggregate_member->element.local) {
-            const auto alias = std::ranges::find_if(
-                design_.container_signal_aliases_.rbegin(),
-                design_.container_signal_aliases_.rend(),
-                [&](const ContainerSignalAlias& candidate) {
-                    return candidate.object
-                            == aggregate_member->element.object
-                        && candidate.readable;
-                });
-            if (alias != design_.container_signal_aliases_.rend()) {
-                implicit_signal_dependencies_.push_back(alias->signal);
-            }
+            record_container_object_dependency(
+                aggregate_member->element.object);
         }
         result = expected_width != 0U
                 && expected_width
@@ -6657,7 +7241,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         && hir_static_container_expression_type(
             expression->systemverilog->operands.front())
         && !hir_container_object_binding(
-            expression->systemverilog->operands.front())) {
+            expression->systemverilog->operands.front())
+        && !hir_container_element_binding(expression_id)) {
         const auto& indexed_expression = *expression->systemverilog;
         const auto container = lower_hir_static_container_value(
             indexed_expression.operands.front());
@@ -6672,20 +7257,35 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             ? frontend::ValueDomain::Bit2
             : frontend::ValueDomain::Logic4;
         element.signed_value = container->type.signed_elements;
-        const auto index = lower_hir_container_element_index(element);
+        element.runtime_read_profile
+            = hir_sv_runtime_container_read_profile(element);
+        const auto guarded_sv_read
+            = hir_sv_runtime_container_read_supported(element);
+        const auto index = guarded_sv_read
+            ? lower_hir_sv_runtime_container_read_index(element)
+            : lower_hir_container_element_index(element);
         if (!index || element.width == 0U) {
             return std::nullopt;
         }
+        const auto destination_domain = guarded_sv_read
+                && element.runtime_read_profile
+            ? element.runtime_read_profile->domain
+            : element.domain;
         const auto destination = allocate_register(
-            element.width, element.domain);
-        process_.operations.emplace_back(ContainerRead {
-            destination,
-            container->value,
-            *index,
-            container->type.signed_indices,
-            false,
-            false,
-        });
+            element.width, destination_domain);
+        if (guarded_sv_read) {
+            lower_hir_sv_runtime_container_read(
+                element, container->value, *index, destination);
+        } else {
+            process_.operations.emplace_back(ContainerRead {
+                destination,
+                container->value,
+                *index,
+                container->type.signed_indices,
+                false,
+                false,
+            });
+        }
         result = expected_width != 0U
                 && expected_width != element.width
             ? std::optional { resize_register(
@@ -6693,7 +7293,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             : std::optional { destination };
     } else if (const auto element
         = hir_container_element_binding(expression_id)) {
-        if (const auto extract
+        if (const auto selected
+            = hir_static_element_signal_extract(*element)) {
+            const auto destination = allocate_register(
+                selected->width, element->domain);
+            process_.operations.emplace_back(runtime::simir::ReadSignal {
+                destination,
+                selected->signal,
+                runtime::simir::SignalReadKind::current,
+            });
+            record_implicit_signal_dependency(
+                selected->signal, selected->offset, selected->width);
+            result = expected_width != 0U
+                    && expected_width != element->width
+                ? std::optional { resize_register(
+                      destination, expected_width, element->signed_value) }
+                : std::optional { destination };
+        } else if (const auto extract
             = hir_static_container_signal_extract(*element)) {
             const auto source_register = allocate_register(
                 extract->source_width, extract->domain);
@@ -6710,14 +7326,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 extract->offset,
                 extract->width,
             });
-            implicit_signal_dependencies_.push_back(extract->signal);
+            record_implicit_signal_dependency(
+                extract->signal, extract->offset, extract->width);
             result = expected_width != 0U
                     && expected_width != element->width
                 ? std::optional { resize_register(
                       destination, expected_width, element->signed_value) }
                 : std::optional { destination };
         } else {
-            const auto index = lower_hir_container_element_index(*element);
+            const auto guarded_sv_read
+                = hir_sv_runtime_container_read_supported(*element);
+            const auto index = guarded_sv_read
+                ? lower_hir_sv_runtime_container_read_index(*element)
+                : lower_hir_container_element_index(*element);
             if (!index) {
                 return std::nullopt;
             }
@@ -6728,28 +7349,28 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 process_.operations.emplace_back(ReadContainerObject {
                     container, element->object });
             }
+            const auto destination_domain = guarded_sv_read
+                    && element->runtime_read_profile
+                ? element->runtime_read_profile->domain
+                : element->domain;
             const auto destination = allocate_register(
-                element->width, element->domain);
-            process_.operations.emplace_back(ContainerRead {
-                destination,
-                container,
-                *index,
-                element->indices.size() > 1U
-                    || element->type->signed_indices,
-                element->indices.size() > 1U,
-                element->type->string_indices,
-            });
+                element->width, destination_domain);
+            if (guarded_sv_read) {
+                lower_hir_sv_runtime_container_read(
+                    *element, container, *index, destination);
+            } else {
+                process_.operations.emplace_back(ContainerRead {
+                    destination,
+                    container,
+                    *index,
+                    element->indices.size() > 1U
+                        || element->type->signed_indices,
+                    element->indices.size() > 1U,
+                    element->type->string_indices,
+                });
+            }
             if (!element->local) {
-                const auto alias = std::ranges::find_if(
-                    design_.container_signal_aliases_.rbegin(),
-                    design_.container_signal_aliases_.rend(),
-                    [&](const ContainerSignalAlias& candidate) {
-                        return candidate.object == element->object
-                            && candidate.readable;
-                    });
-                if (alias != design_.container_signal_aliases_.rend()) {
-                    implicit_signal_dependencies_.push_back(alias->signal);
-                }
+                record_container_object_dependency(element->object);
             }
             result = expected_width != 0U
                     && expected_width != element->width
@@ -7853,7 +8474,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                         ? SignalReadKind::sampled
                         : SignalReadKind::current,
                 });
-                implicit_signal_dependencies_.push_back(*binding->signal);
+                record_implicit_signal_dependency(*binding->signal);
             }
         } else {
             // Constant array declarations have no runtime binding. Materialize
@@ -8132,7 +8753,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                     ? SignalReadKind::sampled
                     : SignalReadKind::current,
             });
-            implicit_signal_dependencies_.push_back(*binding->signal);
+            record_implicit_signal_dependency(*binding->signal);
         }
         if (!root) {
             return std::nullopt;
@@ -9001,7 +9622,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 *seed_binding->signal,
                 SignalReadKind::current,
             });
-            implicit_signal_dependencies_.push_back(
+            record_implicit_signal_dependency(
                 *seed_binding->signal);
         }
         if (!seed) {
@@ -9285,7 +9906,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                         ? SignalReadKind::sampled
                         : SignalReadKind::current,
                 });
-                implicit_signal_dependencies_.push_back(*binding->signal);
+                record_implicit_signal_dependency(*binding->signal);
             }
             if (sv_member) {
                 if (sv_member->offset
@@ -9481,10 +10102,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 > std::numeric_limits<std::uint32_t>::max()) {
             return std::nullopt;
         }
+        const auto dependency_begin = implicit_signal_dependencies_.size();
         const auto input = lower_hir_expression(
             source.operands.front(), *source_width);
         if (!input) {
             return std::nullopt;
+        }
+        if (constant_selection && expression->systemverilog != nullptr) {
+            if (const auto selected = hir_static_signal_sensitivity(
+                    expression_id, hir_process_scope_)) {
+                // Only a syntactically static signal selection is certified.
+                // Arithmetic expressions and dynamic indices retain all reads.
+                implicit_signal_dependencies_.resize(dependency_begin);
+                record_implicit_signal_dependency(
+                    selected->signal, selected->offset, selected->width);
+            }
         }
         const auto destination = allocate_register(
             *result_width, register_domain(*input));
@@ -11333,16 +11965,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             { },
         });
         if (!element->local) {
-            const auto alias = std::ranges::find_if(
-                design_.container_signal_aliases_.rbegin(),
-                design_.container_signal_aliases_.rend(),
-                [&](const ContainerSignalAlias& candidate) {
-                    return candidate.object == element->object
-                        && candidate.readable;
-                });
-            if (alias != design_.container_signal_aliases_.rend()) {
-                implicit_signal_dependencies_.push_back(alias->signal);
-            }
+            record_container_object_dependency(element->object);
         }
         return destination;
     }
@@ -12105,9 +12728,7 @@ Lowerer::capture_hir_packed_update_target(
             ? hir_runtime_binding(
                   *declaration, hir_process_scope_, true)
             : std::nullopt;
-        if (!binding
-            || (binding->signal
-                && read_only_signals_.contains(*binding->signal))
+        if (!binding || !signal_binding_can_emit_write(*binding)
             || binding->width == 0U) {
             return std::nullopt;
         }
@@ -12455,8 +13076,7 @@ bool Lowerer::write_hir_packed_update_target(
         }
         return true;
     }
-    if (!target.binding.signal
-        || read_only_signals_.contains(*target.binding.signal)) {
+    if (!signal_binding_can_emit_write(target.binding)) {
         return false;
     }
     if (target.constant_selection) {
@@ -12489,18 +13109,287 @@ bool Lowerer::write_hir_packed_update_target(
         process_.operations.emplace_back(WriteBlocking {
             *target.binding.signal, value });
     }
+    record_readonly_vhdl_output_write(target.binding);
     return true;
 }
 
 bool Lowerer::lower_hir_packed_copy_out(
     const semantic::ExpressionId target,
-    const RegisterId source)
+    const RegisterId source,
+    const HirPackedCopyOutMode mode)
 {
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(target)
         : std::nullopt;
     if (!expression) {
         return false;
+    }
+    if (mode == HirPackedCopyOutMode::systemverilog_active_update) {
+        if (expression->systemverilog == nullptr
+            || expression->systemverilog->kind
+                != semantic::sv::ExpressionKind::concatenation) {
+            return false;
+        }
+
+        struct PendingUpdate {
+            HirRuntimeBinding binding;
+            std::size_t source_offset { };
+            std::uint32_t width { };
+            std::optional<std::uint32_t> destination_offset;
+            frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+            bool check_integer_range { };
+        };
+        std::vector<PendingUpdate> updates;
+        const auto collect = [&](auto&& self,
+                                 const semantic::ExpressionId lvalue,
+                                 const std::size_t source_offset) -> bool {
+            const auto target_expression
+                = specialized_hir_unit_->find_expression(lvalue);
+            if (!target_expression
+                || target_expression->systemverilog == nullptr) {
+                return false;
+            }
+            const auto& selected = *target_expression->systemverilog;
+            if (selected.kind
+                == semantic::sv::ExpressionKind::concatenation) {
+                if (selected.operands.empty()) {
+                    return false;
+                }
+                std::vector<std::size_t> widths;
+                widths.reserve(selected.operands.size());
+                std::size_t total_width { };
+                for (const auto operand : selected.operands) {
+                    const auto width = hir_expression_width(
+                        operand, hir_process_scope_);
+                    if (!width || *width == 0U
+                        || *width
+                            > std::numeric_limits<std::uint32_t>::max()
+                        || total_width
+                            > std::numeric_limits<std::uint32_t>::max()
+                                - *width) {
+                        return false;
+                    }
+                    widths.push_back(*width);
+                    total_width += *width;
+                }
+                const auto expression_width = hir_expression_width(
+                    lvalue, hir_process_scope_);
+                if (!expression_width
+                    || *expression_width != total_width
+                    || source_offset
+                        > std::numeric_limits<std::size_t>::max()
+                            - total_width) {
+                    return false;
+                }
+
+                std::vector<std::size_t> operand_offsets(
+                    selected.operands.size());
+                auto offset = source_offset;
+                for (std::size_t reverse = widths.size();
+                    reverse != 0U; --reverse) {
+                    const auto index = reverse - 1U;
+                    operand_offsets[index] = offset;
+                    offset += widths[index];
+                }
+                for (std::size_t index { };
+                    index < selected.operands.size(); ++index) {
+                    if (!self(
+                            self,
+                            selected.operands[index],
+                            operand_offsets[index])) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            const bool name = selected.kind
+                == semantic::sv::ExpressionKind::name;
+            const bool index = selected.kind
+                == semantic::sv::ExpressionKind::index;
+            const bool slice = selected.kind
+                == semantic::sv::ExpressionKind::slice;
+            if ((!name && !index && !slice)
+                || hir_container_object_binding(lvalue)
+                || hir_container_element_binding(lvalue)) {
+                return false;
+            }
+            const auto declaration = hir_target_declaration(lvalue);
+            auto binding = declaration
+                ? hir_runtime_binding(
+                      *declaration, hir_process_scope_, true)
+                : std::nullopt;
+            const bool selected_target = index || slice;
+            if (!binding
+                || binding->kind != HirRuntimeBindingKind::signal
+                || !binding->signal
+                || !signal_binding_can_emit_write(*binding)
+                || (selected_target
+                    && (selected.operands.size()
+                            != (index ? 2U : 3U)
+                        || hir_referenced_declaration(
+                               selected.operands.front())
+                            != declaration))) {
+                return false;
+            }
+
+            const auto member = hir_systemverilog_member_selection(
+                selected_target ? selected.operands.front() : lvalue);
+            auto constant_selection = selected_target
+                ? hir_constant_selection(lvalue, hir_process_scope_)
+                : std::nullopt;
+            if (member) {
+                if (member->offset
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || member->width
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    return false;
+                }
+                if (constant_selection) {
+                    if (member->offset
+                        > std::numeric_limits<std::size_t>::max()
+                            - constant_selection->offset) {
+                        return false;
+                    }
+                    constant_selection->offset += member->offset;
+                } else if (!selected_target) {
+                    constant_selection = HirConstantSelection {
+                        member->offset, member->width
+                    };
+                }
+            }
+            if (selected_target && !constant_selection) {
+                // Dynamic bit and part selects need a captured selector and
+                // failure semantics that this source-ordered update path does
+                // not model yet.
+                return false;
+            }
+            const auto width = constant_selection
+                ? std::optional { constant_selection->width }
+                : !selected_target
+                ? std::optional {
+                      member ? member->width : binding->width }
+                : std::nullopt;
+            const auto lvalue_width = hir_expression_width(
+                lvalue, hir_process_scope_);
+            if (!width || *width == 0U
+                || *width > std::numeric_limits<std::uint32_t>::max()
+                || !lvalue_width || *lvalue_width != *width
+                || source_offset
+                    > std::numeric_limits<std::size_t>::max() - *width) {
+                return false;
+            }
+            if (constant_selection
+                && (constant_selection->offset
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || constant_selection->offset
+                        > binding->width
+                    || *width > binding->width
+                        - constant_selection->offset)) {
+                return false;
+            }
+            const auto destination_offset = constant_selection
+                ? std::optional<std::uint32_t> {
+                      static_cast<std::uint32_t>(
+                          constant_selection->offset)
+                  }
+                : std::nullopt;
+            const auto domain = member ? member->domain : binding->domain;
+            if (domain == frontend::ValueDomain::Unknown) {
+                return false;
+            }
+            const bool check_integer_range = !selected_target && !member
+                && binding->domain == frontend::ValueDomain::Integer
+                && binding->integer_range.has_value();
+            updates.push_back(PendingUpdate {
+                std::move(*binding),
+                source_offset,
+                static_cast<std::uint32_t>(*width),
+                destination_offset,
+                domain,
+                check_integer_range,
+            });
+            return true;
+        };
+
+        const auto total_width = hir_expression_width(
+            target, hir_process_scope_);
+        if (!total_width || *total_width == 0U
+            || *total_width > std::numeric_limits<std::uint32_t>::max()
+            || register_width(source) != *total_width
+            || !collect(collect, target, 0U)
+            || updates.empty()) {
+            return false;
+        }
+
+        for (std::size_t left { }; left < updates.size(); ++left) {
+            for (std::size_t right = left + 1U;
+                right < updates.size(); ++right) {
+                if (updates[left].binding.signal
+                    != updates[right].binding.signal) {
+                    continue;
+                }
+                if (!updates[left].destination_offset
+                    || !updates[right].destination_offset) {
+                    return false;
+                }
+                const auto left_begin = static_cast<std::size_t>(
+                    *updates[left].destination_offset);
+                const auto left_end = left_begin + updates[left].width;
+                const auto right_begin = static_cast<std::size_t>(
+                    *updates[right].destination_offset);
+                const auto right_end = right_begin + updates[right].width;
+                if (left_begin < right_end && right_begin < left_end) {
+                    return false;
+                }
+            }
+        }
+
+        for (const auto& update : updates) {
+            auto value = allocate_register(
+                update.width, register_domain(source));
+            process_.operations.emplace_back(Extract {
+                value,
+                source,
+                static_cast<std::uint32_t>(update.source_offset),
+                update.width,
+            });
+            if (register_domain(value) != update.domain) {
+                const auto converted = allocate_register(
+                    update.width, update.domain);
+                process_.operations.emplace_back(CopyRegister {
+                    converted, value });
+                value = converted;
+            }
+            if (update.check_integer_range
+                && update.binding.integer_range) {
+                process_.operations.emplace_back(IntegerCheck {
+                    value,
+                    std::min(
+                        update.binding.integer_range->left,
+                        update.binding.integer_range->right),
+                    std::max(
+                        update.binding.integer_range->left,
+                        update.binding.integer_range->right),
+                });
+            }
+            if (update.destination_offset) {
+                process_.operations.emplace_back(WriteUpdateSlice {
+                    *update.binding.signal,
+                    value,
+                    *update.destination_offset,
+                    SignalUpdateDomain::systemverilog_active,
+                });
+            } else {
+                process_.operations.emplace_back(WriteUpdate {
+                    *update.binding.signal,
+                    value,
+                    SignalUpdateDomain::systemverilog_active,
+                });
+            }
+            record_readonly_vhdl_output_write(update.binding);
+        }
+        return true;
     }
     if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
@@ -12655,6 +13544,7 @@ bool Lowerer::lower_hir_packed_copy_out(
                 converted, value });
             value = converted;
         }
+        const auto write_guard = begin_hir_fixed_array_write(*element, *index);
         if (element->local) {
             process_.operations.emplace_back(ContainerWrite {
                 *element->local,
@@ -12694,6 +13584,7 @@ bool Lowerer::lower_hir_packed_copy_out(
                 std::nullopt,
             });
         }
+        end_hir_fixed_array_write(write_guard);
         return true;
     }
     if (expression->systemverilog != nullptr
@@ -12775,7 +13666,7 @@ bool Lowerer::lower_hir_packed_copy_out(
               *declaration, hir_process_scope_, true)
         : std::nullopt;
     const auto selected = index || slice;
-    if (!binding
+    if (!binding || !signal_binding_can_emit_write(*binding)
         || (selected
             && (operands.size() != (index ? 2U : 3U)
                 || hir_referenced_declaration(operands.front())
@@ -12895,8 +13786,7 @@ bool Lowerer::lower_hir_packed_copy_out(
         }
         return true;
     }
-    if (!binding->signal
-        || read_only_signals_.contains(*binding->signal)) {
+    if (!signal_binding_can_emit_write(*binding)) {
         return false;
     }
     if (constant_selection) {
@@ -12926,6 +13816,7 @@ bool Lowerer::lower_hir_packed_copy_out(
         process_.operations.emplace_back(WriteBlocking {
             *binding->signal, copy_source });
     }
+    record_readonly_vhdl_output_write(*binding);
     return true;
 }
 

@@ -1,7 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/simir.hpp"
 
+#include <atomic>
+#include <limits>
+
 namespace fsim::runtime::simir {
+namespace {
+
+[[nodiscard]] std::uint64_t allocate_nonwrapping_owner_token() noexcept
+{
+    static std::atomic<std::uint64_t> next_token { 1U };
+    auto token = next_token.load(std::memory_order_relaxed);
+    while (token != 0U) {
+        const auto successor = token == std::numeric_limits<std::uint64_t>::max()
+            ? std::uint64_t { 0 }
+            : token + 1U;
+        if (next_token.compare_exchange_weak(
+                token,
+                successor,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed)) {
+            return token;
+        }
+    }
+    return 0U;
+}
+
+} // namespace
+
+[[nodiscard]] std::uint64_t allocate_direct_signal_read_owner_token() noexcept
+{
+    return allocate_nonwrapping_owner_token();
+}
 
 [[nodiscard]] std::uint64_t ProcessExecutionContext::static_trigger_mask() const noexcept
 {
@@ -464,6 +494,19 @@ void ProcessExecutionContext::write_update_word(
             value.width, value.aval, value.bval));
 }
 
+void ProcessExecutionContext::write_update_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const SignalUpdateDomain domain)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        throw std::logic_error {
+            "alternate process executor does not support tagged updates"
+        };
+    }
+    write_update(signal, std::move(value));
+}
+
 void ProcessExecutionContext::write_update_slice_word(
     SignalId signal,
     const Logic4Word value,
@@ -474,6 +517,20 @@ void ProcessExecutionContext::write_update_slice_word(
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval),
         offset);
+}
+
+void ProcessExecutionContext::write_update_slice_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const SignalUpdateDomain domain)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        throw std::logic_error {
+            "alternate process executor does not support tagged update slices"
+        };
+    }
+    write_update_slice(signal, std::move(value), offset);
 }
 
 void ProcessExecutionContext::write_update_words(
@@ -514,12 +571,6 @@ bool ProcessExecutionContext::write_validated_update_slot_batches(
     return false;
 }
 
-bool ProcessExecutionContext::write_validated_prepared_update_slot_batches(
-    std::span<const PureWavePreparedMember* const>)
-{
-    return false;
-}
-
 bool ProcessExecutionContext::write_validated_logic9_update_batch(
     const ProcessLogic9UpdateBatch&)
 {
@@ -543,6 +594,20 @@ void ProcessExecutionContext::write_after_word(
         delay);
 }
 
+void ProcessExecutionContext::write_after_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const SimulationTick delay,
+    const SignalUpdateDomain domain)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        throw std::logic_error {
+            "alternate process executor does not support tagged delayed updates"
+        };
+    }
+    write_after(signal, std::move(value), delay);
+}
+
 void ProcessExecutionContext::write_after_slice_word(
     SignalId signal,
     const Logic4Word value,
@@ -557,6 +622,21 @@ void ProcessExecutionContext::write_after_slice_word(
         delay);
 }
 
+void ProcessExecutionContext::write_after_slice_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const SimulationTick delay,
+    const SignalUpdateDomain domain)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        throw std::logic_error {
+            "alternate process executor does not support tagged delayed update slices"
+        };
+    }
+    write_after_slice(signal, std::move(value), offset, delay);
+}
+
 void ProcessExecutionContext::write_inertial_word(
     SignalId signal,
     const Logic4Word value,
@@ -567,6 +647,20 @@ void ProcessExecutionContext::write_inertial_word(
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval),
         delays);
+}
+
+void ProcessExecutionContext::write_inertial_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const TransitionDelays& delays,
+    const SignalUpdateDomain domain)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        throw std::logic_error {
+            "alternate process executor does not support tagged inertial updates"
+        };
+    }
+    write_inertial(signal, std::move(value), delays);
 }
 
 void ProcessExecutionContext::write_inertial_slice_word(
@@ -581,6 +675,21 @@ void ProcessExecutionContext::write_inertial_slice_word(
             value.width, value.aval, value.bval),
         offset,
         delays);
+}
+
+void ProcessExecutionContext::write_inertial_slice_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const TransitionDelays& delays,
+    const SignalUpdateDomain domain)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        throw std::logic_error {
+            "alternate process executor does not support tagged inertial update slices"
+        };
+    }
+    write_inertial_slice(signal, std::move(value), offset, delays);
 }
 
 void ProcessExecutionContext::write_projected(
@@ -873,6 +982,18 @@ void ProcessExecutionContext::execute_vital_delay(
 [[nodiscard]] bool ProcessExecutionContext::execution_points_enabled() const noexcept
 {
     return false;
+}
+
+[[nodiscard]] bool ProcessExecutionContext::supports_direct_signal_read(
+    SignalId) const noexcept
+{
+    return false;
+}
+
+[[nodiscard]] DirectSignalReadCapabilityKey
+ProcessExecutionContext::direct_signal_read_capability_key() const noexcept
+{
+    return { };
 }
 
 } // namespace fsim::runtime::simir

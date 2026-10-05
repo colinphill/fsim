@@ -38,7 +38,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         *result_bval = 0;
         const auto& operation = callback_operation(
             state, generated_process, instruction);
-        const auto process = state.process->id;
+        const auto process = state.process.id();
         if (const auto* literal = fsim::runtime::simir::operation_get_if<
                 runtime::simir::LoadConstant>(&operation)) {
             const auto known = literal->value.known_unsigned_value();
@@ -47,8 +47,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 || destination >= state.executor->layout_.register_widths.size()
                 || state.executor->layout_.register_widths[destination]
                     != literal->value.width()
-                || (destination < state.process->register_value_kinds.size()
-                    && state.process->register_value_kinds[destination]
+                || (destination < state.process.register_value_kinds().size()
+                    && runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+                           state.process.register_value_kinds(), destination)
                         != runtime::simir::ValueKind::logic4)) {
                 throw compiler::LlvmJitError {
                     "compiled bound literal has incompatible instance metadata"
@@ -62,9 +63,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             return 0;
         }
         if (!fsim::runtime::simir::operation_holds<
-                runtime::simir::ReadContainerObject>(operation)
-            && !fsim::runtime::simir::operation_holds<
-                runtime::simir::WriteContainerObjectElement>(operation)) {
+                runtime::simir::ReadContainerObject>(operation)) {
             state.executor->materialize_container_object_aliases(*state.context);
         }
         auto& profile = container_callback_profile();
@@ -129,8 +128,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 && value.type.element_width <= 64U;
         };
         const auto register_is_logic9 = [&](const runtime::simir::RegisterId id) {
-            return id < state.process->register_value_kinds.size()
-                && state.process->register_value_kinds[id]
+            return id < state.process.register_value_kinds().size()
+                && runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
+                       state.process.register_value_kinds(), id)
                     == runtime::simir::ValueKind::logic9;
         };
         if (const auto* read = fsim::runtime::simir::operation_get_if<
@@ -428,6 +428,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     state.executor->write_register(target.id, value.packed);
                     break;
                 case runtime::simir::InputScanTargetKind::packed_signal:
+                    invalidate_signal_read_cache(state);
                     state.context->write_blocking(target.id, std::move(value.packed));
                     break;
                 case runtime::simir::InputScanTargetKind::string_register:
@@ -479,6 +480,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 state.executor->write_register(binary->target, value.packed);
                 break;
             case runtime::simir::FileBinaryTargetKind::packed_signal:
+                invalidate_signal_read_cache(state);
                 state.context->write_blocking(binary->target, std::move(value.packed));
                 break;
             case runtime::simir::FileBinaryTargetKind::container_register:
@@ -486,6 +488,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     binary->target, *value.container);
                 break;
             case runtime::simir::FileBinaryTargetKind::container_object:
+                invalidate_signal_read_cache(state);
                 state.context->write_container_object(binary->target, *value.container);
                 break;
             }
@@ -984,9 +987,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
             state.executor->alias_container_register(
                 read_object->destination, read_object->object, *state.context);
+            // ReadContainerObject is a snapshot in SimIR. Resolve the deferred
+            // alias before another callback or process can mutate the object.
+            state.executor->materialize_container_object_aliases(
+                *state.context);
         } else if (const auto* write_object = fsim::runtime::simir::operation_get_if<
                        runtime::simir::WriteContainerObject>(
                        &operation)) {
+            // A container object may share storage with a signal read earlier
+            // in this native resume. Revoke cached words before publishing.
+            invalidate_signal_read_cache(state);
             state.context->write_container_object(
                 write_object->object,
                 read_container(write_object->source));
@@ -1010,6 +1020,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 write_element->index, input0_aval, input0_bval);
             const auto element_value = packed_input(
                 write_element->source, input1_aval, input1_bval);
+            invalidate_signal_read_cache(state);
             if (write_element->dynamic_part) {
                 const auto& selection = *write_element->dynamic_part;
                 const auto base = state.executor->read_register(

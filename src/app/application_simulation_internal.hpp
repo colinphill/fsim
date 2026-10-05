@@ -189,7 +189,6 @@ struct Simulation::Impl {
     void setup_execution(SimulationEngine engine);
 #if defined(FSIM_HAS_LLVM)
     void bind_fused_static_cohorts();
-    void bind_fused_masked_regions();
 #endif
 
     [[nodiscard]] std::size_t ensure_concurrent_assertion_coverage(
@@ -500,7 +499,6 @@ struct Simulation::Impl {
     // is reversed, so declaring the JIT first destroys the interpreter first.
     std::unique_ptr<compiler::LlvmJit> jit;
     bool fused_static_cohorts_bound { };
-    bool fused_masked_regions_bound { };
 
     // Original compiled executors borrow fixed-address cells. Destruction
     // runs in reverse declaration order: interpreter, then cells, then JIT.
@@ -597,6 +595,8 @@ struct Simulation::Impl {
         std::vector<std::pair<fsim_vpi_handle_v1, std::size_t>>>
         vpi_container_words;
 
+    std::set<fsim_vpi_handle_v1> vpi_read_only_container_words;
+
     std::map<fsim_vpi_handle_v1,
         std::pair<runtime::simir::ContainerObjectId, std::size_t>>
         vpi_word_handles;
@@ -682,6 +682,10 @@ struct Simulation::Impl {
     std::uint64_t next_safe_point_observer { 1 };
 
     OutputHook output_hook;
+
+    runtime::simir::Interpreter::OutputHook interpreter_output_hook;
+
+    bool trusted_builtin_stdout_output { };
 
     ReportHook report_hook;
 

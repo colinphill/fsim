@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_fused_branch_safety.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace fsim::tests::runtime {
@@ -26,156 +28,140 @@ void require(bool condition, const char* message)
     }
 }
 
-class TerminalExecutor final : public FusedMaskedRegionExecutor {
-public:
-    TerminalExecutor(Interpreter& interpreter,
-        std::vector<ProcessId> members, const ProcessId first,
-        const ProcessId second, const ProcessId terminal,
-        const SignalId input, const SignalId aggregate,
-        const SignalId output, const std::uint32_t width)
-        : interpreter_(interpreter)
-        , members_(std::move(members))
-        , first_(first)
-        , second_(second)
-        , terminal_(terminal)
-        , input_(input)
-        , aggregate_(aggregate)
-        , output_(output)
-        , width_(width)
-    {
-        const auto words = (width + 63U) / 64U;
-        aggregate_aval_.resize(words);
-        aggregate_bval_.resize(words);
-        aggregate_mask_.resize(words);
-        output_aval_.resize(words);
-        output_bval_.resize(words);
-        output_mask_.resize(words);
-    }
-
-    std::optional<FusedStaticCohortResume> resume(
-        const ProcessCohortNativeContext&,
-        const std::span<const std::uint64_t> activation) override
-    {
-        const auto selected = [&](const ProcessId id) {
-            const auto found = std::ranges::find(members_, id);
-            require(found != members_.end(), "terminal member is in its region");
-            const auto index = static_cast<std::size_t>(found - members_.begin());
-            return (activation[index / 64U] & (UINT64_C(1) << (index % 64U))) != 0U;
+void test_masked_error_branch_knownness()
+{
+    const auto make_process = [](const BinaryOperator comparison) {
+        Process process;
+        process.register_count = 3U;
+        process.operations = {
+            ReadSignal { 0U, 0U },
+            LoadConstant { 1U, PackedLogic4(1U, Logic4::one) },
+            Binary { comparison, 2U, 0U, 1U },
+            Branch { 2U, 4U, 4U, UnknownBranchPolicy::error },
+            WaitSensitivity { },
+            Jump { 0U },
         };
-        const auto first = selected(first_);
-        const auto second = selected(second_);
-        const auto terminal = selected(terminal_);
-        const auto& input = interpreter_.signal_value(input_);
-        const auto& aggregate = interpreter_.signal_value(aggregate_);
-        std::ranges::copy(input.aval_words(), aggregate_aval_.begin());
-        std::ranges::copy(input.bval_words(), aggregate_bval_.begin());
-        std::ranges::copy(aggregate.aval_words(), output_aval_.begin());
-        std::ranges::copy(aggregate.bval_words(), output_bval_.begin());
-        std::ranges::fill(aggregate_mask_, UINT64_C(0));
-        std::ranges::fill(output_mask_, UINT64_C(0));
-        const auto split = width_ / 2U;
-        for (std::uint32_t bit = 0U; bit < width_; ++bit) {
-            if ((bit < split && first) || (bit >= split && second)) {
-                aggregate_mask_[bit / 64U] |= UINT64_C(1) << (bit % 64U);
-            }
-            if (terminal) {
-                output_mask_[bit / 64U] |= UINT64_C(1) << (bit % 64U);
-            }
-        }
-        aggregate_active_ = static_cast<std::uint32_t>(first || second);
-        output_active_ = static_cast<std::uint32_t>(terminal);
-        const auto words = static_cast<std::uint32_t>(aggregate_mask_.size());
-        slots_[0] = { aggregate_, width_, words, &aggregate_active_,
-            aggregate_aval_.data(), aggregate_bval_.data(),
-            aggregate_mask_.data() };
-        slots_[1] = { output_, width_, words, &output_active_,
-            output_aval_.data(), output_bval_.data(), output_mask_.data() };
-        return FusedStaticCohortResume { slots_, { } };
-    }
+        return process;
+    };
+    auto case_equal = make_process(BinaryOperator::case_equal);
+    require(fsim::runtime::simir::detail::masked_branch_conditions_are_proven_known(
+                case_equal.operations, case_equal.register_count),
+        "case equality is a known Boolean even when a source signal is X/Z");
+    auto equal = make_process(BinaryOperator::equal);
+    require(!fsim::runtime::simir::detail::masked_branch_conditions_are_proven_known(
+                equal.operations, equal.register_count),
+        "logical equality remains unknown-capable for arbitrary signal inputs");
 
-private:
-    Interpreter& interpreter_;
-    std::vector<ProcessId> members_;
-    ProcessId first_, second_, terminal_;
-    SignalId input_, aggregate_, output_;
-    std::uint32_t width_;
-    std::uint32_t aggregate_active_ { }, output_active_ { };
-    std::vector<std::uint64_t> aggregate_aval_, aggregate_bval_;
-    std::vector<std::uint64_t> aggregate_mask_;
-    std::vector<std::uint64_t> output_aval_, output_bval_, output_mask_;
-    std::array<ProcessUpdateSlotView, 2U> slots_ { };
-};
+    Process known_operands;
+    known_operands.register_count = 3U;
+    known_operands.operations = {
+        LoadConstant { 0U, PackedLogic4(1U, Logic4::one) },
+        LoadConstant { 1U, PackedLogic4(1U, Logic4::zero) },
+        Binary { BinaryOperator::equal, 2U, 0U, 1U },
+        Branch { 2U, 4U, 4U, UnknownBranchPolicy::error },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    require(fsim::runtime::simir::detail::masked_branch_conditions_are_proven_known(
+                known_operands.operations, known_operands.register_count),
+        "logical equality is safe when both reaching operands are known");
 
-class AliasOwnerExecutor final : public FusedMaskedRegionExecutor {
-public:
-    AliasOwnerExecutor(Interpreter& interpreter,
-        std::vector<ProcessId> members, const ProcessId high_owner,
-        const ProcessId low_owner, const SignalId backing,
-        const SignalId input, const SignalId output)
-        : interpreter_(interpreter)
-        , members_(std::move(members))
-        , high_owner_(high_owner)
-        , low_owner_(low_owner)
-        , backing_(backing)
-        , input_(input)
-        , output_(output)
-    {
-    }
+    Process joined;
+    joined.register_count = 3U;
+    joined.operations = {
+        LoadConstant { 0U, PackedLogic4(1U, Logic4::one) },
+        Branch { 0U, 2U, 4U, UnknownBranchPolicy::when_false },
+        Binary { BinaryOperator::case_equal, 2U, 0U, 0U },
+        Jump { 5U },
+        ReadSignal { 2U, 0U },
+        Branch { 2U, 6U, 6U, UnknownBranchPolicy::error },
+        DebugPoint { },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    require(!fsim::runtime::simir::detail::masked_branch_conditions_are_proven_known(
+                joined.operations, joined.register_count),
+        "a CFG join intersects knownness and rejects one unknown incoming definition");
 
-    std::optional<FusedStaticCohortResume> resume(
-        const ProcessCohortNativeContext&,
-        const std::span<const std::uint64_t> activation) override
-    {
-        const auto selected = [&](const ProcessId id) {
-            const auto found = std::ranges::find(members_, id);
-            require(found != members_.end(), "alias owner belongs to the region");
-            const auto index = static_cast<std::size_t>(found - members_.begin());
-            return (activation[index / 64U] & (UINT64_C(1) << (index % 64U))) != 0U;
-        };
-        const auto high = selected(high_owner_);
-        const auto low = selected(low_owner_);
-        auto joined = PackedLogic4(130U, Logic4::z);
-        if (high) {
-            joined.insert_bits(
-                interpreter_.signal_value(backing_).extract_bits(65U, 65U),
-                65U);
-        }
-        if (low) {
-            joined.insert_bits(interpreter_.signal_value(input_), 0U);
-        }
-        std::ranges::copy(joined.aval_words(), aval_.begin());
-        std::ranges::copy(joined.bval_words(), bval_.begin());
-        mask_.fill(0U);
-        for (std::size_t bit = 0U; bit < 130U; ++bit) {
-            if ((bit < 65U && low) || (bit >= 65U && high)) {
-                mask_[bit / 64U] |= UINT64_C(1) << (bit % 64U);
-            }
-        }
-        active_ = static_cast<std::uint32_t>(high || low);
-        slot_ = { output_, 130U, 3U, &active_,
-            aval_.data(), bval_.data(), mask_.data() };
-        return FusedStaticCohortResume { std::span { &slot_, 1U }, { } };
-    }
+    joined.operations.replace(4U, LoadConstant {
+        2U, PackedLogic4(1U, Logic4::zero) });
+    require(fsim::runtime::simir::detail::masked_branch_conditions_are_proven_known(
+                joined.operations, joined.register_count),
+        "a CFG join retains knownness when both reaching definitions are known");
 
-private:
-    Interpreter& interpreter_;
-    std::vector<ProcessId> members_;
-    ProcessId high_owner_, low_owner_;
-    SignalId backing_, input_, output_;
-    std::uint32_t active_ { };
-    std::array<std::uint64_t, 3U> aval_ { }, bval_ { }, mask_ { };
-    ProcessUpdateSlotView slot_ { };
-};
+    const auto cohort_candidate_exists = [](
+        const BinaryOperator comparison,
+        const UnknownBranchPolicy branch_policy,
+        const InstructionIndex true_target) {
+        Interpreter interpreter;
+        const auto input = interpreter.add_signal({
+            "four_state_input", PackedLogic4(1U, Logic4::x) });
+        std::vector<ProcessId> owners;
+        for (ProcessId index = 0U; index < 2U; ++index) {
+            const auto output = interpreter.add_signal({
+                "output_" + std::to_string(index),
+                PackedLogic4(1U, Logic4::zero) });
+            Process process;
+            process.id = index;
+            process.name = "error_branch_owner_" + std::to_string(index);
+            process.register_count = 3U;
+            process.static_sensitivity = { { input, EdgeKind::any } };
+            process.driver_regions = { { output, 0U, 1U, true } };
+            process.operations = {
+                ReadSignal { 0U, input },
+                LoadConstant { 1U, PackedLogic4(1U, Logic4::one) },
+                Binary { comparison, 2U, 0U, 1U },
+                Branch { 2U, true_target, 4U, branch_policy },
+                WriteProjected { output, 0U, 0U, 0U,
+                    ProjectedDelayMode::inertial },
+                WaitSensitivity { },
+                Jump { 0U },
+            };
+            owners.push_back(interpreter.add_process(std::move(process)));
+        }
+        interpreter.start();
+        const auto candidates = interpreter.fused_static_cohort_candidates();
+        return std::ranges::any_of(candidates, [&](const auto& candidate) {
+            return candidate.members == owners && candidate.masked_all_active;
+        });
+    };
+    require(cohort_candidate_exists(BinaryOperator::case_equal,
+                UnknownBranchPolicy::error, 4U),
+        "runtime cohort admission accepts an error branch proven Boolean by case equality");
+    require(!cohort_candidate_exists(BinaryOperator::equal,
+                UnknownBranchPolicy::error, 4U),
+        "runtime cohort admission rejects an unknown-capable equality branch");
+    require(cohort_candidate_exists(BinaryOperator::case_equal,
+                UnknownBranchPolicy::when_false, 4U),
+        "runtime cohort admission preserves a forward X/Z-as-false branch");
+    require(!cohort_candidate_exists(BinaryOperator::case_equal,
+                UnknownBranchPolicy::when_false, 3U),
+        "runtime cohort admission still rejects a backward edge without an error branch");
+}
 
 struct Observation {
     std::vector<std::tuple<SimulationTick, std::uint64_t, std::string>> events;
     std::vector<std::string> settled;
     std::vector<std::string> drivers;
+    std::vector<std::vector<std::string>> driver_frames;
     FusedMaskedRegionCounters counters;
+    bool first_output_seen { };
 };
 
+std::string expected_slice_driver(const std::uint32_t width,
+    const std::uint32_t offset, const std::uint32_t slice_width,
+    const char value)
+{
+    auto result = std::string(width, 'Z');
+    const auto first = static_cast<std::size_t>(width)
+        - static_cast<std::size_t>(offset) - slice_width;
+    result.replace(first, slice_width, slice_width, value);
+    return result;
+}
+
 Observation run_terminal(const std::uint32_t width, const bool fused,
-    const bool terminal_first)
+    const bool terminal_first, const bool capture_output,
+    const bool capture_intermediate_state)
 {
     Interpreter interpreter;
     interpreter.set_fused_masked_region_counters_enabled(true);
@@ -237,12 +223,17 @@ Observation run_terminal(const std::uint32_t width, const bool fused,
         WaitSensitivity { }, Jump { 0U } };
     (void)interpreter.add_process(std::move(observer));
     Observation result;
-    interpreter.set_output_hook([&](ProcessId, std::string_view,
-                                    bool, SimulationTick time,
-                                    std::uint64_t delta) {
-        result.events.emplace_back(time, delta,
-            interpreter.signal_value(output).to_msb_string());
-    });
+    if (capture_output) {
+        interpreter.set_output_hook([&](ProcessId, std::string_view,
+                                        bool, SimulationTick time,
+                                        std::uint64_t delta) {
+            if (!result.first_output_seen) {
+                result.first_output_seen = true;
+            }
+            result.events.emplace_back(time, delta,
+                interpreter.signal_value(output).to_msb_string());
+        });
+    }
     interpreter.schedule_signal_at(input,
         PackedLogic4(width, Logic4::one), 1U, 0U);
     interpreter.schedule_signal_at(input,
@@ -253,34 +244,31 @@ Observation run_terminal(const std::uint32_t width, const bool fused,
         PackedLogic4(width, Logic4::zero), 3U, 0U);
     interpreter.start();
     if (fused) {
-        const auto candidates = interpreter.fused_masked_region_candidates();
-        const auto found = std::ranges::find_if(candidates,
-            [&](const auto& candidate) {
-                const auto expected = terminal_first
-                    ? std::vector<ProcessId> { terminal, owners[0], owners[1] }
-                    : std::vector<ProcessId> { owners[0], owners[1], terminal };
-                return candidate.members == expected
-                    && candidate.outputs == std::vector<SignalId> {
-                        aggregate, output };
-            });
-        require(found != candidates.end(),
-            "the mixed sink has a graph-certified terminal candidate");
-        std::vector<std::vector<Process::DriverRegion>> writes;
-        for (const auto id : found->members) {
-            const auto& program = interpreter.process_program(id);
-            writes.emplace_back(program.driver_regions.begin(),
-                program.driver_regions.end());
-        }
-        interpreter.install_fused_masked_region(found->region_id,
-            std::move(writes), std::make_unique<TerminalExecutor>(
-                interpreter, found->members, owners[0], owners[1], terminal,
-                input, aggregate, output, width));
+        require(interpreter.fused_masked_region_candidates().empty(),
+            "retired terminal planning exposes no masked candidates");
     }
     for (SimulationTick time = 0U; time <= 3U; ++time) {
         const auto run = interpreter.run(time);
         require(run.status == RunStatus::completed
                 || run.status == RunStatus::time_limit,
             "mixed sink reaches each observation time");
+        if (capture_intermediate_state) {
+            auto driver_frame = std::vector<std::string> { };
+            driver_frame.reserve(owners.size() + 1U);
+            for (const auto id : owners) {
+                driver_frame.push_back(
+                    interpreter.driver_value(id, aggregate).to_msb_string());
+            }
+            driver_frame.push_back(
+                interpreter.driver_value(terminal, output).to_msb_string());
+            result.driver_frames.push_back(std::move(driver_frame));
+        }
+        if (capture_intermediate_state) {
+            result.settled.push_back(
+                interpreter.signal_value(output).to_msb_string());
+        }
+    }
+    if (!capture_intermediate_state) {
         result.settled.push_back(
             interpreter.signal_value(output).to_msb_string());
     }
@@ -294,7 +282,8 @@ Observation run_terminal(const std::uint32_t width, const bool fused,
     return result;
 }
 
-Observation run_normalized_owner(const bool fused)
+Observation run_normalized_owner(const bool fused, const bool capture_output,
+    const bool capture_intermediate_state)
 {
     Interpreter interpreter;
     interpreter.set_fused_masked_region_counters_enabled(true);
@@ -314,8 +303,15 @@ Observation run_normalized_owner(const bool fused)
     const auto object = interpreter.add_container_object(
         { "array", default_container_value(type), std::nullopt });
     interpreter.add_container_signal_alias({ object, backing, true, true });
+    Process unrelated;
+    unrelated.id = 0U;
+    unrelated.name = "unrelated_process";
+    unrelated.initialize = false;
+    unrelated.operations = { Halt { } };
+    const auto unrelated_id
+        = interpreter.add_process(std::move(unrelated));
     Process high;
-    high.id = 0U;
+    high.id = 1U;
     high.name = "array_reader";
     high.register_count = 2U;
     high.container_register_count = 1U;
@@ -331,7 +327,7 @@ Observation run_normalized_owner(const bool fused)
     };
     const auto high_id = interpreter.add_process(std::move(high));
     Process low;
-    low.id = 1U;
+    low.id = 2U;
     low.name = "direct_reader";
     low.register_count = 1U;
     low.static_sensitivity = { { input, EdgeKind::any } };
@@ -341,7 +337,7 @@ Observation run_normalized_owner(const bool fused)
         WaitSensitivity { }, Jump { 0U } };
     const auto low_id = interpreter.add_process(std::move(low));
     Process observer;
-    observer.id = 2U;
+    observer.id = 3U;
     observer.name = "observer";
     observer.initialize = false;
     observer.static_sensitivity = { { output, EdgeKind::any } };
@@ -349,12 +345,17 @@ Observation run_normalized_owner(const bool fused)
         WaitSensitivity { }, Jump { 0U } };
     (void)interpreter.add_process(std::move(observer));
     Observation result;
-    interpreter.set_output_hook([&](ProcessId, std::string_view,
-                                    bool, SimulationTick time,
-                                    std::uint64_t delta) {
-        result.events.emplace_back(time, delta,
-            interpreter.signal_value(output).to_msb_string());
-    });
+    if (capture_output) {
+        interpreter.set_output_hook([&](ProcessId, std::string_view,
+                                        bool, SimulationTick time,
+                                        std::uint64_t delta) {
+            if (!result.first_output_seen) {
+                result.first_output_seen = true;
+            }
+            result.events.emplace_back(time, delta,
+                interpreter.signal_value(output).to_msb_string());
+        });
+    }
     interpreter.schedule_signal_at(backing,
         PackedLogic4(130U, Logic4::one), 1U, 0U);
     interpreter.schedule_signal_at(input,
@@ -370,30 +371,41 @@ Observation run_normalized_owner(const bool fused)
     interpreter.start();
     if (fused) {
         const auto& original = interpreter.process_program(high_id);
-        const auto& normalized = interpreter.fused_masked_member_program(high_id);
-        require(operation_holds<ReadContainerObject>(original.operations[1U])
-                && operation_holds<ReadSignal>(normalized.operations[1U]),
-            "the original array read remains intact while the private copy normalizes");
-        const auto candidates = interpreter.fused_masked_region_candidates();
-        const auto found = std::ranges::find_if(candidates,
-            [&](const auto& candidate) {
-                return candidate.members == std::vector<ProcessId> {
-                        high_id, low_id }
-                    && candidate.outputs == std::vector<SignalId> { output };
-            });
-        require(found != candidates.end(),
-            "a normalized owned slice participates in the generic masked region");
-        interpreter.install_fused_masked_region(found->region_id,
-            { { { output, 65U, 65U, false } },
-              { { output, 0U, 65U, false } } },
-            std::make_unique<AliasOwnerExecutor>(interpreter,
-                found->members, high_id, low_id, backing, input, output));
+        const auto& compatibility
+            = interpreter.fused_masked_member_program(high_id);
+        require(&compatibility == &original
+                && compatibility.container_register_count == 1U
+                && operation_holds<ReadContainerObject>(
+                    compatibility.operations[1U])
+                && operation_holds<ContainerRead>(
+                    compatibility.operations[2U]),
+            "the retired member accessor keeps original checked container operations");
+        require(&interpreter.fused_masked_member_program(unrelated_id)
+                == &interpreter.process_program(unrelated_id),
+            "the compatibility accessor resolves every process to its original program");
+        require(interpreter.fused_masked_region_candidates().empty(),
+            "fixed-container members stay on the ordinary checked process path");
     }
     for (SimulationTick time = 0U; time <= 3U; ++time) {
         const auto run = interpreter.run(time);
         require(run.status == RunStatus::completed
                 || run.status == RunStatus::time_limit,
             "the normalized-owner test reaches each observation time");
+        if (capture_intermediate_state) {
+            auto driver_frame = std::vector<std::string> { };
+            driver_frame.reserve(2U);
+            for (const auto id : { high_id, low_id }) {
+                driver_frame.push_back(
+                    interpreter.driver_value(id, output).to_msb_string());
+            }
+            result.driver_frames.push_back(std::move(driver_frame));
+        }
+        if (capture_intermediate_state) {
+            result.settled.push_back(
+                interpreter.signal_value(output).to_msb_string());
+        }
+    }
+    if (!capture_intermediate_state) {
         result.settled.push_back(
             interpreter.signal_value(output).to_msb_string());
     }
@@ -407,32 +419,108 @@ Observation run_normalized_owner(const bool fused)
 
 } // namespace
 
-void test_fused_masked_terminal_regions()
+void test_fused_masked_fallback_semantics()
 {
+    test_masked_error_branch_knownness();
+    const auto require_terminal_frames = [](
+        const Observation& observation, const std::uint32_t width) {
+        const auto split = width / 2U;
+        const auto ones = std::string(width, '1');
+        const auto zeros = std::string(width, '0');
+        const auto one_owner_zero = expected_slice_driver(
+            width, 0U, split, '1');
+        const auto one_owner_one = expected_slice_driver(
+            width, split, width - split, '1');
+        const auto zero_owner_zero = expected_slice_driver(
+            width, 0U, split, '0');
+        const auto zero_owner_one = expected_slice_driver(
+            width, split, width - split, '0');
+        require(observation.settled.size() == 4U
+                && observation.driver_frames.size() == 4U
+                && observation.settled[1U] == ones
+                && observation.driver_frames[1U]
+                    == std::vector<std::string> {
+                        one_owner_zero, one_owner_one, ones },
+            "the terminal output and both raw owners publish the first all-one wave");
+        require(observation.settled[3U] == zeros
+                && observation.driver_frames[3U]
+                    == std::vector<std::string> {
+                        zero_owner_zero, zero_owner_one, zeros },
+            "the terminal output and both raw owners publish the final all-zero wave");
+    };
     for (const auto width : { 65U, 129U }) {
         for (const auto terminal_first : { false, true }) {
-            const auto reference = run_terminal(width, false, terminal_first);
-            const auto candidate = run_terminal(width, true, terminal_first);
+            const auto reference
+                = run_terminal(width, false, terminal_first, false, false);
+            const auto candidate
+                = run_terminal(width, true, terminal_first, false, false);
             require(candidate.events == reference.events
                     && candidate.settled == reference.settled
                     && candidate.drivers == reference.drivers,
                 "mixed owned/normal sinks preserve exact boundary deltas and drivers");
-            require(candidate.counters.terminal_candidates > 0U
-                    && candidate.counters.terminal_regions_bound > 0U
-                    && candidate.counters.terminal_activations > 0U
-                    && candidate.counters.terminal_joint_activations > 0U,
-                "the mixed terminal path must run with its producers");
+            require(candidate.counters.masked_calls == 0U,
+                "the retired terminal executor stays on checked fallback");
+
+            const auto observed_reference
+                = run_terminal(width, false, terminal_first, true, true);
+            const auto observed_candidate
+                = run_terminal(width, true, terminal_first, true, true);
+            require_terminal_frames(observed_reference, width);
+            require_terminal_frames(observed_candidate, width);
+            require(!observed_reference.events.empty()
+                    && observed_candidate.events == observed_reference.events
+                    && observed_candidate.settled == observed_reference.settled
+                    && observed_candidate.drivers == observed_reference.drivers,
+                "observed mixed sinks preserve boundary values, deltas and drivers");
+            require(observed_candidate.first_output_seen
+                    && observed_candidate.counters.masked_calls == 0U,
+                "observed mixed sinks stay on checked fallback");
         }
     }
-    const auto reference = run_normalized_owner(false);
-    const auto candidate = run_normalized_owner(true);
+    const auto reference = run_normalized_owner(false, false, false);
+    const auto candidate = run_normalized_owner(true, false, false);
     require(candidate.events == reference.events
             && candidate.settled == reference.settled
             && candidate.drivers == reference.drivers,
         "late alias cache mutation preserves fallback values and raw drivers");
-    require(candidate.counters.masked_calls > 0U
-            && candidate.counters.demotions > 0U,
-        "a normalized owned member demotes only after genuine fused execution");
+    require(candidate.counters.masked_calls == 0U,
+        "normalized owned members stay on checked fallback after route retirement");
+
+    const auto observed_reference = run_normalized_owner(false, true, true);
+    const auto observed_candidate = run_normalized_owner(true, true, true);
+    const auto check_alias_frames = [](const Observation& observation) {
+        const auto ones = std::string(130U, '1');
+        const auto high_owner_one = expected_slice_driver(130U, 65U, 65U, '1');
+        const auto low_owner_one = expected_slice_driver(130U, 0U, 65U, '1');
+        const auto aggregate_xz = std::string(65U, 'X')
+            + std::string(65U, 'Z');
+        const auto high_owner_x = expected_slice_driver(
+            130U, 65U, 65U, 'X');
+        const auto low_owner_z = expected_slice_driver(
+            130U, 0U, 65U, 'Z');
+        require(observation.settled.size() == 4U
+                && observation.driver_frames.size() == 4U
+                && observation.settled[1U] == ones
+                && observation.driver_frames[1U]
+                    == std::vector<std::string> {
+                        high_owner_one, low_owner_one },
+            "the aliased aggregate and raw owners publish the first all-one wave");
+        require(observation.settled[3U] == aggregate_xz
+                && observation.driver_frames[3U]
+                    == std::vector<std::string> {
+                        high_owner_x, low_owner_z },
+            "the aliased aggregate and raw owners retain final X/Z slices");
+    };
+    check_alias_frames(observed_reference);
+    check_alias_frames(observed_candidate);
+    require(!observed_reference.events.empty()
+            && observed_candidate.events == observed_reference.events
+            && observed_candidate.settled == observed_reference.settled
+            && observed_candidate.drivers == observed_reference.drivers,
+        "observed normalized owners preserve boundary values, deltas and drivers");
+    require(observed_candidate.first_output_seen
+            && observed_candidate.counters.masked_calls == 0U,
+        "observed normalized owners stay on checked fallback");
 }
 
 } // namespace fsim::tests::runtime

@@ -22,9 +22,27 @@ using namespace runtime::simir;
     const std::span<const ValueKind> signal_value_kinds)
 {
     validate_process_shape(process, signal_widths, signal_value_kinds);
+    const auto register_value_kinds
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.register_value_kinds);
+    const auto container_register_types
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.container_register_types);
+    const auto static_trigger_regions
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.static_trigger_regions);
     ValidatedProcess result;
+    result.container_register_reference_counts.resize(
+        process.container_register_count);
+    for (const auto& local : process.debug_container_locals) {
+        if (local.register_id
+            < result.container_register_reference_counts.size()) {
+            ++result.container_register_reference_counts[
+                local.register_id];
+        }
+    }
     result.uses_logic9 = std::ranges::any_of(
-        process.register_value_kinds,
+        register_value_kinds,
         [](const ValueKind kind) { return kind == ValueKind::logic9; });
     result.register_widths.resize(process.register_count);
     std::vector<RegisterId> parents(process.register_count);
@@ -95,11 +113,12 @@ using namespace runtime::simir;
             const std::size_t instruction,
             const std::string_view role) {
             if (id >= process.container_register_count
-                || process.container_register_types.size()
+                || container_register_types.size()
                     != process.container_register_count) {
                 reject(process, instruction,
                     std::string { role } + " container register is out of range");
             }
+            ++result.container_register_reference_counts[id];
         };
     const auto find_root = [&](const RegisterId id) {
         auto root = id;
@@ -243,7 +262,7 @@ using namespace runtime::simir;
         }
     }
     InstructionIndex previous_trigger_end { };
-    for (const auto& region : process.static_trigger_regions) {
+    for (const auto& region : static_trigger_regions) {
         if (region.begin >= region.end
             || region.end > process.operations.size()
             || region.begin < previous_trigger_end
@@ -1002,8 +1021,8 @@ using namespace runtime::simir;
                         validate_container_register(
                             *operation.directory, index, "directory");
                         if (*operation.directory
-                            < process.container_register_types.size()) {
-                            const auto& type = process.container_register_types[
+                            < container_register_types.size()) {
+                            const auto& type = container_register_types[
                                 *operation.directory];
                             if (type.element_kind
                                 != ContainerElementKind::String) {
@@ -1243,7 +1262,36 @@ using namespace runtime::simir;
         visit_operation(
             [&](const auto& operation) {
                 using OperationType = std::decay_t<decltype(operation)>;
-                if constexpr (std::is_same_v<OperationType, IntegerUnary>) {
+                if constexpr (std::is_same_v<OperationType, ContainerRead>) {
+                    if (!operation.string_index
+                        && operation.source
+                            < container_register_types.size()
+                        && operation.index < result.register_widths.size()
+                        && operation.destination
+                            < result.register_widths.size()) {
+                        const auto& type
+                            = container_register_types[operation.source];
+                        const bool packed_element
+                            = !type.associative
+                            && (type.element_kind
+                                    == ContainerElementKind::Packed
+                                || type.element_kind
+                                    == ContainerElementKind::Scalar);
+                        const bool logic4_operands
+                            = register_value_kinds.empty()
+                            || (register_value_kinds[operation.index]
+                                    == ValueKind::logic4
+                                && register_value_kinds[operation.destination]
+                                    == ValueKind::logic4);
+                        if (packed_element && logic4_operands
+                            && result.register_widths[operation.index] == 64U
+                            && result.register_widths[operation.destination]
+                                == type.element_width) {
+                            result.uses_container_read_index64 = true;
+                        }
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, IntegerUnary>) {
                     const auto width =
                         result.register_widths[operation.source];
                     if (width != 32U && width != 64U) {
@@ -1267,8 +1315,8 @@ using namespace runtime::simir;
                             process, index,
                             "IntegerCheck requires an operand no wider than 64 bits");
                     }
-                    if (!process.register_value_kinds.empty()
-                        && process.register_value_kinds[operation.source]
+                    if (!register_value_kinds.empty()
+                        && register_value_kinds[operation.source]
                             == ValueKind::logic9) {
                         reject(
                             process, index,
@@ -1311,9 +1359,9 @@ using namespace runtime::simir;
                 if constexpr (std::is_same_v<OperationType, ContainerRead>) {
                     if (!operation.string_index
                         && operation.source
-                            < process.container_register_types.size()) {
+                            < container_register_types.size()) {
                         const auto& type
-                            = process.container_register_types[operation.source];
+                            = container_register_types[operation.source];
                         result.uses_wide_container_operation
                             = result.uses_wide_container_operation
                             || (!type.associative
@@ -1329,9 +1377,9 @@ using namespace runtime::simir;
                     std::is_same_v<OperationType, ContainerWrite>) {
                     if (!operation.string_index
                         && operation.target
-                            < process.container_register_types.size()) {
+                            < container_register_types.size()) {
                         const auto& type
-                            = process.container_register_types[operation.target];
+                            = container_register_types[operation.target];
                         result.uses_wide_container_operation
                             = result.uses_wide_container_operation
                             || (!type.associative

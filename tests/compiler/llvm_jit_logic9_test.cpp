@@ -3,6 +3,31 @@
 
 namespace fsim::tests::compiler {
 
+extern "C" std::uint32_t read_reserved_logic9_dynamic_part(
+    void* opaque,
+    std::uint32_t,
+    std::uint32_t,
+    std::uint64_t,
+    std::uint64_t,
+    std::int64_t,
+    std::int64_t,
+    std::uint32_t,
+    std::uint32_t,
+    std::uint32_t,
+    fsim_jit_logic9_word_v2* result)
+{
+    if (opaque == nullptr || result == nullptr) {
+        return 1U;
+    }
+    auto& runtime = *static_cast<TestRuntime*>(opaque);
+    ++runtime.dynamic_part_signal_reads;
+    result->planes[0] = UINT64_MAX;
+    result->planes[1] = UINT64_MAX;
+    result->planes[2] = UINT64_MAX;
+    result->planes[3] = UINT64_MAX;
+    return 0U;
+}
+
 void test_logic9_at_level(
     const JitOptimizationLevel optimization,
     const std::string_view symbol)
@@ -70,7 +95,7 @@ void test_logic9_at_level(
     std::vector<std::uint64_t> register_bval(layout.register_count);
     std::vector<std::uint8_t> register_initialized(
         layout.register_count);
-    fsim_jit_frame_v1 frame { };
+    fsim_jit_frame_v2 frame { };
     expect_error(
         [&] {
             jit.initialize_frame(
@@ -122,6 +147,61 @@ void test_logic9_at_level(
     assert(runtime.signals[6] == encode(PackedLogic4::from_msb_string("0")));
     assert(runtime.formatted_logic9_values.size() == 1);
     assert(runtime.formatted_logic9_values.front() == planes(source));
+
+    // Exercise every wire encoding, including reserved ordinals, through
+    // the public callback ABI before converting into a Logic4 register.
+    Process coercion;
+    coercion.id = 113;
+    coercion.name = "logic9_all_wire_codes_to_logic4";
+    coercion.register_count = 3;
+    coercion.register_value_kinds = {
+        ValueKind::logic9, ValueKind::logic4, ValueKind::logic9
+    };
+    coercion.operations = {
+        ReadSignal { 0, 0 },
+        CopyRegister { 1, 0 },
+        UnaryNot { 2, 0 },
+        WriteBlocking { 1, 1 },
+        WriteBlocking { 2, 2 },
+        Halt { }
+    };
+    const auto coercion_symbol = std::string { symbol } + "_all_wire_codes";
+    jit.add_process(coercion_symbol, coercion,
+        std::array<std::uint32_t, 3> { 16U, 16U, 16U },
+        std::array<ValueKind, 3> {
+            ValueKind::logic9, ValueKind::logic4, ValueKind::logic9 });
+    TestRuntime coercion_runtime;
+    constexpr std::array expected_codes {
+        Logic4::x, Logic4::x, Logic4::zero, Logic4::one,
+        Logic4::z, Logic4::x, Logic4::zero, Logic4::one,
+        Logic4::x, Logic4::x, Logic4::x, Logic4::x,
+        Logic4::x, Logic4::x, Logic4::x, Logic4::x
+    };
+    constexpr std::array expected_not_codes {
+        Logic9::u, Logic9::x, Logic9::one, Logic9::zero,
+        Logic9::x, Logic9::x, Logic9::one, Logic9::zero,
+        Logic9::x, Logic9::x, Logic9::x, Logic9::x,
+        Logic9::x, Logic9::x, Logic9::x, Logic9::x
+    };
+    auto coercion_expected = PackedLogic4(16U, Logic4::zero);
+    auto all_codes_not_expected = PackedLogic4::from_logic9_msb_string(
+        std::string(16U, 'U'));
+    for (std::uint32_t code = 0U; code < 16U; ++code) {
+        for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+            if ((code & (1U << plane)) != 0U) {
+                coercion_runtime.logic9_signals[0][plane]
+                    |= UINT64_C(1) << code;
+            }
+        }
+        coercion_expected.set(code, expected_codes[code]);
+        all_codes_not_expected.set_logic9(code, expected_not_codes[code]);
+    }
+    auto coercion_descriptor = abi(coercion_runtime);
+    assert(jit.execute(jit.lookup(coercion_symbol), coercion_descriptor)
+        == JitExecutionStatus::completed);
+    assert(coercion_runtime.signals[1] == encode(coercion_expected));
+    assert(coercion_runtime.logic9_signals[2]
+        == planes(all_codes_not_expected));
 
     Process wide_case_equal;
     wide_case_equal.id = 112;
@@ -243,7 +323,9 @@ void test_logic9_at_level(
         == std::vector<SignalId> { 0U }));
     TestRuntime direct_runtime;
     auto direct_descriptor = abi(direct_runtime);
-    fsim_jit_update_slot_v1 direct_slot { };
+    fsim_jit_update_slot_v2 direct_slot { };
+    direct_slot.width = 8U;
+    direct_slot.word_count = 1U;
     std::array<std::uint64_t, 1> direct_active_words { };
     direct_descriptor.direct_update_slots = &direct_slot;
     direct_descriptor.direct_update_slot_count = 1U;
@@ -322,6 +404,234 @@ void test_logic9_at_level(
         == JitExecutionStatus::completed);
     assert(direct_read_runtime.logic9_signals[0] == planes(nine_states));
 
+    const auto reserved_normalized = PackedLogic4::from_logic9_msb_string(
+        "UUUUUUUUX");
+    const auto reserved_logic9_symbol
+        = std::string { symbol } + "_reserved_logic9_callback";
+    Process reserved_logic9_callback;
+    reserved_logic9_callback.id = 115;
+    reserved_logic9_callback.name = "reserved_logic9_callback";
+    reserved_logic9_callback.register_count = 1U;
+    reserved_logic9_callback.register_value_kinds = { ValueKind::logic9 };
+    reserved_logic9_callback.operations = {
+        ReadSignal { 0U, 1U },
+        WriteBlocking { 0U, 0U },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 2> reserved_widths { 9U, 9U };
+    const std::array<ValueKind, 2> reserved_kinds {
+        ValueKind::logic9, ValueKind::logic9
+    };
+    jit.add_process(
+        reserved_logic9_symbol, reserved_logic9_callback,
+        reserved_widths, reserved_kinds);
+    TestRuntime reserved_callback_runtime;
+    reserved_callback_runtime.logic9_signals[1] = { 1U, 1U, 1U, 1U };
+    auto reserved_callback_descriptor = abi(reserved_callback_runtime);
+    assert(jit.execute(
+               jit.lookup(reserved_logic9_symbol),
+               reserved_callback_descriptor) == JitExecutionStatus::completed);
+    assert(reserved_callback_runtime.logic9_signals[0]
+        == planes(reserved_normalized));
+
+    const auto reserved_direct_symbol
+        = std::string { symbol } + "_reserved_logic9_direct";
+    Process reserved_logic9_direct = reserved_logic9_callback;
+    reserved_logic9_direct.id = 116;
+    reserved_logic9_direct.name = "reserved_logic9_direct";
+    jit.add_process(
+        reserved_direct_symbol, reserved_logic9_direct,
+        reserved_widths, reserved_kinds);
+    TestRuntime reserved_direct_runtime;
+    auto reserved_direct_descriptor = abi(reserved_direct_runtime);
+    std::array<std::array<std::uint64_t, 4>, 4> reserved_direct_planes { };
+    for (std::size_t plane = 0U; plane < 4U; ++plane) {
+        reserved_direct_planes[plane][2U] = 1U;
+    }
+    const std::array<std::uint32_t, 1> reserved_direct_map { 2U };
+    reserved_direct_descriptor.direct_signal_logic9_plane0
+        = reserved_direct_planes[0].data();
+    reserved_direct_descriptor.direct_signal_logic9_plane1
+        = reserved_direct_planes[1].data();
+    reserved_direct_descriptor.direct_signal_logic9_plane2
+        = reserved_direct_planes[2].data();
+    reserved_direct_descriptor.direct_signal_logic9_plane3
+        = reserved_direct_planes[3].data();
+    reserved_direct_descriptor.direct_read_signals
+        = reserved_direct_map.data();
+    reserved_direct_descriptor.direct_read_signal_count = 1U;
+    reserved_direct_descriptor.direct_signal_count = 3U;
+    assert(jit.execute(
+               jit.lookup(reserved_direct_symbol),
+               reserved_direct_descriptor) == JitExecutionStatus::completed);
+    assert(reserved_direct_runtime.logic9_signals[0]
+        == planes(reserved_normalized));
+
+    const auto malformed_dynamic_part_symbol
+        = std::string { symbol } + "_malformed_dynamic_part_callback";
+    Process malformed_dynamic_part;
+    malformed_dynamic_part.id = 118U;
+    malformed_dynamic_part.name = "malformed_dynamic_part_callback";
+    malformed_dynamic_part.register_count = 3U;
+    malformed_dynamic_part.register_value_kinds = {
+        ValueKind::logic4, ValueKind::logic9, ValueKind::logic9
+    };
+    malformed_dynamic_part.operations = {
+        LoadConstant { 0U, PackedLogic4::from_aval_bval(32U, 64U, 0U) },
+        ReadSignal { 1U, 0U },
+        DynamicPartSelect {
+            2U, 1U, 0U, 127, 0, 8U, true, true, false, 0U },
+        WriteBlocking { 1U, 2U },
+        Halt { }
+    };
+    const std::array<std::uint32_t, 2> malformed_dynamic_part_widths {
+        128U, 8U
+    };
+    const std::array<ValueKind, 2> malformed_dynamic_part_kinds {
+        ValueKind::logic9, ValueKind::logic9
+    };
+    LlvmJitOptions malformed_dynamic_part_options;
+    malformed_dynamic_part_options.optimization = optimization;
+    malformed_dynamic_part_options.debug_instrumentation = false;
+    LlvmJit malformed_dynamic_part_jit {
+        malformed_dynamic_part_options
+    };
+    malformed_dynamic_part_jit.add_process(
+        malformed_dynamic_part_symbol,
+        malformed_dynamic_part,
+        malformed_dynamic_part_widths,
+        malformed_dynamic_part_kinds);
+    TestRuntime malformed_dynamic_part_runtime;
+    malformed_dynamic_part_runtime.wide_signal_aval[0U] = { 0U, 0U };
+    malformed_dynamic_part_runtime.wide_signal_bval[0U] = { 0U, 0U };
+    malformed_dynamic_part_runtime.wide_signal_logic9_plane2[0U]
+        = { 0U, 0U };
+    malformed_dynamic_part_runtime.wide_signal_logic9_plane3[0U]
+        = { 0U, 0U };
+    auto malformed_dynamic_part_descriptor
+        = abi(malformed_dynamic_part_runtime);
+    auto malformed_dynamic_part_services
+        = copy_jit_services(malformed_dynamic_part_descriptor);
+    malformed_dynamic_part_services.read_signal_dynamic_part
+        = &read_reserved_logic9_dynamic_part;
+    malformed_dynamic_part_descriptor.services
+        = &malformed_dynamic_part_services;
+    assert(malformed_dynamic_part_jit.execute(
+               malformed_dynamic_part_jit.lookup(
+                   malformed_dynamic_part_symbol),
+               malformed_dynamic_part_descriptor)
+        == JitExecutionStatus::completed);
+    assert(malformed_dynamic_part_runtime.dynamic_part_signal_reads == 1U);
+    assert(malformed_dynamic_part_runtime.logic9_signals[1]
+        == planes(PackedLogic4::from_logic9_msb_string("XXXXXXXX")));
+
+    constexpr std::uint32_t malformed_wide_width = 129U;
+    const auto malformed_wide_symbol
+        = std::string { symbol } + "_malformed_wide_read";
+    Process malformed_wide_read;
+    malformed_wide_read.id = 117U;
+    malformed_wide_read.name = "malformed_wide_logic9_read";
+    malformed_wide_read.register_count = 1U;
+    malformed_wide_read.register_value_kinds = { ValueKind::logic9 };
+    malformed_wide_read.operations = {
+        ReadSignal { 0U, 1U },
+        WriteBlocking { 0U, 0U },
+        Halt { },
+    };
+    const std::array<std::uint32_t, 2> malformed_wide_widths {
+        malformed_wide_width, malformed_wide_width
+    };
+    const std::array<ValueKind, 2> malformed_wide_kinds {
+        ValueKind::logic9, ValueKind::logic9
+    };
+    jit.add_process(
+        malformed_wide_symbol, malformed_wide_read,
+        malformed_wide_widths, malformed_wide_kinds);
+    const auto malformed_wide_expected
+        = PackedLogic4::from_logic9_msb_string(
+            std::string(malformed_wide_width - 1U, 'U') + "X");
+    const auto expected_wide_plane = [&malformed_wide_expected](
+                                         const std::size_t plane) {
+        const auto values
+            = malformed_wide_expected.logic9_plane_words(plane);
+        return std::vector<std::uint64_t>(
+            values.begin(), values.end());
+    };
+    const auto require_normalized_wide_output =
+        [&](const TestRuntime& runtime) {
+            assert(runtime.wide_signal_aval[0]
+                == expected_wide_plane(0U));
+            assert(runtime.wide_signal_bval[0]
+                == expected_wide_plane(1U));
+            assert(runtime.wide_signal_logic9_plane2[0]
+                == expected_wide_plane(2U));
+            assert(runtime.wide_signal_logic9_plane3[0]
+                == expected_wide_plane(3U));
+        };
+
+    TestRuntime malformed_wide_callback_runtime;
+    malformed_wide_callback_runtime.wide_signal_aval[1U]
+        = { 1U, 0U, 0U };
+    malformed_wide_callback_runtime.wide_signal_bval[1U]
+        = { 1U, 0U, 0U };
+    malformed_wide_callback_runtime.wide_signal_logic9_plane2[1U]
+        = { 1U, 0U, 0U };
+    malformed_wide_callback_runtime.wide_signal_logic9_plane3[1U]
+        = { 1U, 0U, 0U };
+    auto malformed_wide_callback_descriptor
+        = abi(malformed_wide_callback_runtime);
+    // Exercise checked callback ingress independently of the direct-plane
+    // malformed input below.
+    assert(jit.execute(
+               jit.lookup(malformed_wide_symbol),
+               malformed_wide_callback_descriptor)
+        == JitExecutionStatus::completed);
+    assert(malformed_wide_callback_runtime.packed_signal_reads == 1U);
+    require_normalized_wide_output(malformed_wide_callback_runtime);
+
+    const auto malformed_wide_handle = jit.lookup(malformed_wide_symbol);
+    assert((jit.frame_layout(malformed_wide_handle).direct_read_signals
+        == std::vector<SignalId> { 1U }));
+    TestRuntime malformed_wide_direct_runtime;
+    auto malformed_wide_direct_descriptor
+        = abi(malformed_wide_direct_runtime);
+    const std::array<std::uint32_t, 1> malformed_wide_read_map { 1U };
+    const std::array<std::uint32_t, 2> malformed_wide_offsets { 0U, 3U };
+    const std::array<std::uint64_t, 6> malformed_wide_aval {
+        0U, 0U, 0U, 1U, 0U, 0U
+    };
+    const std::array<std::uint64_t, 6> malformed_wide_bval {
+        0U, 0U, 0U, 1U, 0U, 0U
+    };
+    const std::array<std::uint64_t, 6> malformed_wide_plane2 {
+        0U, 0U, 0U, 1U, 0U, 0U
+    };
+    const std::array<std::uint64_t, 6> malformed_wide_plane3 {
+        0U, 0U, 0U, 1U, 0U, 0U
+    };
+    malformed_wide_direct_descriptor.direct_read_signals
+        = malformed_wide_read_map.data();
+    malformed_wide_direct_descriptor.direct_read_signal_count = 1U;
+    malformed_wide_direct_descriptor.direct_signal_count = 2U;
+    malformed_wide_direct_descriptor.direct_wide_signal_aval
+        = malformed_wide_aval.data();
+    malformed_wide_direct_descriptor.direct_wide_signal_bval
+        = malformed_wide_bval.data();
+    malformed_wide_direct_descriptor.direct_wide_signal_logic9_plane2
+        = malformed_wide_plane2.data();
+    malformed_wide_direct_descriptor.direct_wide_signal_logic9_plane3
+        = malformed_wide_plane3.data();
+    malformed_wide_direct_descriptor.direct_wide_signal_offsets
+        = malformed_wide_offsets.data();
+    malformed_wide_direct_descriptor.direct_wide_signal_offset_count = 2U;
+    malformed_wide_direct_descriptor.direct_wide_word_count = 6U;
+    assert(jit.execute(
+               malformed_wide_handle,
+               malformed_wide_direct_descriptor)
+        == JitExecutionStatus::completed);
+    assert(malformed_wide_direct_runtime.packed_signal_reads == 0U);
+    require_normalized_wide_output(malformed_wide_direct_runtime);
+
     const auto rhs_states = PackedLogic4::from_logic9_msb_string(
         "UX01ZWLH-");
     constexpr std::array<Logic9, 9> states {
@@ -389,13 +699,15 @@ void test_logic9_at_level(
     }
 
     auto missing_exact_callback = descriptor;
-    missing_exact_callback.read_signal_logic9 = nullptr;
+    auto missing_exact_services = copy_jit_services(missing_exact_callback);
+    missing_exact_services.read_signal_logic9 = nullptr;
+    missing_exact_callback.services = &missing_exact_services;
     expect_error(
         [&] {
             (void)jit.execute(
                 handle, missing_exact_callback);
         },
-        "Logic9 callbacks");
+        "require read_signal_logic9");
 
     Process wide;
     wide.id = 94;
@@ -436,7 +748,7 @@ void test_logic9_at_level(
     const auto shifted = [](auto& storage) {
         return std::span { storage }.subspan(1);
     };
-    fsim_jit_frame_v1 wide_frame { };
+    fsim_jit_frame_v2 wide_frame { };
     jit.initialize_frame(
         wide_handle,
         wide_frame,
@@ -521,7 +833,7 @@ void test_logic9_at_level(
                 branch_layout.register_count);
             std::vector<std::uint8_t> branch_initialized(
                 branch_layout.register_count);
-            fsim_jit_frame_v1 branch_frame { };
+            fsim_jit_frame_v2 branch_frame { };
             jit.initialize_frame(
                 branch_handle,
                 branch_frame,
@@ -706,10 +1018,12 @@ void test_vital_delay_at_level(
         == std::vector<std::pair<std::uint32_t, std::uint32_t>> { { 93U, 8U } }));
 
     auto missing_callback = descriptor;
-    missing_callback.vital_delay = nullptr;
+    auto missing_callback_services = copy_jit_services(descriptor);
+    missing_callback_services.vital_delay = nullptr;
+    missing_callback.services = &missing_callback_services;
     expect_error(
         [&] { (void)jit.execute(handle, missing_callback); },
-        "requires vital_delay");
+        "require vital_delay");
 }
 
 void test_rejections()
@@ -1783,12 +2097,14 @@ void test_rejections()
     jit.add_process("wide", too_wide, widths);
     TestRuntime wide_runtime;
     auto wide_descriptor = abi(wide_runtime);
-    wide_descriptor.read_signal_packed = nullptr;
+    auto wide_services = copy_jit_services(wide_descriptor);
+    wide_services.read_signal_packed = nullptr;
+    wide_descriptor.services = &wide_services;
     expect_fatal_error(
         [&] {
             (void)jit.execute(jit.lookup("wide"), wide_descriptor);
         },
-        "requires read_signal_packed");
+        "require read_signal_packed");
 
     Process zero_width;
     zero_width.id = 0;

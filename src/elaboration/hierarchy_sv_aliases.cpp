@@ -25,7 +25,7 @@ void HierarchyBuilder::add_systemverilog_alias_connections(
             && connection.left_offset == connection.right_offset) {
             continue;
         }
-        const auto process_index = design_.processes_.size();
+        const auto process_index = design_.process_count();
         const auto process_id = static_cast<ProcessId>(process_index);
         if (static_cast<std::size_t>(process_id) != process_index) {
             throw std::length_error { "too many SimIR processes" };
@@ -34,6 +34,8 @@ void HierarchyBuilder::add_systemverilog_alias_connections(
         process.id = process_id;
         process.name = std::string { path } + ".$alias_"
             + std::to_string(ordinal++);
+        process.scheduling_domain
+            = ProcessSchedulingDomain::systemverilog;
         process.switch_source = left->second;
         process.switch_target = right->second;
         process.switch_source_offset = connection.left_offset;
@@ -43,7 +45,7 @@ void HierarchyBuilder::add_systemverilog_alias_connections(
         process.initialize = false;
         process.operations.emplace_back(Halt { });
         specialization.processes.push_back(process.id);
-        design_.processes_.push_back(std::move(process));
+        design_.append_process_record(std::move(process));
     }
 }
 

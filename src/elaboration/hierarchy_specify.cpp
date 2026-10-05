@@ -1421,8 +1421,8 @@ void HierarchyBuilder::attach_verilog_specify_drivers(
         ++path_index) {
         auto& specify_path = design_.verilog_specify_paths_[path_index];
         for (const auto process_id : processes) {
-            const auto& process = design_.processes_.at(process_id);
-            if (std::ranges::any_of(process.driver_regions,
+            const auto process = design_.process_view(process_id);
+            if (std::ranges::any_of(process.driver_regions(),
                     [&](const auto& region) {
                         return std::ranges::any_of(
                             specify_path.destinations,

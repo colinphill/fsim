@@ -608,6 +608,675 @@ endmodule
   return 0;
 }
 
+struct RuntimeIndexCapture {
+  fsim::runtime::RunResult result;
+  std::vector<std::string> values;
+  std::size_t compiled{};
+};
+
+struct FixedPhysicalNetReadCapture {
+  fsim::runtime::RunResult result;
+  std::vector<std::string> values;
+  std::size_t compiled{};
+};
+
+void verify_fixed_physical_net_read_lowering(
+    const fsim::elaboration::ElaboratedDesign& design) {
+  using namespace fsim::runtime::simir;
+  const auto object = design.find_container(
+      "physical_net_array_dynamic_runtime.words");
+  const auto proxy = design.find_signal(
+      "physical_net_array_dynamic_runtime.words");
+  assert(object && proxy);
+
+  const auto& element_aliases = design.container_element_signal_aliases();
+  assert(std::ranges::count_if(
+      element_aliases,
+      [&](const auto& alias) { return alias.object == *object; }) == 2U);
+  const auto first_alias = std::ranges::find_if(
+      element_aliases, [&](const auto& alias) {
+        return alias.object == *object && alias.ordinal == 0U;
+      });
+  const auto second_alias = std::ranges::find_if(
+      element_aliases, [&](const auto& alias) {
+        return alias.object == *object && alias.ordinal == 1U;
+      });
+  const auto first_signal = design.find_signal(
+      "physical_net_array_dynamic_runtime.words[0]");
+  const auto second_signal = design.find_signal(
+      "physical_net_array_dynamic_runtime.words[1]");
+  assert(first_alias != element_aliases.end()
+      && second_alias != element_aliases.end()
+      && first_signal && second_signal
+      && first_alias->signal == *first_signal
+      && second_alias->signal == *second_signal
+      && first_alias->signal != second_alias->signal
+      && first_alias->readable && second_alias->readable);
+  const auto first_info = std::ranges::find_if(
+      design.signals(), [&](const auto& signal) {
+        return signal.id == *first_signal;
+      });
+  const auto second_info = std::ranges::find_if(
+      design.signals(), [&](const auto& signal) {
+        return signal.id == *second_signal;
+      });
+  assert(first_info != design.signals().end()
+      && second_info != design.signals().end()
+      && first_info->width == 8U && second_info->width == 8U
+      && first_info->resolution == ResolutionKind::sv_wire
+      && second_info->resolution == ResolutionKind::sv_wire);
+
+  const auto& aggregate_aliases
+      = design.container_aggregate_signal_aliases();
+  const auto aggregate_alias = std::ranges::find_if(
+      aggregate_aliases, [&](const auto& alias) {
+        return alias.object == *object && alias.signal == *proxy;
+      });
+  assert(aggregate_alias != aggregate_aliases.end()
+      && aggregate_alias->readable);
+
+  std::size_t aggregate_read_processes { };
+  for (const auto& process : design.processes()) {
+    std::vector<ContainerRegisterId> aggregate_registers;
+    for (const auto& operation : process.operations) {
+      const auto* read
+          = operation_get_if<ReadContainerObject>(&operation);
+      if (read != nullptr && read->object == *object) {
+        aggregate_registers.push_back(read->destination);
+      }
+    }
+    if (aggregate_registers.empty()) {
+      continue;
+    }
+    const bool indexed_aggregate_read = std::ranges::any_of(
+        process.operations, [&](const auto& operation) {
+          const auto* read = operation_get_if<ContainerRead>(&operation);
+          return read != nullptr
+              && std::ranges::find(
+                     aggregate_registers, read->source)
+                  != aggregate_registers.end();
+        });
+    if (!indexed_aggregate_read) {
+      continue;
+    }
+    const bool aggregate_proxy_dependency = std::ranges::any_of(
+        process.static_sensitivity, [&](const auto& sensitivity) {
+          return sensitivity.signal == *proxy
+              && sensitivity.width == 0U;
+        });
+    const bool direct_leaf_read = std::ranges::any_of(
+        process.operations, [&](const auto& operation) {
+          const auto* read = operation_get_if<ReadSignal>(&operation);
+          return read != nullptr
+              && (read->signal == first_alias->signal
+                  || read->signal == second_alias->signal);
+        });
+    assert(aggregate_proxy_dependency && !direct_leaf_read);
+    ++aggregate_read_processes;
+  }
+  assert(aggregate_read_processes == 1U);
+}
+
+FixedPhysicalNetReadCapture run_fixed_physical_net_dynamic_read_case(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine) {
+  const auto source = directory / "fixed-physical-net-dynamic-read.sv";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(
+module physical_net_array_dynamic_runtime;
+  wire [7:0] words[0:1];
+  integer index;
+  logic [7:0] dynamic_value;
+  logic [7:0] known_zero_result;
+  logic [7:0] known_one_result;
+  logic [7:0] x_index_result;
+  logic [7:0] z_index_result;
+  logic [7:0] negative_index_result;
+  logic [7:0] out_of_range_result;
+
+  assign words[0] = 8'h11;
+  assign words[1] = 8'h22;
+  always_comb dynamic_value = words[index];
+
+  initial begin
+    index = 0;
+    #1; known_zero_result = dynamic_value;
+    index = 1;
+    #1; known_one_result = dynamic_value;
+    index = 32'bx;
+    #1; x_index_result = dynamic_value;
+    index = 32'bz;
+    #1; z_index_result = dynamic_value;
+    index = -1;
+    #1; negative_index_result = dynamic_value;
+    index = 2;
+    #1; out_of_range_result = dynamic_value;
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+
+  auto config = config_for(directory, source, optimization);
+  config.project.name = "sv-fixed-physical-net-dynamic-read";
+  config.project.top
+      = "sv:work.physical_net_array_dynamic_runtime";
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(project);
+  verify_fixed_physical_net_read_lowering(project->design);
+
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  FixedPhysicalNetReadCapture capture;
+  if (engine == fsim::app::SimulationEngine::compiled) {
+    simulation.await_all_native_compilation();
+    capture.compiled = simulation.compiled_process_count();
+  }
+  capture.result = simulation.run();
+  assert(simulation.compiled_process_count() == capture.compiled);
+  for (const auto name : {
+           "known_zero_result",
+           "known_one_result",
+           "x_index_result",
+           "z_index_result",
+           "negative_index_result",
+           "out_of_range_result",
+       }) {
+    const auto signal = simulation.find_signal(
+        std::string("physical_net_array_dynamic_runtime.") + name);
+    assert(signal);
+    capture.values.push_back(
+        simulation.read_signal(*signal).to_msb_string());
+  }
+  return capture;
+}
+
+void test_fixed_physical_net_dynamic_read_fallback(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization) {
+  const auto reference = run_fixed_physical_net_dynamic_read_case(
+      directory, optimization,
+      fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
+  const auto compiled = run_fixed_physical_net_dynamic_read_case(
+      directory, optimization,
+      fsim::app::SimulationEngine::compiled);
+#else
+  const auto& compiled = reference;
+#endif
+  const auto x8 = std::string(8U, 'X');
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.result.time == 6U);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert(reference.values == (std::vector<std::string> {
+      "00010001",
+      "00100010",
+      x8,
+      x8,
+      x8,
+      x8,
+  }));
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled > 0U);
+#endif
+}
+
+RuntimeIndexCapture run_runtime_index_case(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine) {
+  const auto source = directory / "runtime-index-reads.sv";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(
+module runtime_index_reads;
+  typedef enum bit [2:0] {
+    BIT_CODE_FIRST = 3'd5, BIT_CODE_NEXT = 3'd6
+  } bit_code_t;
+  typedef enum logic [2:0] {
+    LOGIC_CODE_FIRST = 3'd5, LOGIC_CODE_NEXT = 3'd6
+  } logic_code_t;
+  typedef enum int {
+    INT_CODE_FIRST = 32'd19, INT_CODE_NEXT = 32'd20
+  } int_code_t;
+  typedef struct packed {
+    bit [1:0] first;
+    bit [1:0] second;
+  } bit_pair_t;
+  typedef struct packed {
+    bit [1:0] first;
+    logic [1:0] second;
+  } mixed_pair_t;
+  typedef struct packed {
+    int payload;
+  } int_packet_t;
+  typedef struct packed {
+    time stamp;
+    bit valid;
+  } time_packet_t;
+  typedef struct {
+    logic [7:0] logic_member;
+    bit [7:0] bit_member;
+  } unpacked_index_entry_t;
+  logic [7:0] logic_values[];
+  bit [7:0] bit_values[];
+  integer integer_values[];
+  logic [7:0] queue_values[$];
+  real real_values[];
+  shortreal shortreal_values[];
+  chandle chandle_values[];
+  bit_code_t bit_enum_values[];
+  logic_code_t logic_enum_values[];
+  logic_code_t logic_enum_queue[$];
+  int_code_t int_enum_values[];
+  bit_pair_t bit_pair_values[];
+  mixed_pair_t mixed_pair_values[];
+  int_packet_t int_packet_values[];
+  time time_values[];
+  time time_queue[$];
+  time_packet_t time_packet_values[];
+  unpacked_index_entry_t aggregate_index_values[];
+  logic [1:0] x_index;
+  logic [1:0] z_index;
+  integer negative_index;
+  logic [64:0] wide65_index;
+  logic [128:0] wide129_index;
+  logic [128:0] wide129_valid_index;
+  logic [128:0] time_high_bit_index;
+  logic [64:0] x65_index;
+  logic [64:0] z65_index;
+  logic [128:0] x129_index;
+  logic [128:0] z129_index;
+  integer side_effect_calls;
+  integer aggregate_index_calls;
+  logic [7:0] valid_result;
+  logic [7:0] x_result;
+  logic [7:0] z_result;
+  logic [7:0] out_of_range_result;
+  logic [7:0] negative_result;
+  logic [7:0] wide65_result;
+  logic [7:0] wide129_result;
+  logic [7:0] wide129_valid_result;
+  logic [7:0] x65_result;
+  logic [7:0] z129_result;
+  logic [7:0] side_effect_result;
+  logic [7:0] queue_valid_result;
+  logic [7:0] queue_x_result;
+  logic [7:0] queue_out_of_range_result;
+  bit [7:0] bit_out_of_range_result;
+  integer integer_out_of_range_result;
+  real real_out_of_range_result;
+  shortreal shortreal_out_of_range_result;
+  chandle chandle_out_of_range_result;
+  logic [2:0] bit_enum_default_result;
+  logic [2:0] logic_enum_default_result;
+  logic [31:0] int_enum_default_result;
+  logic [31:0] int_packet_default_result;
+  logic [2:0] enum_queue_default_result;
+  logic [3:0] bit_pair_default_result;
+  logic [3:0] mixed_pair_default_result;
+  logic [63:0] time_valid_result;
+  logic [63:0] time_x_index_result;
+  logic [63:0] time_z_index_result;
+  logic [63:0] time_high_bit_index_result;
+  logic [63:0] time_out_of_range_result;
+  logic [63:0] time_negative_result;
+  logic [63:0] time_queue_default_result;
+  logic [64:0] time_packet_default_result;
+  logic [7:0] aggregate_logic_valid_result;
+  logic [7:0] aggregate_logic_x_result;
+  logic [7:0] aggregate_logic_z_result;
+  logic [7:0] aggregate_logic_x65_result;
+  logic [7:0] aggregate_logic_z65_result;
+  logic [7:0] aggregate_logic_x129_result;
+  logic [7:0] aggregate_logic_z129_result;
+  logic [7:0] aggregate_logic_high65_result;
+  logic [7:0] aggregate_logic_high129_result;
+  logic [7:0] aggregate_logic_range_result;
+  logic [7:0] aggregate_logic_negative_result;
+  logic [7:0] aggregate_logic_side_effect_result;
+  bit [7:0] aggregate_bit_valid_result;
+  bit [7:0] aggregate_bit_x_result;
+  bit [7:0] aggregate_bit_z_result;
+  bit [7:0] aggregate_bit_x65_result;
+  bit [7:0] aggregate_bit_z65_result;
+  bit [7:0] aggregate_bit_x129_result;
+  bit [7:0] aggregate_bit_z129_result;
+  bit [7:0] aggregate_bit_high65_result;
+  bit [7:0] aggregate_bit_high129_result;
+  bit [7:0] aggregate_bit_range_result;
+  bit [7:0] aggregate_bit_negative_result;
+
+  function automatic logic [128:0] next_unknown_index();
+    side_effect_calls = side_effect_calls + 1;
+    next_unknown_index = {1'bx, 128'd1};
+  endfunction
+
+  function automatic logic [128:0] next_aggregate_unknown_index();
+    aggregate_index_calls = aggregate_index_calls + 1;
+    next_aggregate_unknown_index = {1'bx, 128'd1};
+  endfunction
+
+  initial begin
+    logic_values = new[2];
+    logic_values[0] = 8'h10;
+    logic_values[1] = 8'h22;
+    bit_values = new[1];
+    bit_values[0] = 8'h35;
+    integer_values = new[1];
+    queue_values.push_back(8'h56);
+    queue_values.push_back(8'h67);
+    real_values = new[1];
+    shortreal_values = new[1];
+    chandle_values = new[1];
+    bit_enum_values = new[1];
+    bit_enum_values[0] = BIT_CODE_FIRST;
+    logic_enum_values = new[1];
+    logic_enum_values[0] = LOGIC_CODE_FIRST;
+    int_enum_values = new[1];
+    int_enum_values[0] = INT_CODE_FIRST;
+    bit_pair_values = new[1];
+    mixed_pair_values = new[1];
+    int_packet_values = new[1];
+    time_values = new[1];
+    time_values[0] = 64'h00000000000000a5;
+    time_packet_values = new[1];
+    aggregate_index_values = new[2];
+    aggregate_index_values[0].logic_member = 8'h5a;
+    aggregate_index_values[0].bit_member = 8'ha5;
+    aggregate_index_values[1].logic_member = 8'h3c;
+    aggregate_index_values[1].bit_member = 8'h69;
+    side_effect_calls = 0;
+    aggregate_index_calls = 0;
+    x_index = 2'bx1;
+    z_index = 2'bz1;
+    negative_index = -1;
+    wide65_index = {1'b1, 64'd1};
+    wide129_index = {1'b1, 128'd1};
+    wide129_valid_index = 129'd1;
+    time_high_bit_index = {1'b1, 128'b0};
+    x65_index = {1'bx, 64'd1};
+    z65_index = {1'bz, 64'd1};
+    x129_index = {1'bx, 128'd1};
+    z129_index = {1'bz, 128'd1};
+    valid_result = logic_values[1];
+    x_result = logic_values[x_index];
+    z_result = logic_values[z_index];
+    out_of_range_result = logic_values[2];
+    negative_result = logic_values[negative_index];
+    wide65_result = logic_values[wide65_index];
+    wide129_result = logic_values[wide129_index];
+    wide129_valid_result = logic_values[wide129_valid_index];
+    x65_result = logic_values[x65_index];
+    z129_result = logic_values[z129_index];
+    queue_valid_result = queue_values[0];
+    queue_x_result = queue_values[x_index];
+    queue_out_of_range_result = queue_values[2];
+    bit_out_of_range_result = bit_values[3];
+    integer_out_of_range_result = integer_values[1];
+    real_out_of_range_result = real_values[1];
+    shortreal_out_of_range_result = shortreal_values[1];
+    chandle_out_of_range_result = chandle_values[1];
+    bit_enum_default_result = bit_enum_values[1];
+    logic_enum_default_result = logic_enum_values[1];
+    int_enum_default_result = int_enum_values[1];
+    int_packet_default_result = int_packet_values[1];
+    enum_queue_default_result = logic_enum_queue[0];
+    bit_pair_default_result = bit_pair_values[1];
+    mixed_pair_default_result = mixed_pair_values[1];
+    time_valid_result = time_values[0];
+    time_x_index_result = time_values[x_index];
+    time_z_index_result = time_values[z_index];
+    time_high_bit_index_result = time_values[time_high_bit_index];
+    time_out_of_range_result = time_values[2];
+    time_negative_result = time_values[negative_index];
+    time_queue_default_result = time_queue[0];
+    time_packet_default_result = time_packet_values[1];
+    side_effect_result = logic_values[next_unknown_index()];
+    aggregate_logic_valid_result =
+        aggregate_index_values[1].logic_member;
+    aggregate_logic_x_result =
+        aggregate_index_values[x_index].logic_member;
+    aggregate_logic_z_result =
+        aggregate_index_values[z_index].logic_member;
+    aggregate_logic_x65_result =
+        aggregate_index_values[x65_index].logic_member;
+    aggregate_logic_z65_result =
+        aggregate_index_values[z65_index].logic_member;
+    aggregate_logic_x129_result =
+        aggregate_index_values[x129_index].logic_member;
+    aggregate_logic_z129_result =
+        aggregate_index_values[z129_index].logic_member;
+    aggregate_logic_high65_result =
+        aggregate_index_values[wide65_index].logic_member;
+    aggregate_logic_high129_result =
+        aggregate_index_values[wide129_index].logic_member;
+    aggregate_logic_range_result =
+        aggregate_index_values[2].logic_member;
+    aggregate_logic_negative_result =
+        aggregate_index_values[negative_index].logic_member;
+    aggregate_logic_side_effect_result =
+        aggregate_index_values[next_aggregate_unknown_index()].logic_member;
+    aggregate_bit_valid_result =
+        aggregate_index_values[1].bit_member;
+    aggregate_bit_x_result =
+        aggregate_index_values[x_index].bit_member;
+    aggregate_bit_z_result =
+        aggregate_index_values[z_index].bit_member;
+    aggregate_bit_x65_result =
+        aggregate_index_values[x65_index].bit_member;
+    aggregate_bit_z65_result =
+        aggregate_index_values[z65_index].bit_member;
+    aggregate_bit_x129_result =
+        aggregate_index_values[x129_index].bit_member;
+    aggregate_bit_z129_result =
+        aggregate_index_values[z129_index].bit_member;
+    aggregate_bit_high65_result =
+        aggregate_index_values[wide65_index].bit_member;
+    aggregate_bit_high129_result =
+        aggregate_index_values[wide129_index].bit_member;
+    aggregate_bit_range_result =
+        aggregate_index_values[2].bit_member;
+    aggregate_bit_negative_result =
+        aggregate_index_values[negative_index].bit_member;
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+
+  auto config = config_for(directory, source, optimization);
+  config.project.name = "sv-runtime-index-reads";
+  config.project.top = "sv:work.runtime_index_reads";
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  RuntimeIndexCapture capture;
+  if (engine == fsim::app::SimulationEngine::compiled) {
+    // This design has one initial process. Join native materialization before
+    // execution so a later background compile cannot mask interpreted work.
+    simulation.await_all_native_compilation();
+    capture.compiled = simulation.compiled_process_count();
+    assert(capture.compiled == 1U);
+  }
+  capture.result = simulation.run();
+  assert(simulation.compiled_process_count() == capture.compiled);
+  for (const auto name : {
+           "valid_result",
+           "x_result",
+           "z_result",
+           "out_of_range_result",
+           "negative_result",
+           "wide65_result",
+           "wide129_result",
+           "wide129_valid_result",
+           "x65_result",
+           "z129_result",
+           "side_effect_result",
+           "queue_valid_result",
+           "queue_x_result",
+           "queue_out_of_range_result",
+           "bit_out_of_range_result",
+           "integer_out_of_range_result",
+           "real_out_of_range_result",
+           "shortreal_out_of_range_result",
+           "chandle_out_of_range_result",
+           "side_effect_calls",
+           "bit_enum_default_result",
+           "logic_enum_default_result",
+           "int_enum_default_result",
+           "int_packet_default_result",
+           "enum_queue_default_result",
+           "bit_pair_default_result",
+           "mixed_pair_default_result",
+           "time_valid_result",
+           "time_x_index_result",
+           "time_z_index_result",
+           "time_high_bit_index_result",
+           "time_out_of_range_result",
+           "time_negative_result",
+           "time_queue_default_result",
+           "time_packet_default_result",
+           "aggregate_logic_valid_result",
+           "aggregate_logic_x_result",
+           "aggregate_logic_z_result",
+           "aggregate_logic_x65_result",
+           "aggregate_logic_z65_result",
+           "aggregate_logic_x129_result",
+           "aggregate_logic_z129_result",
+           "aggregate_logic_high65_result",
+           "aggregate_logic_high129_result",
+           "aggregate_logic_range_result",
+           "aggregate_logic_negative_result",
+           "aggregate_logic_side_effect_result",
+           "aggregate_bit_valid_result",
+           "aggregate_bit_x_result",
+           "aggregate_bit_z_result",
+           "aggregate_bit_x65_result",
+           "aggregate_bit_z65_result",
+           "aggregate_bit_x129_result",
+           "aggregate_bit_z129_result",
+           "aggregate_bit_high65_result",
+           "aggregate_bit_high129_result",
+           "aggregate_bit_range_result",
+           "aggregate_bit_negative_result",
+           "aggregate_index_calls"}) {
+    const auto signal = simulation.find_signal(
+        std::string { "runtime_index_reads." } + name);
+    assert(signal);
+    capture.values.push_back(
+        simulation.read_signal(*signal).to_msb_string());
+  }
+  return capture;
+}
+
+void test_runtime_sized_index_defaults(
+    const std::filesystem::path& directory,
+    const fsim::project::Optimization optimization) {
+  const auto reference = run_runtime_index_case(
+      directory,
+      optimization,
+      fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
+  const auto compiled = run_runtime_index_case(
+      directory,
+      optimization,
+      fsim::app::SimulationEngine::compiled);
+#else
+  const auto& compiled = reference;
+#endif
+  const auto x8 = std::string(8U, 'X');
+  const auto zero8 = std::string(8U, '0');
+  const auto x32 = std::string(32U, 'X');
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert(reference.values == (std::vector<std::string> {
+      "00100010",
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      "00100010",
+      x8,
+      x8,
+      x8,
+      "01010110",
+      x8,
+      x8,
+      zero8,
+      x32,
+      std::string(64U, '0'),
+      std::string(32U, '0'),
+      std::string(64U, '0'),
+      "00000000000000000000000000000001",
+      "000",
+      std::string(3U, 'X'),
+      std::string(32U, '0'),
+      std::string(32U, '0'),
+      std::string(3U, 'X'),
+      "0000",
+      std::string(4U, 'X'),
+      std::string(56U, '0') + "10100101",
+      std::string(64U, 'X'),
+      std::string(64U, 'X'),
+      std::string(64U, 'X'),
+      std::string(64U, 'X'),
+      std::string(64U, 'X'),
+      std::string(64U, 'X'),
+      std::string(65U, 'X'),
+      "00111100",
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      x8,
+      "01101001",
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      zero8,
+      "00000000000000000000000000000001",
+  }));
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled > 0U);
+#endif
+}
+
 }  // namespace
 
 int fsim_application_case_sv_container_capacity() {
@@ -1778,6 +2447,9 @@ endmodule
     inspect_dynamic_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
 #endif
+    test_runtime_sized_index_defaults(directory.path, optimization);
+    test_fixed_physical_net_dynamic_read_fallback(
+        directory.path, optimization);
   }
   return 0;
 }

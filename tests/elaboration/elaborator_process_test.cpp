@@ -3,6 +3,7 @@
 #include "fsim/semantic/compiled_design_normalization.hpp"
 
 namespace fsim::tests::elaboration {
+namespace Simir = fsim::runtime::simir;
 
 void test_process_and_wait_lowering() {
 const auto unsafe_edge = fsim::frontend::parse_text(
@@ -70,6 +71,65 @@ endmodule
                 .to_msb_string()
             == expected);
     }
+
+    const auto verilog_continuous_active = fsim::frontend::parse_text(
+        "verilog_continuous_active.v",
+        R"(
+module verilog_continuous_active;
+  reg source_value;
+  wire continuous_value;
+  assign continuous_value = source_value;
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(verilog_continuous_active.ok());
+    const auto elaborated_verilog_continuous_active
+        = compile_and_elaborate(
+            verilog_continuous_active.design,
+            "verilog_continuous_active");
+    assert(elaborated_verilog_continuous_active.ok());
+    const auto verilog_source =
+        elaborated_verilog_continuous_active.design->find_signal(
+            "source_value");
+    const auto verilog_destination =
+        elaborated_verilog_continuous_active.design->find_signal(
+            "continuous_value");
+    assert(verilog_source && verilog_destination);
+    const auto& verilog_processes
+        = elaborated_verilog_continuous_active.design->processes();
+    const auto verilog_driver = std::ranges::find_if(
+        verilog_processes,
+        [&](const Simir::Process& process) {
+            return std::ranges::any_of(process.driver_regions,
+                [&](const Simir::Process::DriverRegion& region) {
+                    return region.signal == *verilog_destination;
+                });
+        });
+    assert(verilog_driver != verilog_processes.end());
+    assert(verilog_driver->scheduling_domain
+        == Simir::ProcessSchedulingDomain::systemverilog);
+    std::size_t verilog_active_writes { };
+    bool verilog_reads_source { };
+    for (const auto& operation : verilog_driver->operations) {
+        if (const auto* read
+            = Simir::operation_get_if<Simir::ReadSignal>(&operation)) {
+            verilog_reads_source
+                = verilog_reads_source || read->signal == *verilog_source;
+        } else if (const auto* write
+            = Simir::operation_get_if<Simir::WriteUpdate>(&operation)) {
+            assert(write->domain
+                == Simir::SignalUpdateDomain::systemverilog_active);
+            verilog_active_writes += write->signal == *verilog_destination;
+        } else if (const auto* write_slice
+            = Simir::operation_get_if<Simir::WriteUpdateSlice>(
+                &operation)) {
+            assert(write_slice->domain
+                == Simir::SignalUpdateDomain::systemverilog_active);
+            verilog_active_writes
+                += write_slice->signal == *verilog_destination;
+        }
+    }
+    assert(verilog_reads_source && verilog_active_writes == 1U);
 
     const auto assignment_timing = fsim::frontend::parse_text(
         "assignment_timing.sv",
@@ -852,6 +912,308 @@ endmodule
             selected_continuous_drivers.design,
             "selected_continuous_drivers");
     assert(accepted_selected_continuous_drivers.ok());
+
+    const auto continuous_concat_lvalue = fsim::frontend::parse_text(
+        "continuous_concat_lvalue.sv",
+        R"(
+module continuous_concat_lvalue;
+  logic [128:0] wide_source;
+  logic [64:0] wide_head;
+  logic [127:0] descending_target;
+  logic [0:127] ascending_target;
+  logic [8:0] slice_source;
+  logic [7:0] descending_slices;
+  logic [0:7] ascending_slice;
+
+  assign {wide_head,
+          {descending_target[63:32], ascending_target[0:31]}}
+      = wide_source;
+  assign {descending_slices[7:5], ascending_slice[1:4],
+          descending_slices[4:3]} = slice_source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(continuous_concat_lvalue.ok());
+    const auto elaborated_continuous_concat = compile_and_elaborate(
+        continuous_concat_lvalue.design,
+        "continuous_concat_lvalue");
+    if (!elaborated_continuous_concat.ok()) {
+        for (const auto& diagnostic :
+             elaborated_continuous_concat.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_continuous_concat.ok());
+
+    const auto wide_source_signal =
+        elaborated_continuous_concat.design->find_signal("wide_source");
+    const auto wide_head_signal =
+        elaborated_continuous_concat.design->find_signal("wide_head");
+    const auto descending_target_signal =
+        elaborated_continuous_concat.design->find_signal(
+            "descending_target");
+    const auto ascending_target_signal =
+        elaborated_continuous_concat.design->find_signal(
+            "ascending_target");
+    const auto slice_source_signal =
+        elaborated_continuous_concat.design->find_signal("slice_source");
+    const auto descending_slices_signal =
+        elaborated_continuous_concat.design->find_signal(
+            "descending_slices");
+    const auto ascending_slice_signal =
+        elaborated_continuous_concat.design->find_signal(
+            "ascending_slice");
+    assert(wide_source_signal && wide_head_signal
+        && descending_target_signal && ascending_target_signal
+        && slice_source_signal && descending_slices_signal
+        && ascending_slice_signal);
+
+    const auto process_for_driver = [&](const Simir::SignalId signal)
+        -> const Simir::Process& {
+        const auto& processes =
+            elaborated_continuous_concat.design->processes();
+        const auto found = std::ranges::find_if(
+            processes,
+            [&](const Simir::Process& process) {
+                return std::ranges::any_of(
+                    process.driver_regions,
+                    [&](const Simir::Process::DriverRegion& region) {
+                        return region.signal == signal;
+                    });
+            });
+        assert(found != processes.end());
+        return *found;
+    };
+    const auto check_active_update_sequence = [&]
+        (const Simir::Process& process,
+         const Simir::SignalId source_signal,
+         const std::vector<std::pair<Simir::SignalId, bool>>& expected) {
+        assert(process.initialize);
+        assert(process.scheduling_domain
+            == Simir::ProcessSchedulingDomain::systemverilog);
+        assert((process.static_sensitivity
+            == std::vector<Simir::Sensitivity> {
+                { source_signal, Simir::EdgeKind::any, 0U, 0U },
+            }));
+        std::vector<std::pair<Simir::SignalId, bool>> actual;
+        std::size_t source_reads { };
+        for (const auto& operation : process.operations) {
+            if (const auto* update
+                = Simir::operation_get_if<Simir::WriteUpdate>(
+                    &operation)) {
+                assert(update->domain
+                    == Simir::SignalUpdateDomain::systemverilog_active);
+                actual.emplace_back(update->signal, true);
+            } else if (const auto* update_slice
+                = Simir::operation_get_if<Simir::WriteUpdateSlice>(
+                    &operation)) {
+                assert(update_slice->domain
+                    == Simir::SignalUpdateDomain::systemverilog_active);
+                actual.emplace_back(update_slice->signal, false);
+            }
+            if (Simir::operation_holds<Simir::ReadSignal>(operation)) {
+                ++source_reads;
+            }
+        }
+        assert(actual == expected);
+        assert(source_reads == 1U);
+    };
+
+    const auto& wide_concat_process = process_for_driver(*wide_head_signal);
+    check_active_update_sequence(
+        wide_concat_process,
+        *wide_source_signal,
+        { { *wide_head_signal, true },
+          { *descending_target_signal, false },
+          { *ascending_target_signal, false } });
+    assert((wide_concat_process.driver_regions
+        == std::vector<Simir::Process::DriverRegion> {
+            { *wide_head_signal, 0U, 0U, true },
+            { *descending_target_signal, 32U, 32U, false },
+            { *ascending_target_signal, 96U, 32U, false },
+        }));
+
+    const auto& slice_concat_process
+        = process_for_driver(*descending_slices_signal);
+    check_active_update_sequence(
+        slice_concat_process,
+        *slice_source_signal,
+        { { *descending_slices_signal, false },
+          { *ascending_slice_signal, false },
+          { *descending_slices_signal, false } });
+    assert((slice_concat_process.driver_regions
+        == std::vector<Simir::Process::DriverRegion> {
+            { *descending_slices_signal, 5U, 3U, false },
+            { *ascending_slice_signal, 3U, 4U, false },
+            { *descending_slices_signal, 3U, 2U, false },
+        }));
+
+    auto continuous_concat_interpreter =
+        elaborated_continuous_concat.design->create_interpreter();
+    const std::string unknown_65(65U, 'X');
+    const std::string unknown_128(128U, 'X');
+    const std::string unknown_8(8U, 'X');
+    assert(continuous_concat_interpreter->signal_value(
+               *wide_head_signal).to_msb_string() == unknown_65);
+    assert(continuous_concat_interpreter->signal_value(
+               *descending_target_signal).to_msb_string()
+        == unknown_128);
+    assert(continuous_concat_interpreter->signal_value(
+               *ascending_target_signal).to_msb_string()
+        == unknown_128);
+    assert(continuous_concat_interpreter->signal_value(
+               *descending_slices_signal).to_msb_string()
+        == unknown_8);
+    assert(continuous_concat_interpreter->signal_value(
+               *ascending_slice_signal).to_msb_string()
+        == unknown_8);
+
+    std::string wide_source_value;
+    wide_source_value.reserve(129U);
+    constexpr std::string_view four_state_pattern { "10XZ" };
+    for (std::size_t index { }; index < 129U; ++index) {
+        wide_source_value.push_back(
+            four_state_pattern[index % four_state_pattern.size()]);
+    }
+    const std::string slice_source_value { "ZX01XZ10Z" };
+    continuous_concat_interpreter->deposit_signal(
+        *wide_source_signal,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            wide_source_value));
+    continuous_concat_interpreter->deposit_signal(
+        *slice_source_signal,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            slice_source_value));
+    (void)continuous_concat_interpreter->run();
+
+    assert(continuous_concat_interpreter->signal_value(
+               *wide_head_signal).to_msb_string()
+        == wide_source_value.substr(0U, 65U));
+    auto expected_descending_target = unknown_128;
+    expected_descending_target.replace(
+        64U, 32U, wide_source_value.substr(65U, 32U));
+    assert(continuous_concat_interpreter->signal_value(
+               *descending_target_signal).to_msb_string()
+        == expected_descending_target);
+    const auto expected_ascending_target
+        = wide_source_value.substr(97U, 32U) + std::string(96U, 'X');
+    assert(continuous_concat_interpreter->signal_value(
+               *ascending_target_signal).to_msb_string()
+        == expected_ascending_target);
+    const auto expected_descending_slices
+        = slice_source_value.substr(0U, 3U)
+        + slice_source_value.substr(7U, 2U) + std::string(3U, 'X');
+    assert(continuous_concat_interpreter->signal_value(
+               *descending_slices_signal).to_msb_string()
+        == expected_descending_slices);
+    const auto expected_ascending_slice
+        = std::string("X") + slice_source_value.substr(3U, 4U)
+        + std::string(3U, 'X');
+    assert(continuous_concat_interpreter->signal_value(
+               *ascending_slice_signal).to_msb_string()
+        == expected_ascending_slice);
+
+    const auto procedural_concat_lvalue = fsim::frontend::parse_text(
+        "procedural_concat_lvalue.sv",
+        R"(
+module procedural_concat_lvalue;
+  logic [7:0] source;
+  logic [3:0] left;
+  logic [3:0] right;
+  initial {left, right} = source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(procedural_concat_lvalue.ok());
+    const auto elaborated_procedural_concat = compile_and_elaborate(
+        procedural_concat_lvalue.design,
+        "procedural_concat_lvalue");
+    assert(elaborated_procedural_concat.ok());
+    assert(elaborated_procedural_concat.design->processes().size() == 1U);
+    const auto& procedural_concat_operations
+        = elaborated_procedural_concat.design->processes().front().operations;
+    assert(std::ranges::count_if(
+               procedural_concat_operations,
+               [](const auto& operation) {
+                   return Simir::operation_holds<Simir::WriteBlocking>(
+                       operation);
+               })
+        == 2U);
+    assert(std::ranges::none_of(
+        procedural_concat_operations,
+        [](const auto& operation) {
+            return Simir::operation_holds<Simir::WriteUpdate>(operation)
+                || Simir::operation_holds<Simir::WriteUpdateSlice>(
+                    operation);
+        }));
+
+    const auto overlapping_concat_lvalue = fsim::frontend::parse_text(
+        "overlapping_concat_lvalue.sv",
+        R"(
+module overlapping_concat_lvalue;
+  logic target;
+  assign {target, target} = 2'b01;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(overlapping_concat_lvalue.ok());
+    const auto rejected_overlapping_concat_lvalue = compile_and_elaborate(
+        overlapping_concat_lvalue.design,
+        "overlapping_concat_lvalue");
+    assert(!rejected_overlapping_concat_lvalue.ok());
+
+    const auto dynamic_concat_lvalue = fsim::frontend::parse_text(
+        "dynamic_concat_lvalue.sv",
+        R"(
+module dynamic_concat_lvalue;
+  logic [3:0] packed_target;
+  logic index;
+  logic tail;
+  logic [1:0] source;
+  assign {packed_target[index], tail} = source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_concat_lvalue.ok());
+    const auto rejected_dynamic_concat_lvalue = compile_and_elaborate(
+        dynamic_concat_lvalue.design,
+        "dynamic_concat_lvalue");
+    assert(!rejected_dynamic_concat_lvalue.ok());
+
+    const auto container_concat_lvalue = fsim::frontend::parse_text(
+        "container_concat_lvalue.sv",
+        R"(
+module container_concat_lvalue;
+  logic [3:0] words [0:1];
+  logic tail;
+  logic [4:0] source;
+  assign {words[0], tail} = source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(container_concat_lvalue.ok());
+    const auto rejected_container_concat_lvalue = compile_and_elaborate(
+        container_concat_lvalue.design,
+        "container_concat_lvalue");
+    assert(!rejected_container_concat_lvalue.ok());
+
+    const auto delayed_concat_lvalue = fsim::frontend::parse_text(
+        "delayed_concat_lvalue.sv",
+        R"(
+module delayed_concat_lvalue;
+  wire [3:0] left;
+  wire right;
+  logic [4:0] source;
+  assign #1 {left, right} = source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(delayed_concat_lvalue.ok());
+    const auto rejected_delayed_concat_lvalue = compile_and_elaborate(
+        delayed_concat_lvalue.design,
+        "delayed_concat_lvalue");
+    assert(!rejected_delayed_concat_lvalue.ok());
 
     const auto native_wire_drivers = fsim::frontend::parse_text(
         "native_wire_drivers.sv",

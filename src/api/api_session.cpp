@@ -580,12 +580,13 @@ bool rebuild_debug_objects(Session& session) {
   }
   const auto& runtime_design = session.simulation->runtime_adapter();
   const auto& design = session.simulation->design_ir();
+  const auto process_count = design.processes().size();
   const auto& systemc_objects = runtime_design.systemc_objects();
   if (systemc_objects.size() > kSystemCObjectIndexMask) {
     return false;
   }
   session.systemc_scope_by_object.resize(systemc_objects.size());
-  session.systemc_object_by_process.resize(runtime_design.processes().size());
+  session.systemc_object_by_process.resize(process_count);
   session.systemc_design_object_by_object.resize(systemc_objects.size());
   session.systemc_design_process_by_object.resize(systemc_objects.size());
 
@@ -758,14 +759,14 @@ bool rebuild_debug_objects(Session& session) {
     }
   }
 
-  const auto& runtime_processes = runtime_design.processes();
-  session.process_names.resize(runtime_processes.size());
+  session.process_names.resize(process_count);
   for (const auto& occurrence : design.processes()) {
     const auto process = static_cast<std::size_t>(occurrence.runtime_index);
-    if (process >= runtime_processes.size()) {
+    if (process >= process_count) {
       return false;
     }
-    const auto& program = runtime_processes[process];
+    const auto& program = session.simulation->process_program(
+        static_cast<fsim::runtime::simir::ProcessId>(process));
     for (std::size_t local = 0;
          local < program.debug_locals.size(); ++local) {
       const auto& debug_local = program.debug_locals[local];
@@ -835,7 +836,7 @@ bool rebuild_debug_objects(Session& session) {
     const auto& process = design.processes()[driver.process.value()];
     if (object.runtime_index
             > std::numeric_limits<fsim::runtime::simir::SignalId>::max()
-        || process.runtime_index >= runtime_processes.size()) {
+        || process.runtime_index >= process_count) {
       return false;
     }
     const auto signal = static_cast<fsim::runtime::simir::SignalId>(

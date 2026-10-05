@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_vital_path_timing.hpp"
 #include "sdf_diagnostic.hpp"
+#include "sdf_process_rows.hpp"
 
 #include <algorithm>
 #include <array>
@@ -80,11 +81,11 @@ namespace {
     }
 
     [[nodiscard]] const elaboration::SpecializationInfo* specialization_for(
-        const elaboration::ElaboratedDesignState& state,
+        const elaboration::ElaboratedDesign& elaborated,
         const std::string_view instance)
     {
         const elaboration::SpecializationInfo* result = nullptr;
-        for (const auto& specialization : state.specializations) {
+        for (const auto& specialization : elaborated.specializations()) {
             if (specialization.instance != instance
                 || specialization.language != frontend::Language::Vhdl2008) {
                 continue;
@@ -97,23 +98,24 @@ namespace {
     }
 
     [[nodiscard]] std::optional<std::uint64_t> constant_tick(
-        const runtime::simir::Process& process,
+        const runtime::simir::ProcessProgramView& process,
         const runtime::simir::RegisterId target,
         const std::size_t before_instruction)
     {
         std::unordered_map<runtime::simir::RegisterId, runtime::PackedLogic4>
             values;
+        const auto& operations = process.operations();
         for (std::size_t index = 0;
-            index < before_instruction && index < process.operations.size();
+            index < before_instruction && index < operations.size();
             ++index) {
             const auto* load = runtime::simir::operation_get_if<
-                runtime::simir::LoadConstant>(&process.operations[index]);
+                runtime::simir::LoadConstant>(&operations[index]);
             if (load != nullptr) {
                 values[load->destination] = load->value;
                 continue;
             }
             const auto* extract = runtime::simir::operation_get_if<
-                runtime::simir::Extract>(&process.operations[index]);
+                runtime::simir::Extract>(&operations[index]);
             if (extract == nullptr)
                 continue;
             const auto source = values.find(extract->source);
@@ -193,14 +195,14 @@ namespace {
     }
 
     struct CallCandidate {
-        const runtime::simir::Process* process { };
+        runtime::simir::ProcessProgramView process;
         std::uint32_t instruction { };
         const runtime::simir::VitalDelay* delay { };
         const runtime::simir::VitalTimingCheck* check { };
     };
 
     [[nodiscard]] std::vector<CallCandidate> find_calls(
-        const elaboration::ElaboratedDesignState& state,
+        const elaboration::ElaboratedDesign& elaborated,
         const elaboration::SpecializationInfo& specialization,
         const SdfVitalPlannedTarget& target)
     {
@@ -208,27 +210,32 @@ namespace {
         const auto check_kind = timing_check_kind(target.construct_kind);
         const auto output = endpoint_signal(target, SdfEndpointRole::Output);
         for (const auto process_id : specialization.processes) {
-            if (process_id >= state.processes.size())
+            if (process_id >= elaborated.process_count())
                 continue;
-            const auto& process = state.processes[process_id];
-            for (std::size_t index = 0; index < process.operations.size(); ++index) {
+            const auto process
+                = elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+                    elaborated, process_id);
+            if (!process.valid())
+                continue;
+            const auto& operations = process.operations();
+            for (std::size_t index = 0; index < operations.size(); ++index) {
                 if (index > std::numeric_limits<std::uint32_t>::max())
                     break;
                 if (check_kind) {
                     const auto* check = runtime::simir::operation_get_if<
                         runtime::simir::VitalTimingCheck>(
-                        &process.operations[index]);
+                        &operations[index]);
                     if (check != nullptr && timing_call_matches(*check, target)) {
-                        result.push_back({ &process,
+                        result.push_back({ process,
                             static_cast<std::uint32_t>(index), nullptr, check });
                     }
                     continue;
                 }
                 const auto* delay = runtime::simir::operation_get_if<
-                    runtime::simir::VitalDelay>(&process.operations[index]);
+                    runtime::simir::VitalDelay>(&operations[index]);
                 if (delay != nullptr && output && delay->output == *output
                     && delay->kind == runtime::simir::VitalDelayKind::path) {
-                    result.push_back({ &process,
+                    result.push_back({ process,
                         static_cast<std::uint32_t>(index), delay, nullptr });
                 }
             }
@@ -257,7 +264,7 @@ namespace {
         if (candidate.delay != nullptr) {
             const auto count = delay_count(candidate.delay->shape);
             for (std::size_t index = 0; index < count; ++index) {
-                const auto value = constant_tick(*candidate.process,
+                const auto value = constant_tick(candidate.process,
                     candidate.delay->default_delays[index],
                     candidate.instruction);
                 if (!value) {
@@ -336,7 +343,7 @@ namespace {
     [[nodiscard]] std::string call_identity(const CallCandidate& candidate)
     {
         auto result = std::string { "sdf-vital-call-v1" };
-        append_field(result, std::to_string(candidate.process->id));
+        append_field(result, std::to_string(candidate.process.id()));
         append_field(result, std::to_string(candidate.instruction));
         const auto& source = candidate.delay != nullptr
             ? candidate.delay->source_location
@@ -432,7 +439,8 @@ SdfVitalPathTimingResult build_sdf_vital_path_timing_plan(
     }
     const auto& summary = *targets->summary();
     const auto& ir = *summary.endpoint_resolution()->cells()->scope()->normalized_ir();
-    const auto state = elaborated.state();
+    [[maybe_unused]] const auto process_rows
+        = sdf_detail::retain_published_process_rows(elaborated);
     std::set<std::string> owners;
     std::vector<SdfVitalPathTimingRecord> records;
     records.reserve(targets->targets().size());
@@ -440,7 +448,7 @@ SdfVitalPathTimingResult build_sdf_vital_path_timing_plan(
     for (const auto& target : targets->targets()) {
         const auto* node = ir.find_node(target.node_id);
         const auto* specialization
-            = specialization_for(state, target.instance_path);
+            = specialization_for(elaborated, target.instance_path);
         if (node == nullptr || specialization == nullptr
             || node->kind != target.construct_kind
             || (target.construct_kind != SdfConstructKind::Iopath
@@ -450,7 +458,7 @@ SdfVitalPathTimingResult build_sdf_vital_path_timing_plan(
                 node ? node->span : SourceSpan { });
             continue;
         }
-        const auto calls = find_calls(state, *specialization, target);
+        const auto calls = find_calls(elaborated, *specialization, target);
         if (calls.size() != 1U) {
             diagnose(result.diagnostics, "FSIM-SDF-VITAL-PATH-002",
                 "SDF VITAL target has no unique elaborated delay or timing-check call",
@@ -472,7 +480,7 @@ SdfVitalPathTimingResult build_sdf_vital_path_timing_plan(
         record.construct_kind = target.construct_kind;
         record.annotation_mode = annotation_mode(ir, target.node_id);
         record.instance_path = target.instance_path;
-        record.call.process = candidate.process->id;
+        record.call.process = candidate.process.id();
         record.call.instruction = candidate.instruction;
         record.call.kind = candidate.delay != nullptr
             ? SdfVitalCallKind::Delay

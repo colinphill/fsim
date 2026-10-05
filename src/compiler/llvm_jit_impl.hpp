@@ -14,68 +14,24 @@
 #include <unordered_set>
 #include <vector>
 
+namespace fsim::compiler::llvm_detail {
+class LlvmCompilationContexts;
+}
+
 namespace fsim::compiler {
-using NativeProcess = fsim_jit_process_v1;
+using NativeProcess = fsim_jit_process_v2;
 using NativeCohort = std::uint32_t(
-    const fsim_jit_runtime_v1* const*,
-    fsim_jit_frame_v1* const*,
-    fsim_jit_resume_result_v1* const*,
+    const fsim_jit_runtime_instance_v2* const*,
+    fsim_jit_frame_v2* const*,
+    fsim_jit_resume_result_v2* const*,
     std::uint32_t*,
     std::uint8_t* const*,
     std::uint8_t* const*,
     std::uint8_t* const*,
     std::uint8_t* const*,
     std::uint32_t);
-using NativeCompactCohort = void(
-    const std::uint64_t*,
-    const std::uint64_t*,
-    std::uint32_t,
-    std::uint32_t,
-    fsim_jit_update_slot_v1* const*,
-    std::uint64_t* const*,
-    const std::uint64_t*,
-    std::uint8_t* const*,
-    std::uint8_t* const*,
-    std::uint8_t* const*);
-struct NativePureWaveKernelMember {
-    const std::uint64_t* direct_signal_aval { };
-    const std::uint64_t* direct_signal_bval { };
-    const std::uint64_t* direct_wide_signal_aval { };
-    const std::uint64_t* direct_wide_signal_bval { };
-    std::uint32_t wide_signal_word_offset { };
-    fsim_jit_update_slot_v1* update_slot { };
-    std::uint64_t* active_word { };
-    std::uint64_t active_mask { };
-    std::uint8_t* queued { };
-    std::uint8_t* waiting { };
-    std::uint8_t* process_status { };
-    std::uint32_t read_signal0 { };
-    std::uint32_t read_signal1 { };
-    std::uint32_t input_offset0 { };
-    std::uint32_t input_offset1 { };
-    std::uint32_t slice_offset { };
-    std::uint32_t selector_offset { };
-    std::uint32_t update_offset { };
-};
-using NativePureWaveAndTask = void(
-    const runtime::simir::PureWavePreparedMember* const*, std::uint32_t);
-using NativePureWaveSingle = void(const NativePureWaveKernelMember*);
-using NativePureWaveDispatch = void(
-    const runtime::simir::PureWavePreparedMember* const*,
-    const std::uint32_t*,
-    const std::uint8_t*, std::uint32_t);
-
-struct NativePureWavePreparedView {
-    const void* owner { };
-    std::uint64_t generation { };
-    const std::atomic_bool* released { };
-    std::uint32_t shape { };
-    std::uint32_t signal0 { };
-    std::uint32_t signal1 { };
-    const NativePureWaveKernelMember* kernel_member { };
-};
-
 struct LlvmJit::Impl {
+    ~Impl();
     struct ProcessInfo {
         JitProcessFrameLayout frame_layout;
         std::uint32_t operation_count { };
@@ -119,14 +75,24 @@ struct LlvmJit::Impl {
         bool uses_files { };
         bool uses_containers { };
         bool uses_wide_container_operation { };
+        bool uses_container_read_index64 { };
         bool uses_exact_signal_operation { };
         bool uses_wide_signal_read { };
         bool uses_wide_signal_write { };
+        bool uses_wide_projected_write { };
         bool uses_code_coverage { };
         bool uses_coverage_sample { };
         bool uses_class_property_operation { };
         bool uses_event_triggered { };
+        bool requires_direct_read_signals { };
+        bool tiered_read_dedup_safe { };
         std::vector<runtime::simir::InstructionIndex> entry_points;
+        // Runtime-only slot widths reconstructed from the current signal
+        // layout. The C ABI exposes caller-owned slot storage, so checked
+        // entry can reject malformed wide spans before generated stores.
+        std::vector<std::uint32_t> direct_update_widths { };
+        std::vector<std::uint32_t> direct_read_widths { };
+        std::vector<runtime::simir::ValueKind> direct_read_value_kinds { };
 
         static constexpr std::array flags {
             &ProcessInfo::uses_native_call_stack,
@@ -169,29 +135,65 @@ struct LlvmJit::Impl {
             &ProcessInfo::uses_files,
             &ProcessInfo::uses_containers,
             &ProcessInfo::uses_wide_container_operation,
+            &ProcessInfo::uses_container_read_index64,
             &ProcessInfo::uses_exact_signal_operation,
             &ProcessInfo::uses_wide_signal_read,
             &ProcessInfo::uses_wide_signal_write,
+            &ProcessInfo::uses_wide_projected_write,
             &ProcessInfo::uses_code_coverage,
             &ProcessInfo::uses_coverage_sample,
             &ProcessInfo::uses_class_property_operation,
             &ProcessInfo::uses_event_triggered,
+            &ProcessInfo::requires_direct_read_signals,
+            &ProcessInfo::tiered_read_dedup_safe,
         };
     };
 
+    struct ModuleMetadata {
+        std::vector<ProcessInfo> processes;
+        llvm_detail::LlvmBackendTier backend_tier
+            = llvm_detail::LlvmBackendTier::none;
+        bool tier_eligible { };
+        std::uint64_t tier_selection_instruction_count { };
+        std::uint64_t optimized_instruction_count { };
+        llvm_detail::TieredReadDedupStatistics read_dedup_statistics;
+    };
+
     [[nodiscard]] static std::vector<std::byte> encode_module_metadata(
-        std::span<const ProcessInfo> processes);
-    [[nodiscard]] static std::optional<std::vector<ProcessInfo>>
+        std::span<const ProcessInfo> processes,
+        std::string_view cache_identity,
+        llvm_detail::LlvmBackendTier backend_tier,
+        bool tier_eligible,
+        std::uint64_t tier_selection_instruction_count,
+        std::uint64_t optimized_instruction_count,
+        llvm_detail::TieredReadDedupStatistics read_dedup_statistics);
+    [[nodiscard]] static std::optional<ModuleMetadata>
     decode_module_metadata(
         std::span<const std::byte> metadata,
         std::span<const JitProcessModuleEntry> entries,
-        std::span<const std::uint32_t> signal_widths);
+        std::span<const std::uint32_t> signal_widths,
+        std::span<const runtime::simir::ValueKind> signal_value_kinds,
+        std::string_view expected_cache_identity,
+        llvm_detail::LlvmBackendTier expected_backend_tier,
+        bool expected_tier_eligibility,
+        bool global_direct_read_requirement,
+        bool* identity_mismatch = nullptr);
+
+    static void populate_direct_read_metadata(
+        ProcessInfo& process,
+        std::span<const std::uint32_t> signal_widths,
+        std::span<const runtime::simir::ValueKind> signal_value_kinds);
 
     struct NativeEntry {
         NativeProcess* function { };
         ProcessInfo info;
         std::string symbol;
     };
+
+    [[nodiscard]] std::size_t resume_ordered_prevalidated_members(
+        std::span<JitProcessCohortResumeEntry> entries,
+        std::span<const NativeEntry*> native_entries,
+        bool manages_process_state);
 
     struct NativeCohortEntry {
         NativeCohort* function { };
@@ -200,19 +202,13 @@ struct LlvmJit::Impl {
         bool region_mode { };
     };
 
-    struct NativeLogic4BitAndCohortEntry {
-        NativeCohort* function { };
-        std::vector<JitProcessCohortLogic4BitAndMember> members;
-        bool manages_process_state { };
-    };
-
     struct NativeBoundCohortEntry {
         NativeCohort* function { };
         std::uint64_t generation { };
         std::vector<const NativeEntry*> members;
-        std::vector<const fsim_jit_runtime_v1*> runtimes;
-        std::vector<fsim_jit_frame_v1*> frames;
-        std::vector<fsim_jit_resume_result_v1*> results;
+        std::vector<const fsim_jit_runtime_instance_v2*> runtimes;
+        std::vector<fsim_jit_frame_v2*> frames;
+        std::vector<fsim_jit_resume_result_v2*> results;
         std::vector<std::uint32_t> statuses;
         std::vector<std::uint8_t*> queued;
         std::vector<std::uint8_t*> waiting;
@@ -222,140 +218,12 @@ struct LlvmJit::Impl {
         bool region_mode { };
     };
 
-    struct NativeBoundLogic4BitAndCohortEntry {
-        NativeCohort* function { };
-        std::uint64_t generation { };
-        std::vector<const NativeEntry*> native_members;
-        std::vector<JitProcessCohortLogic4BitAndMember> members;
-        std::vector<const fsim_jit_runtime_v1*> runtimes;
-        std::vector<fsim_jit_frame_v1*> frames;
-        std::vector<fsim_jit_resume_result_v1*> results;
-        std::vector<std::uint32_t> statuses;
-        std::vector<std::uint8_t*> queued;
-        std::vector<std::uint8_t*> waiting;
-        std::vector<std::uint8_t*> process_statuses;
-        bool manages_process_state { };
-    };
-
-    struct NativeCompactLogic4BitAndMemberShape {
-        std::uint32_t extract_lhs_offset { };
-        std::uint32_t extract_rhs_offset { };
-        std::uint32_t update_offset { };
-
-        friend bool operator==(
-            const NativeCompactLogic4BitAndMemberShape&,
-            const NativeCompactLogic4BitAndMemberShape&) = default;
-    };
-
-    struct NativeCompactLogic4BitAndCohortEntry {
-        NativeCompactCohort* function { };
-        std::vector<NativeCompactLogic4BitAndMemberShape> members;
-    };
-
-    struct NativeBoundCompactLogic4BitAndCohortEntry {
-        NativeCompactCohort* function { };
-        std::uint64_t generation { };
-        const std::uint64_t* input_aval { };
-        const std::uint64_t* input_bval { };
-        std::uint32_t input_lhs_signal { };
-        std::uint32_t input_rhs_signal { };
-        std::vector<fsim_jit_update_slot_v1*> output_slots;
-        std::vector<std::uint64_t*> active_words;
-        std::vector<std::uint64_t> active_masks;
-        std::vector<std::uint8_t*> queued;
-        std::vector<std::uint8_t*> waiting;
-        std::vector<std::uint8_t*> process_statuses;
-    };
-
-    enum class PureWaveShape : std::uint8_t {
-        logic4_bit_and,
-        reducer31,
-        reduction7,
-        wide_copy6,
-    };
-
-    struct NativePureWaveMemberPlan {
-        const NativeEntry* native { };
-        const runtime::simir::Process* process { };
-        PureWaveShape shape { };
-        std::array<std::uint32_t, 4> read_slots { };
-        std::array<std::uint32_t, 4> read_signals { };
-        std::array<std::uint32_t, 5> registers { };
-        std::array<std::uint32_t, 5> register_widths { };
-        std::array<std::uint32_t, 5> register_word_offsets { };
-        std::uint32_t read_count { };
-        std::uint32_t update_slot { };
-        std::uint32_t update_signal { };
-        std::uint32_t update_offset { };
-        std::uint32_t update_width { };
-        std::uint32_t input_lhs_offset { };
-        std::uint32_t input_rhs_offset { };
-        std::uint32_t slice_offset { };
-        std::uint32_t selector_offset { };
-        std::uint32_t output_slice_offset { };
-        std::uint32_t expected_resume_instruction { };
-        std::uint32_t expected_wait_instruction { };
-    };
-
-    struct NativeBoundPureWaveMemberEntry {
-        std::uint64_t generation { };
-        std::atomic_bool released { };
-        NativePureWaveMemberPlan plan;
-        const fsim_jit_runtime_v1* runtime { };
-        fsim_jit_frame_v1* frame { };
-        fsim_jit_resume_result_v1* result { };
-        std::uint8_t* queued { };
-        std::uint8_t* waiting { };
-        std::uint8_t* process_status { };
-        const std::uint32_t* direct_read_signals { };
-        std::uint32_t direct_read_signal_count { };
-        fsim_jit_update_slot_v1* direct_update_slots { };
-        std::uint32_t direct_update_slot_count { };
-        std::uint64_t* direct_update_active_words { };
-        std::uint32_t direct_update_active_word_count { };
-        const std::uint64_t* direct_signal_aval { };
-        const std::uint64_t* direct_signal_bval { };
-        std::uint32_t direct_signal_count { };
-        const std::uint64_t* direct_wide_signal_aval { };
-        const std::uint64_t* direct_wide_signal_bval { };
-        const std::uint32_t* direct_wide_signal_offsets { };
-        std::uint32_t direct_wide_signal_offset_count { };
-        std::uint32_t direct_wide_word_count { };
-        std::uint64_t layout_id_low { };
-        std::uint64_t layout_id_high { };
-        std::uint32_t frame_register_count { };
-        std::uint32_t expected_resume_instruction { };
-        std::uint32_t expected_wait_instruction { };
-        NativePureWaveKernelMember kernel_member;
-        NativePureWavePreparedView prepared_view;
-    };
-
-    struct NativeBoundPureWaveEntry {
-        std::uint64_t generation { };
-        std::vector<std::shared_ptr<NativeBoundPureWaveMemberEntry>> members;
-        std::vector<std::size_t> task_ends;
-        std::vector<PureWaveShape> task_shapes;
-        std::vector<std::uint32_t> kernel_task_ends;
-        std::vector<std::uint8_t> kernel_task_shapes;
-        std::vector<NativePureWaveKernelMember> kernel_members;
-    };
-
-    struct NativePureWaveKernels {
-        NativePureWaveAndTask* logic4_bit_and { };
-        NativePureWaveSingle* reducer31 { };
-        NativePureWaveSingle* reduction7 { };
-        NativePureWaveSingle* wide_copy6 { };
-        NativePureWaveDispatch* dispatch { };
-    };
-
-    void ensure_pure_wave_kernels();
-
-    [[nodiscard]] static std::optional<NativePureWaveMemberPlan>
-    classify_pure_wave_member(
-        const JitPureWaveMember& member, const NativeEntry& native);
-
     LlvmJitOptions options;
+    // Captured before any module workers start. Verification never changes IR.
+    bool verify_optimized_modules { };
     std::unique_ptr<llvm_detail::LlvmObjectCache> object_cache;
+    // Destroy the JIT and its modules before machines/contexts, then the cache.
+    std::shared_ptr<llvm_detail::LlvmCompilationContexts> compilation_contexts;
     std::unique_ptr<llvm::orc::LLJIT> jit;
     std::string target_cpu;
     std::vector<std::string> target_features;
@@ -370,31 +238,12 @@ struct LlvmJit::Impl {
     std::unordered_map<std::size_t,
         std::vector<std::unique_ptr<NativeCohortEntry>>>
         cohort_functions;
-    std::unordered_map<std::size_t,
-        std::vector<std::unique_ptr<NativeLogic4BitAndCohortEntry>>>
-        logic4_bit_and_cohort_functions;
-    std::unordered_map<std::size_t,
-        std::vector<std::unique_ptr<NativeCompactLogic4BitAndCohortEntry>>>
-        compact_logic4_bit_and_cohort_functions;
+    std::size_t ordered_cohort_materialization_attempts { };
+    bool ordered_cohort_profile_enabled { };
+    std::uint64_t ordered_cohort_budget_misses { };
+    std::atomic<std::uint64_t> ordered_cohort_fallback_batches { };
+    std::atomic<std::uint64_t> ordered_cohort_fallback_members { };
     std::vector<std::shared_ptr<NativeBoundCohortEntry>> bound_cohorts;
-    std::vector<std::shared_ptr<NativeBoundLogic4BitAndCohortEntry>>
-        bound_logic4_bit_and_cohorts;
-    std::vector<std::shared_ptr<NativeBoundCompactLogic4BitAndCohortEntry>>
-        bound_compact_logic4_bit_and_cohorts;
-    std::unordered_map<const NativeBoundPureWaveMemberEntry*,
-        std::shared_ptr<NativeBoundPureWaveMemberEntry>>
-        bound_pure_wave_members;
-    std::unordered_map<const NativeBoundPureWaveEntry*,
-        std::shared_ptr<NativeBoundPureWaveEntry>>
-        bound_pure_waves;
-    NativePureWaveKernels pure_wave_kernels;
-    bool pure_wave_kernels_initialized { };
-    std::vector<const runtime::simir::PureWavePreparedMember*>
-        pure_wave_member_scratch;
-    std::vector<runtime::simir::PureWavePreparedMember>
-        pure_wave_prepared_member_scratch;
-    std::vector<std::uint32_t> pure_wave_task_end_scratch;
-    std::vector<std::uint8_t> pure_wave_task_shape_scratch;
     std::unordered_map<const runtime::simir::Process*,
         llvm_detail::ValidatedProcess>
         immutable_validated_processes;
@@ -404,7 +253,6 @@ struct LlvmJit::Impl {
     std::uint64_t next_handle = 1;
     std::uint64_t next_cohort = 1;
     std::uint64_t next_bound_cohort_generation = 1;
-    std::uint64_t next_pure_wave_member_generation = 1;
 };
 
 } // namespace fsim::compiler

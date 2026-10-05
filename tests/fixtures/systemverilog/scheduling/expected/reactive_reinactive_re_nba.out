@@ -1,0 +1,3 @@
+PROGRAM reactive value=0
+PROGRAM re-inactive value=0
+STROBE value=1

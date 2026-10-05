@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "../../src/app/application_direct_read_map_cache.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -321,6 +326,463 @@ void test_dormant_runtime_updates(
         && simulation.finished());
     assert(simulation.read_signal(*signal).to_msb_string() == final_value);
     assert(stored_bits(registry, object.value->handle) == registry_before);
+}
+
+void test_retained_array_memory_vpi(const std::filesystem::path& directory)
+{
+    const auto source = directory / "element-net-memory-vpi.sv";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(
+module element_net_memory_vpi;
+  reg [7:0] source;
+  wire [7:0] words [3:2];
+  assign words[3] = source;
+  initial begin
+    source = 8'h1a;
+    #5 source = 8'h2b;
+    #5 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "vpi-element-net-memory";
+    config.project.top = "sv:work.element_net_memory_vpi";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = fsim::project::Optimization::o2;
+    config.build.cache_path = directory / "cache-element-net-memory-vpi";
+    config.run.max_deltas = 1'000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    auto project = build_project(config);
+    const auto object
+        = project.design.find_container("element_net_memory_vpi.words");
+    assert(object);
+    const auto alias_count = std::ranges::count_if(
+        project.design.container_element_signal_aliases(),
+        [&](const auto& alias) { return alias.object == *object; });
+    const bool require_physical_aliases
+        = std::getenv("FSIM_REQUIRE_A1_PHYSICAL_ALIASES") != nullptr;
+    assert(alias_count == 0U || alias_count == 2U);
+    assert(!require_physical_aliases || alias_count == 2U);
+    const auto aggregate_alias_count = std::ranges::count_if(
+        project.design.container_aggregate_signal_aliases(),
+        [&](const auto& alias) { return alias.object == *object; });
+    assert(aggregate_alias_count == (alias_count == 0U ? 0U : 1U));
+
+    fsim::app::Simulation simulation {
+        std::move(project), config.run.max_deltas,
+        fsim::app::SimulationEngine::interpreter
+    };
+    auto& registry = simulation.systemverilog_vpi_objects();
+    auto& callbacks = simulation.systemverilog_vpi_callbacks();
+    auto& values = simulation.systemverilog_vpi_values();
+    const auto memory = registry.find("element_net_memory_vpi.words");
+    const auto word_three = registry.find("element_net_memory_vpi.words[3]");
+    const auto word_two = registry.find("element_net_memory_vpi.words[2]");
+    const auto aggregate_signal
+        = simulation.find_signal("element_net_memory_vpi.words");
+    assert(memory && word_three && word_two && aggregate_signal
+        && memory.value->kind == SystemVerilogVpiObjectKind::Memory
+        && word_three.value->kind == SystemVerilogVpiObjectKind::Variable
+        && word_two.value->kind == SystemVerilogVpiObjectKind::Variable
+        && word_three.value->parent == memory.value->handle
+        && word_two.value->parent == memory.value->handle);
+    const auto memory_type = registry.type_info(memory.value->handle);
+    const auto word_three_type
+        = registry.type_info(word_three.value->handle);
+    const std::vector<fsim::runtime::SystemVerilogVpiRange> memory_ranges {
+        { 3, 2 }
+    };
+    const auto indexed_word = registry.find_child(
+        memory.value->handle, "[3]");
+    assert(memory_type && memory_type.value->descriptor
+        && memory_type.value->descriptor->kind
+            == fsim::runtime::SystemVerilogVpiDescriptorKind::UnpackedArray
+        && memory_type.value->descriptor->ranges == memory_ranges
+        && memory_type.value->descriptor->children.size() == 1U
+        && memory_type.value->descriptor->children.front().width == 8U
+        && word_three_type && word_three_type.value->width == 8U
+        && word_three_type.value->direction
+            == fsim::runtime::SystemVerilogVpiDirection::None
+        && indexed_word
+        && indexed_word.value->handle == word_three.value->handle);
+
+    std::vector<EventCapture> word_three_events;
+    const auto callback = callbacks.register_callback(
+        { SystemVerilogVpiCallbackKind::ValueChange,
+            word_three.value->handle, std::nullopt, 1,
+            [&](const SystemVerilogVpiCallbackEvent& event) {
+                assert(event.object == word_three.value->handle
+                    && event.value);
+                const auto* packed
+                    = std::get_if<fsim::runtime::PackedLogic4>(
+                        &event.value->payload);
+                assert(packed && packed->width() == 8U);
+                word_three_events.push_back({
+                    event.kind, packed->to_msb_string(),
+                    event.time.ticks, event.time.delta });
+            } });
+    assert(callback);
+
+    const auto initial_run = simulation.run(0U);
+    assert(initial_run.status == fsim::runtime::RunStatus::time_limit
+        && initial_run.time == 0U);
+    const auto source_update = simulation.run(5U);
+    const bool source_update_matches
+        = source_update.status == fsim::runtime::RunStatus::time_limit
+        && source_update.time == 5U
+        && word_three_events.size() == 3U
+        && word_three_events[0].value == "XXXXXXXX"
+        && word_three_events[0].time == 0U
+        && word_three_events[0].delta == 0U
+        && word_three_events[1].value == "00011010"
+        && word_three_events[1].time == 0U
+        && word_three_events[1].delta == 0U
+        && word_three_events[2].value == "00101011"
+        && word_three_events[2].time == 5U
+        && word_three_events[2].delta == 0U;
+    assert(source_update_matches);
+
+    // Retained aggregate storage can recompute an undriven sibling on a later
+    // source-driver update, so exercise this deposit after the final update.
+    fsim::runtime::SystemVerilogVpiStoredValue deposited_word;
+    deposited_word.payload
+        = fsim::runtime::PackedLogic4::from_msb_string("11000011");
+    assert(values.apply(word_two.value->handle,
+               fsim::runtime::SystemVerilogVpiWriteKind::Deposit,
+               deposited_word)
+        == fsim::runtime::SystemVerilogVpiValueError::None);
+    const auto deposited_value
+        = std::get<fsim::runtime::PackedLogic4>(deposited_word.payload);
+    assert(simulation.read_container_object(*object).elements.at(1U)
+        == std::get<fsim::runtime::PackedLogic4>(deposited_word.payload));
+    std::array<std::uint64_t, 2U> published_word { };
+    const auto published_word_read = registry.read_value(
+        word_two.value->handle,
+        fsim::runtime::SystemVerilogVpiValueFormat::Logic4Vector,
+        { published_word, { } });
+    assert(published_word_read
+        && published_word_read.required_words == published_word.size()
+        && published_word[0] == 0xc3U
+        && published_word[1] == 0U);
+    fsim::runtime::SystemVerilogVpiStoredValue forced_word;
+    forced_word.payload
+        = fsim::runtime::PackedLogic4::from_msb_string("10100101");
+    assert(values.apply(word_two.value->handle,
+               fsim::runtime::SystemVerilogVpiWriteKind::Force,
+               forced_word)
+            == fsim::runtime::SystemVerilogVpiValueError::ReadOnly
+        && values.apply(word_two.value->handle,
+               fsim::runtime::SystemVerilogVpiWriteKind::Release)
+            == fsim::runtime::SystemVerilogVpiValueError::NotForced
+        && simulation.read_container_object(*object).elements.at(1U)
+            == deposited_value);
+
+    const auto result = simulation.run(10U);
+    const auto& final_array = simulation.read_container_object(*object);
+    const bool final_state_matches
+        = result.status == fsim::runtime::RunStatus::stopped
+        && result.time == 10U
+        && final_array.elements.at(0U)
+            == fsim::runtime::PackedLogic4::from_msb_string("00101011")
+        && final_array.elements.at(1U) == deposited_value
+        && simulation.read_signal(*aggregate_signal)
+            == fsim::runtime::PackedLogic4::from_msb_string(
+                "0010101111000011")
+        && word_three_events.size() == 3U
+        && word_three_events[0].value == "XXXXXXXX"
+        && word_three_events[0].time == 0U
+        && word_three_events[0].delta == 0U
+        && word_three_events[1].value == "00011010"
+        && word_three_events[1].time == 0U
+        && word_three_events[1].delta == 0U
+        && word_three_events[2].value == "00101011"
+        && word_three_events[2].time == 5U
+        && word_three_events[2].delta == 0U;
+    if (!final_state_matches) {
+        std::cerr << "retained array VPI final-state mismatch: status="
+                  << static_cast<unsigned>(result.status)
+                  << " time=" << result.time
+                  << " element_count=" << final_array.elements.size();
+        for (std::size_t index = 0;
+            index < final_array.elements.size(); ++index) {
+            std::cerr << " element[" << index << "]=\"";
+            std::cerr << final_array.elements[index].to_msb_string();
+            std::cerr << '\"';
+        }
+        std::cerr << " aggregate=\""
+                  << simulation.read_signal(*aggregate_signal).to_msb_string()
+                  << "\" callbacks=";
+        for (const auto& event : word_three_events) {
+            std::cerr << " [kind=" << static_cast<unsigned>(event.kind)
+                      << " value=" << event.value << " @" << event.time
+                      << '/' << event.delta << ']';
+        }
+        std::cerr << '\n';
+    }
+    assert(final_state_matches);
+}
+
+void test_multidimensional_array_memory_vpi(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "multidimensional-net-memory-vpi.sv";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(
+module multidimensional_net_memory_vpi;
+  reg [7:0] source;
+  wire [7:0] words [3:2][-1:0];
+  logic [7:0] selected;
+  wire [7:0] static_selected;
+  assign static_selected = words[3][-1];
+  integer row;
+  integer column;
+  assign words[3][-1] = source;
+  assign words[2][0] = ~source;
+  always_comb begin
+    if ((row === 3 || row === 2)
+        && (column === -1 || column === 0))
+      selected = words[row][column];
+    else
+      selected = 8'hxx;
+  end
+  initial begin
+    source = 8'h1a;
+    row = 3;
+    column = -1;
+    #1;
+    assert (selected === 8'h1a);
+    assert (static_selected === 8'h1a);
+    #4;
+    source = 8'h2b;
+    row = 2;
+    column = 0;
+    #1;
+    assert (selected === 8'hd4);
+    assert (static_selected === 8'h2b);
+    #4 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+    for (const auto mode : { 0U, 1U, 2U }) {
+        fsim::project::Config config;
+        config.base_directory = directory;
+        config.project.name = "vpi-multidimensional-net-memory";
+        config.project.top = "sv:work.multidimensional_net_memory_vpi";
+        config.project.time_resolution = "1ns";
+        config.build.optimization = mode == 1U
+            ? fsim::project::Optimization::o0 : fsim::project::Optimization::o2;
+        config.build.cache_path = directory
+            / ("cache-multidimensional-net-memory-" + std::to_string(mode));
+        config.run.max_deltas = 1'000;
+        fsim::project::SourceSet sources;
+        sources.language = fsim::project::Language::system_verilog;
+        sources.standard = "2017";
+        sources.library = "work";
+        sources.files.push_back(source);
+        config.source_sets.push_back(std::move(sources));
+        auto project = build_project(config);
+        const auto object = project.design.find_container(
+            "multidimensional_net_memory_vpi.words");
+        assert(object);
+        assert(std::ranges::count_if(
+            project.design.container_element_signal_aliases(),
+            [&](const auto& alias) { return alias.object == *object; }) == 4U);
+        assert(project.design.find_signal(
+            "multidimensional_net_memory_vpi.words[3][-1]"));
+        assert(project.design.find_signal(
+            "multidimensional_net_memory_vpi.words[3][0]"));
+        assert(project.design.find_signal(
+            "multidimensional_net_memory_vpi.words[2][-1]"));
+        assert(project.design.find_signal(
+            "multidimensional_net_memory_vpi.words[2][0]"));
+        assert(std::ranges::any_of(project.design.processes(),
+            [&](const fsim::runtime::simir::Process& process) {
+                return std::ranges::any_of(process.operations,
+                    [&](const fsim::runtime::simir::Operation& operation) {
+                        const auto* read = fsim::runtime::simir::operation_get_if<
+                            fsim::runtime::simir::ReadContainerObject>(&operation);
+                        return read != nullptr && read->object == *object;
+                    });
+            }));
+        fsim::app::Simulation simulation {
+            std::move(project), config.run.max_deltas,
+            mode == 0U ? fsim::app::SimulationEngine::interpreter
+                       : fsim::app::SimulationEngine::compiled
+        };
+#if defined(FSIM_HAS_LLVM)
+        assert(mode == 0U || simulation.compiled_process_count() > 0U);
+#endif
+        auto& registry = simulation.systemverilog_vpi_objects();
+        auto& callbacks = simulation.systemverilog_vpi_callbacks();
+        auto& values = simulation.systemverilog_vpi_values();
+        const auto memory = registry.find("multidimensional_net_memory_vpi.words");
+        const auto driven = registry.find(
+            "multidimensional_net_memory_vpi.words[3][-1]");
+        const auto undriven = registry.find(
+            "multidimensional_net_memory_vpi.words[3][0]");
+        const auto aggregate = simulation.find_signal(
+            "multidimensional_net_memory_vpi.words");
+        assert(memory && driven && undriven && aggregate);
+        assert(memory.value->kind == SystemVerilogVpiObjectKind::Memory);
+        assert(driven.value->parent == memory.value->handle);
+        assert(undriven.value->parent == memory.value->handle);
+        const auto type = registry.type_info(memory.value->handle);
+        assert(type && type.value->descriptor);
+        const auto& outer = *type.value->descriptor;
+        using Range = fsim::runtime::SystemVerilogVpiRange;
+        assert((outer.ranges == std::vector<Range> { { 3, 2 } }));
+        assert(outer.children.size() == 1U);
+        const auto& inner = outer.children.front();
+        assert((inner.ranges == std::vector<Range> { { -1, 0 } }));
+        assert(inner.children.size() == 1U
+            && inner.children.front().width == 8U);
+        const auto child = registry.find_child(memory.value->handle, "[3][-1]");
+        assert(child && child.value->handle == driven.value->handle);
+
+        assert(simulation.run(0U).status == fsim::runtime::RunStatus::time_limit);
+        assert(simulation.read_signal(*aggregate).to_msb_string()
+            == "00011010ZZZZZZZZZZZZZZZZ11100101");
+        std::vector<EventCapture> events;
+        const auto callback = callbacks.register_callback({
+            SystemVerilogVpiCallbackKind::ValueChange,
+            driven.value->handle, std::nullopt, 1,
+            [&](const SystemVerilogVpiCallbackEvent& event) {
+                assert(event.value && event.object == driven.value->handle);
+                const auto* packed = std::get_if<fsim::runtime::PackedLogic4>(
+                    &event.value->payload);
+                assert(packed);
+                events.push_back({ event.kind, packed->to_msb_string(),
+                    event.time.ticks, event.time.delta });
+            }
+        });
+        assert(callback);
+        assert(simulation.run(5U).status == fsim::runtime::RunStatus::time_limit);
+        assert(events.size() == 1U && events[0].value == "00101011"
+            && events[0].time == 5U && events[0].delta == 0U);
+        const auto& retained = simulation.read_container_object(*object);
+        assert(retained.elements.size() == 4U);
+        assert(retained.elements[0].to_msb_string() == "00101011");
+        assert(retained.elements[3].to_msb_string() == "11010100");
+        fsim::runtime::SystemVerilogVpiStoredValue deposited;
+        deposited.payload = fsim::runtime::PackedLogic4::from_msb_string("11000011");
+        assert(values.apply(undriven.value->handle,
+            fsim::runtime::SystemVerilogVpiWriteKind::Deposit, deposited)
+            == fsim::runtime::SystemVerilogVpiValueError::None);
+        assert(retained.elements[1].to_msb_string() == "11000011");
+        assert(simulation.read_signal(*aggregate).to_msb_string()
+            == "0010101111000011ZZZZZZZZ11010100");
+        std::array<std::uint64_t, 2U> word { };
+        const auto read = registry.read_value(undriven.value->handle,
+            fsim::runtime::SystemVerilogVpiValueFormat::Logic4Vector,
+            { word, { } });
+        assert(read && word[0] == 0xc3U && word[1] == 0U);
+        assert(simulation.run(10U).status == fsim::runtime::RunStatus::stopped);
+        assert(events.size() == 1U);
+    }
+}
+
+void test_public_aggregate_array_signal_deposit(
+    const std::filesystem::path& directory)
+{
+    const auto source = directory / "aggregate-array-signal-deposit.sv";
+    {
+        std::ofstream output(source, std::ios::binary);
+        output << R"(
+module aggregate_array_signal_deposit;
+  reg [7:0] source;
+  wire [7:0] words [0:1];
+  assign words[0] = source;
+  assign words[1] = ~source;
+  initial begin
+    source = 8'h12;
+    #5 source = 8'h34;
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "aggregate-array-signal-deposit";
+    config.project.top = "sv:work.aggregate_array_signal_deposit";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = fsim::project::Optimization::o2;
+    config.build.cache_path
+        = directory / "cache-aggregate-array-signal-deposit";
+    config.run.max_deltas = 1'000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2023";
+    sources.library = "work";
+    sources.files.push_back(source);
+    config.source_sets.push_back(std::move(sources));
+
+    auto project = build_project(config);
+    const auto object = project.design.find_container(
+        "aggregate_array_signal_deposit.words");
+    assert(object);
+    const auto leaf_alias_count = std::ranges::count_if(
+        project.design.container_element_signal_aliases(),
+        [&](const auto& alias) { return alias.object == *object; });
+    const auto proxy_count = std::ranges::count_if(
+        project.design.container_aggregate_signal_aliases(),
+        [&](const auto& alias) { return alias.object == *object; });
+    const bool require_physical_split
+        = std::getenv("FSIM_REQUIRE_A1_PHYSICAL_ALIASES") != nullptr;
+    std::optional<fsim::runtime::simir::SignalId> expected_proxy_signal;
+    if (leaf_alias_count == 0U) {
+        // The current admission gate is intentionally disabled. This branch
+        // keeps the public API regression usable before physical splitting.
+        assert(!require_physical_split);
+        assert(proxy_count == 0U);
+    } else {
+        assert(leaf_alias_count == 2U && proxy_count == 1U);
+        const auto proxy = std::ranges::find_if(
+            project.design.container_aggregate_signal_aliases(),
+            [&](const auto& alias) { return alias.object == *object; });
+        assert(proxy != project.design.container_aggregate_signal_aliases().end()
+            && proxy->readable && proxy->writable);
+        expected_proxy_signal = proxy->signal;
+    }
+
+    fsim::app::Simulation simulation {
+        std::move(project), config.run.max_deltas,
+        fsim::app::SimulationEngine::interpreter
+    };
+    const auto aggregate_signal = simulation.find_signal(
+        "aggregate_array_signal_deposit.words");
+    assert(aggregate_signal
+        && (!expected_proxy_signal
+            || *aggregate_signal == *expected_proxy_signal));
+    const auto initial = simulation.run(0U);
+    assert(initial.status == fsim::runtime::RunStatus::time_limit
+        && initial.time == 0U);
+
+    const auto deposited
+        = fsim::runtime::PackedLogic4::from_msb_string("1010010110010110");
+    simulation.deposit_signal(*aggregate_signal, deposited);
+    assert(simulation.read_signal(*aggregate_signal) == deposited);
+    const auto& array = simulation.read_container_object(*object);
+    assert(array.elements.size() == 2U
+        && array.elements[0]
+            == fsim::runtime::PackedLogic4::from_msb_string("10100101")
+        && array.elements[1]
+            == fsim::runtime::PackedLogic4::from_msb_string("10010110"));
 }
 
 Capture execute(
@@ -1275,6 +1737,150 @@ void test_systemverilog_metadata(
             == 0);
 }
 
+void test_direct_read_map_cache_invalidation()
+{
+    using fsim::app::application_detail::DirectReadMapCache;
+    using fsim::app::application_detail::DirectReadPlaneLayoutKey;
+    using fsim::runtime::simir::DirectSignalReadCapabilityKey;
+
+    constexpr auto unsupported = std::numeric_limits<std::uint32_t>::max();
+    const std::array<std::uint32_t, 2> static_signals { 3U, 4U };
+    std::array<std::uint32_t, 2> runtime_signals { unsupported, unsupported };
+    std::array<std::uint64_t, 8> plane_storage { };
+    std::array<std::uint64_t, 8> replacement_plane_storage { };
+    DirectReadPlaneLayoutKey plane_layout;
+    plane_layout.buffers[0] = {
+        plane_storage.data(), plane_storage.size()
+    };
+    DirectReadMapCache cache;
+    std::size_t support_queries = 0U;
+    const auto mixed_support = [&support_queries](const std::uint32_t signal) {
+        ++support_queries;
+        return signal == 3U;
+    };
+    const auto first_owner
+        = fsim::runtime::simir::allocate_direct_signal_read_owner_token();
+    const auto second_owner
+        = fsim::runtime::simir::allocate_direct_signal_read_owner_token();
+    assert(first_owner != 0U && second_owner != 0U
+        && first_owner != second_owner);
+
+    assert(!cache.refresh(
+        static_signals, runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        true, plane_storage.size(), mixed_support));
+    assert(support_queries == 2U);
+    assert(runtime_signals[0] == 3U && runtime_signals[1] == unsupported);
+
+    // A stable owner and epoch reuse the per-slot map without re-querying.
+    assert(!cache.refresh(
+        static_signals, runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        true, plane_storage.size(), mixed_support));
+    assert(support_queries == 2U);
+    plane_storage[0] = std::uint64_t { 0x55U };
+    assert(!cache.refresh(
+        static_signals, runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        true, plane_storage.size(), mixed_support));
+    assert(support_queries == 2U);
+
+    std::array<std::uint32_t, 2> replacement_runtime_signals {
+        unsupported, unsupported
+    };
+    assert(!cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        true, plane_storage.size(), mixed_support));
+    assert(support_queries == 4U);
+    assert(replacement_runtime_signals[0] == 3U
+        && replacement_runtime_signals[1] == unsupported);
+
+    // The destination buffer, direct-plane bound, and validity result are
+    // explicit cache inputs too; changed inputs cannot reuse stale slots.
+    assert(!cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        true, 4U, mixed_support));
+    assert(support_queries == 5U);
+    assert(replacement_runtime_signals[0] == 3U
+        && replacement_runtime_signals[1] == unsupported);
+    assert(!cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        false, plane_storage.size(), mixed_support));
+    assert(support_queries == 5U);
+    assert(replacement_runtime_signals[0] == unsupported
+        && replacement_runtime_signals[1] == unsupported);
+    assert(!cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 1U }, plane_layout,
+        true, plane_storage.size(), mixed_support));
+    assert(support_queries == 7U);
+    assert(replacement_runtime_signals[0] == 3U
+        && replacement_runtime_signals[1] == unsupported);
+
+    // Capability changes must advance the epoch and rebuild every slot.
+    const auto all_supported = [&support_queries](const std::uint32_t) {
+        ++support_queries;
+        return true;
+    };
+    assert(cache.refresh(
+        static_signals, runtime_signals,
+        DirectSignalReadCapabilityKey { first_owner, 2U }, plane_layout,
+        true, plane_storage.size(), all_supported));
+    assert(support_queries == 9U);
+    assert(runtime_signals == static_signals);
+
+    // Distinct lifetime tokens prevent an allocator-reused Impl address from
+    // inheriting the prior lifetime's permissions at the same plane address.
+    assert(!cache.refresh(
+        static_signals, runtime_signals,
+        DirectSignalReadCapabilityKey { second_owner, 1U }, plane_layout,
+        true, plane_storage.size(), mixed_support));
+    assert(support_queries == 11U);
+    assert(runtime_signals[0] == 3U && runtime_signals[1] == unsupported);
+
+    // Plane reallocation invalidates the map even when the capability key is
+    // unchanged, because its storage identity is part of the cache key.
+    plane_layout.buffers[0] = {
+        replacement_plane_storage.data(), replacement_plane_storage.size()
+    };
+    assert(cache.refresh(
+        static_signals, runtime_signals,
+        DirectSignalReadCapabilityKey { second_owner, 1U }, plane_layout,
+        true, replacement_plane_storage.size(), all_supported));
+    assert(support_queries == 13U);
+    assert(runtime_signals == static_signals);
+
+    // Custom contexts with the default zero key are dynamic and are checked
+    // on every resume, so permissions can change without stale map entries.
+    bool dynamic_support = false;
+    const auto dynamic_query = [&support_queries, &dynamic_support](
+                                   const std::uint32_t) {
+        ++support_queries;
+        return dynamic_support;
+    };
+    assert(!cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { }, plane_layout,
+        true, replacement_plane_storage.size(), dynamic_query));
+    assert(replacement_runtime_signals[0] == unsupported
+        && replacement_runtime_signals[1] == unsupported);
+    assert(!cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { }, plane_layout,
+        true, replacement_plane_storage.size(), dynamic_query));
+    assert(support_queries == 17U);
+    dynamic_support = true;
+    assert(cache.refresh(
+        static_signals, replacement_runtime_signals,
+        DirectSignalReadCapabilityKey { }, plane_layout,
+        true, replacement_plane_storage.size(), dynamic_query));
+    assert(support_queries == 19U);
+    assert(replacement_runtime_signals == static_signals);
+}
+
 } // namespace
 
 int main()
@@ -1287,6 +1893,7 @@ int main()
         / ("fsim-vpi-application-" + std::to_string(nonce))
     };
     std::filesystem::create_directories(temporary.path);
+    test_direct_read_map_cache_invalidation();
     const auto legacy_source = temporary.path / "vpi-verilog-1995.v";
     {
         std::ofstream output(legacy_source, std::ios::binary);
@@ -1301,6 +1908,9 @@ endmodule
         assert(output.good());
     }
     test_verilog_1995_profile(temporary.path, legacy_source);
+    test_retained_array_memory_vpi(temporary.path);
+    test_multidimensional_array_memory_vpi(temporary.path);
+    test_public_aggregate_array_signal_deposit(temporary.path);
     const auto source = temporary.path / "vpi-application.v";
     const auto initial = make_bits({ 0, 68, 136 });
     const auto middle = make_bits({ 1, 37, 97, 135 });

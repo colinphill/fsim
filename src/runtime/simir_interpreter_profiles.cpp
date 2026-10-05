@@ -3,13 +3,248 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstddef>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <ranges>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::runtime::simir {
+namespace {
+
+constexpr std::array<std::pair<RegionProcessExclusionReason, std::string_view>,
+    static_cast<std::size_t>(RegionProcessExclusionReason::count)>
+    process_exclusion_fields {{
+        { RegionProcessExclusionReason::not_pure,
+            "process_exclusion_not_pure" },
+        { RegionProcessExclusionReason::wrong_scheduling_domain,
+            "process_exclusion_wrong_scheduling_domain" },
+        { RegionProcessExclusionReason::wrong_update_kind,
+            "process_exclusion_wrong_update_kind" },
+        { RegionProcessExclusionReason::cyclic_or_dependent_on_cycle,
+            "process_exclusion_cyclic_or_dependent_on_cycle" },
+        { RegionProcessExclusionReason::unknown_dependencies,
+            "process_exclusion_unknown_dependencies" },
+        { RegionProcessExclusionReason::edge_sensitivity,
+            "process_exclusion_edge_sensitivity" },
+    }};
+
+constexpr std::array<std::pair<RegionBoundaryReason, std::string_view>,
+    static_cast<std::size_t>(RegionBoundaryReason::count)>
+    boundary_reason_fields {{
+        { RegionBoundaryReason::no_internal_writer,
+            "boundary_no_internal_writer" },
+        { RegionBoundaryReason::writer_outside_component,
+            "boundary_writer_outside_component" },
+        { RegionBoundaryReason::reader_outside_component,
+            "boundary_reader_outside_component" },
+        { RegionBoundaryReason::unknown_driver_ownership,
+            "boundary_unknown_driver_ownership" },
+        { RegionBoundaryReason::partial_driver,
+            "boundary_partial_driver" },
+        { RegionBoundaryReason::resolved_driver_class,
+            "boundary_resolved_driver_class" },
+        { RegionBoundaryReason::unsupported_resolution_mode,
+            "boundary_unsupported_resolution_mode" },
+        { RegionBoundaryReason::implicit_driver,
+            "boundary_implicit_driver" },
+        { RegionBoundaryReason::external_driver,
+            "boundary_external_driver" },
+        { RegionBoundaryReason::event_signal,
+            "boundary_event_signal" },
+        { RegionBoundaryReason::unsupported_width,
+            "boundary_unsupported_width" },
+        { RegionBoundaryReason::unsupported_value_kind,
+            "boundary_unsupported_value_kind" },
+        { RegionBoundaryReason::partial_projected_transactions,
+            "boundary_partial_projected_transactions" },
+        { RegionBoundaryReason::access_inventory_incomplete,
+            "boundary_access_inventory_incomplete" },
+        { RegionBoundaryReason::observed_current,
+            "boundary_observed_current" },
+        { RegionBoundaryReason::observed_previous,
+            "boundary_observed_previous" },
+        { RegionBoundaryReason::observed_drivers,
+            "boundary_observed_drivers" },
+        { RegionBoundaryReason::observed_pending,
+            "boundary_observed_pending" },
+        { RegionBoundaryReason::observed_events,
+            "boundary_observed_events" },
+        { RegionBoundaryReason::observed_mutation,
+            "boundary_observed_mutation" },
+        { RegionBoundaryReason::observed_coverage,
+            "boundary_observed_coverage" },
+        { RegionBoundaryReason::observed_unknown,
+            "boundary_observed_unknown" },
+    }};
+
+template<typename Reason, std::size_t count>
+void print_reason_incidence_counts(
+    std::ostream& output,
+    const std::array<std::size_t, count>& values,
+    const std::array<std::pair<Reason, std::string_view>, count>& fields)
+{
+    static_assert(count == static_cast<std::size_t>(Reason::count));
+    for (const auto& [reason, name] : fields) {
+        output << ' ' << name << '='
+               << values[static_cast<std::size_t>(reason)];
+    }
+}
+
+void print_structural_census(std::ostream& output, const RegionGraph& graph)
+{
+    // This is a build-time structural inventory, not runtime admission. An
+    // incomplete access inventory is graph-wide, and reason counts below are
+    // overlapping process/reason or boundary-signal/reason incidences.
+    const auto& inventory = graph.certificate_inventory();
+    std::size_t structural_candidate_components { };
+    std::size_t no_internal_state_components { };
+    std::size_t incomplete_access_inventory_components { };
+    std::size_t current_epoch_components { };
+    std::size_t stale_epoch_components { };
+    std::size_t current_epoch_structural_candidate_components { };
+    std::size_t stale_epoch_structural_candidate_components { };
+    std::size_t component_member_processes { };
+    std::size_t structural_candidate_member_processes { };
+    std::size_t boundary_signals { };
+    std::size_t candidate_internal_signals { };
+    std::size_t candidate_internal_none_signals { };
+    std::size_t candidate_internal_sv_wire_proof_signals { };
+    std::size_t candidate_internal_other_resolution_signals { };
+    std::size_t opaque_operation_incidences { };
+    std::vector<const RegionOpaqueOperationCount*> opaque_operation_kinds;
+    opaque_operation_kinds.reserve(inventory.opaque_operation_counts.size());
+    for (const auto& operation : inventory.opaque_operation_counts) {
+        opaque_operation_incidences += operation.incidences;
+        opaque_operation_kinds.push_back(&operation);
+    }
+    std::ranges::sort(opaque_operation_kinds,
+        [](const auto* left, const auto* right) {
+            return left->incidences != right->incidences
+                ? left->incidences > right->incidences
+                : left->type_name < right->type_name;
+        });
+
+    for (std::size_t component_index = 0U;
+         component_index < inventory.components.size(); ++component_index) {
+        const auto& component = inventory.components[component_index];
+        component_member_processes += component.members.size();
+        boundary_signals += component.boundary_signals.size();
+        const bool epochs_current
+            = graph.component_epochs_current(component_index);
+        if (epochs_current) {
+            ++current_epoch_components;
+        } else {
+            ++stale_epoch_components;
+        }
+        switch (component.status) {
+        case RegionComponentCertificateStatus::structural_candidate:
+            ++structural_candidate_components;
+            structural_candidate_member_processes += component.members.size();
+            if (epochs_current) {
+                ++current_epoch_structural_candidate_components;
+            } else {
+                ++stale_epoch_structural_candidate_components;
+            }
+            break;
+        case RegionComponentCertificateStatus::no_internal_state:
+            ++no_internal_state_components;
+            break;
+        case RegionComponentCertificateStatus::incomplete_access_inventory:
+            ++incomplete_access_inventory_components;
+            break;
+        }
+
+        candidate_internal_signals
+            += component.structural_internal_signal_candidates.size();
+        candidate_internal_sv_wire_proof_signals
+            += component.runtime_single_driver_proof_signals.size();
+        for (const auto signal_id
+            : component.structural_internal_signal_candidates) {
+            const auto resolution = graph.signals()[signal_id].descriptor.resolution;
+            if (resolution == ResolutionKind::none) {
+                ++candidate_internal_none_signals;
+            } else if (resolution != ResolutionKind::sv_wire) {
+                ++candidate_internal_other_resolution_signals;
+            }
+        }
+    }
+
+    output << "fsim-profile: sv-region-structural-census"
+           << " components=" << inventory.components.size()
+           << " structural_candidate_components="
+           << structural_candidate_components
+           << " no_internal_state_components="
+           << no_internal_state_components
+           << " incomplete_access_inventory_components="
+           << incomplete_access_inventory_components
+           << " current_epoch_components=" << current_epoch_components
+           << " stale_epoch_components=" << stale_epoch_components
+           << " current_epoch_structural_candidate_components="
+           << current_epoch_structural_candidate_components
+           << " stale_epoch_structural_candidate_components="
+           << stale_epoch_structural_candidate_components
+           << " component_member_processes=" << component_member_processes
+           << " structural_candidate_member_processes="
+           << structural_candidate_member_processes
+           << " boundary_signals=" << boundary_signals
+           << " candidate_internal_signals=" << candidate_internal_signals
+           << " candidate_internal_none_resolution_signals="
+           << candidate_internal_none_signals
+           << " candidate_internal_sv_wire_requires_runtime_single_driver_proof_signals="
+           << candidate_internal_sv_wire_proof_signals
+           << " candidate_internal_other_resolution_signals="
+           << candidate_internal_other_resolution_signals
+           << " graph_access_inventory_complete="
+           << (inventory.access_inventory_complete ? 1 : 0)
+           << " opaque_operation_incidences="
+           << opaque_operation_incidences
+           << " opaque_operation_kinds=";
+    constexpr std::size_t maximum_printed_opaque_operation_kinds = 8U;
+    const auto printed_opaque_operation_kinds = std::min(
+        opaque_operation_kinds.size(),
+        maximum_printed_opaque_operation_kinds);
+    if (printed_opaque_operation_kinds == 0U) {
+        output << "none";
+    } else {
+        for (std::size_t index = 0U;
+             index < printed_opaque_operation_kinds; ++index) {
+            if (index != 0U) {
+                output << ';';
+            }
+            const auto& operation = *opaque_operation_kinds[index];
+            for (const char character : operation.type_name) {
+                output << (std::isspace(
+                              static_cast<unsigned char>(character)) != 0
+                        ? '_'
+                        : character);
+            }
+            output << ':' << operation.incidences;
+        }
+    }
+    output << " opaque_operation_kinds_omitted="
+           << opaque_operation_kinds.size() - printed_opaque_operation_kinds
+           << " opaque_operation_count_semantics=instruction_occurrences"
+           << " access_inventory_scope=whole_graph"
+           << " inventory_scope=build_snapshot"
+           << " runtime_execution_proof=not_evaluated"
+           << " reason_count_semantics=overlapping_incidences";
+    print_reason_incidence_counts(output,
+        inventory.process_exclusion_counts, process_exclusion_fields);
+    print_reason_incidence_counts(output,
+        inventory.boundary_reason_counts, boundary_reason_fields);
+    output << '\n';
+}
+
+} // namespace
+
 Interpreter::Interpreter(
     SchedulerOptions options,
     const std::uint64_t seed)
@@ -18,10 +253,271 @@ Interpreter::Interpreter(
 }
 Interpreter::~Interpreter()
 {
+    if (!impl_) {
+        return;
+    }
+    if (impl_->systemverilog_wave_profile_enabled) {
+        const auto batch_compaction
+            = impl_->scheduler.systemverilog_batch_compaction_stats();
+        const auto alias_misses = [&](
+                                      const Impl::RegionFrontierAliasMissReason reason) {
+            return impl_->systemverilog_wave_profile_alias_misses[
+                static_cast<std::size_t>(reason)];
+        };
+        std::cerr << "fsim-profile: sv-frontier-alias-summary checked="
+                  << impl_->systemverilog_wave_profile_alias_checked_entries
+                  << " trusted="
+                  << impl_->systemverilog_wave_profile_alias_trusted_entries
+                  << " unavailable="
+                  << impl_->systemverilog_wave_profile_alias_unavailable_entries
+                  << " forced_staged="
+                  << impl_->systemverilog_wave_profile_alias_forced_staged_entries
+                  << " unprimed="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::unprimed)
+                  << " context_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::context)
+                  << " collector_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::collector)
+                  << " task_extent_only_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::task_extent_only)
+                  << " task_extent_with_other_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::task_extent_with_other)
+                  << " pointer_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::pointer)
+                  << " other_extent_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::extent)
+                  << " tag_misses="
+                  << alias_misses(Impl::RegionFrontierAliasMissReason::alias_tag)
+                  << " confirmation_attempts="
+                  << impl_->systemverilog_wave_profile_alias_confirmation_attempts
+                  << " confirmation_successes="
+                  << impl_->systemverilog_wave_profile_alias_confirmation_successes
+                  << " confirmation_failures="
+                  << impl_->systemverilog_wave_profile_alias_confirmation_failures
+                  << '\n';
+        std::cerr << "fsim-profile: sv-ordered-wave-summary offered_batches="
+                  << impl_->systemverilog_wave_profile_calls
+                  << " offered_members=" << impl_->systemverilog_wave_profile_offered_members
+                  << " accepted_batches=" << impl_->systemverilog_wave_profile_accepted_calls
+                  << " accepted_members=" << impl_->systemverilog_wave_profile_accepted_members
+                  << " zero_accepted_batches=" << impl_->systemverilog_wave_profile_declined_calls
+                  << " failed_batches=" << impl_->systemverilog_wave_profile_failed_calls
+                  << " region_kernel_attempts="
+                  << impl_->systemverilog_wave_profile_region_kernel_attempts
+                  << " region_kernel_runs="
+                  << impl_->systemverilog_wave_profile_region_kernel_runs
+                  << " native_frontier_member_dispatches="
+                  << impl_->systemverilog_wave_profile_native_frontier_member_dispatches
+                  << " native_frontier_budget_trims="
+                  << impl_->systemverilog_wave_profile_native_frontier_budget_trims
+                  << " v2_selected_forwarding_prefixes="
+                  << impl_->systemverilog_wave_profile_v2_selected_forwarding_prefixes
+                  << " v2_selected_forwarding_members="
+                  << impl_->systemverilog_wave_profile_v2_selected_forwarding_members
+                  << " region_forwarding_attempts="
+                  << impl_->systemverilog_wave_profile_region_forwarding_attempts
+                  << " region_forwarding_evaluations="
+                  << impl_->systemverilog_wave_profile_region_forwarding_evaluations
+                  << " region_forwarding_member_consumptions="
+                  << impl_->systemverilog_wave_profile_region_forwarding_member_consumptions
+                  << " region_forwarding_declines="
+                  << impl_->systemverilog_wave_profile_region_forwarding_declines
+                  << " region_forwarding_stage_attempts="
+                  << impl_->systemverilog_wave_profile_region_forwarding_stage_attempts
+                  << " region_forwarding_stage_dispatches="
+                  << impl_->systemverilog_wave_profile_region_forwarding_stage_dispatches
+                  << " region_forwarding_stage_members="
+                  << impl_->systemverilog_wave_profile_region_forwarding_stage_members
+                  << " region_forwarding_stage_declines="
+                  << impl_->systemverilog_wave_profile_region_forwarding_stage_declines
+                  << " region_forwarding_stage_fallback_descriptors="
+                  << impl_->systemverilog_wave_profile_region_forwarding_stage_fallback_descriptors
+                  << " region_forwarding_private_parent_slots_elided="
+                  << impl_->systemverilog_wave_profile_region_forwarding_private_parent_slots_elided
+                  << " region_forwarding_private_parent_dispatches="
+                  << impl_->systemverilog_wave_profile_region_forwarding_private_parent_dispatches
+                  << " region_forwarding_private_parent_fallbacks="
+                  << impl_->systemverilog_wave_profile_region_forwarding_private_parent_fallbacks
+                  << " region_forwarding_public_update_tokens="
+                  << impl_->systemverilog_wave_profile_region_forwarding_public_update_tokens
+                  << " region_kernel_members="
+                  << impl_->systemverilog_wave_profile_region_kernel_members
+                  << " region_kernel_publications="
+                  << impl_->systemverilog_wave_profile_region_kernel_publications
+                  << " region_kernel_failures="
+                  << impl_->systemverilog_wave_profile_region_kernel_failures
+                  << " region_backend_attempts="
+                  << impl_->systemverilog_wave_profile_region_backend_attempts
+                  << " region_backend_runs="
+                  << impl_->systemverilog_wave_profile_region_backend_runs
+                  << " region_backend_completions="
+                  << impl_->systemverilog_wave_profile_region_backend_completions
+                  << " component_batch_tickets="
+                  << batch_compaction.tickets
+                  << " component_batch_members="
+                  << batch_compaction.members
+                  << " component_batch_entries_elided="
+                  << batch_compaction.entries_elided
+                  << " component_batch_direct_dispatches="
+                  << batch_compaction.direct_dispatches
+                  << " component_batch_direct_members="
+                  << batch_compaction.direct_members
+                  << " component_readiness_queue_insertions="
+                  << batch_compaction.readiness_ticket_queue_insertions
+                  << " component_readiness_members="
+                  << batch_compaction.readiness_ticket_members
+                  << " component_readiness_members_elided="
+                  << batch_compaction.readiness_ticket_members_elided
+                  << " component_readiness_fallback_members="
+                  << batch_compaction.readiness_ticket_fallback_members
+                  << " component_readiness_mask_images="
+                  << impl_->systemverilog_wave_profile_readiness_mask_images
+                  << " region_trace_declines="
+                  << impl_->systemverilog_wave_profile_region_trace_declines
+                  << " region_recert_attempts="
+                  << impl_->systemverilog_wave_profile_region_recertification_attempts
+                  << " region_recert_successes="
+                  << impl_->systemverilog_wave_profile_region_recertification_successes
+                  << " region_recert_failures="
+                  << impl_->systemverilog_wave_profile_region_recertification_failures
+                  << " region_recert_processes="
+                  << impl_->systemverilog_wave_profile_region_recertification_processes
+                  << " region_recert_signals="
+                  << impl_->systemverilog_wave_profile_region_recertification_signals
+                  << " region_recert_components="
+                  << impl_->systemverilog_wave_profile_region_recertification_components
+                  << " a4_native_input_handoffs="
+                  << impl_->systemverilog_wave_profile_a4_native_input_handoffs
+                  << " a4_native_input_completions="
+                  << impl_->systemverilog_wave_profile_a4_native_input_completions
+                  << " prepared_output_batches="
+                  << impl_->systemverilog_wave_profile_prepared_output_batches
+                  << " generated_successor_mask_batches="
+                  << impl_->systemverilog_wave_profile_generated_successor_mask_batches
+                  << " direct_ready_window_attempts="
+                  << impl_->systemverilog_wave_profile_direct_ready_window_attempts
+                  << " direct_ready_window_completions="
+                  << impl_->systemverilog_wave_profile_direct_ready_window_completions
+                  << " prepared_output_seals="
+                  << impl_->systemverilog_wave_profile_prepared_output_seals
+                  << " prepared_output_fallbacks="
+                  << impl_->systemverilog_wave_profile_prepared_output_fallbacks
+                  << " prepared_output_group_dispatches="
+                  << impl_->systemverilog_wave_profile_prepared_output_group_dispatches
+                  << " prepared_output_group_members="
+                  << impl_->systemverilog_wave_profile_prepared_output_group_members
+                  << " a2_local_update_dispatches="
+                  << impl_->systemverilog_wave_profile_a2_local_update_dispatches
+                  << " a2_local_update_fallbacks="
+                  << impl_->systemverilog_wave_profile_a2_local_update_fallbacks
+                  << " a2_local_fanout_suppressions="
+                  << impl_->systemverilog_wave_profile_a2_local_fanout_suppressions
+                  << " a2_ordinary_internal_updates="
+                  << impl_->systemverilog_wave_profile_a2_ordinary_internal_updates
+                  << " a2_internal_seed_reads="
+                  << impl_->systemverilog_wave_profile_a2_internal_seed_reads
+                  << " a2_internal_state_seeds="
+                  << impl_->systemverilog_wave_profile_a2_internal_state_seeds
+                  << " a2_internal_state_reuses="
+                  << impl_->systemverilog_wave_profile_a2_internal_state_reuses
+                  << " a3_private_update_ticket_entries="
+                  << impl_->systemverilog_wave_profile_a3_private_update_ticket_entries
+                  << " a3_private_update_ticket_members="
+                  << impl_->systemverilog_wave_profile_a3_private_update_ticket_members
+                  << " a3_private_update_entries_elided="
+                  << impl_->systemverilog_wave_profile_a3_private_update_entries_elided
+                  << " a3_private_update_fallback_members="
+                  << impl_->systemverilog_wave_profile_a3_private_update_fallback_members
+                  << " a2_grouped_fanout_members="
+                  << impl_->systemverilog_wave_profile_a2_grouped_fanout_members
+                  << " a2_completion_fast_batches="
+                  << impl_->systemverilog_wave_profile_a2_completion_fast_batches
+                  << " a2_completion_fast_members="
+                  << impl_->systemverilog_wave_profile_a2_completion_fast_members
+                  << " a2_completion_preflights="
+                  << impl_->systemverilog_wave_profile_a2_completion_preflights
+                  << " a2_completion_register_declines="
+                  << impl_->systemverilog_wave_profile_a2_completion_register_declines
+                  << " p3_group_fanout_groups="
+                  << impl_->systemverilog_wave_profile_p3_group_fanout_groups
+                  << " p3_group_fanout_tickets="
+                  << impl_->systemverilog_wave_profile_p3_group_fanout_tickets
+                  << " p3_group_fanout_members="
+                  << impl_->systemverilog_wave_profile_p3_group_fanout_members
+                  << " p3_group_fanout_declines="
+                  << impl_->systemverilog_wave_profile_p3_group_fanout_declines
+                  << " a3_mapped_successor_batches="
+                  << impl_->systemverilog_wave_profile_a3_mapped_successor_batches
+                  << " a3_mapped_successor_readers="
+                  << impl_->systemverilog_wave_profile_a3_mapped_successor_readers
+                  << " p3_oversized_group_fallbacks="
+                  << impl_->region_grouped_fanout_oversized_group_fallbacks
+                  << '\n';
+        std::cerr << "fsim-profile: generic-projected-region-summary attempts="
+                  << impl_->generic_projected_region_attempts
+                  << " backend_runs="
+                  << impl_->generic_projected_region_backend_runs
+                  << " completions="
+                  << impl_->generic_projected_region_completions
+                  << " members="
+                  << impl_->generic_projected_region_members
+                  << " publications="
+                  << impl_->generic_projected_region_publications
+                  << " declines="
+                  << impl_->generic_projected_region_declines
+                  << " failures="
+                  << impl_->generic_projected_region_failures << '\n';
+        std::cerr << "fsim-profile: a4-state-summary seeded_components="
+                  << impl_->systemverilog_wave_profile_a4_seeded_components
+                  << " seeded_signals="
+                  << impl_->systemverilog_wave_profile_a4_seeded_signals
+                  << " seeded_owners="
+                  << impl_->systemverilog_wave_profile_a4_seeded_owners
+                  << " slot_bind_components="
+                  << impl_->systemverilog_wave_profile_a4_slot_bind_components
+                  << " slot_bindings="
+                  << impl_->systemverilog_wave_profile_a4_slot_bindings
+                  << " slot_rebinds="
+                  << impl_->systemverilog_wave_profile_a4_slot_rebinds
+                  << " bound_components="
+                  << impl_->systemverilog_wave_profile_a4_bound_components
+                  << " bound_slots="
+                  << impl_->systemverilog_wave_profile_a4_bound_slots
+                  << " materialized_components="
+                  << impl_->systemverilog_wave_profile_a4_materialized_components
+                  << " materialized_slots="
+                  << impl_->systemverilog_wave_profile_a4_materialized_slots
+                  << " authoritative_slot_writes="
+                  << impl_->systemverilog_wave_profile_a4_authoritative_slot_writes
+                  << " unresolved_owner_alias_commits="
+                  << impl_->systemverilog_wave_profile_a4_unresolved_owner_alias_commits
+                  << " stored_mirrors="
+                  << impl_->systemverilog_wave_profile_a4_stored_mirrors
+                  << " visible_mirrors="
+                  << impl_->systemverilog_wave_profile_a4_visible_mirrors
+                  << " owner_mirrors="
+                  << impl_->systemverilog_wave_profile_a4_owner_mirrors
+                  << " invalidations="
+                  << impl_->systemverilog_wave_profile_a4_invalidations
+                  << " value_marks="
+                  << impl_->systemverilog_wave_profile_a4_value_marks
+                  << " transaction_marks="
+                  << impl_->systemverilog_wave_profile_a4_transaction_marks
+                  << " ready_consumptions="
+                  << impl_->systemverilog_wave_profile_a4_ready_consumptions
+                  << '\n';
+        if (impl_->region_graph) {
+            print_structural_census(std::cerr, *impl_->region_graph);
+        }
+    }
     if (impl_->native_phase_profile_enabled) {
         std::cerr << "fsim-profile: native-phase attempts="
                   << impl_->native_phase_profile_attempts
                   << " published=" << impl_->native_phase_profile_published
+                  << " shape_certificate_hits="
+                  << impl_->native_phase_profile_shape_certificate_hits
+                  << " shape_certificate_misses="
+                  << impl_->native_phase_profile_shape_certificate_misses
                   << " rejected_structure="
                   << impl_->native_phase_profile_rejected_structure
                   << " rejected_observer="
@@ -55,25 +551,41 @@ Interpreter::~Interpreter()
     }
     if (impl_->native_process_count_profile_enabled) {
         for (std::size_t id = 0; id < impl_->processes.size(); ++id) {
-            const auto& process = impl_->processes[id];
-            const auto interpreted = process.cold().interpreter_operations;
+            const auto interpreted
+                = impl_->processes.interpreter_operations(
+                    static_cast<ProcessId>(id));
             if (interpreted == 0U) {
                 continue;
             }
+            const auto* const compact = impl_->processes.compact_constant(
+                static_cast<ProcessId>(id));
+            const auto* const full = impl_->processes.full_state_if_present(
+                static_cast<ProcessId>(id));
+            const auto program = impl_->processes.program_view(
+                static_cast<ProcessId>(id));
             const auto native_resumes
                 = id < impl_->native_process_resume_counts.size()
                     ? impl_->native_process_resume_counts[id] : 0U;
             std::cerr << "fsim-profile: interpreted-process id=" << id
                       << " operations=" << interpreted
                       << " native_resumes=" << native_resumes
-                      << " executor=" << static_cast<bool>(process.executor)
+                      << " executor="
+                      << (full != nullptr
+                              && static_cast<bool>(full->executor))
                       << " deferred="
-                      << static_cast<bool>(process.cold().deferred_executor)
-                      << " halted=" << process.halted
-                      << " suspended=" << process.suspended
+                      << (full != nullptr
+                              && static_cast<bool>(
+                                  full->cold().deferred_executor))
+                      << " halted="
+                      << (compact != nullptr ? compact->halted
+                                             : full->halted)
+                      << " suspended="
+                      << (compact != nullptr ? compact->suspended
+                                             : full->suspended)
                       << " program_operations="
-                      << process.program().operations.size()
-                      << " name='" << process.program().name << "'\n";
+                      << impl_->processes.operation_count(
+                          static_cast<ProcessId>(id))
+                      << " name='" << program.name() << "'\n";
         }
         const auto total = std::accumulate(
             impl_->native_process_resume_counts.begin(),
@@ -147,6 +659,8 @@ Interpreter::~Interpreter()
             if (count == 0U || id >= impl_->processes.size()) {
                 continue;
             }
+            const auto process_id = static_cast<ProcessId>(id);
+            const auto program = impl_->processes.program_view(process_id);
             std::cerr << "fsim-profile: native-process-count id=" << id
                       << " resumes=" << count
                       << " single="
@@ -160,16 +674,15 @@ Interpreter::~Interpreter()
                       << " word_fanout_ready="
                       << impl_->native_process_word_fanout_ready_counts[id]
                       << " sensitivity="
-                      << impl_->processes[id].program().static_sensitivity.size()
+                      << program.static_sensitivity().size()
                       << " operations="
-                      << impl_->processes[id].program().operations.size()
-                      << " name='" << impl_->processes[id].program().name
+                      << impl_->processes.operation_count(process_id)
+                      << " name='" << program.name()
                       << "'\n";
-            if (!impl_->processes[id].program().static_sensitivity.empty()) {
+            if (!program.static_sensitivity().empty()) {
                 std::cerr << "fsim-profile: native-process-sensitivity id=" << id
                           << " signals=";
-                const auto& sensitivity
-                    = impl_->processes[id].program().static_sensitivity;
+                const auto& sensitivity = program.static_sensitivity();
                 for (std::size_t item = 0; item < sensitivity.size(); ++item) {
                     if (item != 0U) {
                         std::cerr << ',';
@@ -232,13 +745,15 @@ Interpreter::~Interpreter()
         std::size_t eligible_processes { };
         std::uint64_t eligible_resumes { };
         for (std::size_t id = 0; id < process_count; ++id) {
+            const auto process_id = static_cast<ProcessId>(id);
             const auto singles
                 = impl_->native_process_single_resume_counts[id];
             eligible[id] = singles != 0U
                 && singles
                     == impl_->native_process_single_static_wait_counts[id]
                 && impl_->native_process_cohort_resume_counts[id] == 0U
-                && !impl_->processes[id].program().static_sensitivity.empty();
+                && !impl_->processes.program_view(process_id)
+                        .static_sensitivity().empty();
             if (eligible[id]) {
                 ++eligible_processes;
                 eligible_resumes += singles;
@@ -264,13 +779,14 @@ Interpreter::~Interpreter()
             if (!eligible[id]) {
                 continue;
             }
+            const auto process_id = static_cast<ProcessId>(id);
             auto& outputs = process_outputs[id];
-            const auto& program = impl_->processes[id].program();
-            for (const auto& region : program.driver_regions) {
+            const auto& program = impl_->processes.program_view(process_id);
+            for (const auto& region : program.driver_regions()) {
                 outputs.insert(region.signal);
             }
             if (outputs.empty()) {
-                for (const auto& operation : program.operations) {
+                for (const auto& operation : program.operations()) {
                     if (const auto signal = output_signal(operation)) {
                         outputs.insert(*signal);
                     }
@@ -473,6 +989,12 @@ Interpreter::~Interpreter()
                     break;
                 }
             }
+            std::string_view first_name;
+            if (first < process_count) {
+                const auto first_process_id = static_cast<ProcessId>(first);
+                first_name
+                    = impl_->processes.program_view(first_process_id).name();
+            }
             std::cerr << "fsim-profile: native-static-region size="
                       << component_size[component]
                       << " resumes=" << component_resumes[component]
@@ -492,12 +1014,7 @@ Interpreter::~Interpreter()
                       << component_unsafe_internal_fanout[component]
                       << " external_fanout="
                       << component_external_fanout[component]
-                      << " first='"
-                      << (first == process_count
-                              ? std::string_view { }
-                              : std::string_view {
-                                    impl_->processes[first].program().name })
-                      << "'\n";
+                      << " first='" << first_name << "'\n";
         }
     }
     if (impl_->native_update_profile_enabled) {
@@ -554,27 +1071,6 @@ Interpreter::~Interpreter()
                   << impl_->native_update_profile_word_resolved
                   << '\n';
     }
-    if (impl_->native_static_regions_enabled) {
-        const auto members = std::accumulate(
-            impl_->native_static_regions.begin(),
-            impl_->native_static_regions.end(), std::size_t { },
-            [](const auto total, const auto& region) {
-                return total + region.members.size();
-            });
-        std::cerr << "fsim-profile: native-region regions="
-                  << impl_->native_static_regions.size()
-                  << " members=" << members
-                  << " attempts=" << impl_->native_static_region_attempts
-                  << " calls=" << impl_->native_static_region_calls
-                  << " ready=" << impl_->native_static_region_ready
-                  << " consumed=" << impl_->native_static_region_consumed
-                  << " declines="
-                  << impl_->native_static_region_declines[0] << ','
-                  << impl_->native_static_region_declines[1] << ','
-                  << impl_->native_static_region_declines[2] << ','
-                  << impl_->native_static_region_declines[3] << ','
-                  << impl_->native_static_region_declines[4] << '\n';
-    }
     impl_->report_process_profile();
     impl_->report_update_profile();
 }
@@ -591,25 +1087,28 @@ void Interpreter::Impl::report_process_profile()
     std::iota(order.begin(), order.end(), std::size_t { });
     std::ranges::sort(order, [&](const auto left, const auto right) {
         if (update_profile_enabled
-            && processes[left].cold().profile_updates
-                != processes[right].cold().profile_updates) {
-            return processes[left].cold().profile_updates
-                > processes[right].cold().profile_updates;
+            && processes.profile_updates(static_cast<ProcessId>(left))
+                != processes.profile_updates(static_cast<ProcessId>(right))) {
+            return processes.profile_updates(static_cast<ProcessId>(left))
+                > processes.profile_updates(static_cast<ProcessId>(right));
         }
-        return processes[left].cold().profile_total_nanoseconds
-            > processes[right].cold().profile_total_nanoseconds;
+        return processes.profile_total_nanoseconds(
+                   static_cast<ProcessId>(left))
+            > processes.profile_total_nanoseconds(
+                static_cast<ProcessId>(right));
     });
     std::uint64_t total_nanoseconds { };
     std::uint64_t native_nanoseconds { };
     std::uint64_t calls { };
     std::uint64_t native_resumes { };
     std::uint64_t interpreter_operations { };
-    for (const auto& process : processes) {
-        total_nanoseconds += process.cold().profile_total_nanoseconds;
-        native_nanoseconds += process.cold().profile_native_nanoseconds;
-        calls += process.cold().profile_calls;
-        native_resumes += process.cold().profile_native_resumes;
-        interpreter_operations += process.cold().profile_interpreter_operations;
+    for (ProcessId id = 0U; id < processes.size(); ++id) {
+        total_nanoseconds += processes.profile_total_nanoseconds(id);
+        native_nanoseconds += processes.profile_native_nanoseconds(id);
+        calls += processes.profile_calls(id);
+        native_resumes += processes.profile_native_resumes(id);
+        interpreter_operations
+            += processes.profile_interpreter_operations(id);
     }
     std::cerr << "fsim-profile: process-summary processes=" << processes.size()
               << " calls=" << calls
@@ -625,29 +1124,33 @@ void Interpreter::Impl::report_process_profile()
         ? order.size()
         : std::min<std::size_t>(30U, order.size());
     for (std::size_t rank = 0; rank < count; ++rank) {
-        const auto id = order[rank];
-        const auto& process = processes[id];
-        if (process.cold().profile_calls == 0U) {
+        const auto id = static_cast<ProcessId>(order[rank]);
+        const auto program = processes.program_view(id);
+        const auto profile_calls = processes.profile_calls(id);
+        if (profile_calls == 0U) {
             break;
         }
         std::cerr << "fsim-profile: process rank=" << rank + 1U
                   << " id=" << id
-                  << " compiled=" << (process.executor ? 1 : 0)
-                  << " static_operations=" << process.program().operations.size()
+                  << " compiled=" << (processes.has_executor(id) ? 1 : 0)
+                  << " static_operations="
+                  << processes.operation_count(id)
                   << " sensitivity="
-                  << process.program().static_sensitivity.size()
-                  << " calls=" << process.cold().profile_calls
+                  << program.static_sensitivity().size()
+                  << " calls=" << profile_calls
                   << " interpreter_operations="
-                  << process.cold().profile_interpreter_operations
-                  << " native_resumes=" << process.cold().profile_native_resumes
-                  << " updates=" << process.cold().profile_updates
+                  << processes.profile_interpreter_operations(id)
+                  << " native_resumes=" << processes.profile_native_resumes(id)
+                  << " updates=" << processes.profile_updates(id)
                   << " total_ms="
-                  << static_cast<double>(process.cold().profile_total_nanoseconds)
+                  << static_cast<double>(
+                         processes.profile_total_nanoseconds(id))
                 / 1'000'000.0
                   << " native_ms="
-                  << static_cast<double>(process.cold().profile_native_nanoseconds)
+                  << static_cast<double>(
+                         processes.profile_native_nanoseconds(id))
                 / 1'000'000.0
-                  << " name=" << process.program().name << '\n';
+                  << " name=" << program.name() << '\n';
     }
 }
 

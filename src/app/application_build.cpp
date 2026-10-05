@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_phase_profile.hpp"
 #include "application_compiled_environment_vhdl.hpp"
 #include "application_workspace_objects.hpp"
 
@@ -305,6 +306,7 @@ std::optional<BuiltProject> build_checked_project(
     const std::span<const std::filesystem::path> incremental_plugins,
     diagnostic::Engine& diagnostics)
 {
+    ScopedPhaseProfile phase { "build_checked" };
     if (!workspace) {
         return std::nullopt;
     }
@@ -714,14 +716,17 @@ std::optional<BuiltProject> build_checked_project(
     for (const auto& top : tops) {
         elaboration_roots.push_back({ top.target, top.alias });
     }
-    auto elaborated = elaboration::elaborate(
-        *checked,
-        elaboration_roots,
-        bindings,
-        *systemc_instances,
-        systemc_provider.get(),
-        config.elaboration.search_libraries,
-        coverage_context ? &*coverage_context : nullptr);
+    auto elaborated = [&] {
+        ScopedPhaseProfile elaboration_phase { "elaboration" };
+        return elaboration::elaborate(
+            *checked,
+            elaboration_roots,
+            bindings,
+            *systemc_instances,
+            systemc_provider.get(),
+            config.elaboration.search_libraries,
+            coverage_context ? &*coverage_context : nullptr);
+    }();
     for (const auto& input : elaborated.messages) {
         application_detail::import_diagnostic(diagnostics, input);
     }
@@ -960,8 +965,13 @@ std::optional<BuiltProject> build_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics)
 {
+    ScopedPhaseProfile phase { "project_build" };
+    auto workspace = [&] {
+        ScopedPhaseProfile check_phase { "project_check" };
+        return check_project_workspace(config, diagnostics);
+    }();
     return build_checked_project(
-        config, check_project_workspace(config, diagnostics), { }, diagnostics);
+        config, std::move(workspace), { }, diagnostics);
 }
 
 std::optional<BuiltProject> build_objects(
@@ -989,6 +999,7 @@ std::optional<BuiltProject> build_objects(
         empty.systemverilog_hir = build_systemverilog_hir(empty.parsed, empty.semantics);
         checked = std::move(empty);
     } else {
+        ScopedPhaseProfile decode_phase { "object_decode" };
         checked = load_object_workspace(objects, diagnostics);
     }
     return build_checked_project(
@@ -1006,9 +1017,12 @@ std::optional<BuiltProject> application_detail::build_workspace_objects(
         })) {
         return build_objects(config, { }, systemc_plugins, diagnostics);
     }
-    return build_checked_project(config,
-        load_workspace_objects(objects, diagnostics), systemc_plugins,
-        diagnostics);
+    auto workspace = [&] {
+        ScopedPhaseProfile decode_phase { "object_decode" };
+        return load_workspace_objects(objects, diagnostics);
+    }();
+    return build_checked_project(config, std::move(workspace),
+        systemc_plugins, diagnostics);
 }
 
 } // namespace fsim::app

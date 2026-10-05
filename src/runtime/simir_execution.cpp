@@ -37,8 +37,6 @@ Interpreter::Impl::Impl(
           std::getenv("FSIM_JIT_SKIP_CALLABLE_FRAMES") != nullptr)
     , profile_static_cohorts_enabled(
           std::getenv("FSIM_PROFILE_STATIC_COHORTS") != nullptr)
-    , native_static_regions_enabled(
-          std::getenv("FSIM_ENABLE_NATIVE_STATIC_REGIONS") != nullptr)
     , profile_processes_all_enabled(
           std::getenv("FSIM_PROFILE_PROCESSES_ALL") != nullptr)
     , fanout_cohort_grouping_enabled(
@@ -50,11 +48,20 @@ Interpreter::Impl::Impl(
     , logic9_batch_profile_enabled(
           std::getenv("FSIM_PROFILE_LOGIC9_BATCH") != nullptr)
 {
+    output_hook.owner = this;
+    report_hook.owner = this;
     scheduler_discard_hook = scheduler.add_discard_hook(
         this, +[](void* context) noexcept {
             static_cast<Impl*>(context)->discard_scheduler_work();
         });
+    scheduler.set_runtime_slot_quiet_hook(this,
+        +[](void* context) noexcept {
+            static_cast<Impl*>(context)->try_recertify_region_graph();
+        });
     scheduler.set_slot_start_hook([this](Scheduler&) {
+        if (region_forwarding_role_flush_pending_after_discard) {
+            require_all_region_forwarding_role_journals_flushed();
+        }
         if (!requires_sampled_values) {
             return;
         }
@@ -68,13 +75,15 @@ Interpreter::Impl::Impl(
                 && sampled_value_dependency_mask[signal] == 0U) {
                 continue;
             }
-            sampled_values[signal] = signals[signal].initial_value;
+            sampled_values[signal]
+                = logical_signal_value(static_cast<SignalId>(signal));
         }
     });
 }
 
 Interpreter::Impl::~Impl()
 {
+    scheduler.set_runtime_slot_quiet_hook(nullptr, nullptr);
     scheduler.remove_discard_hook(scheduler_discard_hook);
 }
 
@@ -430,8 +439,8 @@ void Interpreter::Impl::execute_dynamic_call(
         >= maximum_container_storage_bytes / sizeof(InstructionIndex)) {
         fail(process, "dynamic call stack exceeds its owning-storage budget");
     }
-    if (operation.target >= process.program().operations.size()
-        || operation.return_target >= process.program().operations.size()) {
+    if (operation.target >= process.program().operations().size()
+        || operation.return_target >= process.program().operations().size()) {
         fail(process, "call target is outside the operation stream");
     }
     cold.dynamic_call_stack.push_back(operation.return_target);
@@ -453,7 +462,7 @@ void Interpreter::Impl::execute_dynamic_return(
     }
     const auto target = cold.dynamic_call_stack.back();
     cold.dynamic_call_stack.pop_back();
-    if (target >= process.program().operations.size()) {
+    if (target >= process.program().operations().size()) {
         fail(process, "call-stack return target is invalid");
     }
     process.pc = target;
@@ -685,7 +694,8 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
             frame.container_ids.begin(), frame.container_ids.end());
     }
 
-    ProcessState::CallableFrameState context;
+    auto snapshot = std::make_unique<ProcessState::CallableFrameState>();
+    auto& context = *snapshot;
     context.packed_ids.assign(packed_ids.begin(), packed_ids.end());
     context.string_ids.assign(string_ids.begin(), string_ids.end());
     context.container_ids.assign(container_ids.begin(), container_ids.end());
@@ -732,7 +742,7 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
         context.containers.push_back(std::move(value));
     }
     process.cold().callable_context_storage_bytes = context.storage_bytes;
-    process.cold().suspended_callable_context = std::move(context);
+    process.cold().suspended_callable_context = std::move(snapshot);
 }
 
 void Interpreter::Impl::restore_callable_context_nonempty(ProcessState& process)
@@ -785,19 +795,85 @@ bool Interpreter::clear_process_executor(const ProcessId process)
         return false;
     }
     auto& state = impl_->get_process(process);
-    impl_->pure_wave_prepared_slots[process] = { };
+    impl_->advance_process_executor_generation(state);
     state.executor.reset();
     state.cold().deferred_executor.reset();
+    state.region_kernel_equivalence_confirmed = false;
+    state.region_kernel_completion_has_no_persistent_registers = false;
+    state.region_kernel_completion_boundary_validated = false;
     return true;
+}
+
+void Interpreter::Impl::prepare_deferred_executor_callback(
+    ProcessState& process)
+{
+    const auto& deferred = process.cold().deferred_executor;
+    if (!started || !deferred
+        || deferred->contract.callbacks_observation_safe) {
+        return;
+    }
+    // Public deferred callbacks can inspect or mutate any signal. Prepare the
+    // complete observable state before each callout; a previous ready() call
+    // is not a durable guarantee about the next call or the later take().
+    process_signal_access_inventory_complete = false;
+    prepare_callback_observation();
+}
+
+bool Interpreter::Impl::deferred_executor_ready(ProcessState& process)
+{
+    const auto& deferred = process.cold().deferred_executor;
+    if (!deferred) {
+        return false;
+    }
+    prepare_deferred_executor_callback(process);
+    return deferred->ready();
 }
 
 void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 {
-    auto executor = process.cold().deferred_executor->take();
-    if (!executor) {
+    auto& deferred = process.cold().deferred_executor;
+    if (!deferred) {
         throw std::logic_error {
-            "deferred SimIR process executor produced a null executor"
+            "deferred SimIR process executor registration is missing"
         };
+    }
+    if (!deferred->prepared_executor) {
+        prepare_deferred_executor_callback(process);
+        auto executor = deferred->take();
+        if (!executor) {
+            throw std::logic_error {
+                "deferred SimIR process executor produced a null executor"
+            };
+        }
+        deferred->prepared_executor = std::move(executor);
+    }
+    auto& executor = *deferred->prepared_executor;
+    const auto* actual_access = executor.program_access_binding();
+    const auto program = process.program();
+    const bool access_matches = deferred->contract.expected_access
+        && actual_access
+        && program.matches_registered_binding(
+            process.id, *deferred->contract.expected_access)
+        && program.matches_registered_binding(process.id, *actual_access)
+        && deferred->contract.expected_access->same_execution_binding(
+            *actual_access);
+    process.region_kernel_equivalence_confirmed
+        = access_matches
+        && deferred->contract.expected_region_kernel_equivalent
+        && executor.region_kernel_equivalent();
+    process.region_kernel_completion_has_no_persistent_registers
+        = process.region_kernel_equivalence_confirmed
+        && executor.region_kernel_completion_has_no_persistent_registers();
+    process.region_kernel_completion_boundary_validated = false;
+    if (!access_matches) {
+        deferred->access_binding_rejected = true;
+        process_signal_access_inventory_complete = false;
+    }
+    if (started && !access_matches) {
+        // The graph may have trusted the deferred registration before the
+        // actual executor was constructed. Revoke and materialize every
+        // hidden dependency before any unverified executor code can run.
+        prepare_callback_observation();
     }
     if (process.frame) {
         for (std::size_t register_index = 0;
@@ -805,37 +881,40 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
              ++register_index) {
             const auto& value = process.frame->registers[register_index];
             if (value.width() != 0) {
-                executor->write_register(
+                executor.write_register(
                     static_cast<RegisterId>(register_index), value);
             }
         }
         for (std::size_t register_index = 0;
              register_index < process.frame->string_registers.size();
              ++register_index) {
-            executor->write_string_register(
+            executor.write_string_register(
                 static_cast<StringRegisterId>(register_index),
                 process.frame->string_registers[register_index]);
         }
         for (std::size_t register_index = 0;
              register_index < process.frame->container_registers.size();
              ++register_index) {
-            executor->write_container_register_storage(
+            executor.write_container_register_storage(
                 static_cast<ContainerRegisterId>(register_index),
                 process.frame->container_registers[register_index]);
         }
     } else {
+        const auto container_register_types
+            = process_layout_detail::ProcessLayoutAccess::view(
+                process.program().container_register_types());
         for (std::size_t register_index = 0;
-             register_index < process.program().container_register_types.size();
+             register_index < container_register_types.size();
              ++register_index) {
-            executor->write_container_register_storage(
+            executor.write_container_register_storage(
                 static_cast<ContainerRegisterId>(register_index),
                 default_container_register(
-                    process.program().container_register_types[register_index]));
+                    container_register_types[register_index]));
         }
     }
-    executor->redirect(process.pc);
-    process.executor = std::move(executor);
-    pure_wave_prepared_slots[process.id] = { };
+    advance_process_executor_generation(process);
+    executor.redirect(process.pc);
+    process.executor = std::move(deferred->prepared_executor);
     process.cold().deferred_executor.reset();
     process.frame.reset();
 }
@@ -853,8 +932,8 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
         return false;
     }
     const auto* operation
-        = boundary.instruction < process.program().operations.size()
-        ? &std::as_const(process.program().operations)[boundary.instruction]
+        = boundary.instruction < process.program().operations().size()
+        ? &std::as_const(process.program().operations())[boundary.instruction]
         : nullptr;
     if (native_process_count_profile_enabled && operation) {
         ++native_process_simir_boundary_groups[operation->storage.index()];
@@ -893,6 +972,7 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 void Interpreter::Impl::execute_static_cohort(
     const std::span<const ProcessId> process_ids)
 {
+    require_all_region_forwarding_role_journals_flushed();
     struct PendingSuffix {
         Impl& owner;
         std::span<const ProcessId> members;
@@ -933,7 +1013,7 @@ void Interpreter::Impl::execute_static_cohort(
         restore_callable_context(state);
         if (!state.executor && state.cold().deferred_executor
             && can_install_deferred_executor(state)
-            && state.cold().deferred_executor->ready()) {
+            && deferred_executor_ready(state)) {
             install_deferred_executor(state);
         }
     }
@@ -1047,27 +1127,15 @@ void Interpreter::Impl::execute_static_cohort(
             });
         }
         std::span<ProcessCohortResumeEntry> entries = overflow_entries;
-        const auto& first_context = overflow_contexts.front();
-        const ProcessCohortNativeContext native_context {
-            this,
-            first_context.direct_signal_aval(),
-            first_context.direct_signal_bval(),
-            first_context.signal_writer_revision(),
-            first_context.supports_direct_word_updates(),
-            first_context.execution_points_enabled(),
-            first_context.direct_wide_signal_aval(),
-            first_context.direct_wide_signal_bval(),
-            first_context.direct_wide_signal_offsets(),
-            first_context.direct_signal_logic9_plane0(),
-            first_context.direct_signal_logic9_plane1(),
-            first_context.direct_signal_logic9_plane2(),
-            first_context.direct_signal_logic9_plane3(),
-            first_context.direct_wide_signal_logic9_plane2(),
-            first_context.direct_wide_signal_logic9_plane3(),
-        };
+        // Cohort executors bypass Impl::execute(id), which normally clears
+        // the stateless-region completion proof. Clear every offered member
+        // before entry; declined members remain conservatively unvalidated.
+        for (std::size_t offset = 0U; offset < entries.size(); ++offset) {
+            get_process(process_ids[begin + offset])
+                .region_kernel_completion_boundary_validated = false;
+        }
         const auto executed
-            = entries.front().executor->resume_cohort_with_native_context(
-                entries, native_context);
+            = entries.front().executor->resume_cohort(entries);
         if (native_phase_profile_enabled) {
             ++native_phase_profile_cohort_resumes;
             native_phase_profile_cohort_members += executed;

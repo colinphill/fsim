@@ -650,7 +650,8 @@ endmodule
             assert(capture->events.front().outcome
                 == fsim::app::ConcurrentAssertionOutcome::pass);
             assert(capture->events.front().time == 1);
-            assert(capture->events.front().delta == 1);
+            // Reactive SystemVerilog rounds do not advance generic delta.
+            assert(capture->events.front().delta == 0);
             assert((capture->timeline
                 == std::vector<std::string> {
                     "event:pass", "output:reactive pass" }));

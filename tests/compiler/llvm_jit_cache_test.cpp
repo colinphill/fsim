@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_test_support.hpp"
+#include "fsim/compiler/fused_masked_process.hpp"
 
 namespace fsim::tests::compiler {
+
+using fsim::compiler::JitBackendTierHint;
 
 void test_debug_point_instrumentation()
 {
@@ -27,35 +30,35 @@ void test_debug_point_instrumentation()
                     std::array<std::uint64_t, 0> aval { };
                     std::array<std::uint64_t, 0> bval { };
                     std::array<std::uint8_t, 0> initialized { };
-                    fsim_jit_frame_v1 frame { };
+                    fsim_jit_frame_v2 frame { };
                     jit.initialize_frame(
                         handle, frame, aval, bval, initialized);
-                    fsim_jit_resume_result_v1 result {
-                        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1,
+                    fsim_jit_resume_result_v2 result {
+                        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V2,
                         static_cast<std::uint32_t>(
-                            sizeof(fsim_jit_resume_result_v1)),
+                            sizeof(fsim_jit_resume_result_v2)),
                         0,
-                        FSIM_JIT_INVALID_INSTRUCTION,
+                        FSIM_JIT_INVALID_INSTRUCTION_V2,
                         0,
                     };
                     TestRuntime runtime;
                     auto descriptor = abi(runtime);
                     auto short_descriptor = descriptor;
                     short_descriptor.struct_size = static_cast<std::uint32_t>(
-                        offsetof(fsim_jit_runtime_v1, flags));
+                        offsetof(fsim_jit_runtime_instance_v2, flags));
                     expect_error(
                         [&] {
                             (void)jit.resume(
                                 handle, short_descriptor, frame, result);
                         },
-                        "does not include debug-point flags");
+                        "runtime-instance ABI structure is too small");
                     assert(
                         jit.resume(handle, descriptor, frame, result)
                         == JitResumeStatus::completed);
                     assert(result.instruction == 1);
                     jit.initialize_frame(
                         handle, frame, aval, bval, initialized);
-                    descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
+                    descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS_V2;
                     assert(
                         jit.resume(handle, descriptor, frame, result)
                         == JitResumeStatus::debug_point);
@@ -102,6 +105,120 @@ make_cached_signal_process(const SignalId signal)
         Halt { },
     };
     return process;
+}
+
+[[nodiscard]] Process make_cached_required_read_process()
+{
+    Process process;
+    process.id = 1201U;
+    process.name = "cached_required_read_process";
+    process.register_count = 4U;
+    process.operations = {
+        ReadSignal { 0U, 0U },
+        CopyRegister { 1U, 0U },
+        ReadSignal { 2U, 0U },
+        Binary { BinaryOperator::bit_and, 3U, 1U, 2U },
+        Halt { },
+    };
+    return process;
+}
+
+[[nodiscard]] fsim::compiler::FusedMaskedProcess
+make_cached_fused_required_read_process()
+{
+    constexpr std::uint32_t width = 8U;
+    std::array<Process, 2> members;
+    members[0].id = 1701U;
+    members[0].name = "tiered_fused_member_a";
+    members[0].initialize = true;
+    members[0].register_count = 9U;
+    members[0].static_sensitivity = {
+        { 0U, EdgeKind::any }, { 1U, EdgeKind::any }
+    };
+    members[0].driver_regions = { { 2U, 0U, width - 1U, false } };
+    members[0].operations = {
+        ReadSignal { 0U, 0U },
+        CopyRegister { 6U, 0U },
+        ReadSignal { 7U, 0U },
+        Binary { BinaryOperator::bit_and, 8U, 6U, 7U },
+        ReadSignal { 1U, 1U },
+        Binary { BinaryOperator::bit_xor, 2U, 8U, 1U },
+        Extract { 3U, 2U, 0U, width - 1U },
+        WriteUpdateSlice { 2U, 3U, 0U },
+        Binary { BinaryOperator::bit_or, 4U, 8U, 1U },
+        Extract { 5U, 4U, 0U, width - 1U },
+        WriteUpdateSlice { 2U, 5U, 0U },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    members[1].id = 1702U;
+    members[1].name = "tiered_fused_member_b";
+    members[1].initialize = true;
+    members[1].register_count = 8U;
+    members[1].static_sensitivity = {
+        { 0U, EdgeKind::any }, { 1U, EdgeKind::any }
+    };
+    members[1].driver_regions = {
+        { 2U, width - 1U, 1U, false }
+    };
+    members[1].operations = {
+        ReadSignal { 0U, 0U },
+        ReadSignal { 1U, 1U },
+        Binary { BinaryOperator::bit_and, 2U, 0U, 1U },
+        Reduction { ReductionOperator::bit_xor, 3U, 2U },
+        CopyRegister { 4U, 3U },
+        LoadConstant { 5U, PackedLogic4(1U, Logic4::z) },
+        Concatenate { 6U, { 4U, 5U }, 2U },
+        Extract { 7U, 6U, 1U, 1U },
+        WriteUpdateSlice { 2U, 7U, width - 1U },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    const std::array<const Process*, 2> pointers {
+        &members[0], &members[1]
+    };
+    constexpr std::array<std::uint32_t, 3> widths {
+        width, width, width
+    };
+    constexpr std::array<ValueKind, 3> kinds {
+        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4
+    };
+    auto fused = fsim::compiler::fuse_masked_processes(
+        pointers, widths, kinds, 99U);
+    assert(fused);
+    return std::move(*fused);
+}
+
+void run_cached_required_read_process(
+    LlvmJit& jit, const std::string_view symbol)
+{
+    const auto handle = jit.lookup(symbol);
+    const auto layout = jit.frame_layout(handle);
+    std::vector<std::uint64_t> register_aval(layout.register_word_count);
+    std::vector<std::uint64_t> register_bval(layout.register_word_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
+    fsim_jit_frame_v2 frame { };
+    jit.initialize_frame(handle, frame, register_aval, register_bval,
+        initialized);
+
+    TestRuntime callbacks;
+    auto runtime = abi(callbacks);
+    std::array<std::uint64_t, 1> signal_aval { UINT64_C(0xa5) };
+    std::array<std::uint64_t, 1> signal_bval { 0U };
+    runtime.direct_signal_aval = signal_aval.data();
+    runtime.direct_signal_bval = signal_bval.data();
+    runtime.direct_signal_count = 1U;
+    runtime.direct_read_signals = layout.direct_read_signals.data();
+    runtime.direct_read_signal_count = static_cast<std::uint32_t>(
+        layout.direct_read_signals.size());
+    auto result = new_resume_result();
+    assert(jit.resume(handle, runtime, frame, result)
+        == JitResumeStatus::completed);
+    assert(register_aval[0U] == UINT64_C(0xa5));
+    assert(register_bval[0U] == 0U);
+    assert(register_aval[layout.register_word_offsets[3U]]
+        == UINT64_C(0xa5));
+    assert(register_bval[layout.register_word_offsets[3U]] == 0U);
 }
 
 [[nodiscard]] Process
@@ -311,6 +428,423 @@ cached_object_paths(const std::filesystem::path& root)
     return result;
 }
 
+struct CachedWideProjectedWriteCapture {
+    std::uint32_t calls { };
+    std::uint32_t signal { UINT32_MAX };
+    std::uint32_t width { };
+    std::uint32_t callback_status { UINT32_MAX };
+    bool logic9_planes_are_null { };
+    std::vector<std::uint64_t> aval_words;
+    std::vector<std::uint64_t> bval_words;
+};
+
+extern "C" std::uint32_t capture_cached_wide_projected_write(
+    void* opaque, const std::uint32_t signal, const std::uint32_t width,
+    const std::uint64_t* aval_words, const std::uint64_t* bval_words,
+    const std::uint64_t* logic9_plane2_words,
+    const std::uint64_t* logic9_plane3_words)
+{
+    auto* const capture
+        = static_cast<CachedWideProjectedWriteCapture*>(opaque);
+    if (capture == nullptr || width == 0U || aval_words == nullptr
+        || bval_words == nullptr) {
+        return 1U;
+    }
+    const auto word_count
+        = (static_cast<std::size_t>(width) + 63U) / 64U;
+    try {
+        ++capture->calls;
+        capture->signal = signal;
+        capture->width = width;
+        capture->callback_status = 0U;
+        capture->logic9_planes_are_null = logic9_plane2_words == nullptr
+            && logic9_plane3_words == nullptr;
+        capture->aval_words.assign(aval_words, aval_words + word_count);
+        capture->bval_words.assign(bval_words, bval_words + word_count);
+    } catch (...) {
+        capture->callback_status = 1U;
+        return 1U;
+    }
+    return 0U;
+}
+
+[[nodiscard]] Process make_cached_wide_projected_process(
+    const PackedLogic4& value)
+{
+    Process process;
+    process.id = 2301U;
+    process.name = "cached_wide_projected";
+    process.register_count = 1U;
+    process.register_value_kinds = { ValueKind::logic4 };
+    process.operations = {
+        LoadConstant { 0U, value },
+        WriteProjected {
+            0U, 0U, 0U, 0U, ProjectedDelayMode::inertial },
+        Halt { },
+    };
+    return process;
+}
+
+void test_cached_wide_projected_write(
+    const JitOptimizationLevel optimization,
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::uint32_t width = 129U;
+    constexpr std::array<std::uint64_t, 3> aval_words {
+        UINT64_C(0x0123456789abcdef),
+        UINT64_C(0xfedcba9876543210),
+        UINT64_MAX,
+    };
+    constexpr std::array<std::uint64_t, 3> bval_words {
+        UINT64_C(0x1010101010101010),
+        UINT64_C(0x0101010101010101),
+        UINT64_MAX,
+    };
+    const auto expected = PackedLogic4::from_word_planes(
+        width, aval_words, bval_words);
+    assert(expected.aval_words().back() == 1U);
+    assert(expected.bval_words().back() == 1U);
+    constexpr std::array<std::uint32_t, 1> signal_widths { width };
+    constexpr std::string_view symbol = "cached_wide_projected_write";
+    const auto process = make_cached_wide_projected_process(expected);
+    const auto options = LlvmJitOptions { optimization, cache_directory };
+
+    const auto execute_and_check = [&](LlvmJit& jit) {
+        TestRuntime runtime;
+        CachedWideProjectedWriteCapture capture;
+        auto descriptor = abi(runtime);
+        auto services = *descriptor.services;
+        services.write_signal_packed = nullptr;
+        services.write_projected_signal_packed
+            = capture_cached_wide_projected_write;
+        descriptor.services = &services;
+        descriptor.context = &capture;
+        assert(services.write_signal_packed == nullptr);
+        assert(services.write_projected_signal_packed != nullptr);
+        assert(jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert(capture.calls == 1U);
+        assert(capture.signal == 0U);
+        assert(capture.width == width);
+        assert(capture.callback_status == 0U);
+        assert(capture.logic9_planes_are_null);
+        assert(std::ranges::equal(capture.aval_words, expected.aval_words()));
+        assert(std::ranges::equal(capture.bval_words, expected.bval_words()));
+    };
+
+    {
+        LlvmJit cold { options };
+        cold.add_process(symbol, process, signal_widths);
+        execute_and_check(cold);
+        expect_cache_statistics(cold, 0U, 1U, 1U);
+    }
+    assert(cached_object_paths(cache_directory).size() == 1U);
+
+    {
+        LlvmJit warm { options };
+        warm.add_process(symbol, process, signal_widths);
+        TestRuntime runtime;
+        CachedWideProjectedWriteCapture capture;
+        auto descriptor = abi(runtime);
+        auto services = *descriptor.services;
+        services.write_signal_packed = nullptr;
+        services.write_projected_signal_packed = nullptr;
+        descriptor.services = &services;
+        descriptor.context = &capture;
+        expect_error(
+            [&] { (void)warm.execute(warm.lookup(symbol), descriptor); },
+            "write_projected_signal_packed");
+        assert(capture.calls == 0U);
+
+        execute_and_check(warm);
+        expect_cache_statistics(warm, 1U, 0U, 0U);
+    }
+}
+
+struct BoundSignalCallbackCapture {
+    std::array<std::uint32_t, 2U> signals { UINT32_MAX, UINT32_MAX };
+    std::array<std::uint64_t, 2U> aval { };
+    std::array<std::uint64_t, 2U> bval { };
+    std::uint32_t read_signal { UINT32_MAX };
+    std::uint32_t read_calls { };
+    std::uint32_t calls { };
+};
+
+extern "C" std::uint64_t capture_bound_signal_read(
+    void* opaque,
+    const std::uint32_t signal,
+    std::uint64_t* bval) noexcept
+{
+    auto* const capture = static_cast<BoundSignalCallbackCapture*>(opaque);
+    if (capture == nullptr || capture->read_calls != 0U || bval == nullptr) {
+        return 0U;
+    }
+    capture->read_signal = signal;
+    ++capture->read_calls;
+    *bval = 0U;
+    return 1U;
+}
+
+extern "C" std::uint32_t capture_bound_signal_read_packed(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t width,
+    std::uint64_t* aval,
+    std::uint64_t* bval,
+    std::uint64_t* logic9_plane2,
+    std::uint64_t* logic9_plane3) noexcept
+{
+    auto* const capture = static_cast<BoundSignalCallbackCapture*>(opaque);
+    if (capture == nullptr || capture->read_calls != 0U || width != 1U
+        || aval == nullptr || bval == nullptr) {
+        return 1U;
+    }
+    capture->read_signal = signal;
+    ++capture->read_calls;
+    aval[0U] = 1U;
+    bval[0U] = 0U;
+    if (logic9_plane2 != nullptr) {
+        logic9_plane2[0U] = 0U;
+    }
+    if (logic9_plane3 != nullptr) {
+        logic9_plane3[0U] = 0U;
+    }
+    return 0U;
+}
+
+extern "C" void capture_bound_signal_write(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint64_t aval,
+    const std::uint64_t bval) noexcept
+{
+    auto* const capture = static_cast<BoundSignalCallbackCapture*>(opaque);
+    if (capture == nullptr || capture->calls >= capture->signals.size()) {
+        return;
+    }
+    const auto index = capture->calls++;
+    capture->signals[index] = signal;
+    capture->aval[index] = aval;
+    capture->bval[index] = bval;
+}
+
+extern "C" std::uint32_t capture_bound_signal_callback(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint32_t mode,
+    const std::uint64_t delay,
+    const std::uint64_t* aval,
+    const std::uint64_t* bval,
+    const std::uint64_t* logic9_plane2,
+    const std::uint64_t* logic9_plane3,
+    const std::uint32_t update_domain) noexcept
+{
+    static_cast<void>(mode);
+    static_cast<void>(delay);
+    static_cast<void>(update_domain);
+    auto* const capture = static_cast<BoundSignalCallbackCapture*>(opaque);
+    if (capture == nullptr || capture->calls >= capture->signals.size()
+        || offset != 0U || width != 1U || aval == nullptr || bval == nullptr
+        || logic9_plane2 != nullptr || logic9_plane3 != nullptr) {
+        return 1U;
+    }
+    const auto index = capture->calls++;
+    capture->signals[index] = signal;
+    capture->aval[index] = aval[0U];
+    capture->bval[index] = bval[0U];
+    return 0U;
+}
+
+[[nodiscard]] Process make_bound_signal_callback_process()
+{
+    Process process;
+    process.id = 2302U;
+    process.name = "bound_signal_callback_operands";
+    process.register_count = 4U;
+    process.register_value_kinds = {
+        ValueKind::logic4,
+        ValueKind::logic4,
+        ValueKind::logic4,
+        ValueKind::logic4,
+    };
+    process.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+        WriteBlocking { 7U, 0U },
+        ReadSignal { 1U, 65U },
+        LoadConstant { 2U, PackedLogic4 { 32U, Logic4::zero } },
+        DynamicExtract { 3U, 1U, DynamicIndex { 2U, 0, 0, 0U } },
+        WriteBlocking { 65U, 3U },
+        Halt { },
+    };
+    return process;
+}
+
+void test_cached_bound_signal_callback_operands(
+    const JitOptimizationLevel optimization,
+    const std::filesystem::path& cache_directory)
+{
+    constexpr std::string_view actual_symbol = "bound_signal_actual_ids";
+    constexpr std::string_view canonical_symbol = "bound_signal_canonical_ids";
+    auto process = make_bound_signal_callback_process();
+    std::array<std::uint32_t, 1001U> signal_widths { };
+    signal_widths.fill(1U);
+    const auto options = LlvmJitOptions { optimization, cache_directory };
+
+    const auto add_entries = [&](LlvmJit& jit) {
+        JitProcessModuleEntry actual_entry;
+        actual_entry.symbol = actual_symbol;
+        actual_entry.process = &process;
+        actual_entry.signal_callback_ids_are_actual = true;
+
+        auto canonical_entry = actual_entry;
+        canonical_entry.symbol = canonical_symbol;
+        canonical_entry.signal_callback_ids_are_actual = false;
+        const std::array entries { actual_entry, canonical_entry };
+        jit.add_process_module(
+            "bound-signal-callback-operands",
+            entries,
+            signal_widths);
+    };
+
+    const auto execute_and_check = [&](LlvmJit& jit) {
+        const auto actual_handle = jit.lookup(actual_symbol);
+        const auto canonical_handle = jit.lookup(canonical_symbol);
+        const auto actual_layout = jit.frame_layout(actual_handle);
+        const auto canonical_layout = jit.frame_layout(canonical_handle);
+        assert(actual_layout.signal_callback_ids_are_actual);
+        assert(!canonical_layout.signal_callback_ids_are_actual);
+        assert((actual_layout.signal_callback_operands
+            == std::vector<std::uint32_t> { 7U, 65U }));
+        assert(canonical_layout.signal_callback_operands.empty());
+        assert(actual_layout.signal_callback_operand_word_base == 4U);
+        assert(canonical_layout.signal_callback_operand_word_base == 4U);
+        assert(actual_layout.register_count == canonical_layout.register_count);
+        assert(actual_layout.register_count == 4U);
+        assert(actual_layout.register_word_count == 6U);
+        assert(canonical_layout.register_word_count == 4U);
+        assert(actual_layout.layout_id_low != canonical_layout.layout_id_low
+            || actual_layout.layout_id_high
+                != canonical_layout.layout_id_high);
+
+        std::vector<std::uint64_t> actual_aval(
+            actual_layout.register_word_count);
+        std::vector<std::uint64_t> actual_bval(
+            actual_layout.register_word_count);
+        std::vector<std::uint8_t> actual_initialized(
+            actual_layout.register_count);
+        fsim_jit_frame_v2 actual_frame { };
+        jit.initialize_frame(
+            actual_handle,
+            actual_frame,
+            actual_aval,
+            actual_bval,
+            actual_initialized);
+        assert(actual_aval[4U] == 7U && actual_aval[5U] == 65U);
+        assert(actual_bval[4U] == 0U && actual_bval[5U] == 0U);
+
+        std::vector<std::uint64_t> short_aval(
+            actual_layout.register_word_count - 1U);
+        std::vector<std::uint64_t> short_bval(
+            actual_layout.register_word_count - 1U);
+        fsim_jit_frame_v2 short_frame { };
+        expect_error(
+            [&] {
+                jit.initialize_frame(
+                    actual_handle,
+                    short_frame,
+                    short_aval,
+                    short_bval,
+                    actual_initialized);
+            },
+            "caller-owned JIT register storage is smaller than the frame layout");
+
+        TestRuntime mismatch_runtime;
+        auto mismatch_descriptor = abi(mismatch_runtime);
+        BoundSignalCallbackCapture mismatch_capture;
+        auto mismatch_services = *mismatch_descriptor.services;
+        mismatch_services.write_signal = capture_bound_signal_write;
+        mismatch_services.write_signal_packed
+            = capture_bound_signal_callback;
+        mismatch_descriptor.services = &mismatch_services;
+        mismatch_descriptor.context = &mismatch_capture;
+        auto mismatch_result = new_resume_result();
+        expect_error(
+            [&] {
+                (void)jit.resume(
+                    canonical_handle,
+                    mismatch_descriptor,
+                    actual_frame,
+                    mismatch_result);
+            },
+            "JIT frame layout mismatch");
+        assert(mismatch_capture.calls == 0U);
+
+        const auto run_entry = [&](const JitProcessHandle handle,
+                                   const fsim::compiler::JitProcessFrameLayout& layout,
+                                   const bool bind_actual_ids) {
+            std::vector<std::uint64_t> aval(layout.register_word_count);
+            std::vector<std::uint64_t> bval(layout.register_word_count);
+            std::vector<std::uint8_t> initialized(layout.register_count);
+            fsim_jit_frame_v2 frame { };
+            jit.initialize_frame(handle, frame, aval, bval, initialized);
+            if (bind_actual_ids) {
+                aval[layout.signal_callback_operand_word_base] = 65U;
+                aval[layout.signal_callback_operand_word_base + 1U]
+                    = 1000U;
+            }
+
+            TestRuntime runtime;
+            auto descriptor = abi(runtime);
+            BoundSignalCallbackCapture capture;
+            auto services = *descriptor.services;
+            services.read_signal = capture_bound_signal_read;
+            services.read_signal_packed
+                = capture_bound_signal_read_packed;
+            services.write_signal = capture_bound_signal_write;
+            services.write_signal_packed = capture_bound_signal_callback;
+            descriptor.services = &services;
+            descriptor.context = &capture;
+            auto result = new_resume_result();
+            assert(jit.resume(handle, descriptor, frame, result)
+                == JitResumeStatus::completed);
+            assert(capture.read_calls == 1U);
+            assert(capture.read_signal
+                == (bind_actual_ids ? 1000U : 65U));
+            assert(capture.calls == 2U);
+            assert((capture.signals == (bind_actual_ids
+                ? std::array<std::uint32_t, 2U> { 65U, 1000U }
+                : std::array<std::uint32_t, 2U> { 7U, 65U })));
+            assert((capture.aval
+                == std::array<std::uint64_t, 2U> { 1U, 1U }));
+            assert((capture.bval
+                == std::array<std::uint64_t, 2U> { 0U, 0U }));
+        };
+        run_entry(actual_handle, actual_layout, true);
+        run_entry(canonical_handle, canonical_layout, false);
+        return std::array { actual_layout, canonical_layout };
+    };
+
+    std::array<fsim::compiler::JitProcessFrameLayout, 2U> original_layouts;
+    {
+        LlvmJit cold { options };
+        add_entries(cold);
+        original_layouts = execute_and_check(cold);
+        expect_cache_statistics(cold, 0U, 1U, 1U);
+    }
+    assert(cached_object_paths(cache_directory).size() == 1U);
+
+    {
+        LlvmJit warm { options };
+        add_entries(warm);
+        const auto warm_layouts = execute_and_check(warm);
+        assert(warm_layouts == original_layouts);
+        expect_cache_statistics(warm, 1U, 0U, 0U);
+    }
+    assert(cached_object_paths(cache_directory).size() == 1U);
+}
+
 void expect_native_record_header(const std::filesystem::path& cache_directory,
     const std::filesystem::path& object_path)
 {
@@ -328,7 +862,7 @@ void expect_native_record_header(const std::filesystem::path& cache_directory,
     constexpr std::array metadata_magic {
         std::byte { 'F' }, std::byte { 'S' }, std::byte { 'I' },
         std::byte { 'M' }, std::byte { 'J' }, std::byte { 'M' },
-        std::byte { '3' }, std::byte { 0 }
+        std::byte { '5' }, std::byte { 0 }
     };
     assert(std::equal(record_magic.begin(), record_magic.end(), record->begin()));
     assert(std::equal(metadata_magic.begin(), metadata_magic.end(),
@@ -343,10 +877,16 @@ void expect_native_record_header(const std::filesystem::path& cache_directory,
         }
         return result;
     };
-    assert(u32_le(8U) == 1U && u32_le(32U) == 2U);
+    assert(u32_le(8U) == 1U && u32_le(32U) == 9U);
     const auto metadata_size = static_cast<std::size_t>(u32_le(12U));
-    assert(metadata_size >= 20U && metadata_size <= record->size() - 24U);
-    assert(u32_le(36U) == metadata_size && u32_le(40U) == 1U);
+    assert(metadata_size >= 37U && metadata_size <= record->size() - 24U);
+    assert(u32_le(36U) == metadata_size);
+    const auto identity_size = static_cast<std::size_t>(u32_le(40U));
+    assert(identity_size != 0U && identity_size <= metadata_size - 37U);
+    const auto backend_tier_offset = 44U + identity_size;
+    assert(u32_le(backend_tier_offset) == 0U);
+    assert(std::to_integer<std::uint8_t>(
+               (*record)[backend_tier_offset + 4U]) == 0U);
     const auto object_offset = (24U + metadata_size + 7U) & ~std::size_t { 7U };
     assert(object_offset < record->size());
     const auto object_size = static_cast<std::uint64_t>(u32_le(16U))
@@ -356,6 +896,272 @@ void expect_native_record_header(const std::filesystem::path& cache_directory,
         24U + metadata_size),
         record->begin() + static_cast<std::ptrdiff_t>(object_offset),
         [](const std::byte value) { return value == std::byte { 0 }; }));
+}
+
+struct CachedTieredReadDedupMetadata {
+    std::uint32_t tier { };
+    std::uint64_t selection_instructions { };
+    std::uint64_t emitted_instructions { };
+    std::uint64_t marked_loads { };
+    std::uint64_t eliminated_loads { };
+    std::uint64_t marked_value_loads { };
+    std::uint64_t eliminated_value_loads { };
+};
+
+[[nodiscard]] CachedTieredReadDedupMetadata
+read_tiered_read_dedup_metadata(
+    const std::filesystem::path& cache_directory,
+    const std::filesystem::path& selected_object = { })
+{
+    const auto paths = cached_object_paths(cache_directory);
+    assert(!paths.empty());
+    assert(paths.size() == 1U || !selected_object.empty());
+    const auto object_path = selected_object.empty()
+        ? paths.front() : selected_object;
+    assert(std::ranges::find(paths, object_path) != paths.end());
+    fsim::compiler::ObjectCache storage {
+        cache_directory / "llvm" / "objects"
+    };
+    std::error_code error;
+    const auto record = storage.load(object_path.stem().string(), error);
+    assert(record && !error && record->size() >= 45U);
+    const auto read_u32 = [&](const std::size_t offset) {
+        assert(offset + 4U <= record->size());
+        std::uint32_t value { };
+        for (std::size_t byte = 0U; byte < 4U; ++byte) {
+            value |= static_cast<std::uint32_t>(
+                std::to_integer<std::uint8_t>((*record)[offset + byte]))
+                << (byte * 8U);
+        }
+        return value;
+    };
+    const auto read_u64 = [&](const std::size_t offset) {
+        assert(offset + 8U <= record->size());
+        std::uint64_t value { };
+        for (std::size_t byte = 0U; byte < 8U; ++byte) {
+            value |= static_cast<std::uint64_t>(
+                std::to_integer<std::uint8_t>((*record)[offset + byte]))
+                << (byte * 8U);
+        }
+        return value;
+    };
+    constexpr std::size_t cache_identity_size_offset = 40U;
+    const auto identity_size = static_cast<std::size_t>(
+        read_u32(cache_identity_size_offset));
+    assert(identity_size > 0U);
+    const auto tier_offset = 44U + identity_size;
+    CachedTieredReadDedupMetadata result;
+    result.tier = read_u32(tier_offset);
+    const auto selection_offset = tier_offset + 5U;
+    result.selection_instructions = read_u64(selection_offset);
+    result.emitted_instructions = read_u64(selection_offset + 8U);
+    result.marked_loads = read_u64(selection_offset + 16U);
+    result.eliminated_loads = read_u64(selection_offset + 24U);
+    result.marked_value_loads = read_u64(selection_offset + 32U);
+    result.eliminated_value_loads = read_u64(selection_offset + 40U);
+    return result;
+}
+
+void test_cache_identity_mismatch_diagnostics(
+    const std::filesystem::path& cache_directory)
+{
+    const auto corrupt_embedded_identity = [](
+        const std::filesystem::path& directory) {
+        const auto paths = cached_object_paths(directory);
+        assert(paths.size() == 1U);
+        fsim::compiler::ObjectCache storage {
+            directory / "llvm" / "objects"
+        };
+        std::error_code error;
+        auto record = storage.load(paths.front().stem().string(), error);
+        assert(record && !error && record->size() >= 45U);
+        const auto u32_le = [&](const std::size_t offset) {
+            std::uint32_t result { };
+            for (std::size_t byte = 0U; byte < 4U; ++byte) {
+                result |= static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>((*record)[offset + byte]))
+                    << (byte * 8U);
+            }
+            return result;
+        };
+        const auto metadata_size = static_cast<std::size_t>(u32_le(12U));
+        const auto identity_size = static_cast<std::size_t>(u32_le(40U));
+        assert(metadata_size >= 37U);
+        assert(metadata_size <= record->size() - 24U);
+        assert(identity_size != 0U && identity_size <= metadata_size - 37U);
+        (*record)[44U] ^= std::byte { 1U };
+        assert(storage.store(
+            paths.front().stem().string(),
+            std::span<const std::byte> { *record }, error));
+        assert(!error);
+    };
+
+    const auto corrupt_first_register_width = [](
+        const std::filesystem::path& directory) {
+        const auto paths = cached_object_paths(directory);
+        assert(paths.size() == 1U);
+        fsim::compiler::ObjectCache storage {
+            directory / "llvm" / "objects"
+        };
+        std::error_code error;
+        auto record = storage.load(paths.front().stem().string(), error);
+        assert(record && !error && record->size() >= 86U);
+        const auto u32_le = [&](const std::size_t offset) {
+            std::uint32_t result { };
+            for (std::size_t byte = 0U; byte < 4U; ++byte) {
+                result |= static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>((*record)[offset + byte]))
+                    << (byte * 8U);
+            }
+            return result;
+        };
+        const auto metadata_size = static_cast<std::size_t>(u32_le(12U));
+        const auto identity_size = static_cast<std::size_t>(u32_le(40U));
+        assert(metadata_size >= 37U);
+        assert(metadata_size <= record->size() - 24U);
+        assert(identity_size <= metadata_size - 37U);
+        // Schema 7 adds one tier-selection count and four deduplication
+        // counters before the per-process layout (five 64-bit fields).
+        const auto process_offset = 101U + identity_size;
+        const auto register_widths_offset = process_offset + 30U;
+        assert(register_widths_offset + 8U <= 24U + metadata_size);
+        assert(u32_le(register_widths_offset) == 1U);
+        const auto first_width_offset = register_widths_offset + 4U;
+        assert(first_width_offset + 4U <= 24U + metadata_size);
+        assert(u32_le(first_width_offset) == 4U);
+        for (std::size_t byte = 0U; byte < 4U; ++byte) {
+            (*record)[first_width_offset + byte] = std::byte { 0U };
+        }
+        assert(storage.store(
+            paths.front().stem().string(),
+            std::span<const std::byte> { *record }, error));
+        assert(!error);
+    };
+
+    const auto corrupt_first_register_persistence = [](
+        const std::filesystem::path& directory) {
+        const auto paths = cached_object_paths(directory);
+        assert(paths.size() == 1U);
+        fsim::compiler::ObjectCache storage {
+            directory / "llvm" / "objects"
+        };
+        std::error_code error;
+        auto record = storage.load(paths.front().stem().string(), error);
+        assert(record && !error && record->size() >= 45U);
+        const auto u32_le = [&](const std::size_t offset) {
+            std::uint32_t result { };
+            for (std::size_t byte = 0U; byte < 4U; ++byte) {
+                result |= static_cast<std::uint32_t>(
+                    std::to_integer<std::uint8_t>((*record)[offset + byte]))
+                    << (byte * 8U);
+            }
+            return result;
+        };
+        const auto metadata_size = static_cast<std::size_t>(u32_le(12U));
+        assert(metadata_size >= 37U);
+        assert(metadata_size <= record->size() - 24U);
+        const auto persistence_offset = 24U + metadata_size - 1U;
+        assert((*record)[persistence_offset] == std::byte { 1U });
+        (*record)[persistence_offset] = std::byte { 2U };
+        assert(storage.store(
+            paths.front().stem().string(),
+            std::span<const std::byte> { *record }, error));
+        assert(!error);
+    };
+
+    const auto verify = [&](const bool immutable_identity) {
+        const auto directory = cache_directory
+            / (immutable_identity ? "immutable" : "ordinary");
+        Process process;
+        process.id = immutable_identity ? 212U : 211U;
+        process.name = immutable_identity
+            ? "immutable_cache_identity_mismatch"
+            : "ordinary_cache_identity_mismatch";
+        process.operations = { Halt { } };
+        const auto options = LlvmJitOptions {
+            JitOptimizationLevel::o2, directory
+        };
+        const auto set_identity = [&](LlvmJit& jit) {
+            if (immutable_identity) {
+                jit.set_immutable_design_identity(
+                    "cache-identity-mismatch-design");
+            }
+        };
+        {
+            LlvmJit warm { options };
+            set_identity(warm);
+            warm.add_process(process.name, process, { });
+            assert(warm.lookup(process.name));
+        }
+        corrupt_embedded_identity(directory);
+        LlvmJit incompatible { options };
+        set_identity(incompatible);
+        expect_error(
+            [&] {
+                incompatible.add_process(process.name, process, { });
+            },
+            "cached LLVM native object has incompatible ABI, semantics, "
+            "optimization-tier, or target identity");
+    };
+
+    verify(false);
+    verify(true);
+
+    const auto layout_directory = cache_directory / "used-register-layout";
+    Process process;
+    process.id = 213U;
+    process.name = "used_register_cache_layout";
+    process.register_count = 1U;
+    process.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string("1010") },
+        Halt { }
+    };
+    fsim::runtime::simir::DebugLocal persistent_register;
+    persistent_register.name = "persistent_value";
+    persistent_register.type_name = "logic [3:0]";
+    persistent_register.register_id = 0U;
+    persistent_register.width = 4U;
+    process.debug_locals.push_back(std::move(persistent_register));
+    const auto options = LlvmJitOptions {
+        JitOptimizationLevel::o2, layout_directory
+    };
+    {
+        LlvmJit warm { options };
+        warm.add_process(process.name, process, { });
+        const auto handle = warm.lookup(process.name);
+        assert(handle);
+        assert((warm.frame_layout(handle).register_values_persistent
+            == std::vector<std::uint8_t> { 1U }));
+    }
+    corrupt_first_register_persistence(layout_directory);
+    LlvmJit incompatible { options };
+    expect_error(
+        [&] { incompatible.add_process(process.name, process, { }); },
+        "cached LLVM native object metadata does not match its compiled "
+        "process module");
+
+    const auto width_layout_directory
+        = cache_directory / "used-register-width-layout";
+    auto width_process = process;
+    width_process.id = 214U;
+    width_process.name = "used_register_width_cache_layout";
+    const auto width_options = LlvmJitOptions {
+        JitOptimizationLevel::o2, width_layout_directory
+    };
+    {
+        LlvmJit warm { width_options };
+        warm.add_process(width_process.name, width_process, { });
+        assert(warm.lookup(width_process.name));
+    }
+    corrupt_first_register_width(width_layout_directory);
+    LlvmJit bad_width_cache { width_options };
+    expect_error(
+        [&] {
+            bad_width_cache.add_process(
+                width_process.name, width_process, { });
+        },
+        "cached LLVM native object metadata does not match its compiled "
+        "process module");
 }
 
 void test_process_module_grouping_at_level(
@@ -378,7 +1184,13 @@ void test_process_module_grouping_at_level(
             return process;
         };
     const std::array<std::uint32_t, 2> widths { 8, 8 };
-    const auto first = make_process(20, 0, "10100101");
+    auto first = make_process(20, 0, "10100101");
+    fsim::runtime::simir::DebugLocal visible_register;
+    visible_register.name = "visible_value";
+    visible_register.type_name = "logic [7:0]";
+    visible_register.register_id = 0U;
+    visible_register.width = 8U;
+    first.debug_locals.push_back(std::move(visible_register));
     const auto second = make_process(21, 1, "01011010");
     const auto add_group =
         [&](LlvmJit& jit, const Process& left,
@@ -409,18 +1221,28 @@ void test_process_module_grouping_at_level(
             assert((
                 runtime.signals[1]
                 == EncodedSignal { UINT64_C(0x5a), 0 }));
+            const auto first_layout = jit.frame_layout(first_handle);
+            const auto second_layout = jit.frame_layout(second_handle);
+            assert(first_layout.register_values_persistent.size()
+                == first_layout.register_count);
+            assert(second_layout.register_values_persistent.size()
+                == second_layout.register_count);
+            assert((first_layout.register_values_persistent
+                == std::vector<std::uint8_t> { 1U }));
+            assert((second_layout.register_values_persistent
+                == std::vector<std::uint8_t> { 0U }));
             return std::array {
-                jit.frame_layout(first_handle),
-                jit.frame_layout(second_handle),
+                first_layout,
+                second_layout,
             };
         };
 
     std::array<fsim::compiler::JitProcessFrameLayout, 2>
         original_layouts;
+    LlvmJitOptions cache_options { optimization, cache_directory };
+    cache_options.debug_instrumentation = false;
     {
-        LlvmJit cold {
-            LlvmJitOptions { optimization, cache_directory }
-        };
+        LlvmJit cold { cache_options };
         assert(cold.supports_process(first, widths));
         assert(cold.supports_process(second, widths));
         add_group(cold, first, second);
@@ -430,9 +1252,7 @@ void test_process_module_grouping_at_level(
     assert(cached_object_paths(cache_directory).size() == 1);
 
     {
-        LlvmJit warm {
-            LlvmJitOptions { optimization, cache_directory }
-        };
+        LlvmJit warm { cache_options };
         add_group(warm, first, second);
         const auto warm_layouts = execute_group(warm);
         assert(warm_layouts == original_layouts);
@@ -443,9 +1263,7 @@ void test_process_module_grouping_at_level(
     // Any changed member invalidates the specialization object, while an
     // unchanged member retains its process-local frame identity.
     {
-        LlvmJit changed {
-            LlvmJitOptions { optimization, cache_directory }
-        };
+        LlvmJit changed { cache_options };
         const auto changed_second = make_process(21, 1, "00111100");
         add_group(changed, first, changed_second);
         const auto first_handle = changed.lookup("grouped_first");
@@ -691,6 +1509,13 @@ void test_canonical_operation_cache_identity(
     materialize(process, { 1, 2 }, 1, 0);
     materialize(process, { 2, 1 }, 0, 1);
 
+    const std::array<std::uint32_t, 2> range_widths { 8U, 1U };
+    materialize(process, range_widths, 0, 1);
+    auto changed_range = make_process();
+    changed_range.static_sensitivity.front().offset = 1U;
+    changed_range.static_sensitivity.front().width = 2U;
+    materialize(changed_range, range_widths, 0, 1);
+
     auto changed_field = make_process();
     fsim::runtime::simir::operation_get<Halt>(
         changed_field.operations.back()).program_exit = true;
@@ -734,15 +1559,15 @@ void test_cohort_binding_retention()
         jit.lookup("cohort_retention_a"),
         jit.lookup("cohort_retention_b")
     };
-    std::array<fsim_jit_frame_v1, 2> frames { };
+    std::array<fsim_jit_frame_v2, 2> frames { };
     std::array<std::array<std::uint64_t, 1>, 2> register_aval { };
     std::array<std::array<std::uint64_t, 1>, 2> register_bval { };
     std::array<std::array<std::uint8_t, 1>, 2> register_initialized { };
-    std::array<fsim_jit_resume_result_v1, 2> results {
+    std::array<fsim_jit_resume_result_v2, 2> results {
         new_resume_result(), new_resume_result()
     };
     std::array<TestRuntime, 2> runtimes;
-    std::array<fsim_jit_runtime_v1, 2> descriptors {
+    std::array<fsim_jit_runtime_instance_v2, 2> descriptors {
         abi(runtimes[0]), abi(runtimes[1])
     };
     std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> entries {
@@ -763,7 +1588,7 @@ void test_cohort_binding_retention()
     assert(jit.resume_cohort_prevalidated(entries) == entries.size());
     assert(std::ranges::all_of(entries, [](const auto& entry) {
         return entry.status
-            == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY;
+            == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2;
     }));
     fsim::compiler::JitProcessCohortBinding previous;
     for (std::size_t attempt = 0; attempt < 32U; ++attempt) {
@@ -777,7 +1602,7 @@ void test_cohort_binding_retention()
             == entries.size());
         assert(std::ranges::all_of(entries, [](const auto& entry) {
             return entry.status
-                == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY;
+                == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2;
         }));
         assert(jit.release_cohort_binding(binding));
         assert(jit.active_cohort_binding_count() == 0U);
@@ -806,6 +1631,16 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     assert(cached_object_paths(cache_directory).size() == 1);
     expect_native_record_header(
         cache_directory, cached_object_paths(cache_directory).front());
+    {
+        const auto metadata = read_tiered_read_dedup_metadata(cache_directory);
+        assert(metadata.tier == 0U);
+        assert(metadata.selection_instructions
+            == metadata.emitted_instructions);
+        assert(metadata.marked_loads == 0U);
+        assert(metadata.eliminated_loads == 0U);
+        assert(metadata.marked_value_loads == 0U);
+        assert(metadata.eliminated_value_loads == 0U);
+    }
 
     {
         LlvmJit warm { options };
@@ -872,6 +1707,192 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
         expect_cache_statistics(changed_process, 0, 1, 1);
     }
     assert(cached_object_paths(cache_directory).size() == 2);
+
+    const auto debug_container_cache
+        = cache_directory.parent_path()
+            / (cache_directory.filename().string()
+                + "-debug-container-local-observer");
+    const auto make_debug_container_process =
+        [](const ContainerRegisterId observed_register) {
+            ContainerType type;
+            type.element_width = 8U;
+            type.fixed = false;
+            type.index_left = 0;
+            type.index_right = 1;
+            Process process;
+            process.id = 93U;
+            process.name = "debug_container_observer_cache";
+            process.register_count = 2U;
+            process.container_register_count = 2U;
+            process.container_register_types = { type, type };
+            process.debug_container_locals.push_back(
+                { "snapshot", observed_register, type, { } });
+            process.operations = {
+                LoadConstant {
+                    0U, PackedLogic4::from_aval_bval(32U, 0U, 0U) },
+                ReadContainerObject { 0U, 0U },
+                ContainerRead { 1U, 0U, 0U, true, false, false },
+                Halt { },
+            };
+            return process;
+        };
+    const auto materialize_debug_container_process =
+        [&](const Process& process,
+            const std::uint64_t hits,
+            const std::uint64_t misses) {
+            LlvmJitOptions debug_container_options {
+                optimization, debug_container_cache };
+            debug_container_options.debug_instrumentation = false;
+            LlvmJit jit { std::move(debug_container_options) };
+            jit.add_process(
+                "debug_container_observer_cache", process, { });
+            assert(jit.lookup("debug_container_observer_cache"));
+            expect_cache_statistics(jit, hits, misses, misses);
+        };
+    // Only the debugger-visible container-register mapping changes, and it
+    // changes whether the generated read may leave the register unmaterialized.
+    materialize_debug_container_process(
+        make_debug_container_process(1U), 0U, 1U);
+    materialize_debug_container_process(
+        make_debug_container_process(0U), 0U, 1U);
+    materialize_debug_container_process(
+        make_debug_container_process(0U), 1U, 0U);
+    assert(cached_object_paths(debug_container_cache).size() == 2U);
+
+    const auto tiered_cache_directory
+        = cache_directory.parent_path()
+            / (cache_directory.filename().string() + "-tiered-read-dedup");
+    constexpr std::string_view tiered_symbol
+        = "persistent_cache_tiered_required_read";
+    constexpr std::array<std::uint32_t, 1> tiered_widths { 8U };
+    constexpr std::array<ValueKind, 1> tiered_kinds {
+        ValueKind::logic4
+    };
+    {
+        LlvmJit cold { LlvmJitOptions {
+            optimization, tiered_cache_directory } };
+        cold.add_process(tiered_symbol, make_cached_required_read_process(),
+            tiered_widths, tiered_kinds,
+            JitBackendTierHint::fused_static_cohort, 1U, true, true);
+        run_cached_required_read_process(cold, tiered_symbol);
+        expect_cache_statistics(cold, 0U, 1U, 1U);
+    }
+    assert(cached_object_paths(tiered_cache_directory).size() == 1U);
+    const auto cold_tiered_metadata
+        = read_tiered_read_dedup_metadata(tiered_cache_directory);
+    assert(cold_tiered_metadata.tier == 1U);
+    assert(cold_tiered_metadata.marked_value_loads >= 2U);
+    assert(cold_tiered_metadata.eliminated_value_loads >= 1U);
+    assert(cold_tiered_metadata.marked_loads
+        > cold_tiered_metadata.eliminated_loads);
+    assert(cold_tiered_metadata.emitted_instructions
+        < cold_tiered_metadata.selection_instructions);
+    const auto original_tiered_object
+        = cached_object_paths(tiered_cache_directory).front();
+    {
+        LlvmJit warm { LlvmJitOptions {
+            optimization, tiered_cache_directory } };
+        warm.add_process(tiered_symbol, make_cached_required_read_process(),
+            tiered_widths, tiered_kinds,
+            JitBackendTierHint::fused_static_cohort, 1U, true, true);
+        run_cached_required_read_process(warm, tiered_symbol);
+        // A hit proves both per-entry flags survived the native metadata
+        // round-trip and matched the source module on reload.
+        expect_cache_statistics(warm, 1U, 0U, 0U);
+    }
+    const auto warm_tiered_metadata
+        = read_tiered_read_dedup_metadata(tiered_cache_directory);
+    assert(warm_tiered_metadata.tier == cold_tiered_metadata.tier);
+    assert(warm_tiered_metadata.selection_instructions
+        == cold_tiered_metadata.selection_instructions);
+    assert(warm_tiered_metadata.emitted_instructions
+        == cold_tiered_metadata.emitted_instructions);
+    assert(warm_tiered_metadata.marked_value_loads
+        == cold_tiered_metadata.marked_value_loads);
+    assert(warm_tiered_metadata.eliminated_value_loads
+        == cold_tiered_metadata.eliminated_value_loads);
+    {
+        LlvmJit changed_policy { LlvmJitOptions {
+            optimization, tiered_cache_directory } };
+        changed_policy.add_process(
+            tiered_symbol, make_cached_required_read_process(),
+            tiered_widths, tiered_kinds,
+            JitBackendTierHint::fused_static_cohort, 1U, true, false);
+        run_cached_required_read_process(changed_policy, tiered_symbol);
+        expect_cache_statistics(changed_policy, 0U, 1U, 1U);
+    }
+    const auto tiered_object_paths
+        = cached_object_paths(tiered_cache_directory);
+    const auto guarded_object = std::ranges::find_if(
+        tiered_object_paths, [&](const auto& path) {
+            return path != original_tiered_object;
+        });
+    assert(guarded_object != tiered_object_paths.end());
+    const auto guarded_tiered_metadata = read_tiered_read_dedup_metadata(
+        tiered_cache_directory, *guarded_object);
+    assert(guarded_tiered_metadata.tier == 1U);
+    assert(guarded_tiered_metadata.marked_loads == 0U);
+    assert(guarded_tiered_metadata.eliminated_loads == 0U);
+    assert(guarded_tiered_metadata.marked_value_loads == 0U);
+    assert(guarded_tiered_metadata.eliminated_value_loads == 0U);
+    assert(guarded_tiered_metadata.emitted_instructions
+        == guarded_tiered_metadata.selection_instructions);
+    assert(cached_object_paths(tiered_cache_directory).size() == 2U);
+
+    const auto fused_tiered_cache_directory
+        = cache_directory.parent_path()
+            / (cache_directory.filename().string() + "-tiered-fused-read-dedup");
+    constexpr std::string_view fused_tiered_symbol
+        = "persistent_cache_fused_tiered_required_read";
+    constexpr std::array<std::uint32_t, 3> fused_tiered_widths {
+        8U, 8U, 8U
+    };
+    constexpr std::array<ValueKind, 3> fused_tiered_kinds {
+        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4
+    };
+    const auto fused_required_read
+        = make_cached_fused_required_read_process();
+    auto fused_options = LlvmJitOptions {
+        optimization, fused_tiered_cache_directory
+    };
+    fused_options.debug_instrumentation = false;
+    {
+        LlvmJit fused_jit { fused_options };
+        fused_jit.add_masked_process(
+            fused_tiered_symbol, fused_required_read,
+            fused_tiered_widths, fused_tiered_kinds, 2U, true, true);
+        assert(fused_jit.lookup(fused_tiered_symbol));
+        expect_cache_statistics(fused_jit, 0U, 1U, 1U);
+    }
+    assert(cached_object_paths(fused_tiered_cache_directory).size() == 1U);
+    const auto fused_tiered_metadata = read_tiered_read_dedup_metadata(
+        fused_tiered_cache_directory);
+    assert(fused_tiered_metadata.tier == 1U);
+    assert(fused_tiered_metadata.marked_value_loads >= 2U);
+    // At O2, LLVM's ordinary optimization pipeline can eliminate the
+    // same-member duplicate reads before the tiered direct-read pass runs.
+    // Keep the custom-pass contribution requirement on O0, where those loads
+    // remain and the custom pass is the one that removes them.
+    if (optimization == JitOptimizationLevel::o0) {
+        assert(fused_tiered_metadata.eliminated_value_loads >= 1U);
+    }
+    assert(fused_tiered_metadata.eliminated_loads
+        >= fused_tiered_metadata.eliminated_value_loads);
+    {
+        LlvmJit fused_warm { fused_options };
+        fused_warm.add_masked_process(
+            fused_tiered_symbol, fused_required_read,
+            fused_tiered_widths, fused_tiered_kinds, 2U, true, true);
+        assert(fused_warm.lookup(fused_tiered_symbol));
+        expect_cache_statistics(fused_warm, 1U, 0U, 0U);
+    }
+    const auto fused_warm_metadata = read_tiered_read_dedup_metadata(
+        fused_tiered_cache_directory);
+    assert(fused_warm_metadata.tier == fused_tiered_metadata.tier);
+    assert(fused_warm_metadata.marked_value_loads
+        == fused_tiered_metadata.marked_value_loads);
+    assert(fused_warm_metadata.eliminated_value_loads
+        == fused_tiered_metadata.eliminated_value_loads);
 
     // Unrelated elaborated signals do not invalidate a process-local object.
     {
@@ -1254,6 +2275,20 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
         expect_cache_statistics(power, 0, 1, 1);
     }
     assert(cached_object_paths(cache_directory).size() == 24);
+
+    const auto wide_projected_cache_directory
+        = cache_directory.parent_path()
+            / (cache_directory.filename().string()
+                + "-wide-projected-packed");
+    test_cached_wide_projected_write(
+        optimization, wide_projected_cache_directory);
+
+    const auto bound_signal_cache_directory
+        = cache_directory.parent_path()
+            / (cache_directory.filename().string()
+                + "-bound-signal-operands");
+    test_cached_bound_signal_callback_operands(
+        optimization, bound_signal_cache_directory);
 }
 
 void test_optimization_cache_invalidation(
@@ -1806,6 +2841,8 @@ void test_system_command_cache_identity(
         assert(jit.lookup(symbol));
         expect_cache_statistics(jit, hits, misses, misses);
     };
+    // The second numeric register is intentionally unused (and has width 0);
+    // replaying its cached frame metadata must preserve that valid layout.
     materialize(0, 0, 0, 1);
     materialize(0, 0, 1, 0);
     materialize(1, 0, 0, 1);

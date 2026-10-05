@@ -81,6 +81,7 @@ endif()
 fsim_collect_source_package_files("${FSIM_SOURCE_DIR}" FSIM_ACTUAL_FILES)
 fsim_load_source_package_exclusions("${FSIM_SOURCE_DIR}")
 foreach(FSIM_GENERATED IN ITEMS
+    .aws src/app/example.cpp.orig
     .fsim .fsim/libraries/work/library.sqlite3
     examples/sample/.fsim/snapshots/default/runtime.bin)
   fsim_source_package_is_excluded("${FSIM_GENERATED}" FSIM_EXCLUDED)
@@ -190,5 +191,5 @@ endforeach()
 
 list(LENGTH FSIM_MANIFEST_FILES FSIM_FILE_COUNT)
 message(STATUS
-  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 27 exclusions, "
+  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 29 exclusions, "
   "five negative classes")

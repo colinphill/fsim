@@ -43,6 +43,11 @@ include(cmake/FsimSqlite.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
+option(
+  FSIM_ENABLE_ALLOCATION_PROFILING
+  "Build instrumented CLI binaries for linked global new allocation diagnostics; use a separate build from Wall"
+  OFF
+)
 option(FSIM_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 set(
   FSIM_LLVM_MODE
@@ -695,6 +700,9 @@ add_library(
     src/runtime/vpi_time.cpp
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
+    src/runtime/scheduler_dispatch.cpp
+    src/runtime/scheduler_systemverilog.cpp
+    src/runtime/scheduler_generic_update.cpp
     src/runtime/vhdl_psl.cpp
     src/runtime/scope_randomize.cpp
     src/runtime/systemverilog_scalar.cpp
@@ -702,6 +710,25 @@ add_library(
     src/runtime/systemverilog_chandle.cpp
     src/runtime/systemverilog_string.cpp
     src/runtime/simir.cpp
+    src/runtime/simir_sensitivity.cpp
+    src/runtime/simir_region_graph.cpp
+    src/runtime/simir_region_graph_runtime.cpp
+    src/runtime/simir_native_frontier.cpp
+    src/runtime/simir_native_frontier_dispatch.cpp
+    src/runtime/simir_native_frontier_bind.cpp
+    src/runtime/simir_native_frontier_generic.cpp
+    src/runtime/simir_native_frontier_generic_stage.cpp
+    src/runtime/simir_native_frontier_issue.cpp
+    src/runtime/simir_native_frontier_fallback.cpp
+    src/runtime/simir_native_frontier_boundary.cpp
+    src/runtime/simir_native_frontier_sync.cpp
+    src/runtime/simir_a4_signal_state.cpp
+    src/runtime/simir_region_kernel_backend.cpp
+    src/runtime/simir_region_activation.cpp
+    src/runtime/simir_region_program.cpp
+    src/runtime/simir_generic_projected_region.cpp
+    src/runtime/simir_systemverilog_wave.cpp
+    src/runtime/simir_prepared_successor_dispatch.cpp
     src/runtime/simir_process_execution_context.cpp
     src/runtime/simir_coverage.cpp
     src/runtime/simir_arithmetic.cpp
@@ -713,13 +740,7 @@ add_library(
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
     src/runtime/simir_execution_part2.cpp
-    src/runtime/simir_execution_pure_wave.cpp
     src/runtime/simir_fused_static_graph.cpp
-    src/runtime/simir_fused_container_reads.cpp
-    src/runtime/simir_fused_masked_normalization.cpp
-    src/runtime/simir_fused_masked_graph.cpp
-    src/runtime/simir_fused_masked_execution.cpp
-    src/runtime/simir_private_bridge.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp
     src/runtime/simir_execution_interpreter.cpp
@@ -731,6 +752,7 @@ add_library(
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
+    src/runtime/simir_process_program.cpp
     src/runtime/simir_interpreter_profiles.cpp
     src/runtime/simir_logic.cpp
       src/runtime/simir_random_distribution.cpp
@@ -824,6 +846,7 @@ endif()
       src/elaboration/lowerer_hir_let.cpp
       src/elaboration/lowerer_hir_math.cpp
       src/elaboration/lowerer_hir_process.cpp
+      src/elaboration/lowerer_sensitivity.cpp
       src/elaboration/lowerer_hir_statement.cpp
       src/elaboration/lowerer_hir_synchronization.cpp
       src/elaboration/lowerer_hir_vhdl_access.cpp
@@ -1073,20 +1096,24 @@ if(FSIM_WITH_LLVM)
     fsim_llvm
     STATIC
       src/compiler/llvm_jit.cpp
+      src/compiler/llvm_jit_compilation_contexts.cpp
+      src/compiler/llvm_jit_llvm_args.cpp
+      src/compiler/llvm_jit_fast_isel_census.cpp
       src/compiler/llvm_jit_execution.cpp
       src/compiler/llvm_jit_process_modules.cpp
-      src/compiler/llvm_jit_fused_static_process.cpp
       src/compiler/llvm_jit_fused_masked_process.cpp
       src/compiler/llvm_jit_masked_lowering.cpp
       src/compiler/llvm_jit_cache_key.cpp
       src/compiler/llvm_jit_cache_key_operations.cpp
       src/compiler/llvm_jit_coverage.cpp
     src/compiler/llvm_jit_lowering.cpp
+    src/compiler/llvm_jit_nounwind.cpp
     src/compiler/llvm_jit_lowering_planning.cpp
     src/compiler/llvm_jit_lowering_operations_prefix.cpp
     src/compiler/llvm_jit_lowering_operations_suffix.cpp
       src/compiler/llvm_jit_dynamic_part.cpp
       src/compiler/llvm_jit_module.cpp
+      src/compiler/llvm_jit_codegen_preparation.cpp
       src/compiler/llvm_jit_operations_control.cpp
       src/compiler/llvm_jit_operations_logic.cpp
       src/compiler/llvm_jit_operations_file.cpp
@@ -1100,7 +1127,16 @@ if(FSIM_WITH_LLVM)
     src/compiler/llvm_jit_validation_operations_prefix.cpp
       src/compiler/llvm_jit_validation_selection.cpp
       src/compiler/llvm_jit_validation_support.cpp
+    src/compiler/llvm_jit_region_kernel.cpp
+    src/compiler/llvm_jit_region_frontier.cpp
+    src/compiler/llvm/region_frontier_kernel_plan.cpp
+    src/compiler/llvm/emit_region_frontier_loop.cpp
+    src/compiler/llvm/emit_region_frontier_internal_commit.cpp
+    src/compiler/llvm/emit_region_frontier_loop_v2.cpp
+    src/compiler/llvm/emit_region_frontier_internal_commit_v2.cpp
+    src/compiler/llvm/logic9_word_lowering.cpp
       src/compiler/llvm_jit_value_lowering.cpp
+      src/compiler/llvm_jit_wide_bitwise_lowering.cpp
   )
   add_library(fsim::llvm ALIAS fsim_llvm)
   fsim_configure_library(fsim_llvm)
@@ -1223,8 +1259,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_executor_frame.cpp
       src/app/application_fused_static_executor.cpp
       src/app/application_fused_static_setup.cpp
-      src/app/application_fused_masked_setup.cpp
       src/app/application_executors.cpp
+      src/app/application_region_kernel_backend.cpp
       src/app/application_executor_vital.cpp
       src/app/application_executor_signal_attributes.cpp
       src/app/application_executor_container_operation.cpp
@@ -1294,6 +1330,11 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/tcl_debugger_commands.cpp
       src/app/tcl_completion.cpp
   )
+  if(FSIM_ENABLE_ALLOCATION_PROFILING)
+    target_sources(fsim_application PRIVATE src/app/allocation_profile.cpp)
+    target_compile_definitions(
+      fsim_application PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
+  endif()
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)
   file(
@@ -1398,6 +1439,13 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
     endif()
     list(APPEND FSIM_COMMAND_TARGETS ${alias_name})
   endforeach()
+  if(FSIM_ENABLE_ALLOCATION_PROFILING)
+    target_compile_definitions(fsim_cli PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
+    foreach(command_target IN LISTS FSIM_COMMAND_TARGETS)
+      target_sources(
+        ${command_target} PRIVATE src/app/allocation_profile_global_new.cpp)
+    endforeach()
+  endif()
 endif()
 
 set(FSIM_SYSTEMC_RUNTIME_TARGET_MANIFEST
@@ -1436,6 +1484,13 @@ install(
 )
 install(
   FILES
+    include/fsim/compiler/jit_runtime.h
+    include/fsim/compiler/jit_runtime_v1.h
+    include/fsim/compiler/jit_runtime_v2.h
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/compiler"
+)
+install(
+  FILES
     include/fsim/semantic/hierarchy_path.hpp
     include/fsim/semantic/model.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/semantic"
@@ -1448,6 +1503,9 @@ install(
     include/fsim/runtime/acc_user.h
     include/fsim/runtime/vpi_abi.h
     include/fsim/runtime/vpi_bridge.h
+    include/fsim/runtime/simir_driver_inventory.hpp
+    include/fsim/runtime/simir_region_frontier.hpp
+    include/fsim/runtime/simir_region_frontier_v2.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/runtime"
 )
 install(

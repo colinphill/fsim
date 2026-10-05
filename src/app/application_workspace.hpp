@@ -17,6 +17,8 @@ int handle_workspace_elaborate(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_workspace_simulate(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
+int handle_workspace_simulate_stdio(const cli::Invocation&,
+    const project::Config&, diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_workspace_library(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
 

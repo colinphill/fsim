@@ -4,6 +4,7 @@
 #include "fsim/runtime/logic.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -12,9 +13,197 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+namespace fsim::app::application_detail {
+class LlvmProcessExecutor;
+}
+
 namespace fsim::runtime {
+
+namespace simir {
+class AuthoritativeSignalPlanes;
+}
+
+/// One role plane backed either by ordinary owning words or by a borrowed
+/// component allocation. Copying or moving a borrowed view detaches into
+/// owning storage; arena lifetime is pinned separately by the containing role
+/// block/state.
+class PackedLogic4PlaneStorage final {
+public:
+    using iterator = std::uint64_t*;
+    using const_iterator = const std::uint64_t*;
+
+    PackedLogic4PlaneStorage() noexcept = default;
+    PackedLogic4PlaneStorage(const PackedLogic4PlaneStorage& other);
+    PackedLogic4PlaneStorage(PackedLogic4PlaneStorage&& other);
+    PackedLogic4PlaneStorage& operator=(
+        const PackedLogic4PlaneStorage& other);
+    PackedLogic4PlaneStorage& operator=(
+        PackedLogic4PlaneStorage&& other);
+
+    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] bool empty() const noexcept { return size() == 0U; }
+    [[nodiscard]] std::uint64_t* data() noexcept;
+    [[nodiscard]] const std::uint64_t* data() const noexcept;
+    [[nodiscard]] iterator begin() noexcept { return data(); }
+    [[nodiscard]] const_iterator begin() const noexcept { return data(); }
+    [[nodiscard]] iterator end() noexcept
+    {
+        auto* const first = data();
+        return first == nullptr ? nullptr : first + size();
+    }
+    [[nodiscard]] const_iterator end() const noexcept
+    {
+        const auto* const first = data();
+        return first == nullptr ? nullptr : first + size();
+    }
+    [[nodiscard]] std::uint64_t& operator[](std::size_t index) noexcept
+    {
+        return data()[index];
+    }
+    [[nodiscard]] const std::uint64_t& operator[](
+        std::size_t index) const noexcept
+    {
+        return data()[index];
+    }
+    [[nodiscard]] std::uint64_t& front() noexcept { return data()[0U]; }
+    [[nodiscard]] const std::uint64_t& front() const noexcept
+    {
+        return data()[0U];
+    }
+    [[nodiscard]] std::uint64_t& back() noexcept { return data()[size() - 1U]; }
+    [[nodiscard]] const std::uint64_t& back() const noexcept
+    {
+        return data()[size() - 1U];
+    }
+    [[nodiscard]] std::span<std::uint64_t> span() noexcept
+    {
+        return { data(), size() };
+    }
+    [[nodiscard]] std::span<const std::uint64_t> span() const noexcept
+    {
+        return { data(), size() };
+    }
+    void resize(std::size_t size);
+    void bind(std::span<std::uint64_t> words) noexcept;
+    [[nodiscard]] bool borrowed() const noexcept { return borrowed_storage_; }
+
+private:
+    std::vector<std::uint64_t> owned_;
+    std::span<std::uint64_t> borrowed_;
+    bool borrowed_storage_ { };
+};
+
+/// Contiguous storage and explicit read-pin accounting for one A4 plane role.
+/// A live component slot owns the current block through a cell; copied packed
+/// values and read leases pin a block so it remains immutable and alive.
+/// Concurrent readers are supported for pinned snapshots and read leases.
+/// Mutating a live slot through spans or scalar/range setters requires
+/// external serialization against writers and new snapshot acquisition; this
+/// type does not provide general concurrent mutation of a live PackedLogic4.
+struct PackedLogic4PlaneBlock final {
+    /// Nonempty only when one or more planes borrow a component arena slice.
+    /// Snapshots pin the block and therefore keep the backing slab alive.
+    std::shared_ptr<void> storage_owner;
+    std::array<PackedLogic4PlaneStorage, 4U> planes;
+
+    void acquire_read_pin() noexcept;
+    void release_read_pin() noexcept;
+    [[nodiscard]] bool has_read_pins() const noexcept;
+    [[nodiscard]] bool write_locked() const noexcept;
+    [[nodiscard]] bool try_begin_write() noexcept;
+    void end_write() noexcept;
+    [[nodiscard]] static std::shared_ptr<PackedLogic4PlaneBlock> clone(
+        const PackedLogic4PlaneBlock& source);
+
+private:
+    static constexpr std::size_t writer_bit
+        = std::size_t { 1 }
+        << (std::numeric_limits<std::size_t>::digits - 1U);
+    std::atomic<std::size_t> reader_state_ { };
+};
+
+/// Stable indirection for a role's current version. Readers can capture a
+/// block while a prepared mutation atomically installs a replacement.
+struct PackedLogic4PlaneCell final {
+    explicit PackedLogic4PlaneCell(
+        std::shared_ptr<PackedLogic4PlaneBlock> initial) noexcept
+        : current(std::move(initial))
+    {
+    }
+
+    std::atomic<std::shared_ptr<PackedLogic4PlaneBlock>> current;
+
+    [[nodiscard]] std::shared_ptr<PackedLogic4PlaneBlock>
+    acquire_read_block() const noexcept;
+};
+
+/// Non-owning packed planes used by the SimIR component-backed value slots.
+/// The backing descriptor is owned by the component for as long as a
+/// PackedLogic4 slot is bound to it. Versioned cells can atomically replace a
+/// role's owning plane block while old value snapshots retain the prior one.
+/// Logic4 uses planes zero and one, while Logic9 uses all four. `plane_words`
+/// returns a mutable borrowed span and requires externally serialized access;
+/// concurrent writes and snapshot acquisition must use the sidecar's prepared
+/// publication path instead.
+struct PackedLogic4PlaneBacking final {
+    std::size_t width { };
+    bool logic9 { };
+    std::size_t first_value_word { };
+    std::size_t first_logic9_word { };
+    std::shared_ptr<PackedLogic4PlaneCell> cell;
+    std::array<std::span<std::uint64_t>, 4U> unversioned_planes;
+
+    [[nodiscard]] std::span<std::uint64_t> plane_words(
+        std::size_t plane) const noexcept;
+    [[nodiscard]] std::shared_ptr<PackedLogic4PlaneBlock>
+    acquire_read_block() const noexcept;
+};
+
+/// An owning immutable lease over one contiguous signal value in an A4 plane
+/// block. Copies retain an explicit read pin without allocating. A lease may
+/// be read concurrently with A4 prepared publication; it never exposes a
+/// mutable span.
+class PackedLogic4PlaneReadLease final {
+public:
+    PackedLogic4PlaneReadLease() noexcept = default;
+    PackedLogic4PlaneReadLease(const PackedLogic4PlaneReadLease& other) noexcept;
+    PackedLogic4PlaneReadLease(PackedLogic4PlaneReadLease&& other) noexcept;
+    PackedLogic4PlaneReadLease& operator=(
+        const PackedLogic4PlaneReadLease& other) noexcept;
+    PackedLogic4PlaneReadLease& operator=(
+        PackedLogic4PlaneReadLease&& other) noexcept;
+    ~PackedLogic4PlaneReadLease();
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return static_cast<bool>(block_);
+    }
+    [[nodiscard]] std::size_t width() const noexcept { return width_; }
+    [[nodiscard]] bool is_logic9() const noexcept { return logic9_; }
+    [[nodiscard]] std::span<const std::uint64_t> plane_words(
+        std::size_t plane) const noexcept;
+
+private:
+    friend class PackedLogic4;
+    friend class simir::AuthoritativeSignalPlanes;
+
+    PackedLogic4PlaneReadLease(
+        std::shared_ptr<PackedLogic4PlaneBlock> block,
+        std::size_t width,
+        bool logic9,
+        std::size_t first_value_word,
+        std::size_t first_logic9_word) noexcept;
+    void reset() noexcept;
+
+    std::shared_ptr<PackedLogic4PlaneBlock> block_;
+    std::size_t width_ { };
+    bool logic9_ { };
+    std::size_t first_value_word_ { };
+    std::size_t first_logic9_word_ { };
+};
 
 /// The complete aval/bval representation of a four-state value up to 64 bits.
 ///
@@ -62,10 +251,27 @@ private:
 ///
 /// This is intentionally separate from the aval/bval ABI used by Logic4.
 /// Generated code must opt in to this representation rather than silently
-/// projecting a nine-state value onto four states.
+/// projecting a nine-state value onto four states. Encodings 9 through 15 are
+/// malformed and normalize to Logic9::x at checked value ingress.
 struct Logic9Word {
     std::size_t width { };
     std::array<std::uint64_t, 4> planes { };
+
+    /// Canonicalize every malformed four-plane code to the Logic9::x code.
+    void normalize_invalid_codes_to_x() noexcept
+    {
+        const auto invalid
+            = planes[3] & (planes[2] | planes[1] | planes[0]);
+        planes[0] |= invalid;
+        planes[1] &= ~invalid;
+        planes[2] &= ~invalid;
+        planes[3] &= ~invalid;
+    }
+
+    [[nodiscard]] bool has_canonical_codes() const noexcept
+    {
+        return (planes[3] & (planes[2] | planes[1] | planes[0])) == 0U;
+    }
 
     friend bool operator==(const Logic9Word&, const Logic9Word&) = default;
 };
@@ -102,6 +308,11 @@ private:
 
 /// A packed four-state vector using the conventional aval/bval encoding:
 /// 0=00, 1=10, X=11, Z=01.
+/// Ordinary reads and mutations on a live externally backed slot are
+/// serialized with its A4 publisher and snapshot acquisition. The copy
+/// constructor and plane_read_lease() may acquire an immutable snapshot
+/// concurrently with prepared publication; read that snapshot instead of the
+/// live slot.
 class PackedLogic4 {
 public:
     explicit PackedLogic4(std::size_t width = 0,
@@ -133,7 +344,7 @@ public:
 
     [[nodiscard]] std::size_t width() const noexcept
     {
-        return width_and_logic9_ & ~logic9_mask;
+        return width_and_logic9_ & ~(logic9_mask | plane_backing_mask);
     }
     [[nodiscard]] bool empty() const noexcept { return width() == 0; }
     [[nodiscard]] bool is_logic9() const noexcept
@@ -167,12 +378,19 @@ public:
     void fill(Logic4 value);
     void fill(Logic9 value);
 
+    /// The spans returned by these three accessors are borrowed. For a live
+    /// slot they remain valid only until its next publication; callers that
+    /// can overlap publication must first make an owning packed snapshot or
+    /// retain a PackedLogic4PlaneReadLease.
     [[nodiscard]] std::span<const std::uint64_t>
     aval_words() const noexcept;
     [[nodiscard]] std::span<const std::uint64_t>
     bval_words() const noexcept;
     [[nodiscard]] std::span<const std::uint64_t>
     logic9_plane_words(std::size_t plane) const noexcept;
+    /// Returns an owning immutable pin for a live versioned slot or snapshot.
+    /// The lease remains stable across A4 prepared publications.
+    [[nodiscard]] PackedLogic4PlaneReadLease plane_read_lease() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t>
     known_unsigned_value() const noexcept;
     [[nodiscard]] std::optional<std::int64_t>
@@ -182,9 +400,10 @@ public:
     /// temporary packed container. The source width must match this value.
     void assign_word(const Logic4Word& source);
     /// Replace an existing single-word Logic9 value without constructing a
-    /// temporary packed container. The source width must match this value.
+    /// temporary packed container. The source width must match this value;
+    /// invalid source codes normalize to X as in ordinary Logic9 assignment.
     void assign_logic9_word(const Logic9Word& source);
-    /// Replace and compare selected bits of an inline Logic9 value.
+    /// Replace and compare selected bits of a single-word Logic9 value.
     void insert_masked_logic9_word(
         const Logic9Word& source, std::uint64_t mask);
     [[nodiscard]] bool matches_masked_logic9_word(
@@ -194,7 +413,12 @@ public:
     /// nonempty Logic4 width no greater than 64 bits.
     [[nodiscard]] Logic4Word unchecked_low_word() const noexcept
     {
-        return { width(), inline_aval_, inline_bval_ };
+        if (width() == 0U) {
+            return { };
+        }
+        const auto aval = aval_words();
+        const auto bval = bval_words();
+        return Logic4Word { width(), aval.front(), bval.front() };
     }
     [[nodiscard]] Logic9Word logic9_low_word() const;
     [[nodiscard]] PackedLogic4 promoted_to_logic9() const;
@@ -216,43 +440,95 @@ private:
         std::vector<std::uint64_t> logic9_plane3;
     };
 
-    struct InlineExtraStorage {
-        std::uint64_t logic9_plane2 { };
-        std::uint64_t logic9_plane3 { };
+    struct InlineStorage {
+        std::array<std::uint64_t, 2U> aval { };
+        std::array<std::uint64_t, 2U> bval { };
+    };
+
+    struct PlaneSnapshotStorage {
+        std::shared_ptr<PackedLogic4PlaneBlock> block;
     };
 
     union ExtraStorage {
-        InlineExtraStorage inline_storage;
         std::shared_ptr<WideStorage> wide;
+        const PackedLogic4PlaneBacking* plane_backing;
+        PlaneSnapshotStorage plane_snapshot;
 
         ExtraStorage() noexcept { }
         ~ExtraStorage() noexcept { }
     };
 
+    struct IndirectStorage {
+        std::uint64_t first_value_word { };
+        std::uint64_t first_logic9_word { };
+        ExtraStorage extra;
+    };
+
+    union ValueStorage {
+        InlineStorage inline_value;
+        IndirectStorage indirect;
+
+        ValueStorage() noexcept { }
+        ~ValueStorage() noexcept { }
+    };
+    static_assert(sizeof(ValueStorage) == 4U * sizeof(std::uint64_t));
+
+    // Four inline words hold two Logic4 planes through 128 bits, or four
+    // Logic9 planes through 64 bits. External/versioned values keep their
+    // owning indirection regardless of whether their width fits inline.
+    [[nodiscard]] bool uses_inline_storage() const noexcept
+    {
+        return width() <= (is_logic9() ? 64U : 128U);
+    }
+    [[nodiscard]] ExtraStorage& extra_storage() noexcept
+    {
+        return storage_.indirect.extra;
+    }
+    [[nodiscard]] const ExtraStorage& extra_storage() const noexcept
+    {
+        return storage_.indirect.extra;
+    }
     [[nodiscard]] std::shared_ptr<WideStorage>& wide_storage()
     {
-        return extra_.wide;
+        return extra_storage().wide;
     }
     [[nodiscard]] const std::shared_ptr<WideStorage>& wide_storage() const
     {
-        return extra_.wide;
+        return extra_storage().wide;
     }
-    [[nodiscard]] std::uint64_t& inline_logic9_plane2()
+    [[nodiscard]] std::uint64_t& inline_aval() noexcept
     {
-        return extra_.inline_storage.logic9_plane2;
+        return storage_.inline_value.aval[0U];
     }
-    [[nodiscard]] const std::uint64_t& inline_logic9_plane2() const
+    [[nodiscard]] std::uint64_t& inline_bval() noexcept
     {
-        return extra_.inline_storage.logic9_plane2;
+        return storage_.inline_value.bval[0U];
     }
-    [[nodiscard]] std::uint64_t& inline_logic9_plane3()
+    [[nodiscard]] std::uint64_t& inline_logic9_plane2() noexcept
     {
-        return extra_.inline_storage.logic9_plane3;
+        return storage_.inline_value.aval[1U];
     }
-    [[nodiscard]] const std::uint64_t& inline_logic9_plane3() const
+    [[nodiscard]] const std::uint64_t& inline_logic9_plane2() const noexcept
     {
-        return extra_.inline_storage.logic9_plane3;
+        return storage_.inline_value.aval[1U];
     }
+    [[nodiscard]] std::uint64_t& inline_logic9_plane3() noexcept
+    {
+        return storage_.inline_value.bval[1U];
+    }
+    [[nodiscard]] const std::uint64_t& inline_logic9_plane3() const noexcept
+    {
+        return storage_.inline_value.bval[1U];
+    }
+    void initialize_storage_from(const PackedLogic4& other,
+        std::shared_ptr<WideStorage> wide) noexcept;
+
+    /// Overwrite an already-owned wide Logic4 value without detaching or
+    /// allocating. Returns false without mutation if the value is shared,
+    /// externally backed, Logic9, or has an incompatible shape/alias.
+    [[nodiscard]] bool try_assign_wide_logic4_word_planes_noalloc(
+        std::span<const std::uint64_t> aval,
+        std::span<const std::uint64_t> bval) noexcept;
 
     void set_logic9(const bool enabled) noexcept
     {
@@ -275,13 +551,68 @@ private:
     mutable_logic9_plane(std::size_t index);
     void mask_unused_bits();
 
+    [[nodiscard]] bool has_plane_backing() const noexcept
+    {
+        return has_live_plane_backing();
+    }
+    [[nodiscard]] const PackedLogic4PlaneBacking* plane_backing() const noexcept
+    {
+        return has_live_plane_backing() ? extra_storage().plane_backing : nullptr;
+    }
+    [[nodiscard]] bool has_plane_snapshot() const noexcept
+    {
+        return has_external_planes() && plane_snapshot_;
+    }
+    [[nodiscard]] bool has_live_plane_backing() const noexcept
+    {
+        return has_external_planes() && !plane_snapshot_;
+    }
+    [[nodiscard]] bool has_external_planes() const noexcept
+    {
+        return (width_and_logic9_ & plane_backing_mask) != 0U;
+    }
+    [[nodiscard]] std::span<const std::uint64_t>
+    snapshot_plane_words(std::size_t plane) const noexcept;
+    void capture_plane_snapshot(
+        const PackedLogic4PlaneBacking& backing) noexcept;
+    [[nodiscard]] std::size_t snapshot_first_value_word() const noexcept
+    {
+        return static_cast<std::size_t>(storage_.indirect.first_value_word);
+    }
+    [[nodiscard]] std::size_t snapshot_first_logic9_word() const noexcept
+    {
+        return static_cast<std::size_t>(storage_.indirect.first_logic9_word);
+    }
+    void set_snapshot_offsets(std::size_t first_value_word,
+        std::size_t first_logic9_word) noexcept
+    {
+        storage_.indirect.first_value_word = static_cast<std::uint64_t>(first_value_word);
+        storage_.indirect.first_logic9_word = static_cast<std::uint64_t>(first_logic9_word);
+    }
+    void release_plane_snapshot() noexcept;
+    void materialize_plane_snapshot();
+    void destroy_active_storage() noexcept;
+    /// Existing pinned snapshots are detached before a mutable span is
+    /// returned, but the caller must serialize access to the live binding
+    /// against both sidecar publication and new snapshot/lease acquisition
+    /// until it finishes writing through the span.
+    [[nodiscard]] std::span<std::uint64_t>
+    prepare_plane_storage_for_write(std::size_t plane);
+    void bind_plane_backing(
+        const PackedLogic4PlaneBacking& backing) noexcept;
+    void unbind_plane_backing() noexcept;
+
+    friend class simir::AuthoritativeSignalPlanes;
+    friend class fsim::app::application_detail::LlvmProcessExecutor;
+    friend class PackedLogic4WideWriteScratchTestAccess;
+
     static constexpr std::size_t logic9_mask
         = std::size_t { 1 }
         << (std::numeric_limits<std::size_t>::digits - 1U);
+    static constexpr std::size_t plane_backing_mask = logic9_mask >> 1U;
     std::size_t width_and_logic9_ { };
-    std::uint64_t inline_aval_ { };
-    std::uint64_t inline_bval_ { };
-    ExtraStorage extra_;
+    ValueStorage storage_;
+    bool plane_snapshot_ { };
 };
 
 /// Preferred name for the common packed transport value. PackedLogic4 remains

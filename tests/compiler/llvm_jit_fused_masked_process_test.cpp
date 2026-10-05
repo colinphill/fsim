@@ -49,6 +49,89 @@ std::vector<const Process*> pointers(const std::vector<Process>& members)
     return result;
 }
 
+void check_masked_error_branch_proof()
+{
+    const std::array<std::uint32_t, 2U> widths { 1U, 1U };
+    const std::array kinds { ValueKind::logic4, ValueKind::logic4 };
+    const auto make_member = [](const BinaryOperator comparison) {
+        Process member;
+        member.id = 71U;
+        member.name = "masked_error_branch";
+        member.register_count = 3U;
+        member.static_sensitivity = { { 0U, EdgeKind::any } };
+        member.driver_regions = { { 1U, 0U, 1U, true } };
+        member.operations = {
+            ReadSignal { 0U, 0U },
+            LoadConstant { 1U, PackedLogic4(1U, Logic4::one) },
+            Binary { comparison, 2U, 0U, 1U },
+            Branch { 2U, 4U, 4U, UnknownBranchPolicy::error },
+            WriteProjected { 1U, 0U, 0U, 0U,
+                ProjectedDelayMode::inertial },
+            WaitSensitivity { },
+            Jump { 0U },
+        };
+        return member;
+    };
+    auto safe = make_member(BinaryOperator::case_equal);
+    const std::array<const Process*, 1U> safe_members { &safe };
+    assert(fuse_masked_processes(safe_members, widths, kinds, 901U));
+
+    auto unknown_capable = make_member(BinaryOperator::equal);
+    const std::array<const Process*, 1U> unknown_members { &unknown_capable };
+    assert(!fuse_masked_processes(unknown_members, widths, kinds, 902U));
+
+    auto known_operands = unknown_capable;
+    known_operands.operations.replace(0U, LoadConstant {
+        0U, PackedLogic4(1U, Logic4::zero) });
+    const std::array<const Process*, 1U> known_members { &known_operands };
+    assert(fuse_masked_processes(known_members, widths, kinds, 903U));
+
+    const std::array<std::uint32_t, 2U> logic9_widths { 1U, 1U };
+    const std::array logic9_kinds { ValueKind::logic9, ValueKind::logic9 };
+    const auto make_logic9_member = [](const bool include_when_false_branch) {
+        Process member;
+        member.id = 72U;
+        member.name = "masked_logic9_without_error_branch";
+        member.register_count = include_when_false_branch ? 2U : 1U;
+        member.register_value_kinds = include_when_false_branch
+            ? std::vector<ValueKind> { ValueKind::logic9, ValueKind::logic9 }
+            : std::vector<ValueKind> { ValueKind::logic9 };
+        member.static_sensitivity = { { 0U, EdgeKind::any } };
+        member.driver_regions = { { 1U, 0U, 1U, true } };
+        const auto logic9_u = PackedLogic4::from_logic9_msb_string("U");
+        if (include_when_false_branch) {
+            member.operations = {
+                ReadSignal { 0U, 0U },
+                LoadConstant { 1U, logic9_u },
+                Branch { 0U, 3U, 3U, UnknownBranchPolicy::when_false },
+                WriteProjected { 1U, 1U, 0U, 0U,
+                    ProjectedDelayMode::inertial },
+                WaitSensitivity { },
+                Jump { 0U },
+            };
+        } else {
+            member.operations = {
+                LoadConstant { 0U, logic9_u },
+                WriteProjected { 1U, 0U, 0U, 0U,
+                    ProjectedDelayMode::inertial },
+                WaitSensitivity { },
+                Jump { 0U },
+            };
+        }
+        return member;
+    };
+    auto logic9_without_branch = make_logic9_member(false);
+    const std::array<const Process*, 1U> logic9_without_branch_members {
+        &logic9_without_branch };
+    assert(fuse_masked_processes(logic9_without_branch_members,
+        logic9_widths, logic9_kinds, 904U));
+    auto logic9_when_false = make_logic9_member(true);
+    const std::array<const Process*, 1U> logic9_when_false_members {
+        &logic9_when_false };
+    assert(fuse_masked_processes(logic9_when_false_members,
+        logic9_widths, logic9_kinds, 905U));
+}
+
 void check_masked_native(const JitOptimizationLevel optimization,
     const std::uint32_t width)
 {
@@ -97,7 +180,7 @@ void check_masked_native(const JitOptimizationLevel optimization,
     std::vector<std::uint64_t> registers_aval(layout.register_word_count);
     std::vector<std::uint64_t> registers_bval(layout.register_word_count);
     std::vector<std::uint8_t> initialized(layout.register_count);
-    fsim_jit_frame_v1 frame { };
+    fsim_jit_frame_v2 frame { };
     jit.initialize_frame(handle, frame, registers_aval, registers_bval, initialized);
     TestRuntime callbacks;
     auto runtime = abi(callbacks);
@@ -115,7 +198,7 @@ void check_masked_native(const JitOptimizationLevel optimization,
     runtime.direct_wide_signal_offsets = offsets.data();
     runtime.direct_wide_signal_offset_count = 4U;
     runtime.direct_wide_word_count = 12U;
-    std::array<fsim_jit_update_slot_v1, 2> slots { };
+    std::array<fsim_jit_update_slot_v2, 2> slots { };
     auto& slot = slots[0];
     auto& terminal_slot = slots[1];
     std::array<std::uint64_t, 3> output_aval { }, output_bval { }, output_mask { };
@@ -218,6 +301,10 @@ void check_masked_native(const JitOptimizationLevel optimization,
     }
     // The mask extension is checked before any body or output mutation.
     const auto saved_slot = slot;
+    const auto saved_slot_active = slot_active;
+    const auto saved_output_aval = output_aval;
+    const auto saved_output_bval = output_bval;
+    const auto saved_output_mask = output_mask;
     const auto saved_terminal_slot = terminal_slot;
     const auto saved_terminal_aval = terminal_aval;
     const auto saved_terminal_bval = terminal_bval;
@@ -227,17 +314,48 @@ void check_masked_native(const JitOptimizationLevel optimization,
     try {
         auto result = new_resume_result();
         static_cast<void>(jit.resume(handle, runtime, frame, result));
-    } catch (const LlvmJitError&) {
-        rejected = true;
+    } catch (const LlvmJitGeneratedRuntimeError& error) {
+        rejected = error.reason()
+                == JitGeneratedRuntimeErrorReason::fused_activation_invalid
+            && error.instruction() == FSIM_JIT_INVALID_INSTRUCTION_V2;
     }
-    assert(rejected && slot.mask == saved_slot.mask && slot.aval == saved_slot.aval);
+    assert(rejected
+        && frame.state == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2
+        && frame.program_counter == static_cast<std::uint32_t>(
+            JitGeneratedRuntimeErrorReason::fused_activation_invalid)
+        && frame.last_instruction == FSIM_JIT_INVALID_INSTRUCTION_V2
+        && slot.mask == saved_slot.mask && slot.aval == saved_slot.aval
+        && slot.bval == saved_slot.bval && slot_active == saved_slot_active
+        && output_aval == saved_output_aval
+        && output_bval == saved_output_bval
+        && output_mask == saved_output_mask);
     assert(terminal_slot.mask == saved_terminal_slot.mask
         && terminal_slot.aval == saved_terminal_slot.aval
         && terminal_aval == saved_terminal_aval
         && terminal_bval == saved_terminal_bval
         && terminal_mask == saved_terminal_mask);
+    bool repeated_error = false;
+    try {
+        auto result = new_resume_result();
+        static_cast<void>(jit.resume(handle, runtime, frame, result));
+    } catch (const LlvmJitGeneratedRuntimeError& error) {
+        repeated_error = error.reason()
+                == JitGeneratedRuntimeErrorReason::fused_activation_invalid
+            && error.instruction() == FSIM_JIT_INVALID_INSTRUCTION_V2;
+    }
+    assert(repeated_error
+        && frame.state == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2
+        && frame.program_counter == static_cast<std::uint32_t>(
+            JitGeneratedRuntimeErrorReason::fused_activation_invalid)
+        && frame.last_instruction == FSIM_JIT_INVALID_INSTRUCTION_V2
+        && slot.mask == saved_slot.mask && slot.aval == saved_slot.aval
+        && slot.bval == saved_slot.bval && slot_active == saved_slot_active
+        && output_aval == saved_output_aval
+        && output_bval == saved_output_bval
+        && output_mask == saved_output_mask);
+    jit.initialize_frame(handle, frame, registers_aval, registers_bval, initialized);
     runtime.fused_activation_word_count = (width + 1U + 63U) / 64U;
-    runtime.struct_size = static_cast<std::uint32_t>(offsetof(fsim_jit_runtime_v1, fused_activation_words));
+    runtime.struct_size = static_cast<std::uint32_t>(offsetof(fsim_jit_runtime_instance_v2, fused_activation_words));
     rejected = false;
     try {
         auto result = new_resume_result();
@@ -260,6 +378,7 @@ void check_masked_native(const JitOptimizationLevel optimization,
 
 void test_fused_masked_process_at_level(const JitOptimizationLevel optimization)
 {
+    check_masked_error_branch_proof();
     for (const auto width : { 3U, 65U, 129U }) {
         check_masked_native(optimization, width);
     }

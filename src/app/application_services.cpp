@@ -132,5 +132,12 @@ cli::Services make_cli_services() {
   return make_cli_services(std::cin);
 }
 
+cli::Services make_stdio_cli_services() {
+  auto services = make_cli_services();
+  services.stdio_run = handle_run_stdio;
+  services.stdio_simulate = handle_workspace_simulate_stdio;
+  return services;
+}
+
 
 } // namespace fsim::app
