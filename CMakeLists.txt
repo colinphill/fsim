@@ -1237,26 +1237,47 @@ endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   fsim_add_sqlite()
+  # The application is four layers: HIR lowering and artifact codecs;
+  # simulation, tracing, coverage and SDF; sessions, phases and workspaces;
+  # and the Tcl console with the CLI composition root.
   add_library(
-    fsim_application
+    fsim_lowering
     ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
       src/app/application.cpp
       src/app/application_analysis.cpp
       src/app/application_compiled_environment.cpp
       src/app/application_compiled_environment_sv.cpp
       src/app/application_compiled_environment_vhdl.cpp
-      src/app/application_workspace.cpp
-      src/app/application_workspace_catalogs.cpp
-      src/app/application_workspace_compile.cpp
-      src/app/application_workspace_objects.cpp
-      src/app/application_workspace_selection.cpp
-      src/app/application_workspace_store.cpp
-      src/app/application_workspace_store_io.cpp
-      src/app/application_workspace_store_sqlite.cpp
-      src/app/application_workspace_store_catalog.cpp
-      src/app/application_workspace_store_transaction.cpp
-      src/app/application_workspace_store_snapshot.cpp
-      src/app/application_workspace_systemc.cpp
+      src/app/application_compiled_design.cpp
+      src/app/application_standard_library.cpp
+      src/app/application_standard_library_vital.cpp
+      src/app/application_vhdl_analysis.cpp
+      src/app/application_design_ir.cpp
+      src/app/application_design_artifact_codec.cpp
+      src/app/application_hierarchy_path_codec.cpp
+      src/app/application_runtime_path_codec.cpp
+      src/app/application_design_artifact_hir_codec.cpp
+      src/app/application_standard_package.cpp
+      src/app/application_semantic.cpp
+      src/app/application_constraint_lowering.cpp
+      src/app/application_systemverilog_class_hir.cpp
+      src/app/application_systemverilog_hir.cpp
+      src/app/application_systemverilog_hir_projection.cpp
+      src/app/application_systemverilog_coverage_hir.cpp
+      src/app/application_systemverilog_executable_hir.cpp
+      src/app/application_vhdl_hir.cpp
+      src/app/application_vhdl_hir_builder.cpp
+      src/app/application_vhdl_hir_projection.cpp
+      src/app/application_vhdl_hir_callables.cpp
+      src/app/application_vhdl_hir_statements.cpp
+      src/app/application_vhdl_hir_types.cpp
+      src/app/application_vhdl_mode_view.cpp
+      src/app/application_vhdl_psl.cpp
+      src/app/application_vhdl_executable_hir.cpp
+  )
+  add_library(
+    fsim_simulation
+    ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
       src/app/application_sdf_annotation_scope.cpp
       src/app/application_sdf_cell_resolution.cpp
       src/app/application_sdf_endpoint_resolution.cpp
@@ -1295,26 +1316,13 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/runtime/sdf_drive_timing.cpp
       src/app/application_sdf_schema.cpp
       src/app/application_sdf_artifact_identity.cpp
-  src/app/application_sdf_portable_archive.cpp
-  src/app/application_sdf_phase_persistence.cpp
-      src/app/application_build.cpp
+      src/app/application_sdf_portable_archive.cpp
+      src/app/application_sdf_phase_persistence.cpp
       src/app/application_coverage_command.cpp
       src/app/application_coverage_database_psl.cpp
       src/app/application_coverage_control.cpp
-      src/app/application_check.cpp
-      src/app/application_compiled_design.cpp
-      src/app/application_standard_library.cpp
-      src/app/application_standard_library_vital.cpp
-      src/app/application_vhdl_analysis.cpp
-      src/app/application_debug_control.cpp
       src/app/application_debug_coverage.cpp
-      src/app/application_debugger.cpp
       src/app/application_uvm_inspection.cpp
-      src/app/application_design_ir.cpp
-      src/app/application_design_artifact_codec.cpp
-      src/app/application_hierarchy_path_codec.cpp
-      src/app/application_runtime_path_codec.cpp
-      src/app/application_design_artifact_hir_codec.cpp
       src/app/application_executor_frame.cpp
       src/app/application_fused_static_executor.cpp
       src/app/application_fused_static_setup.cpp
@@ -1326,11 +1334,6 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_executor_services.cpp
       src/app/application_executor_signals.cpp
       src/app/application_executor_values.cpp
-      src/app/application_library_export.cpp
-      src/app/application_library_import.cpp
-      src/app/application_phase_compile.cpp
-      src/app/application_phase_design.cpp
-      src/app/application_phase_object.cpp
       src/app/application_trace_archive.cpp
       src/app/application_trace_api.cpp
       src/app/application_trace_format.cpp
@@ -1340,30 +1343,11 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_scv_trace.cpp
       src/app/application_systemc_trace.cpp
       src/app/application_run.cpp
-      src/app/application_run_commands.cpp
-      src/app/application_standard_package.cpp
-      src/app/application_semantic.cpp
-      src/app/application_constraint_lowering.cpp
       src/app/application_class_randomization.cpp
       src/app/application_class_execution.cpp
       src/app/application_class_hir_execution.cpp
-      src/app/application_systemverilog_class_hir.cpp
-      src/app/application_systemverilog_hir.cpp
-      src/app/application_systemverilog_hir_projection.cpp
-      src/app/application_systemverilog_coverage_hir.cpp
-      src/app/application_systemverilog_executable_hir.cpp
-      src/app/application_vhdl_hir.cpp
-      src/app/application_vhdl_hir_builder.cpp
-      src/app/application_vhdl_hir_projection.cpp
-      src/app/application_vhdl_hir_callables.cpp
-      src/app/application_vhdl_hir_statements.cpp
-      src/app/application_vhdl_hir_types.cpp
-      src/app/application_vhdl_mode_view.cpp
-  src/app/application_vhdl_psl.cpp
-  src/app/application_vhdl_debug.cpp
+      src/app/application_vhdl_debug.cpp
       src/app/application_vpi.cpp
-      src/app/application_vhdl_executable_hir.cpp
-      src/app/application_services.cpp
       src/app/application_class_inspection.cpp
       src/app/application_simulation.cpp
       src/app/application_simulation_accessors.cpp
@@ -1377,25 +1361,81 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_uvm_registry.cpp
       src/app/application_uvm_command_line.cpp
       src/app/application_time.cpp
-  src/app/application_tf.cpp
-  src/app/application_acc_scheduler.cpp
-  src/app/application_tf_scheduler.cpp
-      src/app/tcl.cpp
-      src/app/tcl_commands.cpp
-      src/app/tcl_command_catalog.cpp
-      src/app/tcl_references.cpp
-      src/app/tcl_workspace_commands.cpp
-      src/app/tcl_object_commands.cpp
-      src/app/tcl_debugger_commands.cpp
-      src/app/tcl_completion.cpp
+      src/app/application_tf.cpp
+      src/app/application_acc_scheduler.cpp
+      src/app/application_tf_scheduler.cpp
   )
+  add_library(
+    fsim_application
+    ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
+      src/app/application_workspace.cpp
+      src/app/application_workspace_catalogs.cpp
+      src/app/application_workspace_compile.cpp
+      src/app/application_workspace_objects.cpp
+      src/app/application_workspace_selection.cpp
+      src/app/application_workspace_store.cpp
+      src/app/application_workspace_store_io.cpp
+      src/app/application_workspace_store_sqlite.cpp
+      src/app/application_workspace_store_catalog.cpp
+      src/app/application_workspace_store_transaction.cpp
+      src/app/application_workspace_store_snapshot.cpp
+      src/app/application_workspace_systemc.cpp
+      src/app/application_build.cpp
+      src/app/application_check.cpp
+      src/app/application_debug_control.cpp
+      src/app/application_debugger.cpp
+      src/app/application_library_export.cpp
+      src/app/application_library_import.cpp
+      src/app/application_phase_compile.cpp
+      src/app/application_phase_design.cpp
+      src/app/application_phase_object.cpp
+      src/app/application_run_commands.cpp
+  )
+  # make_cli_services, the CLI composition root, binds the Tcl console, so it
+  # lives in fsim_tcl. Without Tcl there is no fsim_tcl: the root and tcl.cpp's
+  # "Tcl unavailable" handler join fsim_application. FSIM_CLI_LIBRARY names
+  # the library that provides the root.
+  if(FSIM_WITH_TCL)
+    add_library(
+      fsim_tcl
+      ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
+        src/app/application_services.cpp
+        src/app/tcl.cpp
+        src/app/tcl_commands.cpp
+        src/app/tcl_command_catalog.cpp
+        src/app/tcl_references.cpp
+        src/app/tcl_workspace_commands.cpp
+        src/app/tcl_object_commands.cpp
+        src/app/tcl_debugger_commands.cpp
+        src/app/tcl_completion.cpp
+        src/app/tcl_completion_adapter.cpp
+        src/app/tcl_console.cpp
+        src/app/tcl_transcript.cpp
+    )
+    add_library(fsim::tcl ALIAS fsim_tcl)
+    fsim_configure_subsystem_library(fsim_tcl)
+    target_link_libraries(fsim_tcl PUBLIC fsim_application)
+    set(FSIM_CLI_LIBRARY fsim_tcl)
+  else()
+    target_sources(
+      fsim_application
+      PRIVATE
+        src/app/application_services.cpp
+        src/app/tcl.cpp
+    )
+    set(FSIM_CLI_LIBRARY fsim_application)
+  endif()
   if(FSIM_ENABLE_ALLOCATION_PROFILING)
     target_sources(fsim_application PRIVATE src/app/allocation_profile.cpp)
     target_compile_definitions(
       fsim_application PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
   endif()
+  add_library(fsim::lowering ALIAS fsim_lowering)
+  add_library(fsim::simulation ALIAS fsim_simulation)
   add_library(fsim::application ALIAS fsim_application)
-  fsim_configure_subsystem_library(fsim_application)
+  foreach(target IN ITEMS fsim_lowering fsim_simulation fsim_application)
+    fsim_configure_subsystem_library(${target})
+  endforeach()
   file(
     RELATIVE_PATH
     FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
@@ -1408,26 +1448,36 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
   )
   target_compile_definitions(
-    fsim_application
+    fsim_lowering
     PRIVATE
       "FSIM_IEEE_LIBRARY_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019\""
       "FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR=\"${FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR}\""
   )
   target_link_libraries(
-    fsim_application
+    fsim_lowering
     PUBLIC
-      fsim_cli
+      fsim_base
       fsim_elaboration
-      fsim_library
-      fsim_object_cache
+      fsim_frontend
       fsim_systemc
     PRIVATE
       fsim_boost_pfr_headers
-      fsim_sqlite
+  )
+  target_link_libraries(
+    fsim_simulation
+    PUBLIC fsim_lowering
+    PRIVATE fsim_boost_pfr_headers
+  )
+  target_link_libraries(
+    fsim_application
+    PUBLIC fsim_simulation
+    PRIVATE fsim_sqlite
   )
   if(FSIM_WITH_LLVM)
-    target_link_libraries(fsim_application PUBLIC fsim_compiler)
-    target_compile_definitions(fsim_application PUBLIC FSIM_HAS_LLVM=1)
+    # FSIM_HAS_LLVM changes the layout of types every application layer
+    # shares, so it is PUBLIC on the lowest one.
+    target_compile_definitions(fsim_lowering PUBLIC FSIM_HAS_LLVM=1)
+    target_link_libraries(fsim_simulation PUBLIC fsim_compiler)
   endif()
   if(FSIM_WITH_TCL)
     add_library(fsim_isocline STATIC third_party/isocline/src/isocline.c)
@@ -1447,13 +1497,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       fsim_isocline
       PUBLIC "${PROJECT_SOURCE_DIR}/third_party/isocline/include"
       PRIVATE "${PROJECT_SOURCE_DIR}/third_party/isocline/src")
-    target_sources(fsim_application PRIVATE
-      src/app/tcl_completion_adapter.cpp
-      src/app/tcl_console.cpp
-      src/app/tcl_transcript.cpp)
-    target_link_libraries(fsim_application PRIVATE fsim_isocline)
-    target_link_libraries(fsim_application PRIVATE fsim_tcl_dependency)
-    target_compile_definitions(fsim_application PUBLIC FSIM_HAS_TCL=1)
+    target_link_libraries(fsim_tcl PRIVATE fsim_isocline fsim_tcl_dependency)
+    target_compile_definitions(fsim_tcl PUBLIC FSIM_HAS_TCL=1)
     if(FSIM_WITH_BUNDLED_TCL)
       file(
         RELATIVE_PATH
@@ -1467,7 +1512,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
         FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR
       )
       target_compile_definitions(
-        fsim_application
+        fsim_tcl
         PRIVATE
           "FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH=\"${FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR}\""
       )
@@ -1480,8 +1525,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   add_executable(fsim src/main.cpp)
   fsim_configure_executable(fsim)
   fsim_configure_command_entrypoint(fsim)
-  if(TARGET fsim_application)
-    target_link_libraries(fsim PRIVATE fsim_application)
+  if(DEFINED FSIM_CLI_LIBRARY)
+    target_link_libraries(fsim PRIVATE ${FSIM_CLI_LIBRARY})
   else()
     target_link_libraries(fsim PRIVATE fsim_cli)
   endif()
@@ -1600,7 +1645,8 @@ if(FSIM_SUBSYSTEM_LIBRARY_TYPE STREQUAL "SHARED")
   set(FSIM_SUBSYSTEM_TARGETS
     fsim_base fsim_semantic fsim_frontend fsim_runtime fsim_elaboration
     fsim_systemc)
-  foreach(target IN ITEMS fsim_compiler fsim_application)
+  foreach(target IN ITEMS
+      fsim_compiler fsim_lowering fsim_simulation fsim_application fsim_tcl)
     if(TARGET ${target})
       list(APPEND FSIM_SUBSYSTEM_TARGETS ${target})
     endif()

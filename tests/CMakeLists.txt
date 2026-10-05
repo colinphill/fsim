@@ -1121,6 +1121,11 @@ foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages obj
     "fast;application;workspace;artifact;library"
   )
 endforeach()
+# These cases run the CLI, so they need its composition root.
+foreach(workspace_case IN ITEMS application controls long_paths systemc vhdl_packages)
+  target_link_libraries(
+    fsim_workspace_${workspace_case}_tests PRIVATE ${FSIM_CLI_LIBRARY})
+endforeach()
 target_link_libraries(fsim_workspace_store_tests PRIVATE fsim_sqlite)
 target_link_libraries(fsim_workspace_selection_tests PRIVATE fsim_sqlite)
 
@@ -1420,7 +1425,7 @@ add_executable(
 )
 fsim_configure_test(fsim_coverage_command_tests)
 target_link_libraries(
-  fsim_coverage_command_tests PRIVATE fsim_application
+  fsim_coverage_command_tests PRIVATE ${FSIM_CLI_LIBRARY}
 )
 fsim_register_simple_test(
   fsim.application.coverage-command
@@ -4782,7 +4787,7 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_trace_format_application_tests)
   target_link_libraries(
     fsim_trace_format_application_tests
-    PRIVATE fsim_application
+    PRIVATE ${FSIM_CLI_LIBRARY}
   )
   fsim_register_simple_test(
     fsim.application.trace_format
@@ -4963,6 +4968,12 @@ if(TARGET fsim_application)
           fsim_application
           fsim_cli
       )
+    endforeach()
+    # Shards 0, 1, and 3 hold cases that run the CLI and need its
+    # composition root; a case moved elsewhere fails to link without it.
+    foreach(test_host IN ITEMS
+        fsim_application_tests fsim_application_tests_1 fsim_application_tests_3)
+      target_link_libraries(${test_host} PRIVATE ${FSIM_CLI_LIBRARY})
     endforeach()
 
     function(
@@ -5889,7 +5900,7 @@ fsim_register_simple_test(
   fsim_configure_test(fsim_display_application_tests)
   target_link_libraries(
     fsim_display_application_tests
-    PRIVATE fsim_application
+    PRIVATE ${FSIM_CLI_LIBRARY}
   )
   fsim_register_simple_test(
     fsim.application.display
@@ -5904,7 +5915,7 @@ fsim_register_simple_test(
   fsim_configure_test(fsim_random_application_tests)
   target_link_libraries(
     fsim_random_application_tests
-    PRIVATE fsim_application
+    PRIVATE ${FSIM_CLI_LIBRARY}
   )
   fsim_register_simple_test(
     fsim.application.random
@@ -5919,7 +5930,7 @@ fsim_register_simple_test(
   fsim_configure_test(fsim_plusarg_application_tests)
   target_link_libraries(
     fsim_plusarg_application_tests
-    PRIVATE fsim_application
+    PRIVATE ${FSIM_CLI_LIBRARY}
   )
   fsim_register_simple_test(
     fsim.application.plusargs
@@ -6012,7 +6023,7 @@ fsim_register_simple_test(
   fsim_configure_test(fsim_assertion_application_tests)
   target_link_libraries(
     fsim_assertion_application_tests
-    PRIVATE fsim_application
+    PRIVATE ${FSIM_CLI_LIBRARY}
   )
   fsim_register_simple_test(
     fsim.application.assertions
@@ -6092,7 +6103,7 @@ fsim_register_simple_test(
   target_link_libraries(
     fsim_delay_mode_application_tests
     PRIVATE
-      fsim_application
+      ${FSIM_CLI_LIBRARY}
       fsim_cli
   )
   fsim_register_simple_test(
@@ -6481,7 +6492,7 @@ fsim_register_simple_test(
     fsim_configure_test(fsim_tcl_application_tests)
     target_link_libraries(
       fsim_tcl_application_tests
-      PRIVATE fsim_application
+      PRIVATE fsim_tcl
     )
     fsim_register_simple_test(
       fsim.application.tcl
@@ -6540,17 +6551,17 @@ fsim_register_simple_test(
     fsim_cli_diagnostic_color_tests
     "fast;cli;diagnostic")
 
-  add_executable(fsim_tcl_completion_tests app/tcl_completion_test.cpp)
-  fsim_configure_test(fsim_tcl_completion_tests)
-  target_include_directories(
-    fsim_tcl_completion_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
-  target_link_libraries(fsim_tcl_completion_tests PRIVATE fsim_application)
-  fsim_register_simple_test(
-    fsim.application.tcl-completion
-    fsim_tcl_completion_tests
-    "fast;tcl;completion")
-
   if(FSIM_WITH_TCL)
+    add_executable(fsim_tcl_completion_tests app/tcl_completion_test.cpp)
+    fsim_configure_test(fsim_tcl_completion_tests)
+    target_include_directories(
+      fsim_tcl_completion_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
+    target_link_libraries(fsim_tcl_completion_tests PRIVATE fsim_tcl)
+    fsim_register_simple_test(
+      fsim.application.tcl-completion
+      fsim_tcl_completion_tests
+      "fast;tcl;completion")
+
     foreach(tcl_case IN ITEMS
         references workspace_commands object_commands debugger_commands
         completion_adapter console transcript)
@@ -6561,9 +6572,9 @@ fsim_register_simple_test(
       fsim_configure_test(fsim_tcl_${tcl_case}_tests)
       target_include_directories(
         fsim_tcl_${tcl_case}_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
-      target_link_libraries(fsim_tcl_${tcl_case}_tests PRIVATE fsim_application)
+      target_link_libraries(fsim_tcl_${tcl_case}_tests PRIVATE fsim_tcl)
       if(tcl_case STREQUAL "completion_adapter")
-        # A static Tcl lives inside the shared fsim_application, which
+        # A static Tcl lives inside the shared fsim_tcl, which
         # exports its API; a second copy would split the interpreter state.
         get_target_property(tcl_type fsim_tcl_dependency TYPE)
         get_target_property(tcl_location fsim_tcl_dependency IMPORTED_LOCATION)

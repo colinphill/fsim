@@ -17,6 +17,28 @@
 
 namespace fsim::app::application_detail {
 
+HdlVcdState::~HdlVcdState()
+{
+    if (remove_observer && observer != 0) {
+        remove_observer(observer);
+    }
+    if (current_time) {
+        for (auto& file : extended_files) {
+            if (!file->begun || file->closed) {
+                continue;
+            }
+            const auto now = current_time();
+            if (now > std::numeric_limits<SimulationTick>::max()
+                    / file->tick_multiplier) {
+                continue;
+            }
+            file->stream << "$vcdclose #"
+                         << now * file->tick_multiplier << " $end\n";
+            file->stream.flush();
+            file->closed = true;
+        }
+    }
+}
 
 namespace {
 
