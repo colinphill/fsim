@@ -13,6 +13,12 @@
 
 namespace fsim::app::application_detail {
 
+ContainerCallbackProfile& container_callback_profile()
+{
+    static ContainerCallbackProfile result;
+    return result;
+}
+
 SystemCProcessExecutor::SystemCProcessExecutor(
     std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
     const std::uint64_t process)

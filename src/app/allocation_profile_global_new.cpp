@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "allocation_profile.hpp"
 
+#include "fsim/support/allocation_hooks.hpp"
+
 #include <cstddef>
 #include <cstdlib>
 #include <new>
@@ -73,6 +75,23 @@ void deallocate_aligned(
     std::free(pointer);
 #endif
 }
+
+// Windows binds operator new separately in each module; the fsim DLLs reach
+// this profile through the fsim_base allocation hooks.
+void* hooked_allocate(const std::size_t size)
+{
+    return allocate(size, 0U);
+}
+
+void hooked_deallocate(void* const pointer) noexcept
+{
+    deallocate(pointer);
+}
+
+[[maybe_unused]] const bool allocation_hooks_installed = [] {
+    fsim::support::set_allocation_hooks(hooked_allocate, hooked_deallocate);
+    return true;
+}();
 
 } // namespace
 

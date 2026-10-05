@@ -6563,8 +6563,20 @@ fsim_register_simple_test(
         fsim_tcl_${tcl_case}_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
       target_link_libraries(fsim_tcl_${tcl_case}_tests PRIVATE fsim_application)
       if(tcl_case STREQUAL "completion_adapter")
-        target_link_libraries(
-          fsim_tcl_completion_adapter_tests PRIVATE fsim_tcl_dependency)
+        # A static Tcl lives inside the shared fsim_application, which
+        # exports its API; a second copy would split the interpreter state.
+        get_target_property(tcl_type fsim_tcl_dependency TYPE)
+        get_target_property(tcl_location fsim_tcl_dependency IMPORTED_LOCATION)
+        if(FSIM_SUBSYSTEM_LIBRARY_TYPE STREQUAL "SHARED"
+            AND (tcl_type STREQUAL "STATIC_LIBRARY" OR tcl_location MATCHES "\\.a$"))
+          target_include_directories(fsim_tcl_completion_adapter_tests PRIVATE
+            $<TARGET_PROPERTY:fsim_tcl_dependency,INTERFACE_INCLUDE_DIRECTORIES>)
+          target_compile_definitions(fsim_tcl_completion_adapter_tests PRIVATE
+            $<TARGET_PROPERTY:fsim_tcl_dependency,INTERFACE_COMPILE_DEFINITIONS>)
+        else()
+          target_link_libraries(
+            fsim_tcl_completion_adapter_tests PRIVATE fsim_tcl_dependency)
+        endif()
       endif()
       if(tcl_case STREQUAL "debugger_commands")
         add_test(

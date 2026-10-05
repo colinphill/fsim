@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "runtime_direct_artifact_rows_test_support.hpp"
 
+#include "../allocation_hook_forwarding.hpp"
+
 #include <atomic>
 #include <cassert>
 #include <cstddef>

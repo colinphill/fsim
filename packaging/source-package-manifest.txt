@@ -563,6 +563,7 @@ include/fsim/semantic/model.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/vhdl_hir.hpp
+include/fsim/support/allocation_hooks.hpp
 include/fsim/support/atomic_shared_ptr.hpp
 include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
@@ -1363,6 +1364,8 @@ src/semantic/model.cpp
 src/semantic/systemverilog_class_specialization.cpp
 src/semantic/systemverilog_hir.cpp
 src/semantic/vhdl_hir.cpp
+src/support/allocation_hooks.cpp
+src/support/allocation_hooks.def
 src/support/environment.cpp
 src/support/sha256.cpp
 src/systemc/accellera_compatibility.cpp
@@ -1402,6 +1405,7 @@ src/systemc/systemc_exports.cpp
 src/systemc/tlm1_backend.cpp
 src/systemc/tlm2_backend.cpp
 tests/CMakeLists.txt
+tests/allocation_hook_forwarding.hpp
 tests/api/api_abi_c_test.c
 tests/api/api_abi_contract.h
 tests/api/api_abi_cpp_test.cpp

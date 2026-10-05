@@ -773,9 +773,9 @@ function(fsim_systemc_write_runtime_target_manifest output_path)
     string(APPEND records
       "target=${target}|type=${type}|bridge=fsim_systemc_accellera_runtime\n")
   endforeach()
-  # Every configuration has 17 product targets (LLVM, Tcl, and tests add more),
+  # Every configuration has 11 product targets (LLVM, Tcl, and tests add more),
   # so a smaller inventory means target discovery itself failed.
-  if(fsim_target_count LESS 17)
+  if(fsim_target_count LESS 11)
     message(FATAL_ERROR
       "unexpectedly small fsim target inventory: ${fsim_target_count}")
   endif()

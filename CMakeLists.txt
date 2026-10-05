@@ -392,6 +392,50 @@ function(fsim_configure_library target)
   fsim_configure_debug_footprint(${target})
 endfunction()
 
+# Subsystems are shared libraries, so executables, tests, and the C API share
+# one copy of each. MSVC-style frontends keep static libraries: without
+# dllimport annotations they cannot import data.
+if(
+  MSVC
+  OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+)
+  set(FSIM_SUBSYSTEM_LIBRARY_TYPE STATIC)
+else()
+  set(FSIM_SUBSYSTEM_LIBRARY_TYPE SHARED)
+endif()
+
+function(fsim_configure_subsystem_library target)
+  fsim_configure_library(${target})
+  if(NOT FSIM_SUBSYSTEM_LIBRARY_TYPE STREQUAL "SHARED")
+    return()
+  endif()
+  # Export every symbol, as static linking made every symbol reachable.
+  # Clang keeps hidden symbols out of MinGW's automatic export, so the
+  # visibility is default on every platform.
+  set_target_properties(${target} PROPERTIES CXX_VISIBILITY_PRESET default)
+  if(WIN32)
+    # Inline functions stay hidden: each DLL keeps its own copy regardless.
+    target_link_options(${target} PRIVATE "LINKER:--export-all-symbols")
+  else()
+    # Inline functions are shared too, so their static locals are unique.
+    # Calls inside a library stay direct, and an unresolved symbol fails the
+    # link as it does on Windows. The internal C++ ABI is not stable, so the
+    # soname is the full version.
+    set_target_properties(
+      ${target}
+      PROPERTIES
+        VISIBILITY_INLINES_HIDDEN OFF
+        VERSION "${PROJECT_VERSION}"
+        SOVERSION "${PROJECT_VERSION}"
+    )
+    target_compile_options(${target} PRIVATE -fno-semantic-interposition)
+    target_link_options(
+      ${target}
+      PRIVATE "LINKER:--no-undefined" "LINKER:-Bsymbolic-functions"
+    )
+  endif()
+endfunction()
+
 function(fsim_configure_executable target)
   target_compile_features(${target} PRIVATE cxx_std_20)
   target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/include")
@@ -461,25 +505,38 @@ function(fsim_configure_test target)
   fsim_configure_test_platform(${target})
 endfunction()
 
+# Support, diagnostics, platform, project, object cache, and CLI parsing.
 add_library(
-  fsim_diagnostic STATIC
+  fsim_base ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
+  src/cli/driver.cpp
+  src/compiler/object_cache.cpp
   src/diagnostic/artifact_identity.cpp
   src/diagnostic/compiled_hir_compatibility_codes.cpp
   src/diagnostic/diagnostic.cpp
-)
-add_library(fsim::diagnostic ALIAS fsim_diagnostic)
-fsim_configure_library(fsim_diagnostic)
-
-add_library(
-  fsim_project STATIC
+  src/platform/dynamic_library.cpp
   src/project/project.cpp
   src/project/project_language.cpp
+  src/support/allocation_hooks.cpp
+  src/support/environment.cpp
+  src/support/sha256.cpp
 )
-add_library(fsim::project ALIAS fsim_project)
-fsim_configure_library(fsim_project)
-target_link_libraries(fsim_project PUBLIC fsim_diagnostic)
+add_library(fsim::base ALIAS fsim_base)
+fsim_configure_subsystem_library(fsim_base)
+target_link_libraries(fsim_base PRIVATE ${CMAKE_DL_LIBS})
+if(WIN32 AND FSIM_SUBSYSTEM_LIBRARY_TYPE STREQUAL "SHARED")
+  # Windows binds operator new per module, so fsim_base supplies the one the
+  # fsim DLLs use, which tests and profilers can redirect.
+  target_compile_definitions(fsim_base PRIVATE FSIM_ALLOCATION_HOOKS=1)
+  target_sources(fsim_base PRIVATE src/support/allocation_hooks.def)
+endif()
+# The libraries merged into fsim_base keep their names for consumers.
+foreach(name IN ITEMS cli diagnostic object_cache platform project support)
+  add_library(fsim_${name} INTERFACE)
+  add_library(fsim::${name} ALIAS fsim_${name})
+  target_link_libraries(fsim_${name} INTERFACE fsim_base)
+endforeach()
 
-add_library(fsim_semantic STATIC
+add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/compiled_design.cpp
   src/semantic/compiled_design_linker.cpp
   src/semantic/compiled_design_linker_classes.cpp
@@ -494,7 +551,7 @@ add_library(fsim_semantic STATIC
   src/semantic/systemverilog_hir.cpp
   src/semantic/vhdl_hir.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)
-fsim_configure_library(fsim_semantic)
+fsim_configure_subsystem_library(fsim_semantic)
 target_link_libraries(fsim_semantic PRIVATE fsim_boost_pfr_headers)
 
 set(
@@ -583,18 +640,19 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_statements.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_support.cpp"
 )
-add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
+add_library(
+  fsim_frontend ${FSIM_SUBSYSTEM_LIBRARY_TYPE} ${FSIM_FRONTEND_SOURCES})
 add_library(fsim::frontend ALIAS fsim_frontend)
-fsim_configure_library(fsim_frontend)
+fsim_configure_subsystem_library(fsim_frontend)
 target_link_libraries(
   fsim_frontend
-  PUBLIC fsim_semantic
-  PRIVATE fsim_boost_pfr_headers fsim_support
+  PUBLIC fsim_semantic fsim_base
+  PRIVATE fsim_boost_pfr_headers
 )
 
 add_library(
   fsim_runtime
-  STATIC
+  ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
     src/runtime/code_coverage.cpp
     src/runtime/class_heap.cpp
     src/runtime/class_randomize.cpp
@@ -782,17 +840,16 @@ add_library(
     src/runtime/vcd_writer.cpp
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
-fsim_configure_library(fsim_runtime)
+fsim_configure_subsystem_library(fsim_runtime)
 target_link_libraries(fsim_runtime
-  PUBLIC fsim_semantic
-  PRIVATE fsim_tf)
+  PUBLIC fsim_semantic fsim_tf)
 if(WIN32)
   target_link_libraries(fsim_runtime PUBLIC Advapi32)
 endif()
 
   add_library(
     fsim_elaboration
-    STATIC
+    ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
       src/frontend/coverage_conditions.cpp
       src/frontend/coverage_branches.cpp
       src/elaboration/coverage_exclusion_persistence.cpp
@@ -867,24 +924,18 @@ endif()
       src/elaboration/vhdl_callable_legality.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
-fsim_configure_library(fsim_elaboration)
+fsim_configure_subsystem_library(fsim_elaboration)
 target_link_libraries(
   fsim_elaboration
   PUBLIC fsim_frontend fsim_runtime
   PRIVATE fsim_boost_pfr_headers fsim_support
 )
 
-add_library(
-  fsim_support
-  STATIC
-    src/support/environment.cpp
-    src/support/sha256.cpp
-)
-add_library(fsim::support ALIAS fsim_support)
-fsim_configure_library(fsim_support)
-
-add_library(
-  fsim_library STATIC
+# Artifact and library code is part of fsim_frontend, whose coverage
+# database support calls it.
+target_sources(
+  fsim_frontend
+  PRIVATE
   src/artifact/coverage_database.cpp
   src/artifact/coverage_database_codec.cpp
   src/artifact/coverage_exclusion_report.cpp
@@ -903,20 +954,10 @@ add_library(
   src/artifact/object.cpp
   src/library/artifact.cpp
 )
+add_library(fsim_library INTERFACE)
 add_library(fsim::library ALIAS fsim_library)
-fsim_configure_library(fsim_library)
-target_link_libraries(fsim_library PUBLIC fsim_diagnostic fsim_support)
-target_link_libraries(fsim_library PRIVATE fsim_boost_pfr_headers fsim_frontend)
+target_link_libraries(fsim_library INTERFACE fsim_frontend)
 
-add_library(fsim_object_cache STATIC src/compiler/object_cache.cpp)
-add_library(fsim::object_cache ALIAS fsim_object_cache)
-fsim_configure_library(fsim_object_cache)
-target_link_libraries(fsim_object_cache PUBLIC fsim_support)
-
-add_library(fsim_platform STATIC src/platform/dynamic_library.cpp)
-add_library(fsim::platform ALIAS fsim_platform)
-fsim_configure_library(fsim_platform)
-target_link_libraries(fsim_platform PRIVATE ${CMAKE_DL_LIBS})
 target_link_libraries(
   fsim_runtime
   PUBLIC fsim_diagnostic
@@ -960,7 +1001,7 @@ target_link_libraries(
 
 add_library(
   fsim_systemc
-  STATIC
+  ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
     src/systemc/hierarchy.cpp
     src/systemc/hierarchy_callbacks.cpp
     src/systemc/incremental_artifact.cpp
@@ -990,7 +1031,7 @@ add_library(
     src/systemc/scv_smart_ptr.cpp
 )
 add_library(fsim::systemc ALIAS fsim_systemc)
-fsim_configure_library(fsim_systemc)
+fsim_configure_subsystem_library(fsim_systemc)
 if(WIN32)
   set(FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY
       "${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_IMPORT_LIBRARY_PREFIX}fsim_systemc_accellera_runtime${CMAKE_IMPORT_LIBRARY_SUFFIX}")
@@ -1101,15 +1142,10 @@ if(UNIX AND NOT APPLE)
   )
 endif()
 
-add_library(fsim_cli STATIC src/cli/driver.cpp)
-add_library(fsim::cli ALIAS fsim_cli)
-fsim_configure_library(fsim_cli)
-target_link_libraries(fsim_cli PUBLIC fsim_project fsim_diagnostic)
-
 if(FSIM_WITH_LLVM)
   add_library(
-    fsim_llvm
-    STATIC
+    fsim_compiler
+    ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
       src/compiler/llvm_jit.cpp
       src/compiler/llvm_jit_compilation_contexts.cpp
       src/compiler/llvm_jit_llvm_args.cpp
@@ -1153,26 +1189,33 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_value_lowering.cpp
       src/compiler/llvm_jit_wide_bitwise_lowering.cpp
   )
+  add_library(fsim::compiler ALIAS fsim_compiler)
+  fsim_configure_subsystem_library(fsim_compiler)
+  # The LLVM JIT was fsim_llvm; consumers may keep that name.
+  add_library(fsim_llvm INTERFACE)
   add_library(fsim::llvm ALIAS fsim_llvm)
-  fsim_configure_library(fsim_llvm)
-  target_link_libraries(fsim_llvm PUBLIC fsim_runtime
-    PRIVATE fsim_object_cache fsim_boost_pfr_headers)
-  target_include_directories(fsim_llvm SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_link_libraries(fsim_llvm INTERFACE fsim_compiler)
+  target_link_libraries(fsim_compiler PUBLIC fsim_runtime fsim_base
+    PRIVATE fsim_boost_pfr_headers)
+  target_include_directories(fsim_compiler SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_definitions(
-    fsim_llvm
+    fsim_compiler
     PRIVATE FSIM_BUILD_CONFIGURATION="$<CONFIG>"
     PUBLIC FSIM_HAS_LLVM=1
   )
   if(MSVC)
     # LLVM's DenseMap templates trigger C4702 in MSVC after instantiation,
     # even when their headers are marked external.
-    target_compile_options(fsim_llvm PRIVATE /wd4702)
+    target_compile_options(fsim_compiler PRIVATE /wd4702)
   endif()
 
   # Prefer a distribution's monolithic imported target. Static LLVM builds
   # expose components instead; map only the narrow ORC adapter's requirements.
+  # Consumers of the old fsim_llvm name call LLVM themselves and linked it
+  # through that static library, so the name keeps carrying LLVM.
   if(TARGET LLVM)
-    target_link_libraries(fsim_llvm PRIVATE LLVM)
+    target_link_libraries(fsim_compiler PRIVATE LLVM)
+    target_link_libraries(fsim_llvm INTERFACE LLVM)
   else()
     llvm_map_components_to_libnames(
       FSIM_LLVM_LIBRARIES
@@ -1187,7 +1230,8 @@ if(FSIM_WITH_LLVM)
       support
       targetparser
     )
-    target_link_libraries(fsim_llvm PRIVATE ${FSIM_LLVM_LIBRARIES})
+    target_link_libraries(fsim_compiler PRIVATE ${FSIM_LLVM_LIBRARIES})
+    target_link_libraries(fsim_llvm INTERFACE ${FSIM_LLVM_LIBRARIES})
   endif()
 endif()
 
@@ -1195,7 +1239,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   fsim_add_sqlite()
   add_library(
     fsim_application
-    STATIC
+    ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
       src/app/application.cpp
       src/app/application_analysis.cpp
       src/app/application_compiled_environment.cpp
@@ -1351,7 +1395,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       fsim_application PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
   endif()
   add_library(fsim::application ALIAS fsim_application)
-  fsim_configure_library(fsim_application)
+  fsim_configure_subsystem_library(fsim_application)
   file(
     RELATIVE_PATH
     FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
@@ -1382,7 +1426,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       fsim_sqlite
   )
   if(FSIM_WITH_LLVM)
-    target_link_libraries(fsim_application PRIVATE fsim_llvm)
+    target_link_libraries(fsim_application PUBLIC fsim_compiler)
     target_compile_definitions(fsim_application PUBLIC FSIM_HAS_LLVM=1)
   endif()
   if(FSIM_WITH_TCL)
@@ -1442,7 +1486,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
     target_link_libraries(fsim PRIVATE fsim_cli)
   endif()
   if(FSIM_ENABLE_ALLOCATION_PROFILING)
-    target_compile_definitions(fsim_cli PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
+    target_compile_definitions(fsim_base PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
     target_sources(fsim PRIVATE src/app/allocation_profile_global_new.cpp)
   endif()
 endif()
@@ -1550,6 +1594,24 @@ install(
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+if(FSIM_SUBSYSTEM_LIBRARY_TYPE STREQUAL "SHARED")
+  # Subsystem libraries are runtime dependencies only: their import libraries
+  # and development symlinks are not a public link surface.
+  set(FSIM_SUBSYSTEM_TARGETS
+    fsim_base fsim_semantic fsim_frontend fsim_runtime fsim_elaboration
+    fsim_systemc)
+  foreach(target IN ITEMS fsim_compiler fsim_application)
+    if(TARGET ${target})
+      list(APPEND FSIM_SUBSYSTEM_TARGETS ${target})
+    endif()
+  endforeach()
+  install(
+    TARGETS ${FSIM_SUBSYSTEM_TARGETS}
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" NAMELINK_SKIP
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" EXCLUDE_FROM_ALL
+  )
+endif()
 install(
   TARGETS
     fsim_systemc_plugin_exports

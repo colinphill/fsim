@@ -42,10 +42,8 @@ struct ContainerCallbackProfile {
     }
 };
 
-inline ContainerCallbackProfile& container_callback_profile()
-{
-    static ContainerCallbackProfile result;
-    return result;
-}
+// Defined out of line: an inline function-local static would give each
+// Windows DLL and test executable its own profile.
+ContainerCallbackProfile& container_callback_profile();
 
 } // namespace fsim::app::application_detail

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "native_frontier_generic_update_failure_interposer.hpp"
 
+#include "../allocation_hook_forwarding.hpp"
+
 #include <cstdlib>
 #include <new>
 

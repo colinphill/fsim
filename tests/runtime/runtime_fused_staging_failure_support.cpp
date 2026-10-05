@@ -2,6 +2,8 @@
 
 #include "runtime_fused_staging_failure_support.hpp"
 
+#include "../allocation_hook_forwarding.hpp"
+
 #include <cstdlib>
 #include <iostream>
 #include <new>

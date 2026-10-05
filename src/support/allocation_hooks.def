@@ -1,0 +1,15 @@
+; SPDX-License-Identifier: Apache-2.0
+; The replaceable allocation functions in allocation_hooks.cpp, for x86-64
+; MinGW. Automatic export skips them because the C++ runtime's import library
+; also provides them, so fsim_base exports them by name.
+EXPORTS
+    _Znwy
+    _Znay
+    _ZnwyRKSt9nothrow_t
+    _ZnayRKSt9nothrow_t
+    _ZdlPv
+    _ZdaPv
+    _ZdlPvy
+    _ZdaPvy
+    _ZdlPvRKSt9nothrow_t
+    _ZdaPvRKSt9nothrow_t

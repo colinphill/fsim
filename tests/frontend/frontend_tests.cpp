@@ -2,6 +2,8 @@
 #include "frontend_test_support.hpp"
 #include "fsim/frontend/frontend.hpp"
 
+#include "../allocation_hook_forwarding.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
