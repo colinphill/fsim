@@ -21,6 +21,12 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& module = state.module;
     [[maybe_unused]] auto&& symbol = state.symbol;
     [[maybe_unused]] auto&& process = state.process;
+    const auto container_register_types
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.container_register_types);
+    const std::span<const runtime::simir::ContainerType> container_types {
+        container_register_types.data(), container_register_types.size()
+    };
     [[maybe_unused]] auto&& signal_widths = state.signal_widths;
     [[maybe_unused]] auto&& signal_value_kinds = state.signal_value_kinds;
     [[maybe_unused]] auto&& direct_read_signals = state.direct_read_signals;
@@ -29,18 +35,47 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& bound_literal_sites = state.bound_literal_sites;
     [[maybe_unused]] auto&& debug_instrumentation = state.debug_instrumentation;
     [[maybe_unused]] auto&& require_direct_update_slots = state.require_direct_update_slots;
+    [[maybe_unused]] auto&& require_direct_read_signals = state.require_direct_read_signals;
     [[maybe_unused]] auto&& context = state.context;
     [[maybe_unused]] auto&& i32 = state.i32;
     [[maybe_unused]] auto&& i64 = state.i64;
     [[maybe_unused]] auto&& pointer = state.pointer;
     [[maybe_unused]] auto&& runtime_type = state.runtime_type;
+    [[maybe_unused]] auto&& services_type = state.services_type;
     [[maybe_unused]] auto&& direct_update_slot_type = state.direct_update_slot_type;
     [[maybe_unused]] auto&& frame_type = state.frame_type;
     [[maybe_unused]] auto&& function = state.function;
     [[maybe_unused]] auto&& builder = state.builder;
     [[maybe_unused]] auto&& runtime_argument = state.runtime_argument;
+    [[maybe_unused]] auto&& services_argument = state.services_argument;
     [[maybe_unused]] auto&& frame_argument = state.frame_argument;
     [[maybe_unused]] auto&& context_pointer = state.context_pointer;
+    const auto callback_signal_id = [&](const SignalId signal) -> llvm::Value* {
+        if (!state.signal_callback_ids_are_actual) {
+            return llvm::ConstantInt::get(i32, signal);
+        }
+        const auto found = std::ranges::lower_bound(
+            state.signal_callback_operands, signal);
+        if (found == state.signal_callback_operands.end()
+            || *found != signal
+            || state.frame_register_aval == nullptr) {
+            throw LlvmJitError(
+                "signal callback operand is absent from its frame tail");
+        }
+        const auto index = static_cast<std::uint64_t>(
+            std::distance(state.signal_callback_operands.begin(), found));
+        const auto word_offset
+            = static_cast<std::uint64_t>(
+                  state.signal_callback_operand_word_base)
+            + index;
+        auto* const stored_id = builder.CreateLoad(
+            i64,
+            builder.CreateInBoundsGEP(
+                i64, state.frame_register_aval,
+                constant_i64(context, word_offset)),
+            "signal.callback.actual.id");
+        return builder.CreateTrunc(stored_id, i32);
+    };
     [[maybe_unused]] auto&& read_callback = state.read_callback;
     [[maybe_unused]] auto&& write_callback = state.write_callback;
     [[maybe_unused]] auto&& assert_callback = state.assert_callback;
@@ -105,6 +140,8 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& exact_signal_callback = state.exact_signal_callback;
     [[maybe_unused]] auto&& read_signal_packed_callback = state.read_signal_packed_callback;
     [[maybe_unused]] auto&& write_signal_packed_callback = state.write_signal_packed_callback;
+    [[maybe_unused]] auto&& write_projected_signal_packed_callback
+        = state.write_projected_signal_packed_callback;
     [[maybe_unused]] auto&& read_signal_dynamic_part_callback = state.read_signal_dynamic_part_callback;
     [[maybe_unused]] auto&& write_projected_callback = state.write_projected_callback;
     [[maybe_unused]] auto&& write_projected_slice_callback = state.write_projected_slice_callback;
@@ -127,9 +164,11 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& write_formatted_logic9_callback = state.write_formatted_logic9_callback;
     [[maybe_unused]] auto&& read_type = state.read_type;
     [[maybe_unused]] auto&& write_type = state.write_type;
+    [[maybe_unused]] auto&& write_update_type = state.write_update_type;
     [[maybe_unused]] auto&& assert_type = state.assert_type;
     [[maybe_unused]] auto&& write_after_type = state.write_after_type;
     [[maybe_unused]] auto&& write_slice_type = state.write_slice_type;
+    [[maybe_unused]] auto&& write_update_slice_type = state.write_update_slice_type;
     [[maybe_unused]] auto&& write_after_slice_type = state.write_after_slice_type;
     [[maybe_unused]] auto&& release_slice_type = state.release_slice_type;
     [[maybe_unused]] auto&& write_inertial_type = state.write_inertial_type;
@@ -138,6 +177,8 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& read_signal_packed_type = state.read_signal_packed_type;
     [[maybe_unused]] auto&& read_signal_dynamic_part_type = state.read_signal_dynamic_part_type;
     [[maybe_unused]] auto&& write_signal_packed_type = state.write_signal_packed_type;
+    [[maybe_unused]] auto&& write_projected_signal_packed_type
+        = state.write_projected_signal_packed_type;
     [[maybe_unused]] auto&& write_projected_type = state.write_projected_type;
     [[maybe_unused]] auto&& write_projected_slice_type = state.write_projected_slice_type;
     [[maybe_unused]] auto&& projected_element_type = state.projected_element_type;
@@ -160,8 +201,10 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& random_value_type = state.random_value_type;
     [[maybe_unused]] auto&& read_logic9_type = state.read_logic9_type;
     [[maybe_unused]] auto&& write_logic9_type = state.write_logic9_type;
+    [[maybe_unused]] auto&& write_update_logic9_type = state.write_update_logic9_type;
     [[maybe_unused]] auto&& write_after_logic9_type = state.write_after_logic9_type;
     [[maybe_unused]] auto&& write_slice_logic9_type = state.write_slice_logic9_type;
+    [[maybe_unused]] auto&& write_update_slice_logic9_type = state.write_update_slice_logic9_type;
     [[maybe_unused]] auto&& write_after_slice_logic9_type = state.write_after_slice_logic9_type;
     [[maybe_unused]] auto&& write_inertial_logic9_type = state.write_inertial_logic9_type;
     [[maybe_unused]] auto&& write_inertial_slice_logic9_type = state.write_inertial_slice_logic9_type;
@@ -183,6 +226,9 @@ void lower_process_operations(ProcessLoweringContext& state)
     [[maybe_unused]] auto&& logic9_word_slot = state.logic9_word_slot;
     [[maybe_unused]] auto&& container_result_aval_slot = state.container_result_aval_slot;
     [[maybe_unused]] auto&& container_result_bval_slot = state.container_result_bval_slot;
+    [[maybe_unused]] auto&& wide_callback_scratch = state.wide_callback_scratch;
+    [[maybe_unused]] auto&& wide_callback_scratch_word_stride
+        = state.wide_callback_scratch_word_stride;
     [[maybe_unused]] auto&& store_logic9_word = state.store_logic9_word;
     [[maybe_unused]] auto&& load_logic9_word = state.load_logic9_word;
     [[maybe_unused]] auto&& return_result = state.return_result;
@@ -324,10 +370,10 @@ void lower_process_operations(ProcessLoweringContext& state)
                     condition, error_block, continue_block);
                 builder.SetInsertPoint(error_block);
                 return_result(
-                    FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR,
+                    FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2,
                     instruction,
                     static_cast<std::uint64_t>(reason),
-                    FSIM_JIT_FRAME_STATE_RUNTIME_ERROR,
+                    FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2,
                     static_cast<std::uint32_t>(reason));
                 builder.SetInsertPoint(continue_block);
             };
@@ -437,13 +483,144 @@ void lower_process_operations(ProcessLoweringContext& state)
                     constant_i64(context, slot.word_offset),
                     "wide.signal.logic9.plane3");
             }
+            const auto callback_words = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(slot.width) + 63U) / 64U);
+            const auto callback_bytes
+                = static_cast<std::uint64_t>(callback_words)
+                * sizeof(std::uint64_t);
+            const auto callback_scratch_plane = [&](const std::uint32_t plane) {
+                return builder.CreateInBoundsGEP(
+                    i64,
+                    wide_callback_scratch,
+                    constant_i64(
+                        context,
+                        static_cast<std::uint64_t>(plane)
+                            * wide_callback_scratch_word_stride),
+                    "wide.signal.callback.scratch");
+            };
+            const auto emit_callback_read = [&] {
+                if (wide_callback_scratch == nullptr
+                    || wide_callback_scratch_word_stride < callback_words) {
+                    throw LlvmJitUnsupportedError(
+                        "wide signal read has no callback scratch storage");
+                }
+                auto* scratch_aval = callback_scratch_plane(0U);
+                auto* scratch_bval = callback_scratch_plane(1U);
+                auto* scratch_plane2 = slot.kind == ValueKind::logic9
+                    ? callback_scratch_plane(2U)
+                    : null_pointer;
+                auto* scratch_plane3 = slot.kind == ValueKind::logic9
+                    ? callback_scratch_plane(3U)
+                    : null_pointer;
+                builder.CreateMemCpy(
+                    scratch_aval, llvm::Align(8), aval, llvm::Align(8),
+                    callback_bytes);
+                builder.CreateMemCpy(
+                    scratch_bval, llvm::Align(8), bval, llvm::Align(8),
+                    callback_bytes);
+                if (slot.kind == ValueKind::logic9) {
+                    builder.CreateMemCpy(
+                        scratch_plane2, llvm::Align(8), plane2,
+                        llvm::Align(8), callback_bytes);
+                    builder.CreateMemCpy(
+                        scratch_plane3, llvm::Align(8), plane3,
+                        llvm::Align(8), callback_bytes);
+                }
+                auto* status = builder.CreateCall(
+                    read_signal_packed_type,
+                    read_signal_packed_callback,
+                    { context_pointer,
+                        callback_signal_id(operation.signal),
+                        llvm::ConstantInt::get(i32, slot.width),
+                        scratch_aval,
+                        scratch_bval,
+                        scratch_plane2,
+                        scratch_plane3 });
+                // Callbacks may partially update their output before returning
+                // an error. Copy back before runtime_error_if creates the
+                // terminating error edge to preserve that behavior.
+                builder.CreateMemCpy(
+                    aval, llvm::Align(8), scratch_aval, llvm::Align(8),
+                    callback_bytes);
+                builder.CreateMemCpy(
+                    bval, llvm::Align(8), scratch_bval, llvm::Align(8),
+                    callback_bytes);
+                if (slot.kind == ValueKind::logic9) {
+                    builder.CreateMemCpy(
+                        plane2, llvm::Align(8), scratch_plane2,
+                        llvm::Align(8), callback_bytes);
+                    builder.CreateMemCpy(
+                        plane3, llvm::Align(8), scratch_plane3,
+                        llvm::Align(8), callback_bytes);
+                }
+                runtime_error_if(
+                    builder.CreateICmpNE(
+                        status, llvm::ConstantInt::get(i32, 0)),
+                    JitGeneratedRuntimeErrorReason::signal_callback_failure,
+                    "wide.signal.read");
+            };
             const auto direct = std::ranges::find(
                 direct_read_signals, operation.signal);
             const auto direct_kind_compatible
                 = operation.signal < signal_value_kinds.size()
                 ? signal_value_kinds[operation.signal] == slot.kind
                 : slot.kind == ValueKind::logic4;
-            if (direct_kind_compatible
+            if (require_direct_read_signals) {
+                if (direct == direct_read_signals.end()
+                    || !direct_kind_compatible) {
+                    throw LlvmJitUnsupportedError(
+                        "required direct read is absent from the validated signal layout");
+                }
+                const auto slot_index = static_cast<std::uint32_t>(
+                    std::distance(direct_read_signals.begin(), direct));
+                auto* actual = builder.CreateLoad(
+                    i32,
+                    builder.CreateInBoundsGEP(
+                        i32, direct_read_signal_map,
+                        constant_i64(context, slot_index)),
+                    "wide.signal.required.actual");
+                auto* actual_index = builder.CreateZExt(actual, i64);
+                auto* word_offset = builder.CreateLoad(
+                    i32,
+                    builder.CreateInBoundsGEP(
+                        i32, direct_wide_signal_offsets, actual_index),
+                    "wide.signal.required.word_offset");
+                auto* word_offset_index
+                    = builder.CreateZExt(word_offset, i64);
+                const auto words = static_cast<std::uint32_t>(
+                    (static_cast<std::uint64_t>(slot.width) + 63U) / 64U);
+                auto* wide_aval = builder.CreateInBoundsGEP(
+                    i64, direct_wide_signal_aval, word_offset_index);
+                auto* wide_bval = builder.CreateInBoundsGEP(
+                    i64, direct_wide_signal_bval, word_offset_index);
+                const auto bytes = static_cast<std::uint64_t>(words) * 8U;
+                builder.CreateMemCpy(
+                    aval, llvm::Align(8), wide_aval, llvm::Align(8), bytes);
+                if (slot.known_logic4) {
+                    builder.CreateMemSet(
+                        bval,
+                        llvm::ConstantInt::get(
+                            llvm::Type::getInt8Ty(context), 0U),
+                        constant_i64(context, bytes),
+                        llvm::MaybeAlign(llvm::Align(8)));
+                } else {
+                    builder.CreateMemCpy(
+                        bval, llvm::Align(8), wide_bval,
+                        llvm::Align(8), bytes);
+                }
+                if (slot.kind == ValueKind::logic9) {
+                    auto* wide_plane2 = builder.CreateInBoundsGEP(
+                        i64, direct_wide_signal_logic9_plane2,
+                        word_offset_index);
+                    auto* wide_plane3 = builder.CreateInBoundsGEP(
+                        i64, direct_wide_signal_logic9_plane3,
+                        word_offset_index);
+                    builder.CreateMemCpy(
+                        plane2, llvm::Align(8), wide_plane2, llvm::Align(8), bytes);
+                    builder.CreateMemCpy(
+                        plane3, llvm::Align(8), wide_plane3, llvm::Align(8), bytes);
+                }
+            } else if (direct_kind_compatible
                 && direct != direct_read_signals.end()
                 && direct_wide_signal_aval != nullptr
                 && direct_wide_signal_bval != nullptr
@@ -558,39 +735,117 @@ void lower_process_operations(ProcessLoweringContext& state)
                 builder.CreateBr(merge_block);
 
                 builder.SetInsertPoint(callback_block);
-                auto* status = builder.CreateCall(
-                    read_signal_packed_type,
-                    read_signal_packed_callback,
-                    { context_pointer,
-                        llvm::ConstantInt::get(i32, operation.signal),
-                        llvm::ConstantInt::get(i32, slot.width),
-                        aval,
-                        bval,
-                        plane2,
-                        plane3 });
-                runtime_error_if(
-                    builder.CreateICmpNE(
-                        status, llvm::ConstantInt::get(i32, 0)),
-                    JitGeneratedRuntimeErrorReason::signal_callback_failure,
-                    "wide.signal.read");
+                emit_callback_read();
                 builder.CreateBr(merge_block);
                 builder.SetInsertPoint(merge_block);
             } else {
-                auto* status = builder.CreateCall(
-                    read_signal_packed_type,
-                    read_signal_packed_callback,
-                    { context_pointer,
-                        llvm::ConstantInt::get(i32, operation.signal),
-                        llvm::ConstantInt::get(i32, slot.width),
-                        aval,
-                        bval,
-                        plane2,
-                        plane3 });
-                runtime_error_if(
-                    builder.CreateICmpNE(
-                        status, llvm::ConstantInt::get(i32, 0)),
-                    JitGeneratedRuntimeErrorReason::signal_callback_failure,
-                    "wide.signal.read");
+                emit_callback_read();
+            }
+            if (slot.kind == ValueKind::logic9) {
+                const auto words = static_cast<std::uint32_t>(
+                    (static_cast<std::uint64_t>(slot.width) + 63U) / 64U);
+                auto* current_function
+                    = builder.GetInsertBlock()->getParent();
+                auto* condition = llvm::BasicBlock::Create(
+                    context,
+                    "wide.signal.logic9.normalize.condition",
+                    current_function);
+                auto* body = llvm::BasicBlock::Create(
+                    context,
+                    "wide.signal.logic9.normalize.body",
+                    current_function);
+                auto* finished = llvm::BasicBlock::Create(
+                    context,
+                    "wide.signal.logic9.normalize.finished",
+                    current_function);
+                auto* entry = builder.GetInsertBlock();
+                builder.CreateBr(condition);
+                builder.SetInsertPoint(condition);
+                auto* word_index = builder.CreatePHI(
+                    i32, 2, "wide.signal.logic9.normalize.word");
+                word_index->addIncoming(
+                    llvm::ConstantInt::get(i32, 0), entry);
+                builder.CreateCondBr(
+                    builder.CreateICmpULT(
+                        word_index, llvm::ConstantInt::get(i32, words)),
+                    body,
+                    finished);
+
+                builder.SetInsertPoint(body);
+                auto* word_offset = builder.CreateAdd(
+                    constant_i64(context, slot.word_offset),
+                    builder.CreateZExt(word_index, i64));
+                const auto plane_address = [&](
+                                                llvm::Value* base,
+                                                const char* name) {
+                    return builder.CreateInBoundsGEP(
+                        i64, base, word_offset, name);
+                };
+                auto* aval_address = plane_address(
+                    slot.aval_base,
+                    "wide.signal.logic9.normalize.aval.address");
+                auto* bval_address = plane_address(
+                    slot.bval_base,
+                    "wide.signal.logic9.normalize.bval.address");
+                auto* plane2_address = plane_address(
+                    slot.logic9_plane2_base,
+                    "wide.signal.logic9.normalize.plane2.address");
+                auto* plane3_address = plane_address(
+                    slot.logic9_plane3_base,
+                    "wide.signal.logic9.normalize.plane3.address");
+                auto* raw_aval = builder.CreateLoad(
+                    i64, aval_address,
+                    "wide.signal.logic9.normalize.aval");
+                auto* raw_bval = builder.CreateLoad(
+                    i64, bval_address,
+                    "wide.signal.logic9.normalize.bval");
+                auto* raw_plane2 = builder.CreateLoad(
+                    i64, plane2_address,
+                    "wide.signal.logic9.normalize.plane2");
+                auto* raw_plane3 = builder.CreateLoad(
+                    i64, plane3_address,
+                    "wide.signal.logic9.normalize.plane3");
+                auto* invalid = builder.CreateAnd(
+                    raw_plane3,
+                    builder.CreateOr(
+                        raw_plane2,
+                        builder.CreateOr(raw_bval, raw_aval)));
+                auto* valid = builder.CreateNot(invalid);
+                auto* normalized_aval
+                    = builder.CreateOr(raw_aval, invalid);
+                auto* normalized_bval
+                    = builder.CreateAnd(raw_bval, valid);
+                auto* normalized_plane2
+                    = builder.CreateAnd(raw_plane2, valid);
+                auto* normalized_plane3
+                    = builder.CreateAnd(raw_plane3, valid);
+                const auto tail_width = slot.width % 64U;
+                if (tail_width != 0U) {
+                    auto* is_last_word = builder.CreateICmpEQ(
+                        word_index,
+                        llvm::ConstantInt::get(i32, words - 1U));
+                    const auto tail_mask = constant_i64(
+                        context, width_mask(tail_width));
+                    const auto mask_tail = [&](llvm::Value* value) {
+                        return builder.CreateSelect(
+                            is_last_word,
+                            builder.CreateAnd(value, tail_mask),
+                            value);
+                    };
+                    normalized_aval = mask_tail(normalized_aval);
+                    normalized_bval = mask_tail(normalized_bval);
+                    normalized_plane2 = mask_tail(normalized_plane2);
+                    normalized_plane3 = mask_tail(normalized_plane3);
+                }
+                builder.CreateStore(normalized_aval, aval_address);
+                builder.CreateStore(normalized_bval, bval_address);
+                builder.CreateStore(normalized_plane2, plane2_address);
+                builder.CreateStore(normalized_plane3, plane3_address);
+                auto* next_word = builder.CreateAdd(
+                    word_index, llvm::ConstantInt::get(i32, 1));
+                builder.CreateBr(condition);
+                word_index->addIncoming(next_word, body);
+                builder.SetInsertPoint(finished);
             }
             if (slot.initialized_base != nullptr) {
                 auto* initialized = builder.CreateGEP(
@@ -607,7 +862,8 @@ void lower_process_operations(ProcessLoweringContext& state)
                                            const RegisterId source,
                                            const std::uint32_t offset,
                                            const std::uint32_t mode,
-                                           const runtime::SimulationTick delay) {
+                                           const runtime::SimulationTick delay,
+                                           const SignalUpdateDomain domain) {
             const auto& slot = registers[source];
             auto* aval = builder.CreateGEP(
                 i64,
@@ -635,24 +891,147 @@ void lower_process_operations(ProcessLoweringContext& state)
                     constant_i64(context, slot.word_offset),
                     "wide.signal.write.logic9.plane3");
             }
+            const auto words = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(slot.width) + 63U) / 64U);
+            if (wide_callback_scratch == nullptr
+                || wide_callback_scratch_word_stride < words) {
+                throw LlvmJitUnsupportedError(
+                    "wide signal write has no callback scratch storage");
+            }
+            const auto copy_to_scratch = [&](llvm::Value* source_plane,
+                                             const std::uint32_t plane) {
+                auto* destination = builder.CreateInBoundsGEP(
+                    i64, wide_callback_scratch,
+                    constant_i64(context,
+                        static_cast<std::uint64_t>(plane)
+                            * wide_callback_scratch_word_stride),
+                    "wide.signal.write.scratch");
+                builder.CreateMemCpy(destination, llvm::Align(8),
+                    source_plane, llvm::Align(8),
+                    static_cast<std::uint64_t>(words) * sizeof(std::uint64_t));
+                return destination;
+            };
+            auto* scratch_aval = copy_to_scratch(aval, 0U);
+            auto* scratch_bval = copy_to_scratch(bval, 1U);
+            llvm::Value* scratch_plane2 = null_pointer;
+            llvm::Value* scratch_plane3 = null_pointer;
+            if (slot.kind == ValueKind::logic9) {
+                scratch_plane2 = copy_to_scratch(plane2, 2U);
+                scratch_plane3 = copy_to_scratch(plane3, 3U);
+            }
             auto* status = builder.CreateCall(
                 write_signal_packed_type,
                 write_signal_packed_callback,
                 { context_pointer,
-                    llvm::ConstantInt::get(i32, signal),
+                    callback_signal_id(signal),
                     llvm::ConstantInt::get(i32, offset),
                     llvm::ConstantInt::get(i32, slot.width),
                     llvm::ConstantInt::get(i32, mode),
                     constant_i64(context, delay),
-                    aval,
-                    bval,
-                    plane2,
-                    plane3 });
+                    scratch_aval,
+                    scratch_bval,
+                    scratch_plane2,
+                    scratch_plane3,
+                    llvm::ConstantInt::get(
+                        i32, static_cast<std::uint32_t>(domain)) });
             runtime_error_if(
                 builder.CreateICmpNE(
                     status, llvm::ConstantInt::get(i32, 0)),
                 JitGeneratedRuntimeErrorReason::signal_callback_failure,
                 "wide.signal.write");
+            branch_to_next();
+        };
+        const auto write_wide_projected = [&](
+            const std::uint32_t signal,
+            const RegisterId source_register) {
+            if (signal >= signal_widths.size()) {
+                throw LlvmJitUnsupportedError(
+                    "wide projected write has no signal width");
+            }
+            const auto signal_kind = signal_value_kinds.empty()
+                ? ValueKind::logic4
+                : signal_value_kinds[signal];
+            const auto source = coerce_value_kind(
+                builder,
+                load_register(builder, registers, source_register),
+                signal_kind);
+            if (source.width != signal_widths[signal]) {
+                throw LlvmJitUnsupportedError(
+                    "wide projected source width differs from its signal");
+            }
+            const auto words = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(source.width) + 63U) / 64U);
+            if (wide_callback_scratch == nullptr
+                || wide_callback_scratch_word_stride < words) {
+                throw LlvmJitUnsupportedError(
+                    "wide projected write has no callback scratch storage");
+            }
+            const auto copy_plane_to_scratch = [&] (
+                llvm::Value* const plane,
+                const std::uint32_t plane_index) {
+                auto* const base = builder.CreateInBoundsGEP(
+                    i64,
+                    wide_callback_scratch,
+                    constant_i64(
+                        context,
+                        static_cast<std::uint64_t>(plane_index)
+                            * wide_callback_scratch_word_stride),
+                    "wide.projected.scratch.base");
+                for (std::uint32_t word = 0U; word < words; ++word) {
+                    auto* word_value = plane;
+                    if (word != 0U) {
+                        const auto shift = static_cast<std::uint64_t>(word)
+                            * 64U;
+                        word_value = builder.CreateLShr(
+                            plane,
+                            llvm::ConstantInt::get(
+                                plane->getType(), shift),
+                            "wide.projected.plane.shift");
+                    }
+                    word_value = builder.CreateTruncOrBitCast(
+                        word_value,
+                        i64,
+                        "wide.projected.plane.word");
+                    auto* const destination = builder.CreateInBoundsGEP(
+                        i64,
+                        base,
+                        constant_i64(context, word),
+                        "wide.projected.scratch.word");
+                    auto* const store = builder.CreateStore(
+                        word_value, destination);
+                    store->setAlignment(llvm::Align(8));
+                }
+                return base;
+            };
+            auto* const scratch_aval
+                = copy_plane_to_scratch(source.aval, 0U);
+            auto* const scratch_bval
+                = copy_plane_to_scratch(source.bval, 1U);
+            const auto null_pointer = llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(pointer));
+            llvm::Value* scratch_plane2 = null_pointer;
+            llvm::Value* scratch_plane3 = null_pointer;
+            if (signal_kind == ValueKind::logic9) {
+                scratch_plane2 = copy_plane_to_scratch(
+                    source.logic9_plane2, 2U);
+                scratch_plane3 = copy_plane_to_scratch(
+                    source.logic9_plane3, 3U);
+            }
+            auto* const status = builder.CreateCall(
+                write_projected_signal_packed_type,
+                write_projected_signal_packed_callback,
+                { context_pointer,
+                    callback_signal_id(signal),
+                    llvm::ConstantInt::get(i32, source.width),
+                    scratch_aval,
+                    scratch_bval,
+                    scratch_plane2,
+                    scratch_plane3 });
+            runtime_error_if(
+                builder.CreateICmpNE(
+                    status, llvm::ConstantInt::get(i32, 0)),
+                JitGeneratedRuntimeErrorReason::signal_callback_failure,
+                "wide.projected.write");
             branch_to_next();
         };
         const auto dynamic_offset =
@@ -705,7 +1084,8 @@ void lower_process_operations(ProcessLoweringContext& state)
                 const RegisterId source_register,
                 llvm::Value* offset,
                 llvm::Value* logic4_callback,
-                llvm::Value* logic9_callback) {
+                llvm::Value* logic9_callback,
+                const std::optional<SignalUpdateDomain> update_domain) {
                 const auto signal_kind = signal_value_kinds.empty()
                     ? ValueKind::logic4
                     : signal_value_kinds[signal];
@@ -716,24 +1096,55 @@ void lower_process_operations(ProcessLoweringContext& state)
                     signal_kind);
                 if (signal_kind == ValueKind::logic9) {
                     store_logic9_word(logic9_word_slot, source);
-                    builder.CreateCall(
-                        write_slice_logic9_type,
-                        logic9_callback,
-                        { context_pointer,
-                            llvm::ConstantInt::get(i32, signal),
-                            offset,
-                            llvm::ConstantInt::get(i32, source.width),
-                            logic9_word_slot });
+                    if (update_domain) {
+                        builder.CreateCall(
+                            write_update_slice_logic9_type,
+                            logic9_callback,
+                            { context_pointer,
+                                callback_signal_id(signal),
+                                offset,
+                                llvm::ConstantInt::get(i32, source.width),
+                                logic9_word_slot,
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        *update_domain)) });
+                    } else {
+                        builder.CreateCall(
+                            write_slice_logic9_type,
+                            logic9_callback,
+                            { context_pointer,
+                                callback_signal_id(signal),
+                                offset,
+                                llvm::ConstantInt::get(i32, source.width),
+                                logic9_word_slot });
+                    }
                 } else {
-                    builder.CreateCall(
-                        write_slice_type,
-                        logic4_callback,
-                        { context_pointer,
-                            llvm::ConstantInt::get(i32, signal),
-                            offset,
-                            llvm::ConstantInt::get(i32, source.width),
-                            source.aval,
-                            source.bval });
+                    if (update_domain) {
+                        builder.CreateCall(
+                            write_update_slice_type,
+                            logic4_callback,
+                            { context_pointer,
+                                callback_signal_id(signal),
+                                offset,
+                                llvm::ConstantInt::get(i32, source.width),
+                                source.aval,
+                                source.bval,
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        *update_domain)) });
+                    } else {
+                        builder.CreateCall(
+                            write_slice_type,
+                            logic4_callback,
+                            { context_pointer,
+                                callback_signal_id(signal),
+                                offset,
+                                llvm::ConstantInt::get(i32, source.width),
+                                source.aval,
+                                source.bval });
+                    }
                 }
                 branch_to_next();
             };
@@ -743,7 +1154,8 @@ void lower_process_operations(ProcessLoweringContext& state)
                 const DynamicPartIndex& selection,
                 llvm::Value* logic4_callback,
                 llvm::Value* logic9_callback,
-                const std::optional<runtime::SimulationTick> delay) {
+                const std::optional<runtime::SimulationTick> delay,
+                const std::optional<SignalUpdateDomain> update_domain) {
                 const auto signal_kind = signal_value_kinds.empty()
                     ? ValueKind::logic4
                     : signal_value_kinds[signal];
@@ -773,17 +1185,34 @@ void lower_process_operations(ProcessLoweringContext& state)
                             write_after_slice_logic9_type,
                             logic9_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(i32, signal),
+                                callback_signal_id(signal),
                                 write.offset,
                                 write.width,
                                 logic9_word_slot,
-                                constant_i64(context, *delay) });
+                                constant_i64(context, *delay),
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        update_domain.value())) });
+                    } else if (update_domain) {
+                        builder.CreateCall(
+                            write_update_slice_logic9_type,
+                            logic9_callback,
+                            { context_pointer,
+                                callback_signal_id(signal),
+                                write.offset,
+                                write.width,
+                                logic9_word_slot,
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        *update_domain)) });
                     } else {
                         builder.CreateCall(
                             write_slice_logic9_type,
                             logic9_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(i32, signal),
+                                callback_signal_id(signal),
                                 write.offset,
                                 write.width,
                                 logic9_word_slot });
@@ -793,18 +1222,35 @@ void lower_process_operations(ProcessLoweringContext& state)
                         write_after_slice_type,
                         logic4_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(i32, signal),
+                            callback_signal_id(signal),
                             write.offset,
                             write.width,
                             write.value.aval,
                             write.value.bval,
-                            constant_i64(context, *delay) });
+                            constant_i64(context, *delay),
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(
+                                    update_domain.value())) });
+                } else if (update_domain) {
+                    builder.CreateCall(
+                        write_update_slice_type,
+                        logic4_callback,
+                        { context_pointer,
+                            callback_signal_id(signal),
+                            write.offset,
+                            write.width,
+                            write.value.aval,
+                            write.value.bval,
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(*update_domain)) });
                 } else {
                     builder.CreateCall(
                         write_slice_type,
                         logic4_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(i32, signal),
+                            callback_signal_id(signal),
                             write.offset,
                             write.width,
                             write.value.aval,
@@ -829,24 +1275,30 @@ void lower_process_operations(ProcessLoweringContext& state)
                         write_after_slice_logic9_type,
                         write_after_slice_logic9_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, source.width),
                             logic9_word_slot,
-                            constant_i64(context, operation.delay) });
+                            constant_i64(context, operation.delay),
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(
+                                    operation.domain)) });
                 } else {
                     builder.CreateCall(
                         write_after_slice_type,
                         write_after_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, source.width),
                             source.aval,
                             source.bval,
-                            constant_i64(context, operation.delay) });
+                            constant_i64(context, operation.delay),
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(
+                                    operation.domain)) });
                 }
                 branch_to_next();
             };
@@ -867,8 +1319,7 @@ void lower_process_operations(ProcessLoweringContext& state)
                         write_inertial_slice_logic9_type,
                         write_inertial_slice_logic9_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, source.width),
                             logic9_word_slot,
@@ -877,14 +1328,17 @@ void lower_process_operations(ProcessLoweringContext& state)
                             constant_i64(
                                 context, operation.delays.fall),
                             constant_i64(
-                                context, operation.delays.turnoff) });
+                                context, operation.delays.turnoff),
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(
+                                    operation.domain)) });
                 } else {
                     builder.CreateCall(
                         write_inertial_slice_type,
                         write_inertial_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, source.width),
                             source.aval,
@@ -894,7 +1348,11 @@ void lower_process_operations(ProcessLoweringContext& state)
                             constant_i64(
                                 context, operation.delays.fall),
                             constant_i64(
-                                context, operation.delays.turnoff) });
+                                context, operation.delays.turnoff),
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(
+                                    operation.domain)) });
                 }
                 branch_to_next();
             };
@@ -915,8 +1373,7 @@ void lower_process_operations(ProcessLoweringContext& state)
                         write_projected_slice_logic9_type,
                         write_projected_slice_logic9_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, source.width),
                             logic9_word_slot,
@@ -932,8 +1389,7 @@ void lower_process_operations(ProcessLoweringContext& state)
                         write_projected_slice_type,
                         write_projected_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, source.width),
                             source.aval,
@@ -964,7 +1420,8 @@ void lower_process_operations(ProcessLoweringContext& state)
             instruction,
             read_signal_dynamic_part_callback,
             read_signal_dynamic_part_type,
-            logic9_word_slot
+            logic9_word_slot,
+            callback_signal_id
         };
         SignalOperationLowerer signal_lowerer {
             builder,
@@ -977,6 +1434,7 @@ void lower_process_operations(ProcessLoweringContext& state)
             direct_update_slots,
             direct_update_active_words,
             require_direct_update_slots,
+            require_direct_read_signals,
             context,
             i32,
             i64,
@@ -1033,12 +1491,16 @@ void lower_process_operations(ProcessLoweringContext& state)
             read_type,
             read_logic9_type,
             write_type,
+            write_update_type,
             write_after_type,
             write_logic9_type,
+            write_update_logic9_type,
             write_after_logic9_type,
             write_slice_type,
+            write_update_slice_type,
             write_after_slice_type,
             write_slice_logic9_type,
+            write_update_slice_logic9_type,
             write_after_slice_logic9_type,
             release_slice_type,
             write_projected_waveform_type,
@@ -1065,7 +1527,8 @@ void lower_process_operations(ProcessLoweringContext& state)
             store_logic9_word,
             load_logic9_word,
             runtime_error_if,
-            dynamic_offset
+            dynamic_offset,
+            callback_signal_id
         };
         OutputOperationLowerer output_lowerer {
             builder,
@@ -1308,12 +1771,15 @@ void lower_process_operations(ProcessLoweringContext& state)
                             context_pointer,
                             process.id,
                             instruction,
-                            runtime_type,
-                            runtime_argument,
-                            process.container_register_types,
+                            services_type,
+                            services_argument,
+                            container_types,
                             container_result_aval_slot,
                             container_result_bval_slot,
+                            wide_callback_scratch,
+                            wide_callback_scratch_word_stride,
                             fused_container_object_reads[index],
+                            false,
                             runtime_error_if,
                             branch_to_next
                         };
@@ -1332,13 +1798,9 @@ void lower_process_operations(ProcessLoweringContext& state)
                         if (operation.delay == 0U
                             && operation.rejection == 0U
                             && operation.mode
-                                == runtime::simir::ProjectedDelayMode::inertial) {
-                            write_wide_signal(
-                                operation.signal,
-                                operation.source,
-                                0U,
-                                FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE,
-                                0U);
+                                == ProjectedDelayMode::inertial) {
+                            write_wide_projected(
+                                operation.signal, operation.source);
                         } else {
                             execute_exact_signal();
                         }
@@ -1355,10 +1817,10 @@ void lower_process_operations(ProcessLoweringContext& state)
                     if (operation.kind
                         != runtime::simir::SignalReadKind::current) {
                         return_result(
-                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                             instruction,
                             0,
-                            FSIM_JIT_FRAME_STATE_READY,
+                            FSIM_JIT_FRAME_STATE_READY_V2,
                             next_instruction);
                     } else if (signal_widths[operation.signal] > 64) {
                         read_wide_signal(operation);
@@ -1370,8 +1832,8 @@ void lower_process_operations(ProcessLoweringContext& state)
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
                     if (signal_widths[operation.signal] > 64U) {
                         return_result(
-                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
-                            instruction, 0, FSIM_JIT_FRAME_STATE_READY,
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
+                            instruction, 0, FSIM_JIT_FRAME_STATE_READY_V2,
                             next_instruction);
                     } else {
                         signal_lowerer.lower(operation);
@@ -1404,8 +1866,8 @@ void lower_process_operations(ProcessLoweringContext& state)
                     std::is_same_v<OperationType, SignalDrivingValue>) {
                     if (signal_widths[operation.signal] > 64U) {
                         return_result(
-                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
-                            instruction, 0, FSIM_JIT_FRAME_STATE_READY,
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
+                            instruction, 0, FSIM_JIT_FRAME_STATE_READY_V2,
                             next_instruction);
                     } else {
                         signal_lowerer.lower(operation);
@@ -1459,8 +1921,9 @@ void lower_process_operations(ProcessLoweringContext& state)
                             operation.signal,
                             operation.source,
                             0,
-                            FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING,
-                            0);
+                            FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_V2,
+                            0,
+                            SignalUpdateDomain::generic);
                         return;
                     }
                     signal_lowerer.lower(operation);
@@ -1471,7 +1934,8 @@ void lower_process_operations(ProcessLoweringContext& state)
                             load_register(
                                 builder, registers, operation.source),
                             ValueKind::logic4);
-                        if (std::ranges::find(
+                        if (operation.domain == SignalUpdateDomain::generic
+                            && std::ranges::find(
                                 direct_update_signals, operation.signal)
                             != direct_update_signals.end()) {
                             if (!signal_lowerer.begin_direct_update(
@@ -1487,8 +1951,9 @@ void lower_process_operations(ProcessLoweringContext& state)
                             operation.signal,
                             operation.source,
                             0,
-                            FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE,
-                            0);
+                            FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_V2,
+                            0,
+                            operation.domain);
                         return;
                     }
                     signal_lowerer.lower(operation);
@@ -1498,8 +1963,9 @@ void lower_process_operations(ProcessLoweringContext& state)
                             operation.signal,
                             operation.source,
                             0,
-                            FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER,
-                            operation.delay);
+                            FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_V2,
+                            operation.delay,
+                            operation.domain);
                         return;
                     }
                     signal_lowerer.lower(operation);
@@ -1509,8 +1975,9 @@ void lower_process_operations(ProcessLoweringContext& state)
                             operation.signal,
                             operation.source,
                             operation.offset,
-                            FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE,
-                            0);
+                            FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE_V2,
+                            0,
+                            SignalUpdateDomain::generic);
                         return;
                     }
                     signal_lowerer.lower(operation);
@@ -1525,7 +1992,8 @@ void lower_process_operations(ProcessLoweringContext& state)
             read_wide_signal, write_wide_signal, dynamic_offset,
             dynamic_offset_i32, emit_dynamic_slice, emit_dynamic_part_slice,
             emit_dynamic_after_slice, emit_dynamic_inertial_slice,
-            emit_dynamic_projected_slice, value_lowerer, signal_lowerer,
+            emit_dynamic_projected_slice, callback_signal_id,
+            value_lowerer, signal_lowerer,
             output_lowerer, control_lowerer, code_coverage_hit_slots
         };
         lower_suffix_operation(

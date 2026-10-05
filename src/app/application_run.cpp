@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_compiled_hir_cache_revision.hpp"
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
@@ -66,6 +67,13 @@ namespace {
     }
 
 } // namespace
+
+void add_compiled_hir_cache_key_identity(
+    compiler::CacheKeyBuilder& key)
+{
+    add_compiled_hir_cache_key_identity(
+        key, compiled_hir_cache_producer_revision);
+}
 
 void add_compiled_hir_cache_key_identity(
     compiler::CacheKeyBuilder& key,

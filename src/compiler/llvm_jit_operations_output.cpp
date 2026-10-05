@@ -90,10 +90,10 @@ void OutputOperationLowerer::lower(
               if (operation.severity
                   == runtime::simir::AssertionSeverity::failure) {
                 return_result(
-                    FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                    FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                     instruction,
                     0,
-                    FSIM_JIT_FRAME_STATE_READY,
+                    FSIM_JIT_FRAME_STATE_READY_V2,
                     instruction + 1U);
               } else {
                 branch_to_next();
@@ -117,20 +117,20 @@ void OutputOperationLowerer::lower(
 void OutputOperationLowerer::lower(
     const runtime::simir::WaitFor& operation) {
   return_result(
-      FSIM_JIT_RESUME_STATUS_WAIT_FOR,
+      FSIM_JIT_RESUME_STATUS_WAIT_FOR_V2,
       instruction,
       operation.source ? 0 : operation.delay,
-      FSIM_JIT_FRAME_STATE_READY,
+      FSIM_JIT_FRAME_STATE_READY_V2,
       instruction + 1U);
 }
 
 void OutputOperationLowerer::lower(
     const runtime::simir::WaitOn& operation) {
   return_result(
-      FSIM_JIT_RESUME_STATUS_WAIT_ON,
+      FSIM_JIT_RESUME_STATUS_WAIT_ON_V2,
       instruction,
       operation.timeout.value_or(0),
-      FSIM_JIT_FRAME_STATE_READY,
+      FSIM_JIT_FRAME_STATE_READY_V2,
       instruction + 1U);
 }
 

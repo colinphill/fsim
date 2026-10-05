@@ -114,6 +114,7 @@ namespace {
 
 bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     const semantic::sv::Unit& unit,
+    const semantic::DeclarationId declaration_id,
     SystemVerilogHirMaterialization& materialization,
     const semantic::sv::Declaration& declaration,
     const std::string& path,
@@ -178,6 +179,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     auto& signals = materialization.signals;
     auto& string_objects = materialization.string_objects;
     auto& container_objects = materialization.container_objects;
+    auto& container_declaration_bindings
+        = materialization.container_declaration_bindings;
     auto& read_only_strings = materialization.read_only_strings;
     auto& read_only_containers
         = materialization.read_only_containers;
@@ -356,6 +359,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                             *compiled_, declaration.source));
                     return false;
                 }
+                container_declaration_bindings.insert_or_assign(
+                    declaration_id.value(),
+                    ContainerDeclarationBinding {
+                        alias->second,
+                        compiled_port_direction(declaration)
+                            == frontend::PortDirection::Input,
+                        materialization.specialization == nullptr
+                            ? nullptr
+                            : &materialization.specialization
+                                   ->specialization(),
+                    });
                 container_objects.insert_or_assign(
                     full_name, alias->second);
                 design_.container_by_name_.insert_or_assign(
@@ -469,6 +483,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         materialization.container_objects.emplace(
             declaration.name, id);
         materialization.container_objects.emplace(full_name, id);
+        container_declaration_bindings.insert_or_assign(
+            declaration_id.value(),
+            ContainerDeclarationBinding {
+                id,
+                declaration.form == Form::port
+                    && compiled_port_direction(declaration)
+                        == frontend::PortDirection::Input,
+                materialization.specialization == nullptr
+                    ? nullptr
+                    : &materialization.specialization->specialization(),
+            });
         design_.container_by_name_.emplace(full_name, id);
         if (design_.roots_.size() == 1U
             && materialized_path == active_root_) {

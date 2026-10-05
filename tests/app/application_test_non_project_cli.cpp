@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -12,9 +13,10 @@
 #include <utility>
 #include <vector>
 
+#include "../../src/app/application_hierarchy_path_codec.hpp"
+#include "../../src/elaboration/elaborated_design_process_access.hpp"
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
-#include "../../src/app/application_hierarchy_path_codec.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/app/sdf_phase_persistence.hpp"
@@ -1119,6 +1121,21 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     }
     assert(loaded_systemc_design && !systemc_design_load_diagnostics.has_error());
     std::cerr << "non-project producer hiding: embedded design loaded\n";
+    using DesignProcessAccess
+        = elaboration::detail::ElaboratedDesignProcessAccess;
+    const auto& loaded_runtime_design = loaded_systemc_design->design;
+    const auto loaded_process_rows
+        = DesignProcessAccess::process_table(loaded_runtime_design);
+    assert(DesignProcessAccess::row_backed(loaded_runtime_design));
+    assert(loaded_process_rows != nullptr);
+    assert(loaded_process_rows->rows.size()
+        == DesignProcessAccess::process_count(loaded_runtime_design));
+    for (std::size_t process = 0;
+        process < loaded_process_rows->rows.size(); ++process) {
+        assert(DesignProcessAccess::process_view(
+            loaded_runtime_design, process)
+                .valid());
+    }
     assert(loaded_systemc_design->systemc_hierarchies.size() == 1);
     assert(loaded_systemc_design->systemc_roots.size() == 1);
     assert(loaded_systemc_design->systemc_plugins.size() == 1);

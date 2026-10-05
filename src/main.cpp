@@ -54,13 +54,13 @@ int wmain(const int argc, wchar_t** wide_argv) {
       argv.push_back(argument.c_str());
     }
     return fsim::cli::run(
-        argc, argv.data(), fsim::app::make_cli_services());
+        argc, argv.data(), fsim::app::make_stdio_cli_services());
   } catch (...) {
     return 3;
   }
 }
 #else
 int main(const int argc, char** argv) {
-  return fsim::cli::run(argc, argv, fsim::app::make_cli_services());
+  return fsim::cli::run(argc, argv, fsim::app::make_stdio_cli_services());
 }
 #endif

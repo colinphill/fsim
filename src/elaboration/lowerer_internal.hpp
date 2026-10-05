@@ -3,11 +3,13 @@
 
 #include "elaborator_internal.hpp"
 #include "scoped_bindings.hpp"
+#include "systemverilog_template_bindings.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <map>
+#include <vector>
 
 namespace fsim::elaboration {
 
@@ -74,6 +76,8 @@ public:
     /// Lowerer.
     void set_specialized_hir_unit(
         const semantic::SpecializedHirUnit* unit) noexcept;
+    void set_hir_container_declaration_bindings(
+        const ContainerDeclarationBindings* bindings) noexcept;
     void set_hir_code_coverage_context(
         const CoverageHirContext* coverage, bool module) noexcept;
     void set_hir_code_coverage_active(bool active) noexcept;
@@ -104,6 +108,14 @@ public:
         = std::nullopt);
     [[nodiscard]] std::optional<SignalId>
     hir_concurrent_port_signal(semantic::DeclarationId declaration) const;
+    using HirConcurrentContainerElementSignal
+        = SystemVerilogTemplateElementSignalBinding;
+    /// Return a complete, validated per-element signal map for one exact
+    /// SystemVerilog container declaration. An empty result keeps the cache
+    /// on ordinary lowering when the declaration has no eligible alias.
+    [[nodiscard]] std::vector<HirConcurrentContainerElementSignal>
+    hir_concurrent_container_element_signals(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] bool hir_concurrent_signal_read_only(
         SignalId signal) const noexcept;
     [[nodiscard]] bool has_generated_processes() const noexcept;
@@ -228,6 +240,7 @@ private:
         runtime::simir::EdgeKind event_edge {
             runtime::simir::EdgeKind::any
         };
+        bool event_expression_scalar_edge { };
         std::optional<semantic::ExpressionId> input_actual;
         std::optional<SignalId> input_actual_destination;
         std::optional<semantic::vhdl::SubtypeIndication>
@@ -945,7 +958,18 @@ private:
         std::optional<frontend::IntegerRange> integer_range;
         std::optional<RegisterId> local;
         std::optional<SignalId> signal;
+        bool vhdl_port { };
+        semantic::vhdl::Direction vhdl_direction {
+            semantic::vhdl::Direction::unknown
+        };
     };
+    [[nodiscard]] bool signal_binding_can_emit_write(
+        const HirRuntimeBinding& binding) const noexcept;
+    [[nodiscard]] bool signal_binding_is_writable(
+        const HirRuntimeBinding& binding) const noexcept;
+    void record_readonly_signal_write(SignalId signal);
+    void record_readonly_vhdl_output_write(
+        const HirRuntimeBinding& binding);
     [[nodiscard]] std::optional<HirRuntimeBinding>
     hir_direct_signal_binding(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirRuntimeBinding> hir_runtime_binding(
@@ -999,7 +1023,24 @@ private:
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         bool signed_value { };
         bool read_only { };
+        struct RuntimeReadProfile {
+            frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+            bool default_x { };
+        };
+        std::optional<RuntimeReadProfile> runtime_read_profile;
     };
+    [[nodiscard]] std::optional<
+        HirContainerElementBinding::RuntimeReadProfile>
+    hir_sv_runtime_container_read_profile(
+        const HirContainerElementBinding& element) const;
+    struct HirStaticContainerIndex {
+        std::uint32_t ordinal { };
+        std::uint32_t count { };
+        std::string suffix;
+    };
+    [[nodiscard]] std::optional<HirStaticContainerIndex>
+    hir_static_container_index(
+        const HirContainerElementBinding& element) const;
     struct HirStaticContainerSignalExtract {
         runtime::simir::SignalId signal { };
         std::uint32_t source_width { };
@@ -1011,6 +1052,9 @@ private:
     hir_container_element_binding(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirStaticContainerSignalExtract>
+    hir_static_element_signal_extract(
+        const HirContainerElementBinding& element) const;
+    [[nodiscard]] std::optional<HirStaticContainerSignalExtract>
     hir_static_container_signal_extract(
         const HirContainerElementBinding& element) const;
     struct HirContainerAggregateSelection {
@@ -1021,6 +1065,8 @@ private:
     [[nodiscard]] std::optional<HirContainerAggregateSelection>
     hir_container_aggregate_selection(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] bool hir_sv_dynamic_aggregate_member_read_supported(
+        const HirContainerAggregateSelection& selection) const;
     struct HirPackedContainerAggregateProfile {
         std::size_t width { };
         frontend::ValueDomain domain {
@@ -1048,6 +1094,28 @@ private:
     [[nodiscard]] std::optional<runtime::simir::RegisterId>
     lower_hir_container_element_index(
         const HirContainerElementBinding& element);
+    [[nodiscard]] bool hir_sv_runtime_container_read_supported(
+        const HirContainerElementBinding& element) const;
+    [[nodiscard]] std::optional<runtime::simir::RegisterId>
+    lower_hir_sv_runtime_container_read_index(
+        const HirContainerElementBinding& element);
+    void lower_hir_sv_runtime_container_read(
+        const HirContainerElementBinding& element,
+        runtime::simir::ContainerRegisterId container,
+        runtime::simir::RegisterId index,
+        runtime::simir::RegisterId destination);
+    [[nodiscard]] bool hir_checked_fixed_array_index(
+        const HirContainerElementBinding& element) const;
+    // Invalid fixed-array coordinates produce a disjoint sentinel. Reads
+    // return the element default; writes guard publication after evaluation.
+    [[nodiscard]] std::optional<runtime::simir::RegisterId>
+    lower_hir_fixed_array_index(const HirContainerElementBinding& element);
+    [[nodiscard]] std::optional<runtime::simir::InstructionIndex>
+    begin_hir_fixed_array_write(
+        const HirContainerElementBinding& element,
+        runtime::simir::RegisterId index);
+    void end_hir_fixed_array_write(
+        std::optional<runtime::simir::InstructionIndex> branch);
     struct HirLoweredContainerElement {
         struct Parent {
             runtime::simir::ContainerRegisterId container { };
@@ -1157,9 +1225,16 @@ private:
         semantic::DeclarationId declaration,
         semantic::ScopeId process_scope,
         bool require_storage) const;
+    // Continuous SV concatenation copyout accepts static packed signal leaves
+    // and stages them in source order; other callers retain blocking copyout.
+    enum class HirPackedCopyOutMode : std::uint8_t {
+        blocking,
+        systemverilog_active_update,
+    };
     [[nodiscard]] bool lower_hir_packed_copy_out(
         semantic::ExpressionId target,
-        RegisterId source);
+        RegisterId source,
+        HirPackedCopyOutMode mode = HirPackedCopyOutMode::blocking);
     [[nodiscard]] bool lower_hir_output_actual_write(
         semantic::ExpressionId target,
         RegisterId source);
@@ -1367,8 +1442,7 @@ private:
     void materialize_hir_procedural_continuous_assignments();
 
     void validate_read_only_signal_writes(
-        const frontend::SourceSpan& source,
-        std::optional<SignalId> permitted_signal);
+        const frontend::SourceSpan& source);
     void emit_debug_point(
         DebugPointKind kind,
         const frontend::SourceSpan& span);
@@ -1406,7 +1480,11 @@ private:
     bool coverage_hir_process_active_ { };
     const std::unordered_map<std::string, std::uint64_t>*
         systemverilog_interface_handles_ { };
+    const ContainerDeclarationBindings*
+        container_declaration_bindings_ { };
     semantic::ScopeId hir_process_scope_;
+    std::map<std::size_t, SignalId>
+        readonly_signal_write_operations_;
     std::unordered_map<std::uint32_t, RegisterId> hir_local_registers_;
     std::unordered_map<std::uint32_t, StringRegisterId>
         hir_local_string_registers_;
@@ -1501,7 +1579,13 @@ private:
         deferred_assertion_action_handoff_;
     std::optional<std::uint32_t> systemverilog_program_owner_;
     std::vector<Process> generated_processes_;
-    std::vector<SignalId> implicit_signal_dependencies_;
+    void record_implicit_signal_dependency(SignalId signal,
+        std::uint32_t offset = 0U, std::uint32_t width = 0U);
+    void record_container_object_dependency(ContainerObjectId object);
+    [[nodiscard]] std::optional<runtime::simir::Sensitivity>
+    hir_static_signal_sensitivity(semantic::ExpressionId expression,
+        semantic::ScopeId process_scope);
+    std::vector<runtime::simir::Sensitivity> implicit_signal_dependencies_;
     RegisterId next_register_ { };
     StringRegisterId next_string_register_ { };
     ContainerRegisterId next_container_register_ { };

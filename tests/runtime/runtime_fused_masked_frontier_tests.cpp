@@ -6,6 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -31,7 +33,6 @@ enum class Intervention {
     insert_callback,
     force_input,
     driver_hook,
-    native_decline,
     late_tie,
 };
 
@@ -41,84 +42,40 @@ struct Observation {
     std::vector<Trace> trace;
     std::vector<std::string> settled;
     std::vector<std::string> drivers;
-    std::array<std::uint64_t, 3> native_calls { }, declines { };
     FusedMaskedRegionCounters counters;
     RunStatus status { };
     std::uint64_t delta { };
+    std::uint64_t retired_executor_calls { };
 };
 
-class SliceExecutor final : public FusedMaskedRegionExecutor {
+class RetiredMaskedExecutor final : public FusedMaskedRegionExecutor {
 public:
-    SliceExecutor(Interpreter& interpreter, std::vector<ProcessId> members,
-        const SignalId output, const bool decline,
-        std::uint64_t& native_calls, std::uint64_t& declines)
-        : interpreter_(interpreter)
-        , members_(std::move(members))
-        , output_(output)
-        , decline_(decline)
-        , native_calls_(native_calls)
-        , declines_(declines)
+    explicit RetiredMaskedExecutor(std::uint64_t& calls)
+        : calls_(calls)
     {
     }
 
     std::optional<FusedStaticCohortResume> resume(
         const ProcessCohortNativeContext&,
-        const std::span<const std::uint64_t> activation) override
+        std::span<const std::uint64_t>) override
     {
-        if (decline_) {
-            ++declines_;
-            return std::nullopt;
-        }
-        const auto width = static_cast<std::uint32_t>(
-            interpreter_.signal_value(output_).width());
-        auto value = PackedLogic4(width, Logic4::zero);
-        mask_.fill(0U);
-        for (std::size_t index = 0U; index < members_.size(); ++index) {
-            if ((activation[index / 64U]
-                    & (UINT64_C(1) << (index % 64U))) == 0U) {
-                continue;
-            }
-            const auto& program = interpreter_.process_program(members_[index]);
-            const auto read = operation_get<ReadSignal>(program.operations[0]);
-            const auto extract = operation_get<Extract>(program.operations[1]);
-            const auto write = operation_get<WriteUpdateSlice>(program.operations[2]);
-            value.insert_bits(interpreter_.signal_value(read.signal)
-                                  .extract_bits(extract.offset, extract.width),
-                write.offset);
-            for (std::uint32_t bit = write.offset;
-                 bit < write.offset + extract.width; ++bit) {
-                mask_[bit / 64U] |= UINT64_C(1) << (bit % 64U);
-            }
-        }
-        const auto words = (width + 63U) / 64U;
-        require(words <= aval_.size(), "wide frontier test scratch fits the value");
-        std::copy_n(value.aval_words().begin(), words, aval_.begin());
-        std::copy_n(value.bval_words().begin(), words, bval_.begin());
-        active_ = 1U;
-        slots_[0] = { output_, width, words, &active_,
-            aval_.data(), bval_.data(), mask_.data() };
-        ++native_calls_;
-        return FusedStaticCohortResume { slots_, { } };
+        ++calls_;
+        throw std::runtime_error {
+            "retired global masked executor must not be dispatched" };
     }
 
 private:
-    Interpreter& interpreter_;
-    std::vector<ProcessId> members_;
-    SignalId output_;
-    bool decline_;
-    std::uint64_t& native_calls_;
-    std::uint64_t& declines_;
-    std::uint32_t active_ { };
-    std::array<std::uint64_t, 3> aval_ { }, bval_ { }, mask_ { };
-    std::array<ProcessUpdateSlotView, 1> slots_ { };
+    std::uint64_t& calls_;
 };
 
-Observation run_frontiers(const std::uint32_t width,
-    const Intervention intervention, const bool fused)
+Observation run_interleaved_frontier(const std::uint32_t width,
+    const Intervention intervention, const bool install_candidate,
+    const bool capture_output, const bool capture_intermediate_state)
 {
     Interpreter interpreter;
     interpreter.set_fused_masked_region_counters_enabled(true);
     Observation observation;
+    std::uint64_t retired_executor_calls { };
     std::array<SignalId, 6> inputs;
     std::array<SignalId, 3> outputs;
     std::array<std::vector<ProcessId>, 3> members;
@@ -130,6 +87,7 @@ Observation run_frontiers(const std::uint32_t width,
         outputs[index] = interpreter.add_signal({ "output_" + std::to_string(index),
             PackedLogic4(width, Logic4::z), ResolutionKind::sv_wire });
     }
+
     // Original keys interleave three independent regions: A0, B0, C0,
     // A1, B1, C1. Every member has a distinct static sensitivity cohort.
     for (ProcessId id = 0U; id < inputs.size(); ++id) {
@@ -148,6 +106,7 @@ Observation run_frontiers(const std::uint32_t width,
             WaitSensitivity { }, Jump { 0U } };
         members[group].push_back(interpreter.add_process(std::move(process)));
     }
+
     const auto snapshot = [&] {
         std::string result;
         for (const auto signal : outputs) {
@@ -167,10 +126,15 @@ Observation run_frontiers(const std::uint32_t width,
     }
     observer.operations = { Display { "boundary" }, WaitSensitivity { }, Jump { 0U } };
     (void)interpreter.add_process(std::move(observer));
-    interpreter.set_output_hook([&](ProcessId, std::string_view, bool,
-                                    SimulationTick, std::uint64_t) {
-        trace("boundary");
-    });
+    if (capture_output) {
+        interpreter.set_output_hook([&](ProcessId, std::string_view, bool,
+                                        SimulationTick, std::uint64_t) {
+            trace("boundary");
+        });
+    }
+    require(interpreter.fused_masked_region_candidates().empty(),
+        "the retired masked facade is empty before simulation start");
+
     for (SimulationTick time = 1U; time <= 4U; ++time) {
         for (std::size_t index = 0U; index < inputs.size(); ++index) {
             if (time == 2U && index % 2U != 0U) {
@@ -185,15 +149,14 @@ Observation run_frontiers(const std::uint32_t width,
             interpreter.schedule_signal_at(inputs[index], std::move(value), time, index);
         }
     }
-    if (intervention != Intervention::none && intervention != Intervention::native_decline) {
+    if (intervention != Intervention::none) {
         const bool late_tie = intervention == Intervention::late_tie;
         interpreter.scheduler().schedule_at(2U,
             late_tie ? SchedulerPhase::observed : SchedulerPhase::active, 0U,
             [&](Scheduler& scheduler) {
-                // Active-phase insertion precedes member 2's reservation;
-                // observed-phase insertion follows the update commit and
-                // therefore follows that reservation. Both use the
-                // same StableOrder, so sequence decides the actual boundary.
+                // Active-phase insertion precedes member 2's normal work;
+                // observed-phase insertion follows the update commit. Both
+                // use the same StableOrder, so sequence exposes the boundary.
                 scheduler.schedule_next_delta(SchedulerPhase::active, 2U,
                     [&](Scheduler& current) {
                         trace("outside");
@@ -204,10 +167,8 @@ Observation run_frontiers(const std::uint32_t width,
                         } else if (intervention == Intervention::insert_callback) {
                             current.schedule(SchedulerPhase::active, 0U,
                                 [&](Scheduler&) { trace("inserted"); });
-                        } else if (intervention == Intervention::force_input) {
-                            interpreter.force_signal(inputs[2U],
-                                PackedLogic4(width, Logic4::zero));
-                        } else if (intervention == Intervention::late_tie) {
+                        } else if (intervention == Intervention::force_input
+                            || intervention == Intervention::late_tie) {
                             interpreter.force_signal(inputs[2U],
                                 PackedLogic4(width, Logic4::zero));
                         } else if (intervention == Intervention::driver_hook) {
@@ -223,33 +184,37 @@ Observation run_frontiers(const std::uint32_t width,
                     });
             });
     }
+
     interpreter.start();
-    if (fused) {
+    if (install_candidate) {
         const auto candidates = interpreter.fused_masked_region_candidates();
-        for (std::size_t group = 0U; group < outputs.size(); ++group) {
-            const auto found = std::ranges::find_if(candidates, [&](const auto& candidate) {
-                return candidate.members == members[group]
-                    && candidate.outputs == std::vector<SignalId> { outputs[group] };
-            });
-            require(found != candidates.end(), "each interleaved output forms a masked region");
-            std::vector<std::vector<Process::DriverRegion>> writes;
-            for (const auto id : members[group]) {
-                writes.push_back(interpreter.process_program(id).driver_regions);
-            }
-            interpreter.install_fused_masked_region(found->region_id, std::move(writes),
-                std::make_unique<SliceExecutor>(interpreter, members[group], outputs[group],
-                    intervention == Intervention::native_decline && group == 0U,
-                    observation.native_calls[group], observation.declines[group]));
+        require(candidates.empty(),
+            "the source-compatible retired masked facade exposes no candidates");
+        bool rejected { };
+        try {
+            interpreter.install_fused_masked_region(0U, { },
+                std::make_unique<RetiredMaskedExecutor>(
+                    retired_executor_calls));
+        } catch (const std::logic_error& error) {
+            rejected = std::string_view { error.what() }
+                == "invalid fused masked region binding";
         }
+        require(rejected,
+            "an unknown retired masked region keeps the checked install error");
     }
+
     for (SimulationTick time = 0U; time <= 4U; ++time) {
         RunResult result;
         try {
             result = interpreter.run(time);
         } catch (const std::runtime_error& error) {
-            require(intervention == Intervention::exception && time == 2U
-                    && std::string(error.what()) == "frontier outside exception",
-                "only the intended outside callback may throw");
+            if (intervention != Intervention::exception || time != 2U
+                || std::string(error.what()) != "frontier outside exception") {
+                throw std::runtime_error {
+                    "only the intended outside callback may throw: "
+                    + std::string { error.what() }
+                };
+            }
             trace("caught");
             result = interpreter.run(time);
         }
@@ -262,6 +227,11 @@ Observation run_frontiers(const std::uint32_t width,
         }
         observation.status = result.status;
         observation.delta = result.delta;
+        if (capture_intermediate_state) {
+            observation.settled.push_back(snapshot());
+        }
+    }
+    if (!capture_intermediate_state) {
         observation.settled.push_back(snapshot());
     }
     for (std::size_t group = 0U; group < outputs.size(); ++group) {
@@ -271,52 +241,65 @@ Observation run_frontiers(const std::uint32_t width,
         }
     }
     observation.counters = interpreter.fused_masked_region_counters();
+    observation.retired_executor_calls = retired_executor_calls;
     return observation;
 }
 
 } // namespace
 
-void test_runtime_fused_masked_global_frontier()
+void test_runtime_fused_masked_fallback_interleaving()
 {
     for (const auto width : { 3U, 65U, 129U }) {
         std::vector<Trace> early_force_trace;
         for (const auto intervention : { Intervention::none, Intervention::stop,
                  Intervention::exception, Intervention::insert_callback,
                  Intervention::force_input, Intervention::driver_hook,
-                 Intervention::native_decline, Intervention::late_tie }) {
-            const auto generic = run_frontiers(width, intervention, false);
-            const auto fused = run_frontiers(width, intervention, true);
+                 Intervention::late_tie }) {
+            const auto generic = run_interleaved_frontier(
+                width, intervention, false, false, false);
+            const auto retained_candidate = run_interleaved_frontier(
+                width, intervention, true, false, false);
+            const auto observed_generic = run_interleaved_frontier(
+                width, intervention, false, true, true);
+            const auto observed_candidate = run_interleaved_frontier(
+                width, intervention, true, true, true);
             if (intervention == Intervention::force_input) {
-                early_force_trace = generic.trace;
+                early_force_trace = observed_generic.trace;
             } else if (intervention == Intervention::late_tie) {
-                require(!early_force_trace.empty() && generic.trace != early_force_trace,
+                require(!early_force_trace.empty()
+                        && observed_generic.trace != early_force_trace,
                     "equal StableOrder callbacks on opposite sequence sides expose different deltas");
             }
-            require(fused.trace == generic.trace,
-                "global frontiers preserve boundary values, deltas and outside callback order");
-            require(fused.settled == generic.settled && fused.drivers == generic.drivers,
-                "global frontiers preserve wide committed values and original raw owners");
-            require(fused.status == generic.status && fused.delta == generic.delta,
-                "global frontiers preserve completion after stop or exception");
-            require(fused.counters.masked_calls > 0U,
-                "the interleaved fixture executes masked native regions");
-            if (intervention == Intervention::native_decline) {
-                require(fused.counters.prepared_fallback_tasks
-                            + fused.counters.ordinary_fallback_tasks > 0U,
-                    "a declined region retains its original tasks beside native regions");
-                require(fused.native_calls[0U] == 0U && fused.declines[0U] > 0U
-                        && fused.native_calls[1U] > 0U && fused.native_calls[2U] > 0U,
-                    "both other regions complete natively beside the declined region");
-            } else {
-                require(std::ranges::all_of(fused.native_calls,
-                            [](const auto calls) { return calls > 0U; }),
-                    "every installed region enters the native route");
-            }
-            if (intervention == Intervention::none) {
-                require(fused.counters.global_frontier_callbacks > 0U
-                        && fused.counters.global_frontier_callbacks < fused.counters.masked_calls,
-                    "one physical frontier must execute multiple native regions");
-            }
+            require(retained_candidate.trace == generic.trace,
+                "retired candidates preserve boundary values, deltas and outside callback order");
+            require(retained_candidate.settled == generic.settled
+                    && retained_candidate.drivers == generic.drivers,
+                "checked fallback preserves wide committed values and original raw owners");
+            require(retained_candidate.status == generic.status
+                    && retained_candidate.delta == generic.delta,
+                "checked fallback preserves completion after stop or exception");
+            require(retained_candidate.retired_executor_calls == 0U
+                    && retained_candidate.counters.candidates == 0U
+                    && retained_candidate.counters.masked_calls == 0U
+                    && retained_candidate.counters.global_frontier_callbacks == 0U,
+                "retired masked counters stay zero and never enter an executor");
+            require(observed_candidate.trace == observed_generic.trace,
+                "observed checked fallback preserves boundary values, deltas and callback order");
+            require(observed_candidate.settled == observed_generic.settled
+                    && observed_candidate.drivers == observed_generic.drivers,
+                "observed checked fallback preserves committed values and raw owners");
+            require(observed_candidate.status == observed_generic.status
+                    && observed_candidate.delta == observed_generic.delta,
+                "observed checked fallback preserves completion after stop or exception");
+            require(observed_candidate.retired_executor_calls == 0U
+                    && observed_candidate.counters.masked_calls == 0U
+                    && observed_candidate.counters.global_frontier_callbacks == 0U,
+                "output observation does not enter the retired executor");
+            require(std::ranges::any_of(observed_generic.trace,
+                        [](const Trace& entry) {
+                            return std::get<0>(entry) == "boundary";
+                        }),
+                "the observed fallback run exposes a boundary callback");
         }
     }
 }

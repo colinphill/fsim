@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_vital_models.hpp"
+#include "sdf_row_backed_test_support.hpp"
 
 #include <array>
 #include <cstdint>
@@ -190,9 +191,7 @@ fsim::elaboration::ElaboratedDesign make_design(const FixtureOptions options)
         { "tpd_a_z", "vhdl-time:2000000fs" },
     };
     state.specializations.push_back(std::move(specialization));
-    auto result = elaboration::ElaboratedDesign::from_state(std::move(state));
-    require(result.has_value(), "VITAL model design fixture must be valid");
-    return std::move(*result);
+    return app::sdf_row_backed_test::make_row_backed_design(std::move(state));
 }
 
 fsim::app::SdfResolvedEndpoint endpoint(
@@ -295,11 +294,19 @@ Fixture make_fixture(const FixtureOptions options = { })
             std::move(target_summary) },
         1U, 2U, 1U, 0U, 0U, "vital-model-summary-identity");
     auto design = make_design(options);
+    const auto process_identity
+        = app::sdf_row_backed_test::capture_process_row_identity(design);
     const auto targets = app::build_sdf_vital_target_plan(summary, design);
     require(targets.ok(), "VITAL model fixture should build its target plan");
+    require(app::sdf_row_backed_test::same_process_row_identity(
+                design, process_identity),
+        "VITAL target planning must preserve the published process rows");
     const auto paths = app::build_sdf_vital_path_timing_plan(
         targets.plan, design, app::SdfValuePolicy { });
     require(paths.ok(), "VITAL model fixture should build its path plan");
+    require(app::sdf_row_backed_test::same_process_row_identity(
+                design, process_identity),
+        "VITAL path scanning must preserve shared common-program identities");
     return { std::move(design), paths.plan };
 }
 
@@ -328,12 +335,18 @@ void test_structural_models()
 {
     using fsim::app::SdfVitalStructuralModelKind;
     auto fixture = make_fixture();
+    const auto process_identity
+        = fsim::app::sdf_row_backed_test::capture_process_row_identity(
+            fixture.design);
     auto result = fsim::app::build_sdf_vital_model_plan(
         fixture.paths, fixture.design);
     require(result.ok()
             && result.plan->records().front().structural_kind
                 == SdfVitalStructuralModelKind::Primitive,
         "plain VITAL delay structure should map as a primitive model");
+    require(fsim::app::sdf_row_backed_test::same_process_row_identity(
+                fixture.design, process_identity),
+        "VITAL model fingerprinting must preserve the row-backed design");
 
     fixture = make_fixture({ .state_table = true });
     result = fsim::app::build_sdf_vital_model_plan(

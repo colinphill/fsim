@@ -240,6 +240,122 @@ void test_redirected_tcl_parse_errors_stay_plain()
         "Tcl-looking option value changed ordinary CLI color behavior");
 }
 
+class ScopedStreamBuffer final {
+public:
+    ScopedStreamBuffer(std::ostream& stream, std::streambuf* replacement)
+        : stream_(stream), previous_(stream.rdbuf(replacement))
+    {
+    }
+
+    ~ScopedStreamBuffer()
+    {
+        stream_.rdbuf(previous_);
+    }
+
+private:
+    std::ostream& stream_;
+    std::streambuf* previous_;
+};
+
+void test_stdio_handlers_are_exclusive_to_no_stream_simulate()
+{
+    fsim::cli::Services services;
+    std::vector<std::string> selected_handlers;
+    std::vector<fsim::cli::Command> selected_commands;
+    std::ostream* expected_output { };
+    std::ostream* expected_error { };
+    bool received_expected_streams { true };
+
+    const auto make_handler = [&](const char* route) {
+        return [&, route](const fsim::cli::Invocation& invocation,
+                   const fsim::project::Config&,
+                   fsim::diagnostic::Engine&,
+                   std::ostream& output,
+                   std::ostream& error) {
+            selected_handlers.emplace_back(route);
+            selected_commands.push_back(invocation.command);
+            received_expected_streams
+                = received_expected_streams
+                && &output == expected_output && &error == expected_error;
+            output << route << '\n';
+            return 0;
+        };
+    };
+
+    // These sentinels model the separate stdio and stream-injected service
+    // entries without invoking any application simulation handler.
+    services.simulate = make_handler("simulate-injected");
+    services.stdio_run = make_handler("run-stdio");
+    services.stdio_simulate = make_handler("simulate-stdio");
+    services.debug = make_handler("debug-ordinary");
+    services.tcl = make_handler("tcl-ordinary");
+
+    const char* simulate_arguments[] { "fsim", "simulate" };
+    const char* debug_arguments[] { "fsim", "debug" };
+    const char* tcl_arguments[] { "fsim", "tcl" };
+
+    const auto invoke_injected = [&](const char* const* arguments,
+                                     const fsim::cli::Command command,
+                                     const char* selected,
+                                     const char* expected_output_text) {
+        std::ostringstream output;
+        std::ostringstream error;
+        selected_handlers.clear();
+        selected_commands.clear();
+        received_expected_streams = true;
+        expected_output = &output;
+        expected_error = &error;
+        const auto status = fsim::cli::run(
+            2, arguments, services, output, error);
+        require(status == 0 && error.str().empty(),
+            "stream-injected CLI dispatch reached a service successfully");
+        require(selected_handlers
+                    == std::vector<std::string> { selected }
+                && selected_commands
+                    == std::vector<fsim::cli::Command> { command }
+                && received_expected_streams
+                && output.str() == expected_output_text,
+            "stream-injected simulate uses its ordinary handler and caller streams");
+    };
+
+    const auto invoke_no_stream = [&](const char* const* arguments,
+                                      const fsim::cli::Command command,
+                                      const char* selected,
+                                      const char* expected_output_text) {
+        std::ostringstream captured_output;
+        const ScopedStreamBuffer capture {
+            std::cout, captured_output.rdbuf() };
+        selected_handlers.clear();
+        selected_commands.clear();
+        received_expected_streams = true;
+        expected_output = &std::cout;
+        expected_error = &std::cerr;
+        const auto status = fsim::cli::run(2, arguments, services);
+        require(status == 0, "no-stream CLI dispatch reaches a service successfully");
+        require(selected_handlers
+                    == std::vector<std::string> { selected }
+                && selected_commands
+                    == std::vector<fsim::cli::Command> { command }
+                && received_expected_streams
+                && captured_output.str() == expected_output_text,
+            "no-stream CLI dispatch uses its selected handler and builtin stdout");
+    };
+
+    invoke_injected(simulate_arguments, fsim::cli::Command::simulate,
+        "simulate-injected", "simulate-injected\n");
+    invoke_no_stream(simulate_arguments, fsim::cli::Command::simulate,
+        "simulate-stdio", "simulate-stdio\n");
+    invoke_no_stream(debug_arguments, fsim::cli::Command::debug,
+        "debug-ordinary", "debug-ordinary\n");
+    invoke_no_stream(tcl_arguments, fsim::cli::Command::tcl,
+        "tcl-ordinary", "tcl-ordinary\n");
+
+    services.stdio_run = { };
+    services.stdio_simulate = { };
+    invoke_no_stream(simulate_arguments, fsim::cli::Command::simulate,
+        "simulate-injected", "simulate-injected\n");
+}
+
 } // namespace
 
 int main()
@@ -249,5 +365,6 @@ int main()
     test_cli_color_option_and_json_bypass();
     test_redirected_tcl_diagnostics_stay_plain();
     test_redirected_tcl_parse_errors_stay_plain();
+    test_stdio_handlers_are_exclusive_to_no_stream_simulate();
     return EXIT_SUCCESS;
 }

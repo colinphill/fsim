@@ -14,6 +14,35 @@
 #include <stdexcept>
 #include <string>
 
+namespace fsim::runtime {
+
+class PackedLogic4WideWriteScratchTestAccess final {
+public:
+    [[nodiscard]] static bool assign(
+        PackedLogic4& value,
+        const std::span<const std::uint64_t> aval,
+        const std::span<const std::uint64_t> bval) noexcept
+    {
+        return value.try_assign_wide_logic4_word_planes_noalloc(aval, bval);
+    }
+
+    [[nodiscard]] static std::span<const std::uint64_t>
+    aval(const PackedLogic4& value) noexcept
+    {
+        return std::span<const std::uint64_t> {
+            value.wide_storage()->aval };
+    }
+
+    [[nodiscard]] static std::span<const std::uint64_t>
+    bval(const PackedLogic4& value) noexcept
+    {
+        return std::span<const std::uint64_t> {
+            value.wide_storage()->bval };
+    }
+};
+
+} // namespace fsim::runtime
+
 namespace fsim::tests::runtime {
 
 namespace {
@@ -23,6 +52,89 @@ void require(const bool condition, const char* message)
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+void test_wide_logic4_write_scratch_assignment()
+{
+  using namespace fsim::runtime;
+
+  constexpr std::array<std::uint64_t, 3U> aval {
+      UINT64_C(0x0123456789abcdef), UINT64_C(0xfedcba9876543210),
+      UINT64_C(0xffffffffffffffff)
+  };
+  constexpr std::array<std::uint64_t, 3U> bval {
+      UINT64_C(0x1111111111111111), UINT64_C(0x2222222222222222),
+      UINT64_C(0xaaaaaaaaaaaaaaaa)
+  };
+  PackedLogic4 inline_value { 128U, Logic4::zero };
+  const auto inline_before = inline_value;
+  constexpr std::array<std::uint64_t, 2U> inline_aval {
+      UINT64_C(0x8877665544332211), UINT64_C(0x0123456789abcdef)
+  };
+  constexpr std::array<std::uint64_t, 2U> inline_bval {
+      UINT64_C(0x1111111111111111), UINT64_C(0xfedcba9876543210)
+  };
+  require(!PackedLogic4WideWriteScratchTestAccess::assign(
+              inline_value, inline_aval, inline_bval)
+          && inline_value == inline_before,
+      "inline Logic4 storage must decline the wide heap-scratch helper");
+
+  PackedLogic4 reusable { 129U, Logic4::zero };
+  const auto expected = PackedLogic4::from_word_planes(129U, aval, bval);
+  require(PackedLogic4WideWriteScratchTestAccess::assign(
+              reusable, aval, bval)
+          && reusable == expected,
+      "wide callback scratch must copy both planes and mask tail bits");
+
+  constexpr std::array<std::uint64_t, 3U> replacement_aval {
+      UINT64_C(0x8877665544332211), UINT64_C(0x123456789abcdef0),
+      UINT64_C(1)
+  };
+  constexpr std::array<std::uint64_t, 3U> replacement_bval {
+      UINT64_C(0x0101010101010101), UINT64_C(0x1010101010101010),
+      UINT64_C(0)
+  };
+  const auto replacement_expected = PackedLogic4::from_word_planes(
+      129U, replacement_aval, replacement_bval);
+  {
+      const auto shared = reusable;
+      require(!PackedLogic4WideWriteScratchTestAccess::assign(
+                  reusable, replacement_aval, replacement_bval)
+              && reusable == expected && shared == expected,
+          "a shared callback scratch must decline without changing snapshots");
+  }
+  require(PackedLogic4WideWriteScratchTestAccess::assign(
+              reusable, replacement_aval, replacement_bval)
+          && reusable == replacement_expected,
+      "a unique callback scratch must accept a changed image after release");
+
+  constexpr std::array<std::uint64_t, 2U> short_plane { 1U, 2U };
+  require(!PackedLogic4WideWriteScratchTestAccess::assign(
+              reusable, short_plane, short_plane)
+          && reusable == replacement_expected,
+      "a wrong-shaped callback image must decline without mutation");
+
+  const auto internal_aval
+      = PackedLogic4WideWriteScratchTestAccess::aval(reusable);
+  require(!PackedLogic4WideWriteScratchTestAccess::assign(
+              reusable, internal_aval, internal_aval)
+          && reusable == replacement_expected,
+      "cross-plane callback aliases must decline before either plane changes");
+
+  require(PackedLogic4WideWriteScratchTestAccess::assign(
+              reusable,
+              PackedLogic4WideWriteScratchTestAccess::aval(reusable),
+              PackedLogic4WideWriteScratchTestAccess::bval(reusable))
+          && reusable == replacement_expected,
+      "exact self-plane aliases may be retained without allocating");
+
+  PackedLogic4 logic9 { 129U, Logic4::zero };
+  logic9.set_logic9(0U, Logic9::u);
+  const auto logic9_before = logic9;
+  require(!PackedLogic4WideWriteScratchTestAccess::assign(
+              logic9, replacement_aval, replacement_bval)
+          && logic9 == logic9_before,
+      "the Logic4 scratch must reject Logic9 storage without mutation");
 }
 
 } // namespace
@@ -72,6 +184,8 @@ void test_logic4_word_primitives()
   require(
       one_bit.result() == Logic4Word { 1U, 1U, 0U },
       "narrow Logic4 word resolution must mask unused bits");
+
+  test_wide_logic4_write_scratch_assignment();
 
   constexpr std::array<Logic4Word, 4> wide_word_drivers {
       Logic4Word { 64U, 0U, 0U },
@@ -596,6 +710,87 @@ void test_packed_values() {
   require(nine.to_msb_string() == "U01ZWLH-", "nine-state round trip");
   require(collapse_to_logic4(nine).to_msb_string() == "X01ZX01X",
           "nine-state collapse");
+
+  std::array<std::uint64_t, 4> malformed_planes { };
+  for (std::size_t bit = 0; bit < 16U; ++bit) {
+    for (std::size_t plane = 0; plane < malformed_planes.size(); ++plane) {
+      if (((bit >> plane) & 1U) != 0U) {
+        malformed_planes[plane] |= std::uint64_t { 1 } << bit;
+      }
+    }
+  }
+  const Logic9Word malformed_word { 16U, malformed_planes };
+  const auto canonical_word_value
+      = PackedLogic4::from_logic9_word(malformed_word);
+  require(canonical_word_value.to_msb_string() == "XXXXXXX-HLWZ10XU",
+      "word ingress must preserve codes 0 through 8 and map 9 through 15 to X");
+  require(canonical_word_value.logic9_low_word().has_canonical_codes(),
+      "packed Logic9 words must retain canonical plane codes");
+
+  auto assigned_logic9_word = PackedLogic4::from_logic9_msb_string(
+      std::string(16U, 'U'));
+  assigned_logic9_word.assign_logic9_word(malformed_word);
+  require(assigned_logic9_word == canonical_word_value,
+      "Logic9 assignment must normalize malformed source codes");
+  auto masked_word = PackedLogic4::from_logic9_msb_string(
+      std::string(16U, '0'));
+  constexpr std::uint64_t malformed_lane_mask = std::uint64_t { 1 } << 9U;
+  masked_word.insert_masked_logic9_word(
+      malformed_word, malformed_lane_mask);
+  require(masked_word.get_logic9(9U) == Logic9::x
+          && masked_word.matches_masked_logic9_word(
+              malformed_word, malformed_lane_mask),
+      "masked Logic9 ingress and comparison must agree on malformed codes");
+
+  std::array<std::array<std::uint64_t, 3U>, 4U> wide_malformed_planes { };
+  const auto set_wide_code = [&](const std::size_t bit,
+                                 const std::uint8_t code) {
+    for (std::size_t plane = 0; plane < wide_malformed_planes.size(); ++plane) {
+      if (((code >> plane) & 1U) != 0U) {
+        wide_malformed_planes[plane][bit / 64U]
+            |= std::uint64_t { 1 } << (bit % 64U);
+      }
+    }
+  };
+  for (std::size_t bit = 0; bit < 16U; ++bit) {
+    set_wide_code(bit, static_cast<std::uint8_t>(bit));
+  }
+  set_wide_code(129U, 15U);
+  const auto wide_malformed = PackedLogic4::from_logic9_word_planes(
+      130U,
+      wide_malformed_planes[0],
+      wide_malformed_planes[1],
+      wide_malformed_planes[2],
+      wide_malformed_planes[3]);
+  for (std::size_t bit = 0; bit < 9U; ++bit) {
+    require(wide_malformed.get_logic9(bit)
+            == static_cast<Logic9>(bit),
+        "wide plane ingress must preserve every valid Logic9 code");
+  }
+  for (std::size_t bit = 9U; bit < 16U; ++bit) {
+    require(wide_malformed.get_logic9(bit) == Logic9::x,
+        "wide plane ingress must normalize every malformed Logic9 code");
+  }
+  require(wide_malformed.get_logic9(129U) == Logic9::x,
+      "wide Logic9 ingress must normalize malformed codes in the final word");
+
+  for (std::uint8_t code = 9U; code < 16U; ++code) {
+    const auto invalid = static_cast<Logic9>(code);
+    auto packed_four = PackedLogic4(1U, Logic4::zero);
+    packed_four.set_logic9(0U, invalid);
+    require(packed_four.get_logic9(0U) == Logic9::x,
+        "PackedLogic4 enum ingress must normalize invalid Logic9 values");
+    packed_four.fill(invalid);
+    require(packed_four.get_logic9(0U) == Logic9::x,
+        "PackedLogic4 fill must normalize invalid Logic9 values");
+    auto packed_nine = PackedLogic9(1U, Logic9::zero);
+    packed_nine.set(0U, invalid);
+    require(packed_nine.get(0U) == Logic9::x,
+        "PackedLogic9 enum ingress must normalize invalid values");
+    packed_nine.fill(invalid);
+    require(packed_nine.get(0U) == Logic9::x,
+        "PackedLogic9 fill must normalize invalid values");
+  }
 
   const auto exact =
       PackedValue::from_logic9_msb_string("U01ZWLH-");

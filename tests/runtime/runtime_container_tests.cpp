@@ -3,10 +3,16 @@
 
 #include "fsim/runtime/simir.hpp"
 
+#include <algorithm>
+#include <array>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::tests::runtime {
 
@@ -1478,6 +1484,840 @@ void test_simir_containers()
         "signal-backed container materialization refreshes after a backing "
         "signal revision and remains coherent on repeated reads");
 
+    {
+        Interpreter cross_domain;
+        auto origin_type = static_type;
+        origin_type.index_left = 0;
+        origin_type.index_right = 0;
+        origin_type.dimensions = { { 0, 0 } };
+        const auto backing = cross_domain.add_signal(
+            { "container_origin.backing", value(8, 0) });
+        const auto transaction = cross_domain.add_signal(
+            { "container_origin.transaction", value(1, 1) });
+        const auto object = cross_domain.add_container_object({
+            "container_origin.array",
+            default_container_value(origin_type), std::nullopt
+        });
+        cross_domain.add_container_signal_alias(
+            { object, backing, true, true });
+
+        struct Dispatch {
+            ProcessId process { };
+            SchedulerPhase phase { SchedulerPhase::active };
+            SimulationTick time { };
+            std::uint64_t delta { };
+            std::uint64_t systemverilog_round { };
+            PackedLogic4 container_element;
+        };
+        std::vector<Dispatch> dispatches;
+        cross_domain.set_output_hook(
+            [&](const ProcessId process,
+                const std::string_view,
+                const bool,
+                const SimulationTick time,
+                const std::uint64_t) {
+                const auto phase = cross_domain.scheduler().current_phase();
+                require(phase.has_value(),
+                    "container waiter must run in a scheduler phase");
+                dispatches.push_back({
+                    process, *phase, time,
+                    cross_domain.scheduler().delta(),
+                    cross_domain.scheduler().systemverilog_round(),
+                    cross_domain.container_object_value(object)
+                        .elements.front(),
+                });
+            });
+        const auto add_waiter = [&](const ProcessId id,
+                                    const std::string_view name,
+                                    const SignalId signal,
+                                    const ProcessSchedulingDomain domain) {
+            Process waiter;
+            waiter.id = id;
+            waiter.name = name;
+            waiter.scheduling_domain = domain;
+            waiter.operations = {
+                WaitOn { { signal } },
+                Display { std::string { name }, true },
+                Halt { },
+            };
+            return cross_domain.add_process(std::move(waiter));
+        };
+        const auto generic_backing = add_waiter(
+            0U, "generic backing waiter", backing,
+            ProcessSchedulingDomain::generic);
+        const auto sv_backing = add_waiter(
+            1U, "SV backing waiter", backing,
+            ProcessSchedulingDomain::systemverilog);
+        const auto generic_transaction = add_waiter(
+            2U, "generic transaction waiter", transaction,
+            ProcessSchedulingDomain::generic);
+        const auto sv_transaction = add_waiter(
+            3U, "SV transaction waiter", transaction,
+            ProcessSchedulingDomain::systemverilog);
+
+        Process writer;
+        writer.id = 4U;
+        writer.name = "container_origin_systemverilog_writer";
+        writer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        writer.register_count = 2U;
+        writer.operations = {
+            WaitFor { 1U },
+            LoadConstant { 0U, value(32U, 0U) },
+            LoadConstant { 1U, value(8U, 0xaaU) },
+            WriteContainerObjectElement {
+                object, 0U, 1U, true, false, true,
+                transaction, std::nullopt,
+            },
+            Halt { },
+        };
+        (void)cross_domain.add_process(std::move(writer));
+
+        const auto result = cross_domain.run();
+        const auto dispatch_for = [&](const ProcessId process) {
+            return std::ranges::find(
+                dispatches, process, &Dispatch::process);
+        };
+        const auto generic_backing_dispatch
+            = dispatch_for(generic_backing);
+        const auto sv_backing_dispatch = dispatch_for(sv_backing);
+        const auto generic_transaction_dispatch
+            = dispatch_for(generic_transaction);
+        const auto sv_transaction_dispatch = dispatch_for(sv_transaction);
+        require(
+            result.status == RunStatus::completed
+                && dispatches.size() == 4U
+                && generic_backing_dispatch != dispatches.end()
+                && sv_backing_dispatch != dispatches.end()
+                && generic_transaction_dispatch != dispatches.end()
+                && sv_transaction_dispatch != dispatches.end()
+                && cross_domain.signal_value(backing) == value(8U, 0xaaU)
+                && cross_domain.signal_value(transaction) == value(1U, 0U)
+                && cross_domain.container_object_value(object)
+                    .elements.front() == value(8U, 0xaaU),
+            "SV container NBA publishes its aliased value and transaction");
+        require(
+            generic_backing_dispatch->phase == SchedulerPhase::active
+                && generic_backing_dispatch->time == 1U
+                && generic_backing_dispatch->delta > 0U
+                && generic_transaction_dispatch->phase
+                    == SchedulerPhase::active
+                && generic_transaction_dispatch->time == 1U
+                && generic_transaction_dispatch->delta > 0U,
+            "container NBA wakes generic observers across a generic cycle");
+        require(
+            sv_backing_dispatch->phase == SchedulerPhase::active
+                && sv_backing_dispatch->time == 1U
+                && sv_backing_dispatch->systemverilog_round > 0U
+                && sv_transaction_dispatch->phase == SchedulerPhase::active
+                && sv_transaction_dispatch->time == 1U
+                && sv_transaction_dispatch->systemverilog_round > 0U,
+            "container NBA wakes SV observers in Active rounds");
+        require(
+            generic_transaction_dispatch->container_element == value(8U, 0xaaU)
+                && sv_transaction_dispatch->container_element == value(8U, 0xaaU),
+            "transaction observers see the aliased container publication when they wake");
+    }
+
+    Interpreter element_nets;
+    auto element_net_type = fixed_type(static_type, 4, 3);
+    element_net_type.element_width = 8U;
+    const auto element_net_zero = element_nets.add_signal(
+        { "element_net[4]", value(8, 0x12U) });
+    const auto element_net_one = element_nets.add_signal(
+        { "element_net[3]", value(8, 0x34U) });
+    const auto element_net_object = element_nets.add_container_object(
+        { "element_net", default_container_value(element_net_type),
+            std::nullopt });
+    element_nets.add_container_element_signal_alias(
+        { element_net_object, 0U, element_net_zero, true, true });
+    element_nets.add_container_element_signal_alias(
+        { element_net_object, 1U, element_net_one, true, true });
+    std::vector<std::pair<std::size_t, PackedLogic4>> element_changes;
+    element_nets.set_container_element_change_hook(
+        [&](const auto object, const auto ordinal, const auto& changed,
+            const auto) {
+            require(object == element_net_object,
+                "element-net publication retains the logical array handle");
+            element_changes.emplace_back(ordinal, changed);
+        });
+    require(
+        element_nets.container_object_value(element_net_object).elements
+            == std::vector<PackedLogic4> { value(8, 0x12U),
+                value(8, 0x34U) },
+        "logical fixed-array reads compose independently stored elements");
+    element_nets.deposit_signal(element_net_one, value(8, 0x35U));
+    require(
+        element_nets.container_object_value(element_net_object).elements[1]
+            == value(8, 0x35U),
+        "direct leaf-signal deposits update logical array observations");
+    std::size_t force_stored_notifications { };
+    element_nets.set_stored_signal_change_hook(
+        [&](const SignalId, const SimulationTick) {
+            ++force_stored_notifications;
+        });
+    element_nets.force_signal(element_net_zero, value(8, 0x56U));
+    require(
+        element_nets.container_object_value(element_net_object).elements[0]
+            == value(8, 0x56U),
+        "logical array reads expose a forced element's effective value");
+    element_nets.release_signal(element_net_zero);
+    require(
+        element_nets.container_object_value(element_net_object).elements[0]
+            == value(8, 0x12U),
+        "releasing one element force restores its stored value");
+    require(force_stored_notifications == 0U,
+        "element force and release do not publish stored-value changes");
+    element_nets.set_stored_signal_change_hook({ });
+    element_nets.deposit_container_object_element(
+        element_net_object, 1U, value(8, 0x78U));
+    auto element_net_replacement
+        = element_nets.container_object_value(element_net_object);
+    element_net_replacement.elements = { value(8, 0x9aU),
+        value(8, 0xbcU) };
+    element_nets.deposit_container_object(
+        element_net_object, element_net_replacement);
+    const auto dynamic_element_observation = element_nets.add_signal(
+        { "element_net.dynamic_observation", value(8, 0U) });
+    Process dynamic_element_reader;
+    dynamic_element_reader.id = 0U;
+    dynamic_element_reader.name = "dynamic_element_reader";
+    dynamic_element_reader.register_count = 2U;
+    dynamic_element_reader.container_register_count = 1U;
+    dynamic_element_reader.container_register_types = { element_net_type };
+    dynamic_element_reader.operations = {
+        ReadContainerObject { 0U, element_net_object },
+        LoadConstant { 0U, value(32U, 3U) },
+        ContainerRead { 1U, 0U, 0U, true },
+        WriteBlocking { dynamic_element_observation, 1U },
+        Halt { }
+    };
+    (void)element_nets.add_process(std::move(dynamic_element_reader));
+    require(element_nets.run().status == RunStatus::completed,
+        "element alias dynamic reader completes");
+    require(element_nets.signal_value(dynamic_element_observation)
+            == value(8, 0xbcU),
+        "element alias dynamic index reads the selected leaf");
+    require(element_nets.signal_value(element_net_zero) == value(8, 0x9aU)
+            && element_nets.signal_value(element_net_one) == value(8, 0xbcU),
+        "whole-array deposit installs both element values");
+    require(element_nets.container_object_value(element_net_object).elements
+            == element_net_replacement.elements,
+        "whole-array reads agree with the deposited element values");
+    const auto expected_element_changes
+        = std::vector<std::pair<std::size_t, PackedLogic4>> {
+            { 1U, value(8, 0x35U) },
+            { 0U, value(8, 0x56U) },
+            { 0U, value(8, 0x12U) },
+            { 1U, value(8, 0x78U) },
+            { 0U, value(8, 0x9aU) },
+            { 1U, value(8, 0xbcU) } };
+    require(element_changes.size() == expected_element_changes.size(),
+        "element alias callback count: expected "
+            + std::to_string(expected_element_changes.size()) + ", got "
+            + std::to_string(element_changes.size()));
+    for (std::size_t index = 0U; index < element_changes.size(); ++index) {
+        require(element_changes[index] == expected_element_changes[index],
+            "element alias callback " + std::to_string(index)
+                + " observed ordinal "
+                + std::to_string(element_changes[index].first)
+                + " value " + element_changes[index].second.to_msb_string());
+    }
+
+    Interpreter driven_element_nets;
+    auto driven_element_type = fixed_type(static_type, 1, 0);
+    driven_element_type.element_width = 4U;
+    const auto driven_element_first = driven_element_nets.add_signal(
+        { "driven_element_net[1]",
+            PackedLogic4::from_msb_string("ZZZZ"),
+            ResolutionKind::sv_wire });
+    const auto driven_element_second = driven_element_nets.add_signal(
+        { "driven_element_net[0]",
+            PackedLogic4::from_msb_string("ZZZZ"),
+            ResolutionKind::sv_wire });
+    const auto driven_element_aggregate
+        = driven_element_nets.add_signal(
+            { "driven_element_net",
+                PackedLogic4::from_msb_string("ZZZZZZZZ"),
+                ResolutionKind::sv_wire });
+    const auto driven_element_object
+        = driven_element_nets.add_container_object(
+            { "driven_element_net",
+                default_container_value(driven_element_type),
+                std::nullopt });
+    driven_element_nets.add_container_element_signal_alias(
+        { driven_element_object, 0U, driven_element_first, true, true });
+    driven_element_nets.add_container_element_signal_alias(
+        { driven_element_object, 1U, driven_element_second, true, true });
+    driven_element_nets.add_container_aggregate_signal_alias(
+        { driven_element_object, driven_element_aggregate, true, false });
+    require(
+        driven_element_nets.signal_value(driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZZZZZZZ")
+            && driven_element_nets.stored_signal_value(
+                   driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZZZZZZZ"),
+        "aggregate signal projections begin from authoritative leaf values");
+    std::vector<std::pair<std::size_t, std::string>> driven_element_changes;
+    std::vector<ContainerObjectId> driven_object_changes;
+    driven_element_nets.set_container_object_change_hook(
+        [&](const auto object, const auto) {
+            driven_object_changes.push_back(object);
+        });
+    driven_element_nets.set_container_element_change_hook(
+        [&](const auto object, const auto ordinal, const auto& changed,
+            const auto) {
+            require(object == driven_element_object,
+                "driver publication retains the logical array object");
+            driven_element_changes.emplace_back(
+                ordinal, changed.to_msb_string());
+        });
+    ProcessId next_element_writer { };
+    const auto make_element_writer = [&](const std::string_view name,
+                                         const SignalId signal,
+                                         const std::uint32_t index,
+                                         const PackedLogic4& data,
+                                         const bool nonblocking,
+                                         const std::optional<DynamicPartIndex>& part) {
+        Process writer;
+        writer.id = next_element_writer++;
+        writer.name = std::string { name };
+        writer.register_count = 3U;
+        writer.driver_regions.push_back({ signal, 0U, 4U, false });
+        writer.operations = {
+            LoadConstant { 0U, value(32U, index) },
+            LoadConstant { 1U, data },
+            LoadConstant { 2U, value(32U, 0U) },
+            WriteContainerObjectElement {
+                driven_element_object, 0U, 1U, true, false,
+                nonblocking, std::nullopt, part },
+            Halt { },
+        };
+        return driven_element_nets.add_process(std::move(writer));
+    };
+    const DynamicPartIndex low_pair {
+        2U, 3, 0, 0U, 2U, true, true };
+    const auto first_element_driver = make_element_writer(
+        "element_net_first_driver", driven_element_first, 1U,
+        PackedLogic4::from_msb_string("10"), false, low_pair);
+    const auto second_element_driver = make_element_writer(
+        "element_net_second_driver", driven_element_first, 1U,
+        PackedLogic4::from_msb_string("01"), true, low_pair);
+    const auto independent_element_driver = make_element_writer(
+        "element_net_independent_driver", driven_element_second, 0U,
+        PackedLogic4::from_msb_string("1100"), false, std::nullopt);
+    require(
+        driven_element_nets.run().status == RunStatus::completed
+            && driven_element_nets.driver_value(
+                   first_element_driver, driven_element_first)
+                == PackedLogic4::from_msb_string("ZZ10")
+            && driven_element_nets.driver_value(
+                   second_element_driver, driven_element_first)
+                == PackedLogic4::from_msb_string("ZZ01")
+            && driven_element_nets.signal_value(driven_element_first)
+                == PackedLogic4::from_msb_string("ZZXX")
+            && driven_element_nets.driver_value(
+                   independent_element_driver, driven_element_second)
+                == PackedLogic4::from_msb_string("1100")
+            && driven_element_nets.signal_value(driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZXX1100")
+            && driven_element_nets.stored_signal_value(
+                   driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZXX1100")
+            && driven_element_nets.driver_value(
+                   first_element_driver, driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZ10ZZZZ")
+            && driven_element_nets.driver_value(
+                   independent_element_driver, driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZZZ1100")
+            && driven_element_nets.container_object_value(
+                   driven_element_object).elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("ZZXX"),
+                    PackedLogic4::from_msb_string("1100") }
+            && driven_element_changes
+                == std::vector<std::pair<std::size_t, std::string>> {
+                    { 0U, "ZZ10" }, { 1U, "1100" }, { 0U, "ZZXX" } }
+            && driven_object_changes
+                == std::vector<ContainerObjectId> {
+                    driven_element_object, driven_element_object,
+                    driven_element_object },
+        "element-backed dynamic and nonblocking writes preserve each leaf's "
+        "original driver and publish each observable element change");
+
+    driven_element_nets.force_signal(
+        driven_element_first, PackedLogic4::from_msb_string("0000"));
+    require(
+        driven_element_nets.signal_is_forced(driven_element_aggregate)
+            && driven_element_nets.signal_value(driven_element_aggregate)
+                == PackedLogic4::from_msb_string("00001100")
+            && driven_element_nets.stored_signal_value(
+                   driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZXX1100"),
+        "aggregate handles project forced current values separately from "
+        "their stored raw-driver resolution");
+    auto aggregate_deposit_rejected = false;
+    try {
+        driven_element_nets.deposit_signal(
+            driven_element_aggregate,
+            PackedLogic4::from_msb_string("00000000"));
+    } catch (const std::logic_error&) {
+        aggregate_deposit_rejected = true;
+    }
+    require(
+        aggregate_deposit_rejected
+            && driven_element_nets.signal_value(driven_element_aggregate)
+                == PackedLogic4::from_msb_string("00001100"),
+        "the incomplete aggregate mutation bridge rejects a write without "
+        "altering authoritative element storage");
+    driven_element_nets.release_signal(driven_element_first);
+    require(
+        !driven_element_nets.signal_is_forced(driven_element_aggregate)
+            && driven_element_nets.signal_value(driven_element_aggregate)
+                == PackedLogic4::from_msb_string("ZZXX1100"),
+        "aggregate forced status clears after the final element release");
+
+    Interpreter writable_aggregate;
+    auto writable_aggregate_type = fixed_type(static_type, 1, 0);
+    writable_aggregate_type.element_width = 4U;
+    const auto writable_aggregate_first = writable_aggregate.add_signal(
+        { "writable_aggregate[1]", PackedLogic4(4U, Logic4::z),
+            ResolutionKind::sv_wire });
+    const auto writable_aggregate_second = writable_aggregate.add_signal(
+        { "writable_aggregate[0]", PackedLogic4(4U, Logic4::z),
+            ResolutionKind::sv_wire });
+    const auto writable_aggregate_proxy = writable_aggregate.add_signal(
+        { "writable_aggregate", PackedLogic4(8U, Logic4::z),
+            ResolutionKind::sv_wire });
+    const auto writable_aggregate_object
+        = writable_aggregate.add_container_object({
+            "writable_aggregate",
+            ContainerValue {
+                writable_aggregate_type,
+                { PackedLogic4(4U, Logic4::z),
+                    PackedLogic4(4U, Logic4::z) },
+                { } },
+            std::nullopt });
+    writable_aggregate.add_container_element_signal_alias({
+        writable_aggregate_object, 0U, writable_aggregate_first,
+        true, true });
+    writable_aggregate.add_container_element_signal_alias({
+        writable_aggregate_object, 1U, writable_aggregate_second,
+        true, true });
+    writable_aggregate.add_container_aggregate_signal_alias({
+        writable_aggregate_object, writable_aggregate_proxy, true, true });
+    auto writable_aggregate_slice_type = writable_aggregate_type;
+    writable_aggregate_slice_type.index_right = 1;
+    writable_aggregate_slice_type.dimensions = { { 1, 1 } };
+    const auto writable_aggregate_slice
+        = writable_aggregate.add_container_object({
+            "writable_aggregate.slice",
+            ContainerValue {
+                writable_aggregate_slice_type,
+                { PackedLogic4(4U, Logic4::z) },
+                { } },
+            ContainerSliceAlias { writable_aggregate_object, 1, 1 } });
+    const auto writable_proxy_view
+        = writable_aggregate.add_container_object({
+            "writable_aggregate.proxy_view",
+            ContainerValue {
+                writable_aggregate_type,
+                { PackedLogic4(4U, Logic4::z),
+                    PackedLogic4(4U, Logic4::z) },
+                { } },
+            std::nullopt });
+    writable_aggregate.add_container_signal_alias({
+        writable_proxy_view, writable_aggregate_proxy, true, false });
+    auto writable_proxy_slice_type = writable_aggregate_type;
+    writable_proxy_slice_type.index_right = 1;
+    writable_proxy_slice_type.dimensions = { { 1, 1 } };
+    const auto writable_proxy_slice
+        = writable_aggregate.add_container_object({
+            "writable_aggregate.proxy_slice",
+            ContainerValue {
+                writable_proxy_slice_type,
+                { PackedLogic4(4U, Logic4::z) },
+                { } },
+            ContainerSliceAlias { writable_proxy_view, 1, 1 } });
+    const auto* const retained_writable_aggregate
+        = &writable_aggregate.container_object_value(
+            writable_aggregate_object);
+    const auto* const retained_writable_aggregate_slice
+        = &writable_aggregate.container_object_value(
+            writable_aggregate_slice);
+    const auto* const retained_writable_proxy_view
+        = &writable_aggregate.container_object_value(writable_proxy_view);
+    const auto* const retained_writable_proxy_slice
+        = &writable_aggregate.container_object_value(writable_proxy_slice);
+    const auto* const retained_writable_elements
+        = retained_writable_aggregate->elements.data();
+    const auto* const retained_writable_slice_elements
+        = retained_writable_aggregate_slice->elements.data();
+    const auto* const retained_writable_proxy_elements
+        = retained_writable_proxy_view->elements.data();
+    const auto* const retained_writable_proxy_slice_elements
+        = retained_writable_proxy_slice->elements.data();
+    std::vector<std::string> aggregate_proxy_publications;
+    std::vector<std::string> proxy_view_callback_values;
+    std::vector<std::size_t> writable_element_publications;
+    std::vector<ContainerObjectId> writable_object_publications;
+    std::vector<std::string> writable_object_values;
+    writable_aggregate.set_signal_change_hook(
+        [&](const SignalId signal, const PackedLogic4& changed,
+            const SimulationTick) {
+            if (signal == writable_aggregate_proxy) {
+                aggregate_proxy_publications.push_back(
+                    changed.to_msb_string());
+                proxy_view_callback_values.push_back(
+                    retained_writable_proxy_view->elements[0U]
+                        .to_msb_string()
+                    + retained_writable_proxy_view->elements[1U]
+                        .to_msb_string()
+                    + ":"
+                    + retained_writable_proxy_slice->elements[0U]
+                        .to_msb_string());
+            }
+        });
+    writable_aggregate.set_container_element_change_hook(
+        [&](const ContainerObjectId object, const std::size_t ordinal,
+            const PackedLogic4&, const SimulationTick) {
+            if (object == writable_aggregate_object) {
+                writable_element_publications.push_back(ordinal);
+            }
+        });
+    writable_aggregate.set_container_object_change_hook(
+        [&](const ContainerObjectId object, const SimulationTick) {
+            writable_object_publications.push_back(object);
+            const auto& elements
+                = writable_aggregate.container_object_value(object).elements;
+            writable_object_values.push_back(
+                elements[0].to_msb_string()
+                + elements[1].to_msb_string());
+        });
+    const auto aggregate_deposit
+        = PackedLogic4::from_msb_string("10101011");
+    writable_aggregate.deposit_signal(
+        writable_aggregate_proxy, aggregate_deposit);
+    require(
+        writable_aggregate.signal_value(writable_aggregate_proxy)
+                == aggregate_deposit
+            && writable_aggregate.stored_signal_value(
+                   writable_aggregate_proxy)
+                == aggregate_deposit
+            && writable_aggregate.signal_value(writable_aggregate_first)
+                == PackedLogic4::from_msb_string("1010")
+            && writable_aggregate.signal_value(writable_aggregate_second)
+                == PackedLogic4::from_msb_string("1011")
+            && retained_writable_aggregate->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010"),
+                    PackedLogic4::from_msb_string("1011") }
+            && retained_writable_aggregate_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010") }
+            && retained_writable_aggregate->elements.data()
+                == retained_writable_elements
+            && retained_writable_aggregate_slice->elements.data()
+                == retained_writable_slice_elements
+            && retained_writable_proxy_view->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010"),
+                    PackedLogic4::from_msb_string("1011") }
+            && retained_writable_proxy_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010") }
+            && retained_writable_proxy_view->elements.data()
+                == retained_writable_proxy_elements
+            && retained_writable_proxy_slice->elements.data()
+                == retained_writable_proxy_slice_elements
+            && proxy_view_callback_values
+                == std::vector<std::string> { "10101011:1010" }
+            && aggregate_proxy_publications
+                == std::vector<std::string> { "10101011" }
+            && writable_element_publications
+                == std::vector<std::size_t> { 0U, 1U }
+            && writable_object_publications
+                == std::vector<ContainerObjectId> {
+                    writable_aggregate_object },
+        "a whole aggregate deposit translates to leaf storage while "
+        "publishing each leaf and one atomic aggregate change");
+    writable_aggregate.force_signal(
+        writable_aggregate_proxy,
+        PackedLogic4::from_msb_string("01010100"));
+    writable_aggregate.force_signal_slice(
+        writable_aggregate_proxy,
+        PackedLogic4::from_msb_string("01"), 3U);
+    require(
+        writable_aggregate.signal_is_forced(writable_aggregate_proxy)
+            && writable_aggregate.signal_value(writable_aggregate_proxy)
+                == PackedLogic4::from_msb_string("01001100")
+            && writable_aggregate.stored_signal_value(
+                   writable_aggregate_proxy)
+                == aggregate_deposit
+            && retained_writable_aggregate->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0100"),
+                    PackedLogic4::from_msb_string("1100") }
+            && retained_writable_aggregate_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0100") }
+            && retained_writable_proxy_view->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0100"),
+                    PackedLogic4::from_msb_string("1100") }
+            && retained_writable_proxy_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0100") }
+            && retained_writable_aggregate->elements.data()
+                == retained_writable_elements
+            && retained_writable_aggregate_slice->elements.data()
+                == retained_writable_slice_elements
+            && retained_writable_proxy_view->elements.data()
+                == retained_writable_proxy_elements
+            && retained_writable_proxy_slice->elements.data()
+                == retained_writable_proxy_slice_elements
+            && aggregate_proxy_publications
+                == std::vector<std::string> {
+                    "10101011", "01010100", "01001100" },
+        "aggregate full and cross-element partial forces compose leaf masks "
+        "without changing stored values");
+    writable_aggregate.release_signal_slice(
+        writable_aggregate_proxy, 3U, 2U);
+    writable_aggregate.release_signal(writable_aggregate_proxy);
+    // Current-only force changes also publish the logical container object
+    // so bound VPI memory words observe the same complete value.
+    require(
+        !writable_aggregate.signal_is_forced(writable_aggregate_proxy)
+            && writable_aggregate.signal_value(writable_aggregate_proxy)
+                == aggregate_deposit
+            && retained_writable_aggregate->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010"),
+                    PackedLogic4::from_msb_string("1011") }
+            && retained_writable_aggregate_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010") }
+            && retained_writable_aggregate->elements.data()
+                == retained_writable_elements
+            && retained_writable_aggregate_slice->elements.data()
+                == retained_writable_slice_elements
+            && retained_writable_proxy_view->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010"),
+                    PackedLogic4::from_msb_string("1011") }
+            && retained_writable_proxy_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("1010") }
+            && retained_writable_proxy_view->elements.data()
+                == retained_writable_proxy_elements
+            && retained_writable_proxy_slice->elements.data()
+                == retained_writable_proxy_slice_elements
+            && aggregate_proxy_publications
+                == std::vector<std::string> {
+                    "10101011", "01010100", "01001100",
+                    "10101011" }
+            && proxy_view_callback_values
+                == std::vector<std::string> {
+                    "10101011:1010", "01010100:0101",
+                    "01001100:0100", "10101011:1010" }
+            && writable_object_publications.size() == 4U
+            && writable_object_values
+                == std::vector<std::string> {
+                    "10101011", "01010100", "01001100", "10101011" },
+        "aggregate force release splits partial masks and republishes only "
+        "the final visible value");
+    const auto aggregate_scheduled
+        = PackedLogic4::from_msb_string("01010101");
+    writable_aggregate.schedule_signal_at(
+        writable_aggregate_proxy, aggregate_scheduled, 1U);
+    require(
+        writable_aggregate.run().status == RunStatus::completed
+            && writable_aggregate.signal_value(writable_aggregate_proxy)
+                == aggregate_scheduled
+            && writable_aggregate.stored_signal_value(
+                   writable_aggregate_proxy)
+                == aggregate_scheduled
+            && aggregate_proxy_publications.back() == "01010101"
+            && aggregate_proxy_publications.size() == 5U
+            && retained_writable_proxy_view->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0101"),
+                    PackedLogic4::from_msb_string("0101") }
+            && retained_writable_proxy_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0101") }
+            && retained_writable_proxy_view->elements.data()
+                == retained_writable_proxy_elements
+            && retained_writable_proxy_slice->elements.data()
+                == retained_writable_proxy_slice_elements
+            && writable_object_publications.size() == 5U
+            && writable_object_values
+                == std::vector<std::string> {
+                    "10101011", "01010100", "01001100", "10101011",
+                    "01010101" },
+        "scheduled aggregate updates distribute persistent external drives "
+        "across the leaves and publish once");
+    writable_aggregate.deposit_signal(
+        writable_aggregate_second,
+        PackedLogic4::from_msb_string("0010"));
+    require(
+        writable_aggregate.signal_value(writable_aggregate_proxy)
+                == PackedLogic4::from_msb_string("01010010")
+            && retained_writable_aggregate->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0101"),
+                    PackedLogic4::from_msb_string("0010") }
+            && retained_writable_aggregate_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0101") }
+            && retained_writable_aggregate->elements.data()
+                == retained_writable_elements
+            && retained_writable_aggregate_slice->elements.data()
+                == retained_writable_slice_elements
+            && retained_writable_proxy_view->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0101"),
+                    PackedLogic4::from_msb_string("0010") }
+            && retained_writable_proxy_slice->elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("0101") }
+            && retained_writable_proxy_view->elements.data()
+                == retained_writable_proxy_elements
+            && retained_writable_proxy_slice->elements.data()
+                == retained_writable_proxy_slice_elements
+            && proxy_view_callback_values.back() == "01010010:0101"
+            && proxy_view_callback_values.size() == 6U,
+        "an individual leaf publication refreshes retained aggregate and "
+        "slice references without changing their backing addresses");
+
+    {
+        Interpreter nested_publication;
+        auto family_type = writable_aggregate_type;
+        const auto first = nested_publication.add_signal({
+            "nested_reference[1]", PackedLogic4(4U, Logic4::z),
+            ResolutionKind::sv_wire });
+        const auto second = nested_publication.add_signal({
+            "nested_reference[0]", PackedLogic4(4U, Logic4::z),
+            ResolutionKind::sv_wire });
+        const auto proxy = nested_publication.add_signal({
+            "nested_reference", PackedLogic4(8U, Logic4::z),
+            ResolutionKind::sv_wire });
+        const auto family = nested_publication.add_container_object({
+            "nested_reference",
+            ContainerValue {
+                family_type,
+                { PackedLogic4(4U, Logic4::z),
+                    PackedLogic4(4U, Logic4::z) },
+                { } },
+            std::nullopt });
+        nested_publication.add_container_element_signal_alias(
+            { family, 0U, first, true, true });
+        nested_publication.add_container_element_signal_alias(
+            { family, 1U, second, true, true });
+        nested_publication.add_container_aggregate_signal_alias(
+            { family, proxy, true, true });
+        const auto view = nested_publication.add_container_object({
+            "nested_reference.view",
+            ContainerValue {
+                family_type,
+                { PackedLogic4(4U, Logic4::z),
+                    PackedLogic4(4U, Logic4::z) },
+                { } },
+            std::nullopt });
+        nested_publication.add_container_signal_alias(
+            { view, proxy, true, false });
+        auto view_slice_type = family_type;
+        view_slice_type.index_right = 1;
+        view_slice_type.dimensions = { { 1, 1 } };
+        const auto view_slice = nested_publication.add_container_object({
+            "nested_reference.view_slice",
+            ContainerValue {
+                view_slice_type, { PackedLogic4(4U, Logic4::z) }, { } },
+            ContainerSliceAlias { view, 1, 1 } });
+
+        const auto inner_value = PackedLogic4::from_msb_string("10100101");
+        const auto outer_value = PackedLogic4::from_msb_string("01011010");
+        const ContainerValue* retained_view { };
+        const ContainerValue* retained_slice { };
+        const auto* retained_view_elements
+            = static_cast<const PackedLogic4*>(nullptr);
+        const auto* retained_slice_elements
+            = static_cast<const PackedLogic4*>(nullptr);
+        bool outer_stored_hook { };
+        bool late_exposure { };
+        std::string first_exposed_value;
+        std::string after_inner_publication;
+        std::vector<std::string> proxy_callbacks;
+        nested_publication.set_stored_signal_change_hook(
+            [&](const SignalId changed, const SimulationTick) {
+                if (changed != first) {
+                    return;
+                }
+                if (!outer_stored_hook) {
+                    outer_stored_hook = true;
+                    nested_publication.deposit_signal(proxy, outer_value);
+                    after_inner_publication
+                        = retained_view->elements[0U].to_msb_string()
+                        + retained_view->elements[1U].to_msb_string()
+                        + ":"
+                        + retained_slice->elements[0U].to_msb_string();
+                    return;
+                }
+                if (late_exposure) {
+                    return;
+                }
+                retained_slice
+                    = &nested_publication.container_object_value(view_slice);
+                retained_view
+                    = &nested_publication.container_object_value(view);
+                retained_view_elements = retained_view->elements.data();
+                retained_slice_elements = retained_slice->elements.data();
+                first_exposed_value
+                    = retained_view->elements[0U].to_msb_string()
+                    + retained_view->elements[1U].to_msb_string()
+                    + ":"
+                    + retained_slice->elements[0U].to_msb_string();
+                late_exposure = true;
+            });
+        nested_publication.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4& current,
+                const SimulationTick) {
+                if (changed == proxy && retained_view != nullptr) {
+                    proxy_callbacks.push_back(
+                        current.to_msb_string() + ":"
+                        + retained_view->elements[0U].to_msb_string()
+                        + retained_view->elements[1U].to_msb_string()
+                        + ":"
+                        + retained_slice->elements[0U].to_msb_string());
+                }
+            });
+
+        nested_publication.deposit_signal(proxy, inner_value);
+        // The nested deposit publishes before the original captured family
+        // resumes, so retained references see both complete values in order.
+        require(
+            outer_stored_hook && late_exposure
+                && first_exposed_value == "ZZZZZZZZ:ZZZZ"
+                && after_inner_publication == "01011010:0101"
+                && proxy_callbacks
+                    == std::vector<std::string> {
+                        "01011010:01011010:0101",
+                        "10100101:10100101:1010" }
+                && retained_view != nullptr && retained_slice != nullptr
+                && retained_view->elements.data() == retained_view_elements
+                && retained_slice->elements.data()
+                    == retained_slice_elements
+                && retained_view->elements
+                    == std::vector<PackedLogic4> {
+                        PackedLogic4::from_msb_string("1010"),
+                        PackedLogic4::from_msb_string("0101") }
+                && retained_slice->elements
+                    == std::vector<PackedLogic4> {
+                        PackedLogic4::from_msb_string("1010") },
+            "nested preflighted family publications each retain independent "
+            "scratch when a proxy-backed container reference is first exposed");
+    }
+
     Interpreter nonblocking;
     ContainerType dynamic_type = static_type;
     dynamic_type.fixed = false;
@@ -1703,6 +2543,59 @@ void test_simir_containers()
             && slice_aliases.container_object_value(slice_formal_object).elements == std::vector<PackedLogic4> { value(8, 0x40), value(8, 0xa3), value(8, 0xa2) },
         "nested slice-alias deposits atomically replace only the selected "
         "root range and refresh every ordinal view");
+
+    auto element_slice_parent_type = fixed_type(static_type, 1, 0);
+    const PackedLogic4 high_impedance_word
+        = PackedLogic4::from_msb_string("ZZZZZZZZ");
+    Interpreter element_slice_aliases;
+    const auto element_slice_first = element_slice_aliases.add_signal(
+        { "element_slice_parent[1]", high_impedance_word,
+            ResolutionKind::sv_wire });
+    const auto element_slice_second = element_slice_aliases.add_signal(
+        { "element_slice_parent[0]", high_impedance_word,
+            ResolutionKind::sv_wire });
+    const auto element_slice_parent =
+        element_slice_aliases.add_container_object(
+            { "element_slice_parent",
+                default_container_value(element_slice_parent_type),
+                std::nullopt });
+    element_slice_aliases.add_container_element_signal_alias(
+        { element_slice_parent, 0U, element_slice_first, true, true });
+    element_slice_aliases.add_container_element_signal_alias(
+        { element_slice_parent, 1U, element_slice_second, true, true });
+    const auto element_slice_formal_type = fixed_type(static_type, 9, 8);
+    const auto element_slice_formal =
+        element_slice_aliases.add_container_object(
+            { "element_slice_formal",
+                default_container_value(element_slice_formal_type),
+                ContainerSliceAlias { element_slice_parent, 1, 0 } });
+    Process element_slice_writer;
+    element_slice_writer.id = 0U;
+    element_slice_writer.name = "element_slice_writer";
+    element_slice_writer.register_count = 2U;
+    element_slice_writer.driver_regions.push_back(
+        { element_slice_first, 0U, 8U, false });
+    element_slice_writer.operations = {
+        LoadConstant { 0U, value(32U, 9U) },
+        LoadConstant { 1U, value(8U, 0xa5U) },
+        WriteContainerObjectElement {
+            element_slice_formal, 0U, 1U, true, false, false,
+            std::nullopt, std::nullopt },
+        Halt { },
+    };
+    const auto element_slice_process = element_slice_aliases.add_process(
+        std::move(element_slice_writer));
+    require(
+        element_slice_aliases.run().status == RunStatus::completed
+            && element_slice_aliases.driver_value(
+                   element_slice_process, element_slice_first)
+                == value(8U, 0xa5U)
+            && element_slice_aliases.signal_value(element_slice_first)
+                == value(8U, 0xa5U)
+            && element_slice_aliases.signal_value(element_slice_second)
+                == high_impedance_word,
+        "element-backed slice writes retain their originating process on "
+        "the selected leaf signal");
 
     const auto expect_invalid_slice_alias =
         [&](const ContainerType& formal,
@@ -2014,6 +2907,855 @@ void test_simir_containers()
                     .elements.size()
                 == 4097U,
         "associative arrays retain entries beyond the former hard cap");
+}
+
+void test_simir_retained_commit_hook_phase_and_alias_materialization()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    {
+        Interpreter interpreter;
+        const auto signal = interpreter.add_signal({
+            "stored_hook.signal", PackedLogic4::from_msb_string("00")
+        });
+        std::vector<std::pair<std::string, std::string>> stored_snapshots;
+        std::vector<std::pair<std::string, std::string>> visible_snapshots;
+        std::size_t stored_calls { };
+        interpreter.set_stored_signal_change_hook(
+            [&](const SignalId changed, const SimulationTick) {
+                if (changed != signal) {
+                    return;
+                }
+                stored_snapshots.emplace_back(
+                    interpreter.stored_signal_value(signal).to_msb_string(),
+                    interpreter.signal_value(signal).to_msb_string());
+                if (++stored_calls == 1U) {
+                    interpreter.deposit_signal(
+                        signal, PackedLogic4::from_msb_string("00"));
+                    interpreter.force_signal_slice(
+                        signal, PackedLogic4::from_msb_string("1"), 0U);
+                }
+            });
+        interpreter.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4&,
+                const SimulationTick) {
+                if (changed == signal) {
+                    visible_snapshots.emplace_back(
+                        interpreter.signal_value(signal).to_msb_string(),
+                        interpreter.stored_signal_value(signal).to_msb_string());
+                }
+            });
+
+        interpreter.deposit_signal(
+            signal, PackedLogic4::from_msb_string("10"));
+        require(
+            stored_snapshots
+                    == std::vector<std::pair<std::string, std::string>> {
+                        { "10", "00" }, { "00", "00" }
+                    },
+            "stored hook observes new aggregate storage before current publication");
+        require(
+            visible_snapshots
+                    == std::vector<std::pair<std::string, std::string>> {
+                        { "01", "00" }, { "11", "00" }
+                    }
+                && interpreter.signal_is_forced(signal)
+                && interpreter.stored_signal_value(signal)
+                    == PackedLogic4::from_msb_string("00")
+                && interpreter.signal_value(signal)
+                    == PackedLogic4::from_msb_string("11"),
+            "outer captured aggregate is published with the live force overlay");
+    }
+
+    {
+        Interpreter interpreter;
+        const auto signal = interpreter.add_signal({
+            "current_hook.signal", PackedLogic4::from_msb_string("00")
+        });
+        std::vector<std::pair<std::string, std::string>> stored_snapshots;
+        std::vector<std::pair<std::string, std::string>> visible_snapshots;
+        std::size_t visible_calls { };
+        std::string outer_argument_before_nested_write;
+        interpreter.set_stored_signal_change_hook(
+            [&](const SignalId changed, const SimulationTick) {
+                if (changed != signal) {
+                    return;
+                }
+                stored_snapshots.emplace_back(
+                    interpreter.stored_signal_value(signal).to_msb_string(),
+                    interpreter.signal_value(signal).to_msb_string());
+            });
+        interpreter.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4& callback_value,
+                const SimulationTick) {
+                if (changed != signal) {
+                    return;
+                }
+                visible_snapshots.emplace_back(
+                    interpreter.signal_value(signal).to_msb_string(),
+                    interpreter.stored_signal_value(signal).to_msb_string());
+                if (++visible_calls == 1U) {
+                    outer_argument_before_nested_write
+                        = callback_value.to_msb_string();
+                    interpreter.deposit_signal(
+                        signal, PackedLogic4::from_msb_string("01"));
+                }
+            });
+
+        interpreter.deposit_signal(
+            signal, PackedLogic4::from_msb_string("10"));
+        require(
+            stored_snapshots
+                    == std::vector<std::pair<std::string, std::string>> {
+                        { "10", "00" }, { "01", "10" }
+                    }
+                && visible_snapshots
+                    == std::vector<std::pair<std::string, std::string>> {
+                        { "10", "10" }, { "01", "01" }
+                    }
+                && outer_argument_before_nested_write == "10"
+                && interpreter.stored_signal_value(signal)
+                    == PackedLogic4::from_msb_string("01")
+                && interpreter.signal_value(signal)
+                    == PackedLogic4::from_msb_string("01"),
+            "nested current-hook deposit remains current after the outer hook returns");
+    }
+
+    {
+        Interpreter interpreter;
+        const auto backing = interpreter.add_signal({
+            "alias_hook.backing", PackedLogic4::from_msb_string("00000000")
+        });
+        ContainerType alias_type;
+        alias_type.fixed = true;
+        alias_type.index_left = 0;
+        alias_type.index_right = 0;
+        alias_type.dimensions = { { 0, 0 } };
+        alias_type.element_width = 8;
+        alias_type.two_state = true;
+        const auto object = interpreter.add_container_object({
+            "alias_hook.object",
+            ContainerValue {
+                alias_type,
+                { PackedLogic4::from_msb_string("00000000") },
+                { }
+            },
+            std::nullopt
+        });
+        interpreter.add_container_signal_alias({ object, backing, true, true });
+        const auto* const retained
+            = &interpreter.container_object_value(object);
+        const auto* const retained_elements = retained->elements.data();
+        require(
+            retained->elements.front()
+                == PackedLogic4::from_msb_string("00000000"),
+            "warm the retained whole-object alias before the outer write");
+
+        std::string alias_at_outer_stored_hook;
+        std::string alias_after_nested_deposit;
+        std::size_t stored_calls { };
+        interpreter.set_stored_signal_change_hook(
+            [&](const SignalId changed, const SimulationTick) {
+                if (changed != backing) {
+                    return;
+                }
+                if (++stored_calls == 1U) {
+                    alias_at_outer_stored_hook
+                        = retained->elements.front().to_msb_string();
+                    interpreter.deposit_signal(
+                        backing, PackedLogic4::from_msb_string("10111011"));
+                    alias_after_nested_deposit
+                        = retained->elements.front().to_msb_string();
+                }
+            });
+
+        auto outer = interpreter.container_object_value(object);
+        outer.elements.front()
+            = PackedLogic4::from_msb_string("10101010");
+        interpreter.deposit_container_object(object, std::move(outer));
+        const auto current = interpreter.signal_value(backing);
+        const auto stored = interpreter.stored_signal_value(backing);
+        const auto final_alias = retained->elements.front();
+        const bool alias_matches_current = final_alias == current;
+        const auto diagnostic = std::string {
+            "whole-object alias rematerializes the final current aggregate "
+            "after reentrant stored-hook writes; current="
+        } + current.to_msb_string() + " stored=" + stored.to_msb_string()
+            + " alias=" + final_alias.to_msb_string();
+        require(
+            alias_at_outer_stored_hook == "10101010"
+                && alias_after_nested_deposit == "10111011"
+                && current == PackedLogic4::from_msb_string("10101010")
+                && stored == PackedLogic4::from_msb_string("10111011")
+                && retained->elements.data() == retained_elements
+                && alias_matches_current,
+            diagnostic);
+    }
+
+    for (const auto element_width :
+        std::array<std::size_t, 2U> { 65U, 129U }) {
+        Interpreter interpreter;
+        const auto full_width = element_width * 2U;
+        const auto backing = interpreter.add_signal({
+            "retained_wide_alias.backing",
+            PackedLogic4(full_width, Logic4::zero) });
+        ContainerType array_type;
+        array_type.fixed = true;
+        array_type.index_left = 1;
+        array_type.index_right = 0;
+        array_type.dimensions = { { 1, 0 } };
+        array_type.element_width = static_cast<std::uint32_t>(element_width);
+        const PackedLogic4 zeros(element_width, Logic4::zero);
+        const auto array = interpreter.add_container_object({
+            "retained_wide_alias.array",
+            ContainerValue { array_type, { zeros, zeros }, { } },
+            std::nullopt });
+        interpreter.add_container_signal_alias(
+            { array, backing, true, true });
+        ContainerType slice_type = array_type;
+        slice_type.index_left = 1;
+        slice_type.index_right = 1;
+        slice_type.dimensions = { { 1, 1 } };
+        const auto slice = interpreter.add_container_object({
+            "retained_wide_alias.slice",
+            ContainerValue { slice_type, { zeros }, { } },
+            ContainerSliceAlias { array, 1, 1 } });
+
+        const auto* const retained_array
+            = &interpreter.container_object_value(array);
+        const auto* const retained_slice
+            = &interpreter.container_object_value(slice);
+        const auto* const retained_array_elements
+            = retained_array->elements.data();
+        const auto* const retained_slice_elements
+            = retained_slice->elements.data();
+        std::vector<std::string> callback_values;
+        interpreter.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4& callback_value,
+                const SimulationTick) {
+                if (changed != backing) {
+                    return;
+                }
+                callback_values.push_back(
+                    std::to_string(callback_value.width()) + ":"
+                    + retained_array->elements[0].to_msb_string() + ":"
+                    + retained_array->elements[1].to_msb_string() + ":"
+                    + retained_slice->elements[0].to_msb_string());
+            });
+
+        PackedLogic4 replacement(full_width, Logic4::zero);
+        replacement.set(full_width - 1U, Logic4::one);
+        replacement.set(element_width, Logic4::one);
+        replacement.set(0U, Logic4::one);
+        interpreter.deposit_signal(backing, replacement);
+        require(
+            retained_array->elements[0]
+                    == replacement.extract_bits(element_width, element_width)
+                && retained_array->elements[1]
+                    == replacement.extract_bits(0U, element_width)
+                && retained_slice->elements[0]
+                    == retained_array->elements[0]
+                && retained_array->elements.data()
+                    == retained_array_elements
+                && retained_slice->elements.data()
+                    == retained_slice_elements
+                && callback_values.size() == 1U
+                && callback_values[0U].starts_with(
+                    std::to_string(full_width) + ":"),
+            "retained wide array and slice references update in place before "
+            "the current callback at 65/129-bit element widths");
+
+        interpreter.force_signal_slice(
+            backing, PackedLogic4(1U, Logic4::zero), full_width - 1U);
+        require(
+            retained_array->elements[0].get(element_width - 1U)
+                == Logic4::zero
+                && retained_slice->elements[0]
+                    == retained_array->elements[0],
+            "a retained wide slice follows a forced current leaf change");
+        interpreter.release_signal_slice(backing, full_width - 1U, 1U);
+        require(
+            retained_array->elements[0].get(element_width - 1U)
+                == Logic4::one
+                && retained_slice->elements[0]
+                    == retained_array->elements[0],
+            "release restores the retained wide slice from stored signal data");
+    }
+
+    {
+        Interpreter interpreter;
+        const auto backing = interpreter.add_signal({
+            "retained_reentrant_alias.backing",
+            PackedLogic4::from_msb_string("0000000000000000") });
+        ContainerType array_type;
+        array_type.fixed = true;
+        array_type.index_left = 1;
+        array_type.index_right = 0;
+        array_type.dimensions = { { 1, 0 } };
+        array_type.element_width = 8U;
+        array_type.two_state = true;
+        const auto array = interpreter.add_container_object({
+            "retained_reentrant_alias.array",
+            ContainerValue {
+                array_type,
+                { value(8U, 0U), value(8U, 0U) },
+                { } },
+            std::nullopt });
+        interpreter.add_container_signal_alias(
+            { array, backing, true, true });
+        ContainerType slice_type = array_type;
+        slice_type.index_left = 1;
+        slice_type.index_right = 1;
+        slice_type.dimensions = { { 1, 1 } };
+        const auto slice = interpreter.add_container_object({
+            "retained_reentrant_alias.slice",
+            ContainerValue { slice_type, { value(8U, 0U) }, { } },
+            ContainerSliceAlias { array, 1, 1 } });
+        Process terminator;
+        terminator.id = 0U;
+        terminator.name = "retained_reentrant_alias.terminator";
+        terminator.operations = { Halt { } };
+        (void)interpreter.add_process(std::move(terminator));
+        interpreter.start();
+
+        struct TraceCapture {
+            Interpreter* interpreter { };
+            SignalId signal { };
+            ContainerObjectId array { };
+            ContainerObjectId slice { };
+            const ContainerValue* array_value { };
+            const ContainerValue* slice_value { };
+            const PackedLogic4* array_elements { };
+            const PackedLogic4* slice_elements { };
+            std::optional<ContainerValue> before_publication_snapshot;
+            bool saw_old_current { };
+            bool failed { };
+        } capture {
+            &interpreter, backing, array, slice,
+            nullptr, nullptr, nullptr, nullptr,
+            std::nullopt, false, false
+        };
+        interpreter.scheduler().set_trace_hook(
+            &capture,
+            [](void* context,
+                const SchedulerTraceRecord& record) noexcept {
+                auto& selected = *static_cast<TraceCapture*>(context);
+                if (record.kind != SchedulerTraceKind::signal_transaction
+                    || record.signal != selected.signal
+                    || selected.slice_value != nullptr) {
+                    return;
+                }
+                try {
+                    const auto& slice_value
+                        = selected.interpreter->container_object_value(
+                            selected.slice);
+                    selected.slice_value = &slice_value;
+                    selected.slice_elements = slice_value.elements.data();
+                    const auto& array_value
+                        = selected.interpreter->container_object_value(
+                            selected.array);
+                    selected.array_value = &array_value;
+                    selected.array_elements = array_value.elements.data();
+                    selected.before_publication_snapshot
+                        = selected.interpreter
+                              ->container_object_value_snapshot(
+                                  selected.array);
+                    selected.saw_old_current
+                        = slice_value.elements.size() == 1U
+                        && slice_value.elements[0U] == value(8U, 0U);
+                } catch (...) {
+                    selected.failed = true;
+                }
+            });
+
+        interpreter.deposit_signal(
+            backing, PackedLogic4::from_msb_string("1010101010111100"));
+        interpreter.scheduler().set_trace_hook(nullptr, nullptr);
+        require(
+            interpreter.run().status == RunStatus::completed
+                && !capture.failed && capture.saw_old_current
+                && capture.array_value
+                && capture.slice_value
+                && capture.array_value
+                    == &interpreter.container_object_value(array)
+                && capture.slice_value
+                    == &interpreter.container_object_value(slice)
+                && capture.before_publication_snapshot
+                && capture.before_publication_snapshot->elements
+                    == std::vector<PackedLogic4> {
+                        value(8U, 0U), value(8U, 0U) }
+                && capture.array_value->elements.data()
+                    == capture.array_elements
+                && capture.slice_value->elements.data()
+                    == capture.slice_elements
+                && capture.array_value->elements
+                    == std::vector<PackedLogic4> {
+                        value(8U, 0xaaU), value(8U, 0xbcU) }
+                && capture.slice_value->elements
+                    == std::vector<PackedLogic4> { value(8U, 0xaaU) },
+            "a transaction trace may first retain an aliased slice before "
+            "the outer current publication, which then refreshes that same "
+            "slice and source backing in place");
+    }
+}
+
+void test_simir_resolved_driver_hook_maturity_and_reentrancy()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    {
+        Interpreter interpreter;
+        const auto signal = interpreter.add_signal({
+            "driver_hook.matured_wire",
+            PackedLogic4::from_msb_string("Z"),
+            ResolutionKind::sv_wire
+        });
+
+        Process first;
+        first.id = 0U;
+        first.name = "driver_hook.first";
+        first.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        first.driver_regions.push_back({ signal, 0U, 0U, true });
+        first.register_count = 1U;
+        first.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("0") },
+            WriteBlocking { signal, 0U },
+            Halt { }
+        };
+        const auto first_id = interpreter.add_process(std::move(first));
+
+        Process second;
+        second.id = 1U;
+        second.name = "driver_hook.delayed_second";
+        second.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        second.driver_regions.push_back({ signal, 0U, 0U, true });
+        second.register_count = 1U;
+        second.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+            WriteAfter {
+                signal, 0U, 2U, SignalUpdateDomain::systemverilog_nba
+            },
+            Halt { }
+        };
+        const auto second_id = interpreter.add_process(std::move(second));
+
+        interpreter.force_signal(
+            signal, PackedLogic4::from_msb_string("1"));
+
+        std::vector<std::string> snapshots;
+        const auto record = [&](const std::string_view phase,
+                                const SimulationTick time) {
+            snapshots.push_back(
+                std::string { phase } + "@" + std::to_string(time)
+                + " d0=" + interpreter.driver_value(first_id, signal)
+                      .to_msb_string()
+                + " d1=" + interpreter.driver_value(second_id, signal)
+                      .to_msb_string()
+                + " stored=" + interpreter.stored_signal_value(signal)
+                      .to_msb_string()
+                + " current=" + interpreter.signal_value(signal)
+                      .to_msb_string());
+        };
+        interpreter.set_driver_change_hook(
+            [&](const ProcessId process,
+                const SignalId changed,
+                const SimulationTick time) {
+                if (changed == signal) {
+                    record(
+                        process == first_id ? "driver0" : "driver1", time);
+                }
+            });
+        interpreter.set_stored_signal_change_hook(
+            [&](const SignalId changed, const SimulationTick time) {
+                if (changed == signal) {
+                    record("stored", time);
+                }
+            });
+        interpreter.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4&,
+                const SimulationTick time) {
+                if (changed == signal) {
+                    record("current", time);
+                }
+            });
+
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed && result.time == 2U,
+            "the delayed resolved driver update matures at its requested tick");
+        require(
+            snapshots
+                == std::vector<std::string> {
+                    "driver0@0 d0=0 d1=Z stored=Z current=1",
+                    "stored@0 d0=0 d1=Z stored=0 current=1",
+                    "driver1@2 d0=0 d1=1 stored=0 current=1",
+                    "stored@2 d0=0 d1=1 stored=X current=1"
+                }
+                && interpreter.driver_value(first_id, signal)
+                    == PackedLogic4::from_msb_string("0")
+                && interpreter.driver_value(second_id, signal)
+                    == PackedLogic4::from_msb_string("1")
+                && interpreter.stored_signal_value(signal)
+                    == PackedLogic4::from_msb_string("X")
+                && interpreter.signal_value(signal)
+                    == PackedLogic4::from_msb_string("1"),
+            "driver hooks see the changed raw slot before resolved storage, "
+            "stored hooks precede current publication, and force masks both "
+            "resolved changes");
+
+        interpreter.release_signal(signal);
+        require(
+            snapshots
+                    == std::vector<std::string> {
+                        "driver0@0 d0=0 d1=Z stored=Z current=1",
+                        "stored@0 d0=0 d1=Z stored=0 current=1",
+                        "driver1@2 d0=0 d1=1 stored=0 current=1",
+                        "stored@2 d0=0 d1=1 stored=X current=1",
+                        "current@2 d0=0 d1=1 stored=X current=X"
+                    }
+                && !interpreter.signal_is_forced(signal)
+                && interpreter.signal_value(signal)
+                    == PackedLogic4::from_msb_string("X"),
+            "force release reveals the final resolved driver aggregate");
+    }
+
+    {
+        Interpreter interpreter;
+        const auto signal = interpreter.add_signal({
+            "driver_hook.reentrant_wire",
+            PackedLogic4::from_msb_string("Z"),
+            ResolutionKind::sv_wire
+        });
+        Process writer;
+        writer.id = 0U;
+        writer.name = "driver_hook.reentrant_writer";
+        writer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        writer.driver_regions.push_back({ signal, 0U, 0U, true });
+        writer.operations = { Halt { } };
+        const auto writer_id = interpreter.add_process(std::move(writer));
+
+        std::vector<std::string> snapshots;
+        class ReentrantWriter final : public ProcessExecutor {
+        public:
+            ReentrantWriter(
+                Interpreter& interpreter,
+                const ProcessId process,
+                const SignalId signal,
+                std::vector<std::string>& snapshots)
+                : interpreter_ { interpreter }
+                , process_ { process }
+                , signal_ { signal }
+                , snapshots_ { snapshots }
+            {
+            }
+
+            [[nodiscard]] ProcessResumeResult resume(
+                ProcessExecutionContext& context,
+                const InstructionIndex start) override
+            {
+                require(start == 0U, "the reentrant writer starts at entry");
+                const auto record = [this](
+                    const std::string_view phase,
+                    const SimulationTick time) {
+                    snapshots_.push_back(
+                        std::string { phase } + "@" + std::to_string(time)
+                        + " driver=" + interpreter_.driver_value(
+                            process_, signal_).to_msb_string()
+                        + " stored=" + interpreter_.stored_signal_value(
+                            signal_).to_msb_string()
+                        + " current=" + interpreter_.signal_value(
+                            signal_).to_msb_string());
+                };
+                interpreter_.set_driver_change_hook(
+                    [this, &context, record](
+                        const ProcessId changed_process,
+                        const SignalId changed_signal,
+                        const SimulationTick time) {
+                        if (changed_process != process_
+                            || changed_signal != signal_) {
+                            return;
+                        }
+                        record("driver", time);
+                        if (!nested_write_) {
+                            nested_write_ = true;
+                            context.write_blocking(
+                                signal_, PackedLogic4::from_msb_string("1"));
+                        }
+                    });
+                interpreter_.set_stored_signal_change_hook(
+                    [this, record](
+                        const SignalId changed,
+                        const SimulationTick time) {
+                        if (changed == signal_) {
+                            record("stored", time);
+                        }
+                    });
+                interpreter_.set_signal_change_hook(
+                    [this, record](
+                        const SignalId changed,
+                        const PackedLogic4&,
+                        const SimulationTick time) {
+                        if (changed == signal_) {
+                            record("current", time);
+                        }
+                    });
+
+                context.write_blocking(
+                    signal_, PackedLogic4::from_msb_string("0"));
+                interpreter_.set_driver_change_hook({ });
+                interpreter_.set_stored_signal_change_hook({ });
+                interpreter_.set_signal_change_hook({ });
+
+                ProcessResumeResult result { 0U, 1U };
+                result.external.kind = ExternalSuspendKind::halt;
+                return result;
+            }
+
+        private:
+            Interpreter& interpreter_;
+            ProcessId process_ { };
+            SignalId signal_ { };
+            std::vector<std::string>& snapshots_;
+            bool nested_write_ { };
+        };
+
+        interpreter.set_process_executor(
+            writer_id,
+            std::make_unique<ReentrantWriter>(
+                interpreter, writer_id, signal, snapshots));
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed && result.time == 0U,
+            "the synchronous reentrant driver write completes at its current tick");
+        require(
+            snapshots
+                == std::vector<std::string> {
+                    "driver@0 driver=0 stored=Z current=Z",
+                    "driver@0 driver=1 stored=Z current=Z",
+                    "stored@0 driver=1 stored=1 current=Z",
+                    "current@0 driver=1 stored=1 current=1"
+                }
+                && interpreter.driver_value(writer_id, signal)
+                    == PackedLogic4::from_msb_string("1")
+                && interpreter.stored_signal_value(signal)
+                    == PackedLogic4::from_msb_string("1")
+                && interpreter.signal_value(signal)
+                    == PackedLogic4::from_msb_string("1"),
+            "a reentrant writer callback changes the live raw slot before "
+            "the nested aggregate is stored and published; the outer resolve "
+            "then observes that same current driver slot");
+    }
+
+    {
+        // A retained packed signal is the reference route for one whole
+        // array-driver assignment: set_driver replaces the complete raw
+        // vector before the driver callback, and the container alias projects
+        // that vector into its two logical elements.
+        Interpreter interpreter;
+        ContainerType type;
+        type.fixed = true;
+        type.index_left = 1;
+        type.index_right = 0;
+        type.dimensions = { { 1, 0 } };
+        type.element_width = 8U;
+        const auto object = interpreter.add_container_object({
+            "driver_hook.retained_array",
+            default_container_value(type),
+            std::nullopt
+        });
+        const auto signal = interpreter.add_signal({
+            "driver_hook.retained_array_backing",
+            PackedLogic4::from_msb_string("ZZZZZZZZZZZZZZZZ"),
+            ResolutionKind::sv_wire
+        });
+        interpreter.add_container_signal_alias(
+            { object, signal, true, true });
+
+        Process writer;
+        writer.id = 0U;
+        writer.name = "driver_hook.retained_array_writer";
+        writer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        writer.driver_regions.push_back({ signal, 0U, 0U, true });
+        writer.operations = { Halt { } };
+        const auto writer_id = interpreter.add_process(std::move(writer));
+        interpreter.force_signal_slice(
+            signal, PackedLogic4::from_msb_string("10101010"), 8U);
+
+        std::vector<std::string> snapshots;
+        class WholeArrayDriverWriter final : public ProcessExecutor {
+        public:
+            WholeArrayDriverWriter(
+                Interpreter& interpreter,
+                const ProcessId process,
+                const SignalId signal,
+                const ContainerObjectId object,
+                std::vector<std::string>& snapshots)
+                : interpreter_ { interpreter }
+                , process_ { process }
+                , signal_ { signal }
+                , object_ { object }
+                , snapshots_ { snapshots }
+            {
+            }
+
+            [[nodiscard]] ProcessResumeResult resume(
+                ProcessExecutionContext& context,
+                const InstructionIndex start) override
+            {
+                require(start == 0U,
+                    "the retained whole-array writer starts at entry");
+                interpreter_.set_driver_change_hook(
+                    [this, &context](
+                        const ProcessId changed_process,
+                        const SignalId changed_signal,
+                        const SimulationTick time) {
+                        if (changed_process != process_
+                            || changed_signal != signal_) {
+                            return;
+                        }
+                        record("driver", time);
+                        if (!nested_write_) {
+                            nested_write_ = true;
+                            context.write_blocking(
+                                signal_, PackedLogic4::from_msb_string(
+                                    "1111000010100101"));
+                        }
+                    });
+                interpreter_.set_stored_signal_change_hook(
+                    [this](
+                        const SignalId changed,
+                        const SimulationTick time) {
+                        if (changed == signal_) {
+                            record("stored", time);
+                        }
+                    });
+                interpreter_.set_signal_change_hook(
+                    [this](
+                        const SignalId changed,
+                        const PackedLogic4&,
+                        const SimulationTick time) {
+                        if (changed == signal_) {
+                            record("current", time);
+                        }
+                    });
+
+                context.write_blocking(
+                    signal_, PackedLogic4::from_msb_string(
+                        "0001001000110100"));
+                interpreter_.set_driver_change_hook({ });
+                interpreter_.set_stored_signal_change_hook({ });
+                interpreter_.set_signal_change_hook({ });
+
+                ProcessResumeResult result { 0U, 1U };
+                result.external.kind = ExternalSuspendKind::halt;
+                return result;
+            }
+
+        private:
+            void record(
+                const std::string_view phase,
+                const SimulationTick time)
+            {
+                const auto& logical
+                    = interpreter_.container_object_value(object_);
+                const auto current = project_packed(
+                    interpreter_.signal_value(signal_));
+                require(project_container(logical) == current,
+                    "the logical array follows the retained current vector");
+                snapshots_.push_back(
+                    std::string { phase } + "@" + std::to_string(time)
+                    + " raw=" + project_packed(
+                        interpreter_.driver_value(process_, signal_))
+                    + " stored=" + project_packed(
+                        interpreter_.stored_signal_value(signal_))
+                    + " current=" + current
+                    + " forced="
+                    + (interpreter_.signal_is_forced(signal_)
+                            ? "1" : "0"));
+            }
+
+            [[nodiscard]] std::string project_packed(
+                const PackedLogic4& packed) const
+            {
+                const auto bits = packed.to_msb_string();
+                require(bits.size() == 16U,
+                    "the retained aggregate projection has two bytes");
+                return bits.substr(0U, 8U) + "|"
+                    + bits.substr(8U, 8U);
+            }
+
+            [[nodiscard]] std::string project_container(
+                const ContainerValue& value) const
+            {
+                require(value.elements.size() == 2U,
+                    "the retained logical array has two elements");
+                return value.elements[0].to_msb_string() + "|"
+                    + value.elements[1].to_msb_string();
+            }
+
+            Interpreter& interpreter_;
+            ProcessId process_ { };
+            SignalId signal_ { };
+            ContainerObjectId object_ { };
+            std::vector<std::string>& snapshots_;
+            bool nested_write_ { };
+        };
+
+        interpreter.set_process_executor(
+            writer_id,
+            std::make_unique<WholeArrayDriverWriter>(
+                interpreter, writer_id, signal, object, snapshots));
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed && result.time == 0U,
+            "the retained whole-array driver reference completes");
+        require(
+            snapshots == std::vector<std::string> {
+                "driver@0 raw=00010010|00110100 "
+                "stored=ZZZZZZZZ|ZZZZZZZZ current=10101010|ZZZZZZZZ "
+                "forced=1",
+                "driver@0 raw=11110000|10100101 "
+                "stored=ZZZZZZZZ|ZZZZZZZZ current=10101010|ZZZZZZZZ "
+                "forced=1",
+                "stored@0 raw=11110000|10100101 "
+                "stored=11110000|10100101 current=10101010|ZZZZZZZZ "
+                "forced=1",
+                "current@0 raw=11110000|10100101 "
+                "stored=11110000|10100101 current=10101010|10100101 "
+                "forced=1"
+            }
+            && interpreter.driver_value(writer_id, signal)
+                == PackedLogic4::from_msb_string("1111000010100101")
+            && interpreter.stored_signal_value(signal)
+                == PackedLogic4::from_msb_string("1111000010100101")
+            && interpreter.signal_value(signal)
+                == PackedLogic4::from_msb_string("1010101010100101")
+            && interpreter.container_object_value(object).elements
+                == std::vector<PackedLogic4> {
+                    PackedLogic4::from_msb_string("10101010"),
+                    PackedLogic4::from_msb_string("10100101")
+                }
+            && interpreter.signal_is_forced(signal),
+            "whole driver writes expose complete raw-driver, stored, current, "
+            "force, and logical-array projections at each callback");
+        interpreter.release_signal_slice(signal, 8U, 8U);
+        require(
+            !interpreter.signal_is_forced(signal)
+                && interpreter.signal_value(signal)
+                    == PackedLogic4::from_msb_string("1111000010100101")
+                && interpreter.container_object_value(object).elements
+                    == std::vector<PackedLogic4> {
+                        PackedLogic4::from_msb_string("11110000"),
+                        PackedLogic4::from_msb_string("10100101")
+                    },
+            "releasing the reference force reveals the final full driver vector");
+    }
 }
 
 } // namespace fsim::tests::runtime

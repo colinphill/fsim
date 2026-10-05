@@ -17,6 +17,59 @@ namespace fsim::app::application_detail {
 
 #if defined(FSIM_HAS_LLVM)
 
+namespace {
+
+class WideLogic4WriteScratchGuard final {
+public:
+    explicit WideLogic4WriteScratchGuard(std::atomic<bool>& in_use) noexcept
+        : in_use_(in_use)
+    {
+    }
+
+    WideLogic4WriteScratchGuard(const WideLogic4WriteScratchGuard&) = delete;
+    WideLogic4WriteScratchGuard& operator=(
+        const WideLogic4WriteScratchGuard&) = delete;
+
+    ~WideLogic4WriteScratchGuard()
+    {
+        release();
+    }
+
+    [[nodiscard]] bool try_acquire() noexcept
+    {
+        bool expected = false;
+        acquired_ = in_use_.compare_exchange_strong(
+            expected, true, std::memory_order_acquire,
+            std::memory_order_relaxed);
+        return acquired_;
+    }
+
+    void release() noexcept
+    {
+        if (acquired_) {
+            in_use_.store(false, std::memory_order_release);
+            acquired_ = false;
+        }
+    }
+
+private:
+    std::atomic<bool>& in_use_;
+    bool acquired_ { };
+};
+
+[[nodiscard]] runtime::simir::SignalUpdateDomain checked_update_domain(
+    const std::uint32_t update_domain)
+{
+    constexpr auto maximum_domain = static_cast<std::uint32_t>(
+        runtime::simir::SignalUpdateDomain::systemverilog_nba);
+    if (update_domain > maximum_domain) {
+        throw std::logic_error("generated write has an invalid update domain");
+    }
+    return static_cast<runtime::simir::SignalUpdateDomain>(update_domain);
+}
+
+} // namespace
+
 std::uint64_t LlvmProcessExecutor::read_signal(
     void* context,
     const std::uint32_t signal,
@@ -140,7 +193,7 @@ std::uint32_t LlvmProcessExecutor::read_signal_dynamic_part(
     const std::uint32_t base_offset,
     const std::uint32_t width,
     const std::uint32_t flags,
-    fsim_jit_logic9_word_v1* const result) noexcept
+    fsim_jit_logic9_word_v2* const result) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
@@ -193,13 +246,25 @@ std::uint32_t LlvmProcessExecutor::write_signal_packed(
     const std::uint64_t* const aval,
     const std::uint64_t* const bval,
     const std::uint64_t* const logic9_plane2,
-    const std::uint64_t* const logic9_plane3) noexcept
+    const std::uint64_t* const logic9_plane3,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
+    WideLogic4WriteScratchGuard wide_scratch_guard {
+        state.wide_logic4_write_scratch_in_use };
     if (state.failure) {
         return 1;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
+        const bool blocking_mode
+            = mode == FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_V2
+            || mode == FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE_V2;
+        if (blocking_mode
+            && domain != runtime::simir::SignalUpdateDomain::generic) {
+            throw std::logic_error(
+                "packed blocking writes require the generic update domain");
+        }
         const auto actual_signal = mapped_signal(state, signal);
         if (state.context == nullptr || actual_signal >= state.signal_widths.size()
             || width == 0U || aval == nullptr || bval == nullptr
@@ -208,7 +273,8 @@ std::uint32_t LlvmProcessExecutor::write_signal_packed(
             throw std::logic_error(
                 "invalid generated arbitrary-width signal-write callback");
         }
-        const auto word_count = static_cast<std::size_t>((width + 63U) / 64U);
+        const auto word_count
+            = (static_cast<std::size_t>(width) + 63U) / 64U;
         const auto destination_logic9 = !state.signal_value_kinds.empty()
             && state.signal_value_kinds[actual_signal]
                 == runtime::simir::ValueKind::logic9;
@@ -217,11 +283,12 @@ std::uint32_t LlvmProcessExecutor::write_signal_packed(
                 "generated arbitrary-width signal-write logic9 planes are incomplete");
         }
         const auto source_logic9 = logic9_plane2 != nullptr;
-        if (!source_logic9 && !destination_logic9
+        if (domain == runtime::simir::SignalUpdateDomain::generic
+            && !source_logic9 && !destination_logic9
             && state.supports_direct_word_updates
-            && (mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE
-                || mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE)) {
-            if (mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE
+            && (mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_V2
+                || mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE_V2)) {
+            if (mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_V2
                 && (offset != 0U
                     || width != state.signal_widths[actual_signal])) {
                 throw std::logic_error(
@@ -242,21 +309,50 @@ std::uint32_t LlvmProcessExecutor::write_signal_packed(
             }
             return 0;
         }
-        auto value = source_logic9
-            ? PackedLogic4::from_logic9_word_planes(
-                  width,
-                  { aval, word_count },
-                  { bval, word_count },
-                  { logic9_plane2, word_count },
-                  { logic9_plane3, word_count })
-            : PackedLogic4::from_word_planes(
-                  width, { aval, word_count }, { bval, word_count });
-        if (mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE
-            || mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE) {
+        PackedLogic4 value;
+        bool reused_wide_scratch { };
+        // The generic word-update route above has its own scheduler contract.
+        // This reuse path is only for a wide Logic4 image that must be
+        // materialized; keep the slot guarded until the context has consumed
+        // or retained its copy.
+        if (width > 64U && !source_logic9 && !destination_logic9
+            && wide_scratch_guard.try_acquire()) {
+            const auto source_aval
+                = std::span<const std::uint64_t> { aval, word_count };
+            const auto source_bval
+                = std::span<const std::uint64_t> { bval, word_count };
+            for (auto& scratch : state.wide_logic4_write_scratch) {
+                if (scratch.width == width
+                    && scratch.value
+                           .try_assign_wide_logic4_word_planes_noalloc(
+                               source_aval, source_bval)) {
+                    value = scratch.value;
+                    reused_wide_scratch = true;
+                    break;
+                }
+            }
+            if (!reused_wide_scratch) {
+                wide_scratch_guard.release();
+            }
+        }
+        if (!reused_wide_scratch) {
+            value = source_logic9
+                ? PackedLogic4::from_logic9_word_planes(
+                      width,
+                      { aval, word_count },
+                      { bval, word_count },
+                      { logic9_plane2, word_count },
+                      { logic9_plane3, word_count })
+                : PackedLogic4::from_word_planes(
+                      width, { aval, word_count }, { bval, word_count });
+        }
+        if (domain != runtime::simir::SignalUpdateDomain::generic
+            || mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_V2
+            || mode == FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE_V2) {
             state.executor->flush_update_words(*state.context);
         }
         switch (mode) {
-        case FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING:
+        case FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_V2:
             if (offset != 0U || width != state.signal_widths[actual_signal]) {
                 throw std::logic_error(
                     "packed blocking write does not cover the complete signal");
@@ -264,32 +360,34 @@ std::uint32_t LlvmProcessExecutor::write_signal_packed(
             invalidate_signal_read_cache(state);
             state.context->write_blocking(actual_signal, std::move(value));
             break;
-        case FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE:
+        case FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_V2:
             if (offset != 0U || width != state.signal_widths[actual_signal]) {
                 throw std::logic_error(
                     "packed update write does not cover the complete signal");
             }
-            state.context->write_update(actual_signal, std::move(value));
+            state.context->write_update_in_domain(
+                actual_signal, std::move(value), domain);
             break;
-        case FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER:
+        case FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_V2:
             if (offset != 0U || width != state.signal_widths[actual_signal]) {
                 throw std::logic_error(
                     "packed delayed write does not cover the complete signal");
             }
-            state.context->write_after(actual_signal, std::move(value), delay);
+            state.context->write_after_in_domain(
+                actual_signal, std::move(value), delay, domain);
             break;
-        case FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE:
+        case FSIM_JIT_PACKED_SIGNAL_WRITE_BLOCKING_SLICE_V2:
             invalidate_signal_read_cache(state);
             state.context->write_blocking_slice(
                 actual_signal, std::move(value), offset);
             break;
-        case FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE:
-            state.context->write_update_slice(
-                actual_signal, std::move(value), offset);
+        case FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE_V2:
+            state.context->write_update_slice_in_domain(
+                actual_signal, std::move(value), offset, domain);
             break;
-        case FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_SLICE:
-            state.context->write_after_slice(
-                actual_signal, std::move(value), offset, delay);
+        case FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_SLICE_V2:
+            state.context->write_after_slice_in_domain(
+                actual_signal, std::move(value), offset, delay, domain);
             break;
         default:
             throw std::logic_error(
@@ -302,10 +400,74 @@ std::uint32_t LlvmProcessExecutor::write_signal_packed(
     }
 }
 
+std::uint32_t LlvmProcessExecutor::write_projected_signal_packed(
+    void* context,
+    const std::uint32_t signal,
+    const std::uint32_t width,
+    const std::uint64_t* const aval_words,
+    const std::uint64_t* const bval_words,
+    const std::uint64_t* const logic9_plane2_words,
+    const std::uint64_t* const logic9_plane3_words) noexcept
+{
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+        return 1U;
+    }
+    try {
+        const auto actual_signal = mapped_signal(state, signal);
+        if (state.context == nullptr
+            || state.executor == nullptr
+            || actual_signal >= state.signal_widths.size()
+            || (!state.signal_value_kinds.empty()
+                && actual_signal >= state.signal_value_kinds.size())
+            || width <= 64U
+            || state.signal_widths[actual_signal] != width
+            || aval_words == nullptr || bval_words == nullptr
+            || ((logic9_plane2_words == nullptr)
+                != (logic9_plane3_words == nullptr))) {
+            throw std::logic_error(
+                "invalid wide projected signal-write callback");
+        }
+        const bool destination_logic9
+            = !state.signal_value_kinds.empty()
+            && state.signal_value_kinds[actual_signal]
+                == runtime::simir::ValueKind::logic9;
+        if ((logic9_plane2_words != nullptr) != destination_logic9) {
+            throw std::logic_error(
+                "wide projected signal-write value kind is inconsistent");
+        }
+        const auto word_count
+            = (static_cast<std::size_t>(width) + 63U) / 64U;
+        auto value = destination_logic9
+            ? PackedLogic4::from_logic9_word_planes(
+                  width,
+                  { aval_words, word_count },
+                  { bval_words, word_count },
+                  { logic9_plane2_words, word_count },
+                  { logic9_plane3_words, word_count })
+            : PackedLogic4::from_word_planes(
+                  width,
+                  { aval_words, word_count },
+                  { bval_words, word_count });
+        invalidate_signal_read_cache(state);
+        state.executor->flush_update_words(*state.context);
+        state.context->write_projected(
+            actual_signal,
+            std::move(value),
+            0U,
+            0U,
+            runtime::simir::ProjectedDelayMode::inertial);
+        return 0U;
+    } catch (...) {
+        capture_failure(state);
+        return 1U;
+    }
+}
+
 void LlvmProcessExecutor::read_signal_logic9(
     void* context,
     const std::uint32_t signal,
-    fsim_jit_logic9_word_v1* result) noexcept
+    fsim_jit_logic9_word_v2* result) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     clear_logic9_word(result);
@@ -329,11 +491,12 @@ void LlvmProcessExecutor::read_signal_logic9(
             result->planes[3] = direct[3][actual_signal];
             return;
         }
-        const auto value = state.context->read_signal_logic9_word(actual_signal);
+        auto value = state.context->read_signal_logic9_word(actual_signal);
         if (value.width != state.signal_widths[actual_signal]) {
             throw std::logic_error(
                 "generated Logic9 read observed an invalid width");
         }
+        value.normalize_invalid_codes_to_x();
         result->planes[0] = value.planes[0];
         result->planes[1] = value.planes[1];
         result->planes[2] = value.planes[2];
@@ -347,7 +510,7 @@ void LlvmProcessExecutor::read_signal_logic9(
 void LlvmProcessExecutor::read_signal_logic9_identity(
     void* context,
     const std::uint32_t signal,
-    fsim_jit_logic9_word_v1* result) noexcept
+    fsim_jit_logic9_word_v2* result) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure || result == nullptr) {
@@ -399,7 +562,7 @@ void LlvmProcessExecutor::write_signal(
 void LlvmProcessExecutor::write_signal_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
@@ -420,18 +583,29 @@ void LlvmProcessExecutor::write_update(
     void* context,
     const std::uint32_t signal,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept
+    const std::uint64_t bval,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_write_word(
             state, actual_signal, aval, bval);
-        state.executor->pending_update_words_.push_back(
-            { actual_signal, value, 0U, false });
+        if (domain == runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->pending_update_words_.push_back(
+                { actual_signal, value, 0U, false });
+        } else {
+            state.executor->flush_update_words(*state.context);
+            state.context->write_update_in_domain(
+                actual_signal,
+                PackedLogic4::from_aval_bval(
+                    value.width, value.aval, value.bval),
+                domain);
+        }
     } catch (...) {
         capture_failure(state);
     }
@@ -440,23 +614,26 @@ void LlvmProcessExecutor::write_update(
 void LlvmProcessExecutor::write_update_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         require_logic9_signal(state, actual_signal, value);
-        if (!state.executor->buffer_logic9_update(
-                actual_signal, 0U,
-                state.signal_widths[actual_signal], *value)) {
-            state.executor->flush_update_words(*state.context);
-            state.context->write_update(
-                actual_signal,
-                checked_logic9_value(state, actual_signal, value));
+        const auto packed = checked_logic9_value(state, actual_signal, value);
+        if (domain == runtime::simir::SignalUpdateDomain::generic
+            && state.executor->buffer_logic9_update(
+                actual_signal, 0U, state.signal_widths[actual_signal], *value)) {
+            return;
         }
+        state.executor->flush_update_words(*state.context);
+        state.context->write_update_in_domain(
+            actual_signal, packed, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -467,18 +644,25 @@ void LlvmProcessExecutor::write_after(
     const std::uint32_t signal,
     const std::uint64_t aval,
     const std::uint64_t bval,
-    const std::uint64_t delay) noexcept
+    const std::uint64_t delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_write_word(
             state, actual_signal, aval, bval);
-        state.context->write_after_word(
-            actual_signal, value, delay);
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_after_in_domain(
+            actual_signal,
+            PackedLogic4::from_aval_bval(value.width, value.aval, value.bval),
+            delay, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -487,19 +671,23 @@ void LlvmProcessExecutor::write_after(
 void LlvmProcessExecutor::write_after_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value,
-    const std::uint64_t delay) noexcept
+    const fsim_jit_logic9_word_v2* value,
+    const std::uint64_t delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
-        state.context->write_after(
-            actual_signal,
-            checked_logic9_value(state, actual_signal, value),
-            delay);
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_after_in_domain(
+            actual_signal, checked_logic9_value(state, actual_signal, value),
+            delay, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -512,20 +700,25 @@ void LlvmProcessExecutor::write_inertial(
     const std::uint64_t bval,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept
+    const std::uint64_t turnoff_delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_write_word(
             state, actual_signal, aval, bval);
-        state.context->write_inertial_word(
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_inertial_in_domain(
             actual_signal,
-            value,
-            { rise_delay, fall_delay, turnoff_delay });
+            PackedLogic4::from_aval_bval(value.width, value.aval, value.bval),
+            { rise_delay, fall_delay, turnoff_delay }, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -534,21 +727,25 @@ void LlvmProcessExecutor::write_inertial(
 void LlvmProcessExecutor::write_inertial_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value,
+    const fsim_jit_logic9_word_v2* value,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept
+    const std::uint64_t turnoff_delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
-        state.context->write_inertial(
-            actual_signal,
-            checked_logic9_value(state, actual_signal, value),
-            { rise_delay, fall_delay, turnoff_delay });
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_inertial_in_domain(
+            actual_signal, checked_logic9_value(state, actual_signal, value),
+            { rise_delay, fall_delay, turnoff_delay }, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -585,7 +782,7 @@ void LlvmProcessExecutor::write_projected(
 void LlvmProcessExecutor::write_projected_logic9(
     void* context,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value,
+    const fsim_jit_logic9_word_v2* value,
     const std::uint64_t delay,
     const std::uint64_t rejection,
     const std::uint32_t mode) noexcept
@@ -645,7 +842,7 @@ void LlvmProcessExecutor::write_signal_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
@@ -670,18 +867,28 @@ void LlvmProcessExecutor::write_update_slice(
     const std::uint32_t offset,
     const std::uint32_t width,
     const std::uint64_t aval,
-    const std::uint64_t bval) noexcept
+    const std::uint64_t bval,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_slice_word(
             state, actual_signal, offset, width, aval, bval);
-        state.executor->pending_update_words_.push_back(
-            { actual_signal, value, offset, true });
+        if (domain == runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->pending_update_words_.push_back(
+                { actual_signal, value, offset, true });
+        } else {
+            state.executor->flush_update_words(*state.context);
+            state.context->write_update_slice_in_domain(
+                actual_signal,
+                PackedLogic4::from_aval_bval(value.width, value.aval, value.bval),
+                offset, domain);
+        }
     } catch (...) {
         capture_failure(state);
     }
@@ -692,24 +899,27 @@ void LlvmProcessExecutor::write_update_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         require_logic9_signal(state, actual_signal, value);
-        if (!state.executor->buffer_logic9_update(
+        auto packed = checked_logic9_slice(
+            state, actual_signal, offset, width, value);
+        if (domain == runtime::simir::SignalUpdateDomain::generic
+            && state.executor->buffer_logic9_update(
                 actual_signal, offset, width, *value)) {
-            state.executor->flush_update_words(*state.context);
-            state.context->write_update_slice(
-                actual_signal,
-                checked_logic9_slice(
-                    state, actual_signal, offset, width, value),
-                offset);
+            return;
         }
+        state.executor->flush_update_words(*state.context);
+        state.context->write_update_slice_in_domain(
+            actual_signal, std::move(packed), offset, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -722,18 +932,25 @@ void LlvmProcessExecutor::write_after_slice(
     const std::uint32_t width,
     const std::uint64_t aval,
     const std::uint64_t bval,
-    const std::uint64_t delay) noexcept
+    const std::uint64_t delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_slice_word(
             state, actual_signal, offset, width, aval, bval);
-        state.context->write_after_slice_word(
-            actual_signal, value, offset, delay);
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_after_slice_in_domain(
+            actual_signal,
+            PackedLogic4::from_aval_bval(value.width, value.aval, value.bval),
+            offset, delay, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -744,21 +961,25 @@ void LlvmProcessExecutor::write_after_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value,
-    const std::uint64_t delay) noexcept
+    const fsim_jit_logic9_word_v2* value,
+    const std::uint64_t delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
-        state.context->write_after_slice(
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_after_slice_in_domain(
             actual_signal,
             checked_logic9_slice(
                 state, actual_signal, offset, width, value),
-            offset,
-            delay);
+            offset, delay, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -773,21 +994,25 @@ void LlvmProcessExecutor::write_inertial_slice(
     const std::uint64_t bval,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept
+    const std::uint64_t turnoff_delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
         const auto value = checked_slice_word(
             state, actual_signal, offset, width, aval, bval);
-        state.context->write_inertial_slice_word(
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_inertial_slice_in_domain(
             actual_signal,
-            value,
-            offset,
-            { rise_delay, fall_delay, turnoff_delay });
+            PackedLogic4::from_aval_bval(value.width, value.aval, value.bval),
+            offset, { rise_delay, fall_delay, turnoff_delay }, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -798,23 +1023,27 @@ void LlvmProcessExecutor::write_inertial_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value,
+    const fsim_jit_logic9_word_v2* value,
     const std::uint64_t rise_delay,
     const std::uint64_t fall_delay,
-    const std::uint64_t turnoff_delay) noexcept
+    const std::uint64_t turnoff_delay,
+    const std::uint32_t update_domain) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
         return;
     }
     try {
+        const auto domain = checked_update_domain(update_domain);
         const auto actual_signal = mapped_signal(state, signal);
-        state.context->write_inertial_slice(
+        if (domain != runtime::simir::SignalUpdateDomain::generic) {
+            state.executor->flush_update_words(*state.context);
+        }
+        state.context->write_inertial_slice_in_domain(
             actual_signal,
             checked_logic9_slice(
                 state, actual_signal, offset, width, value),
-            offset,
-            { rise_delay, fall_delay, turnoff_delay });
+            offset, { rise_delay, fall_delay, turnoff_delay }, domain);
     } catch (...) {
         capture_failure(state);
     }
@@ -856,7 +1085,7 @@ void LlvmProcessExecutor::write_projected_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value,
+    const fsim_jit_logic9_word_v2* value,
     const std::uint64_t delay,
     const std::uint64_t rejection,
     const std::uint32_t mode) noexcept
@@ -891,7 +1120,7 @@ void LlvmProcessExecutor::write_projected_waveform(
     void* context,
     const std::uint32_t signal,
     const std::uint32_t width,
-    const fsim_jit_projected_element_v1* elements,
+    const fsim_jit_projected_element_v2* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
     const std::uint32_t mode) noexcept
@@ -934,7 +1163,7 @@ void LlvmProcessExecutor::write_projected_waveform_logic9(
     void* context,
     const std::uint32_t signal,
     const std::uint32_t width,
-    const fsim_jit_logic9_projected_element_v1* elements,
+    const fsim_jit_logic9_projected_element_v2* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
     const std::uint32_t mode) noexcept
@@ -974,7 +1203,7 @@ void LlvmProcessExecutor::write_projected_waveform_slice(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_projected_element_v1* elements,
+    const fsim_jit_projected_element_v2* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
     const std::uint32_t mode) noexcept
@@ -1019,7 +1248,7 @@ void LlvmProcessExecutor::write_projected_waveform_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_projected_element_v1* elements,
+    const fsim_jit_logic9_projected_element_v2* elements,
     const std::uint32_t count,
     const std::uint64_t rejection,
     const std::uint32_t mode) noexcept
@@ -1060,10 +1289,10 @@ void LlvmProcessExecutor::write_projected_waveform_slice_logic9(
 [[nodiscard]] runtime::simir::ProjectedDelayMode
 LlvmProcessExecutor::projected_delay_mode(const std::uint32_t mode)
 {
-    if (mode == FSIM_JIT_PROJECTED_TRANSPORT) {
+    if (mode == FSIM_JIT_PROJECTED_TRANSPORT_V2) {
         return runtime::simir::ProjectedDelayMode::transport;
     }
-    if (mode == FSIM_JIT_PROJECTED_INERTIAL) {
+    if (mode == FSIM_JIT_PROJECTED_INERTIAL_V2) {
         return runtime::simir::ProjectedDelayMode::inertial;
     }
     throw compiler::LlvmJitError(
@@ -1089,7 +1318,7 @@ LlvmProcessExecutor::projected_delay_mode(const std::uint32_t mode)
 }
 
 void LlvmProcessExecutor::clear_logic9_word(
-    fsim_jit_logic9_word_v1* value) noexcept
+    fsim_jit_logic9_word_v2* value) noexcept
 {
     if (value == nullptr) {
         return;
@@ -1103,7 +1332,7 @@ void LlvmProcessExecutor::clear_logic9_word(
 void LlvmProcessExecutor::require_logic9_signal(
     const CallbackState& state,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value)
+    const fsim_jit_logic9_word_v2* value)
 {
     if (value == nullptr
         || state.context == nullptr
@@ -1135,7 +1364,7 @@ void LlvmProcessExecutor::require_logic9_signal(
 [[nodiscard]] PackedLogic4 LlvmProcessExecutor::checked_logic9_value(
     const CallbackState& state,
     const std::uint32_t signal,
-    const fsim_jit_logic9_word_v1* value)
+    const fsim_jit_logic9_word_v2* value)
 {
     require_logic9_signal(state, signal, value);
     return PackedLogic4::from_logic9_word(
@@ -1151,7 +1380,7 @@ void LlvmProcessExecutor::require_logic9_signal(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value)
+    const fsim_jit_logic9_word_v2* value)
 {
     if (value == nullptr
         || state.context == nullptr
@@ -1276,7 +1505,7 @@ std::uint64_t LlvmProcessExecutor::signal_last_value(
 void LlvmProcessExecutor::signal_last_value_logic9(
     void* context,
     const std::uint32_t signal,
-    fsim_jit_logic9_word_v1* result) noexcept
+    fsim_jit_logic9_word_v2* result) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     clear_logic9_word(result);
@@ -1326,7 +1555,7 @@ std::uint32_t LlvmProcessExecutor::execute_signal_operation(
     void* context,
     const std::uint32_t process,
     const std::uint32_t instruction,
-    fsim_jit_frame_v1* frame) noexcept
+    fsim_jit_frame_v2* frame) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
@@ -1335,14 +1564,14 @@ std::uint32_t LlvmProcessExecutor::execute_signal_operation(
     try {
         invalidate_signal_read_cache(state);
         if (state.executor == nullptr || state.context == nullptr
-            || state.process == nullptr || state.generated_process != process
-            || instruction >= state.process->operations.size()
+            || !state.process.valid() || state.generated_process != process
+            || instruction >= state.process.operations().size()
             || frame != &state.executor->frame_) {
             throw std::logic_error(
                 "invalid generated exact-width signal callback");
         }
         state.executor->flush_update_words(*state.context);
-        const auto& stored = state.process->operations[instruction];
+        const auto& stored = state.process.operations()[instruction];
         const auto dynamic_offset = [&](const runtime::simir::DynamicIndex& selection) {
             return runtime::simir::dynamic_index_offset(
                 state.executor->read_register(selection.index, 32),

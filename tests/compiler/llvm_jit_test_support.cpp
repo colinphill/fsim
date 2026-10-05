@@ -46,6 +46,23 @@ extern "C" std::uint32_t container_read_packed(
         return 0U;
     }
 
+extern "C" std::uint32_t container_read_packed_index64(
+    void* opaque,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    std::uint64_t* aval,
+    std::uint64_t* bval,
+    const std::uint32_t word_count)
+{
+    return container_read_packed(
+        opaque, process, instruction, container, flags,
+        index_aval, index_bval, aval, bval, word_count);
+}
+
 extern "C" std::uint32_t container_write_packed(
         void* opaque,
         std::uint32_t,
@@ -70,7 +87,7 @@ extern "C" std::uint32_t container_write_packed(
     }
 
 [[nodiscard]] std::array<std::uint64_t, 4> logic9_value(
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value)
     {
         assert(value != nullptr);
         return {
@@ -82,7 +99,7 @@ extern "C" std::uint32_t container_write_packed(
     }
 
 void store_logic9_value(
-        fsim_jit_logic9_word_v1* destination,
+        fsim_jit_logic9_word_v2* destination,
         const std::array<std::uint64_t, 4>& value)
     {
         assert(destination != nullptr);
@@ -92,7 +109,7 @@ void store_logic9_value(
 extern "C" void read_signal_logic9(
         void* opaque,
         const std::uint32_t signal,
-        fsim_jit_logic9_word_v1* value)
+        fsim_jit_logic9_word_v2* value)
     {
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.logic9_signals.size());
@@ -102,7 +119,7 @@ extern "C" void read_signal_logic9(
 extern "C" void write_signal_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value)
     {
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.logic9_signals.size());
@@ -112,17 +129,21 @@ extern "C" void write_signal_logic9(
 extern "C" void write_update_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value,
+        std::uint32_t update_domain)
     {
+    static_cast<void>(update_domain);
         write_signal_logic9(opaque, signal, value);
     }
 
 extern "C" void write_after_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value,
-        const std::uint64_t)
+        const fsim_jit_logic9_word_v2* value,
+        const std::uint64_t,
+        std::uint32_t update_domain)
     {
+    static_cast<void>(update_domain);
         write_signal_logic9(opaque, signal, value);
     }
 
@@ -131,7 +152,7 @@ void write_signal_slice_logic9_impl(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value)
     {
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.logic9_signals.size());
@@ -149,7 +170,7 @@ extern "C" void write_signal_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value)
     {
         write_signal_slice_logic9_impl(
             opaque, signal, offset, width, value);
@@ -160,8 +181,10 @@ extern "C" void write_update_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value,
+        std::uint32_t update_domain)
     {
+    static_cast<void>(update_domain);
         write_signal_slice_logic9_impl(
             opaque, signal, offset, width, value);
     }
@@ -171,9 +194,11 @@ extern "C" void write_after_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value,
-        const std::uint64_t)
+        const fsim_jit_logic9_word_v2* value,
+        const std::uint64_t,
+        std::uint32_t update_domain)
     {
+    static_cast<void>(update_domain);
         write_signal_slice_logic9_impl(
             opaque, signal, offset, width, value);
     }
@@ -181,7 +206,7 @@ extern "C" void write_after_slice_logic9(
 extern "C" void signal_last_value_logic9(
         void* opaque,
         const std::uint32_t signal,
-        fsim_jit_logic9_word_v1* value)
+        fsim_jit_logic9_word_v2* value)
     {
         read_signal_logic9(opaque, signal, value);
     }
@@ -189,11 +214,13 @@ extern "C" void signal_last_value_logic9(
 extern "C" void write_inertial_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
-        const std::uint64_t)
+        const std::uint64_t,
+        std::uint32_t update_domain)
     {
+    static_cast<void>(update_domain);
         write_signal_logic9(opaque, signal, value);
     }
 
@@ -202,11 +229,13 @@ extern "C" void write_inertial_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
-        const std::uint64_t)
+        const std::uint64_t,
+        std::uint32_t update_domain)
     {
+    static_cast<void>(update_domain);
         write_signal_slice_logic9_impl(
             opaque, signal, offset, width, value);
     }
@@ -214,7 +243,7 @@ extern "C" void write_inertial_slice_logic9(
 extern "C" void write_projected_logic9(
         void* opaque,
         const std::uint32_t signal,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
         const std::uint32_t)
@@ -227,7 +256,7 @@ extern "C" void write_projected_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_word_v1* value,
+        const fsim_jit_logic9_word_v2* value,
         const std::uint64_t,
         const std::uint64_t,
         const std::uint32_t)
@@ -240,7 +269,7 @@ extern "C" void write_projected_waveform_logic9(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t,
-        const fsim_jit_logic9_projected_element_v1* elements,
+        const fsim_jit_logic9_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t,
         const std::uint32_t)
@@ -254,7 +283,7 @@ extern "C" void write_projected_waveform_slice_logic9(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_logic9_projected_element_v1* elements,
+        const fsim_jit_logic9_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t,
         const std::uint32_t)
@@ -269,7 +298,7 @@ extern "C" void write_formatted_logic9(
         const std::uint32_t,
         const std::uint32_t,
         const std::uint32_t,
-        const fsim_jit_logic9_word_v1* value)
+        const fsim_jit_logic9_word_v2* value)
     {
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         runtime.formatted_logic9_values.push_back(logic9_value(value));
@@ -333,7 +362,7 @@ extern "C" std::uint32_t read_signal_dynamic_part(
         const std::uint32_t base_offset,
         const std::uint32_t width,
         const std::uint32_t flags,
-        fsim_jit_logic9_word_v1* const result)
+        fsim_jit_logic9_word_v2* const result)
     {
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         ++runtime.dynamic_part_signal_reads;
@@ -388,8 +417,10 @@ extern "C" std::uint32_t write_signal_packed(
         const std::uint64_t* const aval,
         const std::uint64_t* const bval,
         const std::uint64_t* const logic9_plane2,
-        const std::uint64_t* const logic9_plane3)
+        const std::uint64_t* const logic9_plane3,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         assert(width > 0U && aval != nullptr && bval != nullptr);
@@ -441,8 +472,10 @@ extern "C" void assert_failed(void* opaque, const std::uint32_t process,
 
 extern "C" void write_update(void* opaque, const std::uint32_t signal,
         const std::uint64_t aval,
-        const std::uint64_t bval)
+        const std::uint64_t bval,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         runtime.scheduled_writes.push_back(
@@ -453,8 +486,10 @@ extern "C" void write_update(void* opaque, const std::uint32_t signal,
 extern "C" void write_after(void* opaque, const std::uint32_t signal,
         const std::uint64_t aval,
         const std::uint64_t bval,
-        const std::uint64_t delay)
+        const std::uint64_t delay,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         assert(delay <= std::numeric_limits<std::uint64_t>::max() - runtime.current_time);
@@ -509,8 +544,10 @@ extern "C" void write_update_slice(
         const std::uint32_t offset,
         const std::uint32_t width,
         const std::uint64_t aval,
-        const std::uint64_t bval)
+        const std::uint64_t bval,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         runtime.scheduled_writes.push_back(
@@ -531,8 +568,10 @@ extern "C" void write_after_slice(
         const std::uint32_t width,
         const std::uint64_t aval,
         const std::uint64_t bval,
-        const std::uint64_t delay)
+        const std::uint64_t delay,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         assert(delay
@@ -598,7 +637,7 @@ extern "C" std::uint64_t signal_driving_value(
 extern "C" void signal_driving_value_logic9(
         void* opaque,
         const std::uint32_t signal,
-        fsim_jit_logic9_word_v1* value)
+        fsim_jit_logic9_word_v2* value)
     {
         read_signal_logic9(opaque, signal, value);
     }
@@ -738,8 +777,10 @@ extern "C" void write_inertial(
         const std::uint64_t bval,
         const std::uint64_t rise,
         const std::uint64_t fall,
-        const std::uint64_t turnoff)
+        const std::uint64_t turnoff,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         runtime.inertial_writes.push_back(
@@ -755,8 +796,10 @@ extern "C" void write_inertial_slice(
         const std::uint64_t bval,
         const std::uint64_t rise,
         const std::uint64_t fall,
-        const std::uint64_t turnoff)
+        const std::uint64_t turnoff,
+        std::uint32_t update_domain)
     {
+        static_cast<void>(update_domain);
         auto& runtime = *static_cast<TestRuntime*>(opaque);
         assert(signal < runtime.signals.size());
         runtime.inertial_writes.push_back(
@@ -799,7 +842,7 @@ extern "C" void write_projected_waveform(
         void* opaque,
         const std::uint32_t signal,
         const std::uint32_t width,
-        const fsim_jit_projected_element_v1* elements,
+        const fsim_jit_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t rejection,
         const std::uint32_t mode)
@@ -824,7 +867,7 @@ extern "C" void write_projected_waveform_slice(
         const std::uint32_t signal,
         const std::uint32_t offset,
         const std::uint32_t width,
-        const fsim_jit_projected_element_v1* elements,
+        const fsim_jit_projected_element_v2* elements,
         const std::uint32_t count,
         const std::uint64_t rejection,
         const std::uint32_t mode)
@@ -1036,7 +1079,7 @@ extern "C" std::uint32_t sample_coverage(
     void* opaque,
     std::uint32_t,
     const std::uint32_t instruction,
-    fsim_jit_frame_v1* frame) noexcept
+    fsim_jit_frame_v2* frame) noexcept
 {
     auto& runtime = *static_cast<TestRuntime*>(opaque);
     try {
@@ -1074,7 +1117,7 @@ extern "C" std::uint32_t execute_class_property_operation(
     void* opaque,
     std::uint32_t,
     const std::uint32_t instruction,
-    fsim_jit_frame_v1* frame) noexcept
+    fsim_jit_frame_v2* frame) noexcept
 {
     auto& runtime = *static_cast<TestRuntime*>(opaque);
     try {
@@ -1158,7 +1201,7 @@ extern "C" std::uint32_t query_event_triggered(
     void* opaque,
     std::uint32_t,
     const std::uint32_t instruction,
-    fsim_jit_frame_v1* frame) noexcept
+    fsim_jit_frame_v2* frame) noexcept
 {
     auto& runtime = *static_cast<TestRuntime*>(opaque);
     try {
@@ -1189,100 +1232,107 @@ extern "C" std::uint32_t query_event_triggered(
     }
 }
 
-[[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime& runtime)
-    {
-        fsim_jit_runtime_v1 result { };
-        result.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
-        result.struct_size = static_cast<std::uint32_t>(sizeof(fsim_jit_runtime_v1));
-        result.context = &runtime;
-        result.read_signal = &read_signal;
-        result.write_signal = &write_signal;
-        result.assert_failed = &assert_failed;
-        result.write_update = &write_update;
-        result.write_after = &write_after;
-        result.write_signal_slice = &write_signal_slice;
-        result.write_update_slice = &write_update_slice;
-        result.write_after_slice = &write_after_slice;
-        result.signal_event = &signal_event;
-        result.signal_last_value = &signal_last_value;
-        result.signal_last_event = &signal_last_event;
-        result.signal_active = &signal_active;
-        result.signal_last_active = &signal_last_active;
-        result.signal_driving = &signal_driving;
-        result.signal_driving_value = &signal_driving_value;
-        result.signal_driving_value_logic9 = &signal_driving_value_logic9;
-        result.read_simulation_time = &read_simulation_time;
-        result.vital_timing_check = &vital_timing_check;
-        result.vital_delay = &vital_delay;
-        result.write_output = &write_output;
-        result.schedule_output = &schedule_output;
-        result.write_report = &write_report;
-        result.write_formatted = &write_formatted;
-        result.write_time = &write_time;
-        result.install_monitor = &install_monitor;
-        result.control_monitor = &control_monitor;
-        result.random_value = &random_value;
-        result.write_inertial = &write_inertial;
-        result.write_inertial_slice = &write_inertial_slice;
-        result.write_projected = &write_projected;
-        result.write_projected_slice = &write_projected_slice;
-        result.write_projected_waveform = &write_projected_waveform;
-        result.write_projected_waveform_slice = &write_projected_waveform_slice;
-        result.read_signal_logic9 = &read_signal_logic9;
-        result.write_signal_logic9 = &write_signal_logic9;
-        result.write_update_logic9 = &write_update_logic9;
-        result.write_after_logic9 = &write_after_logic9;
-        result.write_signal_slice_logic9 = &write_signal_slice_logic9;
-        result.write_update_slice_logic9 = &write_update_slice_logic9;
-        result.write_after_slice_logic9 = &write_after_slice_logic9;
-        result.signal_last_value_logic9 = &signal_last_value_logic9;
-        result.write_inertial_logic9 = &write_inertial_logic9;
-        result.write_inertial_slice_logic9 = &write_inertial_slice_logic9;
-        result.write_projected_logic9 = &write_projected_logic9;
-        result.write_projected_slice_logic9 = &write_projected_slice_logic9;
-        result.write_projected_waveform_logic9 = &write_projected_waveform_logic9;
-        result.write_projected_waveform_slice_logic9 = &write_projected_waveform_slice_logic9;
-        result.write_formatted_logic9 = &write_formatted_logic9;
-        result.force_signal_slice = &write_signal_slice;
-        result.force_signal_slice_logic9 = &write_signal_slice_logic9;
-        result.release_signal_slice = &release_signal_slice;
-        result.load_string = &load_string;
-        result.copy_string = &copy_string;
-        result.read_string_object = &read_string_object;
-        result.write_string_object = &write_string_object;
-        result.concatenate_strings = &concatenate_strings;
-        result.compare_strings = &compare_strings;
-        result.string_length = &string_length;
-        result.string_index = &string_index;
-        result.string_replace_byte = &string_replace_byte;
-        result.write_string_output = &write_string_output;
-        result.force_driver_signal_slice = &write_signal_slice;
-        result.force_driver_signal_slice_logic9 = &write_signal_slice_logic9;
-        result.release_driver_signal_slice = &release_signal_slice;
-        result.container_operation = &container_operation_stub;
-        result.container_read_word = &container_read_word_stub;
-        result.container_write_word = &container_write_word_stub;
-        result.container_read_packed = &container_read_packed;
-        result.container_write_packed = &container_write_packed;
-        result.read_signal_packed = &read_signal_packed;
-        result.write_signal_packed = &write_signal_packed;
-        result.read_signal_dynamic_part = &read_signal_dynamic_part;
-        result.record_code_coverage_counter
-            = &record_code_coverage_counter;
-        result.sample_coverage = &sample_coverage;
-        result.execute_class_property_operation
-            = &execute_class_property_operation;
-        result.query_event_triggered = &query_event_triggered;
-        return result;
-    }
+[[nodiscard]] fsim_jit_runtime_instance_v2 abi(TestRuntime& runtime)
+{
+    static const fsim_jit_services_v2 services = [] {
+        fsim_jit_services_v2 value { };
+        value.abi_version = FSIM_JIT_SERVICES_ABI_VERSION_V2;
+        value.struct_size = static_cast<std::uint32_t>(sizeof(value));
+        value.read_signal = &read_signal;
+        value.write_signal = &write_signal;
+        value.assert_failed = &assert_failed;
+        value.write_update = &write_update;
+        value.write_after = &write_after;
+        value.write_signal_slice = &write_signal_slice;
+        value.write_update_slice = &write_update_slice;
+        value.write_after_slice = &write_after_slice;
+        value.signal_event = &signal_event;
+        value.signal_last_value = &signal_last_value;
+        value.signal_last_event = &signal_last_event;
+        value.signal_active = &signal_active;
+        value.signal_last_active = &signal_last_active;
+        value.signal_driving = &signal_driving;
+        value.signal_driving_value = &signal_driving_value;
+        value.signal_driving_value_logic9 = &signal_driving_value_logic9;
+        value.read_simulation_time = &read_simulation_time;
+        value.vital_timing_check = &vital_timing_check;
+        value.vital_delay = &vital_delay;
+        value.write_output = &write_output;
+        value.schedule_output = &schedule_output;
+        value.write_report = &write_report;
+        value.write_formatted = &write_formatted;
+        value.write_time = &write_time;
+        value.install_monitor = &install_monitor;
+        value.control_monitor = &control_monitor;
+        value.random_value = &random_value;
+        value.write_inertial = &write_inertial;
+        value.write_inertial_slice = &write_inertial_slice;
+        value.write_projected = &write_projected;
+        value.write_projected_slice = &write_projected_slice;
+        value.write_projected_waveform = &write_projected_waveform;
+        value.write_projected_waveform_slice = &write_projected_waveform_slice;
+        value.read_signal_logic9 = &read_signal_logic9;
+        value.write_signal_logic9 = &write_signal_logic9;
+        value.write_update_logic9 = &write_update_logic9;
+        value.write_after_logic9 = &write_after_logic9;
+        value.write_signal_slice_logic9 = &write_signal_slice_logic9;
+        value.write_update_slice_logic9 = &write_update_slice_logic9;
+        value.write_after_slice_logic9 = &write_after_slice_logic9;
+        value.signal_last_value_logic9 = &signal_last_value_logic9;
+        value.write_inertial_logic9 = &write_inertial_logic9;
+        value.write_inertial_slice_logic9 = &write_inertial_slice_logic9;
+        value.write_projected_logic9 = &write_projected_logic9;
+        value.write_projected_slice_logic9 = &write_projected_slice_logic9;
+        value.write_projected_waveform_logic9 = &write_projected_waveform_logic9;
+        value.write_projected_waveform_slice_logic9 = &write_projected_waveform_slice_logic9;
+        value.write_formatted_logic9 = &write_formatted_logic9;
+        value.force_signal_slice = &write_signal_slice;
+        value.force_signal_slice_logic9 = &write_signal_slice_logic9;
+        value.release_signal_slice = &release_signal_slice;
+        value.load_string = &load_string;
+        value.copy_string = &copy_string;
+        value.read_string_object = &read_string_object;
+        value.write_string_object = &write_string_object;
+        value.concatenate_strings = &concatenate_strings;
+        value.compare_strings = &compare_strings;
+        value.string_length = &string_length;
+        value.string_index = &string_index;
+        value.string_replace_byte = &string_replace_byte;
+        value.write_string_output = &write_string_output;
+        value.force_driver_signal_slice = &write_signal_slice;
+        value.force_driver_signal_slice_logic9 = &write_signal_slice_logic9;
+        value.release_driver_signal_slice = &release_signal_slice;
+        value.container_operation = &container_operation_stub;
+        value.container_read_word = &container_read_word_stub;
+        value.container_write_word = &container_write_word_stub;
+        value.container_read_packed = &container_read_packed;
+        value.container_read_packed_index64
+            = &container_read_packed_index64;
+        value.container_write_packed = &container_write_packed;
+        value.read_signal_packed = &read_signal_packed;
+        value.write_signal_packed = &write_signal_packed;
+        value.read_signal_dynamic_part = &read_signal_dynamic_part;
+        value.record_code_coverage_counter = &record_code_coverage_counter;
+        value.sample_coverage = &sample_coverage;
+        value.execute_class_property_operation = &execute_class_property_operation;
+        value.query_event_triggered = &query_event_triggered;
+        return value;
+    }();
+    fsim_jit_runtime_instance_v2 result { };
+    result.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V2;
+    result.struct_size = static_cast<std::uint32_t>(sizeof(result));
+    result.services = &services;
+    result.context = &runtime;
+    return result;
+}
 
-[[nodiscard]] fsim_jit_resume_result_v1 new_resume_result()
+[[nodiscard]] fsim_jit_resume_result_v2 new_resume_result()
     {
         return {
-            FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1,
-            static_cast<std::uint32_t>(sizeof(fsim_jit_resume_result_v1)),
+            FSIM_JIT_RESUME_RESULT_ABI_VERSION_V2,
+            static_cast<std::uint32_t>(sizeof(fsim_jit_resume_result_v2)),
             0,
-            FSIM_JIT_INVALID_INSTRUCTION,
+            FSIM_JIT_INVALID_INSTRUCTION_V2,
             0,
         };
     }

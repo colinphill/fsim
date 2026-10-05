@@ -21,9 +21,349 @@
 
 namespace fsim::runtime::simir {
 
+void Interpreter::Impl::execute_compact_constant(
+    ConstantDriverStartupEntry& process)
+{
+    if (process.startup_write_bank != nullptr) {
+        execute_compact_startup_write(process);
+        return;
+    }
+    if (process.halted) {
+        return;
+    }
+    if (native_process_count_profile_enabled) {
+        process.track_interpreter_operations = true;
+    }
+    const auto program = processes.program_view(process.id);
+    const auto& operations = program.operations();
+    if (operations.size() != 4U && operations.size() != 5U) {
+        throw std::logic_error {
+            "compact constant process lost its validated body shape"
+        };
+    }
+    const auto statement_offset = operations.size() == 5U ? 1U : 0U;
+    const auto load_instruction = 1U + statement_offset;
+    const auto write_instruction = 2U + statement_offset;
+    const auto halt_instruction = 3U + statement_offset;
+    const auto completed_instruction = 4U + statement_offset;
+    std::uint64_t interpreted_operations = 0U;
+    const auto invocation_started_at = process_profile_enabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point { };
+    const auto count_operation = [&] {
+        ++interpreted_operations;
+        if (process_profile_enabled) {
+            ++process.profile_interpreter_operations;
+        }
+    };
+    const auto finish_invocation = [&] {
+        if (process.track_interpreter_operations) {
+            process.interpreter_operations += interpreted_operations;
+        }
+        if (process_profile_enabled) {
+            ++process.profile_calls;
+            process.profile_total_nanoseconds
+                += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now()
+                            - invocation_started_at)
+                        .count());
+        }
+    };
+
+    if (process.suspended) {
+        process.suspended_wake = true;
+        finish_invocation();
+        return;
+    }
+    if (process.status != ProcessStatus::finished) {
+        process.status = ProcessStatus::running;
+    }
+    if (process.pc == 0U) {
+        count_operation();
+        const auto marker_operation = operations.expanded(0U);
+        const auto* marker = operation_get_if<DebugPoint>(&marker_operation);
+        if (marker == nullptr) {
+            throw std::logic_error {
+                "compact constant process lost its entry DebugPoint"
+            };
+        }
+        const auto& actual = operations.debug_point(0U, *marker);
+        process.current_source = actual.source;
+        process.current_scope = operations.debug_scope(actual.scope);
+        process.pc = 1U;
+        notify_execution_point(
+            process.id, process.id, program, 0U,
+            ExecutionPointKind::process_entry, process.current_source,
+            process.current_scope);
+        if (scheduler.stop_requested()) {
+            queue_current(process.id);
+            finish_invocation();
+            return;
+        }
+    }
+    if (statement_offset != 0U && process.pc == 1U) {
+        count_operation();
+        const auto marker_operation = operations.expanded(1U);
+        const auto* marker = operation_get_if<DebugPoint>(&marker_operation);
+        if (marker == nullptr || marker->kind != DebugPointKind::statement) {
+            throw std::logic_error {
+                "compact constant process lost its statement DebugPoint"
+            };
+        }
+        const auto& actual = operations.debug_point(1U, *marker);
+        process.current_source = actual.source;
+        process.current_scope = operations.debug_scope(actual.scope);
+        process.pc = load_instruction;
+        notify_execution_point(
+            process.id, process.id, program, 1U,
+            ExecutionPointKind::statement, process.current_source,
+            process.current_scope);
+        if (scheduler.stop_requested()) {
+            queue_current(process.id);
+            finish_invocation();
+            return;
+        }
+    }
+    if (process.pc == load_instruction) {
+        const auto load_operation = operations.expanded(load_instruction);
+        const auto* load = operation_get_if<LoadConstant>(&load_operation);
+        if (load == nullptr) {
+            throw std::logic_error {
+                "compact constant process lost its LoadConstant"
+            };
+        }
+        count_operation();
+        auto value = coerce_value_kind(
+            load->value, signals[process.signal].value_kind);
+        process.pc = write_instruction;
+        count_operation();
+        process.pc = halt_instruction;
+        if (process.projected) {
+            const auto write_operation = operations.expanded(write_instruction);
+            bool projected_matches { };
+            if (process.slice) {
+                const auto* const projected_slice
+                    = operation_get_if<WriteProjectedSlice>(
+                        &write_operation);
+                projected_matches = projected_slice != nullptr
+                    && projected_slice->signal == process.signal
+                    && projected_slice->source == load->destination
+                    && projected_slice->offset == process.offset
+                    && projected_slice->delay == process.projected_delay
+                    && projected_slice->rejection
+                        == process.projected_rejection
+                    && projected_slice->mode == process.projected_mode;
+            } else {
+                const auto* const projected
+                    = operation_get_if<WriteProjected>(&write_operation);
+                projected_matches = projected != nullptr
+                    && projected->signal == process.signal
+                    && projected->source == load->destination
+                    && projected->delay == process.projected_delay
+                    && projected->rejection == process.projected_rejection
+                    && projected->mode == process.projected_mode;
+            }
+            if (!projected_matches
+                || process.update_domain != SignalUpdateDomain::generic) {
+                throw std::logic_error {
+                    "compact constant process lost its projected write"
+                };
+            }
+            schedule_projected(
+                process.id, process.signal, value,
+                process.slice
+                    ? std::optional<std::size_t> { process.offset }
+                    : std::nullopt,
+                process.projected_delay, process.projected_rejection,
+                process.projected_mode);
+        } else if (process.slice) {
+            stage_update_slice(
+                process.id, process.signal, std::move(value),
+                process.offset,
+                process.update_domain);
+        } else {
+            stage_update(
+                process.id, process.signal, std::move(value),
+                process.update_domain);
+        }
+    }
+    if (process.pc == halt_instruction) {
+        count_operation();
+        process.pc = completed_instruction;
+        const auto halt_operation = operations.expanded(halt_instruction);
+        if (!operation_holds<Halt>(halt_operation)) {
+            throw std::logic_error {
+                "compact constant process lost its terminal Halt"
+            };
+        }
+        notify_execution_point(
+            process.id, process.id, program, halt_instruction,
+            ExecutionPointKind::process_suspend, process.current_source,
+            process.current_scope);
+        process.halted = true;
+        process.status = ProcessStatus::finished;
+        process.suspended = false;
+        process.suspended_wake = false;
+        process.waiting_on_static = false;
+        finish_invocation();
+        return;
+    }
+    if (process.pc != completed_instruction) {
+        throw std::logic_error {
+            "compact constant process has an invalid program counter"
+        };
+    }
+    finish_invocation();
+}
+
+void Interpreter::Impl::execute_compact_startup_write(
+    ConstantDriverStartupEntry& process)
+{
+    if (process.halted) {
+        return;
+    }
+    const auto& bank = *process.startup_write_bank;
+    if (bank.signal != process.signal
+        || bank.slice != process.slice
+        || bank.offset != process.offset
+        || bank.update_domain != process.update_domain
+        || bank.operation_count
+            != (bank.statement_point ? 5U : 4U)
+                + static_cast<std::size_t>(bank.constant_copy.has_value())) {
+        throw std::logic_error {
+            "data-only startup write lost its registered shape"
+        };
+    }
+    if (native_process_count_profile_enabled) {
+        process.track_interpreter_operations = true;
+    }
+    const auto program = processes.program_view(process.id);
+    const auto statement_offset = bank.statement_point ? 1U : 0U;
+    const auto load_instruction = 1U + statement_offset;
+    const auto copy_instruction = 2U + statement_offset;
+    const InstructionIndex write_instruction = copy_instruction
+        + static_cast<InstructionIndex>(bank.constant_copy.has_value());
+    const auto halt_instruction = write_instruction + 1U;
+    const auto completed_instruction = halt_instruction + 1U;
+    std::uint64_t interpreted_operations = 0U;
+    const auto invocation_started_at = process_profile_enabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point { };
+    const auto count_operation = [&] {
+        ++interpreted_operations;
+        if (process_profile_enabled) {
+            ++process.profile_interpreter_operations;
+        }
+    };
+    const auto finish_invocation = [&] {
+        if (process.track_interpreter_operations) {
+            process.interpreter_operations += interpreted_operations;
+        }
+        if (process_profile_enabled) {
+            ++process.profile_calls;
+            process.profile_total_nanoseconds
+                += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now()
+                            - invocation_started_at)
+                        .count());
+        }
+    };
+
+    if (process.suspended) {
+        process.suspended_wake = true;
+        finish_invocation();
+        return;
+    }
+    if (process.status != ProcessStatus::finished) {
+        process.status = ProcessStatus::running;
+    }
+    if (process.pc == 0U) {
+        count_operation();
+        process.current_source = bank.entry_point.source;
+        process.current_scope = bank.entry_point.scope;
+        process.pc = 1U;
+        notify_execution_point(
+            process.id, process.id, program, 0U,
+            ExecutionPointKind::process_entry, process.current_source,
+            process.current_scope);
+        if (scheduler.stop_requested()) {
+            queue_current(process.id);
+            finish_invocation();
+            return;
+        }
+    }
+    if (statement_offset != 0U && process.pc == 1U) {
+        count_operation();
+        const auto& statement_point = *bank.statement_point;
+        process.current_source = statement_point.source;
+        process.current_scope = statement_point.scope;
+        process.pc = load_instruction;
+        notify_execution_point(
+            process.id, process.id, program, 1U,
+            ExecutionPointKind::statement, process.current_source,
+            process.current_scope);
+        if (scheduler.stop_requested()) {
+            queue_current(process.id);
+            finish_invocation();
+            return;
+        }
+    }
+    if (process.pc == load_instruction) {
+        count_operation();
+        process.pc = bank.constant_copy
+            ? copy_instruction : write_instruction;
+    }
+    if (bank.constant_copy && process.pc == copy_instruction) {
+        count_operation();
+        process.pc = write_instruction;
+    }
+    if (process.pc == write_instruction) {
+        count_operation();
+        auto value = coerce_value_kind(
+            bank.value, signals[bank.signal].value_kind);
+        process.pc = halt_instruction;
+        if (bank.slice) {
+            stage_update_slice(process.id, bank.signal, std::move(value),
+                bank.offset, bank.update_domain);
+        } else {
+            stage_update(process.id, bank.signal, std::move(value),
+                bank.update_domain);
+        }
+    }
+    if (process.pc == halt_instruction) {
+        count_operation();
+        process.pc = completed_instruction;
+        notify_execution_point(
+            process.id, process.id, program, halt_instruction,
+            ExecutionPointKind::process_suspend, process.current_source,
+            process.current_scope);
+        process.halted = true;
+        process.status = ProcessStatus::finished;
+        process.suspended = false;
+        process.suspended_wake = false;
+        process.waiting_on_static = false;
+        finish_invocation();
+        return;
+    }
+    if (process.pc != completed_instruction) {
+        throw std::logic_error {
+            "data-only startup write has an invalid program counter"
+        };
+    }
+    finish_invocation();
+}
+
 void Interpreter::Impl::execute(ProcessId id)
 {
+    require_all_region_forwarding_role_journals_flushed();
+    if (auto* const compact = processes.compact_constant(id)) {
+        execute_compact_constant(*compact);
+        return;
+    }
     auto& process = get_process(id);
+    process.region_kernel_completion_boundary_validated = false;
     if (native_process_count_profile_enabled) {
         process.cold().track_interpreter_operations = true;
     }
@@ -62,7 +402,7 @@ void Interpreter::Impl::execute(ProcessId id)
     restore_callable_context(process);
     if (!process.executor && process.cold().deferred_executor
         && can_install_deferred_executor(process)
-        && process.cold().deferred_executor->ready()) {
+        && deferred_executor_ready(process)) {
         install_deferred_executor(process);
     }
     if (!process.halted) {
@@ -129,7 +469,7 @@ void Interpreter::Impl::execute(ProcessId id)
     }
 
     while (!process.halted) {
-        if (process.pc >= process.program().operations.size()) {
+        if (process.pc >= process.program().operations().size()) {
             fail(process, "program counter is outside the operation stream");
         }
 
@@ -141,7 +481,7 @@ void Interpreter::Impl::execute(ProcessId id)
             ++process.cold().profile_interpreter_operations;
         }
         const auto& operation
-            = std::as_const(process.program().operations)[instruction];
+            = std::as_const(process.program().operations())[instruction];
         bool boundary = false;
         const auto selected_offset =
             [&](const DynamicIndex& selection) -> std::uint32_t {
@@ -191,10 +531,10 @@ void Interpreter::Impl::execute(ProcessId id)
                             process, op.destination));
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
-                    const auto& signal = get_signal(op.signal);
+                    (void)get_signal(op.signal);
                     if (op.kind == SignalReadKind::current) {
                         get_register(process, op.destination) = coerce_value_kind(
-                            signal.initial_value,
+                            logical_signal_value(op.signal),
                             register_value_kind(process, op.destination));
                         ++process.pc;
                         return;
@@ -213,7 +553,7 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
                     (void)get_signal(op.signal);
                     get_register(process, op.destination) = coerce_value_kind(
-                        signal_last_values[op.signal],
+                        logical_signal_last_value(op.signal),
                         register_value_kind(
                             process, op.destination));
                     ++process.pc;
@@ -316,7 +656,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 : std::string { });
                     }
                     const auto handle = class_allocate_hook(
-                        process.program().name,
+                        process.program().name(),
                         op.specialization_identity,
                         op.declared_type,
                         actuals,
@@ -936,7 +1276,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 bits = bits.substr(
                                     0U, maximum_bits) + "...";
                             }
-                            message += " [process=" + process.program().name
+                            message += " [process=" + process.program().name()
                                 + ", register="
                                 + std::to_string(op.source)
                                 + ", width="
@@ -975,19 +1315,27 @@ void Interpreter::Impl::execute(ProcessId id)
                     stage_update(
                         process.id,
                         op.signal,
-                        std::move(value));
+                        std::move(value),
+                        op.domain);
                 } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
-                    scheduler.schedule_after(
-                        op.delay, SchedulerPhase::update, process.id,
-                        [this,
-                            driver = process.id,
-                            signal = op.signal,
-                            value = std::move(value)](Scheduler&) mutable {
-                            stage_update(
-                                driver, signal, std::move(value));
-                        });
+                    if (op.domain
+                        != SignalUpdateDomain::generic) {
+                        schedule_systemverilog_update(
+                            process.id, op.signal, std::move(value),
+                            std::nullopt, op.domain, op.delay);
+                    } else {
+                        scheduler.schedule_after(
+                            op.delay, SchedulerPhase::update, process.id,
+                            [this,
+                                driver = process.id,
+                                signal = op.signal,
+                                value = std::move(value)](Scheduler&) mutable {
+                                stage_update(
+                                    driver, signal, std::move(value));
+                            });
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
@@ -996,7 +1344,8 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.signal,
                         std::move(value),
                         std::nullopt,
-                        op.delays);
+                        op.delays,
+                        op.domain);
                 } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
@@ -1039,26 +1388,34 @@ void Interpreter::Impl::execute(ProcessId id)
                         process.id,
                         op.signal,
                         std::move(value),
-                        op.offset);
+                        op.offset,
+                        op.domain);
                 } else if constexpr (std::is_same_v<OperationType, WriteAfterSlice>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
-                    scheduler.schedule_after(
-                        op.delay,
-                        SchedulerPhase::update,
-                        process.id,
-                        [this,
-                            driver = process.id,
-                            signal = op.signal,
-                            offset = op.offset,
-                            value = std::move(value)](
-                            Scheduler&) mutable {
-                            stage_update_slice(
-                                driver,
-                                signal,
-                                std::move(value),
-                                offset);
-                        });
+                    if (op.domain
+                        != SignalUpdateDomain::generic) {
+                        schedule_systemverilog_update(
+                            process.id, op.signal, std::move(value),
+                            op.offset, op.domain, op.delay);
+                    } else {
+                        scheduler.schedule_after(
+                            op.delay,
+                            SchedulerPhase::update,
+                            process.id,
+                            [this,
+                                driver = process.id,
+                                signal = op.signal,
+                                offset = op.offset,
+                                value = std::move(value)](
+                                Scheduler&) mutable {
+                                stage_update_slice(
+                                    driver,
+                                    signal,
+                                    std::move(value),
+                                    offset);
+                            });
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
@@ -1067,7 +1424,8 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.signal,
                         std::move(value),
                         op.offset,
-                        op.delays);
+                        op.delays,
+                        op.domain);
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;
@@ -1112,27 +1470,35 @@ void Interpreter::Impl::execute(ProcessId id)
                         process.id,
                         op.signal,
                         std::move(value),
-                        offset);
+                        offset,
+                        op.domain);
                 } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
                     auto value = get_register(process, op.source);
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
-                    scheduler.schedule_after(
-                        op.delay,
-                        SchedulerPhase::update,
-                        process.id,
-                        [this,
-                            driver = process.id,
-                            signal = op.signal,
-                            offset,
-                            value = std::move(value)](
-                            Scheduler&) mutable {
-                            stage_update_slice(
-                                driver,
-                                signal,
-                                std::move(value),
-                                offset);
-                        });
+                    if (op.domain
+                        != SignalUpdateDomain::generic) {
+                        schedule_systemverilog_update(
+                            process.id, op.signal, std::move(value),
+                            offset, op.domain, op.delay);
+                    } else {
+                        scheduler.schedule_after(
+                            op.delay,
+                            SchedulerPhase::update,
+                            process.id,
+                            [this,
+                                driver = process.id,
+                                signal = op.signal,
+                                offset,
+                                value = std::move(value)](
+                                Scheduler&) mutable {
+                                stage_update_slice(
+                                    driver,
+                                    signal,
+                                    std::move(value),
+                                    offset);
+                            });
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicPartSlice>) {
                     try {
                         const auto write = dynamic_part_write_value(
@@ -1162,7 +1528,8 @@ void Interpreter::Impl::execute(ProcessId id)
                                 process.id,
                                 op.signal,
                                 write->value,
-                                write->offset);
+                                write->offset,
+                                op.domain);
                         }
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
@@ -1175,21 +1542,29 @@ void Interpreter::Impl::execute(ProcessId id)
                             op.selection);
                         ++process.pc;
                         if (write) {
-                            scheduler.schedule_after(
-                                op.delay,
-                                SchedulerPhase::update,
-                                process.id,
-                                [this,
-                                    driver = process.id,
-                                    signal = op.signal,
-                                    write = std::move(*write)](
-                                    Scheduler&) mutable {
-                                    stage_update_slice(
-                                        driver,
-                                        signal,
-                                        std::move(write.value),
-                                        write.offset);
-                                });
+                            if (op.domain
+                                != SignalUpdateDomain::generic) {
+                                schedule_systemverilog_update(
+                                    process.id, op.signal,
+                                    std::move(write->value), write->offset,
+                                    op.domain, op.delay);
+                            } else {
+                                scheduler.schedule_after(
+                                    op.delay,
+                                    SchedulerPhase::update,
+                                    process.id,
+                                    [this,
+                                        driver = process.id,
+                                        signal = op.signal,
+                                        write = std::move(*write)](
+                                        Scheduler&) mutable {
+                                        stage_update_slice(
+                                            driver,
+                                            signal,
+                                            std::move(write.value),
+                                            write.offset);
+                                    });
+                            }
                         }
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
@@ -1239,7 +1614,8 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.signal,
                         std::move(value),
                         offset,
-                        op.delays);
+                        op.delays,
+                        op.domain);
                 } else if constexpr (std::is_same_v<
                                          OperationType,
                                          WriteInertialDynamicPartSlice>) {
@@ -1255,7 +1631,8 @@ void Interpreter::Impl::execute(ProcessId id)
                                 op.signal,
                                 std::move(write->value),
                                 write->offset,
-                                op.delays);
+                                op.delays,
+                                op.domain);
                         }
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
@@ -1355,7 +1732,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     || std::is_same_v<OperationType, SemaphorePut>) {
                     boundary = true;
                 } else if constexpr (std::is_same_v<OperationType, Jump>) {
-                    if (op.target >= process.program().operations.size()) {
+                    if (op.target >= process.program().operations().size()) {
                         fail(process, "jump target is outside the operation stream");
                     }
                     process.pc = op.target;
@@ -1371,9 +1748,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     if (pointer.aval >= op.stack.capacity) {
                         fail(process, "call-stack capacity is exhausted");
                     }
-                    if (op.target >= process.program().operations.size()
+                    if (op.target >= process.program().operations().size()
                         || op.return_target
-                            >= process.program().operations.size()) {
+                            >= process.program().operations().size()) {
                         fail(process, "call target is outside the operation stream");
                     }
                     get_register(
@@ -1404,7 +1781,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                             .low_word();
                     if (target.bval != 0
                         || target.aval
-                            >= process.program().operations.size()) {
+                            >= process.program().operations().size()) {
                         fail(process, "call-stack return target is invalid");
                     }
                     get_register(process, op.stack.pointer) = PackedLogic4::from_aval_bval(
@@ -1435,7 +1812,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     } else {
                         target = value == Logic4::one ? op.when_true : op.when_false;
                     }
-                    if (target >= process.program().operations.size()) {
+                    if (target >= process.program().operations().size()) {
                         fail(process, "branch target is outside the operation stream");
                     }
                     process.pc = target;
@@ -1447,7 +1824,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         const auto message = op.message.empty()
                             ? std::string_view { "assertion failed" }
                             : std::string_view { op.message };
-                        if (process.program().language_standard == "2019") {
+                        if (process.program().language_standard() == "2019") {
                             execute_vhdl_report(
                                 process, process.pc, message, op.severity,
                                 op.source, false);
@@ -1476,22 +1853,30 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, Display>) {
                     if (op.postponed) {
-                        scheduler.schedule(
-                            SchedulerPhase::postponed,
-                            process.id,
-                            [this,
-                                process_id = process.id,
-                                text = op.text,
-                                newline = op.newline](Scheduler& runtime) {
-                                if (output_hook) {
-                                    output_hook(
-                                        process_id,
-                                        text,
-                                        newline,
-                                        runtime.now(),
-                                        runtime.delta());
-                                }
-                            });
+                        auto publish = [this,
+                                           process_id = process.id,
+                                           text = op.text,
+                                           newline = op.newline](
+                                          Scheduler& runtime) {
+                            if (output_hook) {
+                                output_hook(
+                                    process_id,
+                                    text,
+                                    newline,
+                                    runtime.now(),
+                                    runtime.delta());
+                            }
+                        };
+                        if (process.program().scheduling_domain()
+                            == ProcessSchedulingDomain::systemverilog) {
+                            scheduler.schedule_end_of_time_slot(
+                                process.id, std::move(publish));
+                        } else {
+                            scheduler.schedule(
+                                SchedulerPhase::postponed,
+                                process.id,
+                                std::move(publish));
+                        }
                     } else if (output_hook) {
                         output_hook(
                             process.id,
@@ -1514,22 +1899,30 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.zero_pad,
                         op.scalar_kind);
                     if (op.postponed) {
-                        scheduler.schedule(
-                            SchedulerPhase::postponed,
-                            process.id,
-                            [this,
-                                process_id = process.id,
-                                text = std::move(text),
-                                newline = op.newline](Scheduler& runtime) {
-                                if (output_hook) {
-                                    output_hook(
-                                        process_id,
-                                        text,
-                                        newline,
-                                        runtime.now(),
-                                        runtime.delta());
-                                }
-                            });
+                        auto publish = [this,
+                                           process_id = process.id,
+                                           text = std::move(text),
+                                           newline = op.newline](
+                                          Scheduler& runtime) {
+                            if (output_hook) {
+                                output_hook(
+                                    process_id,
+                                    text,
+                                    newline,
+                                    runtime.now(),
+                                    runtime.delta());
+                            }
+                        };
+                        if (process.program().scheduling_domain()
+                            == ProcessSchedulingDomain::systemverilog) {
+                            scheduler.schedule_end_of_time_slot(
+                                process.id, std::move(publish));
+                        } else {
+                            scheduler.schedule(
+                                SchedulerPhase::postponed,
+                                process.id,
+                                std::move(publish));
+                        }
                     } else if (output_hook) {
                         output_hook(
                             process.id,
@@ -1544,22 +1937,30 @@ void Interpreter::Impl::execute(ProcessId id)
                         + get_string_register(process, op.source)
                         + op.suffix;
                     if (op.postponed) {
-                        scheduler.schedule(
-                            SchedulerPhase::postponed,
-                            process.id,
-                            [this,
-                                process_id = process.id,
-                                text = std::move(text),
-                                newline = op.newline](Scheduler& runtime) {
-                                if (output_hook) {
-                                    output_hook(
-                                        process_id,
-                                        text,
-                                        newline,
-                                        runtime.now(),
-                                        runtime.delta());
-                                }
-                            });
+                        auto publish = [this,
+                                           process_id = process.id,
+                                           text = std::move(text),
+                                           newline = op.newline](
+                                          Scheduler& runtime) {
+                            if (output_hook) {
+                                output_hook(
+                                    process_id,
+                                    text,
+                                    newline,
+                                    runtime.now(),
+                                    runtime.delta());
+                            }
+                        };
+                        if (process.program().scheduling_domain()
+                            == ProcessSchedulingDomain::systemverilog) {
+                            scheduler.schedule_end_of_time_slot(
+                                process.id, std::move(publish));
+                        } else {
+                            scheduler.schedule(
+                                SchedulerPhase::postponed,
+                                process.id,
+                                std::move(publish));
+                        }
                     } else if (output_hook) {
                         output_hook(
                             process.id,
@@ -1584,7 +1985,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         | (encoded.get(1) == Logic4::one ? 2U : 0U);
                     const auto severity = static_cast<AssertionSeverity>(ordinal);
                     const auto& message = get_string_register(process, op.message);
-                    if (process.program().language_standard == "2019") {
+                    if (process.program().language_standard() == "2019") {
                         execute_vhdl_report(
                             process, process.pc, message, severity,
                             op.source, op.standalone);
@@ -1630,22 +2031,30 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.left_justify,
                         op.zero_pad);
                     if (op.postponed) {
-                        scheduler.schedule(
-                            SchedulerPhase::postponed,
-                            process.id,
-                            [this,
-                                process_id = process.id,
-                                text = std::move(text),
-                                newline = op.newline](Scheduler& runtime) {
-                                if (output_hook) {
-                                    output_hook(
-                                        process_id,
-                                        text,
-                                        newline,
-                                        runtime.now(),
-                                        runtime.delta());
-                                }
-                            });
+                        auto publish = [this,
+                                           process_id = process.id,
+                                           text = std::move(text),
+                                           newline = op.newline](
+                                          Scheduler& runtime) {
+                            if (output_hook) {
+                                output_hook(
+                                    process_id,
+                                    text,
+                                    newline,
+                                    runtime.now(),
+                                    runtime.delta());
+                            }
+                        };
+                        if (process.program().scheduling_domain()
+                            == ProcessSchedulingDomain::systemverilog) {
+                            scheduler.schedule_end_of_time_slot(
+                                process.id, std::move(publish));
+                        } else {
+                            scheduler.schedule(
+                                SchedulerPhase::postponed,
+                                process.id,
+                                std::move(publish));
+                        }
                     } else if (output_hook) {
                         output_hook(
                             process.id,
@@ -1813,7 +2222,7 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (
                     std::is_same_v<OperationType, CodeCoverageHit>) {
                     const auto counter
-                        = process.program().operations.code_coverage_counter(
+                        = process.program().operations().code_coverage_counter(
                             process.pc, op.counter);
                     const auto update = code_coverage_counters.record(counter);
                     if (update == CodeCoverageCounterUpdate::Unavailable) {
@@ -1866,7 +2275,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     execute_scope_randomize(process, instruction, op);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
-                    if (process.program().language_standard == "2019") {
+                    if (process.program().language_standard() == "2019") {
                         execute_vhdl_report(
                             process, process.pc, op.message, op.severity,
                             op.source, true);
@@ -1879,7 +2288,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             scheduler.now(),
                             scheduler.delta());
                     }
-                    if (process.program().language_standard != "2019"
+                    if (process.program().language_standard() != "2019"
                         && op.severity == AssertionSeverity::failure) {
                         throw AssertionError(
                             process.id,
@@ -1921,7 +2330,7 @@ void Interpreter::Impl::execute(ProcessId id)
             if (fsim::runtime::simir::operation_holds<Fork>(operation)
                 && !process.executor && process.cold().deferred_executor
                 && can_install_deferred_executor(process)
-                && process.cold().deferred_executor->ready()) {
+                && deferred_executor_ready(process)) {
                 install_deferred_executor(process);
                 queue_current(process.id);
                 return;

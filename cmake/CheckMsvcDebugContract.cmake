@@ -167,6 +167,7 @@ endif()
 
 foreach(FSIM_C_HOST IN ITEMS
     fsim_jit_runtime_c_tests
+    fsim_jit_runtime_v2_c_layout_tests
     fsim_systemc_abi_c_tests
     fsim_api_header_c_test)
   string(FIND

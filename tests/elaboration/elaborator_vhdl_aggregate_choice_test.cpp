@@ -166,12 +166,13 @@ end architecture;
   auto slice_interpreter = slice_elaborated.design->create_interpreter();
   const auto slice_run = slice_interpreter->run();
   assert(slice_run.status == fsim::runtime::RunStatus::completed);
-  // The selected halves are driven; their untouched halves remain Z.
+  // The selected halves are driven; the undriven subelements keep their
+  // declared std_logic initial U rather than acquiring a phantom Z driver.
   assert(
       slice_interpreter->signal_value(*descending).to_msb_string()
-          == "ZZZZZZZZ11111111"
+          == "UUUUUUUU11111111"
       && slice_interpreter->signal_value(*ascending).to_msb_string()
-          == "11111111ZZZZZZZZ");
+          == "11111111UUUUUUUU");
 
   const auto inactive_generate = fsim::frontend::parse_text(
       "vhdl_inactive_generate_slice_validation.vhd",

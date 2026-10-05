@@ -22,13 +22,20 @@ struct ProcessUpdateSlotView {
     std::uint64_t* mask { };
 };
 
-/// One process's ordered slot set within a hierarchy-wide native cohort.
-/// Batches retain the actual elaborated process identity rather than the
-/// structurally shared process template identity.
+struct PreparedOwnedUpdateSlot;
+
+/// One process's ordered slot set from a native update accumulator. Batches
+/// retain the actual elaborated process identity rather than the structurally
+/// shared process template identity.
 struct ProcessUpdateSlotBatch {
     ProcessId process { };
     std::span<const ProcessUpdateSlotView> slots;
     std::span<std::uint64_t> active_words;
+    /// Optional immutable ownership proof obtained for this batch geometry.
+    /// The runtime checks its owner and slot identity before using the
+    /// prevalidated path; a missing or mismatched proof uses regular validated
+    /// staging. The caller keeps it alive through the synchronous write call.
+    const PreparedOwnedUpdateSlot* owned_slot_certificate { };
 };
 
 /// Immutable geometry for one owned native update slot. The executor owns the
@@ -44,11 +51,10 @@ struct PreparedOwnedUpdateSlot {
     std::array<std::uint64_t, 2U> own_masks { };
 };
 
-struct PureWavePreparedMember;
-
 /// Mutable view of one callback-buffered single-word Logic9 update. The four
-/// planes retain the exact std_ulogic values; mask selects bits written by the
-/// current activation.
+/// planes use the ordinal Logic9 encoding; checked batch ingress maps malformed
+/// codes 9 through 15 to X before native publication. `mask` selects bits
+/// written by the current activation.
 struct ProcessLogic9UpdateSlotView {
     SignalId signal { };
     std::uint32_t width { };
@@ -76,6 +82,29 @@ struct ProcessNativeWordUpdate {
     ProcessId process { };
     std::uint32_t active { };
     std::uint32_t reserved { };
+};
+
+/// Allocate a process-wide unique owner token for a stable direct-read
+/// capability map. Returns zero permanently after the nonwrapping token space
+/// is exhausted; zero-key contexts are revalidated on every resume.
+[[nodiscard]] std::uint64_t allocate_direct_signal_read_owner_token() noexcept;
+
+struct DirectSignalReadCapabilityKey {
+    // Zero disables reuse. A nonzero owner token is unique for one context
+    // lifetime; the epoch changes whenever capability eligibility or an
+    // in-place plane layout changes. Runtime value contents may change while
+    // their direct planes remain authoritative for logical current values.
+    std::uint64_t owner_token { };
+    std::uint64_t epoch { };
+
+    [[nodiscard]] bool cacheable() const noexcept
+    {
+        return owner_token != 0U && epoch != 0U;
+    }
+
+    friend bool operator==(
+        const DirectSignalReadCapabilityKey&,
+        const DirectSignalReadCapabilityKey&) = default;
 };
 
 class ProcessExecutionContext {
@@ -172,8 +201,11 @@ public:
     /// these methods to access its signal storage directly.
     [[nodiscard]] virtual Logic4Word
     read_signal_word(SignalId signal) const;
-    /// Dense current-value planes for callback-free native reads. Empty spans
-    /// preserve compatibility for alternate execution contexts.
+    /// Dense current-value planes for callback-free native reads. A caller
+    /// that reads an individual signal entry must first check
+    /// supports_direct_signal_read(signal); unsupported entries may not match
+    /// the logical current value. Empty spans preserve compatibility for
+    /// alternate execution contexts.
     [[nodiscard]] virtual std::span<const std::uint64_t>
     direct_signal_aval() const noexcept;
     [[nodiscard]] virtual std::span<const std::uint64_t>
@@ -210,7 +242,8 @@ public:
     [[nodiscard]] virtual bool event_triggered(
         SignalId event, InstructionIndex instruction) const;
     /// Dense exact Logic9 planes for callback-free native reads of signals no
-    /// wider than one word. Entries for non-Logic9 signals are zero.
+    /// wider than one word. Entries for non-Logic9 signals are zero. Check
+    /// supports_direct_signal_read(signal) before reading any signal entry.
     [[nodiscard]] virtual std::span<const std::uint64_t>
     direct_signal_logic9_plane0() const noexcept;
     [[nodiscard]] virtual std::span<const std::uint64_t>
@@ -220,8 +253,9 @@ public:
     [[nodiscard]] virtual std::span<const std::uint64_t>
     direct_signal_logic9_plane3() const noexcept;
     /// Flattened current Logic4 planes and per-signal word offsets for
-    /// callback-free arbitrary-width native reads. Empty spans preserve
-    /// compatibility for alternate execution contexts.
+    /// callback-free arbitrary-width native reads. Check
+    /// supports_direct_signal_read(signal) before reading any signal entry.
+    /// Empty spans preserve compatibility for alternate execution contexts.
     [[nodiscard]] virtual std::span<const std::uint64_t>
     direct_wide_signal_aval() const noexcept;
     [[nodiscard]] virtual std::span<const std::uint64_t>
@@ -314,15 +348,14 @@ public:
     /// batch staging.
     [[nodiscard]] virtual std::optional<PreparedOwnedUpdateSlot>
     prepare_owned_update_slot(const ProcessUpdateSlotBatch&);
-    /// Consume already validated native slot batches in canonical cohort
-    /// order. Returns false without mutating slots when the context requires
-    /// the ordinary checked path.
+    /// Consume native slot batches in their supplied order. A batch may carry
+    /// an owned-slot certificate from prepare_owned_update_slot; the runtime
+    /// rechecks its owner and geometry, then still validates mutable ownership
+    /// and phase state. Returns false without mutating slots when the context
+    /// requires ordinary word-based staging. Borrowed certificates are never
+    /// retained after this call.
     virtual bool write_validated_update_slot_batches(
         std::span<const ProcessUpdateSlotBatch>);
-    /// Stage the active batches in one ordered prepared wave. A false return
-    /// leaves every slot untouched for member-local ordered flushing.
-    virtual bool write_validated_prepared_update_slot_batches(
-        std::span<const PureWavePreparedMember* const>);
     /// Consume validated inline Logic9 accumulators without expanding them to
     /// temporary packed values. False leaves every mask untouched.
     virtual bool write_validated_logic9_update_batch(
@@ -505,4 +538,59 @@ public:
 
     /// True when an embedding debugger currently requests source boundaries.
     [[nodiscard]] virtual bool execution_points_enabled() const noexcept;
+
+    /// Append-only tagged update entry points. They are deliberately kept at
+    /// the end of this virtual interface so adding scheduling provenance does
+    /// not move any pre-existing virtual function slot. Alternate execution
+    /// contexts that implement only the legacy interface remain generic-only;
+    /// they must implement these methods to accept SystemVerilog Active/NBA
+    /// updates. Existing binary subclasses must be rebuilt before code calls
+    /// these appended entries.
+    virtual void write_update_in_domain(
+        SignalId signal,
+        PackedLogic4 value,
+        SignalUpdateDomain domain);
+    virtual void write_update_slice_in_domain(
+        SignalId signal,
+        PackedLogic4 value,
+        std::size_t offset,
+        SignalUpdateDomain domain);
+    virtual void write_after_in_domain(
+        SignalId signal,
+        PackedLogic4 value,
+        SimulationTick delay,
+        SignalUpdateDomain domain);
+    virtual void write_after_slice_in_domain(
+        SignalId signal,
+        PackedLogic4 value,
+        std::size_t offset,
+        SimulationTick delay,
+        SignalUpdateDomain domain);
+    virtual void write_inertial_in_domain(
+        SignalId signal,
+        PackedLogic4 value,
+        const TransitionDelays& delays,
+        SignalUpdateDomain domain);
+    virtual void write_inertial_slice_in_domain(
+        SignalId signal,
+        PackedLogic4 value,
+        std::size_t offset,
+        const TransitionDelays& delays,
+        SignalUpdateDomain domain);
+
+    /// True when reading this signal through the dense direct-value planes
+    /// returns the same logical current value as `read_signal`. The default
+    /// is fail-closed so alternate contexts retain checked callback reads
+    /// unless they explicitly certify a stable signal mapping.
+    [[nodiscard]] virtual bool supports_direct_signal_read(
+        SignalId signal) const noexcept;
+
+    /// A nonzero key promises per-signal eligibility and the layout of any
+    /// direct planes remain stable for this owner and epoch. Dynamic/custom
+    /// contexts keep the zero default and are revalidated on every resume.
+    /// Advance the epoch after an in-place capability or plane-layout change.
+    /// The owner token must not be reused when a context is destroyed and
+    /// another one is allocated at the same address.
+    [[nodiscard]] virtual DirectSignalReadCapabilityKey
+    direct_signal_read_capability_key() const noexcept;
 };

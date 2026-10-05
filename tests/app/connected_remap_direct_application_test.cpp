@@ -394,7 +394,13 @@ int fsim_application_case_connected_remap_direct()
         assert(pure_native.output == pure_reference.output);
         assert(pure_native.timeline == pure_reference.timeline);
         assert(pure_native.registers == pure_reference.registers);
-        assert(pure_native.bound_cohorts == 2U);
+        if (pure_native.bound_cohorts != 1U) {
+            std::cerr << "CONNECTED_REMAP_BINDINGS level="
+                      << static_cast<int>(level)
+                      << " bound=" << pure_native.bound_cohorts << '\n';
+        }
+        // Both ready processes are held by one composite native binding.
+        assert(pure_native.bound_cohorts == 1U);
 
         const auto hooked_reference = run_pure_cohort_case(
             level, false, true);

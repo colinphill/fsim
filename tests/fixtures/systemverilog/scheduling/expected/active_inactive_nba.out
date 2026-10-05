@@ -1,0 +1,4 @@
+ACTIVE before blocking=0 nba=0
+ACTIVE after blocking=1 nba=0
+INACTIVE blocking=1 nba=0
+POSTPONED blocking=1 nba=1

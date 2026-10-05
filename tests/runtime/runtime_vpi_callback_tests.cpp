@@ -12,6 +12,8 @@
 
 namespace fsim::tests::runtime {
 
+void test_vpi_observation_preparation();
+
 namespace {
 
     using fsim::runtime::Logic9;
@@ -427,6 +429,7 @@ namespace {
 
 void test_systemverilog_vpi_callbacks()
 {
+    test_vpi_observation_preparation();
     SystemVerilogVpiObjectRegistry registry { 901 };
     Scheduler scheduler;
     SystemVerilogVpiTimeService time_service {

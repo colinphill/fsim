@@ -1519,7 +1519,7 @@ fsim_status_t fsim_session_read_value(
         }
         std::optional<fsim::runtime::PackedLogic4> packed;
         if (const auto signal = object_signal(value, object)) {
-            packed = value.simulation->read_signal(*signal);
+            packed = value.simulation->read_signal_snapshot(*signal);
         } else if (const auto driver = object_driver(value, object)) {
             const auto& reference = value.drivers[*driver];
             packed = value.simulation->read_driver(

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_interconnect_timing.hpp"
+#include "sdf_row_backed_test_support.hpp"
 
 #include <iostream>
 #include <memory>
@@ -81,9 +82,7 @@ fsim::elaboration::ElaboratedDesign make_design()
     switch_process.switch_bidirectional = true;
     state.processes.push_back(std::move(switch_process));
 
-    auto design = elaboration::ElaboratedDesign::from_state(std::move(state));
-    require(design.has_value(), "interconnect design fixture must be valid");
-    return std::move(*design);
+    return app::sdf_row_backed_test::make_row_backed_design(std::move(state));
 }
 
 std::shared_ptr<const fsim::app::SdfAnnotationSummary> make_summary(
@@ -237,6 +236,27 @@ void test_all_endpoint_targets_and_driver_ownership()
         "interconnect timing application must not mutate source processes");
 }
 
+void test_row_backed_identity_survives_interconnect_planning()
+{
+    using namespace fsim;
+    auto design = make_design();
+    const auto identity
+        = app::sdf_row_backed_test::capture_process_row_identity(design);
+    const auto result = app::apply_sdf_interconnect_timing(
+        make_plan(valid_annotations()), design);
+    require(result.ok() && result.application->timings().size() == 4U,
+        "row-backed interconnect planning must retain all endpoint targets");
+    require(app::sdf_row_backed_test::same_process_row_identity(
+                design, identity),
+        "interconnect helper calls must preserve published row and common identities");
+    const auto* interconnect
+        = result.application->find_target("interconnect:src:dst");
+    require(interconnect != nullptr
+            && interconnect->driver_processes
+                == std::vector<runtime::simir::ProcessId>({ 0U, 1U, 2U }),
+        "row-backed interconnect scans must retain exact driver ownership");
+}
+
 void test_endpoint_and_profile_rejection()
 {
     const auto design = make_design();
@@ -306,6 +326,7 @@ int main()
 {
     try {
         test_all_endpoint_targets_and_driver_ownership();
+        test_row_backed_identity_survives_interconnect_planning();
         test_endpoint_and_profile_rejection();
         test_systemc_typed_endpoint();
         test_ambiguity_and_resource_rejection();

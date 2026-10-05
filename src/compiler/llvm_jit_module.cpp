@@ -2,9 +2,17 @@
 #include "llvm_jit_internal.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
 
+#include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <map>
+#include <optional>
 #include <vector>
+#include <llvm/IR/CFG.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/IR/PassInstrumentation.h>
 #include <llvm/IR/Module.h>
@@ -15,6 +23,134 @@
 #include <llvm/Support/raw_ostream.h>
 
 namespace fsim::compiler::llvm_detail {
+namespace {
+
+void emit_frontier_profile_line(const std::string_view line) noexcept
+{
+  // One stdio call keeps this diagnostic record intact across compiler threads.
+  (void)std::fwrite(line.data(), sizeof(char), line.size(), stderr);
+  (void)std::fflush(stderr);
+}
+
+}  // namespace
+
+TieredReadDedupStatistics run_tiered_direct_read_dedup(
+    llvm::Module& module,
+    const LlvmBackendTier tier,
+    const bool safe_entry)
+{
+    using ReadKey = std::pair<std::uint32_t, std::uint32_t>;
+    TieredReadDedupStatistics statistics;
+    if (tier != LlvmBackendTier::less || !safe_entry) {
+        return statistics;
+    }
+    const auto metadata_kind = module.getContext().getMDKindID(
+        kTieredDirectReadLoadMetadata);
+    const auto safe_store_kind = module.getContext().getMDKindID(
+        kTieredSafeFrameStoreMetadata);
+
+    const auto read_key = [&](const llvm::LoadInst& load)
+        -> std::optional<ReadKey> {
+        const auto* const metadata = load.getMetadata(metadata_kind);
+        if (metadata == nullptr || metadata->getNumOperands() != 2U) {
+            return std::nullopt;
+        }
+        const auto get_operand = [&](const unsigned index)
+            -> std::optional<std::uint32_t> {
+            const auto* const constant = llvm::dyn_cast_or_null<
+                llvm::ConstantAsMetadata>(metadata->getOperand(index));
+            const auto* const integer = constant == nullptr ? nullptr
+                : llvm::dyn_cast<llvm::ConstantInt>(constant->getValue());
+            if (integer == nullptr || !integer->getType()->isIntegerTy(32)) {
+                return std::nullopt;
+            }
+            return static_cast<std::uint32_t>(integer->getZExtValue());
+        };
+        const auto signal = get_operand(0U);
+        const auto plane = get_operand(1U);
+        if (!signal || !plane || *plane > 2U) {
+            return std::nullopt;
+        }
+        return ReadKey { *signal, *plane };
+    };
+
+    for (auto& function : module) {
+        if (function.isDeclaration()) {
+            continue;
+        }
+        llvm::DominatorTree dominators { function };
+        using AvailableReads = std::map<ReadKey, llvm::LoadInst*>;
+        std::function<void(llvm::DomTreeNode*, AvailableReads)> visit;
+        visit = [&](llvm::DomTreeNode* const node,
+                    AvailableReads available_reads) {
+            auto* const block = node->getBlock();
+            if (block != &function.getEntryBlock()
+                && llvm::pred_size(block) > 1U) {
+                // A sibling route can alter an input plane before reaching a
+                // join. Drop inherited facts at every multi-predecessor block
+                // rather than relying on an alias analysis across paths.
+                available_reads.clear();
+            }
+            for (auto iterator = block->begin(); iterator != block->end();) {
+                auto& instruction = *iterator++;
+                if (auto* const load = llvm::dyn_cast<llvm::LoadInst>(
+                        &instruction)) {
+                    if (load->getMetadata(metadata_kind) != nullptr) {
+                        ++statistics.marked_loads;
+                        const auto key = read_key(*load);
+                        if (key && !load->isVolatile() && !load->isAtomic()) {
+                            if (key->second != 0U) {
+                                ++statistics.marked_value_loads;
+                            }
+                            const auto found = available_reads.find(*key);
+                            if (found != available_reads.end()
+                                && found->second->getType() == load->getType()) {
+                                load->replaceAllUsesWith(found->second);
+                                load->eraseFromParent();
+                                ++statistics.eliminated_loads;
+                                if (key->second != 0U) {
+                                    ++statistics.eliminated_value_loads;
+                                }
+                                continue;
+                            }
+                            available_reads.insert_or_assign(*key, load);
+                        } else {
+                            available_reads.clear();
+                        }
+                        continue;
+                    }
+                    if (load->isVolatile() || load->isAtomic()) {
+                        available_reads.clear();
+                    }
+                    continue;
+                }
+                if (auto* const store = llvm::dyn_cast<llvm::StoreInst>(
+                        &instruction)) {
+                    if (store->isVolatile() || store->isAtomic()
+                        || store->getMetadata(safe_store_kind) == nullptr) {
+                        available_reads.clear();
+                    }
+                    continue;
+                }
+                // Calls are barriers even when their declared attributes say
+                // readonly: callbacks and host services can observe or update
+                // signal storage outside this function's IR.
+                if (llvm::isa<llvm::CallBase>(&instruction)
+                    || instruction.mayWriteToMemory()
+                    || instruction.mayHaveSideEffects()) {
+                    available_reads.clear();
+                }
+            }
+            for (auto* const child : node->children()) {
+                visit(child, available_reads);
+            }
+        };
+        if (auto* const root = dominators.getRootNode()) {
+            visit(root, { });
+        }
+    }
+    return statistics;
+}
 
 void optimize_module(llvm::Module &module,
                      const JitOptimizationLevel optimization,
@@ -22,6 +158,8 @@ void optimize_module(llvm::Module &module,
                      const std::size_t process_count) {
   const bool profile_passes
       = std::getenv("FSIM_PROFILE_LLVM_MODULES") != nullptr;
+  const bool profile_frontier_passes = profile_passes
+      && module.getModuleIdentifier() == "fsim-region-frontier-v2";
   struct PassFrame {
     std::string name;
     std::optional<diagnostic::ThreadCpuTime> begin;
@@ -43,6 +181,16 @@ void optimize_module(llvm::Module &module,
         [&](const llvm::StringRef name, llvm::Any) {
           active_passes.push_back(
               { name.str(), diagnostic::thread_cpu_now(), { }, true });
+          if (profile_frontier_passes && name.contains("InstCombine")) {
+            std::string profile_line;
+            llvm::raw_string_ostream profile(profile_line);
+            profile << "fsim-profile: llvm-frontier-pass-enter"
+                    << " cache_identity='" << profile_identity << "'"
+                    << " pass='" << name << "'"
+                    << " members=" << process_count << '\n';
+            profile.flush();
+            emit_frontier_profile_line(profile_line);
+          }
         });
     const auto finish_pass = [&](const llvm::StringRef name) {
       if (active_passes.empty()) {
@@ -89,7 +237,17 @@ void optimize_module(llvm::Module &module,
   llvm::FunctionAnalysisManager function_analyses;
   llvm::CGSCCAnalysisManager cgscc_analyses;
   llvm::ModuleAnalysisManager module_analyses;
-  llvm::PassBuilder builder { nullptr, llvm::PipelineTuningOptions { },
+  // Keep the existing small, single-process O1 loop policy explicit. These
+  // five settings match LLVM 22's fixed defaults; command-line-backed tuning
+  // fields retain the values installed by the JIT's LLVM argument parser.
+  // This policy does not enable SLP or cross-member vectorization.
+  llvm::PipelineTuningOptions pipeline_tuning;
+  pipeline_tuning.LoopInterleaving = true;
+  pipeline_tuning.LoopVectorization = true;
+  pipeline_tuning.SLPVectorization = false;
+  pipeline_tuning.LoopUnrolling = true;
+  pipeline_tuning.LoopFusion = false;
+  llvm::PassBuilder builder { nullptr, pipeline_tuning,
       std::nullopt, profile_passes ? &callbacks : nullptr };
 
   builder.registerModuleAnalyses(module_analyses);

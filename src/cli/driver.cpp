@@ -746,7 +746,8 @@ namespace {
         return value != nullptr && value[0] != '\0';
     }
 
-    const Handler* select_handler(const Services& services, const Command command)
+    const Handler* select_handler(const Services& services, const Command command,
+        const bool builtin_stdio)
     {
         switch (command) {
         case Command::check:
@@ -754,7 +755,8 @@ namespace {
         case Command::build:
             return &services.build;
         case Command::run:
-            return &services.run;
+            return builtin_stdio && services.stdio_run
+                ? &services.stdio_run : &services.run;
         case Command::debug:
             return &services.debug;
         case Command::tcl:
@@ -764,7 +766,8 @@ namespace {
         case Command::elaborate:
             return &services.elaborate;
         case Command::simulate:
-            return &services.simulate;
+            return builtin_stdio && services.stdio_simulate
+                ? &services.stdio_simulate : &services.simulate;
         case Command::systemc_compile:
             return &services.systemc_compile;
         case Command::systemc_link:
@@ -2113,7 +2116,8 @@ namespace {
         std::ostream& output,
         std::ostream& error,
         const bool output_is_terminal,
-        const bool error_is_terminal)
+        const bool error_is_terminal,
+        const bool builtin_stdio)
     {
         diagnostic::Engine diagnostics;
         const auto requested_format = requested_diagnostic_format(argc, argv);
@@ -2143,7 +2147,11 @@ namespace {
             invocation->color_mode = diagnostic_color;
             if (invocation->version) {
                 output << "fsim " << fsim::version << " (C API "
-                       << FSIM_API_VERSION << ")\n";
+                       << FSIM_API_VERSION << ")";
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+                output << " [allocation-profiling-build]";
+#endif
+                output << '\n';
                 return kSuccess;
             }
             // The banner is for people at a console. Pipes, scripts, --quiet,
@@ -2174,7 +2182,8 @@ namespace {
                 return kUserError;
             }
 
-            const Handler* handler = select_handler(services, invocation->command);
+            const Handler* handler = select_handler(
+                services, invocation->command, builtin_stdio);
             if (handler == nullptr || !*handler) {
                 diagnostics.error(
                     "FSIM-CLI-0002",
@@ -2214,7 +2223,7 @@ int run(
 {
     // A caller-supplied stream has no portable terminal query. Treat it as
     // redirected in automatic mode; --color always remains an explicit opt-in.
-    return run_impl(argc, argv, services, output, error, false, false);
+    return run_impl(argc, argv, services, output, error, false, false, false);
 }
 
 int run(
@@ -2223,7 +2232,7 @@ int run(
     const Services& services)
 {
     return run_impl(argc, argv, services, std::cout, std::cerr,
-        standard_output_is_terminal(), standard_error_is_terminal());
+        standard_output_is_terminal(), standard_error_is_terminal(), true);
 }
 
 } // namespace fsim::cli

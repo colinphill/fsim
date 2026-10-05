@@ -46,7 +46,7 @@ namespace {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 64);
+    static_assert(app::kRuntimeStateSchema == 73);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 5);
     static_assert(app::kCompiledHirBundleSchema == 1);
@@ -107,7 +107,9 @@ module phase_child #(
     (value => transformed) = 0;
     $setup(posedge value[0], posedge clk, 0, notifier);
   endspecify
-  assign transformed = value ^ MASK;
+  for (genvar bit_index = 0; bit_index < 8; ++bit_index) begin : bit_lanes
+    assign transformed[bit_index] = value[bit_index] ^ MASK[bit_index];
+  end
 endmodule
 
 module phase_tb;
@@ -115,11 +117,23 @@ module phase_tb;
   logic reset;
   logic [7:0] counter_q;
   logic [7:0] transformed;
+  logic [7:0] template_left_value;
+  logic [7:0] template_right_value;
+  logic [7:0] template_left_result;
+  logic [7:0] template_right_result;
   phase_counter counter (
     .clk(clk), .reset(reset), .q(counter_q));
   phase_child #(.MASK(8'h0f)) child (
     .clk(clk), .value(counter_q), .transformed(transformed));
+  phase_child #(.MASK(8'h0f)) template_left (
+    .clk(clk), .value(template_left_value),
+    .transformed(template_left_result));
+  phase_child #(.MASK(8'h0f)) template_right (
+    .clk(clk), .value(template_right_value),
+    .transformed(template_right_result));
   initial begin
+    template_left_value = 8'h12;
+    template_right_value = 8'h34;
     clk = 1'b0;
     reset = 1'b1;
     #1 clk = 1'b1;
@@ -140,6 +154,7 @@ module phase_watch;
 endmodule
 
 module scalar_artifact;
+  localparam bit [7:0] BIT2_COPY_SEED = 8'h5a;
   localparam logic signed [136:0] WIDE_SEED =
       {1'b1, 62'b0, 1'bx, 69'b0, 4'b10z0};
   typedef enum logic [136:0] {
@@ -161,6 +176,7 @@ module scalar_artifact;
   chandle handle;
   logic signed [136:0] wide_value;
   logic signed [136:0] wide_shift;
+  logic [7:0] bit2_copy_value;
   wide_enum_t wide_enum;
   initialized_wide_t initialized_wide;
   tagged_wide_t tagged_wide;
@@ -180,6 +196,7 @@ module scalar_artifact;
       }
     endgroup : artifact_coverage
   endclass : ArtifactCoverageOwner
+  assign bit2_copy_value = BIT2_COPY_SEED;
   assign wide_value = WIDE_SEED;
   initial begin
     r = 1.25;
@@ -937,8 +954,9 @@ end architecture;
             std::move(project), 1000, app::SimulationEngine::interpreter
         };
         const std::array names { "main.counter_q", "observer.watched",
-            "container.observed", "scalar.checks" };
-        std::array<std::string, 4U> values;
+            "container.observed", "scalar.checks",
+            "main.template_left_result", "main.template_right_result" };
+        std::array<std::string, 6U> values;
         const auto result = simulation.run();
         for (std::size_t index = 0U; index < names.size(); ++index) {
             const auto signal = simulation.find_signal(names[index]);
@@ -1182,6 +1200,39 @@ end architecture;
         runtime::simir::SignalId { 0U }, 0U, 1U });
     vhdl_2019_runtime_state.signal_info.front()
         .vhdl_mode_view_bindings.push_back(std::move(runtime_view));
+    runtime::simir::Process scheduling_provenance;
+    scheduling_provenance.id = static_cast<runtime::simir::ProcessId>(
+        vhdl_2019_runtime_state.processes.size());
+    scheduling_provenance.name = "scheduling_provenance";
+    scheduling_provenance.language_standard = "1800-2017";
+    scheduling_provenance.scheduling_domain
+        = runtime::simir::ProcessSchedulingDomain::systemverilog;
+    scheduling_provenance.static_sensitivity = {
+        { 0U, runtime::simir::EdgeKind::any, 0U, 1U }
+    };
+    scheduling_provenance.register_count = 1U;
+    scheduling_provenance.register_value_kinds = {
+        vhdl_2019_runtime_state.signals.front().value_kind
+    };
+    scheduling_provenance.operations.emplace_back(
+        runtime::simir::LoadConstant {
+            0U, vhdl_2019_runtime_state.signals.front().initial_value
+        });
+    scheduling_provenance.operations.emplace_back(
+        runtime::simir::WriteUpdate {
+            0U, 0U,
+            runtime::simir::SignalUpdateDomain::systemverilog_nba,
+        });
+    scheduling_provenance.operations.emplace_back(
+        runtime::simir::Halt { });
+    scheduling_provenance.driver_regions.push_back({
+        0U, 0U,
+        static_cast<std::uint32_t>(
+            vhdl_2019_runtime_state.signals.front().initial_value.width()),
+        true,
+    });
+    vhdl_2019_runtime_state.processes.push_back(
+        std::move(scheduling_provenance));
     const auto vhdl_2019_runtime_design
         = elaboration::ElaboratedDesign::from_state(
             std::move(vhdl_2019_runtime_state));
@@ -1195,10 +1246,15 @@ end architecture;
     elaboration::ElaboratedDesignState codec_fixture;
     codec_fixture.top = "fixture";
     codec_fixture.roots = { "fixture" };
+    const auto codec_fixture_design
+        = elaboration::ElaboratedDesign::from_state(
+            std::move(codec_fixture));
+    assert(codec_fixture_design);
     std::ostringstream codec_fixture_output(std::ios::binary);
     diagnostic::Engine codec_fixture_diagnostics;
     assert(app::serialize_runtime_state(
-        codec_fixture, codec_fixture_output, codec_fixture_diagnostics));
+        codec_fixture_design->state(), codec_fixture_output,
+        codec_fixture_diagnostics));
     assert(!codec_fixture_diagnostics.has_error());
     const auto codec_fixture_bytes = codec_fixture_output.str();
     diagnostic::Engine codec_fixture_decode_diagnostics;
@@ -1224,6 +1280,7 @@ end architecture;
     }
     for (const auto schema : std::array {
              48U,
+             64U,
              app::kRuntimeStateSchema - 1U,
              app::kRuntimeStateSchema + 1U }) {
         auto incompatible_runtime = *vhdl_2019_runtime_bytes;
@@ -1268,7 +1325,26 @@ end architecture;
             == 0U
         && restored_vhdl_2019_runtime->signals().front()
                 .vhdl_mode_view_bindings.front().elements.front().width
-            == 1U);
+            == 1U
+        && restored_vhdl_2019_runtime->processes().back()
+                .scheduling_domain
+            == runtime::simir::ProcessSchedulingDomain::systemverilog
+        && runtime::simir::operation_get_if<runtime::simir::WriteUpdate>(
+               &restored_vhdl_2019_runtime->processes().back().operations[1])
+                ->domain
+            == runtime::simir::SignalUpdateDomain::systemverilog_nba);
+    const auto& restored_sensitivity = restored_vhdl_2019_runtime
+        ->processes().back().static_sensitivity;
+    assert(restored_sensitivity.size() == 1U
+        && restored_sensitivity.front().signal == 0U
+        && restored_sensitivity.front().edge == runtime::simir::EdgeKind::any
+        && restored_sensitivity.front().offset == 0U
+        && restored_sensitivity.front().width == 1U);
+    auto invalid_sensitivity_state = restored_vhdl_2019_runtime->state();
+    invalid_sensitivity_state.processes.back().static_sensitivity.front().offset
+        = std::numeric_limits<std::uint32_t>::max();
+    assert(!elaboration::ElaboratedDesign::from_state(
+        std::move(invalid_sensitivity_state)));
     auto invalid_vhdl_2019_endpoint_state
         = restored_vhdl_2019_runtime->state();
     invalid_vhdl_2019_endpoint_state.signal_info.front()
@@ -1288,6 +1364,24 @@ end architecture;
     assert(!app::serialize_runtime_state(
         *invalid_vhdl_2019_runtime_design,
         invalid_vhdl_2019_runtime_diagnostics));
+
+    auto invalid_scheduling_domain_state
+        = restored_vhdl_2019_runtime->state();
+    auto* invalid_scheduling_update
+        = runtime::simir::operation_get_if<runtime::simir::WriteUpdate>(
+            &invalid_scheduling_domain_state.processes.back()
+                 .operations[1]);
+    assert(invalid_scheduling_update != nullptr);
+    invalid_scheduling_update->domain
+        = static_cast<runtime::simir::SignalUpdateDomain>(255U);
+    const auto invalid_scheduling_domain_design
+        = elaboration::ElaboratedDesign::from_state(
+            std::move(invalid_scheduling_domain_state));
+    assert(invalid_scheduling_domain_design);
+    diagnostic::Engine invalid_scheduling_domain_diagnostics;
+    assert(!app::serialize_runtime_state(
+        *invalid_scheduling_domain_design,
+        invalid_scheduling_domain_diagnostics));
 
     auto future_vhdl_hir = *vhdl_hir_bytes;
     future_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema + 1U);
@@ -1558,9 +1652,82 @@ end architecture;
         assert(built->design.roots()
             == std::vector<std::string>(
                 { "main", "observer", "scalar", "container", "virtual" }));
+        const auto template_left_input
+            = built->design.find_signal("main.template_left_value");
+        const auto template_right_input
+            = built->design.find_signal("main.template_right_value");
+        const auto template_left_output
+            = built->design.find_signal("main.template_left_result");
+        const auto template_right_output
+            = built->design.find_signal("main.template_right_result");
+        assert(template_left_input && template_right_input
+            && template_left_output && template_right_output);
+        assert(*template_left_input != *template_right_input
+            && *template_left_output != *template_right_output);
+        constexpr auto systemverilog_domain
+            = runtime::simir::ProcessSchedulingDomain::systemverilog;
+        const auto process_has_range_binding = [&](const auto input,
+                                                   const auto output,
+                                                   const std::uint32_t offset) {
+            return std::ranges::any_of(
+                built->design.processes(), [&](const auto& process) {
+                    bool reads_input { };
+                    bool writes_output { };
+                    bool sensitive_to_input { };
+                    bool drives_output { };
+                    for (std::size_t index = 0;
+                         index < process.operations.size(); ++index) {
+                        const auto operation
+                            = process.operations.expanded(index);
+                        if (const auto* read
+                            = runtime::simir::operation_get_if<
+                                runtime::simir::ReadSignal>(&operation)) {
+                            reads_input
+                                = reads_input || read->signal == input;
+                        }
+                        if (const auto* write
+                            = runtime::simir::operation_get_if<
+                                runtime::simir::WriteUpdate>(&operation)) {
+                            writes_output
+                                = writes_output || write->signal == output;
+                        }
+                        if (const auto* write
+                            = runtime::simir::operation_get_if<
+                                runtime::simir::WriteUpdateSlice>(
+                                &operation)) {
+                            writes_output
+                                = writes_output || write->signal == output;
+                        }
+                    }
+                    for (const auto& sensitivity
+                        : process.static_sensitivity) {
+                        sensitive_to_input = sensitive_to_input
+                            || (sensitivity.signal == input
+                                && sensitivity.offset == offset
+                                && sensitivity.width == 1U);
+                    }
+                    for (const auto& driver : process.driver_regions) {
+                        drives_output = drives_output
+                            || (driver.signal == output && !driver.whole
+                                && driver.offset == offset
+                                && driver.width == 1U);
+                    }
+                    return process.scheduling_domain == systemverilog_domain
+                        && reads_input && writes_output
+                        && sensitive_to_input && drives_output;
+                });
+        };
+        for (std::uint32_t offset = 0U; offset < 8U; ++offset) {
+            assert(process_has_range_binding(
+                *template_left_input, *template_left_output, offset));
+            assert(process_has_range_binding(
+                *template_right_input, *template_right_output, offset));
+        }
         assert(built->semantics.source_files().size() >= 2);
-        assert(built->design.verilog_specify_paths().size() == 1);
-        assert(built->design.verilog_timing_checks().size() == 1);
+        // The phase_child fixture is instantiated for child and both
+        // template-replay instances; each keeps its own specify metadata.
+        assert(built->design.verilog_specify_paths().size() == 3U);
+        assert(built->design.verilog_timing_checks().size() == 3U);
         const auto distribution_process = std::ranges::find_if(
             built->design.processes(), [](const auto& process) {
                 return std::ranges::any_of(
@@ -1712,6 +1879,15 @@ end architecture;
         const auto result = simulation.run();
         assert(result.status == runtime::RunStatus::stopped);
         assert(result.time == 6);
+        const auto template_left_result
+            = simulation.find_signal("main.template_left_result");
+        const auto template_right_result
+            = simulation.find_signal("main.template_right_result");
+        assert(template_left_result && template_right_result);
+        assert(simulation.read_signal(*template_left_result).to_msb_string()
+            == "00011101");
+        assert(simulation.read_signal(*template_right_result).to_msb_string()
+            == "00111011");
         const auto replay_checkpoint = simulation.capture_uvm_checkpoint();
         assert(
             replay_checkpoint
@@ -1954,7 +2130,15 @@ end architecture;
         std::string checks;
         std::string wide;
         std::string wide_shift;
+        std::string bit2_copy_value;
+        std::string bit2_copy_driver;
+        runtime::simir::ProcessId bit2_copy_owner { };
         std::array<std::uint64_t, 5> payloads { };
+        std::vector<std::tuple<runtime::SimulationTick,
+            std::uint64_t, std::string>> bit2_copy_changes;
+        std::vector<std::tuple<runtime::simir::ExecutionPointKind,
+            runtime::simir::SourceLocation, std::string,
+            runtime::simir::InstructionIndex>> bit2_copy_debug_points;
         std::vector<std::string> keys;
         app::NativeCacheStatistics cache;
         std::size_t compiled_processes { };
@@ -1994,11 +2178,76 @@ end architecture;
         capture.coverage_identity = built->systemverilog_coverage.instances.front().runtime_identity;
         capture.coverage_report = frontend::render_systemverilog_coverage_report(
             built->systemverilog_coverage.reports.front());
+        const auto bit2_copy_signal
+            = built->design.find_signal("scalar_artifact.bit2_copy_value");
+        assert(bit2_copy_signal);
+        const auto& design_processes = built->design.processes();
+        const auto owner = std::ranges::find_if(
+            design_processes, [&](const runtime::simir::Process& process) {
+                return process.driver_regions.size() == 1U
+                    && process.driver_regions.front().signal
+                        == *bit2_copy_signal;
+            });
+        assert(owner != design_processes.end());
+        const auto bit2_copy_owner = owner->id;
+        capture.bit2_copy_owner = bit2_copy_owner;
+        const auto check_copy_body = [bit2_copy_signal](
+                                        const runtime::simir::Process& process) {
+            using namespace runtime::simir;
+            assert(process.scheduling_domain
+                == ProcessSchedulingDomain::systemverilog);
+            assert(process.register_count == 2U);
+            assert(process.register_value_kinds.size() == 2U);
+            assert(process.register_value_kinds[0] == ValueKind::logic4);
+            assert(process.register_value_kinds[1] == ValueKind::logic4);
+            const auto& operations = process.operations;
+            assert(operations.size() == 5U || operations.size() == 6U);
+            const auto entry_operation = operations.expanded(0U);
+            const auto* const entry
+                = operation_get_if<DebugPoint>(&entry_operation);
+            assert(entry && entry->kind == DebugPointKind::process_entry);
+            const auto maybe_statement = operations.expanded(1U);
+            const auto* const statement
+                = operation_get_if<DebugPoint>(&maybe_statement);
+            const auto statement_offset
+                = statement != nullptr
+                    && statement->kind == DebugPointKind::statement
+                ? 1U : 0U;
+            assert(operations.size() == 5U + statement_offset);
+            const auto load_operation
+                = operations.expanded(1U + statement_offset);
+            const auto* const load
+                = operation_get_if<LoadConstant>(&load_operation);
+            const auto copy_operation
+                = operations.expanded(2U + statement_offset);
+            const auto* const copy
+                = operation_get_if<CopyRegister>(&copy_operation);
+            const auto write_operation
+                = operations.expanded(3U + statement_offset);
+            const auto* const write
+                = operation_get_if<WriteUpdate>(&write_operation);
+            const auto halt_operation
+                = operations.expanded(4U + statement_offset);
+            const auto* const halt
+                = operation_get_if<Halt>(&halt_operation);
+            assert(load && load->destination == 0U);
+            assert(load->value.width() == 8U);
+            assert(load->value.to_msb_string() == "01011010");
+            assert(copy && copy->destination == 1U && copy->source == 0U);
+            assert(write && write->signal == *bit2_copy_signal
+                && write->source == 1U
+                && write->domain
+                    == SignalUpdateDomain::systemverilog_active);
+            assert(halt && !halt->program_exit);
+        };
+        check_copy_body(*owner);
         app::Simulation simulation { std::move(*built), 1000, engine };
         capture.cache = simulation.native_cache_statistics();
         capture.compiled_processes = simulation.compiled_process_count();
         const auto checks = simulation.find_signal("scalar_artifact.checks");
         const auto wide = simulation.find_signal("scalar_artifact.wide_value");
+        const auto bit2_copy_value
+            = simulation.find_signal("scalar_artifact.bit2_copy_value");
         const auto wide_shift
             = simulation.find_signal("scalar_artifact.wide_shift");
         const std::array signals {
@@ -2008,13 +2257,39 @@ end architecture;
             simulation.find_signal("scalar_artifact.ticks"),
             simulation.find_signal("scalar_artifact.handle")
         };
-        assert(checks && wide && wide_shift
+        assert(checks && wide && bit2_copy_value && wide_shift
             && std::ranges::all_of(signals, [](const auto& signal) {
                    return signal.has_value();
                }));
+        assert(bit2_copy_value && *bit2_copy_value == *bit2_copy_signal);
+        check_copy_body(simulation.process_program(bit2_copy_owner));
+        simulation.set_signal_change_hook(
+            [&](const runtime::simir::SignalId signal,
+                const runtime::PackedLogic4& value,
+                const runtime::SimulationTick time,
+                const std::uint64_t delta) {
+                if (signal == *bit2_copy_value) {
+                    capture.bit2_copy_changes.emplace_back(
+                        time, delta, value.to_msb_string());
+                }
+            });
+        simulation.set_execution_point_hook(
+            [&](runtime::Scheduler&,
+                const runtime::simir::ExecutionPoint& point) {
+                if (point.design_process == bit2_copy_owner) {
+                    capture.bit2_copy_debug_points.emplace_back(
+                        point.kind, point.source, point.scope,
+                        point.instruction);
+                }
+            });
         assert(simulation.run().status == runtime::RunStatus::completed);
         capture.checks = simulation.read_signal(*checks).to_msb_string();
         capture.wide = simulation.read_signal(*wide).to_msb_string();
+        capture.bit2_copy_value
+            = simulation.read_signal(*bit2_copy_value).to_msb_string();
+        capture.bit2_copy_driver
+            = simulation.read_driver(bit2_copy_owner, *bit2_copy_value)
+                  .to_msb_string();
         capture.wide_shift
             = simulation.read_signal(*wide_shift).to_msb_string();
         for (std::size_t index = 0; index < signals.size(); ++index) {
@@ -2042,6 +2317,37 @@ end architecture;
             && scalar_cold.wide_shift == scalar_warm.wide_shift);
         assert(scalar_interpreted.payloads == scalar_cold.payloads
             && scalar_cold.payloads == scalar_warm.payloads);
+        assert(scalar_interpreted.bit2_copy_value == "01011010");
+        assert(scalar_interpreted.bit2_copy_value
+            == scalar_cold.bit2_copy_value
+            && scalar_cold.bit2_copy_value == scalar_warm.bit2_copy_value);
+        assert(scalar_interpreted.bit2_copy_driver == "01011010");
+        assert(scalar_interpreted.bit2_copy_driver
+            == scalar_cold.bit2_copy_driver
+            && scalar_cold.bit2_copy_driver == scalar_warm.bit2_copy_driver);
+        assert(scalar_interpreted.bit2_copy_owner
+            == scalar_cold.bit2_copy_owner
+            && scalar_cold.bit2_copy_owner == scalar_warm.bit2_copy_owner);
+        assert(scalar_interpreted.bit2_copy_changes.size() == 1U);
+        assert(scalar_interpreted.bit2_copy_changes
+            == scalar_cold.bit2_copy_changes);
+        assert(scalar_cold.bit2_copy_changes
+            == scalar_warm.bit2_copy_changes);
+        assert(std::get<2>(scalar_interpreted.bit2_copy_changes.front())
+            == "01011010");
+        assert(std::get<0>(scalar_interpreted.bit2_copy_changes.front())
+            == 0U);
+        assert(scalar_interpreted.bit2_copy_debug_points.size() == 3U);
+        assert(scalar_interpreted.bit2_copy_debug_points
+            == scalar_cold.bit2_copy_debug_points);
+        assert(scalar_cold.bit2_copy_debug_points
+            == scalar_warm.bit2_copy_debug_points);
+        assert(std::get<0>(scalar_interpreted.bit2_copy_debug_points[0])
+            == runtime::simir::ExecutionPointKind::process_entry);
+        assert(std::get<0>(scalar_interpreted.bit2_copy_debug_points[1])
+            == runtime::simir::ExecutionPointKind::statement);
+        assert(std::get<0>(scalar_interpreted.bit2_copy_debug_points[2])
+            == runtime::simir::ExecutionPointKind::process_suspend);
         assert(scalar_interpreted.keys == scalar_cold.keys
             && scalar_cold.keys == scalar_warm.keys);
         assert(scalar_interpreted.coverage_identity
@@ -2052,7 +2358,10 @@ end architecture;
             == scalar_cold.coverage_report);
         assert(scalar_cold.coverage_report == scalar_warm.coverage_report);
 #if defined(FSIM_HAS_LLVM)
-        assert(scalar_cold.compiled_processes == 2);
+        // Both continuous constant assignments use startup banks; only the
+        // initial block needs a JIT process executor.
+        assert(scalar_cold.compiled_processes == 1);
+        assert(scalar_warm.compiled_processes == 1);
         assert(scalar_warm.cache.hits == 1);
 #endif
         if (optimization == project::Optimization::o2) {
@@ -2073,6 +2382,16 @@ end architecture;
         relocated_scalar.checks == "111111"
         && relocated_scalar.wide == scalar_o2_reference.wide
         && relocated_scalar.wide_shift == scalar_o2_reference.wide_shift
+        && relocated_scalar.bit2_copy_value
+            == scalar_o2_reference.bit2_copy_value
+        && relocated_scalar.bit2_copy_driver
+            == scalar_o2_reference.bit2_copy_driver
+        && relocated_scalar.bit2_copy_owner
+            == scalar_o2_reference.bit2_copy_owner
+        && relocated_scalar.bit2_copy_changes
+            == scalar_o2_reference.bit2_copy_changes
+        && relocated_scalar.bit2_copy_debug_points
+            == scalar_o2_reference.bit2_copy_debug_points
         && relocated_scalar.payloads == scalar_o2_reference.payloads
         && relocated_scalar.keys == scalar_o2_reference.keys
         && relocated_scalar.coverage_identity
@@ -2118,7 +2437,7 @@ end architecture;
         && edited_scalar.keys != scalar_o2_reference.keys);
 #if defined(FSIM_HAS_LLVM)
     assert(
-        edited_scalar.compiled_processes == 2
+        edited_scalar.compiled_processes == 1
         && edited_scalar.cache.hits + edited_scalar.cache.misses == 1);
 #endif
     const auto edited_scalar_warm = run_scalar_library(

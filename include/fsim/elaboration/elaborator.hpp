@@ -4,6 +4,7 @@
 #include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_driver_inventory.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc_abi.h"
@@ -20,7 +21,19 @@
 #include <utility>
 #include <vector>
 
+namespace fsim::runtime::simir {
+class ProcessProgramView;
+struct ProcessInstanceProgram;
+struct ProcessProgramTemplate;
+}
+
 namespace fsim::elaboration {
+
+namespace detail {
+class ElaboratedDesignProcessAccess;
+class RuntimeProcessProgramTableBuilder;
+struct RuntimeProcessProgramTable;
+}
 
 struct ElaborationResult;
 struct CoverageHirContext;
@@ -710,6 +723,10 @@ struct ElaboratedDesignState {
     std::vector<runtime::simir::ContainerObject> container_objects;
     std::vector<runtime::simir::ContainerSignalAlias>
         container_signal_aliases;
+    std::vector<runtime::simir::ContainerElementSignalAlias>
+        container_element_signal_aliases;
+    std::vector<runtime::simir::ContainerAggregateSignalAlias>
+        container_aggregate_signal_aliases;
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info;
     std::vector<runtime::simir::Process> processes;
     std::vector<SpecializationInfo> specializations;
@@ -725,6 +742,8 @@ struct ElaboratedDesignState {
     std::vector<std::pair<std::string, runtime::simir::ContainerObjectId>>
         container_names;
     std::optional<CodeCoverageInventory> code_coverage_inventory;
+    std::optional<runtime::simir::SignalDriverInventory>
+        signal_driver_inventory;
 };
 
 class ElaboratedDesign final {
@@ -760,9 +779,17 @@ public:
     string_objects() const noexcept;
     [[nodiscard]] const std::vector<ContainerObjectInfo>&
     container_objects() const noexcept;
+    [[nodiscard]] const std::vector<runtime::simir::ContainerElementSignalAlias>&
+    container_element_signal_aliases() const noexcept;
+    [[nodiscard]] const std::vector<runtime::simir::ContainerAggregateSignalAlias>&
+    container_aggregate_signal_aliases() const noexcept;
     [[nodiscard]] const std::vector<VhdlProtectedObjectInfo>&
     vhdl_protected_objects() const noexcept;
-    [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const noexcept;
+    /// Number of runtime processes without materializing artifact-backed rows.
+    [[nodiscard]] std::size_t process_count() const noexcept;
+    /// Materialize and return the public Process facade. This may allocate for
+    /// a design decoded into private runtime rows and therefore may throw.
+    [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const;
     [[nodiscard]] const std::vector<SpecializationInfo>&
     specializations() const noexcept;
     [[nodiscard]] const std::vector<UdpTableInfo>&
@@ -779,6 +806,8 @@ public:
     systemc_objects() const noexcept;
     [[nodiscard]] const std::optional<CodeCoverageInventory>&
     code_coverage_inventory() const noexcept;
+    [[nodiscard]] const std::optional<runtime::simir::SignalDriverInventory>&
+    signal_driver_inventory() const noexcept;
     [[nodiscard]] CoverageInventoryValidationResult
     attach_code_coverage_inventory(
         std::span<const CoverageInventorySource> sources,
@@ -823,11 +852,33 @@ public:
 private:
     friend struct ElaborationResult;
     friend class Lowerer;
+    friend class detail::ElaboratedDesignProcessAccess;
+
+    [[nodiscard]] static std::optional<ElaboratedDesign>
+    from_state_with_process_rows(
+        ElaboratedDesignState state,
+        std::shared_ptr<const detail::RuntimeProcessProgramTable> rows,
+        bool require_driver_inventory);
 
     void populate_interpreter(
         runtime::simir::Interpreter* interpreter,
         bool validation_only,
         std::vector<runtime::simir::Process>* consumed_processes = nullptr) const;
+    void finalize_signal_driver_inventory();
+    void append_process_record(runtime::simir::Process process);
+    void append_process_instance_record(
+        std::shared_ptr<const runtime::simir::ProcessProgramTemplate> common,
+        runtime::simir::ProcessInstanceProgram instance);
+    void replace_process_record(
+        std::size_t process, runtime::simir::Process instance);
+    [[nodiscard]] std::shared_ptr<const runtime::simir::ProcessProgramTemplate>
+    intern_process_template(
+        const runtime::simir::ProcessProgramView& process);
+    [[nodiscard]] runtime::simir::ProcessProgramView process_view(
+        std::size_t process) const noexcept;
+    void finalize_process_rows();
+    [[nodiscard]] runtime::simir::SignalDriverInventory
+    compute_signal_driver_inventory() const;
     friend class HierarchyBuilder;
 
     struct HierarchyPathHash final {
@@ -851,8 +902,16 @@ private:
     std::vector<runtime::simir::ContainerObject> container_objects_;
     std::vector<runtime::simir::ContainerSignalAlias>
         container_signal_aliases_;
+    std::vector<runtime::simir::ContainerElementSignalAlias>
+        container_element_signal_aliases_;
+    std::vector<runtime::simir::ContainerAggregateSignalAlias>
+        container_aggregate_signal_aliases_;
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info_;
-    std::vector<runtime::simir::Process> processes_;
+    mutable std::vector<runtime::simir::Process> processes_;
+    mutable std::shared_ptr<const detail::RuntimeProcessProgramTable>
+        process_rows_;
+    std::shared_ptr<detail::RuntimeProcessProgramTableBuilder>
+        process_builder_;
     std::vector<SpecializationInfo> specializations_;
     std::vector<UdpTableInfo> udp_tables_;
     std::vector<VerilogSpecifyPathInfo> verilog_specify_paths_;
@@ -861,6 +920,8 @@ private:
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;
     std::optional<CodeCoverageInventory> code_coverage_inventory_;
+    std::optional<runtime::simir::SignalDriverInventory>
+        signal_driver_inventory_;
     semantic::HierarchyPathTable hierarchy_paths_;
     std::unordered_map<semantic::HierarchyPathId,
         runtime::simir::SignalId, HierarchyPathHash> signal_by_path_;

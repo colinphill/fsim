@@ -11,34 +11,48 @@ namespace fsim::tests::elaboration {
 void test_generate_slice_and_case_closure(
     const fsim::frontend::ParsedDesign& generated_design)
 {
+    const auto assert_systemverilog_slice_processes = [](
+        const auto& design,
+        const std::size_t expected_count) {
+        std::size_t slice_processes { };
+        for (const auto& process : design.processes()) {
+            std::size_t process_slices { };
+            for (const auto& operation : process.operations) {
+                if (const auto* write
+                    = fsim::runtime::simir::operation_get_if<
+                        fsim::runtime::simir::WriteUpdateSlice>(
+                        &operation)) {
+                    ++process_slices;
+                    assert(write->domain
+                        == fsim::runtime::simir::SignalUpdateDomain::
+                            systemverilog_active);
+                }
+            }
+            if (process_slices == 0U) {
+                continue;
+            }
+            assert(process_slices == 1U);
+            assert(process.scheduling_domain
+                == fsim::runtime::simir::ProcessSchedulingDomain::
+                    systemverilog);
+            assert(std::ranges::none_of(
+                process.operations,
+                [](const auto& operation) {
+                    return fsim::runtime::simir::operation_holds<
+                        fsim::runtime::simir::Insert>(operation);
+                }));
+            ++slice_processes;
+        }
+        assert(slice_processes == expected_count);
+    };
+
     const auto generated_sv_full_slice_bank =
         compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_full_slice_bank");
     assert(generated_sv_full_slice_bank.ok());
-    const auto full_slice_process = std::ranges::find_if(
-        generated_sv_full_slice_bank.design->processes(),
-        [](const auto& process) {
-            return process.name.find(".continuous_fused_")
-                != std::string::npos;
-        });
-    assert(
-        full_slice_process
-        != generated_sv_full_slice_bank.design->processes().end());
-    assert(
-        std::ranges::count_if(
-            full_slice_process->operations,
-            [](const auto& operation) {
-                return fsim::runtime::simir::operation_holds<
-                    fsim::runtime::simir::WriteUpdate>(operation);
-            })
-        == 1);
-    assert(std::ranges::none_of(
-        full_slice_process->operations,
-        [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                fsim::runtime::simir::WriteUpdateSlice>(operation);
-        }));
+    assert_systemverilog_slice_processes(
+        *generated_sv_full_slice_bank.design, 8U);
     const auto full_slice_observed =
         generated_sv_full_slice_bank.design->find_signal("observed");
     assert(full_slice_observed);
@@ -57,35 +71,14 @@ void test_generate_slice_and_case_closure(
             generated_design,
             "sv:work.generated_sv_partial_slice_bank");
     assert(generated_sv_partial_slice_bank.ok());
-    const auto partial_slice_process = std::ranges::find_if(
-        generated_sv_partial_slice_bank.design->processes(),
-        [](const auto& process) {
-            return process.name.find(".continuous_fused_")
-                != std::string::npos;
-        });
-    assert(
-        partial_slice_process
-        != generated_sv_partial_slice_bank.design->processes().end());
-    assert(
-        std::ranges::count_if(
-            partial_slice_process->operations,
-            [](const auto& operation) {
-                return fsim::runtime::simir::operation_holds<
-                    fsim::runtime::simir::WriteUpdateSlice>(operation);
-            })
-        == 8);
+    assert_systemverilog_slice_processes(
+        *generated_sv_partial_slice_bank.design, 8U);
 
     const auto generated_sv_wide_slice_bank =
         compile_and_elaborate(
             generated_design,
             "sv:work.generated_sv_wide_slice_bank");
     assert(generated_sv_wide_slice_bank.ok());
-    const auto wide_slice_process = std::ranges::find_if(
-        generated_sv_wide_slice_bank.design->processes(),
-        [](const auto& process) {
-            return process.name.find(".continuous_fused_")
-                != std::string::npos;
-        });
     if (std::getenv("FSIM_TRACE_WIDE_FUSION") != nullptr) {
         const auto& all_processes
             = generated_sv_wide_slice_bank.design->processes();
@@ -129,23 +122,8 @@ void test_generate_slice_and_case_closure(
             break;
         }
     }
-    assert(
-        wide_slice_process
-        != generated_sv_wide_slice_bank.design->processes().end());
-    assert(
-        std::ranges::count_if(
-            wide_slice_process->operations,
-            [](const auto& operation) {
-                return fsim::runtime::simir::operation_holds<
-                    fsim::runtime::simir::WriteUpdateSlice>(operation);
-            })
-        == 128);
-    assert(std::ranges::none_of(
-        wide_slice_process->operations,
-        [](const auto& operation) {
-            return fsim::runtime::simir::operation_holds<
-                fsim::runtime::simir::Insert>(operation);
-        }));
+    assert_systemverilog_slice_processes(
+        *generated_sv_wide_slice_bank.design, 128U);
     auto wide_slice_interpreter =
         generated_sv_wide_slice_bank.design->create_interpreter();
     assert(

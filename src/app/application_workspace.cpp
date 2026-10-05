@@ -119,8 +119,9 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
     return 0;
 }
 
-int handle_workspace_simulate(const cli::Invocation& invocation, const project::Config& config,
-    diagnostic::Engine& diagnostics, std::ostream& output, std::ostream& error_output)
+static int handle_workspace_simulate_impl(const cli::Invocation& invocation,
+    const project::Config& config, diagnostic::Engine& diagnostics,
+    std::ostream& output, std::ostream& error_output, const bool builtin_stdout)
 {
     workspace::Store store(config.base_directory);
     std::string error;
@@ -132,7 +133,25 @@ int handle_workspace_simulate(const cli::Invocation& invocation, const project::
     auto phase = invocation;
     phase.design = snapshot->path;
     phase.cache_directory = config.build.cache_path;
-    return handle_simulate(phase, config, diagnostics, output, error_output);
+    return builtin_stdout
+        ? handle_simulate_stdio(phase, config, diagnostics, output, error_output)
+        : handle_simulate(phase, config, diagnostics, output, error_output);
+}
+
+int handle_workspace_simulate(const cli::Invocation& invocation,
+    const project::Config& config, diagnostic::Engine& diagnostics,
+    std::ostream& output, std::ostream& error_output)
+{
+    return handle_workspace_simulate_impl(
+        invocation, config, diagnostics, output, error_output, false);
+}
+
+int handle_workspace_simulate_stdio(const cli::Invocation& invocation,
+    const project::Config& config, diagnostic::Engine& diagnostics,
+    std::ostream& output, std::ostream& error_output)
+{
+    return handle_workspace_simulate_impl(
+        invocation, config, diagnostics, output, error_output, true);
 }
 
 int handle_workspace_library(const cli::Invocation& invocation, const project::Config& config,

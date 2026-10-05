@@ -129,8 +129,21 @@ void test_systemverilog_clog2(
     }
     assert(reference_project);
     assert(compiled_project);
+    assert(
+        compiled_project->compiled_process_selection
+        == fsim::app::BuiltProject::CompiledProcessSelection::selected);
     assert(reference_project->design.specializations().size() == 3);
     assert(reference_project->specialization_cache_keys.size() == 3);
+    assert(compiled_project->design_ir.processes().size() == 2U);
+    for (const auto& process : compiled_project->design_ir.processes()) {
+        assert(process.initialize);
+        assert(!process.observed);
+        assert(!process.reactive);
+        assert(!process.final);
+        assert(process.sensitivities.empty());
+        assert(process.drivers.size() == 1U);
+        assert(process.transactions.size() == 1U);
+    }
 
     std::optional<std::size_t> narrow_specialization;
     std::optional<std::size_t> wide_specialization;
@@ -184,11 +197,14 @@ void test_systemverilog_clog2(
     assert(reference.compiled_processes == 0);
     assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 2);
-    assert(compiled.compiled_modules == 2);
+    // These two continuous drivers are exact known-constant startup writes.
+    // Under the default selected policy, their registered startup banks do
+    // not require native process materialization.
+    assert(compiled.compiled_processes == 0);
+    assert(compiled.compiled_modules == 0);
     assert(compiled.native_cache.hits == 0);
-    assert(compiled.native_cache.misses == 2);
-    assert(compiled.native_cache.stores == 2);
+    assert(compiled.native_cache.misses == 0);
+    assert(compiled.native_cache.stores == 0);
 #else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
@@ -290,7 +306,7 @@ void test_vhdl_shift_rotate(
             "10100101",
             "01011010",
             "00000010",
-            "ZZZZ0110",
+            "UUUU0110",
             "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
             "0000000000000000000000000000000000000000000000000000000000000111",
             "00111100",

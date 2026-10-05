@@ -57,6 +57,18 @@ int main()
     FSIM_RUN_TEST(test_systemverilog_string_constants);
     FSIM_RUN_TEST(test_systemverilog_type_parameters);
     FSIM_RUN_TEST(test_systemverilog_hierarchy_configuration);
+    FSIM_RUN_TEST(test_systemverilog_concurrent_template_replay);
+    FSIM_RUN_TEST(test_systemverilog_generated_process_template_replay);
+    FSIM_RUN_TEST(test_vhdl_ordinary_process_template_replay);
+    FSIM_RUN_TEST(test_vhdl_generate_relative_process_template_replay);
+    FSIM_RUN_TEST(test_vhdl_concurrent_statement_template_rows);
+    FSIM_RUN_TEST(test_vhdl_projected_constant_startup_lowering);
+    FSIM_RUN_TEST(test_systemverilog_ordinary_process_template_replay);
+    FSIM_RUN_TEST(test_systemverilog_callable_process_template_replay);
+    FSIM_RUN_TEST(
+        test_systemverilog_generated_callable_process_template_replay);
+    FSIM_RUN_TEST(test_systemverilog_always_ff_process_template_replay);
+    FSIM_RUN_TEST(test_systemverilog_element_process_template_replay);
     FSIM_RUN_TEST(test_generate_elaboration);
     FSIM_RUN_TEST(test_verilog_defparam_elaboration);
     FSIM_RUN_TEST(test_mixed_language_and_systemc);

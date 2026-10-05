@@ -3,13 +3,32 @@
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+#  include "allocation_profile.hpp"
+#endif
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/path.hpp"
 
 #include <chrono>
+#include <cstdio>
 
 namespace fsim::app::application_detail {
+
+namespace {
+
+struct BuiltinStdoutFlush final {
+    bool enabled { };
+
+    ~BuiltinStdoutFlush()
+    {
+        if (enabled) {
+            (void)std::fflush(stdout);
+        }
+    }
+};
+
+} // namespace
 
 HdlVcdState::~HdlVcdState()
 {
@@ -192,7 +211,8 @@ int run_built_project(
     const project::Config& config,
     const std::span<const std::string> plusargs,
     diagnostic::Engine& diagnostics,
-    std::ostream& output)
+    std::ostream& output,
+    const SimulationOutputSink sink)
 {
     const auto duration = configured_duration(
         config, built.time_resolution, diagnostics);
@@ -241,11 +261,12 @@ int run_built_project(
         archived_control = std::move(restored.application);
         publish_trace_control(*archived_control, trace_config.run);
     }
-    std::vector<std::string> process_names;
-    process_names.reserve(built.design.processes().size());
-    for (const auto& process : built.design.processes()) {
-        process_names.push_back(process.name);
-    }
+    const auto design_process_count = built.design.process_count();
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+    allocation_profile::Session allocation_profile_session {
+        std::getenv("FSIM_PROFILE_ALLOCATIONS") != nullptr
+    };
+#endif
     const bool profile_phases = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
     const auto simulation_setup_begin = std::chrono::steady_clock::now();
     Simulation simulation(
@@ -253,35 +274,53 @@ int run_built_project(
         config.run.max_deltas,
         engine,
         SystemVerilogVpiRuntimeUpdates::omitted);
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+    allocation_profile_session.after_setup();
+#endif
     const auto simulation_setup_elapsed = std::chrono::steady_clock::now()
         - simulation_setup_begin;
+    const auto simulation_prepare_begin = std::chrono::steady_clock::now();
     if (!apply_uvm_command_line(simulation, plusargs, diagnostics)) {
         return 1;
     }
-    simulation.set_output_hook(
-        [&output](
-            const runtime::simir::ProcessId,
-            const std::string_view text,
-            const bool newline,
-            const SimulationTick,
-            const std::uint64_t) {
-            output << text;
-            if (newline) {
-                output << '\n';
-            }
-        });
+    if (sink == SimulationOutputSink::builtin_stdout) {
+        output.flush();
+        simulation.set_builtin_stdout_output();
+    } else {
+        simulation.set_output_hook(
+            [&output](
+                const runtime::simir::ProcessId,
+                const std::string_view text,
+                const bool newline,
+                const SimulationTick,
+                const std::uint64_t) {
+                output << text;
+                if (newline) {
+                    output << '\n';
+                }
+            });
+    }
+    const BuiltinStdoutFlush stdout_flush {
+        sink == SimulationOutputSink::builtin_stdout
+    };
     simulation.set_report_hook(
-        [&output](
+        [&output, sink](
             const runtime::simir::ProcessId,
             const std::string_view message,
             const runtime::simir::AssertionSeverity severity,
             const runtime::simir::SourceLocation& source,
             const SimulationTick,
             const std::uint64_t) {
+            if (sink == SimulationOutputSink::builtin_stdout) {
+                (void)std::fflush(stdout);
+            }
             output << source.path << ':' << source.line << ':'
                    << source.column << ": "
                    << report_severity_name(severity)
                    << "[FSIM-HDL-REPORT]: " << message << '\n';
+            if (sink == SimulationOutputSink::builtin_stdout) {
+                output.flush();
+            }
         });
     report_native_cache_failures(simulation, diagnostics, false);
     auto trace = attach_trace(simulation, trace_config, diagnostics, false,
@@ -300,9 +339,21 @@ int run_built_project(
         const auto native_await_elapsed
             = std::chrono::steady_clock::duration::zero();
         const auto simulation_run_begin = std::chrono::steady_clock::now();
+        const auto simulation_prepare_elapsed
+            = simulation_run_begin - simulation_prepare_begin;
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+        allocation_profile_session.after_prepare();
+#endif
         const auto result = simulation.run(duration);
+        if (sink == SimulationOutputSink::builtin_stdout) {
+            (void)std::fflush(stdout);
+        }
+        const auto simulation_run_end = std::chrono::steady_clock::now();
         const auto simulation_execution_elapsed
-            = std::chrono::steady_clock::now() - simulation_run_begin;
+            = simulation_run_end - simulation_run_begin;
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+        allocation_profile_session.after_run();
+#endif
         if (trace && !finish_trace(*trace, diagnostics)) {
             return 1;
         }
@@ -313,6 +364,9 @@ int run_built_project(
                           ? "reached time limit"
                           : "stopped")
                << " at tick " << result.time << ", delta " << result.delta << '\n';
+#if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
+        allocation_profile_session.finish(output);
+#endif
         if (profile_phases) {
             const auto milliseconds = [](const auto elapsed) {
                 return std::chrono::duration<double, std::milli>(elapsed)
@@ -322,6 +376,14 @@ int run_built_project(
                    << milliseconds(simulation_setup_elapsed)
                    << " run_ms=" << milliseconds(simulation_execution_elapsed)
                    << " native_await_ms=" << milliseconds(native_await_elapsed)
+                   << " prepare_ms=" << milliseconds(simulation_prepare_elapsed)
+                   << " run_begin_ms="
+                   << milliseconds(simulation_run_begin - simulation_setup_begin)
+                   << " run_end_ms="
+                   << milliseconds(simulation_run_end - simulation_setup_begin)
+                   << " finalize_ms="
+                   << milliseconds(std::chrono::steady_clock::now()
+                          - simulation_run_end)
                    << '\n';
         }
         if (result.simulator_status) {
@@ -386,9 +448,10 @@ int run_built_project(
             severity, "FSIM-RUN-ASSERT-0001", error.what(), std::move(span), { } });
     } catch (const runtime::simir::InterpreterError& error) {
         auto message = std::string { error.what() };
-        if (error.process() < process_names.size()) {
-            message += "; process '"
-                + process_names[error.process()] + "'";
+        if (error.process() < design_process_count) {
+            message += "; process '";
+            message += simulation.process_program(error.process()).name;
+            message += '\'';
         }
         diagnostics.error("FSIM-RUN-0001", std::move(message));
     } catch (const std::exception& error) {
@@ -411,6 +474,23 @@ int handle_run(
     return run_built_project(
         std::move(*built), SimulationEngine::compiled,
         config, invocation.plusargs, diagnostics, output);
+}
+
+int handle_run_stdio(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream&)
+{
+    auto built = build_project(config, diagnostics);
+    if (!built) {
+        return 1;
+    }
+    return run_built_project(
+        std::move(*built), SimulationEngine::compiled,
+        config, invocation.plusargs, diagnostics, output,
+        SimulationOutputSink::builtin_stdout);
 }
 
 } // namespace fsim::app::application_detail

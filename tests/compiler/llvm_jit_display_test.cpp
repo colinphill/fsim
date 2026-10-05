@@ -97,8 +97,9 @@ void test_display_at_level(
 
     TestRuntime short_runtime;
     auto short_descriptor = abi(short_runtime);
-    short_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_output));
+    auto short_services = copy_jit_services(short_descriptor);
+    short_services.write_output = nullptr;
+    short_descriptor.services = &short_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -108,8 +109,10 @@ void test_display_at_level(
 
     TestRuntime short_postponed_runtime;
     auto short_postponed_descriptor = abi(short_postponed_runtime);
-    short_postponed_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, schedule_output));
+    auto short_postponed_services
+        = copy_jit_services(short_postponed_descriptor);
+    short_postponed_services.schedule_output = nullptr;
+    short_postponed_descriptor.services = &short_postponed_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -119,8 +122,9 @@ void test_display_at_level(
 
     TestRuntime short_report_runtime;
     auto short_report_descriptor = abi(short_report_runtime);
-    short_report_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_report));
+    auto short_report_services = copy_jit_services(short_report_descriptor);
+    short_report_services.write_report = nullptr;
+    short_report_descriptor.services = &short_report_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -130,8 +134,10 @@ void test_display_at_level(
 
     TestRuntime short_formatted_runtime;
     auto short_formatted_descriptor = abi(short_formatted_runtime);
-    short_formatted_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_formatted));
+    auto short_formatted_services
+        = copy_jit_services(short_formatted_descriptor);
+    short_formatted_services.write_formatted = nullptr;
+    short_formatted_descriptor.services = &short_formatted_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -141,8 +147,9 @@ void test_display_at_level(
 
     TestRuntime short_time_runtime;
     auto short_time_descriptor = abi(short_time_runtime);
-    short_time_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_time));
+    auto short_time_services = copy_jit_services(short_time_descriptor);
+    short_time_services.write_time = nullptr;
+    short_time_descriptor.services = &short_time_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -152,8 +159,11 @@ void test_display_at_level(
 
     TestRuntime short_monitor_install_runtime;
     auto short_monitor_install_descriptor = abi(short_monitor_install_runtime);
-    short_monitor_install_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, install_monitor));
+    auto short_monitor_install_services
+        = copy_jit_services(short_monitor_install_descriptor);
+    short_monitor_install_services.install_monitor = nullptr;
+    short_monitor_install_descriptor.services
+        = &short_monitor_install_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -163,8 +173,11 @@ void test_display_at_level(
 
     TestRuntime short_monitor_control_runtime;
     auto short_monitor_control_descriptor = abi(short_monitor_control_runtime);
-    short_monitor_control_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, control_monitor));
+    auto short_monitor_control_services
+        = copy_jit_services(short_monitor_control_descriptor);
+    short_monitor_control_services.control_monitor = nullptr;
+    short_monitor_control_descriptor.services
+        = &short_monitor_control_services;
     expect_error(
         [&] {
             (void)jit.execute(
@@ -174,8 +187,9 @@ void test_display_at_level(
 
     TestRuntime short_random_runtime;
     auto short_random_descriptor = abi(short_random_runtime);
-    short_random_descriptor.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, random_value));
+    auto short_random_services = copy_jit_services(short_random_descriptor);
+    short_random_services.random_value = nullptr;
+    short_random_descriptor.services = &short_random_services;
     expect_error(
         [&] {
             (void)jit.execute(

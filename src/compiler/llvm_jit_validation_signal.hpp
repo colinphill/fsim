@@ -187,10 +187,12 @@ template <typename OperationType, typename ExactSignalWidth,
                 "automatic callable frame repeats a container register");
         }
         for (const auto id : operation.containers) {
-            if (id >= process.container_register_types.size()) {
+            if (id >= process.container_register_count
+                || id >= process.container_register_types.size()) {
                 reject(process, index,
                     "automatic callable frame container register is outside the type table");
             }
+            ++result.container_register_reference_counts[id];
         }
     } else if constexpr (
         std::is_same_v<OperationType, CallableFramePop>) {
@@ -227,10 +229,12 @@ template <typename OperationType, typename ExactSignalWidth,
                 "automatic callable frame pop repeats a preserved container register");
         }
         for (const auto id : operation.preserve_containers) {
-            if (id >= process.container_register_types.size()) {
+            if (id >= process.container_register_count
+                || id >= process.container_register_types.size()) {
                 reject(process, index,
                     "automatic callable frame pop preserved container register is outside the type table");
             }
+            ++result.container_register_reference_counts[id];
         }
     } else if constexpr (std::is_same_v<OperationType, Branch>) {
         record_use(operation.condition, index);
@@ -306,14 +310,11 @@ template <typename OperationType, typename ExactSignalWidth,
                 "transport projected write has a rejection limit");
         }
         if (target_width > 64) {
-            if (operation.delay == 0U
-                && operation.rejection == 0U
+            if (operation.delay == 0U && operation.rejection == 0U
                 && operation.mode
                     == runtime::simir::ProjectedDelayMode::inertial) {
-                result.uses_wide_signal_write = true;
+                result.uses_wide_projected_write = true;
             } else {
-                // Nonzero projected transactions retain their exact queue and
-                // rejection semantics through the interpreter boundary.
                 result.uses_exact_signal_operation = true;
             }
         } else {

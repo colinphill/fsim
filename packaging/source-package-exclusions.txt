@@ -2,6 +2,7 @@
 # schema=fsim-source-package-exclusions-v1
 # kind<TAB>value<TAB>reason
 root	.agents	workspace agent state
+root	.aws	local cloud tooling state
 root	.cache	local tool cache
 root	.codebase-memory	generated codebase index state
 root	.local-artifacts	local non-source artifacts
@@ -22,6 +23,7 @@ suffix	.dylib	generated native library
 suffix	.fst	generated waveform
 suffix	.o	generated native object
 suffix	.obj	generated native object
+suffix	.orig	local source backup
 suffix	.pyc	generated Python bytecode
 suffix	.so	generated native library
 suffix	.swp	local editor state

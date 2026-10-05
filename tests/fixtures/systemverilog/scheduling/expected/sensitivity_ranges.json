@@ -1,0 +1,19 @@
+{
+  "dynamic_index": {
+    "dynamic": 1
+  },
+  "selected_bits": {
+    "comb": 1,
+    "dynamic": 1,
+    "explicit_element": 1,
+    "explicit_slice": 1,
+    "wildcard": 1
+  },
+  "unrelated_bits": {
+    "dynamic": 1,
+    "explicit_element": 1
+  },
+  "unrelated_element": {
+    "dynamic": 1
+  }
+}

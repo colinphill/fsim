@@ -3,8 +3,10 @@
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/Support/ErrorHandling.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -29,6 +31,55 @@ using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
 using runtime::simir::UnaryNot;
 using runtime::simir::ValueKind;
+
+namespace {
+
+[[nodiscard]] llvm::Value* count_set_bits_in_words(
+    llvm::IRBuilder<>& builder,
+    llvm::Value* value,
+    const std::uint32_t width)
+{
+    auto& context = builder.getContext();
+    auto* const i64 = llvm::Type::getInt64Ty(context);
+    auto* const zero = llvm::ConstantInt::get(i64, 0U);
+    llvm::Value* count = zero;
+    auto* const popcount = llvm::Intrinsic::getOrInsertDeclaration(
+        builder.GetInsertBlock()->getModule(),
+        llvm::Intrinsic::ctpop,
+        i64,
+        { i64 });
+
+    for (std::uint64_t offset = 0U; offset < width; offset += 64U) {
+        const auto active_width = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(64U, width - offset));
+        auto* shifted = value;
+        if (offset != 0U) {
+            shifted = builder.CreateLShr(
+                value, packed_constant(
+                           context, width,
+                           static_cast<std::uint64_t>(offset)));
+        }
+        auto* word = builder.CreateZExtOrTrunc(shifted, i64);
+        if (active_width != 64U) {
+            word = builder.CreateAnd(
+                word, packed_low_mask(context, 64U, active_width));
+        }
+        count = builder.CreateAdd(
+            count, builder.CreateCall(popcount, { word }));
+    }
+    return count;
+}
+
+[[nodiscard]] llvm::Value* logic4_exact_one_bits(
+    llvm::IRBuilder<>& builder,
+    const EncodedValue& value)
+{
+    auto* const mask = packed_mask(builder.getContext(), value.width);
+    return builder.CreateAnd(
+        builder.CreateAnd(value.aval, builder.CreateNot(value.bval)), mask);
+}
+
+} // namespace
 
 void ValueOperationLowerer::lower(
     const CopyRegister& operation) {
@@ -62,24 +113,38 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const UnaryNot& operation) {
+              if (registers[operation.destination].known_logic4) {
+                const auto source = load_register(
+                    builder, registers, operation.source);
+                auto* const mask = packed_mask(context, source.width);
+                auto* const aval = builder.CreateAnd(
+                    builder.CreateNot(source.aval), mask);
+                auto* const zero = packed_constant(
+                    context, source.width, 0U);
+                store_register(
+                    builder, registers, operation.destination,
+                    EncodedValue {
+                        aval, zero, source.width, zero, zero,
+                        ValueKind::logic4 });
+                branch_to_next();
+                return;
+              }
+              if (try_lower_wide_bitwise_not(
+                      builder,
+                      registers,
+                      operation.destination,
+                      operation.source)) {
+                branch_to_next();
+                return;
+              }
               const auto source =
                   load_register(builder, registers, operation.source);
               if (source.kind == ValueKind::logic9) {
-                constexpr auto table = [] {
-                  std::array<Logic9, 9> values{};
-                  for (std::size_t state = 0;
-                       state < values.size();
-                       ++state) {
-                    values[state] = runtime::logic_not(
-                        static_cast<Logic9>(state));
-                  }
-                  return values;
-                }();
                 store_register(
                     builder,
                     registers,
                     operation.destination,
-                    map_logic9_unary(builder, source, table));
+                    lower_logic9_not(builder, source));
                 branch_to_next();
                 return;
               }
@@ -166,40 +231,64 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const Reduction& operation) {
+              if (registers[operation.destination].known_logic4) {
+                const auto source = load_register(
+                    builder, registers, operation.source);
+                auto* const mask = packed_mask(context, source.width);
+                auto* const value = builder.CreateAnd(source.aval, mask);
+                llvm::Value* reduced = nullptr;
+                if (operation.operation == ReductionOperator::bit_and) {
+                  reduced = builder.CreateICmpEQ(value, mask);
+                } else if (
+                    operation.operation == ReductionOperator::bit_or) {
+                  reduced = builder.CreateICmpNE(
+                      value, packed_constant(context, source.width, 0U));
+                } else if (
+                    operation.operation == ReductionOperator::bit_xor) {
+                  auto* const one_count = count_set_bits_in_words(
+                      builder, logic4_exact_one_bits(builder, source),
+                      source.width);
+                  auto* const parity = builder.CreateAnd(
+                      one_count, llvm::ConstantInt::get(i64, 1U));
+                  reduced = builder.CreateICmpNE(
+                      parity, packed_constant(context, 1U, 0U));
+                } else {
+                  throw LlvmJitError(
+                      "known Logic4 region reduction is unsupported");
+                }
+                auto* const zero = packed_constant(context, 1U, 0U);
+                store_register(
+                    builder, registers, operation.destination,
+                    EncodedValue {
+                        builder.CreateZExt(reduced, i64), zero, 1U,
+                        zero, zero, ValueKind::logic4 });
+                branch_to_next();
+                return;
+              }
               const auto source = coerce_value_kind(
                   builder,
                   load_register(
                       builder, registers, operation.source),
                   ValueKind::logic4);
+              const auto extend_boolean = [&](llvm::Value* value) {
+                return builder.CreateZExt(value, i64);
+              };
+              const auto count_exact_ones = [&] {
+                return count_set_bits_in_words(
+                    builder, logic4_exact_one_bits(builder, source),
+                    source.width);
+              };
               if (operation.operation
                       == ReductionOperator::one_hot
                   || operation.operation
                       == ReductionOperator::one_hot_or_zero) {
-                llvm::Value* seen_one =
-                    llvm::ConstantInt::getFalse(context);
-                llvm::Value* multiple_ones =
-                    llvm::ConstantInt::getFalse(context);
-                for (std::uint32_t bit = 0;
-                     bit < source.width;
-                     ++bit) {
-                  const auto value =
-                      bit_at(builder, source, bit);
-                  auto* exact_one = builder.CreateAnd(
-                      value.aval,
-                      builder.CreateNot(value.bval));
-                  multiple_ones = builder.CreateOr(
-                      multiple_ones,
-                      builder.CreateAnd(seen_one, exact_one));
-                  seen_one =
-                      builder.CreateOr(seen_one, exact_one);
-                }
+                auto* const count = count_exact_ones();
+                auto* const one = llvm::ConstantInt::get(i64, 1U);
                 auto* matched =
                     operation.operation
                             == ReductionOperator::one_hot
-                        ? builder.CreateAnd(
-                              seen_one,
-                              builder.CreateNot(multiple_ones))
-                        : builder.CreateNot(multiple_ones);
+                        ? builder.CreateICmpEQ(count, one)
+                        : builder.CreateICmpULE(count, one);
                 store_register(
                     builder,
                     registers,
@@ -214,33 +303,47 @@ void ValueOperationLowerer::lower(
                 branch_to_next();
                 return;
               }
-              EncodedBit result{
-                  operation.operation == ReductionOperator::bit_and
-                      ? llvm::ConstantInt::getTrue(context)
-                      : llvm::ConstantInt::getFalse(context),
-                  llvm::ConstantInt::getFalse(context)};
-              for (std::uint32_t bit = 0; bit < source.width; ++bit) {
-                const auto value = bit_at(builder, source, bit);
-                if (operation.operation
-                    == ReductionOperator::bit_and) {
-                  result = bit_and(builder, result, value);
-                } else if (
-                    operation.operation
-                    == ReductionOperator::bit_or) {
-                  result = bit_or(builder, result, value);
-                } else {
-                  result = bit_xor(builder, result, value);
-                }
+              auto* const mask = packed_mask(context, source.width);
+              auto* const zero = packed_constant(context, source.width, 0U);
+              auto* const aval = builder.CreateAnd(source.aval, mask);
+              auto* const bval = builder.CreateAnd(source.bval, mask);
+              auto* result_aval = static_cast<llvm::Value*>(nullptr);
+              auto* result_bval = static_cast<llvm::Value*>(nullptr);
+              if (operation.operation == ReductionOperator::bit_and) {
+                auto* const known_zero = builder.CreateAnd(
+                    builder.CreateNot(aval), builder.CreateNot(bval));
+                auto* const has_known_zero = builder.CreateICmpNE(
+                    builder.CreateAnd(known_zero, mask), zero);
+                auto* const has_unknown = builder.CreateICmpNE(bval, zero);
+                auto* const result_one = builder.CreateNot(has_known_zero);
+                result_aval = extend_boolean(result_one);
+                result_bval = extend_boolean(
+                    builder.CreateAnd(result_one, has_unknown));
+              } else if (
+                  operation.operation == ReductionOperator::bit_or) {
+                auto* const known_one = builder.CreateAnd(
+                    aval, builder.CreateNot(bval));
+                auto* const has_known_one = builder.CreateICmpNE(
+                    known_one, zero);
+                auto* const has_unknown = builder.CreateICmpNE(bval, zero);
+                result_aval = extend_boolean(
+                    builder.CreateOr(has_known_one, has_unknown));
+                result_bval = extend_boolean(
+                    builder.CreateAnd(
+                        has_unknown, builder.CreateNot(has_known_one)));
+              } else {
+                auto* const has_unknown = builder.CreateICmpNE(bval, zero);
+                auto* const parity = builder.CreateAnd(
+                    count_exact_ones(), llvm::ConstantInt::get(i64, 1U));
+                result_aval = builder.CreateOr(
+                    parity, extend_boolean(has_unknown));
+                result_bval = extend_boolean(has_unknown);
               }
               store_register(
                   builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateZExt(
-                          result.aval,
-                          llvm::Type::getInt64Ty(context)),
-                      builder.CreateZExt(
-                          result.bval,
-                          llvm::Type::getInt64Ty(context)),
+                  EncodedValue {
+                      result_aval,
+                      result_bval,
                       1});
               branch_to_next();
             
@@ -253,22 +356,9 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   ValueKind::logic4);
-              llvm::Value* count = llvm::ConstantInt::get(
-                  llvm::Type::getInt64Ty(context), 0);
-              for (std::uint32_t bit = 0;
-                   bit < source.width;
-                   ++bit) {
-                const auto value =
-                    bit_at(builder, source, bit);
-                auto* exact_one = builder.CreateAnd(
-                    value.aval,
-                    builder.CreateNot(value.bval));
-                count = builder.CreateAdd(
-                    count,
-                    builder.CreateZExt(
-                        exact_one,
-                        llvm::Type::getInt64Ty(context)));
-              }
+              auto* const count = count_set_bits_in_words(
+                  builder, logic4_exact_one_bits(builder, source),
+                  source.width);
               store_register(
                   builder,
                   registers,
@@ -289,43 +379,36 @@ void ValueOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   ValueKind::logic4);
-              llvm::Value* count = llvm::ConstantInt::get(
-                  llvm::Type::getInt64Ty(context), 0);
-              for (std::uint32_t bit = 0;
-                   bit < source.width;
-                   ++bit) {
-                const auto value =
-                    bit_at(builder, source, bit);
-                auto* not_aval = builder.CreateNot(value.aval);
-                auto* not_bval = builder.CreateNot(value.bval);
-                llvm::Value* selected =
-                    llvm::ConstantInt::getFalse(context);
-                if ((operation.state_mask & 0x1U) != 0) {
+              auto* const mask = packed_mask(context, source.width);
+              auto* const aval = builder.CreateAnd(source.aval, mask);
+              auto* const bval = builder.CreateAnd(source.bval, mask);
+              llvm::Value* selected =
+                  packed_constant(context, source.width, 0U);
+              if ((operation.state_mask & 0x1U) != 0U) {
                   selected = builder.CreateOr(
                       selected,
-                      builder.CreateAnd(not_aval, not_bval));
-                }
-                if ((operation.state_mask & 0x2U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(value.aval, not_bval));
-                }
-                if ((operation.state_mask & 0x4U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(value.aval, value.bval));
-                }
-                if ((operation.state_mask & 0x8U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(not_aval, value.bval));
-                }
-                count = builder.CreateAdd(
-                    count,
-                    builder.CreateZExt(
-                        selected,
-                        llvm::Type::getInt64Ty(context)));
+                      builder.CreateAnd(
+                          builder.CreateNot(builder.CreateOr(aval, bval)),
+                          mask));
               }
+              if ((operation.state_mask & 0x2U) != 0U) {
+                  selected = builder.CreateOr(
+                      selected,
+                      builder.CreateAnd(aval, builder.CreateNot(bval)));
+              }
+              if ((operation.state_mask & 0x4U) != 0U) {
+                  selected = builder.CreateOr(
+                      selected, builder.CreateAnd(aval, bval));
+              }
+              if ((operation.state_mask & 0x8U) != 0U) {
+                  selected = builder.CreateOr(
+                      selected,
+                      builder.CreateAnd(
+                          builder.CreateNot(aval), bval));
+              }
+              auto* const count = count_set_bits_in_words(
+                  builder, builder.CreateAnd(selected, mask),
+                  source.width);
               store_register(
                   builder,
                   registers,
@@ -399,6 +482,17 @@ void ValueOperationLowerer::lower(
                         amount_bits);
               auto* value_amount = builder.CreateZExtOrTrunc(
                   safe_amount, packed_integer_type(context, value.width));
+              llvm::Value* inverse_amount = nullptr;
+              if (rotating) {
+                  auto* zero_value = packed_constant(
+                      context, value.width, 0);
+                  auto* width_value = packed_constant(
+                      context, value.width, value.width);
+                  inverse_amount = builder.CreateSelect(
+                      builder.CreateICmpEQ(value_amount, zero_value),
+                      zero_value,
+                      builder.CreateSub(width_value, value_amount));
+              }
               const auto shift_component =
                   [&](llvm::Value* component,
                       const ShiftOperator selected_operation,
@@ -408,13 +502,6 @@ void ValueOperationLowerer::lower(
                             == ShiftOperator::rotate_left
                         || selected_operation
                             == ShiftOperator::rotate_right) {
-                        auto* inverse_amount = builder.CreateURem(
-                            builder.CreateSub(
-                                packed_constant(
-                                    context, value.width, value.width),
-                                value_amount),
-                            packed_constant(
-                                context, value.width, value.width));
                         auto* left_amount = selected_operation
                                 == ShiftOperator::rotate_left
                             ? value_amount

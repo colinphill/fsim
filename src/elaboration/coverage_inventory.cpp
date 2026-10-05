@@ -2,10 +2,12 @@
 #include "fsim/elaboration/coverage_inventory.hpp"
 
 #include "fsim/elaboration/elaborator.hpp"
+#include "elaborated_design_process_access.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <memory>
 #include <new>
 #include <ranges>
 #include <stdexcept>
@@ -387,7 +389,33 @@ ElaboratedDesign::bind_hir_code_coverage_hits() noexcept
     if (!code_coverage_inventory_) {
         return { Error::MissingInstance, 0U };
     }
+    if (process_builder_) {
+        return { Error::InvalidProcess, 0U };
+    }
     try {
+        auto replacement_rows
+            = process_rows_
+            ? std::make_shared<detail::RuntimeProcessProgramTable>(
+                  *process_rows_)
+            : std::shared_ptr<detail::RuntimeProcessProgramTable> { };
+        const auto operations_for = [&](const std::size_t process_id)
+            -> runtime::simir::OperationList* {
+            if (replacement_rows) {
+                if (process_id >= replacement_rows->rows.size()) {
+                    return nullptr;
+                }
+                auto& row = replacement_rows->rows[process_id];
+                if (row.instance.id != process_id
+                    || row.template_id >= replacement_rows->templates.size()) {
+                    return nullptr;
+                }
+                return &row.instance.operations;
+            }
+            if (process_id >= processes_.size()) {
+                return nullptr;
+            }
+            return &processes_[process_id].operations;
+        };
         for (std::size_t index = 0U;
             index < specializations_.size(); ++index) {
             const auto& specialization = specializations_[index];
@@ -400,15 +428,16 @@ ElaboratedDesign::bind_hir_code_coverage_hits() noexcept
                     point.point);
             }
             for (const auto process_id : specialization.processes) {
-                if (process_id >= processes_.size()) {
+                auto* const operations
+                    = operations_for(process_id);
+                if (operations == nullptr) {
                     return { Error::InvalidProcess, index };
                 }
-                auto& process = processes_[process_id];
                 for (std::size_t instruction = 0U;
-                    instruction < process.operations.size(); ++instruction) {
+                    instruction < operations->size(); ++instruction) {
                     auto* hit = runtime::simir::operation_get_if<
                         runtime::simir::CodeCoverageHit>(
-                        &process.operations[instruction]);
+                        &(*operations)[instruction]);
                     if (hit == nullptr) {
                         continue;
                     }
@@ -421,6 +450,9 @@ ElaboratedDesign::bind_hir_code_coverage_hits() noexcept
                     hit->counter = found->second.counter;
                 }
             }
+        }
+        if (replacement_rows) {
+            process_rows_ = std::move(replacement_rows);
         }
         return { };
     } catch (const std::bad_alloc&) {

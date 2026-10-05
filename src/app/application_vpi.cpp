@@ -1364,6 +1364,33 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     std::map<std::pair<fsim_vpi_handle_v1, std::string>,
         std::pair<runtime::simir::SignalId, fsim_vpi_handle_v1>>
         published_siblings;
+    std::map<std::pair<runtime::simir::ContainerObjectId, std::size_t>,
+        runtime::simir::ContainerElementSignalAlias>
+        container_element_aliases;
+    std::map<runtime::simir::SignalId,
+        std::vector<const semantic::design::Object*>>
+        signal_objects_by_runtime;
+    for (const auto& alias :
+        project.design.container_element_signal_aliases()) {
+        if (!container_element_aliases.emplace(
+                std::pair { alias.object,
+                    static_cast<std::size_t>(alias.ordinal) },
+                alias).second) {
+            throw std::logic_error {
+                "VPI memory has duplicate container-element signal aliases"
+            };
+        }
+    }
+    for (const auto& candidate : project.design_ir.objects()) {
+        if (candidate.kind == semantic::design::ObjectKind::signal
+            && candidate.runtime_index
+                <= std::numeric_limits<runtime::simir::SignalId>::max()) {
+            signal_objects_by_runtime[
+                static_cast<runtime::simir::SignalId>(
+                    candidate.runtime_index)]
+                .push_back(&candidate);
+        }
+    }
     std::set<std::string, std::less<>> vpi_memory_paths;
     for (const auto& object : project.design_ir.objects()) {
         if (!relevant_specializations.contains(object.specialization.value())
@@ -1417,7 +1444,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     return path == memory_path
                         || (path.starts_with(memory_path)
                             && path.size() > memory_path.size()
-                            && path[memory_path.size()] == '.');
+                            && (path[memory_path.size()] == '.'
+                                || path[memory_path.size()] == '['));
                 })) {
             continue;
         }
@@ -1580,7 +1608,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto direction = port == ports.end()
             ? runtime::SystemVerilogVpiDirection::None
             : vpi_direction(port->second->direction);
-        const auto& value = interpreter.signal_value(signal);
+        const auto value = interpreter.signal_value_snapshot(signal);
         descriptor.type = packed_type(specialization.language,
             value.width(), object.signed_value, descriptor.kind, signal_info,
             direction);
@@ -1731,35 +1759,105 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             *result.registry, std::move(descriptor), path);
         objects.emplace(object.id.value(), memory);
 
-        const auto& value = interpreter.container_object_value(container);
+        const auto value
+            = interpreter.container_object_value_snapshot(container);
         const auto category = container_category(type);
         for (std::size_t ordinal = 0; ordinal < value.elements.size();
             ++ordinal) {
+            const auto word_name = memory_word_name(type, ordinal);
+            const auto element_alias = container_element_aliases.find(
+                { container, ordinal });
+            const elaboration::SignalInfo* element_signal_info { };
+            auto word_category = category;
+            if (element_alias != container_element_aliases.end()) {
+                if (!element_alias->second.readable) {
+                    throw std::logic_error {
+                        "VPI memory cannot publish an unreadable element signal"
+                    };
+                }
+                element_signal_info = &project.design.signals().at(
+                    element_alias->second.signal);
+                word_category = vpi_category(
+                    specialization.language, *element_signal_info);
+            }
             runtime::SystemVerilogVpiObjectDescriptor word;
             word.kind = runtime::SystemVerilogVpiObjectKind::Variable;
             word.parent = memory;
-            word.name = memory_word_name(type, ordinal);
-            word.type = container_word_type(specialization.language, type);
+            word.name = word_name;
+            word.type = container_word_type(
+                specialization.language, type);
             word.type->language
                 = vpi_profile_language(project, specialization);
             apply_vpi_specialization_provenance(
                 *word.type, project, specialization);
             apply_vpi_source(*word.type, project, object.source);
+            const auto word_path = path + word_name;
             const auto word_handle = create_checked(*result.registry,
-                std::move(word), path + memory_word_name(type, ordinal));
+                std::move(word), word_path);
+            const auto& word_value
+                = element_alias == container_element_aliases.end()
+                ? value.elements[ordinal]
+                : interpreter.signal_value_snapshot(
+                      element_alias->second.signal);
             const auto bound = result.registry->bind_value(word_handle,
-                systemverilog_vpi_signal_value(value.elements[ordinal],
-                    type.scalar_kind, category));
+                systemverilog_vpi_signal_value(
+                    word_value,
+                    element_signal_info == nullptr
+                        ? type.scalar_kind
+                        : element_signal_info->systemverilog_scalar,
+                    word_category));
             if (bound != runtime::SystemVerilogVpiValueError::None) {
                 throw std::logic_error {
                     "failed to bind live VPI memory word '" + path
                     + memory_word_name(type, ordinal) + "'"
                 };
             }
-            result.container_words[container].push_back(
-                { word_handle, ordinal });
+            // Physical element storage does not change the public memory
+            // word's mutation contract. Keep its container write identity
+            // (deposit supported, force unsupported) while signal bindings
+            // below provide current values and change notifications.
             result.word_handles.emplace(
                 word_handle, std::pair { container, ordinal });
+            if (element_alias == container_element_aliases.end()) {
+                result.container_words[container].push_back(
+                    { word_handle, ordinal });
+                continue;
+            }
+
+            const auto& alias = element_alias->second;
+            const auto signal = alias.signal;
+            result.signals[signal].push_back(word_handle);
+            result.handles.emplace(word_handle, signal);
+            result.scalar_kinds.emplace(
+                signal, element_signal_info->systemverilog_scalar);
+            result.categories.emplace(signal, word_category);
+            if (!alias.writable) {
+                result.read_only_container_words.insert(word_handle);
+            }
+            published_paths.emplace(
+                word_path, std::pair { signal, word_handle });
+            published_siblings.emplace(
+                std::pair { memory, word_name },
+                std::pair { signal, word_handle });
+            if (const auto signal_objects
+                = signal_objects_by_runtime.find(signal);
+                signal_objects != signal_objects_by_runtime.end()) {
+                for (const auto* signal_object : signal_objects->second) {
+                    const auto& signal_specialization
+                        = project.design_ir.specializations().at(
+                            signal_object->specialization.value());
+                    const auto& signal_instance
+                        = project.design_ir.instances().at(
+                            signal_specialization.instance.value());
+                    const auto signal_path = occurrence_path(
+                        project.design_ir.path(signal_instance.path),
+                        project.design_ir.path(signal_object->path));
+                    if (signal_path == word_path) {
+                        objects.insert_or_assign(
+                            signal_object->id.value(), word_handle);
+                    }
+                }
+            }
         }
         result.container_scalar_kinds.emplace(container, type.scalar_kind);
         result.container_categories.emplace(container, category);
@@ -1929,9 +2027,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto* logic
             = std::get_if<runtime::PackedLogic4>(&vpi_stored.payload);
         if (logic != nullptr && logic->width() == 1U) {
-            strength = vpi_drive_strength(
-                interpreter.process_program(process.runtime_index)
-                    .drive_strength);
+            const auto program = runtime::simir::InterpreterProgramAccess::view(
+                interpreter, process.runtime_index);
+            strength = vpi_drive_strength(program.drive_strength());
             vpi_stored.strength = strength;
         }
         const auto bound

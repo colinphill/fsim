@@ -10,15 +10,15 @@ std::uint32_t LlvmProcessExecutor::vital_timing_check(
     const std::uint32_t process,
     const std::uint32_t instruction) noexcept {
   auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure || state.context == nullptr || state.process == nullptr
-      || process != state.process->id
-      || instruction >= state.process->operations.size()) {
+  if (state.failure || state.context == nullptr || !state.process.valid()
+      || process != state.process.id()
+      || instruction >= state.process.operations().size()) {
     return static_cast<std::uint32_t>(runtime::Logic9::x);
   }
   try {
     const auto* operation = runtime::simir::operation_get_if<
         runtime::simir::VitalTimingCheck>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
     if (operation == nullptr) {
       throw std::logic_error{
           "generated VITAL callback references the wrong operation"};
@@ -38,11 +38,11 @@ void LlvmProcessExecutor::vital_delay(
     const std::uint32_t instruction) noexcept {
   auto& state = *static_cast<CallbackState*>(context);
   if (state.failure || state.executor == nullptr || state.context == nullptr
-      || state.process == nullptr || process != state.process->id
-      || instruction >= state.process->operations.size()) return;
+      || !state.process.valid() || process != state.process.id()
+      || instruction >= state.process.operations().size()) return;
   try {
     const auto* operation = runtime::simir::operation_get_if<
-        runtime::simir::VitalDelay>(&state.process->operations[instruction]);
+        runtime::simir::VitalDelay>(&state.process.operations()[instruction]);
     if (operation == nullptr) {
       throw std::logic_error{
           "generated VITAL delay callback references the wrong operation"};

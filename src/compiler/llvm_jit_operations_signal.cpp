@@ -2,10 +2,17 @@
 #include "llvm_jit_lowering_internal.hpp"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/DataLayout.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <string>
 #include <array>
 #include <cstdint>
 #include <iterator>
@@ -38,32 +45,379 @@ using runtime::simir::SignalDriving;
 using runtime::simir::SignalDrivingValue;
 using runtime::simir::ValueKind;
 
-llvm::StructType* create_jit_runtime_type(llvm::LLVMContext& context) {
-  auto* i32 = llvm::Type::getInt32Ty(context);
-  auto* i64 = llvm::Type::getInt64Ty(context);
-  auto* pointer = llvm::PointerType::getUnqual(context);
-  return llvm::StructType::create(
-      context,
-      { i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-          i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer, pointer, pointer,
-          i32, i32,
-          pointer, pointer, pointer, i32, i32, i32,
-          pointer, pointer, pointer, i32, i32,
-          pointer, i32, i32, i64, pointer, pointer, pointer,
-          pointer, pointer, pointer, pointer,
-          pointer, pointer, i32, i32, pointer,
-          pointer, pointer, pointer, pointer, i32, i32 },
-      "fsim_jit_runtime_v1");
+namespace {
+
+void mark_tiered_direct_read_load(
+    llvm::Value* const value,
+    const runtime::simir::SignalId signal,
+    const std::uint32_t plane)
+{
+    auto* const load = llvm::dyn_cast_or_null<llvm::LoadInst>(value);
+    if (load == nullptr || load->isVolatile() || load->isAtomic()) {
+        return;
+    }
+    auto& context = value->getContext();
+    auto* const i32 = llvm::Type::getInt32Ty(context);
+    llvm::Metadata* const operands[] {
+        llvm::ConstantAsMetadata::get(
+            llvm::ConstantInt::get(i32, signal)),
+        llvm::ConstantAsMetadata::get(
+            llvm::ConstantInt::get(i32, plane))
+    };
+    load->setMetadata(
+        context.getMDKindID(kTieredDirectReadLoadMetadata),
+        llvm::MDNode::get(
+            context, llvm::ArrayRef<llvm::Metadata*> { operands }));
+}
+
+[[nodiscard]] EncodedValue canonicalize_logic9_planes(
+    llvm::IRBuilder<>& builder,
+    EncodedValue value)
+{
+    const auto invalid = builder.CreateAnd(
+        value.logic9_plane3,
+        builder.CreateOr(
+            value.logic9_plane2,
+            builder.CreateOr(value.bval, value.aval)));
+    const auto valid = builder.CreateNot(invalid);
+    value.aval = builder.CreateOr(value.aval, invalid);
+    value.bval = builder.CreateAnd(value.bval, valid);
+    value.logic9_plane2 = builder.CreateAnd(
+        value.logic9_plane2, valid);
+    value.logic9_plane3 = builder.CreateAnd(
+        value.logic9_plane3, valid);
+    return value;
+}
+
+} // namespace
+
+JitAbiV2Types create_jit_abi_v2_types(llvm::LLVMContext& context)
+{
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* pointer = llvm::PointerType::getUnqual(context);
+    auto* service_callbacks = llvm::ArrayType::get(
+        pointer, static_cast<unsigned>(JitServiceField::count));
+    auto* services = llvm::StructType::create(
+        context, { i32, i32, service_callbacks }, "fsim_jit_services_v2");
+    auto* runtime_instance = llvm::StructType::create(
+        context,
+        { i32, i32, pointer, pointer, i32, i32,
+            pointer, i32, i32,
+            pointer, pointer, pointer, i32, i32, i32,
+            pointer, pointer, pointer, i32, i32,
+            pointer, i32, i32, i64,
+            pointer, pointer, pointer, pointer, pointer, pointer,
+            pointer, pointer, i32, i32,
+            pointer, i32, i32 },
+        "fsim_jit_runtime_instance_v2");
+    auto* update_slot = llvm::StructType::create(
+        context,
+        { i64, i64, i64, i64, i64, i32, i32,
+            pointer, pointer, pointer, i32, i32 },
+        "fsim_jit_update_slot_v2");
+    auto* native_return_stack = llvm::ArrayType::get(
+        i32, FSIM_JIT_NATIVE_CALL_STACK_CAPACITY_V2);
+    auto* frame = llvm::StructType::create(
+        context,
+        { i32, i32, i64, i64, i32, i32, i32, i32,
+            pointer, pointer, pointer, pointer, pointer,
+            i32, i32, native_return_stack },
+        "fsim_jit_frame_v2");
+    auto* resume_result = llvm::StructType::create(
+        context, { i32, i32, i32, i32, i64 },
+        "fsim_jit_resume_result_v2");
+    auto* projected_element = llvm::StructType::create(
+        context, { i64, i64, i64 }, "fsim_jit_projected_element_v2");
+    auto* logic9_planes = llvm::ArrayType::get(i64, 4U);
+    auto* logic9_word = llvm::StructType::create(
+        context, { logic9_planes }, "fsim_jit_logic9_word_v2");
+    auto* logic9_projected_element = llvm::StructType::create(
+        context, { logic9_word, i64 },
+        "fsim_jit_logic9_projected_element_v2");
+    return {
+        service_callbacks,
+        services,
+        runtime_instance,
+        update_slot,
+        frame,
+        resume_result,
+        projected_element,
+        logic9_word,
+        logic9_projected_element
+    };
+}
+
+void validate_jit_abi_v2_layout(
+    const llvm::DataLayout& data_layout,
+    const JitAbiV2Types& types)
+{
+    const auto fail_layout = [](const std::string_view aggregate) {
+        throw LlvmJitError(
+            "generated LLVM " + std::string(aggregate)
+            + " layout disagrees with the native ABI v2");
+    };
+    const auto require_struct = [&](
+        llvm::StructType* type,
+        const std::span<const std::size_t> offsets,
+        const std::size_t native_size,
+        const std::size_t native_alignment,
+        const std::string_view aggregate) {
+        if (type->getNumElements() != offsets.size()
+            || data_layout.getTypeAllocSize(type).getFixedValue()
+                != native_size
+            || data_layout.getABITypeAlign(type).value()
+                != native_alignment) {
+            fail_layout(aggregate);
+        }
+        const auto* layout = data_layout.getStructLayout(type);
+        for (std::size_t index = 0; index < offsets.size(); ++index) {
+            if (layout->getElementOffset(
+                    static_cast<unsigned>(index)) != offsets[index]) {
+                fail_layout(aggregate);
+            }
+        }
+    };
+
+#define FSIM_JIT_SERVICE_OFFSET(name) offsetof(fsim_jit_services_v2, name),
+    constexpr std::array service_offsets {
+        offsetof(fsim_jit_services_v2, abi_version),
+        offsetof(fsim_jit_services_v2, struct_size),
+        FSIM_JIT_SERVICES_V2_CALLBACK_FIELDS(
+            FSIM_JIT_SERVICE_OFFSET)
+    };
+#undef FSIM_JIT_SERVICE_OFFSET
+    if (types.services->getNumElements() != 3U
+        || data_layout.getTypeAllocSize(types.services).getFixedValue()
+            != sizeof(fsim_jit_services_v2)
+        || data_layout.getABITypeAlign(types.services).value()
+            != alignof(fsim_jit_services_v2)) {
+        fail_layout("fsim_jit_services_v2");
+    }
+    const auto* service_layout = data_layout.getStructLayout(types.services);
+    if (service_layout->getElementOffset(0U)
+            != offsetof(fsim_jit_services_v2, abi_version)
+        || service_layout->getElementOffset(1U)
+            != offsetof(fsim_jit_services_v2, struct_size)
+        || service_layout->getElementOffset(2U)
+            != offsetof(fsim_jit_services_v2, read_signal)) {
+        fail_layout("fsim_jit_services_v2");
+    }
+    const auto* callback_array_layout
+        = data_layout.getStructLayout(types.services);
+    const auto callback_base = callback_array_layout->getElementOffset(2U);
+    const auto callback_size = data_layout.getTypeAllocSize(
+        types.service_callbacks).getFixedValue();
+    const auto pointer_stride = data_layout.getPointerSize();
+    if (callback_size
+        != static_cast<std::uint64_t>(service_offsets.size() - 2U)
+            * pointer_stride) {
+        fail_layout("fsim_jit_services_v2 callbacks");
+    }
+    for (std::size_t index = 2U; index < service_offsets.size(); ++index) {
+        const auto callback_index = index - 2U;
+        if (callback_base + callback_index * pointer_stride
+            != service_offsets[index]) {
+            fail_layout("fsim_jit_services_v2 callbacks");
+        }
+    }
+
+    constexpr std::array runtime_instance_offsets {
+        offsetof(fsim_jit_runtime_instance_v2, abi_version),
+        offsetof(fsim_jit_runtime_instance_v2, struct_size),
+        offsetof(fsim_jit_runtime_instance_v2, services),
+        offsetof(fsim_jit_runtime_instance_v2, context),
+        offsetof(fsim_jit_runtime_instance_v2, flags),
+        offsetof(fsim_jit_runtime_instance_v2, reserved),
+        offsetof(fsim_jit_runtime_instance_v2, direct_update_slots),
+        offsetof(fsim_jit_runtime_instance_v2, direct_update_slot_count),
+        offsetof(fsim_jit_runtime_instance_v2, direct_update_reserved),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_aval),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_bval),
+        offsetof(fsim_jit_runtime_instance_v2, direct_read_signals),
+        offsetof(fsim_jit_runtime_instance_v2, direct_read_signal_count),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_count),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_reserved),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_signal_aval),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_signal_bval),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_signal_offsets),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_signal_offset_count),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_word_count),
+        offsetof(fsim_jit_runtime_instance_v2, direct_update_active_words),
+        offsetof(fsim_jit_runtime_instance_v2, direct_update_active_word_count),
+        offsetof(fsim_jit_runtime_instance_v2, direct_update_active_reserved),
+        offsetof(fsim_jit_runtime_instance_v2, static_trigger_mask),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_signal_logic9_plane2),
+        offsetof(fsim_jit_runtime_instance_v2, direct_wide_signal_logic9_plane3),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_logic9_plane0),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_logic9_plane1),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_logic9_plane2),
+        offsetof(fsim_jit_runtime_instance_v2, direct_signal_logic9_plane3),
+        offsetof(fsim_jit_runtime_instance_v2, code_coverage_hit_counters),
+        offsetof(fsim_jit_runtime_instance_v2, code_coverage_counter_values),
+        offsetof(fsim_jit_runtime_instance_v2, code_coverage_hit_count),
+        offsetof(fsim_jit_runtime_instance_v2, code_coverage_counter_count),
+        offsetof(fsim_jit_runtime_instance_v2, fused_activation_words),
+        offsetof(fsim_jit_runtime_instance_v2, fused_activation_word_count),
+        offsetof(fsim_jit_runtime_instance_v2, fused_activation_reserved)
+    };
+    require_struct(
+        types.runtime_instance,
+        runtime_instance_offsets,
+        sizeof(fsim_jit_runtime_instance_v2),
+        alignof(fsim_jit_runtime_instance_v2),
+        "fsim_jit_runtime_instance_v2");
+
+    constexpr std::array update_slot_offsets {
+        offsetof(fsim_jit_update_slot_v2, aval),
+        offsetof(fsim_jit_update_slot_v2, bval),
+        offsetof(fsim_jit_update_slot_v2, logic9_plane2),
+        offsetof(fsim_jit_update_slot_v2, logic9_plane3),
+        offsetof(fsim_jit_update_slot_v2, mask),
+        offsetof(fsim_jit_update_slot_v2, active),
+        offsetof(fsim_jit_update_slot_v2, reserved),
+        offsetof(fsim_jit_update_slot_v2, wide_aval),
+        offsetof(fsim_jit_update_slot_v2, wide_bval),
+        offsetof(fsim_jit_update_slot_v2, wide_mask),
+        offsetof(fsim_jit_update_slot_v2, word_count),
+        offsetof(fsim_jit_update_slot_v2, width)
+    };
+    require_struct(
+        types.update_slot,
+        update_slot_offsets,
+        sizeof(fsim_jit_update_slot_v2),
+        alignof(fsim_jit_update_slot_v2),
+        "fsim_jit_update_slot_v2");
+
+    constexpr std::array frame_offsets {
+        offsetof(fsim_jit_frame_v2, abi_version),
+        offsetof(fsim_jit_frame_v2, struct_size),
+        offsetof(fsim_jit_frame_v2, layout_id_low),
+        offsetof(fsim_jit_frame_v2, layout_id_high),
+        offsetof(fsim_jit_frame_v2, register_count),
+        offsetof(fsim_jit_frame_v2, program_counter),
+        offsetof(fsim_jit_frame_v2, state),
+        offsetof(fsim_jit_frame_v2, last_instruction),
+        offsetof(fsim_jit_frame_v2, register_aval),
+        offsetof(fsim_jit_frame_v2, register_bval),
+        offsetof(fsim_jit_frame_v2, register_initialized),
+        offsetof(fsim_jit_frame_v2, register_logic9_plane2),
+        offsetof(fsim_jit_frame_v2, register_logic9_plane3),
+        offsetof(fsim_jit_frame_v2, native_call_depth),
+        offsetof(fsim_jit_frame_v2, native_call_reserved),
+        offsetof(fsim_jit_frame_v2, native_return_stack)
+    };
+    require_struct(
+        types.frame,
+        frame_offsets,
+        sizeof(fsim_jit_frame_v2),
+        alignof(fsim_jit_frame_v2),
+        "fsim_jit_frame_v2");
+
+    constexpr std::array result_offsets {
+        offsetof(fsim_jit_resume_result_v2, abi_version),
+        offsetof(fsim_jit_resume_result_v2, struct_size),
+        offsetof(fsim_jit_resume_result_v2, status),
+        offsetof(fsim_jit_resume_result_v2, instruction),
+        offsetof(fsim_jit_resume_result_v2, delay)
+    };
+    require_struct(
+        types.resume_result,
+        result_offsets,
+        sizeof(fsim_jit_resume_result_v2),
+        alignof(fsim_jit_resume_result_v2),
+        "fsim_jit_resume_result_v2");
+
+    constexpr std::array projected_offsets {
+        offsetof(fsim_jit_projected_element_v2, aval),
+        offsetof(fsim_jit_projected_element_v2, bval),
+        offsetof(fsim_jit_projected_element_v2, delay)
+    };
+    require_struct(
+        types.projected_element,
+        projected_offsets,
+        sizeof(fsim_jit_projected_element_v2),
+        alignof(fsim_jit_projected_element_v2),
+        "fsim_jit_projected_element_v2");
+
+    constexpr std::array logic9_word_offsets {
+        offsetof(fsim_jit_logic9_word_v2, planes)
+    };
+    require_struct(
+        types.logic9_word,
+        logic9_word_offsets,
+        sizeof(fsim_jit_logic9_word_v2),
+        alignof(fsim_jit_logic9_word_v2),
+        "fsim_jit_logic9_word_v2");
+
+    constexpr std::array logic9_projected_offsets {
+        offsetof(fsim_jit_logic9_projected_element_v2, value),
+        offsetof(fsim_jit_logic9_projected_element_v2, delay)
+    };
+    require_struct(
+        types.logic9_projected_element,
+        logic9_projected_offsets,
+        sizeof(fsim_jit_logic9_projected_element_v2),
+        alignof(fsim_jit_logic9_projected_element_v2),
+        "fsim_jit_logic9_projected_element_v2");
+}
+
+llvm::Value* runtime_instance_field_address(
+    llvm::IRBuilder<>& builder,
+    llvm::StructType* instance_type,
+    llvm::Value* instance,
+    const JitRuntimeInstanceField field)
+{
+    return builder.CreateStructGEP(
+        instance_type, instance, static_cast<unsigned>(field));
+}
+
+llvm::Value* jit_service_callback_address(
+    llvm::IRBuilder<>& builder,
+    llvm::StructType* services_type,
+    llvm::Value* services,
+    const JitServiceField field)
+{
+    auto* callbacks_type = llvm::cast<llvm::ArrayType>(
+        services_type->getElementType(2U));
+    auto* callbacks_address = builder.CreateStructGEP(
+        services_type, services, 2U);
+    return builder.CreateInBoundsGEP(
+        callbacks_type,
+        callbacks_address,
+        { llvm::ConstantInt::get(llvm::Type::getInt32Ty(
+              builder.getContext()), 0U),
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(
+              builder.getContext()), static_cast<unsigned>(field)) });
+}
+
+llvm::Value* load_jit_service_callback(
+    llvm::IRBuilder<>& builder,
+    llvm::StructType* services_type,
+    llvm::Value* services,
+    const JitServiceField field,
+    const std::string_view name)
+{
+    auto* const callback = builder.CreateLoad(
+        llvm::PointerType::getUnqual(builder.getContext()),
+        jit_service_callback_address(builder, services_type, services, field),
+        std::string(name));
+    const auto callback_metadata_kind
+        = builder.getContext().getMDKindID(
+            kJitNoUnwindCallbackMetadata);
+    callback->setMetadata(
+        callback_metadata_kind,
+        llvm::MDNode::get(
+            builder.getContext(),
+            llvm::ArrayRef<llvm::Metadata*> { }));
+    // ABI v2 freezes the service table after publication. This does not
+    // apply to the runtime instance's services pointer or mutable fields.
+    callback->setMetadata(
+        llvm::LLVMContext::MD_invariant_load,
+        llvm::MDNode::get(
+            builder.getContext(),
+            llvm::ArrayRef<llvm::Metadata*> { }));
+    return callback;
 }
 
 void SignalOperationLowerer::mark_direct_update_active(
@@ -209,17 +563,20 @@ bool SignalOperationLowerer::begin_direct_update(
     effective_mask = builder.CreateSelect(
         enabled, mask, constant_i64(context, 0U));
   }
-  const auto merge_plane = [&](const unsigned member, llvm::Value* shifted) {
+  const auto merge_plane = [&](const unsigned member, llvm::Value* shifted,
+                               llvm::Value* previous = nullptr) {
     auto* address = builder.CreateStructGEP(
         direct_update_slot_type, slot, member);
-    auto* previous = builder.CreateLoad(i64, address);
+    if (previous == nullptr) {
+      previous = builder.CreateLoad(i64, address);
+    }
     auto* merged = builder.CreateOr(
         builder.CreateAnd(previous, builder.CreateNot(effective_mask)),
         builder.CreateAnd(shifted, effective_mask));
     builder.CreateStore(merged, address);
   };
-  merge_plane(0, shifted_aval);
-  merge_plane(1, shifted_bval);
+  merge_plane(0, shifted_aval, previous_aval);
+  merge_plane(1, shifted_bval, previous_bval);
   if (source.kind == ValueKind::logic9) {
     auto* shifted_plane2 = offset == 0U
         ? source.logic9_plane2
@@ -663,12 +1020,12 @@ void SignalOperationLowerer::lower(const WriteBlocking& operation) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
         write_logic9_type, write_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          logic9_word_slot});
   } else {
     builder.CreateCall(
         write_type, write_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          source.aval, source.bval});
   }
   branch_to_next();
@@ -680,21 +1037,24 @@ void SignalOperationLowerer::lower(const WriteUpdate& operation) {
   const auto source = coerce_value_kind(
       builder, load_register(builder, registers, operation.source),
       signal_kind);
-  if (begin_direct_update(operation.signal, 0U, source)
+  const auto update_domain = llvm::ConstantInt::get(
+      i32, static_cast<std::uint32_t>(operation.domain));
+  if (operation.domain == runtime::simir::SignalUpdateDomain::generic
+      && begin_direct_update(operation.signal, 0U, source)
       && require_direct_update_slots) {
     return;
   }
   if (signal_kind == ValueKind::logic9) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
-        write_logic9_type, write_update_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-         logic9_word_slot});
+        write_update_logic9_type, write_update_logic9_callback,
+        {context_pointer, callback_signal_id(operation.signal),
+         logic9_word_slot, update_domain});
   } else {
     builder.CreateCall(
-        write_type, write_update_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-         source.aval, source.bval});
+        write_update_type, write_update_callback,
+        {context_pointer, callback_signal_id(operation.signal),
+         source.aval, source.bval, update_domain});
   }
   branch_to_next();
 }
@@ -705,17 +1065,21 @@ void SignalOperationLowerer::lower(const WriteAfter& operation) {
   const auto source = coerce_value_kind(
       builder, load_register(builder, registers, operation.source),
       signal_kind);
+  const auto update_domain = llvm::ConstantInt::get(
+      i32, static_cast<std::uint32_t>(operation.domain));
   if (signal_kind == ValueKind::logic9) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
         write_after_logic9_type, write_after_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-         logic9_word_slot, constant_i64(context, operation.delay)});
+        {context_pointer, callback_signal_id(operation.signal),
+         logic9_word_slot, constant_i64(context, operation.delay),
+         update_domain});
   } else {
     builder.CreateCall(
         write_after_type, write_after_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-         source.aval, source.bval, constant_i64(context, operation.delay)});
+        {context_pointer, callback_signal_id(operation.signal),
+         source.aval, source.bval, constant_i64(context, operation.delay),
+         update_domain});
   }
   branch_to_next();
 }
@@ -730,13 +1094,13 @@ void SignalOperationLowerer::lower(const WriteBlockingSlice& operation) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
         write_slice_logic9_type, write_blocking_slice_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          llvm::ConstantInt::get(i32, operation.offset),
          llvm::ConstantInt::get(i32, source.width), logic9_word_slot});
   } else {
     builder.CreateCall(
         write_slice_type, write_blocking_slice_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          llvm::ConstantInt::get(i32, operation.offset),
          llvm::ConstantInt::get(i32, source.width), source.aval, source.bval});
   }
@@ -749,23 +1113,28 @@ void SignalOperationLowerer::lower(const WriteUpdateSlice& operation) {
   const auto source = coerce_value_kind(
       builder, load_register(builder, registers, operation.source),
       signal_kind);
-  if (begin_direct_update(operation.signal, operation.offset, source)
+  const auto update_domain = llvm::ConstantInt::get(
+      i32, static_cast<std::uint32_t>(operation.domain));
+  if (operation.domain == runtime::simir::SignalUpdateDomain::generic
+      && begin_direct_update(operation.signal, operation.offset, source)
       && require_direct_update_slots) {
     return;
   }
   if (signal_kind == ValueKind::logic9) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
-        write_slice_logic9_type, write_update_slice_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        write_update_slice_logic9_type, write_update_slice_logic9_callback,
+        {context_pointer, callback_signal_id(operation.signal),
          llvm::ConstantInt::get(i32, operation.offset),
-         llvm::ConstantInt::get(i32, source.width), logic9_word_slot});
+         llvm::ConstantInt::get(i32, source.width), logic9_word_slot,
+         update_domain});
   } else {
     builder.CreateCall(
-        write_slice_type, write_update_slice_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        write_update_slice_type, write_update_slice_callback,
+        {context_pointer, callback_signal_id(operation.signal),
          llvm::ConstantInt::get(i32, operation.offset),
-         llvm::ConstantInt::get(i32, source.width), source.aval, source.bval});
+         llvm::ConstantInt::get(i32, source.width), source.aval, source.bval,
+         update_domain});
   }
   branch_to_next();
 }
@@ -776,21 +1145,23 @@ void SignalOperationLowerer::lower(const WriteAfterSlice& operation) {
   const auto source = coerce_value_kind(
       builder, load_register(builder, registers, operation.source),
       signal_kind);
+  const auto update_domain = llvm::ConstantInt::get(
+      i32, static_cast<std::uint32_t>(operation.domain));
   if (signal_kind == ValueKind::logic9) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
         write_after_slice_logic9_type, write_after_slice_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          llvm::ConstantInt::get(i32, operation.offset),
          llvm::ConstantInt::get(i32, source.width), logic9_word_slot,
-         constant_i64(context, operation.delay)});
+         constant_i64(context, operation.delay), update_domain});
   } else {
     builder.CreateCall(
         write_after_slice_type, write_after_slice_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          llvm::ConstantInt::get(i32, operation.offset),
          llvm::ConstantInt::get(i32, source.width), source.aval, source.bval,
-         constant_i64(context, operation.delay)});
+         constant_i64(context, operation.delay), update_domain});
   }
   branch_to_next();
 }
@@ -811,7 +1182,7 @@ void SignalOperationLowerer::lower(const ForceSignalSlice& operation) {
         operation.driving_value
             ? force_driver_signal_slice_logic9_callback
             : force_signal_slice_logic9_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          offset,
          llvm::ConstantInt::get(i32, source.width), logic9_word_slot});
   } else {
@@ -820,7 +1191,7 @@ void SignalOperationLowerer::lower(const ForceSignalSlice& operation) {
         operation.driving_value
             ? force_driver_signal_slice_callback
             : force_signal_slice_callback,
-        {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+        {context_pointer, callback_signal_id(operation.signal),
          offset,
          llvm::ConstantInt::get(i32, source.width), source.aval, source.bval});
   }
@@ -836,7 +1207,7 @@ void SignalOperationLowerer::lower(const ReleaseSignalSlice& operation) {
       operation.driving_value
           ? release_driver_signal_slice_callback
           : release_signal_slice_callback,
-      {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
+      {context_pointer, callback_signal_id(operation.signal),
        offset,
        llvm::ConstantInt::get(i32, operation.width)});
   branch_to_next();
@@ -899,8 +1270,7 @@ void SignalOperationLowerer::lower(
                     write_projected_waveform_logic9_callback,
                     {
                         context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         llvm::ConstantInt::get(i32, first.width),
                         storage,
                         llvm::ConstantInt::get(
@@ -954,7 +1324,7 @@ void SignalOperationLowerer::lower(
                   write_projected_waveform_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
+                      callback_signal_id(operation.signal),
                       llvm::ConstantInt::get(i32, first.width),
                       storage,
                       llvm::ConstantInt::get(
@@ -997,8 +1367,7 @@ void SignalOperationLowerer::lower(
                     write_projected_logic9_callback,
                     {
                         context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         logic9_word_slot,
                         constant_i64(
                             context, operation.delay),
@@ -1016,7 +1385,7 @@ void SignalOperationLowerer::lower(
                   write_projected_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
+                      callback_signal_id(operation.signal),
                       source.aval,
                       source.bval,
                       constant_i64(context, operation.delay),
@@ -1040,6 +1409,8 @@ void SignalOperationLowerer::lower(
                   load_register(
                       builder, registers, operation.source),
                   signal_kind);
+              const auto update_domain = llvm::ConstantInt::get(
+                  i32, static_cast<std::uint32_t>(operation.domain));
               if (signal_kind == ValueKind::logic9) {
                 store_logic9_word(logic9_word_slot, source);
                 builder.CreateCall(
@@ -1047,8 +1418,7 @@ void SignalOperationLowerer::lower(
                     write_inertial_logic9_callback,
                     {
                         context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         logic9_word_slot,
                         constant_i64(
                             context, operation.delays.rise),
@@ -1056,7 +1426,8 @@ void SignalOperationLowerer::lower(
                             context, operation.delays.fall),
                         constant_i64(
                             context,
-                            operation.delays.turnoff)});
+                            operation.delays.turnoff),
+                        update_domain});
                 branch_to_next();
                 return;
               }
@@ -1065,13 +1436,14 @@ void SignalOperationLowerer::lower(
                   write_inertial_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
+                      callback_signal_id(operation.signal),
                       source.aval,
                       source.bval,
                       constant_i64(context, operation.delays.rise),
                       constant_i64(context, operation.delays.fall),
                       constant_i64(
-                          context, operation.delays.turnoff)});
+                          context, operation.delays.turnoff),
+                      update_domain});
               branch_to_next();
             
 }
@@ -1087,7 +1459,41 @@ void SignalOperationLowerer::lower(
                 EncodedValue value;
                 const auto direct = std::ranges::find(
                     direct_read_signals, operation.signal);
-                if (direct != direct_read_signals.end()
+                if (require_direct_read_signals) {
+                  if (direct == direct_read_signals.end()) {
+                    throw LlvmJitUnsupportedError(
+                        "required Logic9 read is absent from the direct signal layout");
+                  }
+                  const auto slot = static_cast<std::uint32_t>(
+                      std::distance(direct_read_signals.begin(), direct));
+                  auto* actual = builder.CreateLoad(
+                      i32,
+                      builder.CreateInBoundsGEP(
+                          i32, direct_read_signal_map,
+                          constant_i64(context, slot)),
+                      "read.logic9.required.actual");
+                  auto* actual_index = builder.CreateZExt(actual, i64);
+                  const auto load_plane = [&](llvm::Value* planes,
+                                               const char* name) {
+                    return builder.CreateLoad(
+                        i64,
+                        builder.CreateInBoundsGEP(
+                            i64, planes, actual_index),
+                        name);
+                  };
+                  value = EncodedValue {
+                      load_plane(direct_signal_logic9_plane0,
+                          "read.logic9.required.plane0"),
+                      load_plane(direct_signal_logic9_plane1,
+                          "read.logic9.required.plane1"),
+                      width,
+                      load_plane(direct_signal_logic9_plane2,
+                          "read.logic9.required.plane2"),
+                      load_plane(direct_signal_logic9_plane3,
+                          "read.logic9.required.plane3"),
+                      ValueKind::logic9
+                  };
+                } else if (direct != direct_read_signals.end()
                     && direct_signal_logic9_plane0 != nullptr
                     && direct_signal_logic9_plane1 != nullptr
                     && direct_signal_logic9_plane2 != nullptr
@@ -1174,7 +1580,7 @@ void SignalOperationLowerer::lower(
                       read_logic9_type,
                       read_logic9_callback,
                       { context_pointer,
-                          llvm::ConstantInt::get(i32, operation.signal),
+                          callback_signal_id(operation.signal),
                           logic9_word_slot });
                   const auto callback_value = load_logic9_word(
                       logic9_word_slot, width);
@@ -1209,10 +1615,12 @@ void SignalOperationLowerer::lower(
                       read_logic9_type,
                       read_logic9_callback,
                       { context_pointer,
-                          llvm::ConstantInt::get(i32, operation.signal),
+                          callback_signal_id(operation.signal),
                           logic9_word_slot });
                   value = load_logic9_word(logic9_word_slot, width);
                 }
+                value = canonicalize_logic9_planes(
+                    builder, value);
                 auto* mask =
                     constant_i64(context, width_mask(width));
                 value.aval = builder.CreateAnd(value.aval, mask);
@@ -1233,7 +1641,45 @@ void SignalOperationLowerer::lower(
               llvm::Value* bval = nullptr;
               const auto direct = std::ranges::find(
                   direct_read_signals, operation.signal);
-              if (direct != direct_read_signals.end()
+              if (require_direct_read_signals) {
+                if (direct == direct_read_signals.end()) {
+                  throw LlvmJitUnsupportedError(
+                      "required Logic4 read is absent from the direct signal layout");
+                }
+                const auto slot = static_cast<std::uint32_t>(
+                    std::distance(direct_read_signals.begin(), direct));
+                auto* actual = builder.CreateLoad(
+                    i32,
+                    builder.CreateInBoundsGEP(
+                        i32, direct_read_signal_map,
+                        constant_i64(context, slot)),
+                    "read.logic4.required.actual");
+                if (width <= 64U) {
+                  mark_tiered_direct_read_load(actual, operation.signal, 0U);
+                }
+                auto* actual_index = builder.CreateZExt(actual, i64);
+                aval = builder.CreateLoad(
+                    i64,
+                    builder.CreateInBoundsGEP(
+                        i64, direct_signal_aval, actual_index),
+                    "read.logic4.required.aval");
+                if (width <= 64U) {
+                  mark_tiered_direct_read_load(aval, operation.signal, 1U);
+                }
+                if (registers[operation.destination].known_logic4) {
+                  bval = constant_i64(context, 0U);
+                } else {
+                  bval = builder.CreateLoad(
+                      i64,
+                      builder.CreateInBoundsGEP(
+                          i64, direct_signal_bval, actual_index),
+                      "read.logic4.required.bval");
+                  if (width <= 64U) {
+                    mark_tiered_direct_read_load(
+                        bval, operation.signal, 2U);
+                  }
+                }
+              } else if (direct != direct_read_signals.end()
                   && direct_signal_aval != nullptr
                   && direct_signal_bval != nullptr
                   && direct_read_signal_map != nullptr
@@ -1302,7 +1748,7 @@ void SignalOperationLowerer::lower(
                     read_type,
                     read_callback,
                     { context_pointer,
-                        llvm::ConstantInt::get(i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         read_bval_slot },
                     "read.callback.aval");
                 auto* callback_bval = builder.CreateLoad(
@@ -1326,7 +1772,7 @@ void SignalOperationLowerer::lower(
                     read_type,
                     read_callback,
                     { context_pointer,
-                        llvm::ConstantInt::get(i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         read_bval_slot },
                     "aval");
                 bval = builder.CreateLoad(
@@ -1350,8 +1796,7 @@ void SignalOperationLowerer::lower(
                   signal_event_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(
-                          i32, operation.signal)},
+                      callback_signal_id(operation.signal)},
                   "signal.event");
               store_register(
                   builder, registers, operation.destination,
@@ -1376,14 +1821,16 @@ void SignalOperationLowerer::lower(
                     signal_last_value_logic9_callback,
                     {
                         context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         logic9_word_slot});
+                const auto value = canonicalize_logic9_planes(
+                    builder,
+                    load_logic9_word(logic9_word_slot, width));
                 store_register(
                     builder,
                     registers,
                     operation.destination,
-                    load_logic9_word(logic9_word_slot, width));
+                    value);
                 branch_to_next();
                 return;
               }
@@ -1394,7 +1841,7 @@ void SignalOperationLowerer::lower(
                   signal_last_value_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
+                      callback_signal_id(operation.signal),
                       read_bval_slot},
                   "signal.last_value.aval");
               auto* bval = builder.CreateLoad(
@@ -1417,7 +1864,7 @@ void SignalOperationLowerer::lower(
                   signal_last_event_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal)},
+                      callback_signal_id(operation.signal)},
                   "signal.last_event");
               store_register(
                   builder, registers, operation.destination,
@@ -1483,7 +1930,7 @@ void SignalOperationLowerer::lower(
                   signal_active_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal)},
+                      callback_signal_id(operation.signal)},
                   "signal.active");
               store_register(
                   builder, registers, operation.destination,
@@ -1502,7 +1949,7 @@ void SignalOperationLowerer::lower(
                   signal_last_active_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal)},
+                      callback_signal_id(operation.signal)},
                   "signal.last_active");
               store_register(
                   builder, registers, operation.destination,
@@ -1520,7 +1967,7 @@ void SignalOperationLowerer::lower(
                   signal_driving_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal)},
+                      callback_signal_id(operation.signal)},
                   "signal.driving");
               store_register(
                   builder, registers, operation.destination,
@@ -1544,14 +1991,16 @@ void SignalOperationLowerer::lower(
                     signal_driving_value_logic9_callback,
                     {
                         context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
+                        callback_signal_id(operation.signal),
                         logic9_word_slot});
+                const auto value = canonicalize_logic9_planes(
+                    builder,
+                    load_logic9_word(logic9_word_slot, width));
                 store_register(
                     builder,
                     registers,
                     operation.destination,
-                    load_logic9_word(logic9_word_slot, width));
+                    value);
                 branch_to_next();
                 return;
               }
@@ -1562,7 +2011,7 @@ void SignalOperationLowerer::lower(
                   signal_driving_value_callback,
                   {
                       context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
+                      callback_signal_id(operation.signal),
                       read_bval_slot},
                   "signal.driving_value.aval");
               auto* bval = builder.CreateLoad(

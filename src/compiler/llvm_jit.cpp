@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/compiler/llvm_jit.hpp"
 #include "llvm_jit_impl.hpp"
+#include "llvm_jit_compilation_contexts.hpp"
+#include "llvm_jit_codegen_preparation.hpp"
 #include "llvm_jit_internal.hpp"
+#include "llvm_jit_fast_isel_census.hpp"
+#include "llvm_jit_llvm_args.hpp"
+#include "native_cache_schema.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/support/bounded_bytes.hpp"
@@ -21,6 +26,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -51,6 +57,7 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -82,14 +89,14 @@ namespace llvm_detail {
     constexpr std::array<std::byte, 8> kJitMetadataMagic {
         std::byte { 'F' }, std::byte { 'S' }, std::byte { 'I' },
         std::byte { 'M' }, std::byte { 'J' }, std::byte { 'M' },
-        std::byte { '3' }, std::byte { 0 }
+        std::byte { '5' }, std::byte { 0 }
     };
     constexpr std::array<std::byte, 8> kJitCacheRecordMagic {
         std::byte { 'F' }, std::byte { 'S' }, std::byte { 'I' },
         std::byte { 'M' }, std::byte { 'J' }, std::byte { 'O' },
         std::byte { '3' }, std::byte { 0 }
     };
-    constexpr std::uint32_t kJitMetadataSchema = 2U;
+    constexpr std::uint32_t kJitMetadataSchema = 9U;
     constexpr std::uint32_t kJitCacheRecordSchema = 1U;
     constexpr std::size_t kMaximumJitMetadataBytes = 64U * 1024U * 1024U;
 
@@ -123,6 +130,21 @@ namespace llvm_detail {
             append_u32(static_cast<std::uint32_t>(values.size()));
             for (const auto value : values) {
                 append_u32(value);
+            }
+        }
+
+        void append_u8_vector(const std::span<const std::uint8_t> values)
+        {
+            if (values.size() > std::numeric_limits<std::uint32_t>::max()) {
+                throw LlvmJitError("LLVM cache metadata vector is too large");
+            }
+            append_u32(static_cast<std::uint32_t>(values.size()));
+            for (const auto value : values) {
+                if (value > 1U) {
+                    throw LlvmJitError(
+                        "LLVM cache metadata register persistence is invalid");
+                }
+                append_u8(value);
             }
         }
 
@@ -204,6 +226,13 @@ namespace llvm_detail {
             return reader_.take(expected.size(), ignored);
         }
 
+        [[nodiscard]] bool read_bytes(
+            const std::size_t size,
+            std::span<const std::byte>& result)
+        {
+            return reader_.take(size, result);
+        }
+
         [[nodiscard]] bool read_u32_vector(
             std::vector<std::uint32_t>& values)
         {
@@ -221,6 +250,22 @@ namespace llvm_detail {
             return true;
         }
 
+        [[nodiscard]] bool read_u8_vector(
+            std::vector<std::uint8_t>& values)
+        {
+            std::uint32_t count { };
+            if (!read_u32(count) || count > reader_.remaining()) {
+                return false;
+            }
+            values.resize(count);
+            for (auto& value : values) {
+                if (!read_u8(value) || value > 1U) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         [[nodiscard]] bool finished() const noexcept
         {
             return reader_.finished();
@@ -230,6 +275,43 @@ namespace llvm_detail {
         std::span<const std::byte> bytes_;
         support::BoundedByteReader reader_;
     };
+
+    [[nodiscard]] bool cache_metadata_matches_identity(
+        const std::span<const std::byte> metadata,
+        const std::string_view expected_identity)
+    {
+        if (metadata.size() < 37U
+            || metadata.size() > kMaximumJitMetadataBytes) {
+            return false;
+        }
+        JitMetadataReader header { metadata };
+        std::uint32_t schema { };
+        std::uint32_t encoded_size { };
+        if (!header.read_bytes(kJitMetadataMagic)
+            || !header.read_u32(schema)
+            || schema != kJitMetadataSchema
+            || !header.read_u32(encoded_size)
+            || encoded_size < 37U
+            || encoded_size > metadata.size()) {
+            return false;
+        }
+
+        JitMetadataReader reader { metadata.first(encoded_size) };
+        std::uint32_t cache_identity_size { };
+        std::span<const std::byte> cache_identity;
+        if (!reader.read_bytes(kJitMetadataMagic)
+            || !reader.read_u32(schema)
+            || !reader.read_u32(encoded_size)
+            || !reader.read_u32(cache_identity_size)
+            || !reader.read_bytes(cache_identity_size, cache_identity)) {
+            return false;
+        }
+        const auto expected = std::span<const std::byte> {
+            reinterpret_cast<const std::byte*>(expected_identity.data()),
+            expected_identity.size()
+        };
+        return std::ranges::equal(cache_identity, expected);
+    }
 
     struct JitCacheRecordView {
         std::span<const std::byte> metadata;
@@ -348,11 +430,11 @@ namespace llvm_detail {
     using runtime::simir::WriteUpdateDynamicPartSlice;
     using runtime::simir::WriteUpdateDynamicSlice;
     using runtime::simir::WriteUpdateSlice;
-    using NativeProcess = fsim_jit_process_v1;
+    using NativeProcess = fsim_jit_process_v2;
     using NativeCohort = std::uint32_t(
-        const fsim_jit_runtime_v1* const*,
-        fsim_jit_frame_v1* const*,
-        fsim_jit_resume_result_v1* const*,
+        const fsim_jit_runtime_instance_v2* const*,
+        fsim_jit_frame_v2* const*,
+        fsim_jit_resume_result_v2* const*,
         std::uint32_t*, std::uint8_t* const*, std::uint8_t* const*,
         std::uint8_t* const*, std::uint8_t* const*, std::uint32_t);
 
@@ -362,6 +444,26 @@ namespace llvm_detail {
         const std::span<const std::uint32_t> signal_widths,
         const std::span<const ValueKind> signal_value_kinds)
     {
+        const bool has_tagged_scheduling = process.scheduling_domain
+                != runtime::simir::ProcessSchedulingDomain::generic
+            || std::ranges::any_of(
+                process.operations,
+                [](const auto& stored) {
+                    return runtime::simir::visit_operation(
+                        [](const auto& operation) {
+                            if constexpr (requires { operation.domain; }) {
+                                return operation.domain
+                                    != runtime::simir::SignalUpdateDomain::generic;
+                            }
+                            return false;
+                        },
+                        stored);
+                });
+        if (has_tagged_scheduling) {
+            // Per-operation callbacks preserve the ordering between generic
+            // and tagged updates in mixed-domain processes.
+            return {};
+        }
         const auto* const profiled_process = std::getenv(
             "FSIM_PROFILE_DIRECT_UPDATE_PROCESS");
         const bool profile = profiled_process != nullptr
@@ -557,8 +659,7 @@ namespace llvm_detail {
                 }
                 const auto kind = signal_value_kinds[read->signal];
                 if (kind != ValueKind::logic4
-                    && (kind != ValueKind::logic9
-                        || signal_widths[read->signal] > 64U)) {
+                    && kind != ValueKind::logic9) {
                     continue;
                 }
             }
@@ -601,6 +702,8 @@ namespace llvm_detail {
             ++result.functions;
             for (const auto& block : function) {
                 ++result.blocks;
+                result.max_block_instructions = std::max(
+                    result.max_block_instructions, block.size());
                 for (const auto& instruction : block) {
                     ++result.instructions;
                     result.allocas += llvm::isa<llvm::AllocaInst>(instruction);
@@ -610,10 +713,68 @@ namespace llvm_detail {
                     result.branches += llvm::isa<llvm::BranchInst>(instruction);
                     result.switches += llvm::isa<llvm::SwitchInst>(instruction);
                     result.phis += llvm::isa<llvm::PHINode>(instruction);
+                    result.returns += llvm::isa<llvm::ReturnInst>(instruction);
+                    // Include operand widths: stores, compares and truncations
+                    // can consume a wide integer without producing one.
+                    std::size_t integer_width { };
+                    const auto include_type = [&](const llvm::Type* type) {
+                        if (const auto* integer
+                            = llvm::dyn_cast<llvm::IntegerType>(type)) {
+                            integer_width = std::max(integer_width,
+                                static_cast<std::size_t>(
+                                    integer->getBitWidth()));
+                        }
+                    };
+                    include_type(instruction.getType());
+                    for (const auto& operand : instruction.operands()) {
+                        include_type(operand->getType());
+                    }
+                    const auto* const vector_type
+                        = llvm::dyn_cast<llvm::FixedVectorType>(
+                            instruction.getType());
+                    const auto* const vector_element = vector_type == nullptr
+                        ? nullptr
+                        : llvm::dyn_cast<llvm::IntegerType>(
+                              vector_type->getElementType());
+                    if (vector_type != nullptr
+                        && vector_type->getNumElements() == 4U
+                        && vector_element != nullptr
+                        && vector_element->getBitWidth() == 64U) {
+                        const std::string_view opcode {
+                            instruction.getOpcodeName() };
+                        if (opcode == "and" || opcode == "or"
+                            || opcode == "xor") {
+                            const auto vector_opcode
+                                = opcode == "xor"
+                                    && instruction.getName().starts_with(
+                                        "wide.bitwise.not")
+                                ? std::string { "not" }
+                                : std::string { opcode };
+                            ++result.wide_vector_opcodes[vector_opcode];
+                        }
+                    }
+                    result.max_integer_width = std::max(
+                        result.max_integer_width, integer_width);
+                    if (integer_width > 64U) {
+                        ++result.wide_integer_opcodes[
+                            instruction.getOpcodeName()];
+                    }
                 }
             }
         }
         return result;
+    }
+
+    [[nodiscard]] std::uint64_t ir_instruction_count(
+        const llvm::Module& module) noexcept
+    {
+        std::uint64_t count { };
+        for (const auto& function : module) {
+            for (const auto& block : function) {
+                count += block.size();
+            }
+        }
+        return count;
     }
 
     void dump_ir(const llvm::Module& module, const char* path)
@@ -643,164 +804,154 @@ namespace llvm_detail {
             << " " << phase << "_calls=" << shape.calls
             << " " << phase << "_branches=" << shape.branches
             << " " << phase << "_switches=" << shape.switches
-            << " " << phase << "_phis=" << shape.phis;
+            << " " << phase << "_phis=" << shape.phis
+            << " " << phase << "_returns=" << shape.returns
+            << " " << phase << "_max_block_instructions="
+            << shape.max_block_instructions
+            << " " << phase << "_max_integer_width="
+            << shape.max_integer_width;
+        for (const auto& [opcode, count] : shape.wide_integer_opcodes) {
+            stream << " " << phase << "_wide_" << opcode << '=' << count;
+        }
+        for (const auto& [opcode, count] : shape.wide_vector_opcodes) {
+            stream << " " << phase << "_vector_" << opcode << '=' << count;
+        }
     }
 
-    static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
-    static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
-    static_assert(std::is_standard_layout_v<fsim_jit_resume_result_v1>);
-    static_assert(sizeof(std::uint32_t) == 4);
-    static_assert(sizeof(std::uint64_t) == 8);
-    static_assert(offsetof(fsim_jit_runtime_v1, abi_version) == 0);
-    static_assert(offsetof(fsim_jit_runtime_v1, struct_size) == 4);
-    static_assert(offsetof(fsim_jit_runtime_v1, context) == 8);
-    static_assert(offsetof(fsim_jit_runtime_v1, read_signal) == 16);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_signal) == 24);
-    static_assert(offsetof(fsim_jit_runtime_v1, assert_failed) == 32);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_update) == 40);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_after) == 48);
-    static_assert(offsetof(fsim_jit_runtime_v1, flags) == 56);
-    static_assert(offsetof(fsim_jit_runtime_v1, reserved) == 60);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_signal_slice) == 64);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_update_slice) == 72);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_after_slice) == 80);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_event) == 88);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_last_value) == 96);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120);
-    static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_formatted) == 144);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_time) == 152);
-    static_assert(offsetof(fsim_jit_runtime_v1, install_monitor) == 160);
-    static_assert(offsetof(fsim_jit_runtime_v1, control_monitor) == 168);
-    static_assert(offsetof(fsim_jit_runtime_v1, random_value) == 176);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_inertial) == 184);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, write_inertial_slice) == 192);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_projected) == 200);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, write_projected_slice) == 208);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, write_projected_waveform) == 216);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, write_projected_waveform_slice) == 224);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, read_signal_logic9) == 232);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, write_formatted_logic9) == 344);
-    static_assert(offsetof(fsim_jit_runtime_v1, load_string) == 352);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, write_string_output) == 424);
-    static_assert(offsetof(fsim_jit_runtime_v1, file_open) == 432);
-    static_assert(offsetof(fsim_jit_runtime_v1, file_error) == 472);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, container_operation) == 480);
-    static_assert(offsetof(fsim_jit_runtime_v1, force_signal_slice) == 488);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, force_signal_slice_logic9) == 496);
-    static_assert(offsetof(fsim_jit_runtime_v1, release_signal_slice) == 504);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_last_active) == 512);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_driving) == 520);
-    static_assert(offsetof(fsim_jit_runtime_v1, signal_driving_value) == 528);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, signal_driving_value_logic9) == 536);
-    static_assert(offsetof(fsim_jit_runtime_v1, read_simulation_time) == 544);
-    static_assert(offsetof(fsim_jit_runtime_v1, vital_timing_check) == 552);
-    static_assert(offsetof(fsim_jit_runtime_v1, vital_delay) == 560);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, force_driver_signal_slice) == 568);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, execute_signal_operation) == 592);
-    static_assert(offsetof(fsim_jit_runtime_v1, container_read_word) == 600);
-    static_assert(offsetof(fsim_jit_runtime_v1, container_write_word) == 608);
-    static_assert(offsetof(fsim_jit_runtime_v1, container_read_packed) == 616);
-    static_assert(offsetof(fsim_jit_runtime_v1, container_write_packed) == 624);
-    static_assert(offsetof(fsim_jit_runtime_v1, read_signal_packed) == 632);
-    static_assert(offsetof(fsim_jit_runtime_v1, write_signal_packed) == 640);
-    static_assert(offsetof(fsim_jit_runtime_v1, direct_update_slots) == 648);
-    static_assert(offsetof(fsim_jit_runtime_v1, direct_update_slot_count) == 656);
-    static_assert(offsetof(fsim_jit_runtime_v1, direct_signal_aval) == 664);
-    static_assert(offsetof(fsim_jit_runtime_v1, direct_signal_bval) == 672);
-    static_assert(offsetof(fsim_jit_runtime_v1, direct_read_signals) == 680);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_read_signal_count) == 688);
-    static_assert(offsetof(fsim_jit_runtime_v1, direct_signal_count) == 692);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_wide_signal_aval) == 704);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_wide_signal_bval) == 712);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_wide_signal_offsets) == 720);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_wide_signal_offset_count) == 728);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_wide_word_count) == 732);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_update_active_words) == 736);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_update_active_word_count) == 744);
-    static_assert(offsetof(fsim_jit_runtime_v1, static_trigger_mask) == 752);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, read_signal_dynamic_part) == 760);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1,
-            direct_wide_signal_logic9_plane2)
-        == 768);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1,
-            direct_wide_signal_logic9_plane3)
-        == 776);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane0) == 784);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane1) == 792);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane2) == 800);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, direct_signal_logic9_plane3) == 808);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters) == 816);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, code_coverage_counter_values) == 824);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, code_coverage_hit_count) == 832);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, code_coverage_counter_count) == 836);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, sample_coverage) == 848);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, execute_class_property_operation)
-        == 856);
-    static_assert(
-        offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864);
-    static_assert(offsetof(fsim_jit_runtime_v1, fused_activation_words) == 872);
-    static_assert(offsetof(fsim_jit_runtime_v1, fused_activation_word_count) == 880);
-    static_assert(offsetof(fsim_jit_runtime_v1, fused_activation_reserved) == 884);
-    static_assert(sizeof(fsim_jit_runtime_v1) == 888);
-    static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
-    static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
-    static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
-    static_assert(sizeof(fsim_jit_update_slot_v1) == 80);
-    static_assert(sizeof(fsim_jit_frame_v1) == 344);
-    static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
-    static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
-    static_assert(offsetof(fsim_jit_frame_v1, register_initialized) == 56);
-    static_assert(
-        offsetof(fsim_jit_frame_v1, register_logic9_plane2) == 64);
-    static_assert(
-        offsetof(fsim_jit_frame_v1, register_logic9_plane3) == 72);
-    static_assert(offsetof(fsim_jit_frame_v1, native_call_depth) == 80);
-    static_assert(offsetof(fsim_jit_frame_v1, native_call_reserved) == 84);
-    static_assert(offsetof(fsim_jit_frame_v1, native_return_stack) == 88);
-    static_assert(sizeof(fsim_jit_resume_result_v1) == 24);
+    static_assert(std::is_standard_layout_v<fsim_jit_services_v2>);
+    static_assert(std::is_standard_layout_v<fsim_jit_runtime_instance_v2>);
+    static_assert(std::is_standard_layout_v<fsim_jit_frame_v2>);
+    static_assert(std::is_standard_layout_v<fsim_jit_resume_result_v2>);
+    static_assert(sizeof(std::uint32_t) == 4U);
+    static_assert(sizeof(std::uint64_t) == 8U);
+    static_assert(sizeof(fsim_jit_logic9_word_v2) == 32U);
+    static_assert(sizeof(fsim_jit_projected_element_v2) == 24U);
+    static_assert(sizeof(fsim_jit_update_slot_v2) == 80U);
+
+    class TieredIRCompiler final
+        : public llvm::orc::IRCompileLayer::IRCompiler {
+    public:
+        TieredIRCompiler(
+            llvm::orc::JITTargetMachineBuilder machine_builder,
+            llvm::ObjectCache* const object_cache,
+            const bool profile_modules,
+            std::shared_ptr<LlvmCompilationContexts> contexts)
+            : IRCompiler(
+                  llvm::orc::irManglingOptionsFromTargetOptions(
+                      machine_builder.getOptions()))
+            , none_(make_compiler(
+                  machine_builder, object_cache,
+                  llvm::CodeGenOptLevel::None))
+            , less_(make_compiler(
+                  std::move(machine_builder), object_cache,
+                  llvm::CodeGenOptLevel::Less))
+            , profile_modules_(profile_modules)
+            , contexts_(std::move(contexts))
+        {
+        }
+
+        llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>> operator()(
+            llvm::Module& module) override
+        {
+            const auto tier_value = read_flag(
+                module, "fsim.backend-codegen-tier");
+            const auto eligibility_value = read_flag(
+                module, "fsim.backend-tier-eligible");
+            const auto instruction_count = read_flag(
+                module, "fsim.backend-ir-instruction-count");
+            const auto tier_selection_count = read_flag(
+                module, "fsim.backend-tier-selection-ir-instruction-count");
+            if (!tier_value && !eligibility_value && !instruction_count
+                && !tier_selection_count) {
+                return compile_with(*none_, module, llvm::CodeGenOptLevel::None);
+            }
+            if (!tier_value || !eligibility_value || !instruction_count
+                || !tier_selection_count
+                || *tier_value
+                    > static_cast<std::uint64_t>(LlvmBackendTier::less)
+                || *eligibility_value > 1U
+                || *instruction_count != ir_instruction_count(module)
+                || *instruction_count > *tier_selection_count
+                || (static_cast<LlvmBackendTier>(*tier_value)
+                        == LlvmBackendTier::none
+                    && *instruction_count != *tier_selection_count)) {
+                return llvm::createStringError(
+                    llvm::inconvertibleErrorCode(),
+                    "LLVM process module has invalid backend-tier proof");
+            }
+            const auto tier = static_cast<LlvmBackendTier>(*tier_value);
+            const bool eligible = *eligibility_value != 0U;
+            if (!valid_backend_tier_proof(
+                    tier, eligible, *tier_selection_count)) {
+                return llvm::createStringError(
+                    llvm::inconvertibleErrorCode(),
+                    "LLVM process module backend tier disagrees with its IR "
+                    "instruction-count proof");
+            }
+            auto& compiler = tier == LlvmBackendTier::less
+                ? *less_ : *none_;
+            return compile_with(compiler, module,
+                tier == LlvmBackendTier::less
+                    ? llvm::CodeGenOptLevel::Less : llvm::CodeGenOptLevel::None);
+        }
+
+    private:
+        [[nodiscard]] static std::unique_ptr<
+            llvm::orc::IRCompileLayer::IRCompiler>
+        make_compiler(
+            llvm::orc::JITTargetMachineBuilder machine_builder,
+            llvm::ObjectCache* const object_cache,
+            const llvm::CodeGenOptLevel optimization)
+        {
+            machine_builder.setCodeGenOptLevel(optimization);
+            return std::make_unique<llvm::orc::ConcurrentIRCompiler>(
+                std::move(machine_builder), object_cache);
+        }
+
+        [[nodiscard]] static std::optional<std::uint64_t> read_flag(
+            const llvm::Module& module,
+            const llvm::StringRef name)
+        {
+            const auto* const metadata = module.getModuleFlag(name);
+            if (metadata == nullptr) {
+                return std::nullopt;
+            }
+            const auto* const integer
+                = llvm::mdconst::dyn_extract<llvm::ConstantInt>(metadata);
+            if (integer == nullptr || integer->getValue().getActiveBits() > 64U) {
+                return std::nullopt;
+            }
+            return integer->getZExtValue();
+        }
+
+        [[nodiscard]] llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
+        compile_with(
+            llvm::orc::IRCompileLayer::IRCompiler& compiler,
+            llvm::Module& module, const llvm::CodeGenOptLevel optimization)
+        {
+            // The tier proof was checked against optimized IR above. Keep
+            // Less unchanged so preparation cannot bypass its instruction cap.
+            if (optimization == llvm::CodeGenOptLevel::None
+                && prepare_fast_isel_module(module)) {
+                std::string error;
+                llvm::raw_string_ostream output { error };
+                if (llvm::verifyModule(module, &output)) {
+                    return llvm::createStringError(
+                        llvm::inconvertibleErrorCode(),
+                        "LLVM codegen preparation produced invalid IR: " + error);
+                }
+            }
+            FastIselCensus census { module, profile_modules_ };
+            auto result = contexts_->compile(module, optimization, compiler);
+            census.report(static_cast<bool>(result), llvm::errs());
+            return result;
+        }
+
+        std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler> none_;
+        std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler> less_;
+        bool profile_modules_ { };
+        std::shared_ptr<LlvmCompilationContexts> contexts_;
+    };
 
     class PersistentLlvmObjectCache final : public LlvmObjectCache {
     public:
@@ -870,14 +1021,22 @@ namespace llvm_detail {
             if (module == nullptr || !valid_cache_key(module->getModuleIdentifier())) {
                 return nullptr;
             }
+            bool preflight_miss { };
             {
                 const std::lock_guard lock { preflight_mutex_ };
-                if (preflight_misses_.erase(module->getModuleIdentifier()) != 0U) {
-                    misses_.fetch_add(1, std::memory_order_relaxed);
-                    return nullptr;
-                }
+                preflight_miss = preflight_misses_.erase(
+                    module->getModuleIdentifier()) != 0U;
             }
-            return load_object(module->getModuleIdentifier(), true);
+            if (!preflight_miss) {
+                // Every cacheable module is checked by preflight before it is
+                // added to ORC. A hit is inserted directly with addObjectFile;
+                // this hook is only the compile-through path after a miss.
+                // Returning no object here prevents an unvalidated second load.
+                load_failures_.fetch_add(1, std::memory_order_relaxed);
+                return nullptr;
+            }
+            misses_.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
         }
 
         [[nodiscard]] std::unique_ptr<llvm::MemoryBuffer>
@@ -888,12 +1047,43 @@ namespace llvm_detail {
             if (!valid_cache_key(key)) {
                 return nullptr;
             }
-            auto object = load_object(key, false, metadata);
+            bool cache_identity_mismatch { };
+            auto object = load_object(
+                key, false, metadata, &cache_identity_mismatch, false);
+            if (cache_identity_mismatch) {
+                throw LlvmJitError(
+                    "cached LLVM native object has incompatible ABI, semantics, "
+                    "optimization-tier, or target identity");
+            }
             if (!object) {
                 const std::lock_guard lock { preflight_mutex_ };
                 preflight_misses_.emplace(key);
+            } else {
+                const std::lock_guard lock { preflight_mutex_ };
+                preflight_misses_.erase(std::string { key });
             }
             return object;
+        }
+
+        void accept_preflight_hit(const std::string_view key) override
+        {
+            {
+                const std::lock_guard lock { preflight_mutex_ };
+                const auto found = std::ranges::find(preflight_misses_, key);
+                if (found != preflight_misses_.end()) {
+                    preflight_misses_.erase(found);
+                }
+            }
+            hits_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void discard_preflight(const std::string_view key) override
+        {
+            const std::lock_guard lock { preflight_mutex_ };
+            const auto found = std::ranges::find(preflight_misses_, key);
+            if (found != preflight_misses_.end()) {
+                preflight_misses_.erase(found);
+            }
         }
 
         void stage_metadata(
@@ -930,8 +1120,13 @@ namespace llvm_detail {
         load_object(
             const std::string_view key,
             const bool record_miss,
-            std::vector<std::byte>* const metadata = nullptr)
+            std::vector<std::byte>* const metadata = nullptr,
+            bool* const cache_identity_mismatch = nullptr,
+            const bool record_hit = true)
         {
+            if (cache_identity_mismatch != nullptr) {
+                *cache_identity_mismatch = false;
+            }
             try {
                 std::error_code error;
                 auto bytes = storage_.load(key, error);
@@ -956,6 +1151,13 @@ namespace llvm_detail {
                     rejected_entries_.fetch_add(1, std::memory_order_relaxed);
                     return nullptr;
                 }
+                if (!cache_metadata_matches_identity(record->metadata, key)) {
+                    if (cache_identity_mismatch != nullptr) {
+                        *cache_identity_mismatch = true;
+                    }
+                    rejected_entries_.fetch_add(1, std::memory_order_relaxed);
+                    return nullptr;
+                }
 
                 if (metadata != nullptr) {
                     metadata->assign(
@@ -967,7 +1169,9 @@ namespace llvm_detail {
                 };
                 auto result = llvm::MemoryBuffer::getMemBufferCopy(
                     data, std::string { key } + ".o");
-                hits_.fetch_add(1, std::memory_order_relaxed);
+                if (record_hit) {
+                    hits_.fetch_add(1, std::memory_order_relaxed);
+                }
                 return result;
             } catch (...) {
                 if (record_miss) {
@@ -1028,6 +1232,7 @@ namespace llvm_detail {
 
     void initialize_native_target()
     {
+        static_cast<void>(initialize_llvm_arguments());
         std::call_once(native_target_once, [] {
             if (llvm::InitializeNativeTarget()) {
                 native_target_error = "LLVM failed to initialize the native target";
@@ -1120,7 +1325,13 @@ LlvmJitGeneratedRuntimeError::LlvmJitGeneratedRuntimeError(
 }
 
 std::vector<std::byte> LlvmJit::Impl::encode_module_metadata(
-    const std::span<const ProcessInfo> processes)
+    const std::span<const ProcessInfo> processes,
+    const std::string_view cache_identity,
+    const llvm_detail::LlvmBackendTier backend_tier,
+    const bool tier_eligible,
+    const std::uint64_t tier_selection_instruction_count,
+    const std::uint64_t optimized_instruction_count,
+    const llvm_detail::TieredReadDedupStatistics read_dedup_statistics)
 {
     if (processes.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw LlvmJitError("LLVM cache metadata has too many processes");
@@ -1130,6 +1341,22 @@ std::vector<std::byte> LlvmJit::Impl::encode_module_metadata(
     writer.append_u32(kJitMetadataSchema);
     constexpr std::size_t encoded_size_offset = 12U;
     writer.append_u32(0U);
+    if (cache_identity.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw LlvmJitError("LLVM cache identity is too large");
+    }
+    writer.append_u32(static_cast<std::uint32_t>(cache_identity.size()));
+    writer.append_bytes(std::span<const std::byte> {
+        reinterpret_cast<const std::byte*>(cache_identity.data()),
+        cache_identity.size()
+    });
+    writer.append_u32(static_cast<std::uint32_t>(backend_tier));
+    writer.append_u8(tier_eligible ? 1U : 0U);
+    writer.append_u64(tier_selection_instruction_count);
+    writer.append_u64(optimized_instruction_count);
+    writer.append_u64(read_dedup_statistics.marked_loads);
+    writer.append_u64(read_dedup_statistics.eliminated_loads);
+    writer.append_u64(read_dedup_statistics.marked_value_loads);
+    writer.append_u64(read_dedup_statistics.eliminated_value_loads);
     writer.append_u32(static_cast<std::uint32_t>(processes.size()));
     for (const auto& process : processes) {
         const auto& frame = process.frame_layout;
@@ -1144,11 +1371,20 @@ std::vector<std::byte> LlvmJit::Impl::encode_module_metadata(
         writer.append_u32_vector(frame.register_word_offsets);
         writer.append_u32_vector(frame.direct_read_signals);
         writer.append_u32_vector(frame.direct_update_signals);
+        writer.append_u8(
+            frame.signal_callback_ids_are_actual ? 1U : 0U);
+        writer.append_u32(frame.signal_callback_operand_word_base);
+        writer.append_u32_vector(frame.signal_callback_operands);
         writer.append_u32(process.operation_count);
         for (const auto flag : ProcessInfo::flags) {
             writer.append_u8(process.*flag ? 1U : 0U);
         }
         writer.append_u32_vector(process.entry_points);
+        if (frame.register_values_persistent.size() != frame.register_count) {
+            throw LlvmJitError(
+                "LLVM cache metadata register persistence has the wrong size");
+        }
+        writer.append_u8_vector(frame.register_values_persistent);
     }
     if (writer.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw LlvmJitError("LLVM cache metadata is too large");
@@ -1158,13 +1394,49 @@ std::vector<std::byte> LlvmJit::Impl::encode_module_metadata(
     return writer.finish();
 }
 
-std::optional<std::vector<LlvmJit::Impl::ProcessInfo>>
+void LlvmJit::Impl::populate_direct_read_metadata(
+    ProcessInfo& process,
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const runtime::simir::ValueKind> signal_value_kinds)
+{
+    const auto count = process.frame_layout.direct_read_signals.size();
+    process.direct_read_widths.clear();
+    process.direct_read_value_kinds.clear();
+    process.direct_read_widths.reserve(count);
+    process.direct_read_value_kinds.reserve(count);
+    for (const auto signal : process.frame_layout.direct_read_signals) {
+        if (signal >= signal_widths.size() || signal_widths[signal] == 0U
+            || (!signal_value_kinds.empty()
+                && signal >= signal_value_kinds.size())) {
+            throw LlvmJitError(
+                "LLVM direct-read signal metadata is unavailable");
+        }
+        const auto kind = signal_value_kinds.empty()
+            ? runtime::simir::ValueKind::logic4
+            : signal_value_kinds[signal];
+        if (kind != runtime::simir::ValueKind::logic4
+            && kind != runtime::simir::ValueKind::logic9) {
+            throw LlvmJitError(
+                "LLVM direct-read signal metadata has an unsupported value kind");
+        }
+        process.direct_read_widths.push_back(signal_widths[signal]);
+        process.direct_read_value_kinds.push_back(kind);
+    }
+}
+
+std::optional<LlvmJit::Impl::ModuleMetadata>
 LlvmJit::Impl::decode_module_metadata(
     const std::span<const std::byte> metadata,
     const std::span<const JitProcessModuleEntry> entries,
-    const std::span<const std::uint32_t> signal_widths)
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const runtime::simir::ValueKind> signal_value_kinds,
+    const std::string_view expected_cache_identity,
+    const llvm_detail::LlvmBackendTier expected_backend_tier,
+    const bool expected_tier_eligibility,
+    const bool global_direct_read_requirement,
+    bool* const identity_mismatch)
 {
-    if (metadata.size() < 20U
+    if (metadata.size() < 37U
         || metadata.size() > kMaximumJitMetadataBytes) {
         return std::nullopt;
     }
@@ -1175,30 +1447,105 @@ LlvmJit::Impl::decode_module_metadata(
         || !header.read_u32(schema)
         || schema != kJitMetadataSchema
         || !header.read_u32(encoded_size)
-        || encoded_size < 20U
+        || encoded_size < 37U
         || encoded_size > metadata.size()) {
         return std::nullopt;
     }
 
+    if (identity_mismatch != nullptr) {
+        *identity_mismatch = false;
+    }
     JitMetadataReader reader { metadata.first(encoded_size) };
+    std::uint32_t cache_identity_size { };
+    std::uint32_t backend_tier_value { };
+    std::uint8_t tier_eligibility_value { };
+    std::uint64_t tier_selection_instruction_count { };
+    std::uint64_t optimized_instruction_count { };
+    llvm_detail::TieredReadDedupStatistics read_dedup_statistics;
+    std::span<const std::byte> cache_identity;
     std::uint32_t process_count { };
     if (!reader.read_bytes(kJitMetadataMagic)
         || !reader.read_u32(schema)
         || !reader.read_u32(encoded_size)
-        || !reader.read_u32(process_count)
+        || !reader.read_u32(cache_identity_size)
+        || !reader.read_bytes(cache_identity_size, cache_identity)
+        || !reader.read_u32(backend_tier_value)
+        || backend_tier_value
+            > static_cast<std::uint32_t>(
+                llvm_detail::LlvmBackendTier::less)
+        || !reader.read_u8(tier_eligibility_value)
+        || tier_eligibility_value > 1U
+        || !reader.read_u64(tier_selection_instruction_count)
+        || !reader.read_u64(optimized_instruction_count)
+        || !reader.read_u64(read_dedup_statistics.marked_loads)
+        || !reader.read_u64(read_dedup_statistics.eliminated_loads)
+        || !reader.read_u64(read_dedup_statistics.marked_value_loads)
+        || !reader.read_u64(read_dedup_statistics.eliminated_value_loads)
+        || read_dedup_statistics.eliminated_loads
+            > read_dedup_statistics.marked_loads
+        || read_dedup_statistics.marked_value_loads
+            > read_dedup_statistics.marked_loads
+        || read_dedup_statistics.eliminated_value_loads
+            > read_dedup_statistics.eliminated_loads
+        || read_dedup_statistics.eliminated_value_loads
+            > read_dedup_statistics.marked_value_loads) {
+        return std::nullopt;
+    }
+    const auto expected_identity = std::span<const std::byte> {
+        reinterpret_cast<const std::byte*>(expected_cache_identity.data()),
+        expected_cache_identity.size()
+    };
+    if (!std::ranges::equal(cache_identity, expected_identity)) {
+        if (identity_mismatch != nullptr) {
+            *identity_mismatch = true;
+        }
+        return std::nullopt;
+    }
+    const auto backend_tier
+        = static_cast<llvm_detail::LlvmBackendTier>(backend_tier_value);
+    const bool tier_eligible = tier_eligibility_value != 0U;
+    if (backend_tier != expected_backend_tier
+        || tier_eligible != expected_tier_eligibility
+        || optimized_instruction_count > tier_selection_instruction_count
+        || (backend_tier == llvm_detail::LlvmBackendTier::none
+            && optimized_instruction_count
+                != tier_selection_instruction_count)
+        || (backend_tier == llvm_detail::LlvmBackendTier::none
+            && (read_dedup_statistics.marked_loads != 0U
+                || read_dedup_statistics.eliminated_loads != 0U
+                || read_dedup_statistics.marked_value_loads != 0U
+                || read_dedup_statistics.eliminated_value_loads != 0U))
+        || !llvm_detail::valid_backend_tier_proof(
+            backend_tier, tier_eligible,
+            tier_selection_instruction_count)) {
+        if (identity_mismatch != nullptr) {
+            *identity_mismatch = true;
+        }
+        return std::nullopt;
+    }
+    if (!reader.read_u32(process_count)
         || process_count != entries.size()) {
         return std::nullopt;
     }
 
-    std::vector<ProcessInfo> result(process_count);
-    for (std::size_t index = 0U; index < result.size(); ++index) {
+    ModuleMetadata result;
+    result.backend_tier = backend_tier;
+    result.tier_eligible = tier_eligible;
+    result.tier_selection_instruction_count
+        = tier_selection_instruction_count;
+    result.optimized_instruction_count = optimized_instruction_count;
+    result.read_dedup_statistics = read_dedup_statistics;
+    result.processes.resize(process_count);
+    for (std::size_t index = 0U;
+        index < result.processes.size(); ++index) {
         if (entries[index].process == nullptr) {
             return std::nullopt;
         }
-        auto& process = result[index];
+        auto& process = result.processes[index];
         auto& frame = process.frame_layout;
         std::uint8_t uses_logic9 { };
         std::uint8_t tracks_register_initialization { };
+        std::uint8_t signal_callback_ids_are_actual { };
         if (!reader.read_u64(frame.layout_id_low)
             || !reader.read_u64(frame.layout_id_high)
             || !reader.read_u32(frame.register_count)
@@ -1212,12 +1559,18 @@ LlvmJit::Impl::decode_module_metadata(
             || !reader.read_u32_vector(frame.register_word_offsets)
             || !reader.read_u32_vector(frame.direct_read_signals)
             || !reader.read_u32_vector(frame.direct_update_signals)
+            || !reader.read_u8(signal_callback_ids_are_actual)
+            || signal_callback_ids_are_actual > 1U
+            || !reader.read_u32(frame.signal_callback_operand_word_base)
+            || !reader.read_u32_vector(frame.signal_callback_operands)
             || !reader.read_u32(process.operation_count)) {
             return std::nullopt;
         }
         frame.uses_logic9 = uses_logic9 != 0U;
         frame.tracks_register_initialization
             = tracks_register_initialization != 0U;
+        frame.signal_callback_ids_are_actual
+            = signal_callback_ids_are_actual != 0U;
         for (const auto flag : ProcessInfo::flags) {
             std::uint8_t value { };
             if (!reader.read_u8(value) || value > 1U) {
@@ -1225,7 +1578,19 @@ LlvmJit::Impl::decode_module_metadata(
             }
             process.*flag = value != 0U;
         }
+        if (process.requires_direct_read_signals
+                != (global_direct_read_requirement
+                    || entries[index].require_direct_read_signals)
+            || process.tiered_read_dedup_safe
+                != entries[index].tiered_read_dedup_safe
+            || frame.signal_callback_ids_are_actual
+                != entries[index].signal_callback_ids_are_actual) {
+            return std::nullopt;
+        }
         if (!reader.read_u32_vector(process.entry_points)) {
+            return std::nullopt;
+        }
+        if (!reader.read_u8_vector(frame.register_values_persistent)) {
             return std::nullopt;
         }
 
@@ -1234,18 +1599,48 @@ LlvmJit::Impl::decode_module_metadata(
             || frame.register_count != source.register_count
             || frame.string_register_count != source.string_register_count
             || frame.register_widths.size() != frame.register_count
-            || frame.register_word_offsets.size() != frame.register_count) {
+            || frame.register_word_offsets.size() != frame.register_count
+            || frame.register_values_persistent.size()
+                != frame.register_count) {
             return std::nullopt;
         }
+        const auto validated
+            = validate_process(source, signal_widths, signal_value_kinds);
+        const auto expected_callback_operands
+            = frame.signal_callback_ids_are_actual
+            ? llvm_detail::signal_callback_operands(source, signal_widths)
+            : std::vector<runtime::simir::SignalId> { };
+        if (frame.register_widths != validated.register_widths
+            || frame.uses_logic9 != validated.uses_logic9
+            || frame.signal_callback_operands
+                != expected_callback_operands) {
+            return std::nullopt;
+        }
+        std::uint64_t expected_word_offset { };
         for (std::size_t reg = 0U;
             reg < frame.register_widths.size(); ++reg) {
             const auto width = frame.register_widths[reg];
             const auto offset = frame.register_word_offsets[reg];
             const auto words = (static_cast<std::uint64_t>(width) + 63U) / 64U;
-            if (width == 0U || offset > frame.register_word_count
+            if (offset != expected_word_offset
+                || offset > frame.register_word_count
                 || words > frame.register_word_count - offset) {
                 return std::nullopt;
             }
+            expected_word_offset += words;
+            if (expected_word_offset
+                > std::numeric_limits<std::uint32_t>::max()) {
+                return std::nullopt;
+            }
+        }
+        if (expected_word_offset
+                != frame.signal_callback_operand_word_base
+            || frame.signal_callback_operand_word_base
+                > frame.register_word_count
+            || frame.signal_callback_operands.size()
+                != frame.register_word_count
+                    - frame.signal_callback_operand_word_base) {
+            return std::nullopt;
         }
         const auto valid_signal = [&](const auto signal) {
             return signal < signal_widths.size()
@@ -1256,11 +1651,27 @@ LlvmJit::Impl::decode_module_metadata(
             || !std::ranges::all_of(
                 frame.direct_update_signals, valid_signal)
             || !std::ranges::all_of(
+                frame.signal_callback_operands, valid_signal)
+            || !std::ranges::all_of(
                 process.entry_points,
                 [&](const auto instruction) {
                     return instruction < process.operation_count;
                 })) {
             return std::nullopt;
+        }
+        if (process.requires_direct_read_signals) {
+            const auto expected_reads = direct_read_signals(
+                *entries[index].process, signal_widths, signal_value_kinds);
+            if (frame.direct_read_signals != expected_reads) {
+                return std::nullopt;
+            }
+        }
+        populate_direct_read_metadata(
+            process, signal_widths, signal_value_kinds);
+        process.direct_update_widths.reserve(
+            frame.direct_update_signals.size());
+        for (const auto signal : frame.direct_update_signals) {
+            process.direct_update_widths.push_back(signal_widths[signal]);
         }
     }
     if (!reader.finished()) {
@@ -1274,6 +1685,15 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
 {
     initialize_native_target();
     impl_->options = options;
+#ifndef NDEBUG
+    impl_->verify_optimized_modules = true;
+#else
+    const auto* const verify_modules = std::getenv("FSIM_VERIFY_LLVM_MODULES");
+    impl_->verify_optimized_modules = verify_modules != nullptr
+        && *verify_modules != '\0' && std::string_view { verify_modules } != "0";
+#endif
+    impl_->ordered_cohort_profile_enabled
+        = std::getenv("FSIM_PROFILE_SV_WAVES") != nullptr;
 
     auto target_builder = unwrap(
         llvm::orc::JITTargetMachineBuilder::detectHost(),
@@ -1301,17 +1721,28 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
             options.cache_directory / "llvm" / "objects",
             target_builder.getTargetTriple(),
             options);
-        auto* const object_cache = impl_->object_cache.get();
-        builder.setCompileFunctionCreator(
-            [object_cache](llvm::orc::JITTargetMachineBuilder machine_builder)
-                -> llvm::Expected<std::unique_ptr<
-                    llvm::orc::IRCompileLayer::IRCompiler>> {
-                std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>
-                    compiler = std::make_unique<llvm::orc::ConcurrentIRCompiler>(
-                        std::move(machine_builder), object_cache);
-                return compiler;
-            });
     }
+    const bool profile_modules
+        = std::getenv("FSIM_PROFILE_LLVM_MODULES") != nullptr;
+    // Every module producer uses a thread-safe compiler even without a cache.
+    // Process lowering shares locked contexts per application worker, allowing
+    // each context to reuse its own None/Less machines. Other module producers
+    // retain ConcurrentIRCompiler's fresh-machine fallback.
+    auto* const object_cache = impl_->object_cache.get();
+    builder.setCompileFunctionCreator(
+        [object_cache, profile_modules, implementation = impl_.get()](
+            llvm::orc::JITTargetMachineBuilder machine_builder)
+            -> llvm::Expected<std::unique_ptr<
+                llvm::orc::IRCompileLayer::IRCompiler>> {
+            auto contexts = std::make_shared<LlvmCompilationContexts>(
+                machine_builder, object_cache);
+            std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler> compiler
+                = std::make_unique<TieredIRCompiler>(
+                    std::move(machine_builder), object_cache,
+                    profile_modules, contexts);
+            implementation->compilation_contexts = std::move(contexts);
+            return compiler;
+        });
     builder.setJITTargetMachineBuilder(std::move(target_builder));
     impl_->jit = unwrap(builder.create(), "cannot create LLVM LLJIT");
 #if defined(__linux__)
@@ -1338,6 +1769,33 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
             + llvm_error(std::move(error)));
     }
 #endif
+}
+
+LlvmJit::Impl::~Impl()
+{
+    if (compilation_contexts
+        && std::getenv("FSIM_PROFILE_LLVM_MODULES") != nullptr) {
+        const auto counts = compilation_contexts->statistics();
+        llvm::errs() << "fsim-profile: jit-context-summary contexts="
+                     << counts.contexts
+                     << " target_machines=" << counts.target_machines
+                     << " reused_compilations=" << counts.reused_compilations
+                     << " fallback_compilations=" << counts.fallback_compilations
+                     << '\n';
+    }
+    if (ordered_cohort_profile_enabled) {
+        llvm::errs() << "fsim-profile: sv-ordered-wrapper-summary"
+                     << " materialization_attempts="
+                     << ordered_cohort_materialization_attempts
+                     << " budget_misses=" << ordered_cohort_budget_misses
+                     << " fallback_batches="
+                     << ordered_cohort_fallback_batches.load(
+                            std::memory_order_relaxed)
+                     << " fallback_members="
+                     << ordered_cohort_fallback_members.load(
+                            std::memory_order_relaxed)
+                     << '\n';
+    }
 }
 
 LlvmJit::~LlvmJit() = default;
@@ -1408,6 +1866,50 @@ std::string_view LlvmJit::llvm_version() noexcept
     return LLVM_VERSION_STRING;
 }
 
+std::string llvm_detail::make_native_host_identity_fingerprint(
+    const LlvmNativeHostIdentity& identity,
+    const JitOptimizationLevel optimization,
+    const std::string_view native_object_schema)
+{
+    CacheKeyBuilder builder;
+    builder.add("kind", "fsim-llvm-native-host-v2");
+    builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
+    builder.add("llvm-version", identity.llvm_version);
+    builder.add("optimization", to_string(optimization));
+    builder.add("llvm-arguments", initialize_llvm_arguments());
+    builder.add("backend-tier-policy", llvm_detail::kBackendTierPolicy);
+    builder.add(
+        "backend-tier-ir-instruction-limit",
+        std::to_string(llvm_detail::kLessBackendTierInstructionLimit));
+    builder.add("llvm-object-schema", native_object_schema);
+    builder.add(
+        "services-abi-version",
+        std::to_string(FSIM_JIT_SERVICES_ABI_VERSION_V2));
+    builder.add("services-abi-size", std::to_string(sizeof(fsim_jit_services_v2)));
+    builder.add(
+        "runtime-instance-abi-version",
+        std::to_string(FSIM_JIT_RUNTIME_ABI_VERSION_V2));
+    builder.add(
+        "runtime-instance-abi-size",
+        std::to_string(sizeof(fsim_jit_runtime_instance_v2)));
+    builder.add(
+        "frame-abi-version", std::to_string(FSIM_JIT_FRAME_ABI_VERSION_V2));
+    builder.add("frame-abi-size", std::to_string(sizeof(fsim_jit_frame_v2)));
+    builder.add(
+        "resume-abi-version",
+        std::to_string(FSIM_JIT_RESUME_RESULT_ABI_VERSION_V2));
+    builder.add(
+        "resume-abi-size", std::to_string(sizeof(fsim_jit_resume_result_v2)));
+    builder.add("target", identity.target);
+    builder.add("data-layout", identity.data_layout);
+    builder.add("cpu", identity.cpu);
+    builder.add("feature-count", std::to_string(identity.features.size()));
+    for (const auto& feature : identity.features) {
+        builder.add("feature", feature);
+    }
+    return builder.finish();
+}
+
 LlvmNativeHostIdentity LlvmJit::native_host_identity(
     const JitOptimizationLevel optimization)
 {
@@ -1425,34 +1927,15 @@ LlvmNativeHostIdentity LlvmJit::native_host_identity(
         "cannot create native LLVM target machine");
     const auto data_layout = target_machine->createDataLayout().getStringRepresentation();
 
-    CacheKeyBuilder builder;
-    builder.add("kind", "fsim-llvm-native-host-v1");
-    builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
-    builder.add("llvm-version", LLVM_VERSION_STRING);
-    builder.add("optimization", to_string(optimization));
-    builder.add(
-        "runtime-abi-version",
-        std::to_string(FSIM_JIT_RUNTIME_ABI_VERSION_V1));
-    builder.add("runtime-abi-size", std::to_string(sizeof(fsim_jit_runtime_v1)));
-    builder.add(
-        "frame-abi-version", std::to_string(FSIM_JIT_FRAME_ABI_VERSION_V1));
-    builder.add("frame-abi-size", std::to_string(sizeof(fsim_jit_frame_v1)));
-    builder.add(
-        "resume-abi-version",
-        std::to_string(FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1));
-    builder.add(
-        "resume-abi-size", std::to_string(sizeof(fsim_jit_resume_result_v1)));
-    builder.add("target", target);
-    builder.add("data-layout", data_layout);
-    builder.add("cpu", cpu);
-    builder.add("feature-count", std::to_string(features.size()));
-    for (const auto& feature : features) {
-        builder.add("feature", feature);
-    }
-    return {
-        builder.finish(), LLVM_VERSION_STRING, target, data_layout, cpu,
+    LlvmNativeHostIdentity identity {
+        { }, LLVM_VERSION_STRING, target, data_layout, cpu,
         std::move(features)
     };
+    identity.fingerprint
+        = llvm_detail::make_native_host_identity_fingerprint(
+            identity, optimization,
+            llvm_detail::kNativeObjectCacheSchema);
+    return identity;
 }
 
 } // namespace fsim::compiler

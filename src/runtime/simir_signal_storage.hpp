@@ -19,6 +19,11 @@ struct SignalHot {
     bool event_variable { };
     bool has_implicit_driver { };
     bool has_charge_strength { };
+    // Public const-reference getters can escape beyond the next callback or
+    // scheduler boundary. Keep any such value on ordinary public storage.
+    bool public_value_reference_exposed { };
+    bool public_value_alias_exposure_in_progress { };
+    bool public_value_aliases_exposed { };
 };
 
 struct SignalCold {

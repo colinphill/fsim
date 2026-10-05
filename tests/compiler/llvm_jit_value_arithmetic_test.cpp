@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_test_support.hpp"
 
+#include <limits>
+
 namespace fsim::tests::compiler {
 
 void test_unsigned_arithmetic_at_level(
@@ -343,25 +345,30 @@ void test_insert_and_partial_writes_at_level(
 
   {
     auto legacy = descriptor;
-    legacy.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_signal_slice));
+    auto legacy_services = copy_jit_services(legacy);
+    legacy_services.write_signal_slice = nullptr;
+    legacy.services = &legacy_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, legacy); },
-        "does not include write_signal_slice");
+        "require write_signal_slice");
   }
   {
     auto missing = descriptor;
-    missing.write_update_slice = nullptr;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_update_slice = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
-        "requires write_update_slice");
+        "require write_update_slice");
   }
   {
     auto missing = descriptor;
-    missing.write_after_slice = nullptr;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_after_slice = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
-        "requires write_after_slice");
+        "require write_after_slice");
   }
 }
 
@@ -670,6 +677,48 @@ void test_direct_signal_read_at_level(
   assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
   assert((runtime.signals[0]
       == EncodedSignal { UINT64_C(0xa5), UINT64_C(0x80) }));
+
+  Process mixed_direct_and_callback;
+  mixed_direct_and_callback.id = 107;
+  mixed_direct_and_callback.name = "mixed_direct_and_alias_fallback";
+  mixed_direct_and_callback.register_count = 2;
+  mixed_direct_and_callback.operations = {
+      ReadSignal { 0, 2 },
+      WriteBlocking { 0, 0 },
+      ReadSignal { 1, 3 },
+      WriteBlocking { 1, 1 },
+      Halt { },
+  };
+  const std::string fallback_symbol
+      = std::string { symbol } + "_alias_fallback";
+  jit.add_process(fallback_symbol, mixed_direct_and_callback, widths);
+  const auto fallback_handle = jit.lookup(fallback_symbol);
+  assert((jit.frame_layout(fallback_handle).direct_read_signals
+      == std::vector<runtime::simir::SignalId> { 2, 3 }));
+
+  TestRuntime fallback_runtime;
+  fallback_runtime.signals[3] = { UINT64_C(0x5a), 0U };
+  auto fallback_descriptor = abi(fallback_runtime);
+  const std::array<std::uint64_t, 8> fallback_aval {
+      0, 0, 0, UINT64_C(0xee), 0, 0, 0, UINT64_C(0xa5)
+  };
+  const std::array<std::uint64_t, 8> fallback_bval { };
+  const std::array<std::uint32_t, 2> mixed_remap {
+      7U, std::numeric_limits<std::uint32_t>::max()
+  };
+  fallback_descriptor.direct_signal_aval = fallback_aval.data();
+  fallback_descriptor.direct_signal_bval = fallback_bval.data();
+  fallback_descriptor.direct_read_signals = mixed_remap.data();
+  fallback_descriptor.direct_read_signal_count
+      = static_cast<std::uint32_t>(mixed_remap.size());
+  fallback_descriptor.direct_signal_count
+      = static_cast<std::uint32_t>(fallback_aval.size());
+  assert(jit.execute(fallback_handle, fallback_descriptor)
+      == JitExecutionStatus::completed);
+  assert((fallback_runtime.signals[0]
+      == EncodedSignal { UINT64_C(0xa5), 0U }));
+  assert((fallback_runtime.signals[1]
+      == EncodedSignal { UINT64_C(0x5a), 0U }));
 }
 
 void test_direct_update_accumulator_at_level(
@@ -704,12 +753,35 @@ void test_direct_update_accumulator_at_level(
 
   TestRuntime runtime;
   auto descriptor = abi(runtime);
-  fsim_jit_update_slot_v1 slot { };
+  fsim_jit_update_slot_v2 slot { };
   std::array<std::uint64_t, 1> active_words { };
+  slot.width = 8U;
+  slot.word_count = 1U;
   descriptor.direct_update_slots = &slot;
   descriptor.direct_update_slot_count = 1;
   descriptor.direct_update_active_words = active_words.data();
   descriptor.direct_update_active_word_count = 1;
+  {
+    auto truncated = descriptor;
+    truncated.direct_update_slot_count = 0U;
+    slot.aval = UINT64_C(0x55);
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, truncated); },
+        "requires every direct-update slot");
+    assert(slot.aval == UINT64_C(0x55));
+    assert(runtime.scheduled_writes.empty());
+  }
+  {
+    auto truncated = descriptor;
+    truncated.direct_update_active_word_count = 0U;
+    slot.aval = UINT64_C(0x55);
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, truncated); },
+        "requires every direct-update slot");
+    assert(slot.aval == UINT64_C(0x55));
+    assert(runtime.scheduled_writes.empty());
+  }
+  slot.aval = 0U;
   assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
   assert(runtime.writes.empty());
   assert(slot.active == 1U);
@@ -717,6 +789,70 @@ void test_direct_update_accumulator_at_level(
   assert(slot.aval == UINT64_C(0x31));
   assert(slot.bval == 0U);
   assert(active_words[0] == UINT64_C(1));
+
+  Process optional_process;
+  optional_process.id = 108U;
+  optional_process.name = std::string { symbol } + "_optional";
+  optional_process.register_count = 1U;
+  optional_process.operations = {
+      LoadConstant { 0U, PackedLogic4::from_aval_bval(8U, 0x6dU, 0U) },
+      WriteUpdate { 0U, 0U },
+      Halt { },
+  };
+  LlvmJit optional_jit { LlvmJitOptions { optimization, { } } };
+  const auto optional_symbol = std::string { symbol } + "_optional";
+  optional_jit.add_process(optional_symbol, optional_process, widths);
+  const auto optional_handle = optional_jit.lookup(optional_symbol);
+  assert((optional_jit.frame_layout(optional_handle).direct_update_signals
+      == std::vector<runtime::simir::SignalId> { 0U }));
+
+  TestRuntime optional_fallback_runtime;
+  auto optional_fallback = abi(optional_fallback_runtime);
+  std::array<std::uint64_t, 1> ignored_active_words { UINT64_C(0x5a) };
+  optional_fallback.direct_update_active_words = ignored_active_words.data();
+  optional_fallback.direct_update_active_word_count = 0U;
+  assert(optional_jit.execute(optional_handle, optional_fallback)
+      == JitExecutionStatus::completed);
+  assert(optional_fallback_runtime.scheduled_writes.size() == 1U);
+  assert(ignored_active_words[0] == UINT64_C(0x5a));
+
+  fsim_jit_update_slot_v2 optional_slot { };
+  optional_slot.width = 8U;
+  optional_slot.word_count = 1U;
+  std::array<std::uint64_t, 1> optional_active_words { };
+  TestRuntime optional_direct_runtime;
+  auto optional_direct = abi(optional_direct_runtime);
+  optional_direct.direct_update_slots = &optional_slot;
+  optional_direct.direct_update_slot_count = 1U;
+  optional_direct.direct_update_active_words = optional_active_words.data();
+  optional_direct.direct_update_active_word_count = 1U;
+  assert(optional_jit.execute(optional_handle, optional_direct)
+      == JitExecutionStatus::completed);
+  assert(optional_direct_runtime.scheduled_writes.empty());
+  assert(optional_slot.active == 1U);
+  assert(optional_slot.mask == UINT64_C(0xff));
+  assert(optional_slot.aval == UINT64_C(0x6d));
+
+  {
+    auto truncated = optional_direct;
+    truncated.direct_update_slot_count = 0U;
+    optional_slot.aval = UINT64_C(0x55);
+    expect_fatal_error(
+        [&] { (void)optional_jit.execute(optional_handle, truncated); },
+        "direct-update slot array is too small");
+    assert(optional_slot.aval == UINT64_C(0x55));
+    assert(optional_direct_runtime.scheduled_writes.empty());
+  }
+  {
+    auto truncated = optional_direct;
+    truncated.direct_update_active_word_count = 0U;
+    optional_slot.aval = UINT64_C(0x55);
+    expect_fatal_error(
+        [&] { (void)optional_jit.execute(optional_handle, truncated); },
+        "activity bitmap is too small");
+    assert(optional_slot.aval == UINT64_C(0x55));
+    assert(optional_direct_runtime.scheduled_writes.empty());
+  }
 
   Process stable_process;
   stable_process.id = 106;
@@ -778,7 +914,7 @@ void test_direct_update_accumulator_at_level(
 
   TestRuntime wide_runtime;
   auto wide_descriptor = abi(wide_runtime);
-  fsim_jit_update_slot_v1 wide_slot { };
+  fsim_jit_update_slot_v2 wide_slot { };
   std::array<std::uint64_t, 3> wide_aval { };
   std::array<std::uint64_t, 3> wide_bval { };
   std::array<std::uint64_t, 3> wide_mask { };
@@ -792,11 +928,48 @@ void test_direct_update_accumulator_at_level(
   wide_descriptor.direct_update_slot_count = 1;
   wide_descriptor.direct_update_active_words = wide_active_words.data();
   wide_descriptor.direct_update_active_word_count = 1;
-  wide_descriptor.execute_signal_operation
-      = [](void*, std::uint32_t, std::uint32_t, fsim_jit_frame_v1*) {
+  auto wide_services = copy_jit_services(wide_descriptor);
+  wide_services.execute_signal_operation
+      = [](void*, std::uint32_t, std::uint32_t, fsim_jit_frame_v2*) {
           assert(false && "direct wide update used its exact callback");
           return std::uint32_t { };
         };
+  wide_descriptor.services = &wide_services;
+  const auto reject_bad_wide_shapes = [&](
+      LlvmJit& candidate_jit,
+      const JitProcessHandle candidate_handle,
+      const fsim_jit_runtime_instance_v2& base_descriptor,
+      const fsim_jit_update_slot_v2& valid_slot,
+      const std::array<std::uint64_t, 3>& aval_words,
+      const std::array<std::uint64_t, 3>& bval_words,
+      const std::array<std::uint64_t, 3>& mask_words) {
+    const auto before_aval = aval_words;
+    const auto before_bval = bval_words;
+    const auto before_mask = mask_words;
+    const auto check = [&](const auto& corrupt) {
+      auto malformed_slot = valid_slot;
+      corrupt(malformed_slot);
+      auto malformed_descriptor = base_descriptor;
+      malformed_descriptor.direct_update_slots = &malformed_slot;
+      expect_fatal_error(
+          [&] {
+            (void)candidate_jit.execute(
+                candidate_handle, malformed_descriptor);
+          },
+          "malformed wide direct-update slot");
+      assert(aval_words == before_aval);
+      assert(bval_words == before_bval);
+      assert(mask_words == before_mask);
+    };
+    check([](auto& malformed) { malformed.width = 129U; });
+    check([](auto& malformed) { malformed.word_count = 2U; });
+    check([](auto& malformed) { malformed.wide_aval = nullptr; });
+    check([](auto& malformed) { malformed.wide_bval = nullptr; });
+    check([](auto& malformed) { malformed.wide_mask = nullptr; });
+  };
+  reject_bad_wide_shapes(
+      jit, wide_handle, wide_descriptor, wide_slot,
+      wide_aval, wide_bval, wide_mask);
   assert(jit.execute(wide_handle, wide_descriptor)
       == JitExecutionStatus::completed);
   assert(wide_runtime.writes.empty());
@@ -810,6 +983,51 @@ void test_direct_update_accumulator_at_level(
       UINT64_C(0x8000000000000001), UINT64_C(0), UINT64_C(2) }));
   assert((wide_bval == std::array<std::uint64_t, 3> { 0, 0, 0 }));
   assert(wide_active_words[0] == UINT64_C(1));
+
+  LlvmJit optional_wide_jit { LlvmJitOptions { optimization, { } } };
+  const auto optional_wide_symbol
+      = std::string { symbol } + "_optional_wide";
+  optional_wide_jit.add_process(
+      optional_wide_symbol, wide_process, wide_widths);
+  const auto optional_wide_handle
+      = optional_wide_jit.lookup(optional_wide_symbol);
+  TestRuntime optional_wide_runtime;
+  auto optional_wide_descriptor = abi(optional_wide_runtime);
+  fsim_jit_update_slot_v2 optional_wide_slot { };
+  std::array<std::uint64_t, 3> optional_wide_aval { };
+  std::array<std::uint64_t, 3> optional_wide_bval { };
+  std::array<std::uint64_t, 3> optional_wide_mask { };
+  std::array<std::uint64_t, 1> optional_wide_active_words { };
+  optional_wide_slot.wide_aval = optional_wide_aval.data();
+  optional_wide_slot.wide_bval = optional_wide_bval.data();
+  optional_wide_slot.wide_mask = optional_wide_mask.data();
+  optional_wide_slot.word_count = 3U;
+  optional_wide_slot.width = 130U;
+  optional_wide_descriptor.direct_update_slots = &optional_wide_slot;
+  optional_wide_descriptor.direct_update_slot_count = 1U;
+  optional_wide_descriptor.direct_update_active_words
+      = optional_wide_active_words.data();
+  optional_wide_descriptor.direct_update_active_word_count = 1U;
+  auto optional_wide_services = copy_jit_services(optional_wide_descriptor);
+  optional_wide_services.execute_signal_operation
+      = wide_services.execute_signal_operation;
+  optional_wide_descriptor.services = &optional_wide_services;
+  reject_bad_wide_shapes(
+      optional_wide_jit, optional_wide_handle, optional_wide_descriptor,
+      optional_wide_slot, optional_wide_aval, optional_wide_bval,
+      optional_wide_mask);
+  assert(optional_wide_jit.execute(
+             optional_wide_handle, optional_wide_descriptor)
+      == JitExecutionStatus::completed);
+  assert(optional_wide_slot.active == 1U);
+  assert(optional_wide_mask[0] == UINT64_MAX);
+  assert(optional_wide_mask[1] == UINT64_MAX);
+  assert(optional_wide_mask[2] == UINT64_C(3));
+  assert((optional_wide_aval == std::array<std::uint64_t, 3> {
+      UINT64_C(0x8000000000000001), UINT64_C(0), UINT64_C(2) }));
+  assert((optional_wide_bval == std::array<std::uint64_t, 3> {
+      0U, 0U, 0U }));
+  assert(optional_wide_runtime.scheduled_writes.empty());
 
 }
 

@@ -982,7 +982,8 @@ void Interpreter::Impl::execute_file(
             get_container_register(process, operation.target) = std::move(*result.container);
             break;
         case FileBinaryTargetKind::container_object:
-            write_container_object_value(operation.target, *result.container);
+            write_container_object_value(
+                operation.target, *result.container, process.id);
             break;
         }
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, result.bytes, 0);

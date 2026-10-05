@@ -83,7 +83,7 @@ std::uint64_t LlvmProcessExecutor::signal_driving_value(
 void LlvmProcessExecutor::signal_driving_value_logic9(
     void* context,
     const std::uint32_t signal,
-    fsim_jit_logic9_word_v1* result) noexcept {
+    fsim_jit_logic9_word_v2* result) noexcept {
   auto& state = *static_cast<CallbackState*>(context);
   clear_logic9_word(result);
   if (state.failure) {

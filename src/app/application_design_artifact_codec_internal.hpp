@@ -11,6 +11,7 @@
 #include "fsim/support/sha256.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
+#include "../elaboration/elaborated_design_process_access.hpp"
 
 #include <boost/pfr/core.hpp>
 
@@ -318,7 +319,18 @@ namespace codec_detail {
     template <typename T>
     constexpr bool valid_archive_enum(const T value) noexcept
     {
-        if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
+        if constexpr (
+            std::same_as<T, runtime::simir::SignalUpdateDomain>) {
+            return value >= runtime::simir::SignalUpdateDomain::generic
+                && value
+                    <= runtime::simir::SignalUpdateDomain::systemverilog_nba;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::ProcessSchedulingDomain>) {
+            return value
+                    >= runtime::simir::ProcessSchedulingDomain::generic
+                && value
+                    <= runtime::simir::ProcessSchedulingDomain::systemverilog;
+        } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
         } else if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
@@ -775,6 +787,53 @@ namespace codec_detail {
     }
 
     template <typename T>
+        requires std::same_as<std::remove_cv_t<T>,
+            runtime::simir::ProcessProgramTemplate>
+    auto archive_fields(T& value)
+    {
+        return std::tie(
+            value.language_standard, value.compatibility_profile,
+            value.register_count, value.string_register_count,
+            value.container_register_count, value.debug_locals,
+            value.debug_string_locals, value.debug_container_locals,
+            value.container_register_types, value.static_trigger_regions,
+            value.register_value_kinds, value.expression_profiles,
+            value.scheduling_domain);
+    }
+
+    template <typename T>
+        requires std::same_as<std::remove_cv_t<T>,
+            runtime::simir::ProcessInstanceProgram>
+    auto archive_fields(T& value)
+    {
+        return std::tie(
+            value.id, value.name, value.static_sensitivity,
+            value.operations, value.driver_regions, value.drive_strength,
+            value.switch_source, value.switch_target, value.switch_control,
+            value.switch_source_offset, value.switch_target_offset,
+            value.switch_width, value.switch_active_high,
+            value.switch_bidirectional, value.switch_resistive,
+            value.initialize, value.observed, value.reactive,
+            value.program_owner, value.postponed, value.final);
+    }
+
+    template <typename T>
+        requires std::same_as<std::remove_cv_t<T>,
+            elaboration::detail::RuntimeProcessProgramRow>
+    auto archive_fields(T& value)
+    {
+        return std::tie(value.template_id, value.instance);
+    }
+
+    template <typename T>
+        requires std::same_as<std::remove_cv_t<T>,
+            elaboration::detail::RuntimeProcessProgramTable>
+    auto archive_fields(T& value)
+    {
+        return std::tie(value.templates, value.rows);
+    }
+
+    template <typename T>
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::FileOpen>
     auto archive_fields(T& value)
     {
@@ -870,6 +929,139 @@ namespace codec_detail {
     concept StorageWrapper = requires(T value) {
         value.storage;
     } && IsVariant<std::remove_cvref_t<decltype(std::declval<T>().storage)>>::value;
+
+    template <typename T>
+    struct RuntimeProcessLayoutVectorTraits : std::false_type {
+    };
+
+    template <typename T>
+    struct RuntimeProcessLayoutVectorTraits<
+        runtime::simir::CopyOnWriteVector<T>>
+        : std::bool_constant<
+              std::same_as<T, runtime::simir::ValueKind>
+              || std::same_as<T, runtime::simir::ContainerType>
+              || std::same_as<T,
+                  runtime::simir::Process::StaticTriggerRegion>> {
+    };
+
+    class ProcessLayoutValueHasher {
+    public:
+        void add_u64(const std::uint64_t value) noexcept
+        {
+            for (unsigned shift = 0; shift < 64U; shift += 8U) {
+                state_ ^= static_cast<std::uint8_t>(value >> shift);
+                state_ *= UINT64_C(1099511628211);
+            }
+        }
+
+        void add_bool(const bool value) noexcept
+        {
+            add_u64(value ? 1U : 0U);
+        }
+
+        void add_string(const std::string_view value) noexcept
+        {
+            add_u64(value.size());
+            for (const auto byte : value) {
+                state_ ^= static_cast<std::uint8_t>(
+                    static_cast<unsigned char>(byte));
+                state_ *= UINT64_C(1099511628211);
+            }
+        }
+
+        [[nodiscard]] std::uint64_t value() const noexcept
+        {
+            return state_;
+        }
+
+    private:
+        std::uint64_t state_ { UINT64_C(1469598103934665603) };
+    };
+
+    template <typename T>
+    void append_process_layout_hash(
+        ProcessLayoutValueHasher& hasher, const T& value);
+
+    inline void append_process_layout_hash(
+        ProcessLayoutValueHasher& hasher,
+        const runtime::simir::ValueKind value)
+    {
+        hasher.add_u64(static_cast<std::uint64_t>(value));
+    }
+
+    inline void append_process_layout_hash(
+        ProcessLayoutValueHasher& hasher,
+        const runtime::simir::Process::StaticTriggerRegion& value)
+    {
+        hasher.add_u64(value.begin);
+        hasher.add_u64(value.end);
+        hasher.add_u64(value.mask);
+    }
+
+    inline void append_process_layout_hash(
+        ProcessLayoutValueHasher& hasher,
+        const runtime::simir::ContainerType& value)
+    {
+        hasher.add_u64(static_cast<std::uint64_t>(value.element_kind));
+        hasher.add_u64(static_cast<std::uint64_t>(value.scalar_kind));
+        hasher.add_u64(value.element_width);
+        hasher.add_bool(value.two_state);
+        hasher.add_bool(value.signed_elements);
+        hasher.add_bool(value.union_aggregate);
+        hasher.add_bool(value.aggregate_value);
+        hasher.add_bool(value.queue);
+        hasher.add_bool(value.associative);
+        hasher.add_bool(value.fixed);
+        hasher.add_u64(value.index_width);
+        hasher.add_bool(value.two_state_indices);
+        hasher.add_bool(value.signed_indices);
+        hasher.add_bool(value.string_indices);
+        hasher.add_u64(static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(value.index_left)));
+        hasher.add_u64(static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(value.index_right)));
+        hasher.add_bool(value.maximum_elements.has_value());
+        if (value.maximum_elements) {
+            hasher.add_u64(*value.maximum_elements);
+        }
+        hasher.add_u64(value.dimensions.size());
+        for (const auto& [left, right] : value.dimensions) {
+            hasher.add_u64(static_cast<std::uint64_t>(
+                static_cast<std::int64_t>(left)));
+            hasher.add_u64(static_cast<std::uint64_t>(
+                static_cast<std::int64_t>(right)));
+        }
+        hasher.add_string(value.element_nominal_type);
+        hasher.add_u64(value.element_types.size());
+        for (const auto& element_type : value.element_types) {
+            append_process_layout_hash(hasher, element_type);
+        }
+        hasher.add_u64(value.member_names.size());
+        for (const auto& name : value.member_names) {
+            hasher.add_string(name);
+        }
+    }
+
+    template <typename T>
+    [[nodiscard]] std::uint64_t process_layout_vector_hash(
+        const std::vector<T>& values)
+    {
+        ProcessLayoutValueHasher hasher;
+        hasher.add_u64(values.size());
+        for (const auto& value : values) {
+            append_process_layout_hash(hasher, value);
+        }
+        return hasher.value();
+    }
+
+    template <typename T>
+    struct RuntimeProcessLayoutBodies {
+        std::vector<runtime::simir::CopyOnWriteVector<T>> definitions;
+        // Hashes only select equality-check buckets. They never enter the
+        // artifact and cannot make unequal layouts share a definition.
+        std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>
+            ids_by_hash;
+    };
 
     class Writer;
     class Reader;
@@ -1009,6 +1201,25 @@ namespace codec_detail {
         {
         }
 
+        void set_runtime_path_projection(const bool enabled) noexcept
+        {
+            runtime_path_projection_ = enabled;
+        }
+
+        // The shared-body representation is part of the runtime-state wire
+        // format. Other Writer users, including in-memory cache keys, retain
+        // the legacy expanded-operation encoding.
+        void set_runtime_operation_body_sharing(const bool enabled) noexcept
+        {
+            runtime_operation_body_sharing_ = enabled;
+        }
+
+        void set_runtime_process_layout_sharing(
+            const bool enabled) noexcept
+        {
+            runtime_process_layout_sharing_ = enabled;
+        }
+
         void raw(std::string_view bytes)
         {
             if (output_ == nullptr && checksum_ == nullptr) {
@@ -1108,16 +1319,33 @@ namespace codec_detail {
                 write_operation(*this, value);
             } else if constexpr (
                 std::same_as<Value, runtime::simir::OperationList>) {
-                u64(value.size());
-                for (std::size_t index = 0; index < value.size(); ++index) {
-                    write(value.expanded(index));
+                if (runtime_operation_body_sharing_) {
+                    write_operation_list(value);
+                } else {
+                    u64(value.size());
+                    for (std::size_t index = 0; index < value.size(); ++index) {
+                        write(value.expanded(index));
+                    }
                 }
+            } else if constexpr (std::same_as<Value,
+                                  elaboration::detail::RuntimeProcessProgramTable>) {
+                write_runtime_process_table(value);
             } else if constexpr (
                 std::same_as<Value,
                     runtime::simir::ExpressionProfileList>) {
                 u64(value.size());
                 for (const auto& profile : value) {
                     write(profile);
+                }
+            } else if constexpr (
+                RuntimeProcessLayoutVectorTraits<Value>::value) {
+                if (runtime_process_layout_sharing_) {
+                    write_process_layout_vector(value);
+                } else {
+                    const auto view
+                        = runtime::simir::process_layout_detail::
+                            ProcessLayoutAccess::view(value);
+                    write(view.vector());
                 }
             } else if constexpr (DenseId<Value>) {
                 write(value.value());
@@ -1178,6 +1406,165 @@ namespace codec_detail {
         const std::string& failure() const noexcept { return failure_; }
 
     private:
+        void write_runtime_process_table(
+            const elaboration::detail::RuntimeProcessProgramTable& table)
+        {
+            write(table.templates);
+            u64(table.rows.size());
+            for (const auto& row : table.rows) {
+                write(row.template_id);
+                const auto& instance = row.instance;
+                write(instance.id);
+                // The name is restored from the ordered path-ID vector.
+                write(instance.static_sensitivity);
+                write(instance.operations);
+                write(instance.driver_regions);
+                write(instance.drive_strength);
+                write(instance.switch_source);
+                write(instance.switch_target);
+                write(instance.switch_control);
+                write(instance.switch_source_offset);
+                write(instance.switch_target_offset);
+                write(instance.switch_width);
+                write(instance.switch_active_high);
+                write(instance.switch_bidirectional);
+                write(instance.switch_resistive);
+                write(instance.initialize);
+                write(instance.observed);
+                write(instance.reactive);
+                write(instance.program_owner);
+                write(instance.postponed);
+                write(instance.final);
+            }
+        }
+
+        template <typename T>
+        RuntimeProcessLayoutBodies<T>& process_layout_bodies()
+        {
+            if constexpr (std::same_as<T, runtime::simir::ValueKind>) {
+                return register_value_kind_bodies_;
+            } else if constexpr (
+                std::same_as<T, runtime::simir::ContainerType>) {
+                return container_register_type_bodies_;
+            } else {
+                static_assert(std::same_as<T,
+                    runtime::simir::Process::StaticTriggerRegion>);
+                return static_trigger_region_bodies_;
+            }
+        }
+
+        template <typename T>
+        void write_process_layout_vector(
+            const runtime::simir::CopyOnWriteVector<T>& source)
+        {
+            const auto view
+                = runtime::simir::process_layout_detail::ProcessLayoutAccess::
+                    view(source);
+            auto& table = process_layout_bodies<T>();
+            const auto hash = process_layout_vector_hash(view.vector());
+            const auto bucket = table.ids_by_hash.find(hash);
+            if (bucket != table.ids_by_hash.end()) {
+                for (const auto candidate : bucket->second) {
+                    const auto index = static_cast<std::size_t>(candidate);
+                    const auto candidate_view
+                        = runtime::simir::process_layout_detail::
+                            ProcessLayoutAccess::view(
+                                table.definitions[index]);
+                    if (candidate_view.vector() == view.vector()) {
+                        u64(candidate);
+                        write(false);
+                        return;
+                    }
+                }
+            }
+
+            // IDs follow first logical-value encounter order. The retained
+            // COW copy snapshots an exposed facade while sharing immutable
+            // backing for an unexposed source.
+            const auto body_id
+                = static_cast<std::uint64_t>(table.definitions.size());
+            u64(body_id);
+            write(true);
+            u64(view.size());
+            for (const auto& value : view) {
+                write(value);
+            }
+            table.definitions.push_back(source);
+            table.ids_by_hash[hash].push_back(body_id);
+        }
+
+        void write_operation_list(
+            const runtime::simir::OperationList& operations)
+        {
+            const auto* const identity = operations.body_identity();
+            std::uint64_t body_id { };
+            const auto [entry, inserted]
+                = operation_body_ids_.try_emplace(
+                    identity, next_operation_body_id_);
+            body_id = entry->second;
+            const bool definition = inserted;
+            if (inserted) {
+                ++next_operation_body_id_;
+            }
+            u64(body_id);
+            write(definition);
+            if (definition) {
+                u64(operations.size());
+                for (std::size_t index = 0;
+                     index < operations.size(); ++index) {
+                    write_operation_for_runtime_state(
+                        operations.data()[index]);
+                }
+            }
+
+            const auto overrides
+                = operations.instance_operation_overrides();
+            u64(overrides.size());
+            for (const auto& [index, operation] : overrides) {
+                u64(index);
+                write_operation_for_runtime_state(operation);
+            }
+        }
+
+        void write_operation_for_runtime_state(
+            const runtime::simir::Operation& operation)
+        {
+            if (!runtime_path_projection_) {
+                write(operation);
+                return;
+            }
+
+            if (runtime::simir::operation_get_if<
+                    runtime::simir::CoverageControl>(&operation) != nullptr) {
+                auto projected = operation;
+                auto* control
+                    = runtime::simir::operation_get_if<
+                        runtime::simir::CoverageControl>(&projected);
+                control->instance_context.clear();
+                write(projected);
+            } else if (runtime::simir::operation_get_if<
+                           runtime::simir::CoverageAccess>(&operation)
+                != nullptr) {
+                auto projected = operation;
+                auto* access
+                    = runtime::simir::operation_get_if<
+                        runtime::simir::CoverageAccess>(&projected);
+                access->instance_context.clear();
+                write(projected);
+            } else if (runtime::simir::operation_get_if<
+                           runtime::simir::DebugPoint>(&operation)
+                != nullptr) {
+                auto projected = operation;
+                auto* point
+                    = runtime::simir::operation_get_if<
+                        runtime::simir::DebugPoint>(&projected);
+                point->scope = std::string_view { };
+                write(projected);
+            } else {
+                write(operation);
+            }
+        }
+
         void flush()
         {
             if (buffered_ == 0 || !failure_.empty()) {
@@ -1204,6 +1591,19 @@ namespace codec_detail {
         std::size_t buffered_ { };
         std::size_t depth_ { };
         std::string failure_;
+        bool runtime_path_projection_ { };
+        bool runtime_operation_body_sharing_ { };
+        bool runtime_process_layout_sharing_ { };
+        std::uint64_t next_operation_body_id_ { };
+        std::unordered_map<const void*, std::uint64_t>
+            operation_body_ids_;
+        RuntimeProcessLayoutBodies<runtime::simir::ValueKind>
+            register_value_kind_bodies_;
+        RuntimeProcessLayoutBodies<runtime::simir::ContainerType>
+            container_register_type_bodies_;
+        RuntimeProcessLayoutBodies<
+            runtime::simir::Process::StaticTriggerRegion>
+            static_trigger_region_bodies_;
     };
 
     class Reader {
@@ -1222,6 +1622,20 @@ namespace codec_detail {
             , remaining_(size)
             , budget_(budget)
         {
+        }
+
+        // Keep generic artifact decoders on the legacy format. Runtime-state
+        // decoding enables body references only after its schema is accepted.
+        void set_runtime_operation_body_sharing(const bool enabled) noexcept
+        {
+            runtime_operation_body_sharing_ = enabled;
+        }
+
+        // This format is enabled only after the runtime-state schema check.
+        void set_runtime_process_layout_sharing(
+            const bool enabled) noexcept
+        {
+            runtime_process_layout_sharing_ = enabled;
         }
 
         bool raw(const std::string_view expected)
@@ -1373,6 +1787,9 @@ namespace codec_detail {
                     return read_operation(*this, value);
                 } else if constexpr (
                     std::same_as<Value, runtime::simir::OperationList>) {
+                    if (runtime_operation_body_sharing_) {
+                        return read_operation_list(value);
+                    }
                     std::uint64_t size { };
                     auto operations = std::move(operation_scratch_);
                     operations.clear();
@@ -1392,6 +1809,9 @@ namespace codec_detail {
                     }
                     value = std::move(operations);
                     return true;
+                } else if constexpr (std::same_as<Value,
+                                      elaboration::detail::RuntimeProcessProgramTable>) {
+                    return read_runtime_process_table(value);
                 } else if constexpr (
                     std::same_as<Value,
                         runtime::simir::ExpressionProfileList>) {
@@ -1456,7 +1876,9 @@ namespace codec_detail {
                         if constexpr (std::same_as<
                                           typename Value::value_type,
                                           runtime::simir::Process>) {
-                            canonicalize_process(value.back());
+                            if (!runtime_operation_body_sharing_) {
+                                canonicalize_process(value.back());
+                            }
                         }
                     }
                     if constexpr (std::same_as<
@@ -1505,15 +1927,28 @@ namespace codec_detail {
                         return true;
                     }
                     if (!consume_allocation(1U,
-                            sizeof(typename Value::element_type)
+                            sizeof(std::remove_const_t<
+                                typename Value::element_type>)
                                 + 2U * sizeof(void*))) {
                         return false;
                     }
-                    value = std::make_shared<typename Value::element_type>();
-                    return read(*value);
+                    using Element = std::remove_const_t<
+                        typename Value::element_type>;
+                    auto decoded = std::make_shared<Element>();
+                    if (!read(*decoded)) {
+                        return false;
+                    }
+                    value = std::move(decoded);
+                    return true;
                 } else if constexpr (StorageWrapper<Value>) {
                     return read(value.storage);
                 } else if constexpr (requires { archive_fields(value); }) {
+                    if constexpr (
+                        RuntimeProcessLayoutVectorTraits<Value>::value) {
+                        if (runtime_process_layout_sharing_) {
+                            return read_process_layout_vector(value);
+                        }
+                    }
                     bool ok = true;
                     std::apply(
                         [&](auto&... fields) { ((ok = ok && read(fields)), ...); },
@@ -1523,6 +1958,28 @@ namespace codec_detail {
                     bool ok = true;
                     boost::pfr::for_each_field(
                         value, [&](auto& field) { ok = ok && read(field); });
+                    if constexpr (std::same_as<
+                                      Value, runtime::simir::Process>) {
+                        if (ok && runtime_process_layout_sharing_) {
+                            const auto register_value_kinds
+                                = runtime::simir::process_layout_detail::
+                                    ProcessLayoutAccess::view(
+                                        value.register_value_kinds);
+                            const auto container_register_types
+                                = runtime::simir::process_layout_detail::
+                                    ProcessLayoutAccess::view(
+                                        value.container_register_types);
+                            if ((!register_value_kinds.empty()
+                                    && register_value_kinds.size()
+                                        != value.register_count)
+                                || container_register_types.size()
+                                    != value.container_register_count) {
+                                return fail(
+                                    "design state process layout vector has "
+                                    "an invalid register shape");
+                            }
+                        }
+                    }
                     return ok;
                 } else {
                     static_assert(sizeof(Value) == 0, "unsupported design-state field");
@@ -1543,6 +2000,131 @@ namespace codec_detail {
         }
 
     private:
+        bool read_runtime_process_table(
+            elaboration::detail::RuntimeProcessProgramTable& table)
+        {
+            if (!read(table.templates)) {
+                return false;
+            }
+            std::uint64_t count { };
+            if (!u64(count) || count > remaining() + 1U
+                || count > table.rows.max_size()
+                || !consume_allocation(
+                    count,
+                    sizeof(elaboration::detail::RuntimeProcessProgramRow))) {
+                return fail("runtime process rows exceed the payload");
+            }
+            table.rows.clear();
+            table.rows.reserve(static_cast<std::size_t>(count));
+            for (std::uint64_t index = 0; index < count; ++index) {
+                table.rows.emplace_back();
+                auto& row = table.rows.back();
+                if (!read(row.template_id)) {
+                    return false;
+                }
+                auto& instance = row.instance;
+                if (!read(instance.id)
+                    // The instance name is reconstructed from the ordered
+                    // path-ID table after the complete DTO is read.
+                    || !read(instance.static_sensitivity)
+                    || !read(instance.operations)
+                    || !read(instance.driver_regions)
+                    || !read(instance.drive_strength)
+                    || !read(instance.switch_source)
+                    || !read(instance.switch_target)
+                    || !read(instance.switch_control)
+                    || !read(instance.switch_source_offset)
+                    || !read(instance.switch_target_offset)
+                    || !read(instance.switch_width)
+                    || !read(instance.switch_active_high)
+                    || !read(instance.switch_bidirectional)
+                    || !read(instance.switch_resistive)
+                    || !read(instance.initialize)
+                    || !read(instance.observed)
+                    || !read(instance.reactive)
+                    || !read(instance.program_owner)
+                    || !read(instance.postponed)
+                    || !read(instance.final)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        template <typename T>
+        std::vector<runtime::simir::CopyOnWriteVector<T>>&
+        process_layout_bodies()
+        {
+            if constexpr (std::same_as<T, runtime::simir::ValueKind>) {
+                return register_value_kind_bodies_;
+            } else if constexpr (
+                std::same_as<T, runtime::simir::ContainerType>) {
+                return container_register_type_bodies_;
+            } else {
+                static_assert(std::same_as<T,
+                    runtime::simir::Process::StaticTriggerRegion>);
+                return static_trigger_region_bodies_;
+            }
+        }
+
+        template <typename T>
+        bool read_process_layout_vector(
+            runtime::simir::CopyOnWriteVector<T>& value)
+        {
+            if (value.references_escaped()) {
+                return fail(
+                    "design state shared process-layout destination is "
+                    "already exposed");
+            }
+
+            std::uint64_t body_id { };
+            bool definition { };
+            if (!u64(body_id) || !read(definition)) {
+                return false;
+            }
+
+            auto& bodies = process_layout_bodies<T>();
+            if (definition) {
+                if (body_id != bodies.size()) {
+                    return fail(
+                        "design state process-layout definition is "
+                        "duplicated or out of order");
+                }
+                // Reserve budget for this table entry, its geometric vector
+                // growth, and the shared COW control/vector storage.
+                if (!consume_allocation(1U,
+                        2U * sizeof(runtime::simir::CopyOnWriteVector<T>)
+                            + sizeof(std::vector<T>)
+                            + 2U * sizeof(void*))) {
+                    return false;
+                }
+                std::uint64_t size { };
+                std::vector<T> decoded;
+                if (!u64(size) || size > remaining()
+                    || size > decoded.max_size()
+                    || !consume_allocation(size, sizeof(T))) {
+                    return fail(
+                        "design state process-layout vector exceeds the "
+                        "payload");
+                }
+                decoded.reserve(static_cast<std::size_t>(size));
+                for (std::uint64_t index = 0; index < size; ++index) {
+                    decoded.emplace_back();
+                    if (!read(decoded.back())) {
+                        return false;
+                    }
+                }
+                bodies.emplace_back(std::move(decoded));
+            } else if (body_id >= bodies.size()) {
+                return fail(
+                    "design state references an unknown process-layout "
+                    "vector");
+            }
+
+            value = bodies[static_cast<std::size_t>(body_id)];
+            return true;
+        }
+
         void canonicalize_process(runtime::simir::Process& process)
         {
             if (signals_ == nullptr
@@ -1558,7 +2140,10 @@ namespace codec_detail {
             mix(process.register_count);
             mix(process.string_register_count);
             mix(process.container_register_count);
-            for (const auto kind : process.register_value_kinds) {
+            const auto register_value_kinds
+                = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+                    process.register_value_kinds);
+            for (const auto kind : register_value_kinds) {
                 mix(static_cast<std::uint64_t>(kind));
             }
             for (const auto& operation : process.operations) {
@@ -1574,6 +2159,84 @@ namespace codec_detail {
                 }
             }
             representatives.push_back(&process);
+        }
+
+        bool read_operation_list(
+            runtime::simir::OperationList& value)
+        {
+            std::uint64_t body_id { };
+            bool definition { };
+            if (!u64(body_id) || !read(definition)) {
+                return false;
+            }
+            if (definition) {
+                if (body_id != operation_bodies_.size()
+                    || !consume_allocation(
+                        1U, sizeof(runtime::simir::OperationList))) {
+                    return fail(
+                        "design state operation body definition is out of order");
+                }
+                std::uint64_t size { };
+                runtime::simir::OperationList::Storage operations;
+                if (!u64(size)
+                    || size > static_cast<std::uint64_t>(remaining()) + 1U
+                    || size > operations.max_size()
+                    || !consume_allocation(size,
+                        sizeof(runtime::simir::Operation))) {
+                    return fail(
+                        "design state operation body exceeds the payload");
+                }
+                operations.reserve(static_cast<std::size_t>(size));
+                for (std::uint64_t index = 0; index < size; ++index) {
+                    operations.emplace_back();
+                    if (!read(operations.back())) {
+                        return false;
+                    }
+                }
+                operation_bodies_.emplace_back(std::move(operations));
+            } else if (body_id >= operation_bodies_.size()) {
+                return fail(
+                    "design state references an unknown operation body");
+            }
+
+            value = operation_bodies_[static_cast<std::size_t>(body_id)];
+            std::uint64_t override_count { };
+            if (!u64(override_count)
+                || override_count > value.size()
+                || override_count
+                    > static_cast<std::uint64_t>(remaining()) / 16U
+                || override_count
+                    > std::vector<std::pair<std::uint64_t,
+                           runtime::simir::Operation>> {}.max_size()
+                || !consume_allocation(override_count,
+                    sizeof(std::pair<std::uint64_t,
+                        runtime::simir::Operation>))) {
+                return fail(
+                    "design state operation overrides exceed the payload");
+            }
+
+            std::uint64_t previous_index { };
+            bool has_previous_index { };
+            for (std::uint64_t override_index = 0;
+                 override_index < override_count; ++override_index) {
+                std::uint64_t index { };
+                runtime::simir::Operation operation;
+                if (!u64(index) || !read(operation)) {
+                    return false;
+                }
+                if (index >= value.size()
+                    || index
+                        > std::numeric_limits<runtime::simir::InstructionIndex>::max()
+                    || (has_previous_index && index <= previous_index)) {
+                    return fail(
+                        "design state operation overrides are not canonical");
+                }
+                value.replace(static_cast<std::size_t>(index),
+                    std::move(operation));
+                previous_index = index;
+                has_previous_index = true;
+            }
+            return true;
         }
 
         bool enter()
@@ -1661,6 +2324,16 @@ namespace codec_detail {
         std::size_t depth_ { };
         std::string failure_;
         DecodeBudget* budget_ { };
+        bool runtime_operation_body_sharing_ { };
+        bool runtime_process_layout_sharing_ { };
+        std::vector<runtime::simir::OperationList> operation_bodies_;
+        std::vector<runtime::simir::CopyOnWriteVector<
+            runtime::simir::ValueKind>> register_value_kind_bodies_;
+        std::vector<runtime::simir::CopyOnWriteVector<
+            runtime::simir::ContainerType>> container_register_type_bodies_;
+        std::vector<runtime::simir::CopyOnWriteVector<
+            runtime::simir::Process::StaticTriggerRegion>>
+            static_trigger_region_bodies_;
         const std::vector<runtime::simir::Signal>* signals_ { };
         std::unordered_map<std::uint64_t,
             std::vector<const runtime::simir::Process*>> process_bodies_;

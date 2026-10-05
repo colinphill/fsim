@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_phase_profile.hpp"
 #include "application_workspace_internal.hpp"
 #include "application_sdf_session.hpp"
 #include "application_hierarchy_path_codec.hpp"
+#include "../elaboration/elaborated_design_process_access.hpp"
 #include "../systemc/producer_fingerprint.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
@@ -199,7 +201,13 @@ namespace {
             }
             return RehydratedSystemC { };
         }
-        auto state = runtime.state();
+        const auto process_rows
+            = elaboration::detail::ElaboratedDesignProcessAccess::process_table(
+                runtime);
+        auto state = process_rows
+            ? elaboration::detail::ElaboratedDesignProcessAccess::artifact_state(
+                  runtime)
+            : runtime.state();
 
         project::SystemCSection host_settings;
         diagnostic::Engine fingerprint_diagnostics;
@@ -467,7 +475,9 @@ namespace {
                 return std::nullopt;
             }
         }
-        auto rebuilt = elaboration::ElaboratedDesign::from_state(std::move(state));
+        auto rebuilt
+            = elaboration::detail::ElaboratedDesignProcessAccess::from_state(
+                std::move(state), process_rows);
         if (!rebuilt) {
             diagnostics.error(
                 "FSIM-ART-0014",
@@ -523,6 +533,7 @@ static bool publish_design_artifact_impl(
     diagnostic::Engine& diagnostics,
     BuiltProject* consumable_project)
 {
+    application_detail::ScopedPhaseProfile phase { "design_artifact_publish" };
     auto compiled_design = consumable_project != nullptr
         ? semantic::CompiledDesign {
               std::move(consumable_project->semantics),
@@ -669,14 +680,19 @@ static bool publish_design_artifact_impl(
     }
     metadata.specialization_count = project.design.specializations().size();
     metadata.signal_count = project.design.signals().size();
-    metadata.process_count = project.design.processes().size();
+    metadata.process_count = project.design.process_count();
 
-    auto runtime = consumable_project != nullptr
-        ? serialize_runtime_state(
-              std::move(consumable_project->design),
-              hierarchy_paths.payload->paths, diagnostics)
-        : serialize_runtime_state(project.design,
-              hierarchy_paths.payload->paths, diagnostics);
+    auto runtime = [&] {
+        application_detail::ScopedPhaseProfile encode_phase {
+            "runtime_artifact_encode"
+        };
+        return consumable_project != nullptr
+            ? serialize_runtime_state(
+                  std::move(consumable_project->design),
+                  hierarchy_paths.payload->paths, diagnostics)
+            : serialize_runtime_state(project.design,
+                  hierarchy_paths.payload->paths, diagnostics);
+    }();
     if (!runtime) {
         return false;
     }
@@ -866,6 +882,7 @@ std::optional<BuiltProject> load_design_artifact(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics)
 {
+    application_detail::ScopedPhaseProfile phase { "design_artifact_load" };
     auto metadata = artifact::load_design_metadata(directory, diagnostics);
     if (!metadata) {
         return std::nullopt;
@@ -948,9 +965,14 @@ std::optional<BuiltProject> load_design_artifact(
                 + support::path_to_utf8(runtime_path));
         return std::nullopt;
     }
-    auto runtime = deserialize_runtime_state(runtime_input, *runtime_size,
-        support::path_to_utf8(runtime_index->artifact),
-        hierarchy_paths.payload->paths, diagnostics);
+    auto runtime = [&] {
+        application_detail::ScopedPhaseProfile decode_phase {
+            "runtime_artifact_decode"
+        };
+        return deserialize_runtime_state(runtime_input, *runtime_size,
+            support::path_to_utf8(runtime_index->artifact),
+            hierarchy_paths.payload->paths, diagnostics);
+    }();
     if (runtime && !runtime->remap_path_table(
                        hierarchy_paths.payload->paths)) {
         diagnostics.error("FSIM-ART-0014",
@@ -1047,7 +1069,7 @@ std::optional<BuiltProject> load_design_artifact(
         || semantics->source_files().size() != metadata->semantic_source_count
         || runtime->specializations().size() != metadata->specialization_count
         || runtime->signals().size() != metadata->signal_count
-        || runtime->processes().size() != metadata->process_count
+        || runtime->process_count() != metadata->process_count
         || fsim::runtime::validate_systemverilog_uvm_checkpoint(
                *uvm_state, expected_uvm)
             != fsim::runtime::SystemVerilogUvmCheckpointError::None) {
@@ -1690,12 +1712,12 @@ int handle_elaborate(const cli::Invocation& invocation,
         diagnostics, output);
 }
 
-int handle_simulate(
+static int handle_simulate_impl(
     const cli::Invocation& invocation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     std::ostream& output,
-    std::ostream&)
+    const SimulationOutputSink sink)
 {
     if (!invocation.design) {
         return 1;
@@ -1789,7 +1811,31 @@ int handle_simulate(
     }
     return run_built_project(
         std::move(*built), simulation_engine,
-        config, invocation.plusargs, diagnostics, output);
+        config, invocation.plusargs, diagnostics, output,
+        simulation_engine == SimulationEngine::debug
+            ? SimulationOutputSink::callback : sink);
+}
+
+int handle_simulate(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream&)
+{
+    return handle_simulate_impl(invocation, config, diagnostics, output,
+        SimulationOutputSink::callback);
+}
+
+int handle_simulate_stdio(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream&)
+{
+    return handle_simulate_impl(invocation, config, diagnostics, output,
+        SimulationOutputSink::builtin_stdout);
 }
 
 } // namespace fsim::app::application_detail

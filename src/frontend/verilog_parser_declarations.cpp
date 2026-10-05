@@ -1217,7 +1217,7 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
     }
     std::vector<Statement> statements;
     do {
-        if (!at(TokenKind::Identifier)) {
+        if (!at(TokenKind::Identifier) && !at(TokenKind::LeftBrace)) {
             error(
                 current(), "FSIM-SV-PARSE-009",
                 "expected continuous assignment target");

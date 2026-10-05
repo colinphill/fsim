@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_vital_models.hpp"
 #include "sdf_diagnostic.hpp"
+#include "sdf_process_rows.hpp"
 
 #include <algorithm>
 #include <ranges>
@@ -52,7 +53,7 @@ namespace {
     };
 
     [[nodiscard]] ModelFingerprint fingerprint(
-        const elaboration::ElaboratedDesignState& state,
+        const elaboration::ElaboratedDesign& elaborated,
         const elaboration::SpecializationInfo& specialization)
     {
         ModelFingerprint result;
@@ -66,12 +67,18 @@ namespace {
         result.process_set.insert(
             result.processes.begin(), result.processes.end());
         for (const auto process_id : result.processes) {
-            if (process_id >= state.processes.size()
-                || state.processes[process_id].id != process_id) {
+            if (process_id >= elaborated.process_count()) {
                 result.valid = false;
                 continue;
             }
-            for (const auto& operation : state.processes[process_id].operations) {
+            const auto process
+                = elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+                    elaborated, process_id);
+            if (!process.valid() || process.id() != process_id) {
+                result.valid = false;
+                continue;
+            }
+            for (const auto& operation : process.operations()) {
                 if (runtime::simir::operation_get_if<
                         runtime::simir::VitalMemoryDeclare>(&operation)
                     != nullptr) {
@@ -243,8 +250,9 @@ SdfVitalModelResult build_sdf_vital_model_plan(
     std::unordered_map<std::string_view,
         const elaboration::SpecializationInfo*>
         specializations;
-    const auto& state = elaborated.state();
-    for (const auto& specialization : state.specializations) {
+    [[maybe_unused]] const auto process_rows
+        = sdf_detail::retain_published_process_rows(elaborated);
+    for (const auto& specialization : elaborated.specializations()) {
         if (specialization.language != frontend::Language::Vhdl2008)
             continue;
         const auto [found, inserted] = specializations.emplace(
@@ -301,7 +309,7 @@ SdfVitalModelResult build_sdf_vital_model_plan(
         auto [fingerprint_entry, inserted] = fingerprints.try_emplace(
             specialization.instance);
         if (inserted) {
-            fingerprint_entry->second = fingerprint(state, specialization);
+            fingerprint_entry->second = fingerprint(elaborated, specialization);
         }
         const auto& model = fingerprint_entry->second;
         if (!model.valid || model.processes.empty()

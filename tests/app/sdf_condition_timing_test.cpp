@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_condition_timing.hpp"
+#include "sdf_row_backed_test_support.hpp"
 
 #include <iostream>
 #include <memory>
@@ -122,9 +123,7 @@ fsim::elaboration::ElaboratedDesign make_design()
     setup.limits = { 1 };
     state.verilog_timing_checks.push_back(std::move(setup));
 
-    auto design = elaboration::ElaboratedDesign::from_state(std::move(state));
-    require(design.has_value(), "condition timing fixture must be valid");
-    return std::move(*design);
+    return app::sdf_row_backed_test::make_row_backed_design(std::move(state));
 }
 
 std::shared_ptr<const fsim::app::SdfAnnotationSummary> make_summary(
@@ -279,6 +278,21 @@ void test_condition_edge_notifier_and_signed_binding()
         "conditional timing application must not mutate elaboration");
 }
 
+void test_row_backed_identity_survives_condition_planning()
+{
+    using namespace fsim;
+    auto design = make_design();
+    const auto identity
+        = app::sdf_row_backed_test::capture_process_row_identity(design);
+    const auto result = app::apply_sdf_condition_timing(
+        make_plan(valid_annotations()), design);
+    require(result.ok() && result.application->checks().size() == 3U,
+        "row-backed condition planning must publish all valid checks");
+    require(app::sdf_row_backed_test::same_process_row_identity(
+                design, identity),
+        "condition checks must retain process rows and common-program identities");
+}
+
 std::pair<std::size_t, std::string> run_effective_check(
     const fsim::runtime::simir::ModuleTimingCheck& source,
     const std::string_view initial_enable,
@@ -390,6 +404,7 @@ int main()
 {
     try {
         test_condition_edge_notifier_and_signed_binding();
+        test_row_backed_identity_survives_condition_planning();
         test_four_state_and_same_tick_runtime_behavior();
         test_mismatch_and_resource_rejection();
     } catch (const std::exception& exception) {

@@ -47,6 +47,8 @@ void test_inline_constraint_cache_identity(
     const std::filesystem::path& cache_directory);
 void test_static_pattern_cache_identity(
     const std::filesystem::path& cache_directory);
+void test_cache_identity_mismatch_diagnostics(
+    const std::filesystem::path& cache_directory);
 
 void test_static_slice_cache_identity(
     const std::filesystem::path& cache_directory)
@@ -670,6 +672,7 @@ void test_persistent_object_cache()
         JitOptimizationLevel::o0, root / "group-o0");
     test_process_module_grouping_at_level(
         JitOptimizationLevel::o2, root / "group-o2");
+    test_cache_identity_mismatch_diagnostics(root / "identity-mismatch");
     test_canonical_operation_cache_identity(root / "canonical-operations");
     test_cohort_binding_retention();
     test_cache_pruning_integration(root / "pruning");

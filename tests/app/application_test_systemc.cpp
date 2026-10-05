@@ -2,13 +2,19 @@
 #include "application_test_support.hpp"
 
 #include "fsim/systemc/hierarchy.hpp"
+#include "../../src/app/application_simulation_internal.hpp"
+#include "../../src/runtime/simir_internal.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <csignal>
+#include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -17,6 +23,386 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+namespace fsim::runtime::simir {
+
+struct SystemCBridgeTestAccess {
+    struct RawDriver {
+        ProcessId process { };
+        std::string value;
+
+        friend bool operator==(const RawDriver&, const RawDriver&) = default;
+    };
+
+    struct SignalSnapshot {
+        std::string current;
+        std::string last;
+        std::string stored;
+        std::vector<RawDriver> raw_drivers;
+        std::optional<std::pair<SimulationTick, std::uint64_t>> event;
+        std::optional<std::pair<SimulationTick, std::uint64_t>> transaction;
+        ProcessSchedulingDomain event_domain {
+            ProcessSchedulingDomain::generic };
+        SchedulerPhase event_phase { SchedulerPhase::active };
+        std::uint64_t systemverilog_round { };
+
+        friend bool operator==(
+            const SignalSnapshot&, const SignalSnapshot&) = default;
+    };
+
+    struct SystemCBridgeRun {
+        ProcessId systemc_process { };
+        ProcessId observer_process { };
+        fsim::runtime::RunStatus first_status {
+            fsim::runtime::RunStatus::completed };
+        fsim::runtime::RunStatus final_status {
+            fsim::runtime::RunStatus::completed };
+        SimulationTick first_time { };
+        std::uint64_t first_delta { };
+        SimulationTick final_time { };
+        bool compiled_observer_available { };
+        bool systemc_access_complete { };
+        bool region_graph_present { };
+        bool graph_access_inventory_complete { };
+        bool frontier_backend_available { };
+        bool observer_frontier_member_available { };
+        bool readiness_key_valid_at_boundary { };
+        bool queued_boundary_captured { };
+        bool queued_at_boundary { };
+        SimulationTick queued_boundary_time { };
+        std::uint64_t queued_boundary_delta { };
+        SignalSnapshot input_at_boundary;
+        SignalSnapshot output_at_boundary;
+        SignalSnapshot input;
+        SignalSnapshot output;
+        std::uint64_t native_frontier_dispatches_before_run { };
+        std::uint64_t native_frontier_dispatches_at_boundary { };
+        std::uint64_t native_frontier_dispatches_after_resume { };
+    };
+
+    class ScopedEnvironment final {
+    public:
+        ScopedEnvironment(const char* const name, const char* const value)
+            : name_(name)
+        {
+            if (const auto* const previous = std::getenv(name_.c_str())) {
+                previous_ = previous;
+            }
+            if (!set(value)) {
+                throw std::runtime_error {
+                    "failed to update the native-frontier test environment"
+                };
+            }
+        }
+
+        ScopedEnvironment(const ScopedEnvironment&) = delete;
+        ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
+
+        ~ScopedEnvironment()
+        {
+            static_cast<void>(set(previous_ ? previous_->c_str() : nullptr));
+        }
+
+    private:
+        [[nodiscard]] bool set(const char* const value) const noexcept
+        {
+#if defined(_WIN32)
+            return ::_putenv_s(
+                name_.c_str(), value == nullptr ? "" : value) == 0;
+#else
+            return value == nullptr
+                ? ::unsetenv(name_.c_str()) == 0
+                : ::setenv(name_.c_str(), value, 1) == 0;
+#endif
+        }
+
+        std::string name_;
+        std::optional<std::string> previous_;
+    };
+
+    [[nodiscard]] static SignalSnapshot snapshot(
+        const fsim::app::Simulation& simulation, const SignalId signal)
+    {
+        const auto& application = *simulation.impl_;
+        if (!application.interpreter) {
+            throw std::logic_error {
+                "the SystemC bridge snapshot has no interpreter state"
+            };
+        }
+        const auto& state = *application.interpreter->impl_;
+        if (signal >= state.signals.size()
+            || state.has_container_signal_alias(signal)) {
+            throw std::logic_error {
+                "the SystemC bridge snapshot requires direct signals"
+            };
+        }
+
+        const bool materialization_pending
+            = signal < state.direct_signal_materialization_pending.size()
+            && state.direct_signal_materialization_pending[signal] != 0U;
+        const AuthoritativeSignalPlanes* authoritative_values { };
+        const auto width = state.signals[signal].initial_value.width();
+        if (width > 64U
+            && signal < state.region_authoritative_component_by_signal.size()) {
+            const auto component
+                = state.region_authoritative_component_by_signal[signal];
+            if (component
+                    < state.region_authoritative_state_by_component.size()
+                && state.region_authoritative_state_by_component[component]
+                && state.region_authoritative_state_by_component[component]
+                       ->values().packed_signal_slots_bound(signal)) {
+                authoritative_values
+                    = &state.region_authoritative_state_by_component[component]
+                           ->values();
+            }
+        }
+
+        PackedLogic4 current;
+        PackedLogic4 last;
+        PackedLogic4 stored;
+        if (authoritative_values != nullptr) {
+            current = authoritative_values->current(signal);
+            last = authoritative_values->previous(signal);
+            stored = authoritative_values->stored(signal);
+        } else if (materialization_pending) {
+            if (state.signals[signal].value_kind != ValueKind::logic4
+                || width == 0U || width > 64U
+                || signal >= state.direct_signal_aval.size()
+                || signal >= state.direct_signal_bval.size()
+                || signal >= state.direct_signal_last_aval.size()
+                || signal >= state.direct_signal_last_bval.size()) {
+                throw std::logic_error {
+                    "the pending direct plane is outside the passive snapshot path"
+                };
+            }
+            current = PackedLogic4::from_aval_bval(width,
+                state.direct_signal_aval[signal],
+                state.direct_signal_bval[signal]);
+            last = PackedLogic4::from_aval_bval(width,
+                state.direct_signal_last_aval[signal],
+                state.direct_signal_last_bval[signal]);
+            stored = current;
+        } else {
+            current = state.signals[signal].initial_value;
+            last = state.signal_last_values.at(signal);
+            stored = state.driven_values.at(signal);
+        }
+
+        SignalSnapshot result;
+        result.current = current.to_msb_string();
+        result.last = last.to_msb_string();
+        result.stored = stored.to_msb_string();
+        state.driver_values.at(signal).for_each_in_process_order(
+            [&](const DriverRecord& record) {
+                const auto value = authoritative_values != nullptr
+                    ? authoritative_values->owner_value(
+                          signal, record.process)
+                    : materialization_pending
+                        && state.direct_single_driver_record(signal) == &record
+                    ? current
+                    : record.value;
+                result.raw_drivers.push_back(
+                    { record.process, value.to_msb_string() });
+            });
+        result.event = state.signal_events.at(signal);
+        result.transaction = state.signal_transactions.at(signal);
+        const auto& stamp
+            = state.signal_event_scheduling_stamps.at(signal);
+        result.event_domain = stamp.origin.process_domain;
+        result.event_phase = stamp.origin.phase;
+        result.systemverilog_round = stamp.systemverilog_round;
+        return result;
+    }
+
+    [[nodiscard]] static ProcessId single_writer_in_domain(
+        const fsim::app::Simulation& simulation,
+        const SignalId signal,
+        const ProcessSchedulingDomain domain)
+    {
+        const auto& application = *simulation.impl_;
+        if (!application.interpreter) {
+            throw std::logic_error {
+                "the SystemC bridge owner lookup has no interpreter state"
+            };
+        }
+        const auto& state = *application.interpreter->impl_;
+        if (signal >= state.signal_writer_counts.size()
+            || signal >= state.stable_single_writer_processes.size()
+            || state.signal_writer_counts[signal] != 1U) {
+            throw std::logic_error {
+                "the SystemC bridge signal has no unique registered writer"
+            };
+        }
+
+        const auto process = state.stable_single_writer_processes[signal];
+        if (process >= state.processes.size()
+            || state.processes.program_view(process).scheduling_domain()
+                != domain) {
+            throw std::logic_error {
+                "the SystemC bridge signal has no writer in the requested domain"
+            };
+        }
+        return process;
+    }
+
+    [[nodiscard]] static std::uint64_t native_dispatches(
+        const fsim::app::Simulation& simulation)
+    {
+        const auto& application = *simulation.impl_;
+        if (!application.interpreter) {
+            throw std::logic_error {
+                "the SystemC bridge dispatch counter has no interpreter state"
+            };
+        }
+        return application.interpreter->impl_
+            ->systemverilog_wave_profile_native_frontier_member_dispatches;
+    }
+
+    [[nodiscard]] static SystemCBridgeRun run_systemc_method(
+        fsim::app::BuiltProject project,
+        const SimulationTick max_deltas,
+        const fsim::app::SimulationEngine engine)
+    {
+        const bool compiled
+            = engine == fsim::app::SimulationEngine::compiled;
+        ScopedEnvironment region_kernel {
+            "FSIM_ENABLE_SV_REGION_KERNEL", compiled ? "1" : "0" };
+        ScopedEnvironment local_wave {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", compiled ? "1" : "0" };
+        ScopedEnvironment wave_profile { "FSIM_PROFILE_SV_WAVES", "1" };
+        ScopedEnvironment jit_profile { "FSIM_PROFILE_JIT", nullptr };
+
+        const auto input = project.design.find_signal("inverted");
+        const auto output = project.design.find_signal("observed");
+        if (!input || !output
+            || project.design.systemc_processes().size() != 1U) {
+            throw std::logic_error {
+                "the SystemC callback fixture lost its signal/process shape"
+            };
+        }
+
+        SystemCBridgeRun result;
+        result.systemc_process
+            = project.design.systemc_processes().front().process;
+        fsim::app::Simulation simulation {
+            std::move(project), max_deltas, engine,
+            fsim::app::SystemVerilogVpiRuntimeUpdates::omitted };
+        if (compiled) {
+            simulation.await_all_native_compilation();
+        }
+        const auto initial = simulation.run(SimulationTick { 0U });
+        if (initial.status != fsim::runtime::RunStatus::time_limit
+            || initial.time != SimulationTick { 0U }) {
+            throw std::logic_error {
+                "the SystemC bridge fixture did not settle its time-zero startup"
+            };
+        }
+        result.observer_process = single_writer_in_domain(simulation,
+            *output, ProcessSchedulingDomain::systemverilog);
+
+        auto& state = *simulation.impl_->interpreter->impl_;
+        auto& scheduler = state.scheduler;
+        result.systemc_access_complete
+            = state.process_signal_access_is_complete(
+                result.systemc_process);
+        result.region_graph_present = state.region_graph.has_value();
+        result.graph_access_inventory_complete = state.region_graph
+            && state.region_graph->certificate_inventory()
+                   .access_inventory_complete;
+        result.frontier_backend_available = std::ranges::any_of(
+            state.region_frontier_backends_by_component,
+            [](const auto& backend) {
+                return backend && backend->executor;
+            });
+        result.observer_frontier_member_available
+            = result.observer_process
+                    < state.region_readiness_member_index_by_process.size()
+            && state.region_readiness_member_index_by_process[
+                   result.observer_process]
+                != std::numeric_limits<std::size_t>::max();
+#if defined(FSIM_HAS_LLVM)
+        if (compiled
+            && result.observer_process < state.processes.size()) {
+            result.compiled_observer_available
+                = dynamic_cast<const fsim::app::LlvmProcessExecutor*>(
+                      state.processes[result.observer_process]
+                          .executor.get())
+                != nullptr;
+        }
+#endif
+        result.native_frontier_dispatches_before_run
+            = native_dispatches(simulation);
+        Scheduler::SafePointHookToken hook_token { };
+        hook_token = scheduler.add_safe_point_hook(
+            [&simulation, &state, &result, input = *input,
+                output = *output](Scheduler& active_scheduler,
+                const SchedulerPhase phase) {
+                if (result.queued_boundary_captured
+                    || phase != SchedulerPhase::active
+                    || active_scheduler.now() != SimulationTick { 1U }
+                    || result.observer_process >= state.processes.size()
+                    || !state.processes[result.observer_process].queued) {
+                    return;
+                }
+
+                const auto input_snapshot = snapshot(simulation, input);
+                if (!input_snapshot.event
+                    || input_snapshot.event_domain
+                        != ProcessSchedulingDomain::generic
+                    || input_snapshot.event_phase != SchedulerPhase::active
+                    || input_snapshot.systemverilog_round != 0U
+                    || input_snapshot.event->first
+                        != active_scheduler.now()) {
+                    return;
+                }
+
+                result.queued_boundary_captured = true;
+                result.queued_at_boundary
+                    = state.processes[result.observer_process].queued;
+                result.queued_boundary_time = active_scheduler.now();
+                result.queued_boundary_delta = active_scheduler.delta();
+                result.readiness_key_valid_at_boundary
+                    = result.observer_process
+                            < state.region_readiness_queued_by_process.size()
+                    && state.region_readiness_queued_by_process[
+                           result.observer_process]
+                           .key_valid;
+                result.native_frontier_dispatches_at_boundary
+                    = native_dispatches(simulation);
+                result.input_at_boundary = input_snapshot;
+                result.output_at_boundary = snapshot(simulation, output);
+                active_scheduler.request_stop();
+            });
+
+        const auto first = simulation.run();
+        result.first_status = first.status;
+        result.first_time = first.time;
+        result.first_delta = first.delta;
+        auto final = first;
+        if (hook_token != 0U) {
+            scheduler.remove_safe_point_hook(hook_token);
+            hook_token = 0U;
+        }
+        if (first.status != fsim::runtime::RunStatus::stopped
+            || !result.queued_boundary_captured) {
+            throw std::logic_error {
+                "the SystemC callback did not stop at its queued checked SV boundary"
+            };
+        }
+        simulation.clear_stop();
+        final = simulation.run();
+
+        result.final_status = final.status;
+        result.final_time = final.time;
+        result.native_frontier_dispatches_after_resume
+            = native_dispatches(simulation);
+        result.input = snapshot(simulation, *input);
+        result.output = snapshot(simulation, *output);
+        return result;
+    }
+};
+
+} // namespace fsim::runtime::simir
 
 namespace fsim::test {
 
@@ -1243,17 +1629,32 @@ systemc_method_config.bindings = {
      "systemc:models.method_bridge",
      std::nullopt},
 };
+auto systemc_method_o0_config = systemc_method_config;
+systemc_method_o0_config.build.optimization =
+    fsim::project::Optimization::o0;
+systemc_method_o0_config.build.cache_path =
+    directory / "systemc-method-o0-cache";
+auto systemc_method_o2_config = systemc_method_config;
+systemc_method_o2_config.build.optimization =
+    fsim::project::Optimization::o2;
+systemc_method_o2_config.build.cache_path =
+    directory / "systemc-method-o2-cache";
 fsim::diagnostic::Engine systemc_method_diagnostics;
 auto systemc_method_reference = fsim::app::build_project(
-    systemc_method_config, systemc_method_diagnostics);
+    systemc_method_o0_config, systemc_method_diagnostics);
 auto systemc_method_compiled = fsim::app::build_project(
-    systemc_method_config, systemc_method_diagnostics);
+    systemc_method_o0_config, systemc_method_diagnostics);
+fsim::diagnostic::Engine systemc_method_o2_diagnostics;
+auto systemc_method_o2_compiled = fsim::app::build_project(
+    systemc_method_o2_config, systemc_method_o2_diagnostics);
 assert(systemc_method_reference);
 assert(systemc_method_compiled);
+assert(systemc_method_o2_compiled);
 assert(systemc_method_reference->specialization_cache_keys.size() == 1);
 assert(
     systemc_method_compiled->specialization_cache_keys
     == systemc_method_reference->specialization_cache_keys);
+assert(systemc_method_o2_compiled->specialization_cache_keys.size() == 1);
 const auto method_runtime_identity =
     systemc_method_reference->specialization_cache_keys.front();
 
@@ -1262,7 +1663,7 @@ const auto method_runtime_identity =
 // Native specialization provenance must follow the selected factory schema,
 // typed construction tuple, and stable hierarchy rather than transient image
 // addresses or handles.
-auto alternate_factory_config = systemc_method_config;
+auto alternate_factory_config = systemc_method_o0_config;
 alternate_factory_config.bindings.front().target =
     "systemc:models.bound_ports";
 fsim::diagnostic::Engine alternate_factory_diagnostics;
@@ -1277,7 +1678,7 @@ assert(
     alternate_factory_project->design.systemc_instances().front().target
     == "systemc:models.bound_ports");
 
-auto alternate_hierarchy_config = systemc_method_config;
+auto alternate_hierarchy_config = systemc_method_o0_config;
 alternate_hierarchy_config.bindings.front().target =
     "systemc:models.native_hierarchy";
 fsim::diagnostic::Engine alternate_hierarchy_diagnostics;
@@ -1305,43 +1706,105 @@ assert(
     == "systemc_method_host.u_method.$accellera_kernel");
 assert(method_process.initialize);
 assert(method_process.static_sensitivity.size() == 1);
-const auto run_systemc_method =
-    [&](fsim::app::BuiltProject project,
-        const fsim::app::SimulationEngine engine) {
-      const auto inverted =
-          project.design.find_signal("inverted");
-      const auto observed =
-          project.design.find_signal("observed");
-      assert(inverted && observed);
-      fsim::app::Simulation simulation{
-          std::move(project),
-          systemc_method_config.run.max_deltas,
-          engine};
-      const auto result = simulation.run();
-      return std::tuple{
-          result,
-          simulation.read_signal(*inverted).to_msb_string(),
-          simulation.read_signal(*observed).to_msb_string()};
-    };
-const auto method_reference = run_systemc_method(
-    std::move(*systemc_method_reference),
-    fsim::app::SimulationEngine::interpreter);
-const auto method_compiled = run_systemc_method(
-    std::move(*systemc_method_compiled),
-    fsim::app::SimulationEngine::compiled);
-assert(std::get<0>(method_reference).status
+const auto method_reference =
+    fsim::runtime::simir::SystemCBridgeTestAccess::run_systemc_method(
+        std::move(*systemc_method_reference),
+        systemc_method_config.run.max_deltas,
+        fsim::app::SimulationEngine::interpreter);
+const auto method_compiled =
+    fsim::runtime::simir::SystemCBridgeTestAccess::run_systemc_method(
+        std::move(*systemc_method_compiled),
+        systemc_method_o0_config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled);
+const auto method_compiled_o2 =
+    fsim::runtime::simir::SystemCBridgeTestAccess::run_systemc_method(
+        std::move(*systemc_method_o2_compiled),
+        systemc_method_o2_config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled);
+assert(method_reference.final_status
        == fsim::runtime::RunStatus::stopped);
-assert(std::get<0>(method_reference).time == 2);
-assert(std::get<1>(method_reference) == "0");
-assert(std::get<2>(method_reference) == "0");
-assert(std::get<0>(method_reference).status
-       == std::get<0>(method_compiled).status);
-assert(std::get<0>(method_reference).time
-       == std::get<0>(method_compiled).time);
-assert(std::get<1>(method_reference)
-       == std::get<1>(method_compiled));
-assert(std::get<2>(method_reference)
-       == std::get<2>(method_compiled));
+assert(method_reference.final_time == 2);
+assert(method_reference.input.current == "0");
+assert(method_reference.output.current == "0");
+assert(method_reference.input.raw_drivers.empty());
+const auto assert_checked_systemc_boundary = [](const auto& run) {
+    const auto assert_optional_observer_driver
+        = [](const auto& signal, const auto process) {
+              for (const auto& driver : signal.raw_drivers) {
+                  assert(driver.process == process);
+                  assert(driver.value == signal.current);
+              }
+          };
+    assert(run.first_status == fsim::runtime::RunStatus::stopped);
+    assert(run.queued_boundary_captured);
+    assert(run.queued_at_boundary);
+    assert(run.first_time == run.queued_boundary_time);
+    assert(run.first_delta == run.queued_boundary_delta);
+    assert(!run.systemc_access_complete);
+    assert(run.region_graph_present);
+    assert(!run.graph_access_inventory_complete);
+    assert(!run.frontier_backend_available);
+    assert(!run.observer_frontier_member_available);
+    assert(!run.readiness_key_valid_at_boundary);
+    assert(run.native_frontier_dispatches_before_run == 0U);
+    assert(run.native_frontier_dispatches_before_run
+           == run.native_frontier_dispatches_at_boundary);
+    assert(run.native_frontier_dispatches_at_boundary
+           == run.native_frontier_dispatches_after_resume);
+
+    const auto& input_at_boundary = run.input_at_boundary;
+    assert(input_at_boundary.event.has_value());
+    assert(input_at_boundary.event->first == 1U);
+    assert(input_at_boundary.event->second <= run.queued_boundary_delta);
+    assert(input_at_boundary.current == "0");
+    assert(input_at_boundary.raw_drivers.empty());
+    assert(input_at_boundary.event_domain
+           == fsim::runtime::simir::ProcessSchedulingDomain::generic);
+    assert(input_at_boundary.event_phase
+           == fsim::runtime::SchedulerPhase::active);
+    assert(input_at_boundary.systemverilog_round == 0U);
+    assert(run.input.event == input_at_boundary.event);
+
+    const auto& output_at_boundary = run.output_at_boundary;
+    assert(output_at_boundary.current == "1");
+    assert_optional_observer_driver(
+        output_at_boundary, run.observer_process);
+    assert(run.output.current == "0");
+    assert(run.output.event.has_value());
+    assert(run.output.event != output_at_boundary.event);
+    assert(run.output.transaction != output_at_boundary.transaction);
+    assert(run.output.event->first == input_at_boundary.event->first);
+    assert(run.output.event_domain
+           == fsim::runtime::simir::ProcessSchedulingDomain::systemverilog);
+    assert(run.output.event_phase == fsim::runtime::SchedulerPhase::active);
+    assert_optional_observer_driver(run.output, run.observer_process);
+};
+assert_checked_systemc_boundary(method_reference);
+assert_checked_systemc_boundary(method_compiled);
+assert_checked_systemc_boundary(method_compiled_o2);
+for (const auto* const compiled : { &method_compiled, &method_compiled_o2 }) {
+    assert(method_reference.final_status == compiled->final_status);
+    assert(method_reference.final_time == compiled->final_time);
+    assert(method_reference.first_status == compiled->first_status);
+    assert(method_reference.first_time == compiled->first_time);
+    assert(method_reference.first_delta == compiled->first_delta);
+    assert(method_reference.systemc_process == compiled->systemc_process);
+    assert(method_reference.observer_process == compiled->observer_process);
+    assert(method_reference.input_at_boundary
+           == compiled->input_at_boundary);
+    assert(method_reference.output_at_boundary
+           == compiled->output_at_boundary);
+    assert(method_reference.input == compiled->input);
+    assert(method_reference.output == compiled->output);
+    assert(compiled->input.raw_drivers.empty());
+}
+#if defined(FSIM_HAS_LLVM)
+assert(method_compiled.compiled_observer_available);
+assert(method_compiled_o2.compiled_observer_available);
+#else
+assert(!method_compiled.compiled_observer_available);
+assert(!method_compiled_o2.compiled_observer_available);
+#endif
 
 auto vhdl_systemc_method_config = systemc_method_config;
 vhdl_systemc_method_config.project.top =

@@ -84,6 +84,11 @@ const PackedLogic4& Simulation::read_signal(const SignalId signal) const
     return impl_->interpreter->signal_value(signal);
 }
 
+PackedLogic4 Simulation::read_signal_snapshot(const SignalId signal) const
+{
+    return impl_->interpreter->signal_value_snapshot(signal);
+}
+
 runtime::SystemVerilogScalarValue Simulation::read_scalar_signal(
     const SignalId signal) const
 {

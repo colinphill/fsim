@@ -704,7 +704,11 @@ public:
     [[nodiscard]] std::string_view time_resolution() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view path) const noexcept;
+    /// Return a live reference backed by public storage for its lifetime.
     [[nodiscard]] const runtime::PackedLogic4& read_signal(
+        runtime::simir::SignalId signal) const;
+    /// Return a value snapshot without permanently pinning the signal.
+    [[nodiscard]] runtime::PackedLogic4 read_signal_snapshot(
         runtime::simir::SignalId signal) const;
     [[nodiscard]] runtime::SystemVerilogScalarValue read_scalar_signal(
         runtime::simir::SignalId signal) const;
@@ -1028,6 +1032,9 @@ public:
         SystemVerilogDpiFunctionHook hook);
     void set_vcd_control_hook(VcdControlHook hook);
     void set_output_hook(OutputHook hook);
+    /// Use the executable's concrete process-stdout sink for ordinary HDL
+    /// text. Reserved output controls still prepare full observation.
+    void set_builtin_stdout_output();
     void set_report_hook(ReportHook hook);
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
     void set_vhdl_psl_attempt_hook(VhdlPslAttemptHook hook);
@@ -1038,6 +1045,8 @@ public:
         ClassStaticPropertyChangeHook hook);
 
 private:
+    friend struct ::fsim::runtime::simir::NativeRegionAllocationTestAccess;
+    friend struct ::fsim::runtime::simir::SystemCBridgeTestAccess;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -1204,6 +1213,9 @@ struct DebuggerSourceProvenance {
 
 /// Concrete command handlers used by fsim and its traditional aliases.
 [[nodiscard]] cli::Services make_cli_services();
+/// Executable-only standard-output services. Stream-injected CLI calls still
+/// use the ordinary handlers and retain full callback observation.
+[[nodiscard]] cli::Services make_stdio_cli_services();
 /// Stream-injectable variant used by embedders and non-interactive tests.
 /// The input stream must outlive the returned services object.
 [[nodiscard]] cli::Services make_cli_services(std::istream& input);

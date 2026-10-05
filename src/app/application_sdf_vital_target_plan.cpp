@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_vital_target_plan.hpp"
 #include "sdf_diagnostic.hpp"
+#include "sdf_process_rows.hpp"
 
 #include <algorithm>
 #include <map>
@@ -38,11 +39,11 @@ namespace {
     }
 
     [[nodiscard]] const elaboration::SpecializationInfo* find_specialization(
-        const elaboration::ElaboratedDesignState& state,
+        const elaboration::ElaboratedDesign& elaborated,
         const std::string_view instance_path)
     {
         const elaboration::SpecializationInfo* result = nullptr;
-        for (const auto& specialization : state.specializations) {
+        for (const auto& specialization : elaborated.specializations()) {
             if (specialization.instance != instance_path
                 || specialization.language != frontend::Language::Vhdl2008) {
                 continue;
@@ -55,14 +56,14 @@ namespace {
     }
 
     [[nodiscard]] const elaboration::SignalInfo* find_signal(
-        const elaboration::ElaboratedDesignState& state,
+        const elaboration::ElaboratedDesign& elaborated,
         const runtime::simir::SignalId signal) noexcept
     {
-        if (signal >= state.signal_info.size()
-            || state.signal_info[signal].id != signal) {
+        const auto& signals = elaborated.signals();
+        if (signal >= signals.size() || signals[signal].id != signal) {
             return nullptr;
         }
-        return &state.signal_info[signal];
+        return &signals[signal];
     }
 
     [[nodiscard]] std::string port_identity(
@@ -95,7 +96,7 @@ namespace {
     }
 
     [[nodiscard]] bool bind_ports(const SdfResolvedNodeEndpoints& mapping,
-        const elaboration::ElaboratedDesignState& state,
+        const elaboration::ElaboratedDesign& elaborated,
         const SdfVitalTargetPlanLimits& limits,
         SdfVitalPlannedTarget& target, std::vector<Diagnostic>& diagnostics,
         const SourceSpan& span)
@@ -111,7 +112,7 @@ namespace {
         std::set<std::string> paths;
         target.ports.reserve(mapping.endpoints.size());
         for (const auto& endpoint : mapping.endpoints) {
-            const auto* signal = find_signal(state, endpoint.signal);
+            const auto* signal = find_signal(elaborated, endpoint.signal);
             const auto selected_width
                 = endpoint.select ? endpoint.select->width : endpoint.object_width;
             if (endpoint.language != SdfScopeRootLanguage::Vhdl
@@ -304,7 +305,8 @@ SdfVitalTargetPlanResult build_sdf_vital_target_plan(
         return result;
     }
 
-    const auto state = elaborated.state();
+    [[maybe_unused]] const auto process_rows
+        = sdf_detail::retain_published_process_rows(elaborated);
     std::set<std::string> owners;
     std::vector<SdfVitalPlannedTarget> targets;
     targets.reserve(resolution.nodes().size());
@@ -326,7 +328,7 @@ SdfVitalTargetPlanResult build_sdf_vital_target_plan(
             continue;
         }
         const auto* specialization
-            = find_specialization(state, mapping.target_instance_path);
+            = find_specialization(elaborated, mapping.target_instance_path);
         if (specialization == nullptr || specialization->unit.empty()
             || specialization->library.empty()
             || instance->unit_identity.empty()) {
@@ -348,7 +350,7 @@ SdfVitalTargetPlanResult build_sdf_vital_target_plan(
         target.language = specialization->language;
         target.source = node->span;
         target.source_identity = node->source_identity;
-        bool valid = bind_ports(mapping, state, limits, target,
+        bool valid = bind_ports(mapping, elaborated, limits, target,
             result.diagnostics, span);
         valid = bind_generics(*specialization, limits, target,
                     result.diagnostics, span)

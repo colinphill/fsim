@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_cache_key_internal.hpp"
+#include "llvm_jit_llvm_args.hpp"
 #include "native_cache_schema.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
@@ -9,6 +10,8 @@
 
 #include <array>
 #include <cstddef>
+#include <limits>
+#include <ranges>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -299,6 +302,10 @@ void add_container_type_key(
     const JitOptimizationLevel optimization,
     const bool debug_instrumentation,
     const bool require_direct_update_slots,
+    const bool require_direct_read_signals,
+    const bool tiered_read_dedup_safe,
+    const bool signal_callback_ids_are_actual,
+    const ProcessLoweringMode mode,
     const std::string_view code_coverage_identity,
     const llvm::Triple& target_triple, const llvm::DataLayout& data_layout,
     const std::string_view target_cpu,
@@ -309,22 +316,35 @@ void add_container_type_key(
     builder.add("llvm-object-schema", kNativeObjectCacheSchema);
     builder.add("llvm-version", LLVM_VERSION_STRING);
     builder.add("optimization", to_string(optimization));
+    builder.add("llvm-arguments", initialize_llvm_arguments());
     add_key_u64(builder, "debug-instrumentation", debug_instrumentation);
     add_key_u64(
         builder, "require-direct-update-slots", require_direct_update_slots);
+    add_key_u64(
+        builder, "require-direct-read-signals", require_direct_read_signals);
+    add_key_u64(
+        builder, "tiered-read-dedup-safe", tiered_read_dedup_safe);
+    add_key_u64(builder, "signal-callback-ids-are-actual",
+        signal_callback_ids_are_actual);
+    add_key_u64(
+        builder, "process-lowering-mode", static_cast<std::uint8_t>(mode));
     builder.add("code-coverage-identity", code_coverage_identity);
-    add_key_u64(builder, "runtime-abi-version",
-        FSIM_JIT_RUNTIME_ABI_VERSION_V1);
-    add_key_u64(builder, "runtime-abi-structure-size",
-        sizeof(fsim_jit_runtime_v1));
+    add_key_u64(builder, "services-abi-version",
+        FSIM_JIT_SERVICES_ABI_VERSION_V2);
+    add_key_u64(builder, "services-abi-structure-size",
+        sizeof(fsim_jit_services_v2));
+    add_key_u64(builder, "runtime-instance-abi-version",
+        FSIM_JIT_RUNTIME_ABI_VERSION_V2);
+    add_key_u64(builder, "runtime-instance-abi-structure-size",
+        sizeof(fsim_jit_runtime_instance_v2));
     add_key_u64(builder, "frame-abi-version",
-        FSIM_JIT_FRAME_ABI_VERSION_V1);
+        FSIM_JIT_FRAME_ABI_VERSION_V2);
     add_key_u64(builder, "frame-abi-structure-size",
-        sizeof(fsim_jit_frame_v1));
+        sizeof(fsim_jit_frame_v2));
     add_key_u64(builder, "resume-result-abi-version",
-        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1);
+        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V2);
     add_key_u64(builder, "resume-result-abi-structure-size",
-        sizeof(fsim_jit_resume_result_v1));
+        sizeof(fsim_jit_resume_result_v2));
     builder.add("target-triple", target_triple.str());
     builder.add("data-layout", data_layout.getStringRepresentation());
     builder.add("target-cpu", target_cpu);
@@ -340,16 +360,35 @@ void add_container_type_key(
     }
     add_key_u64(builder, "process-id", process.id);
     builder.add("process-name", process.name);
+    add_key_u64(builder, "process-scheduling-domain",
+        static_cast<std::uint8_t>(process.scheduling_domain));
     builder.add("language-standard", process.language_standard);
     builder.add("compatibility-profile", process.compatibility_profile);
+    const auto container_register_types
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.container_register_types);
+    const auto register_value_kinds
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.register_value_kinds);
+    const auto static_trigger_regions
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.static_trigger_regions);
     add_key_u64(builder, "register-count", process.register_count);
     add_key_u64(
         builder, "string-register-count", process.string_register_count);
     add_key_u64(
         builder, "container-register-count",
         process.container_register_count);
-    for (const auto& type : process.container_register_types) {
+    for (const auto& type : container_register_types) {
         add_container_type_key(builder, type);
+    }
+    add_key_u64(
+        builder, "debug-container-local-count",
+        process.debug_container_locals.size());
+    for (const auto& local : process.debug_container_locals) {
+        add_key_u64(
+            builder, "debug-container-local-register",
+            local.register_id);
     }
     builder.add(
         "container-semantics",
@@ -371,8 +410,8 @@ void add_container_type_key(
     add_key_u64(
         builder,
         "register-value-kind-count",
-        process.register_value_kinds.size());
-    for (const auto kind : process.register_value_kinds) {
+        register_value_kinds.size());
+    for (const auto kind : register_value_kinds) {
         add_key_u64(
             builder,
             "register-value-kind",
@@ -503,15 +542,19 @@ void add_container_type_key(
         process.static_sensitivity.size());
     for (const auto& sensitivity : process.static_sensitivity) {
         add_key_u64(builder, "sensitivity-signal", sensitivity.signal);
+        add_key_u64(builder, "sensitivity-offset", sensitivity.offset);
+        add_key_u64(builder, "sensitivity-width", sensitivity.width);
         add_key_u64(
             builder, "sensitivity-edge",
             static_cast<std::underlying_type_t<runtime::simir::EdgeKind>>(
                 sensitivity.edge));
+        add_key_u64(builder, "sensitivity-offset", sensitivity.offset);
+        add_key_u64(builder, "sensitivity-width", sensitivity.width);
     }
     add_key_u64(
         builder, "static-trigger-region-count",
-        process.static_trigger_regions.size());
-    for (const auto& region : process.static_trigger_regions) {
+        static_trigger_regions.size());
+    for (const auto& region : static_trigger_regions) {
         add_key_u64(builder, "static-trigger-region-begin", region.begin);
         add_key_u64(builder, "static-trigger-region-end", region.end);
         add_key_u64(builder, "static-trigger-region-mask", region.mask);
@@ -527,6 +570,10 @@ void add_container_type_key(
     const JitOptimizationLevel optimization,
     const bool debug_instrumentation,
     const bool require_direct_update_slots,
+    const bool require_direct_read_signals,
+    const bool tiered_read_dedup_safe,
+    const bool signal_callback_ids_are_actual,
+    const ProcessLoweringMode mode,
     const std::string_view code_coverage_identity,
     const llvm::Triple& target_triple,
     const llvm::DataLayout& data_layout,
@@ -538,22 +585,35 @@ void add_container_type_key(
     builder.add("llvm-object-schema", kNativeObjectCacheSchema);
     builder.add("llvm-version", LLVM_VERSION_STRING);
     builder.add("optimization", to_string(optimization));
+    builder.add("llvm-arguments", initialize_llvm_arguments());
     add_key_u64(builder, "debug-instrumentation", debug_instrumentation);
     add_key_u64(
         builder, "require-direct-update-slots", require_direct_update_slots);
+    add_key_u64(
+        builder, "require-direct-read-signals", require_direct_read_signals);
+    add_key_u64(
+        builder, "tiered-read-dedup-safe", tiered_read_dedup_safe);
+    add_key_u64(builder, "signal-callback-ids-are-actual",
+        signal_callback_ids_are_actual);
+    add_key_u64(
+        builder, "process-lowering-mode", static_cast<std::uint8_t>(mode));
     builder.add("code-coverage-identity", code_coverage_identity);
-    add_key_u64(builder, "runtime-abi-version",
-        FSIM_JIT_RUNTIME_ABI_VERSION_V1);
-    add_key_u64(builder, "runtime-abi-structure-size",
-        sizeof(fsim_jit_runtime_v1));
+    add_key_u64(builder, "services-abi-version",
+        FSIM_JIT_SERVICES_ABI_VERSION_V2);
+    add_key_u64(builder, "services-abi-structure-size",
+        sizeof(fsim_jit_services_v2));
+    add_key_u64(builder, "runtime-instance-abi-version",
+        FSIM_JIT_RUNTIME_ABI_VERSION_V2);
+    add_key_u64(builder, "runtime-instance-abi-structure-size",
+        sizeof(fsim_jit_runtime_instance_v2));
     add_key_u64(builder, "frame-abi-version",
-        FSIM_JIT_FRAME_ABI_VERSION_V1);
+        FSIM_JIT_FRAME_ABI_VERSION_V2);
     add_key_u64(builder, "frame-abi-structure-size",
-        sizeof(fsim_jit_frame_v1));
+        sizeof(fsim_jit_frame_v2));
     add_key_u64(builder, "resume-result-abi-version",
-        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1);
+        FSIM_JIT_RESUME_RESULT_ABI_VERSION_V2);
     add_key_u64(builder, "resume-result-abi-structure-size",
-        sizeof(fsim_jit_resume_result_v1));
+        sizeof(fsim_jit_resume_result_v2));
     builder.add("target-triple", target_triple.str());
     builder.add("data-layout", data_layout.getStringRepresentation());
     builder.add("target-cpu", target_cpu);
@@ -573,11 +633,21 @@ void add_container_type_key(
 
 [[nodiscard]] std::string make_native_module_cache_key(
     const std::string_view module_identity,
-    const std::span<const std::string> process_keys)
+    const std::span<const std::string> process_keys,
+    const LlvmBackendTier backend_tier,
+    const bool tier_eligible)
 {
     CacheKeyBuilder builder;
     builder.add("llvm-module-schema", kNativeObjectCacheSchema);
     builder.add("module-identity", module_identity);
+    builder.add("backend-tier-policy", kBackendTierPolicy);
+    add_key_u64(
+        builder, "backend-tier-ir-instruction-limit",
+        kLessBackendTierInstructionLimit);
+    add_key_u64(builder, "backend-tier-eligible", tier_eligible);
+    builder.add(
+        "backend-codegen-tier",
+        backend_tier == LlvmBackendTier::less ? "less" : "none");
     add_key_u64(builder, "process-count", process_keys.size());
     for (const auto& process_key : process_keys) {
         builder.add("process-key", process_key);
@@ -606,7 +676,10 @@ make_frame_layout(const std::string_view cache_key,
     const bool uses_logic9,
     const bool tracks_register_initialization,
     const std::span<const runtime::simir::SignalId> direct_read_signals,
-    const std::span<const runtime::simir::SignalId> direct_update_signals)
+    const std::span<const runtime::simir::SignalId> direct_update_signals,
+    const bool signal_callback_ids_are_actual,
+    const std::span<const runtime::simir::SignalId>
+        signal_callback_operands)
 {
     JitProcessFrameLayout result;
     result.layout_id_low = cache_key_word(cache_key, 0);
@@ -620,6 +693,14 @@ make_frame_layout(const std::string_view cache_key,
         direct_read_signals.begin(), direct_read_signals.end());
     result.direct_update_signals.assign(
         direct_update_signals.begin(), direct_update_signals.end());
+    result.signal_callback_ids_are_actual = signal_callback_ids_are_actual;
+    if (!signal_callback_ids_are_actual
+        && !signal_callback_operands.empty()) {
+        throw LlvmJitError(
+            "unbound callback signal operands require the actual-ID frame tail");
+    }
+    result.signal_callback_operands.assign(
+        signal_callback_operands.begin(), signal_callback_operands.end());
     result.register_word_offsets.reserve(register_widths.size());
     std::uint64_t offset { };
     for (const auto width : register_widths) {
@@ -629,7 +710,58 @@ make_frame_layout(const std::string_view cache_key,
             throw LlvmJitError { "JIT register-word frame exceeds host ABI limits" };
         }
     }
+    result.signal_callback_operand_word_base
+        = static_cast<std::uint32_t>(offset);
+    offset += signal_callback_operands.size();
+    if (offset > std::numeric_limits<std::uint32_t>::max()) {
+        throw LlvmJitError(
+            "JIT signal-callback operand frame exceeds host ABI limits");
+    }
     result.register_word_count = static_cast<std::uint32_t>(offset);
+    return result;
+}
+
+std::vector<runtime::simir::SignalId> signal_callback_operands(
+    const runtime::simir::Process& process,
+    const std::span<const std::uint32_t> signal_widths)
+{
+    // Keep a conservative table of singular signal fields from operations.
+    // Some entries are used only by exact-operation paths; callback lowering
+    // loads only the operands it actually emits.
+    std::vector<runtime::simir::SignalId> result;
+    result.reserve(process.operations.size());
+    const auto add_signal = [&](const runtime::simir::SignalId signal) {
+        if (signal >= signal_widths.size() || signal_widths[signal] == 0U) {
+            throw LlvmJitError(
+                "signal callback operand has no validated signal width");
+        }
+        result.push_back(signal);
+    };
+    for (const auto& stored : process.operations) {
+        runtime::simir::visit_operation(
+            [&](const auto& operation) {
+                if constexpr (requires { operation.signal; }) {
+                    using SignalField = std::remove_cvref_t<
+                        decltype(operation.signal)>;
+                    if constexpr (std::is_same_v<
+                                      SignalField,
+                                      runtime::simir::SignalId>) {
+                        add_signal(operation.signal);
+                    } else if constexpr (requires {
+                                             operation.signal.has_value();
+                                             *operation.signal;
+                                         }) {
+                        if (operation.signal) {
+                            add_signal(*operation.signal);
+                        }
+                    }
+                }
+            },
+            stored);
+    }
+    std::ranges::sort(result);
+    const auto unique_end = std::ranges::unique(result).begin();
+    result.erase(unique_end, result.end());
     return result;
 }
 

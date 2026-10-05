@@ -2,6 +2,7 @@
 
 #include "fsim/app/sdf_condition_timing.hpp"
 #include "sdf_diagnostic.hpp"
+#include "sdf_process_rows.hpp"
 
 #include <algorithm>
 #include <array>
@@ -204,7 +205,7 @@ namespace {
 
     [[nodiscard]] bool collect_condition_signals(
         const ModuleTimingCheck& check,
-        const std::span<const runtime::simir::Signal> signals,
+        const std::span<const elaboration::SignalInfo> signals,
         const SdfConditionTimingLimits& limits,
         std::vector<SignalId>& condition_signals)
     {
@@ -229,9 +230,9 @@ namespace {
                 if (node.terminal.signal >= signals.size()
                     || node.terminal.width == 0U
                     || node.terminal.offset
-                        > signals[node.terminal.signal].initial_value.width()
+                        > signals[node.terminal.signal].width
                     || node.terminal.width
-                        > signals[node.terminal.signal].initial_value.width()
+                        > signals[node.terminal.signal].width
                             - node.terminal.offset) {
                     return false;
                 }
@@ -356,7 +357,9 @@ SdfConditionTimingResult apply_sdf_condition_timing(
             { });
         return result;
     }
-    const auto design_state = elaborated.state();
+    [[maybe_unused]] const auto process_rows
+        = sdf_detail::retain_published_process_rows(elaborated);
+    const auto& design_signals = elaborated.signals();
     std::vector<SdfAppliedConditionTiming> checks;
     std::set<std::uint32_t> check_ids;
     std::size_t identity_bytes { };
@@ -380,7 +383,7 @@ SdfConditionTimingResult apply_sdf_condition_timing(
             continue;
         }
         std::vector<SignalId> condition_signals;
-        if (!collect_condition_signals(*check, design_state.signals, limits,
+        if (!collect_condition_signals(*check, design_signals, limits,
                 condition_signals)) {
             diagnose(result.diagnostics, "FSIM-SDF-CONDITION-CHECK-004",
                 "SDF timing-check condition program exceeds a resource limit or contains a stale terminal",
@@ -407,8 +410,8 @@ SdfConditionTimingResult apply_sdf_condition_timing(
             continue;
         }
         if (check->notifier
-            && (*check->notifier >= design_state.signals.size()
-                || design_state.signals[*check->notifier].initial_value.width()
+            && (*check->notifier >= design_signals.size()
+                || design_signals[*check->notifier].width
                     != 1U)) {
             diagnose(result.diagnostics, "FSIM-SDF-CONDITION-CHECK-004",
                 "SDF timing-check notifier binding is missing or nonscalar",

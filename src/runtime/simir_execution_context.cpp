@@ -44,12 +44,15 @@ Interpreter::Impl::ExecutionContext::ExecutionContext(
 }
 
 [[nodiscard]] std::uint64_t Interpreter::Impl::ExecutionContext::static_trigger_mask() const noexcept{
+    if (const auto* compact = owner.processes.compact_constant(process)) {
+        return compact->static_trigger_mask;
+    }
     return owner.processes[process].static_trigger_mask;
 }
 
 [[nodiscard]] PackedLogic4
 Interpreter::Impl::ExecutionContext::read_signal(const SignalId signal) const{
-    return owner.get_signal(signal).initial_value;
+    return owner.logical_signal_value(signal);
 }
 
 [[nodiscard]] Logic4Word
@@ -57,17 +60,21 @@ Interpreter::Impl::ExecutionContext::read_signal_word(const SignalId signal) con
     // Native lowering selects this callback only for validated nonempty
     // Logic4 signals no wider than one ABI word. Avoid repeating the
     // public checked conversion on every generated signal read.
-    return owner.get_signal(signal).initial_value.unchecked_low_word();
+    return owner.logical_signal_value(signal).unchecked_low_word();
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_signal_aval() const noexcept{
-    return owner.direct_signal_aval;
+    return direct_signal_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_signal_aval }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_signal_bval() const noexcept{
-    return owner.direct_signal_bval;
+    return direct_signal_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_signal_bval }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<std::uint64_t>
@@ -195,47 +202,67 @@ Interpreter::Impl::ExecutionContext::event_triggered(
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_signal_logic9_plane0() const noexcept{
-    return owner.direct_signal_logic9_plane0;
+    return direct_signal_logic9_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_signal_logic9_plane0 }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_signal_logic9_plane1() const noexcept{
-    return owner.direct_signal_logic9_plane1;
+    return direct_signal_logic9_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_signal_logic9_plane1 }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_signal_logic9_plane2() const noexcept{
-    return owner.direct_signal_logic9_plane2;
+    return direct_signal_logic9_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_signal_logic9_plane2 }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_signal_logic9_plane3() const noexcept{
-    return owner.direct_signal_logic9_plane3;
+    return direct_signal_logic9_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_signal_logic9_plane3 }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_wide_signal_aval() const noexcept{
-    return owner.direct_wide_signal_aval;
+    return direct_signal_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_wide_signal_aval }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_wide_signal_bval() const noexcept{
-    return owner.direct_wide_signal_bval;
+    return direct_signal_planes_available()
+        ? std::span<const std::uint64_t> { owner.direct_wide_signal_bval }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_wide_signal_logic9_plane2() const noexcept{
-    return owner.direct_wide_signal_logic9_plane2;
+    return direct_wide_signal_logic9_planes_available()
+        ? std::span<const std::uint64_t> {
+              owner.direct_wide_signal_logic9_plane2 }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint64_t>
 Interpreter::Impl::ExecutionContext::direct_wide_signal_logic9_plane3() const noexcept{
-    return owner.direct_wide_signal_logic9_plane3;
+    return direct_wide_signal_logic9_planes_available()
+        ? std::span<const std::uint64_t> {
+              owner.direct_wide_signal_logic9_plane3 }
+        : std::span<const std::uint64_t> { };
 }
 
 [[nodiscard]] std::span<const std::uint32_t>
 Interpreter::Impl::ExecutionContext::direct_wide_signal_offsets() const noexcept{
-    return owner.direct_wide_signal_offsets;
+    return direct_signal_planes_available()
+        ? std::span<const std::uint32_t> { owner.direct_wide_signal_offsets }
+        : std::span<const std::uint32_t> { };
 }
 
 [[nodiscard]] std::span<const ProcessId>
@@ -259,7 +286,7 @@ void Interpreter::Impl::ExecutionContext::read_signal_planes(
     const std::span<std::uint64_t> bval,
     const std::span<std::uint64_t> logic9_plane2,
     const std::span<std::uint64_t> logic9_plane3) const{
-    const auto& value = owner.get_signal(signal).initial_value;
+    const auto& value = owner.logical_signal_value(signal);
     const auto expected_words = (value.width() + 63U) / 64U;
     if (aval.size() != expected_words || bval.size() != expected_words
         || (!value.is_logic9()
@@ -335,7 +362,15 @@ void Interpreter::Impl::ExecutionContext::write_string_object(
 void Interpreter::Impl::ExecutionContext::write_container_object(
     const ContainerObjectId object,
     const ContainerValue& value){
-    owner.write_container_object_value(object, value);
+    const auto process_domain
+        = owner.processes.program_view(process).scheduling_domain();
+    const auto update_domain
+        = process_domain == ProcessSchedulingDomain::systemverilog
+        ? SignalUpdateDomain::systemverilog_active
+        : SignalUpdateDomain::generic;
+    owner.write_container_object_value(
+        object, value, process,
+        owner.capture_signal_change_origin(process, update_domain));
 }
 
 void Interpreter::Impl::ExecutionContext::write_container_object_element(
@@ -347,20 +382,38 @@ void Interpreter::Impl::ExecutionContext::write_container_object_element(
     const ProcessId generated_process,
     const InstructionIndex instruction,
     const bool nonblocking){
+    const auto process_domain
+        = owner.processes.program_view(generated_process).scheduling_domain();
+    const auto update_domain
+        = process_domain == ProcessSchedulingDomain::systemverilog
+        ? nonblocking
+            ? SignalUpdateDomain::systemverilog_nba
+            : SignalUpdateDomain::systemverilog_active
+        : SignalUpdateDomain::generic;
+    auto origin = owner.capture_signal_change_origin(
+        generated_process, update_domain);
+    if (update_domain == SignalUpdateDomain::generic && nonblocking) {
+        origin.phase = SchedulerPhase::update;
+    }
     if (nonblocking) {
-        owner.scheduler.schedule(
-            SchedulerPhase::update,
-            generated_process,
-            [&owner = owner, object, index, signed_index, linear_index,
-                value, generated_process, instruction](Scheduler&) {
+        const auto publish = [&owner = owner, object, index, signed_index,
+            linear_index, value, generated_process, instruction,
+            origin](Scheduler&) {
                 owner.write_container_object_element_value(
                     object, index, signed_index, linear_index, value,
-                    generated_process, instruction);
-            });
+                    generated_process, instruction, origin);
+            };
+        if (process_domain == ProcessSchedulingDomain::systemverilog) {
+            owner.scheduler.schedule_systemverilog(
+                origin.phase, generated_process, publish);
+        } else {
+            owner.scheduler.schedule(
+                SchedulerPhase::update, generated_process, publish);
+        }
     } else {
         owner.write_container_object_element_value(
             object, index, signed_index, linear_index, value,
-            generated_process, instruction);
+            generated_process, instruction, origin);
     }
 }
 
@@ -376,21 +429,38 @@ void Interpreter::Impl::ExecutionContext::write_container_object_dynamic_part_el
     const InstructionIndex instruction,
     const bool nonblocking)
 {
+    const auto process_domain
+        = owner.processes.program_view(generated_process).scheduling_domain();
+    const auto update_domain
+        = process_domain == ProcessSchedulingDomain::systemverilog
+        ? nonblocking
+            ? SignalUpdateDomain::systemverilog_nba
+            : SignalUpdateDomain::systemverilog_active
+        : SignalUpdateDomain::generic;
+    auto origin = owner.capture_signal_change_origin(
+        generated_process, update_domain);
+    if (update_domain == SignalUpdateDomain::generic && nonblocking) {
+        origin.phase = SchedulerPhase::update;
+    }
     if (nonblocking) {
-        owner.scheduler.schedule(
-            SchedulerPhase::update,
-            generated_process,
-            [&owner = owner, object, index, signed_index, linear_index,
-                value, base, selection, generated_process,
-                instruction](Scheduler&) {
+        const auto publish = [&owner = owner, object, index, signed_index,
+            linear_index, value, base, selection, generated_process,
+            instruction, origin](Scheduler&) {
                 owner.write_container_object_dynamic_part_element_value(
                     object, index, signed_index, linear_index, value, base,
-                    selection, generated_process, instruction);
-            });
+                    selection, generated_process, instruction, origin);
+            };
+        if (process_domain == ProcessSchedulingDomain::systemverilog) {
+            owner.scheduler.schedule_systemverilog(
+                origin.phase, generated_process, publish);
+        } else {
+            owner.scheduler.schedule(
+                SchedulerPhase::update, generated_process, publish);
+        }
     } else {
         owner.write_container_object_dynamic_part_element_value(
             object, index, signed_index, linear_index, value, base,
-            selection, generated_process, instruction);
+            selection, generated_process, instruction, origin);
     }
 }
 
@@ -523,7 +593,9 @@ void Interpreter::Impl::ExecutionContext::write_blocking_word(
             throw std::invalid_argument(
                 "SimIR signal assignment width mismatch");
         }
-        owner.publish_native_word(signal, value);
+        // Direct publication bypasses commit_driver's origin capture.
+        owner.publish_native_word(
+            signal, value, owner.capture_signal_change_origin(process));
         return;
     }
     owner.commit_driver(
@@ -560,7 +632,8 @@ void Interpreter::Impl::ExecutionContext::write_blocking_slice_word(
                     (owner.direct_signal_aval[signal] & ~mask)
                         | ((value.aval << offset) & mask),
                     (owner.direct_signal_bval[signal] & ~mask)
-                        | ((value.bval << offset) & mask) });
+                        | ((value.bval << offset) & mask) },
+                owner.capture_signal_change_origin(process));
             return;
         }
     }
@@ -606,6 +679,13 @@ void Interpreter::Impl::ExecutionContext::write_update(
     owner.stage_update(process, signal, std::move(value));
 }
 
+void Interpreter::Impl::ExecutionContext::write_update_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const SignalUpdateDomain domain){
+    owner.stage_update(process, signal, std::move(value), domain);
+}
+
 void Interpreter::Impl::ExecutionContext::write_update_word(
     const SignalId signal,
     const Logic4Word value){
@@ -622,6 +702,15 @@ void Interpreter::Impl::ExecutionContext::write_update_slice(
     const std::size_t offset){
     owner.stage_update_slice(
         process, signal, std::move(value), offset);
+}
+
+void Interpreter::Impl::ExecutionContext::write_update_slice_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const SignalUpdateDomain domain){
+    owner.stage_update_slice(
+        process, signal, std::move(value), offset, domain);
 }
 
 void Interpreter::Impl::ExecutionContext::write_update_slice_word(
@@ -662,11 +751,6 @@ bool Interpreter::Impl::ExecutionContext::write_validated_update_slot_batches(
     return owner.stage_validated_update_slot_batches(batches);
 }
 
-bool Interpreter::Impl::ExecutionContext::write_validated_prepared_update_slot_batches(
-    const std::span<const PureWavePreparedMember* const> members){
-    return owner.stage_validated_prepared_update_slot_batches(members);
-}
-
 bool Interpreter::Impl::ExecutionContext::write_validated_logic9_update_batch(
     const ProcessLogic9UpdateBatch& batch){
     return owner.stage_validated_logic9_update_batch(batch);
@@ -681,6 +765,254 @@ bool Interpreter::Impl::ExecutionContext::write_validated_logic9_update_batches(
     return owner.module_paths.empty()
         || (!owner.native_signal_dependencies_unknown
             && owner.module_path_destination_mask.size() == owner.signals.size());
+}
+
+[[nodiscard]] bool
+Interpreter::Impl::ExecutionContext::direct_signal_planes_available() const noexcept
+{
+    // Logic4 direct reads need only the always-present narrow and wide A/B
+    // planes. Logic9 planes are sparse when a design mixes value kinds and
+    // have their own completeness checks below.
+    return owner.direct_signal_plane_layout_available;
+}
+
+[[nodiscard]] bool
+Interpreter::Impl::ExecutionContext::direct_signal_logic9_planes_available() const noexcept
+{
+    const auto signal_count = owner.signals.size();
+    return direct_signal_planes_available()
+        && owner.direct_signal_logic9_plane0.size() == signal_count
+        && owner.direct_signal_logic9_plane1.size() == signal_count
+        && owner.direct_signal_logic9_plane2.size() == signal_count
+        && owner.direct_signal_logic9_plane3.size() == signal_count;
+}
+
+[[nodiscard]] bool
+Interpreter::Impl::ExecutionContext::direct_wide_signal_logic9_planes_available() const noexcept
+{
+    const auto wide_size = owner.direct_wide_signal_aval.size();
+    return direct_signal_planes_available()
+        && owner.direct_wide_signal_logic9_plane2.size() == wide_size
+        && owner.direct_wide_signal_logic9_plane3.size() == wide_size;
+}
+
+[[nodiscard]] bool
+Interpreter::Impl::ExecutionContext::supports_direct_signal_read(
+    const SignalId signal) const noexcept
+{
+    return signal < owner.direct_signal_read_capabilities.size()
+        && owner.direct_signal_read_capabilities[signal] != 0U
+        && signal < owner.signals.size()
+        && !owner.signals[signal].public_value_reference_exposed;
+}
+
+[[nodiscard]] DirectSignalReadCapabilityKey
+Interpreter::Impl::ExecutionContext::direct_signal_read_capability_key()
+    const noexcept
+{
+    return {
+        owner.direct_signal_read_owner_token,
+        owner.direct_signal_read_capability_epoch
+    };
+}
+
+void Interpreter::Impl::advance_direct_signal_read_capability_epoch()
+    noexcept
+{
+    if (direct_signal_read_capability_epoch_exhausted) {
+        return;
+    }
+    if (direct_signal_read_capability_epoch
+        == std::numeric_limits<std::uint64_t>::max()) {
+        direct_signal_read_capability_epoch = 0U;
+        direct_signal_read_capability_epoch_exhausted = true;
+    } else {
+        ++direct_signal_read_capability_epoch;
+    }
+}
+
+void Interpreter::Impl::build_direct_signal_read_capabilities() noexcept
+{
+    advance_direct_signal_read_capability_epoch();
+    const auto signal_count = signals.size();
+    direct_signal_plane_layout_available
+        = direct_signal_aval.size() == signal_count
+        && direct_signal_bval.size() == signal_count
+        && direct_wide_signal_offsets.size() == signal_count
+        && direct_wide_signal_aval.size() == direct_wide_signal_bval.size();
+
+    direct_signal_read_capabilities.clear();
+    try {
+        direct_signal_read_capabilities.assign(signal_count, 0U);
+    } catch (...) {
+        direct_signal_read_capabilities.clear();
+        return;
+    }
+
+    const bool complete_inventory
+        = !native_signal_dependencies_unknown
+        && native_signal_dependency_mask.size() == signal_count
+        && signal_container_aliases.size() == signal_count
+        && signal_container_element_aliases.size() == signal_count
+        && signal_container_aggregate_aliases.size() == signal_count
+        && container_objects.size() == container_signal_aliases.size()
+        && container_objects.size()
+            == container_element_signal_aliases.size()
+        && container_objects.size()
+            == container_aggregate_signal_aliases.size();
+    const bool complete_planes = direct_signal_plane_layout_available;
+    if (complete_inventory && complete_planes) {
+        const auto wide_size = direct_wide_signal_aval.size();
+        const bool complete_narrow_logic9_planes
+            = direct_signal_logic9_plane0.size() == signal_count
+            && direct_signal_logic9_plane1.size() == signal_count
+            && direct_signal_logic9_plane2.size() == signal_count
+            && direct_signal_logic9_plane3.size() == signal_count;
+        const bool complete_wide_logic9_planes
+            = direct_wide_signal_logic9_plane2.size() == wide_size
+            && direct_wide_signal_logic9_plane3.size() == wide_size;
+        for (std::size_t signal = 0U; signal < signal_count; ++signal) {
+            if (signals[signal].public_value_reference_exposed
+                || has_container_signal_alias(static_cast<SignalId>(signal))) {
+                continue;
+            }
+            const auto width = signals[signal].initial_value.width();
+            if (width == 0U) {
+                continue;
+            }
+            const auto word_count = width / 64U
+                + (width % 64U != 0U ? 1U : 0U);
+            const auto offset = direct_wide_signal_offsets[signal];
+            if (offset > wide_size || word_count > wide_size - offset) {
+                continue;
+            }
+            if (signals[signal].value_kind == ValueKind::logic9) {
+                const bool logic9_layout_available = width <= 64U
+                    ? complete_narrow_logic9_planes
+                    : complete_wide_logic9_planes;
+                if (!logic9_layout_available) {
+                    continue;
+                }
+            }
+            direct_signal_read_capabilities[signal] = 1U;
+        }
+
+        const auto has_direct_plane_layout = [&](const SignalId signal) {
+            if (signal >= signal_count
+                || signals[signal].public_value_reference_exposed) {
+                return false;
+            }
+            const auto width = signals[signal].initial_value.width();
+            if (width == 0U) {
+                return false;
+            }
+            const auto word_count = width / 64U
+                + (width % 64U != 0U ? 1U : 0U);
+            const auto offset = direct_wide_signal_offsets[signal];
+            if (offset > wide_size || word_count > wide_size - offset) {
+                return false;
+            }
+            if (signals[signal].value_kind != ValueKind::logic9) {
+                return true;
+            }
+            return width <= 64U
+                ? complete_narrow_logic9_planes
+                : complete_wide_logic9_planes;
+        };
+
+        for (std::size_t object_index = 0U;
+             object_index < container_objects.size();
+             ++object_index) {
+            const auto object_id
+                = static_cast<ContainerObjectId>(object_index);
+            const auto& object = container_objects[object_index];
+            const auto& type = object.initial_value.type;
+            if (container_signal_aliases[object_index]
+                || !container_aggregate_signal_aliases[object_index]) {
+                continue;
+            }
+            const auto& aggregate
+                = *container_aggregate_signal_aliases[object_index];
+            const auto proxy = aggregate.signal;
+            if (proxy >= signal_count) {
+                continue;
+            }
+            const auto bridge_width = container_signal_bridge_width(type);
+            const auto& elements
+                = container_element_signal_aliases[object_index];
+            if (object.slice_alias || !type.fixed
+                || type.dimensions.empty()
+                || type.element_kind != ContainerElementKind::Packed
+                || type.element_width == 0U || type.two_state
+                || aggregate.object != object_id
+                || !aggregate.readable || !aggregate.writable
+                || !container_alias_authority_active(object_id)
+                || !bridge_width
+                || *bridge_width / type.element_width != elements.size()
+                || *bridge_width % type.element_width != 0U
+                || *bridge_width != signals[proxy].initial_value.width()
+                || signals[proxy].value_kind != ValueKind::logic4
+                || signals[proxy].initial_value.is_logic9()
+                || signals[proxy].resolution == ResolutionKind::none
+                || elements.size() != object.initial_value.elements.size()
+                || signal_container_aggregate_aliases[proxy]
+                    != std::optional<ContainerObjectId> { object_id }
+                || signal_container_element_aliases[proxy]
+                || !signal_container_aliases[proxy].empty()) {
+                continue;
+            }
+
+            bool complete_family
+                = !elements.empty()
+                && has_direct_plane_layout(proxy);
+            for (std::size_t ordinal = 0U;
+                 complete_family && ordinal < elements.size();
+                 ++ordinal) {
+                const auto& element = elements[ordinal];
+                if (!element || element->object != object_id
+                    || element->ordinal != ordinal || !element->readable
+                    || !element->writable
+                    || element->signal >= signal_count
+                    || element->signal == proxy) {
+                    complete_family = false;
+                    break;
+                }
+
+                const auto leaf = element->signal;
+                const auto& leaf_signal = signals[leaf];
+                const auto reverse_element
+                    = std::pair<ContainerObjectId, std::size_t> {
+                        object_id, ordinal
+                    };
+                const std::optional<
+                    std::pair<ContainerObjectId, std::size_t>>
+                    reverse_element_alias {
+                        std::in_place, reverse_element
+                    };
+                if (signal_container_element_aliases[leaf]
+                        != reverse_element_alias
+                    || signal_container_aggregate_aliases[leaf]
+                    || !signal_container_aliases[leaf].empty()
+                    || leaf_signal.value_kind != ValueKind::logic4
+                    || leaf_signal.initial_value.is_logic9()
+                    || leaf_signal.initial_value.width()
+                        != type.element_width
+                    || leaf_signal.resolution != signals[proxy].resolution
+                    || !has_direct_plane_layout(leaf)) {
+                    complete_family = false;
+                }
+            }
+
+            if (complete_family) {
+                for (const auto& element : elements) {
+                    direct_signal_read_capabilities[element->signal] = 1U;
+                }
+            }
+        }
+    }
+    // add_signal and alias registration are forbidden after start. This map
+    // is immutable after the last successful pre-start rebuild. Epoch zero is
+    // reserved for overflow and forces the app bridge to revalidate each time.
 }
 
 void Interpreter::Impl::ExecutionContext::write_after(
@@ -701,6 +1033,19 @@ void Interpreter::Impl::ExecutionContext::write_after(
             owner.stage_update(
                 driver, signal, std::move(value));
         });
+}
+
+void Interpreter::Impl::ExecutionContext::write_after_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const SimulationTick delay,
+    const SignalUpdateDomain domain){
+    if (domain == SignalUpdateDomain::generic) {
+        write_after(signal, std::move(value), delay);
+        return;
+    }
+    owner.schedule_systemverilog_update(
+        process, signal, std::move(value), std::nullopt, domain, delay);
 }
 
 void Interpreter::Impl::ExecutionContext::write_after_word(
@@ -762,6 +1107,20 @@ void Interpreter::Impl::ExecutionContext::write_after_slice(
         });
 }
 
+void Interpreter::Impl::ExecutionContext::write_after_slice_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const SimulationTick delay,
+    const SignalUpdateDomain domain){
+    if (domain == SignalUpdateDomain::generic) {
+        write_after_slice(signal, std::move(value), offset, delay);
+        return;
+    }
+    owner.schedule_systemverilog_update(
+        process, signal, std::move(value), offset, domain, delay);
+}
+
 void Interpreter::Impl::ExecutionContext::write_after_slice_word(
     const SignalId signal,
     const Logic4Word value,
@@ -805,6 +1164,15 @@ void Interpreter::Impl::ExecutionContext::write_inertial(
         delays);
 }
 
+void Interpreter::Impl::ExecutionContext::write_inertial_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const TransitionDelays& delays,
+    const SignalUpdateDomain domain){
+    owner.schedule_inertial(
+        process, signal, std::move(value), std::nullopt, delays, domain);
+}
+
 void Interpreter::Impl::ExecutionContext::write_inertial_slice(
     const SignalId signal,
     PackedLogic4 value,
@@ -816,6 +1184,16 @@ void Interpreter::Impl::ExecutionContext::write_inertial_slice(
         std::move(value),
         offset,
         delays);
+}
+
+void Interpreter::Impl::ExecutionContext::write_inertial_slice_in_domain(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const TransitionDelays& delays,
+    const SignalUpdateDomain domain){
+    owner.schedule_inertial(
+        process, signal, std::move(value), offset, delays, domain);
 }
 
 void Interpreter::Impl::ExecutionContext::write_projected(
@@ -884,7 +1262,9 @@ void Interpreter::Impl::ExecutionContext::notify_event(
     const SignalId event,
     const SimulationTick delay,
     const EventNotificationKind kind){
-    owner.notify_event(event, delay, kind, process);
+    owner.notify_event(
+        event, delay, kind, process,
+        owner.capture_signal_change_origin(process));
 }
 
 void Interpreter::Impl::ExecutionContext::cancel_event(const SignalId event){
@@ -903,14 +1283,14 @@ Interpreter::Impl::ExecutionContext::signal_event(const SignalId signal) const{
 [[nodiscard]] Logic4Word
 Interpreter::Impl::ExecutionContext::signal_last_value_word(const SignalId signal) const{
     (void)owner.get_signal(signal);
-    return owner.signal_last_values[signal].low_word();
+    return owner.logical_signal_last_value(signal).low_word();
 }
 
 [[nodiscard]] Logic9Word
 Interpreter::Impl::ExecutionContext::signal_last_value_logic9_word(
     const SignalId signal) const{
     (void)owner.get_signal(signal);
-    return owner.signal_last_values[signal].logic9_low_word();
+    return owner.logical_signal_last_value(signal).logic9_low_word();
 }
 
 [[nodiscard]] SimulationTick
@@ -976,10 +1356,7 @@ void Interpreter::Impl::ExecutionContext::display(
 void Interpreter::Impl::ExecutionContext::postpone_display(
     const std::string_view text,
     const bool newline){
-    owner.scheduler.schedule(
-        SchedulerPhase::postponed,
-        process,
-        [&owner = owner,
+    auto publish = [&owner = owner,
             process = process,
             text = std::string { text },
             newline](Scheduler& scheduler) {
@@ -991,7 +1368,14 @@ void Interpreter::Impl::ExecutionContext::postpone_display(
                     scheduler.now(),
                     scheduler.delta());
             }
-        });
+        };
+    if (owner.processes.program_view(process).scheduling_domain()
+        == ProcessSchedulingDomain::systemverilog) {
+        owner.scheduler.schedule_end_of_time_slot(process, std::move(publish));
+    } else {
+        owner.scheduler.schedule(
+            SchedulerPhase::postponed, process, std::move(publish));
+    }
 }
 
 [[nodiscard]] SimulationTick Interpreter::Impl::ExecutionContext::current_time() const noexcept{
@@ -1028,10 +1412,7 @@ void Interpreter::Impl::ExecutionContext::display_formatted(
         zero_pad,
         scalar_kind);
     if (postponed) {
-        owner.scheduler.schedule(
-            SchedulerPhase::postponed,
-            process,
-            [&owner = owner,
+        auto publish = [&owner = owner,
                 process = process,
                 text = std::move(text),
                 newline](Scheduler& scheduler) {
@@ -1043,7 +1424,15 @@ void Interpreter::Impl::ExecutionContext::display_formatted(
                         scheduler.now(),
                         scheduler.delta());
                 }
-            });
+            };
+        if (owner.processes.program_view(process).scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog) {
+            owner.scheduler.schedule_end_of_time_slot(
+                process, std::move(publish));
+        } else {
+            owner.scheduler.schedule(
+                SchedulerPhase::postponed, process, std::move(publish));
+        }
     } else if (owner.output_hook) {
         owner.output_hook(
             process,
@@ -1073,10 +1462,7 @@ void Interpreter::Impl::ExecutionContext::display_time(
         left_justify,
         zero_pad);
     if (postponed) {
-        owner.scheduler.schedule(
-            SchedulerPhase::postponed,
-            process,
-            [&owner = owner,
+        auto publish = [&owner = owner,
                 process = process,
                 text = std::move(text),
                 newline](Scheduler& scheduler) {
@@ -1088,7 +1474,15 @@ void Interpreter::Impl::ExecutionContext::display_time(
                         scheduler.now(),
                         scheduler.delta());
                 }
-            });
+            };
+        if (owner.processes.program_view(process).scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog) {
+            owner.scheduler.schedule_end_of_time_slot(
+                process, std::move(publish));
+        } else {
+            owner.scheduler.schedule(
+                SchedulerPhase::postponed, process, std::move(publish));
+        }
     } else if (owner.output_hook) {
         owner.output_hook(
             process,

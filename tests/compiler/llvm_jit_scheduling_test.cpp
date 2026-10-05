@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_test_support.hpp"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
+#include <initializer_list>
+#include <iterator>
+
 namespace fsim::tests::compiler {
 
 namespace llvm_jit_test_detail {
@@ -84,10 +90,10 @@ void run_at_level(const JitOptimizationLevel optimization,
   legacy_runtime.signals[0] = {0x35, 0};
   legacy_runtime.signals[1] = {0x0f, 0};
   auto legacy_descriptor = abi(legacy_runtime);
-  legacy_descriptor.struct_size = static_cast<std::uint32_t>(
-      offsetof(fsim_jit_runtime_v1, write_update));
-  legacy_descriptor.write_update = nullptr;
-  legacy_descriptor.write_after = nullptr;
+  auto legacy_services = copy_jit_services(legacy_descriptor);
+  legacy_services.write_update = nullptr;
+  legacy_services.write_after = nullptr;
+  legacy_descriptor.services = &legacy_services;
   assert(jit.execute(handle, legacy_descriptor) ==
          JitExecutionStatus::completed);
 
@@ -138,33 +144,31 @@ void test_scheduled_callbacks_at_level(
 
   {
     auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_update));
+    auto short_services = copy_jit_services(too_short);
+    short_services.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_services_v2, write_update));
+    too_short.services = &short_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_update");
-  }
-  {
-    auto no_delayed_tail = descriptor;
-    no_delayed_tail.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_after));
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, no_delayed_tail); },
-        "does not include write_after");
+        "services ABI structure is too small");
   }
   {
     auto missing_update = descriptor;
-    missing_update.write_update = nullptr;
+    auto missing_services = copy_jit_services(missing_update);
+    missing_services.write_update = nullptr;
+    missing_update.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing_update); },
-        "requires write_update");
+        "require write_update");
   }
   {
     auto missing_after = descriptor;
-    missing_after.write_after = nullptr;
+    auto missing_services = copy_jit_services(missing_after);
+    missing_services.write_after = nullptr;
+    missing_after.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing_after); },
-        "requires write_after");
+        "require write_after");
   }
 
   Process update_only;
@@ -180,9 +184,9 @@ void test_scheduled_callbacks_at_level(
   jit.add_process(update_symbol, update_only, widths);
   TestRuntime update_runtime;
   auto update_descriptor = abi(update_runtime);
-  update_descriptor.struct_size = static_cast<std::uint32_t>(
-      offsetof(fsim_jit_runtime_v1, write_after));
-  update_descriptor.write_after = nullptr;
+  auto update_services = copy_jit_services(update_descriptor);
+  update_services.write_after = nullptr;
+  update_descriptor.services = &update_services;
   assert(jit.execute(jit.lookup(update_symbol), update_descriptor) ==
          JitExecutionStatus::completed);
   assert(update_runtime.scheduled_writes.size() == 1);
@@ -202,7 +206,9 @@ void test_scheduled_callbacks_at_level(
   jit.add_process(after_symbol, after_only, widths);
   TestRuntime after_runtime;
   auto after_descriptor = abi(after_runtime);
-  after_descriptor.write_update = nullptr;
+  auto after_services = copy_jit_services(after_descriptor);
+  after_services.write_update = nullptr;
+  after_descriptor.services = &after_services;
   assert(jit.execute(jit.lookup(after_symbol), after_descriptor) ==
          JitExecutionStatus::completed);
   assert(after_runtime.scheduled_writes.size() == 1);
@@ -295,34 +301,22 @@ void test_inertial_callbacks_at_level(
   assert(runtime.inertial_writes == expected);
 
   {
-    auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_inertial));
+    auto missing = descriptor;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_inertial = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
-        [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_inertial");
+        [&] { (void)jit.execute(handle, missing); },
+        "require write_inertial");
   }
   {
     auto missing = descriptor;
-    missing.write_inertial = nullptr;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_inertial_slice = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
-        "requires write_inertial");
-  }
-  {
-    auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_inertial_slice));
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_inertial_slice");
-  }
-  {
-    auto missing = descriptor;
-    missing.write_inertial_slice = nullptr;
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, missing); },
-        "requires write_inertial_slice");
+        "require write_inertial_slice");
   }
 }
 
@@ -386,7 +380,7 @@ void test_projected_callbacks_at_level(
           0,
           11,
           3,
-          FSIM_JIT_PROJECTED_INERTIAL},
+          FSIM_JIT_PROJECTED_INERTIAL_V2},
       {
           1,
           encode(PackedLogic4::from_msb_string("XZ")),
@@ -394,7 +388,7 @@ void test_projected_callbacks_at_level(
           2,
           13,
           0,
-          FSIM_JIT_PROJECTED_TRANSPORT},
+          FSIM_JIT_PROJECTED_TRANSPORT_V2},
       {
           0,
           encode(PackedLogic4::from_msb_string("01010101")),
@@ -402,7 +396,7 @@ void test_projected_callbacks_at_level(
           8,
           17,
           4,
-          FSIM_JIT_PROJECTED_INERTIAL},
+          FSIM_JIT_PROJECTED_INERTIAL_V2},
       {
           0,
           encode(PackedLogic4::from_msb_string("10101010")),
@@ -410,7 +404,7 @@ void test_projected_callbacks_at_level(
           8,
           23,
           4,
-          FSIM_JIT_PROJECTED_INERTIAL},
+          FSIM_JIT_PROJECTED_INERTIAL_V2},
       {
           1,
           encode(PackedLogic4::from_msb_string("01")),
@@ -418,7 +412,7 @@ void test_projected_callbacks_at_level(
           2,
           19,
           0,
-          FSIM_JIT_PROJECTED_TRANSPORT},
+          FSIM_JIT_PROJECTED_TRANSPORT_V2},
       {
           1,
           encode(PackedLogic4::from_msb_string("10")),
@@ -426,71 +420,45 @@ void test_projected_callbacks_at_level(
           2,
           29,
           0,
-          FSIM_JIT_PROJECTED_TRANSPORT},
+          FSIM_JIT_PROJECTED_TRANSPORT_V2},
   };
   assert(runtime.projected_writes == expected);
 
   {
-    auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_projected));
+    auto missing = descriptor;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_projected = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
-        [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_projected");
+        [&] { (void)jit.execute(handle, missing); },
+        "require write_projected");
   }
   {
     auto missing = descriptor;
-    missing.write_projected = nullptr;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_projected_slice = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
-        "requires write_projected");
-  }
-  {
-    auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_projected_slice));
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_projected_slice");
+        "require write_projected_slice");
   }
   {
     auto missing = descriptor;
-    missing.write_projected_slice = nullptr;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_projected_waveform = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
-        "requires write_projected_slice");
-  }
-  {
-    auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(fsim_jit_runtime_v1, write_projected_waveform));
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_projected_waveform");
+        "require write_projected_waveform");
   }
   {
     auto missing = descriptor;
-    missing.write_projected_waveform = nullptr;
+    auto missing_services = copy_jit_services(missing);
+    missing_services.write_projected_waveform_slice = nullptr;
+    missing.services = &missing_services;
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
-        "requires write_projected_waveform");
-  }
-  {
-    auto too_short = descriptor;
-    too_short.struct_size = static_cast<std::uint32_t>(
-        offsetof(
-            fsim_jit_runtime_v1,
-            write_projected_waveform_slice));
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, too_short); },
-        "does not include write_projected_waveform_slice");
-  }
-  {
-    auto missing = descriptor;
-    missing.write_projected_waveform_slice = nullptr;
-    expect_fatal_error(
-        [&] { (void)jit.execute(handle, missing); },
-        "requires write_projected_waveform_slice");
+        "require write_projected_waveform_slice");
   }
 
   Process wide;
@@ -519,6 +487,10 @@ void test_projected_callbacks_at_level(
           { { 3, 8 }, { 4, 9 } },
           DynamicIndex { 2, 79, 0, 0 }, 0,
           ProjectedDelayMode::transport },
+      WriteProjected { 0, 0, 7, 3,
+          ProjectedDelayMode::inertial },
+      WriteProjected { 0, 0, 0, 0,
+          ProjectedDelayMode::transport },
       Halt { }
   };
   const std::array<std::uint32_t, 2> wide_widths { 80U, 80U };
@@ -527,10 +499,13 @@ void test_projected_callbacks_at_level(
   jit.add_process(wide_symbol, wide, wide_widths);
   TestRuntime wide_runtime;
   auto wide_descriptor = abi(wide_runtime);
-  wide_descriptor.execute_signal_operation = [](
+  auto wide_services = copy_jit_services(wide_descriptor);
+  wide_services.write_signal_packed = nullptr;
+  wide_services.write_projected_signal_packed = nullptr;
+  wide_services.execute_signal_operation = [](
       void* context, const std::uint32_t process,
       const std::uint32_t instruction,
-      fsim_jit_frame_v1* frame) {
+      fsim_jit_frame_v2* frame) {
       auto& runtime = *static_cast<TestRuntime*>(context);
       assert(process == 8U && frame != nullptr);
       assert(frame->register_initialized[0] != 0U);
@@ -539,12 +514,268 @@ void test_projected_callbacks_at_level(
       runtime.native_service_calls.emplace_back(process, instruction);
       return std::uint32_t { 0 };
   };
+  wide_descriptor.services = &wide_services;
   assert(jit.execute(jit.lookup(wide_symbol), wide_descriptor)
       == JitExecutionStatus::completed);
   assert((wide_runtime.native_service_calls
       == std::vector<std::pair<std::uint32_t, std::uint32_t>> {
           { 8U, 5U }, { 8U, 6U }, { 8U, 7U }, { 8U, 8U },
-          { 8U, 9U } }));
+          { 8U, 9U }, { 8U, 10U }, { 8U, 11U } }));
+
+  struct PackedProjectedCapture {
+    std::uint32_t calls { };
+    std::uint32_t status { };
+    std::uint32_t expected_signal { };
+    std::uint32_t expected_width { };
+    std::array<bool, 4> expected_present { };
+    std::array<std::array<std::uint64_t, 2>, 4> words { };
+  };
+  const auto capture_projected_planes = +[](void* const opaque,
+      const std::uint32_t signal, const std::uint32_t width,
+      const std::uint64_t* const aval, const std::uint64_t* const bval,
+      const std::uint64_t* const plane2,
+      const std::uint64_t* const plane3) -> std::uint32_t {
+    if (opaque == nullptr) {
+      return 1U;
+    }
+    auto& capture = *static_cast<PackedProjectedCapture*>(opaque);
+    const std::array<const std::uint64_t*, 4> source_planes {
+        aval, bval, plane2, plane3 };
+    const auto word_count = static_cast<std::size_t>(
+        (static_cast<std::uint64_t>(width) + 63U) / 64U);
+    if (signal != capture.expected_signal || width != capture.expected_width
+        || word_count != capture.words.front().size()) {
+      return 2U;
+    }
+    for (std::size_t plane = 0U; plane < source_planes.size(); ++plane) {
+      if ((source_planes[plane] != nullptr)
+          != capture.expected_present[plane]) {
+        return 3U;
+      }
+      if (source_planes[plane] != nullptr) {
+        std::copy_n(source_planes[plane], word_count,
+            capture.words[plane].begin());
+      }
+    }
+    ++capture.calls;
+    return capture.status;
+  };
+  const auto copy_expected_planes = [](
+      const PackedLogic4& value) {
+    std::array<std::array<std::uint64_t, 2>, 4> expected { };
+    assert(value.width() == 80U);
+    assert(value.aval_words().size() == 2U);
+    assert(value.bval_words().size() == 2U);
+    std::copy(value.aval_words().begin(), value.aval_words().end(),
+        expected[0].begin());
+    std::copy(value.bval_words().begin(), value.bval_words().end(),
+        expected[1].begin());
+    if (value.is_logic9()) {
+      for (std::size_t plane = 2U; plane < 4U; ++plane) {
+        const auto source = value.logic9_plane_words(plane);
+        assert(source.size() == 2U);
+        std::copy(source.begin(), source.end(), expected[plane].begin());
+      }
+    }
+    return expected;
+  };
+
+  const auto wide_l4_value = PackedLogic4::from_msb_string(
+      "1XZ" + std::string(77U, '0'));
+  const auto wide_l4_expected = copy_expected_planes(wide_l4_value);
+  const std::array<std::array<std::uint64_t, 2>, 4>
+      expected_wide_l4_planes {{
+          { 0U, UINT64_C(0xc000) },
+          { 0U, UINT64_C(0x6000) },
+          { 0U, 0U },
+          { 0U, 0U },
+      }};
+  assert(wide_l4_expected == expected_wide_l4_planes);
+
+  Process wide_projected_only;
+  wide_projected_only.id = 9U;
+  wide_projected_only.name = "wide_projected_packed_callback";
+  wide_projected_only.register_count = 1U;
+  wide_projected_only.operations = {
+      LoadConstant { 0U, wide_l4_value },
+      WriteProjected {
+          0U, 0U, 0U, 0U, ProjectedDelayMode::inertial },
+      Halt { }
+  };
+  const std::array<std::uint32_t, 1> projected_only_widths { 80U };
+  const auto projected_only_symbol = std::string { symbol_prefix }
+      + "_wide_projected_packed_callback";
+  jit.add_process(
+      projected_only_symbol, wide_projected_only, projected_only_widths);
+  const auto projected_only_handle = jit.lookup(projected_only_symbol);
+  TestRuntime projected_only_runtime;
+  auto projected_only_descriptor = abi(projected_only_runtime);
+  auto projected_only_services
+      = copy_jit_services(projected_only_descriptor);
+  assert(projected_only_services.struct_size
+      == sizeof(fsim_jit_services_v2));
+  projected_only_services.write_signal_packed = nullptr;
+  projected_only_services.execute_signal_operation = nullptr;
+  PackedProjectedCapture projected_capture;
+  projected_capture.expected_signal = 0U;
+  projected_capture.expected_width = 80U;
+  projected_capture.expected_present = { true, true, false, false };
+  projected_capture.words = { };
+  projected_only_descriptor.context = &projected_capture;
+  projected_only_services.write_projected_signal_packed
+      = capture_projected_planes;
+  projected_only_descriptor.services = &projected_only_services;
+  assert(jit.execute(projected_only_handle, projected_only_descriptor)
+      == JitExecutionStatus::completed);
+  assert(projected_capture.calls == 1U);
+  assert(projected_capture.words == wide_l4_expected);
+
+  const auto layout = jit.frame_layout(projected_only_handle);
+  std::vector<std::uint64_t> register_aval(layout.register_word_count);
+  std::vector<std::uint64_t> register_bval(layout.register_word_count);
+  std::vector<std::uint8_t> register_initialized(layout.register_count);
+  fsim_jit_frame_v2 frame { };
+  auto result = new_resume_result();
+  const auto expect_preflight_failure_without_mutation =
+      [&](const fsim_jit_runtime_instance_v2& descriptor,
+          const std::string_view message) {
+        jit.initialize_frame(projected_only_handle, frame, register_aval,
+            register_bval, register_initialized);
+        const auto frame_before = frame;
+        const auto result_before = result;
+        const auto aval_before = register_aval;
+        const auto bval_before = register_bval;
+        const auto initialized_before = register_initialized;
+        expect_fatal_error(
+            [&] {
+              (void)jit.resume(
+                  projected_only_handle, descriptor, frame, result);
+            },
+            message);
+        assert(frame.abi_version == frame_before.abi_version);
+        assert(frame.struct_size == frame_before.struct_size);
+        assert(frame.layout_id_low == frame_before.layout_id_low);
+        assert(frame.layout_id_high == frame_before.layout_id_high);
+        assert(frame.register_count == frame_before.register_count);
+        assert(frame.program_counter == frame_before.program_counter);
+        assert(frame.state == frame_before.state);
+        assert(frame.last_instruction == frame_before.last_instruction);
+        assert(frame.register_aval == frame_before.register_aval);
+        assert(frame.register_bval == frame_before.register_bval);
+        assert(frame.register_initialized == frame_before.register_initialized);
+        assert(frame.register_logic9_plane2
+            == frame_before.register_logic9_plane2);
+        assert(frame.register_logic9_plane3
+            == frame_before.register_logic9_plane3);
+        assert(frame.native_call_depth == frame_before.native_call_depth);
+        assert(frame.native_call_reserved == frame_before.native_call_reserved);
+        assert(std::equal(std::begin(frame.native_return_stack),
+            std::end(frame.native_return_stack),
+            std::begin(frame_before.native_return_stack)));
+        assert(register_aval == aval_before);
+        assert(register_bval == bval_before);
+        assert(register_initialized == initialized_before);
+        assert(result.abi_version == result_before.abi_version);
+        assert(result.struct_size == result_before.struct_size);
+        assert(result.status == result_before.status);
+        assert(result.instruction == result_before.instruction);
+        assert(result.delay == result_before.delay);
+      };
+
+  auto missing_packed_projected = projected_only_descriptor;
+  auto missing_packed_projected_services
+      = copy_jit_services(missing_packed_projected);
+  missing_packed_projected_services.write_projected_signal_packed = nullptr;
+  missing_packed_projected.services = &missing_packed_projected_services;
+  expect_preflight_failure_without_mutation(missing_packed_projected,
+      "require write_projected_signal_packed");
+  assert(projected_capture.calls == 1U);
+
+  constexpr auto legacy_service_prefix_size = offsetof(
+      fsim_jit_services_v2, write_projected_signal_packed);
+  static_assert(legacy_service_prefix_size == 672U);
+  alignas(fsim_jit_services_v2)
+      std::array<std::byte, legacy_service_prefix_size> legacy_storage { };
+  const auto make_legacy_prefix = [&](const fsim_jit_services_v2& services) {
+    std::memcpy(legacy_storage.data(), &services,
+        legacy_service_prefix_size);
+    const auto size = static_cast<std::uint32_t>(legacy_service_prefix_size);
+    std::memcpy(legacy_storage.data()
+            + offsetof(fsim_jit_services_v2, struct_size),
+        &size, sizeof(size));
+    return reinterpret_cast<const fsim_jit_services_v2*>(
+        legacy_storage.data());
+  };
+
+  TestRuntime legacy_runtime;
+  auto legacy_descriptor = abi(legacy_runtime);
+  auto legacy_full_services = copy_jit_services(legacy_descriptor);
+  assert(legacy_full_services.struct_size
+      == sizeof(fsim_jit_services_v2));
+  legacy_descriptor.services = make_legacy_prefix(legacy_full_services);
+  assert(jit.execute(handle, legacy_descriptor)
+      == JitExecutionStatus::completed);
+  assert(legacy_runtime.projected_writes == expected);
+
+  auto physically_short = projected_only_descriptor;
+  physically_short.services = make_legacy_prefix(projected_only_services);
+  expect_preflight_failure_without_mutation(physically_short,
+      "services ABI structure is too small for "
+      "write_projected_signal_packed");
+  assert(projected_capture.calls == 1U);
+
+  projected_capture.status = 7U;
+  expect_generated_runtime_error(
+      [&] {
+        (void)jit.execute(projected_only_handle, projected_only_descriptor);
+      },
+      1U, JitGeneratedRuntimeErrorReason::signal_callback_failure,
+      "exact-width signal runtime callback failed");
+  assert(projected_capture.calls == 2U);
+
+  std::string logic9_bits;
+  logic9_bits.reserve(80U);
+  constexpr std::string_view logic9_cycle { "U01XZWLH-" };
+  for (std::size_t bit = 0U; bit < 80U; ++bit) {
+    logic9_bits.push_back(logic9_cycle[bit % logic9_cycle.size()]);
+  }
+  const auto wide_l9_value = PackedLogic4::from_logic9_msb_string(logic9_bits);
+  const auto wide_l9_expected = copy_expected_planes(wide_l9_value);
+  Process wide_logic9_projected;
+  wide_logic9_projected.id = 10U;
+  wide_logic9_projected.name = "wide_logic9_projected_packed_callback";
+  wide_logic9_projected.register_count = 1U;
+  wide_logic9_projected.register_value_kinds = { ValueKind::logic9 };
+  wide_logic9_projected.operations = {
+      LoadConstant { 0U, wide_l9_value },
+      WriteProjected {
+          0U, 0U, 0U, 0U, ProjectedDelayMode::inertial },
+      Halt { }
+  };
+  const std::array<std::uint32_t, 1> logic9_widths { 80U };
+  const std::array<ValueKind, 1> logic9_signal_kinds { ValueKind::logic9 };
+  const auto logic9_symbol = std::string { symbol_prefix }
+      + "_wide_logic9_projected_packed_callback";
+  jit.add_process(logic9_symbol, wide_logic9_projected,
+      logic9_widths, logic9_signal_kinds);
+  TestRuntime logic9_runtime;
+  auto logic9_descriptor = abi(logic9_runtime);
+  auto logic9_services = copy_jit_services(logic9_descriptor);
+  logic9_services.write_signal_packed = nullptr;
+  logic9_services.execute_signal_operation = nullptr;
+  logic9_services.write_projected_signal_packed
+      = capture_projected_planes;
+  PackedProjectedCapture logic9_capture;
+  logic9_capture.expected_signal = 0U;
+  logic9_capture.expected_width = 80U;
+  logic9_capture.expected_present = { true, true, true, true };
+  logic9_descriptor.context = &logic9_capture;
+  logic9_descriptor.services = &logic9_services;
+  assert(jit.execute(jit.lookup(logic9_symbol), logic9_descriptor)
+      == JitExecutionStatus::completed);
+  assert(logic9_capture.calls == 1U);
+  assert(logic9_capture.words == wide_l9_expected);
+
 }
 
 [[nodiscard]] Process make_scheduling_differential_process() {
@@ -579,7 +810,7 @@ void test_scheduling_differential_at_level(
   std::vector<std::uint64_t> register_aval(layout.register_word_count);
   std::vector<std::uint64_t> register_bval(layout.register_word_count);
   std::vector<std::uint8_t> register_initialized(layout.register_count);
-  fsim_jit_frame_v1 frame{};
+  fsim_jit_frame_v2 frame{};
   jit.initialize_frame(
       handle, frame, register_aval, register_bval,
       register_initialized);
@@ -728,12 +959,12 @@ void test_native_callable_regions() {
   std::vector<std::uint64_t> aval(layout.register_count);
   std::vector<std::uint64_t> bval(layout.register_count);
   std::vector<std::uint8_t> initialized(layout.register_count);
-  fsim_jit_frame_v1 frame{};
+  fsim_jit_frame_v2 frame{};
   jit.initialize_frame(handle, frame, aval, bval, initialized);
 
   TestRuntime runtime;
   auto descriptor = abi(runtime);
-  descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
+  descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS_V2;
   auto result = new_resume_result();
   assert(jit.resume(handle, descriptor, frame, result)
          == JitResumeStatus::debug_point);
@@ -766,7 +997,7 @@ void test_native_callable_regions() {
       conservative_layout.register_count);
   std::vector<std::uint8_t> conservative_initialized(
       conservative_layout.register_count);
-  fsim_jit_frame_v1 conservative_frame{};
+  fsim_jit_frame_v2 conservative_frame{};
   conservative_jit.initialize_frame(
       conservative_handle,
       conservative_frame,
@@ -818,7 +1049,7 @@ void test_native_callable_regions() {
     std::vector<std::uint64_t> nested_bval(nested_layout.register_count);
     std::vector<std::uint8_t> nested_initialized(
         nested_layout.register_count);
-    fsim_jit_frame_v1 nested_frame{};
+    fsim_jit_frame_v2 nested_frame{};
     nested_jit.initialize_frame(
         nested_handle, nested_frame, nested_aval, nested_bval,
         nested_initialized);
@@ -939,7 +1170,7 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
         jit.frame_layout(error_handle).register_count);
     std::vector<std::uint8_t> register_initialized(
         jit.frame_layout(error_handle).register_count);
-    fsim_jit_frame_v1 frame{};
+    fsim_jit_frame_v2 frame{};
     jit.initialize_frame(
         error_handle, frame, register_aval, register_bval,
         register_initialized);
@@ -951,8 +1182,8 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
         },
         1, JitGeneratedRuntimeErrorReason::unknown_branch_condition,
         "instruction 1: branch condition is unknown or high impedance");
-    assert(result.status == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR);
-    assert(frame.state == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR);
+    assert(result.status == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2);
+    assert(frame.state == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2);
     expect_generated_runtime_error(
         [&] {
           (void)jit.resume(
@@ -978,7 +1209,7 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
       call_layout.register_count);
   std::vector<std::uint8_t> call_initialized(
       call_layout.register_count);
-  fsim_jit_frame_v1 call_frame{};
+  fsim_jit_frame_v2 call_frame{};
   call_jit.initialize_frame(
       call_handle,
       call_frame,
@@ -1174,7 +1405,7 @@ void test_checked_integer_at_level(
         std::vector<std::uint64_t> bval(layout.register_count);
         std::vector<std::uint8_t> initialized(
             layout.register_count);
-        fsim_jit_frame_v1 frame{};
+        fsim_jit_frame_v2 frame{};
         jit.initialize_frame(
             handle, frame, aval, bval, initialized);
         auto resume_result = new_resume_result();
@@ -1191,13 +1422,16 @@ void test_checked_integer_at_level(
             message);
         assert(
             resume_result.status
-            == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR);
+            == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2);
         assert(
             resume_result.delay
             == static_cast<std::uint64_t>(reason));
         assert(
             frame.state
-            == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR);
+            == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR_V2);
+        assert(resume_result.instruction == instruction);
+        assert(frame.last_instruction == instruction);
+        assert(frame.program_counter == static_cast<std::uint32_t>(reason));
         expect_generated_runtime_error(
             [&] {
               (void)jit.resume(
@@ -1210,6 +1444,69 @@ void test_checked_integer_at_level(
             reason,
             message);
       };
+  // Runtime operands exercise the carry/overflow paths after either LLVM
+  // optimization pipeline, rather than constant-folding the checked result.
+  struct BoundaryCase {
+      std::int32_t left;
+      std::int32_t right;
+      std::int64_t expected;
+  };
+  const auto minimum32 = std::numeric_limits<std::int32_t>::min();
+  const auto maximum32 = std::numeric_limits<std::int32_t>::max();
+  const auto check_boundaries = [&](const IntegerBinaryOperator operation,
+                                    const std::string_view suffix,
+                                    const std::initializer_list<BoundaryCase> cases) {
+      Process boundary;
+      boundary.id = 0U;
+      boundary.name = std::string { symbol_prefix } + std::string { suffix };
+      boundary.register_count = 3U;
+      boundary.operations = {
+          ReadSignal { 0U, 0U }, ReadSignal { 1U, 1U },
+          IntegerBinary { operation, 2U, 0U, 1U },
+          WriteBlocking { 2U, 2U }, Halt { },
+      };
+      const std::array<std::uint32_t, 3U> widths { 32U, 32U, 32U };
+      jit.add_process(boundary.name, boundary, widths);
+      const auto handle = jit.lookup(boundary.name);
+      for (const auto& item : cases) {
+          TestRuntime native;
+          native.signals[0] = encode(integer(item.left));
+          native.signals[1] = encode(integer(item.right));
+          native.signals[2] = encode(integer(17));
+          auto native_abi = abi(native);
+          const bool overflow = item.expected < minimum32 || item.expected > maximum32;
+          if (overflow) {
+              expect_generated_runtime_error(
+                  [&] { (void)jit.execute(handle, native_abi); },
+                  2U, JitGeneratedRuntimeErrorReason::integer_overflow,
+                  "instruction 2: VHDL integer arithmetic overflow");
+              assert(native.signals[2] == encode(integer(17)));
+          } else {
+              assert(jit.execute(handle, native_abi) == JitExecutionStatus::completed);
+              assert(native.signals[2]
+                  == encode(integer(static_cast<std::int32_t>(item.expected))));
+          }
+      }
+  };
+  check_boundaries(IntegerBinaryOperator::add, "_add_boundaries", {
+      { maximum32, 0, maximum32 }, { minimum32, 0, minimum32 },
+      { maximum32, 1, std::int64_t { maximum32 } + 1 },
+      { minimum32, -1, std::int64_t { minimum32 } - 1 },
+      { minimum32, maximum32, -1 },
+  });
+  check_boundaries(IntegerBinaryOperator::subtract, "_subtract_boundaries", {
+      { minimum32, 0, minimum32 }, { maximum32, 0, maximum32 },
+      { minimum32, 1, std::int64_t { minimum32 } - 1 },
+      { maximum32, -1, std::int64_t { maximum32 } + 1 },
+      { minimum32, minimum32, 0 },
+  });
+  check_boundaries(IntegerBinaryOperator::multiply, "_multiply_boundaries", {
+      { minimum32, 1, minimum32 }, { maximum32, 1, maximum32 },
+      { minimum32, -1, -std::int64_t { minimum32 } },
+      { maximum32, 2, std::int64_t { maximum32 } * 2 },
+      { -46340, 46340, -INT64_C(2147395600) },
+  });
+
   add_failure(
       "overflow",
       {
@@ -1377,7 +1674,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
                                            UINT64_MAX);
   std::vector<std::uint8_t> register_initialized(
       layout.register_count, UINT8_MAX);
-  fsim_jit_frame_v1 frame{};
+  fsim_jit_frame_v2 frame{};
   jit.initialize_frame(
       handle, frame, register_aval, register_bval,
       register_initialized);
@@ -1391,7 +1688,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   assert(frame.layout_id_low == layout.layout_id_low);
   assert(frame.layout_id_high == layout.layout_id_high);
   assert(frame.program_counter == 0);
-  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY_V2);
 
   auto result = new_resume_result();
   {
@@ -1405,7 +1702,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
     auto wrong = frame;
     wrong.struct_size =
         static_cast<std::uint32_t>(
-            offsetof(fsim_jit_frame_v1, register_logic9_plane2) - 1U);
+            offsetof(fsim_jit_frame_v2, register_logic9_plane2) - 1U);
     expect_error(
         [&] { (void)jit.resume(handle, descriptor, wrong, result); },
         "frame ABI structure is too small");
@@ -1464,7 +1761,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
     auto wrong_result = result;
     wrong_result.struct_size =
         static_cast<std::uint32_t>(
-            sizeof(fsim_jit_resume_result_v1) - 1U);
+            sizeof(fsim_jit_resume_result_v2) - 1U);
     expect_error(
         [&] { (void)jit.resume(handle, descriptor, frame, wrong_result); },
         "resume-result ABI structure is too small");
@@ -1473,7 +1770,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
     std::array<std::uint64_t, 1> too_small_aval{};
     std::array<std::uint64_t, 1> too_small_bval{};
     std::array<std::uint8_t, 1> too_small_initialized{};
-    fsim_jit_frame_v1 unused{};
+    fsim_jit_frame_v2 unused{};
     expect_error(
         [&] {
           jit.initialize_frame(
@@ -1485,7 +1782,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   {
     std::vector<std::uint64_t> aliased(layout.register_count);
     std::vector<std::uint8_t> initialized(layout.register_count);
-    fsim_jit_frame_v1 unused{};
+    fsim_jit_frame_v2 unused{};
     expect_error(
         [&] {
           jit.initialize_frame(
@@ -1496,7 +1793,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::wait_for);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_FOR);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_FOR_V2);
   assert(result.instruction == 2);
   assert(result.delay == 5);
   assert(frame.program_counter == 3);
@@ -1508,7 +1805,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::yielded);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_YIELDED);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_YIELDED_V2);
   assert(result.instruction == 5);
   assert(result.delay == 0);
   assert(frame.program_counter == 6);
@@ -1519,18 +1816,18 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::paused);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_PAUSED);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_PAUSED_V2);
   assert(result.instruction == 6);
   assert(result.delay == 0);
   assert(frame.program_counter == 7);
-  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY_V2);
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::stopped);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_STOPPED);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_STOPPED_V2);
   assert(result.instruction == 9);
   assert(frame.program_counter == process.operations.size());
-  assert(frame.state == FSIM_JIT_FRAME_STATE_STOPPED);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_STOPPED_V2);
   const auto writes_before_terminal_resume = runtime.writes.size();
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::stopped);
@@ -1591,7 +1888,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   std::vector<std::uint64_t> loop_bval(loop_layout.register_count);
   std::vector<std::uint8_t> loop_initialized(
       loop_layout.register_count);
-  fsim_jit_frame_v1 loop_frame{};
+  fsim_jit_frame_v2 loop_frame{};
   jit.initialize_frame(
       loop_handle, loop_frame, loop_aval, loop_bval,
       loop_initialized);
@@ -1645,7 +1942,7 @@ void test_process_cohort_resume_at_level(
     std::vector<std::uint64_t> aval;
     std::vector<std::uint64_t> bval;
     std::vector<std::uint8_t> initialized;
-    fsim_jit_frame_v1 value { };
+    fsim_jit_frame_v2 value { };
   };
   std::array<Frame, 2> frames;
   for (std::size_t index = 0; index < frames.size(); ++index) {
@@ -1660,10 +1957,10 @@ void test_process_cohort_resume_at_level(
   }
 
   std::array<TestRuntime, 2> runtimes;
-  std::array<fsim_jit_runtime_v1, 2> descriptors {
+  std::array<fsim_jit_runtime_instance_v2, 2> descriptors {
       abi(runtimes[0]), abi(runtimes[1])
   };
-  std::array<fsim_jit_resume_result_v1, 2> results {
+  std::array<fsim_jit_resume_result_v2, 2> results {
       new_resume_result(), new_resume_result()
   };
   std::array<std::uint8_t, 2> queued { 1U, 1U };
@@ -1682,7 +1979,7 @@ void test_process_cohort_resume_at_level(
   assert(jit.resume_cohort_prevalidated(cohort) == cohort.size());
   for (std::size_t index = 0; index < cohort.size(); ++index) {
     assert(cohort[index].status
-           == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+           == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
     assert(results[index].instruction == 2U);
     assert(frames[index].value.program_counter == 3U);
     assert((runtimes[index].signals[index] == EncodedSignal { 1U, 0U }));
@@ -1703,7 +2000,7 @@ void test_process_cohort_resume_at_level(
          == cohort.size());
   for (std::size_t index = 0; index < cohort.size(); ++index) {
     assert(cohort[index].status
-           == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+           == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
     assert(results[index].instruction == 2U);
     assert(frames[index].value.program_counter == 3U);
     assert((runtimes[index].signals[index] == EncodedSignal { 1U, 0U }));
@@ -1718,36 +2015,393 @@ void test_process_cohort_resume_at_level(
   queued = { 1U, 1U };
   waiting = { 1U, 1U };
   process_status = { 2U, 2U };
-  std::array<std::uint8_t, 2> active { 0U, 1U };
-  std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> region {
-      fsim::compiler::JitProcessCohortResumeEntry {
-          jit.bind(handles[0]), descriptors[0],
-          frames[0].value, results[0], &queued[0], &waiting[0],
-          &process_status[0], &active[0] },
-      fsim::compiler::JitProcessCohortResumeEntry {
-          jit.bind(handles[1]), descriptors[1],
-          frames[1].value, results[1], &queued[1], &waiting[1],
-          &process_status[1], &active[1] },
-  };
-  region[0].status = std::numeric_limits<std::uint32_t>::max();
-  const std::array<std::size_t, 1> active_indices { 1U };
-  assert(jit.resume_region_prevalidated(region, active_indices)
-         == region.size());
-  assert(active[0] == 0U);
-  assert(queued[0] == 1U);
-  assert(waiting[0] == 1U);
-  assert(process_status[0] == 2U);
-  assert(region[0].status == std::numeric_limits<std::uint32_t>::max());
-  assert((runtimes[0].signals[0] == EncodedSignal { 0U, 0U }));
-  assert(active[1] == 0U);
-  assert(queued[1] == 0U);
-  assert(waiting[1] == 1U);
-  assert(process_status[1] == 2U);
-  assert(region[1].status
-         == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
-  assert(results[1].instruction == 2U);
-  assert((runtimes[1].signals[1] == EncodedSignal { 1U, 0U }));
+}
 
+void test_ordered_cohort_cache_budget()
+{
+  constexpr std::size_t process_count = 6U;
+  constexpr std::size_t maximum_variants = 16U;
+  constexpr std::size_t capped_miss_variant = maximum_variants;
+  constexpr std::size_t maximum_members = 64U;
+  const std::array<std::uint32_t, 1> widths { 129U };
+  LlvmJit jit { LlvmJitOptions { JitOptimizationLevel::o0, { } } };
+  std::array<JitProcessHandle, process_count> handles;
+  for (std::size_t index = 0U; index < handles.size(); ++index) {
+    Process process;
+    process.id = static_cast<ProcessId>(index);
+    process.name = "bounded_ordered_cohort_" + std::to_string(index);
+    process.register_count = 1U;
+    process.static_sensitivity = { { 0U, EdgeKind::any } };
+    process.operations = {
+        ReadSignal { 0U, 0U },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    const auto symbol = process.name;
+    jit.add_process(symbol, process, widths);
+    handles[index] = jit.lookup(symbol);
+    assert(handles[index]);
+  }
+
+  struct FrameState {
+    std::vector<std::uint64_t> aval;
+    std::vector<std::uint64_t> bval;
+    std::vector<std::uint8_t> initialized;
+    fsim_jit_frame_v2 frame { };
+    fsim_jit_resume_result_v2 result { };
+  };
+  std::array<FrameState, process_count> frames;
+  for (std::size_t index = 0U; index < frames.size(); ++index) {
+    const auto layout = jit.frame_layout(handles[index]);
+    frames[index].aval.resize(layout.register_word_count);
+    frames[index].bval.resize(layout.register_word_count);
+    frames[index].initialized.resize(layout.register_count);
+    jit.initialize_frame(
+        handles[index], frames[index].frame,
+        frames[index].aval, frames[index].bval,
+        frames[index].initialized);
+    frames[index].result = new_resume_result();
+  }
+
+  TestRuntime runtime;
+  runtime.wide_signal_aval[0U] = { 0U, 0U, 0U };
+  runtime.wide_signal_bval[0U] = { 0U, 0U, 0U };
+  const auto descriptor = abi(runtime);
+  const auto same_result = [](
+      const fsim_jit_resume_result_v2& lhs,
+      const fsim_jit_resume_result_v2& rhs) {
+    return lhs.abi_version == rhs.abi_version
+        && lhs.struct_size == rhs.struct_size
+        && lhs.status == rhs.status
+        && lhs.instruction == rhs.instruction
+        && lhs.delay == rhs.delay;
+  };
+  std::array<std::uint8_t, 2> queued { 1U, 1U };
+  std::array<std::uint8_t, 2> waiting { 0U, 0U };
+  std::array<std::uint8_t, 2> process_status { 0U, 0U };
+  const auto reset_member = [&](const std::size_t index) {
+    jit.initialize_frame(
+        handles[index], frames[index].frame,
+        frames[index].aval, frames[index].bval,
+        frames[index].initialized);
+    frames[index].result = new_resume_result();
+  };
+  const auto make_entries = [&](const std::size_t first,
+                                const std::size_t second) {
+    return std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> {
+        fsim::compiler::JitProcessCohortResumeEntry {
+            jit.bind(handles[first]), descriptor,
+            frames[first].frame, frames[first].result,
+            &queued[0], &waiting[0], &process_status[0] },
+        fsim::compiler::JitProcessCohortResumeEntry {
+            jit.bind(handles[second]), descriptor,
+            frames[second].frame, frames[second].result,
+            &queued[1], &waiting[1], &process_status[1] },
+    };
+  };
+
+  // More than 64 members decline before frame or scheduler-state mutation and
+  // do not spend one of the ordered wrapper materialization attempts.
+  std::array<fsim::compiler::JitProcessCohortResumeEntry,
+      maximum_members + 1U> oversized;
+  std::array<std::uint8_t, maximum_members + 1U> large_queued;
+  std::array<std::uint8_t, maximum_members + 1U> large_waiting;
+  std::array<std::uint8_t, maximum_members + 1U> large_status;
+  large_queued.fill(1U);
+  large_waiting.fill(0U);
+  large_status.fill(0U);
+  auto& oversized_frame = frames[0];
+  const auto full_frame_before = oversized_frame.frame;
+  const auto frame_pc_before = oversized_frame.frame.program_counter;
+  const auto frame_state_before = oversized_frame.frame.state;
+  const auto register_aval_before = oversized_frame.aval;
+  const auto register_bval_before = oversized_frame.bval;
+  const auto register_initialized_before = oversized_frame.initialized;
+  const auto result_before = oversized_frame.result;
+  for (std::size_t index = 0U; index < oversized.size(); ++index) {
+    oversized[index] = fsim::compiler::JitProcessCohortResumeEntry {
+        jit.bind(handles[0]), descriptor,
+        oversized_frame.frame, oversized_frame.result,
+        &large_queued[index], &large_waiting[index], &large_status[index] };
+    oversized[index].status = UINT32_C(0xdeadbeef);
+  }
+  assert(jit.resume_ordered_cohort_prevalidated(oversized) == 0U);
+  assert(oversized_frame.frame.program_counter == frame_pc_before);
+  assert(oversized_frame.frame.state == frame_state_before);
+  assert(oversized_frame.frame.abi_version == full_frame_before.abi_version);
+  assert(oversized_frame.frame.struct_size == full_frame_before.struct_size);
+  assert(oversized_frame.frame.layout_id_low
+      == full_frame_before.layout_id_low);
+  assert(oversized_frame.frame.layout_id_high
+      == full_frame_before.layout_id_high);
+  assert(oversized_frame.frame.register_count
+      == full_frame_before.register_count);
+  assert(oversized_frame.frame.last_instruction
+      == full_frame_before.last_instruction);
+  assert(oversized_frame.frame.register_aval
+      == full_frame_before.register_aval);
+  assert(oversized_frame.frame.register_bval
+      == full_frame_before.register_bval);
+  assert(oversized_frame.frame.register_initialized
+      == full_frame_before.register_initialized);
+  assert(oversized_frame.frame.register_logic9_plane2
+      == full_frame_before.register_logic9_plane2);
+  assert(oversized_frame.frame.register_logic9_plane3
+      == full_frame_before.register_logic9_plane3);
+  assert(oversized_frame.frame.native_call_depth
+      == full_frame_before.native_call_depth);
+  assert(oversized_frame.frame.native_call_reserved
+      == full_frame_before.native_call_reserved);
+  assert(std::ranges::equal(
+      oversized_frame.frame.native_return_stack,
+      full_frame_before.native_return_stack));
+  assert(oversized_frame.aval == register_aval_before);
+  assert(oversized_frame.bval == register_bval_before);
+  assert(oversized_frame.initialized == register_initialized_before);
+  assert(same_result(oversized_frame.result, result_before));
+  assert(std::ranges::all_of(oversized, [](const auto& entry) {
+    return entry.status == UINT32_C(0xdeadbeef) && !entry.failure;
+  }));
+  assert(std::ranges::all_of(large_queued, [](const auto value) {
+    return value == 1U;
+  }));
+  assert(std::ranges::all_of(large_waiting, [](const auto value) {
+    return value == 0U;
+  }));
+  assert(std::ranges::all_of(large_status, [](const auto value) {
+    return value == 0U;
+  }));
+
+  std::array<std::array<std::size_t, 2>, maximum_variants + 1U> variants { };
+  std::size_t variant_count { };
+  for (std::size_t first = 0U;
+      first < process_count && variant_count < variants.size(); ++first) {
+    for (std::size_t second = 0U;
+        second < process_count && variant_count < variants.size(); ++second) {
+      if (first != second) {
+        variants[variant_count++] = { first, second };
+      }
+    }
+  }
+  assert(variant_count == variants.size());
+
+  for (std::size_t index = 0U; index < maximum_variants; ++index) {
+    const auto [first, second] = variants[index];
+    reset_member(first);
+    reset_member(second);
+    queued = { 1U, 1U };
+    waiting = { 0U, 0U };
+    process_status = { 0U, 0U };
+    auto entries = make_entries(first, second);
+    assert(jit.resume_ordered_cohort_prevalidated(entries)
+        == entries.size());
+    assert(entries[0].status == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
+    assert(entries[1].status == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
+    assert(frames[first].frame.program_counter == 2U);
+    assert(frames[second].frame.program_counter == 2U);
+  }
+  assert(runtime.packed_signal_reads == maximum_variants * 2U);
+
+  const auto [miss_first, miss_second] = variants[capped_miss_variant];
+  reset_member(miss_first);
+  reset_member(miss_second);
+  queued = { 1U, 1U };
+  waiting = { 0U, 0U };
+  process_status = { 0U, 0U };
+  auto invalid_entries = make_entries(miss_first, miss_second);
+  const auto first_frame_before = frames[miss_first].frame;
+  const auto first_aval_before = frames[miss_first].aval;
+  const auto first_bval_before = frames[miss_first].bval;
+  const auto first_initialized_before = frames[miss_first].initialized;
+  const auto first_result_before = frames[miss_first].result;
+  const auto second_struct_size = frames[miss_second].frame.struct_size;
+  const auto reads_before_validation = runtime.packed_signal_reads;
+  invalid_entries[0].status = UINT32_C(0xcafef00d);
+  invalid_entries[1].status = UINT32_C(0xcafef00d);
+  frames[miss_second].frame.struct_size = 0U;
+  expect_fatal_error(
+      [&] { (void)jit.resume_ordered_cohort_prevalidated(invalid_entries); },
+      "frame ABI structure is too small");
+  frames[miss_second].frame.struct_size = second_struct_size;
+  assert(runtime.packed_signal_reads == reads_before_validation);
+  assert(frames[miss_first].frame.program_counter
+      == first_frame_before.program_counter);
+  assert(frames[miss_first].frame.state == first_frame_before.state);
+  assert(frames[miss_first].aval == first_aval_before);
+  assert(frames[miss_first].bval == first_bval_before);
+  assert(frames[miss_first].initialized == first_initialized_before);
+  assert(same_result(frames[miss_first].result, first_result_before));
+  assert(invalid_entries[0].status == UINT32_C(0xcafef00d));
+  assert(invalid_entries[1].status == UINT32_C(0xcafef00d));
+  assert(!invalid_entries[0].failure && !invalid_entries[1].failure);
+  assert(queued == (std::array<std::uint8_t, 2> { 1U, 1U }));
+  assert(waiting == (std::array<std::uint8_t, 2> { 0U, 0U }));
+  assert(process_status == (std::array<std::uint8_t, 2> { 0U, 0U }));
+
+  // The seventeenth distinct ordered pair executes its validated members
+  // directly after the wrapper budget is full.
+  auto fallback_entries = make_entries(miss_first, miss_second);
+  const auto reads_before_fallback = runtime.packed_signal_reads;
+  assert(jit.resume_ordered_cohort_prevalidated(fallback_entries)
+      == fallback_entries.size());
+  assert(runtime.packed_signal_reads == reads_before_fallback + 2U);
+  assert(fallback_entries[0].status
+      == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
+  assert(fallback_entries[1].status
+      == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
+  assert(frames[miss_first].frame.program_counter == 2U);
+  assert(frames[miss_second].frame.program_counter == 2U);
+  assert(queued == (std::array<std::uint8_t, 2> { 0U, 0U }));
+  assert(waiting == (std::array<std::uint8_t, 2> { 1U, 1U }));
+  assert(process_status == (std::array<std::uint8_t, 2> { 2U, 2U }));
+
+  // These ABI-level probes test accepted-prefix accounting; they do not
+  // certify application SV-active wave admission or semantics.
+  Process stop_process;
+  stop_process.id = static_cast<ProcessId>(process_count);
+  stop_process.name = "bounded_ordered_stop";
+  stop_process.register_count = 1U;
+  stop_process.operations = {
+      LoadConstant { 0U, PackedLogic4::from_msb_string("1") }, Stop { }
+  };
+  constexpr std::string_view stop_symbol = "bounded_ordered_stop";
+  jit.add_process(stop_symbol, stop_process, widths);
+  const auto stop_handle = jit.lookup(stop_symbol);
+  FrameState stop_frame;
+  const auto initialize_frame = [&](const JitProcessHandle handle,
+                                    FrameState& state) {
+    const auto layout = jit.frame_layout(handle);
+    state.aval.resize(layout.register_word_count);
+    state.bval.resize(layout.register_word_count);
+    state.initialized.resize(layout.register_count);
+    jit.initialize_frame(
+        handle, state.frame, state.aval, state.bval, state.initialized);
+    state.result = new_resume_result();
+  };
+  initialize_frame(stop_handle, stop_frame);
+  reset_member(1U);
+  queued = { 1U, 1U };
+  waiting = { 0U, 0U };
+  process_status = { 0U, 0U };
+  std::array<fsim::compiler::JitProcessCohortResumeEntry, 2> stop_entries {
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(stop_handle), descriptor, stop_frame.frame,
+          stop_frame.result, &queued[0], &waiting[0], &process_status[0] },
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[1]), descriptor, frames[1].frame,
+          frames[1].result, &queued[1], &waiting[1], &process_status[1] },
+  };
+  stop_entries[1].status = UINT32_C(0xdeadbeef);
+  const auto suffix_frame_before_stop = frames[1].frame;
+  const auto suffix_aval_before_stop = frames[1].aval;
+  const auto suffix_bval_before_stop = frames[1].bval;
+  const auto suffix_initialized_before_stop = frames[1].initialized;
+  const auto suffix_result_before_stop = frames[1].result;
+  const auto reads_before_stop = runtime.packed_signal_reads;
+  assert(jit.resume_ordered_cohort_prevalidated(stop_entries) == 1U);
+  assert(stop_entries[0].status == FSIM_JIT_RESUME_STATUS_STOPPED_V2);
+  assert(!stop_entries[0].failure);
+  assert(runtime.packed_signal_reads == reads_before_stop);
+  assert(frames[1].frame.program_counter
+      == suffix_frame_before_stop.program_counter);
+  assert(frames[1].frame.state == suffix_frame_before_stop.state);
+  assert(frames[1].aval == suffix_aval_before_stop);
+  assert(frames[1].bval == suffix_bval_before_stop);
+  assert(frames[1].initialized == suffix_initialized_before_stop);
+  assert(same_result(frames[1].result, suffix_result_before_stop));
+  assert(stop_entries[1].status == UINT32_C(0xdeadbeef));
+  assert(!stop_entries[1].failure);
+  assert(queued == (std::array<std::uint8_t, 2> { 0U, 1U }));
+  assert(waiting == (std::array<std::uint8_t, 2> { 0U, 0U }));
+  assert(process_status == (std::array<std::uint8_t, 2> { 1U, 0U }));
+
+  Process error_process;
+  error_process.id = static_cast<ProcessId>(process_count + 1U);
+  error_process.name = "bounded_ordered_runtime_error";
+  error_process.register_count = 1U;
+  error_process.operations = { ReadSignal { 0U, 0U }, Halt { } };
+  constexpr std::string_view error_symbol = "bounded_ordered_runtime_error";
+  jit.add_process(error_symbol, error_process, widths);
+  const auto error_handle = jit.lookup(error_symbol);
+  FrameState error_frame;
+  initialize_frame(error_handle, error_frame);
+  reset_member(0U);
+  reset_member(1U);
+  TestRuntime failing_runtime;
+  auto failing_descriptor = abi(failing_runtime);
+  auto failing_services = copy_jit_services(failing_descriptor);
+  // ABI v2 forbids callbacks from unwinding across the generated C boundary;
+  // a nonzero return exercises its supported runtime-error path.
+  failing_services.read_signal_packed = [](
+      void* context, std::uint32_t, std::uint32_t, std::uint64_t*,
+      std::uint64_t*, std::uint64_t*, std::uint64_t*) -> std::uint32_t {
+    auto& failed = *static_cast<TestRuntime*>(context);
+    ++failed.packed_signal_reads;
+    return 1U;
+  };
+  failing_descriptor.services = &failing_services;
+  std::array<std::uint8_t, 3> error_queued { 1U, 1U, 1U };
+  std::array<std::uint8_t, 3> error_waiting { 0U, 0U, 0U };
+  std::array<std::uint8_t, 3> error_process_status { 0U, 0U, 0U };
+  std::array<fsim::compiler::JitProcessCohortResumeEntry, 3> error_entries {
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[0]), descriptor, frames[0].frame,
+          frames[0].result, &error_queued[0], &error_waiting[0],
+          &error_process_status[0] },
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(error_handle), failing_descriptor, error_frame.frame,
+          error_frame.result, &error_queued[1], &error_waiting[1],
+          &error_process_status[1] },
+      fsim::compiler::JitProcessCohortResumeEntry {
+          jit.bind(handles[1]), descriptor, frames[1].frame,
+          frames[1].result, &error_queued[2], &error_waiting[2],
+          &error_process_status[2] },
+  };
+  error_entries[2].status = UINT32_C(0xdeadbeef);
+  const auto suffix_frame_before_error = frames[1].frame;
+  const auto suffix_aval_before_error = frames[1].aval;
+  const auto suffix_bval_before_error = frames[1].bval;
+  const auto suffix_initialized_before_error = frames[1].initialized;
+  const auto suffix_result_before_error = frames[1].result;
+  const auto reads_before_error = runtime.packed_signal_reads;
+  assert(jit.resume_ordered_cohort_prevalidated(error_entries) == 2U);
+  assert(error_entries[0].status
+      == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
+  assert(!error_entries[0].failure);
+  assert(frames[0].frame.program_counter == 2U);
+  assert(error_entries[1].status
+      == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR_V2);
+  assert(error_entries[1].failure);
+  assert(failing_runtime.packed_signal_reads == 1U);
+  assert(runtime.packed_signal_reads == reads_before_error + 1U);
+  assert(frames[1].frame.program_counter
+      == suffix_frame_before_error.program_counter);
+  assert(frames[1].frame.state == suffix_frame_before_error.state);
+  assert(frames[1].aval == suffix_aval_before_error);
+  assert(frames[1].bval == suffix_bval_before_error);
+  assert(frames[1].initialized == suffix_initialized_before_error);
+  assert(same_result(frames[1].result, suffix_result_before_error));
+  assert(error_entries[2].status == UINT32_C(0xdeadbeef));
+  assert(!error_entries[2].failure);
+  assert((error_queued == std::array<std::uint8_t, 3> { 0U, 0U, 1U }));
+  assert((error_waiting == std::array<std::uint8_t, 3> { 1U, 0U, 0U }));
+  assert((error_process_status
+      == std::array<std::uint8_t, 3> { 2U, 1U, 0U }));
+
+  // Exact existing member order remains reusable after the new-variant cap.
+  const auto [cached_first, cached_second] = variants[0];
+  reset_member(cached_first);
+  reset_member(cached_second);
+  queued = { 1U, 1U };
+  waiting = { 0U, 0U };
+  process_status = { 0U, 0U };
+  auto cached_entries = make_entries(cached_first, cached_second);
+  const auto reads_before_cached_reuse = runtime.packed_signal_reads;
+  assert(jit.resume_ordered_cohort_prevalidated(cached_entries)
+      == cached_entries.size());
+  assert(runtime.packed_signal_reads == reads_before_cached_reuse + 2U);
+  assert(frames[cached_first].frame.program_counter == 2U);
+  assert(frames[cached_second].frame.program_counter == 2U);
 }
 
 void test_class_service_boundaries_at_level(
@@ -1781,7 +2435,7 @@ void test_class_service_boundaries_at_level(
   std::vector<std::uint64_t> register_aval(layout.register_word_count);
   std::vector<std::uint64_t> register_bval(layout.register_word_count);
   std::vector<std::uint8_t> register_initialized(layout.register_count);
-  fsim_jit_frame_v1 frame{};
+  fsim_jit_frame_v2 frame{};
   jit.initialize_frame(
       handle,
       frame,
@@ -1863,14 +2517,14 @@ void test_class_service_boundaries_at_level(
   assert(result.instruction == 11 && frame.program_counter == 12);
 
   auto old_descriptor = descriptor;
-  old_descriptor.struct_size = static_cast<std::uint32_t>(
-      offsetof(fsim_jit_runtime_v1, execute_class_property_operation));
-  old_descriptor.execute_class_property_operation = nullptr;
+  auto old_services = copy_jit_services(old_descriptor);
+  old_services.execute_class_property_operation = nullptr;
+  old_descriptor.services = &old_services;
   jit.initialize_frame(
       handle, frame, register_aval, register_bval, register_initialized);
   expect_error(
       [&] { (void)jit.resume(handle, old_descriptor, frame, result); },
-      "requires class-property service callbacks");
+      "require class-property callbacks");
 
   Process malformed;
   malformed.id = 1;
@@ -1946,7 +2600,7 @@ void test_native_service_callbacks_at_level(
   std::vector<std::uint64_t> register_aval(layout.register_word_count);
   std::vector<std::uint64_t> register_bval(layout.register_word_count);
   std::vector<std::uint8_t> register_initialized(layout.register_count);
-  fsim_jit_frame_v1 frame { };
+  fsim_jit_frame_v2 frame { };
   jit.initialize_frame(
       handle, frame, register_aval, register_bval, register_initialized);
 
@@ -1973,19 +2627,68 @@ void test_native_service_callbacks_at_level(
       layout.register_word_offsets[1]] == 1U);
 
   auto old_descriptor = descriptor;
-  old_descriptor.struct_size = static_cast<std::uint32_t>(
-      offsetof(fsim_jit_runtime_v1, sample_coverage));
-  old_descriptor.sample_coverage = nullptr;
+  auto old_services = copy_jit_services(old_descriptor);
+  old_services.sample_coverage = nullptr;
+  old_descriptor.services = &old_services;
+  const auto frame_before_missing_callback = frame;
+  const auto result_before_missing_callback = result;
+  const auto register_aval_before_missing_callback = register_aval;
+  const auto register_bval_before_missing_callback = register_bval;
+  const auto register_initialized_before_missing_callback
+      = register_initialized;
+  const auto assert_unchanged_after_callback_rejection = [&] {
+    assert(frame.abi_version == frame_before_missing_callback.abi_version);
+    assert(frame.struct_size == frame_before_missing_callback.struct_size);
+    assert(frame.layout_id_low
+        == frame_before_missing_callback.layout_id_low);
+    assert(frame.layout_id_high
+        == frame_before_missing_callback.layout_id_high);
+    assert(frame.register_count
+        == frame_before_missing_callback.register_count);
+    assert(frame.program_counter
+        == frame_before_missing_callback.program_counter);
+    assert(frame.state == frame_before_missing_callback.state);
+    assert(frame.last_instruction
+        == frame_before_missing_callback.last_instruction);
+    assert(frame.register_aval
+        == frame_before_missing_callback.register_aval);
+    assert(frame.register_bval
+        == frame_before_missing_callback.register_bval);
+    assert(frame.register_initialized
+        == frame_before_missing_callback.register_initialized);
+    assert(frame.register_logic9_plane2
+        == frame_before_missing_callback.register_logic9_plane2);
+    assert(frame.register_logic9_plane3
+        == frame_before_missing_callback.register_logic9_plane3);
+    assert(frame.native_call_depth
+        == frame_before_missing_callback.native_call_depth);
+    assert(frame.native_call_reserved
+        == frame_before_missing_callback.native_call_reserved);
+    assert(std::ranges::equal(
+        frame.native_return_stack,
+        frame_before_missing_callback.native_return_stack));
+    assert(register_aval == register_aval_before_missing_callback);
+    assert(register_bval == register_bval_before_missing_callback);
+    assert(register_initialized
+        == register_initialized_before_missing_callback);
+    assert(result.abi_version == result_before_missing_callback.abi_version);
+    assert(result.struct_size == result_before_missing_callback.struct_size);
+    assert(result.status == result_before_missing_callback.status);
+    assert(result.instruction == result_before_missing_callback.instruction);
+    assert(result.delay == result_before_missing_callback.delay);
+  };
   expect_error(
       [&] { (void)jit.resume(handle, old_descriptor, frame, result); },
-      "requires sample_coverage");
+      "require sample_coverage");
+  assert_unchanged_after_callback_rejection();
   const auto process_binding = jit.bind(handle);
   expect_error(
       [&] {
         (void)jit.resume_prevalidated(
             process_binding, old_descriptor, frame, result);
       },
-      "requires sample_coverage");
+      "require sample_coverage");
+  assert_unchanged_after_callback_rejection();
 
   std::array old_cohort {
       JitProcessCohortResumeEntry {
@@ -1995,32 +2698,8 @@ void test_native_service_callbacks_at_level(
   };
   expect_error(
       [&] { (void)jit.resume_cohort_prevalidated(old_cohort); },
-      "requires sample_coverage");
-
-  std::uint8_t active0 { 1U };
-  std::uint8_t active1 { 1U };
-  std::uint8_t queued0 { };
-  std::uint8_t queued1 { };
-  std::uint8_t waiting0 { };
-  std::uint8_t waiting1 { };
-  std::uint8_t status0 { };
-  std::uint8_t status1 { };
-  std::array region_entries {
-      JitProcessCohortResumeEntry {
-          process_binding, old_descriptor, frame, result,
-          &queued0, &waiting0, &status0, &active0 },
-      JitProcessCohortResumeEntry {
-          process_binding, descriptor, frame, result,
-          &queued1, &waiting1, &status1, &active1 },
-  };
-  const std::array<std::size_t, 2> active_indices { 0U, 1U };
-  expect_error(
-      [&] {
-        (void)jit.resume_region_prevalidated(
-            region_entries, active_indices);
-      },
-      "requires sample_coverage");
-  assert(active0 == 1U && active1 == 1U);
+      "require sample_coverage");
+  assert_unchanged_after_callback_rejection();
 
   std::array valid_cohort {
       JitProcessCohortResumeEntry {
@@ -2034,17 +2713,17 @@ void test_native_service_callbacks_at_level(
       [&] {
         (void)jit.resume_cohort_prevalidated(bound_cohort, old_cohort);
       },
-      "requires sample_coverage");
+      "require sample_coverage");
 
   auto missing_event_callback = descriptor;
-  missing_event_callback.struct_size = static_cast<std::uint32_t>(
-      offsetof(fsim_jit_runtime_v1, query_event_triggered));
-  missing_event_callback.query_event_triggered = nullptr;
+  auto missing_event_services = copy_jit_services(missing_event_callback);
+  missing_event_services.query_event_triggered = nullptr;
+  missing_event_callback.services = &missing_event_services;
   expect_error(
       [&] {
         (void)jit.resume(handle, missing_event_callback, frame, result);
       },
-      "requires query_event_triggered");
+      "require query_event_triggered");
   assert(runtime.coverage_sample_calls == 1U);
   assert(runtime.event_triggered_calls == 1U);
 
@@ -2103,7 +2782,7 @@ void test_signal_waits_at_level(
   std::vector<std::uint64_t> register_aval;
   std::vector<std::uint64_t> register_bval;
   std::vector<std::uint8_t> register_initialized;
-  fsim_jit_frame_v1 frame{};
+  fsim_jit_frame_v2 frame{};
   jit.initialize_frame(
       handle, frame, register_aval, register_bval,
       register_initialized);
@@ -2111,12 +2790,12 @@ void test_signal_waits_at_level(
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::wait_on);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_ON);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_ON_V2);
   assert(result.instruction == 0);
   assert(result.delay == 0);
   assert(frame.program_counter == 1);
   assert(frame.last_instruction == 0);
-  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY_V2);
   assert((fsim::runtime::simir::operation_get<WaitOn>(process.operations[0]).signals ==
           std::vector<SignalId>{2, 0, 2}));
   assert((
@@ -2126,12 +2805,12 @@ void test_signal_waits_at_level(
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::wait_sensitivity);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2);
   assert(result.instruction == 1);
   assert(result.delay == 0);
   assert(frame.program_counter == 2);
   assert(frame.last_instruction == 1);
-  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY_V2);
   assert(process.static_sensitivity.size() == 2);
   assert(process.static_sensitivity[0].signal == 0);
   assert(process.static_sensitivity[0].edge == EdgeKind::posedge);
@@ -2140,20 +2819,20 @@ void test_signal_waits_at_level(
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::wait_forever);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_FOREVER);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_FOREVER_V2);
   assert(result.instruction == 2);
   assert(result.delay == 0);
   assert(frame.program_counter == 3);
   assert(frame.last_instruction == 2);
-  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY_V2);
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::completed);
-  assert(result.status == FSIM_JIT_RESUME_STATUS_COMPLETED);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_COMPLETED_V2);
   assert(result.instruction == 3);
   assert(frame.program_counter == process.operations.size());
   assert(frame.last_instruction == 3);
-  assert(frame.state == FSIM_JIT_FRAME_STATE_COMPLETED);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_COMPLETED_V2);
   assert(runtime.writes.empty());
   assert(runtime.scheduled_writes.empty());
 
@@ -2167,7 +2846,7 @@ void test_signal_waits_at_level(
   const auto wait_on_symbol = std::string{symbol_prefix} + "_wait_on_loop";
   jit.add_process(wait_on_symbol, wait_on_loop, widths);
   const auto wait_on_handle = jit.lookup(wait_on_symbol);
-  fsim_jit_frame_v1 wait_on_frame{};
+  fsim_jit_frame_v2 wait_on_frame{};
   jit.initialize_frame(
       wait_on_handle, wait_on_frame, register_aval, register_bval,
       register_initialized);
@@ -2194,7 +2873,7 @@ void test_signal_waits_at_level(
       std::string{symbol_prefix} + "_sensitivity_loop";
   jit.add_process(sensitivity_symbol, sensitivity_loop, widths);
   const auto sensitivity_handle = jit.lookup(sensitivity_symbol);
-  fsim_jit_frame_v1 sensitivity_frame{};
+  fsim_jit_frame_v2 sensitivity_frame{};
   jit.initialize_frame(
       sensitivity_handle, sensitivity_frame, register_aval, register_bval,
       register_initialized);
@@ -2229,7 +2908,7 @@ void test_signal_waits_at_level(
   std::vector<std::uint64_t> timed_aval(1);
   std::vector<std::uint64_t> timed_bval(1);
   std::vector<std::uint8_t> timed_initialized(1);
-  fsim_jit_frame_v1 timed_frame{};
+  fsim_jit_frame_v2 timed_frame{};
   jit.initialize_frame(
       timed_handle, timed_frame, timed_aval, timed_bval,
       timed_initialized);
@@ -2258,7 +2937,7 @@ void test_signal_waits_at_level(
       std::string{symbol_prefix} + "_fork_boundaries";
   jit.add_process(fork_symbol, fork_process, {});
   const auto fork_handle = jit.lookup(fork_symbol);
-  fsim_jit_frame_v1 fork_frame{};
+  fsim_jit_frame_v2 fork_frame{};
   jit.initialize_frame(
       fork_handle, fork_frame, register_aval, register_bval,
       register_initialized);
@@ -2268,7 +2947,7 @@ void test_signal_waits_at_level(
           fork_handle, descriptor, fork_frame, fork_result)
       == JitResumeStatus::fork);
   assert(
-      fork_result.status == FSIM_JIT_RESUME_STATUS_FORK
+      fork_result.status == FSIM_JIT_RESUME_STATUS_FORK_V2
       && fork_result.instruction == 0
       && fork_frame.program_counter == 1);
   assert(
@@ -2276,7 +2955,7 @@ void test_signal_waits_at_level(
           fork_handle, descriptor, fork_frame, fork_result)
       == JitResumeStatus::wait_fork);
   assert(
-      fork_result.status == FSIM_JIT_RESUME_STATUS_WAIT_FORK
+      fork_result.status == FSIM_JIT_RESUME_STATUS_WAIT_FORK_V2
       && fork_result.instruction == 1
       && fork_frame.program_counter == 2);
   assert(
@@ -2284,11 +2963,11 @@ void test_signal_waits_at_level(
           fork_handle, descriptor, fork_frame, fork_result)
       == JitResumeStatus::disable_fork);
   assert(
-      fork_result.status == FSIM_JIT_RESUME_STATUS_DISABLE_FORK
+      fork_result.status == FSIM_JIT_RESUME_STATUS_DISABLE_FORK_V2
       && fork_result.instruction == 2
       && fork_frame.program_counter == 3);
 
-  fsim_jit_frame_v1 child_frame{};
+  fsim_jit_frame_v2 child_frame{};
   jit.initialize_frame(
       fork_handle, child_frame, register_aval, register_bval,
       register_initialized);
@@ -2299,7 +2978,7 @@ void test_signal_waits_at_level(
           fork_handle, descriptor, child_frame, child_result)
       == JitResumeStatus::fork_end);
   assert(
-      child_result.status == FSIM_JIT_RESUME_STATUS_FORK_END
+      child_result.status == FSIM_JIT_RESUME_STATUS_FORK_END_V2
       && child_result.instruction == 4
       && child_frame.program_counter == 5);
 }
@@ -2351,7 +3030,7 @@ void test_wide_boundary_registers_at_level(
   std::vector<std::uint64_t> register_aval(layout.register_word_count);
   std::vector<std::uint64_t> register_bval(layout.register_word_count);
   std::vector<std::uint8_t> register_initialized(layout.register_count);
-  fsim_jit_frame_v1 frame { };
+  fsim_jit_frame_v2 frame { };
   jit.initialize_frame(
       handle, frame, register_aval, register_bval, register_initialized);
 
@@ -2509,11 +3188,13 @@ void test_bound_literal_binding()
     TestRuntime runtime;
     runtime.bound_literal_value = literal;
     auto descriptor = abi(runtime);
-    descriptor.container_operation = &bound_literal_operation;
+    auto services = copy_jit_services(descriptor);
+    services.container_operation = &bound_literal_operation;
+    descriptor.services = &services;
     std::vector<std::uint64_t> register_aval(layout.register_word_count);
     std::vector<std::uint64_t> register_bval(layout.register_word_count);
     std::vector<std::uint8_t> register_initialized(layout.register_count);
-    fsim_jit_frame_v1 frame { };
+    fsim_jit_frame_v2 frame { };
     jit.initialize_frame(
         handle, frame, register_aval, register_bval, register_initialized);
     auto result = new_resume_result();
@@ -2646,7 +3327,9 @@ void test_bound_literal_binding()
       TestRuntime runtime;
       runtime.bound_literal_value = { 0x74U, 0U };
       auto descriptor = abi(runtime);
-      descriptor.container_operation = &bound_literal_operation;
+      auto services = copy_jit_services(descriptor);
+      services.container_operation = &bound_literal_operation;
+      descriptor.services = &services;
       assert(bound_cached.execute(
                  bound_cached.lookup("bound_literal_cache_identity"),
                  descriptor)

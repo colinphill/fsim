@@ -7934,35 +7934,10 @@ namespace {
                         "a multidimensional static-array element access must "
                         "supply exactly one index per declared dimension",
                         statement.source);
-                } else if (indices.size()
-                    >= base_type->unpacked_dimensions.size()) {
-                    for (std::size_t dimension { };
-                        dimension < base_type->unpacked_dimensions.size();
-                        ++dimension) {
-                        const auto index = unit_specialized != nullptr
-                            ? unit_specialized->evaluate_integral_expression(
-                                  indices[dimension])
-                            : std::nullopt;
-                        const auto left = range_boundary(
-                            base_type->unpacked_dimensions[dimension], true);
-                        const auto right = range_boundary(
-                            base_type->unpacked_dimensions[dimension], false);
-                        if (!index || !left || !right
-                            || (*index >= std::min(*left, *right)
-                                && *index <= std::max(*left, *right))) {
-                            continue;
-                        }
-                        const auto index_expression = compiled.find_expression(
-                            indices[dimension]);
-                        append("FSIM-ELAB-SVMDARRAY-003",
-                            "multidimensional static-array index is outside "
-                            "its declared range",
-                            index_expression
-                                    && index_expression->systemverilog != nullptr
-                                ? index_expression->systemverilog->source
-                                : statement.source);
-                    }
                 }
+                // An out-of-range static-array assignment index is a legal
+                // ignored write under IEEE 1800-2017 7.4.5. The HIR lowerer
+                // retains index/RHS evaluation and suppresses the store.
             }
             const auto target_expression = compiled.find_expression(
                 *statement.target);
@@ -10143,7 +10118,7 @@ HierarchyBuilder::connect_compiled_boundary_port(
             = input ? actual_info.is_signed : port.signed_value;
         Process adapter;
         adapter.id = static_cast<ProcessId>(
-            design_.processes_.size());
+            design_.process_count());
         adapter.name = formal_name
             + (boolean_boundary
                     ? "$boundary_boolean"
@@ -10268,7 +10243,7 @@ HierarchyBuilder::connect_compiled_boundary_port(
             design_.specializations_.back().processes.push_back(
                 adapter.id);
         }
-        design_.processes_.push_back(std::move(adapter));
+        design_.append_process_record(std::move(adapter));
     }
 
     design_.boundary_conversions_.push_back(BoundaryConversionInfo {
@@ -10925,6 +10900,8 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                                           const bool observed) {
         Process process;
         process.name = path + "." + name;
+        process.scheduling_domain
+            = runtime::simir::ProcessSchedulingDomain::systemverilog;
         process.register_count = 1U;
         process.register_value_kinds.push_back(value_kind(
             design_.signal_info_[source].source_domain));
@@ -11520,6 +11497,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         { },
         { },
         std::move(*root_alias_plan),
+        { },
     };
     std::vector<PendingVirtualInterfaceInitializer>
         pending_virtual_interface_initializers;
@@ -11538,7 +11516,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         if (!declaration
             || declaration->systemverilog == nullptr
             || !materialize_compiled_systemverilog_declaration(
-                    unit, root_materialization,
+                    unit, declaration_id, root_materialization,
                     *declaration->systemverilog, path, unconnected_drive,
                     pending_virtual_interface_initializers,
                     packed_type_resolver, packed_default_resolver,
@@ -11598,6 +11576,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     lowerer.set_specialized_hir_unit(&*specialized);
     lowerer.set_systemverilog_interface_handles(
         &systemverilog_interface_handles_);
+    lowerer.set_hir_container_declaration_bindings(
+        &root_materialization.container_declaration_bindings);
 
     const auto specialization_index = design_.specializations_.size();
     const auto specialization_id = static_cast<SpecializationId>(
@@ -11824,6 +11804,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
             ReadOnlySignalSet { &parent->read_only_signals },
             { },
             std::move(*occurrence_alias_plan),
+            ContainerDeclarationBindings {
+                &parent->container_declaration_bindings
+            },
         };
         for (const auto declaration_id :
             occurrence.region->declarations) {
@@ -11833,7 +11816,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
             if (!declaration
                 || declaration->systemverilog == nullptr
                 || !materialize_compiled_systemverilog_declaration(
-                    unit, materialization, *declaration->systemverilog,
+                    unit, declaration_id, materialization,
+                    *declaration->systemverilog,
                     path, unconnected_drive,
                     pending_virtual_interface_initializers,
                     packed_type_resolver, packed_default_resolver,
@@ -13163,30 +13147,36 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 canonicalize_process_operations(*lowered);
                 design_.specializations_[specialization_id]
                     .processes.push_back(lowered->id);
-                design_.processes_.push_back(
+                design_.append_process_record(
                     std::move(*lowered));
                 return true;
             };
-            if (accepts_input && !value && !static_value
-                && !append_adapter(
-                    actual_lowerer.lower_hir_input_actual(
-                        *binding.expression,
-                        id,
-                        frontend::Language::Vhdl2008,
-                        working_path,
-                        concurrent_order++,
-                        formal_declaration.subtype))) {
-                actual_signal.reset();
+            if (accepts_input && !value && !static_value) {
+                record_lowering_census(
+                    vhdl_port_input_actual_occurrences_);
+                if (!append_adapter(
+                        actual_lowerer.lower_hir_input_actual(
+                            *binding.expression,
+                            id,
+                            frontend::Language::Vhdl2008,
+                            working_path,
+                            concurrent_order++,
+                            formal_declaration.subtype))) {
+                    actual_signal.reset();
+                }
             }
-            if (actual_signal && produces_output
-                && !append_adapter(
-                    actual_lowerer.lower_hir_output_actual(
-                        id,
-                        *binding.expression,
-                        frontend::Language::Vhdl2008,
-                        working_path,
-                        concurrent_order++))) {
-                actual_signal.reset();
+            if (actual_signal && produces_output) {
+                record_lowering_census(
+                    vhdl_port_output_actual_occurrences_);
+                if (!append_adapter(
+                        actual_lowerer.lower_hir_output_actual(
+                            id,
+                            *binding.expression,
+                            frontend::Language::Vhdl2008,
+                            working_path,
+                            concurrent_order++))) {
+                    actual_signal.reset();
+                }
             }
         }
     }
@@ -19534,7 +19524,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
         return false;
     }
     if (!lower_compiled_vhdl_generated_processes(
-            generated_materializations, architecture, string_objects,
+            generated_materializations, *entity, architecture, string_objects,
             read_only_strings, container_objects, read_only_containers,
             specialization, concurrent_order)) {
         return false;
@@ -20352,13 +20342,17 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
 {
     const auto append_generated_processes = [&](Lowerer& source,
                                                 const semantic::vhdl::Unit& owner) {
-        for (auto& generated : source.take_generated_processes()) {
+        auto generated_processes = source.take_generated_processes();
+        record_lowering_census(
+            vhdl_lowerer_generated_processes_,
+            generated_processes.size());
+        for (auto& generated : generated_processes) {
             generated.language_standard = owner.standard;
             generated.compatibility_profile
                 = owner.compatibility_profile;
             canonicalize_process_operations(generated);
             specialization.processes.push_back(generated.id);
-            design_.processes_.push_back(std::move(generated));
+            design_.append_process_record(std::move(generated));
         }
     };
     const auto report_unspecified_inference = [&](Lowerer& source,
@@ -20388,7 +20382,7 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                           lowerer, statement_id)) {
                       return false;
                   }
-                  auto lowered = lower_cached_vhdl_concurrent_statement(
+                  auto lowered = lower_cached_vhdl_occurrence(
                       entity, owner, specialized, lowerer,
                       statement_id, path, concurrent_order++);
                   if (!lowered) {
@@ -20400,12 +20394,25 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                               *compiled_, statement_source));
                       return false;
                   }
-                  lowered->language_standard = owner.standard;
-                  lowered->compatibility_profile
-                      = owner.compatibility_profile;
-                  canonicalize_process_operations(*lowered);
-                  specialization.processes.push_back(lowered->id);
-                  design_.processes_.push_back(std::move(*lowered));
+                  if (lowered->instance) {
+                      auto& instance = *lowered->instance;
+                      canonicalize_process_operations(
+                          lowered->common, instance);
+                      specialization.processes.push_back(instance.id);
+                      design_.append_process_instance_record(
+                          std::move(lowered->common),
+                          std::move(instance));
+                  } else {
+                      auto& process_instance = *lowered->process;
+                      process_instance.language_standard = owner.standard;
+                      process_instance.compatibility_profile
+                          = owner.compatibility_profile;
+                      canonicalize_process_operations(process_instance);
+                      specialization.processes.push_back(
+                          process_instance.id);
+                      design_.append_process_record(
+                          std::move(process_instance));
+                  }
                   append_generated_processes(lowerer, owner);
               }
               return true;
@@ -20419,10 +20426,9 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
             if (report_unspecified_inference(lowerer, process_id)) {
                 return false;
             }
-            auto lowered = lowerer.lower_hir_process(
-                process_id,
-                frontend::Language::Vhdl2008,
-                path);
+            auto lowered = lower_cached_vhdl_occurrence(
+                entity, owner, specialized, lowerer,
+                semantic::StatementId { }, path, 0U, process_id);
             if (!lowered) {
                 const auto process_name = process
                         && process->vhdl != nullptr
@@ -20438,13 +20444,27 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                     compiled_source_span(*compiled_, process_source));
                 return false;
             }
-            lowered->language_standard = owner.standard;
-            lowered->compatibility_profile = owner.compatibility_profile;
-            canonicalize_process_operations(*lowered);
-            specialization.processes.push_back(lowered->id);
-            specialization.semantic_processes.emplace_back(
-                lowered->id, process_id);
-            design_.processes_.push_back(std::move(*lowered));
+            if (lowered->instance) {
+                auto& instance = *lowered->instance;
+                canonicalize_process_operations(
+                    lowered->common, instance);
+                specialization.processes.push_back(instance.id);
+                specialization.semantic_processes.emplace_back(
+                    instance.id, process_id);
+                design_.append_process_instance_record(
+                    std::move(lowered->common), std::move(instance));
+            } else {
+                auto& process_instance = *lowered->process;
+                process_instance.language_standard = owner.standard;
+                process_instance.compatibility_profile
+                    = owner.compatibility_profile;
+                canonicalize_process_operations(process_instance);
+                specialization.processes.push_back(process_instance.id);
+                specialization.semantic_processes.emplace_back(
+                    process_instance.id, process_id);
+                design_.append_process_record(
+                    std::move(process_instance));
+            }
             append_generated_processes(lowerer, owner);
         }
         return true;
@@ -22135,6 +22155,7 @@ HierarchyBuilder::process_compiled_vhdl_generated_occurrence(
 
     const SignalMap* parent_signals = &signals;
     const ReadOnlySignalSet* parent_read_only = &read_only_signals;
+    std::span<const semantic::DeclarationId> ancestor_signal_declarations;
     const semantic::SpecializedHirUnit* parent_specialization
         = &specialized;
     for (auto candidate = generated_materializations.rbegin();
@@ -22144,6 +22165,8 @@ HierarchyBuilder::process_compiled_vhdl_generated_occurrence(
             && occurrence_path[candidate->path.size()] == '.') {
             parent_signals = &candidate->signals;
             parent_read_only = &candidate->read_only_signals;
+            ancestor_signal_declarations
+                = candidate->signal_declarations;
             parent_specialization = &candidate->specialization;
             break;
         }
@@ -22247,6 +22270,8 @@ HierarchyBuilder::process_compiled_vhdl_generated_occurrence(
                 .vhdl_port_shape_identities
                 = context.vhdl_port_shape_identities,
                 .generated_materializations = generated_materializations,
+                .ancestor_signal_declarations
+                = ancestor_signal_declarations,
             })) {
         return CompiledVhdlGeneratedOccurrenceStatus::failed;
     }
@@ -22379,7 +22404,36 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
         ReadOnlySignalSet { parent_read_only },
         { },
         { },
+        { },
+        { },
     };
+    // Retain the generated labels and indices while excluding the owning
+    // entity-instance path, so the same loop iteration can replay across
+    // instances without sharing a template between different iterations.
+    if (occurrence_path.size() > path.size()
+        && occurrence_path.starts_with(path)
+        && occurrence_path[path.size()] == '.') {
+        materialization.generate_relative_discriminator
+            = occurrence_path.substr(path.size() + 1U);
+    } else {
+        // A full hierarchy path prevents a false cross-instance replay if
+        // the occurrence cannot be represented relative to its unit root.
+        materialization.generate_relative_discriminator = occurrence_path;
+    }
+    materialization.signal_declarations.reserve(
+        context.ancestor_signal_declarations.size()
+        + region.declarations.size());
+    materialization.signal_declarations.insert(
+        materialization.signal_declarations.end(),
+        context.ancestor_signal_declarations.begin(),
+        context.ancestor_signal_declarations.end());
+    for (const auto declaration_id : region.declarations) {
+        if (std::ranges::find(
+                materialization.signal_declarations, declaration_id)
+            == materialization.signal_declarations.end()) {
+            materialization.signal_declarations.push_back(declaration_id);
+        }
+    }
     std::vector<const semantic::vhdl::Declaration*> block_ports;
     for (const auto declaration_id : region.declarations) {
         const auto declaration

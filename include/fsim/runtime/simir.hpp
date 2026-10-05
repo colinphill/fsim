@@ -6,6 +6,7 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include <array>
@@ -43,6 +44,9 @@ using InstructionIndex = std::uint32_t;
 enum class OutputFormat : std::uint8_t;
 
 using fsim::support::RareVector;
+
+class RegionKernelBackendProvider;
+class InterpreterProgramAccess;
 
 template <typename T>
 auto archive_fields(const RareVector<T>& values)
@@ -879,10 +883,20 @@ struct WriteBlocking {
     RegisterId source { };
 };
 
+/// Scheduling provenance for deferred signal writes. Generic updates retain
+/// the runtime's existing language-cycle behavior. SystemVerilog continuous
+/// assignments mature in Active; nonblocking assignments mature in NBA.
+enum class SignalUpdateDomain : std::uint8_t {
+    generic,
+    systemverilog_active,
+    systemverilog_nba,
+};
+
 /// Queue a new value for the current timestamp's update phase.
 struct WriteUpdate {
     SignalId signal { };
     RegisterId source { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 /// Queue a new value for a future timestamp's update phase.
@@ -890,6 +904,7 @@ struct WriteAfter {
     SignalId signal { };
     RegisterId source { };
     SimulationTick delay { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct TransitionDelays {
@@ -908,6 +923,7 @@ struct WriteInertial {
     SignalId signal { };
     RegisterId source { };
     TransitionDelays delays;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 enum class ProjectedDelayMode : std::uint8_t {
@@ -956,6 +972,7 @@ struct WriteUpdateSlice {
     SignalId signal { };
     RegisterId source { };
     std::uint32_t offset { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 /// Stage a contiguous packed range after a simulation-time delay.
@@ -964,6 +981,7 @@ struct WriteAfterSlice {
     RegisterId source { };
     std::uint32_t offset { };
     SimulationTick delay { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteInertialSlice {
@@ -971,6 +989,7 @@ struct WriteInertialSlice {
     RegisterId source { };
     std::uint32_t offset { };
     TransitionDelays delays;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteProjectedSlice {
@@ -1000,6 +1019,7 @@ struct WriteUpdateDynamicSlice {
     SignalId signal { };
     RegisterId source { };
     DynamicIndex selection;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteAfterDynamicSlice {
@@ -1007,6 +1027,7 @@ struct WriteAfterDynamicSlice {
     RegisterId source { };
     DynamicIndex selection;
     SimulationTick delay { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteBlockingDynamicPartSlice {
@@ -1019,6 +1040,7 @@ struct WriteUpdateDynamicPartSlice {
     SignalId signal { };
     RegisterId source { };
     DynamicPartIndex selection;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteAfterDynamicPartSlice {
@@ -1026,6 +1048,7 @@ struct WriteAfterDynamicPartSlice {
     RegisterId source { };
     DynamicPartIndex selection;
     SimulationTick delay { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 /// Force a static packed region while drivers continue beneath its mask.
@@ -1050,6 +1073,7 @@ struct WriteInertialDynamicSlice {
     RegisterId source { };
     DynamicIndex selection;
     TransitionDelays delays;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteInertialDynamicPartSlice {
@@ -1057,6 +1081,7 @@ struct WriteInertialDynamicPartSlice {
     RegisterId source { };
     DynamicPartIndex selection;
     TransitionDelays delays;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 struct WriteProjectedDynamicSlice {
@@ -1300,15 +1325,64 @@ struct ContainerSignalAlias {
     bool writable { };
 };
 
+/// Bind one declared-order element of a logical fixed net array to its own
+/// independently resolved signal.
+struct ContainerElementSignalAlias {
+    ContainerObjectId object { };
+    std::uint32_t ordinal { };
+    SignalId signal { };
+    bool readable { };
+    bool writable { };
+
+    friend bool operator==(
+        const ContainerElementSignalAlias&,
+        const ContainerElementSignalAlias&) = default;
+};
+
+/// Preserve the public aggregate SignalId for a fixed array whose storage is
+/// represented by independently resolved element signals. Lowered HDL accesses
+/// use the element aliases; external readers may project the aggregate handle.
+/// A non-writable alias is an observation-only checkpoint: mutations through
+/// that SignalId are rejected until an aggregate update transaction is bound.
+struct ContainerAggregateSignalAlias {
+    ContainerObjectId object { };
+    SignalId signal { };
+    bool readable { };
+    bool writable { };
+
+    friend bool operator==(
+        const ContainerAggregateSignalAlias&,
+        const ContainerAggregateSignalAlias&) = default;
+};
+
 struct Sensitivity {
     SignalId signal { };
     EdgeKind edge = EdgeKind::any;
+    /// LSB-normalized interval. Zero width means the complete signal.
+    /// Ranges currently apply only to any-change sensitivity.
+    std::uint32_t offset { };
+    std::uint32_t width { };
 
     bool operator==(const Sensitivity&) const = default;
 };
 
+/// Merge overlapping or adjacent intervals before assigning trigger-mask bits.
+/// Whole-signal sensitivity dominates ranges for the same signal and edge.
+void normalize_sensitivities(std::vector<Sensitivity>&);
+
+/// Compare the original value domains without allocating extracted values.
+/// Invalid or unsupported ranges conservatively count as changed.
+[[nodiscard]] bool sensitivity_range_changed(
+    const PackedLogic4& previous, const PackedLogic4& current,
+    std::uint32_t offset, std::uint32_t width) noexcept;
+
 #include "fsim/runtime/simir_debug.hpp"
 #include "fsim/runtime/simir_specify.hpp"
+enum class ProcessSchedulingDomain : std::uint8_t {
+    generic,
+    systemverilog,
+};
+
 struct Process {
     static constexpr std::uint64_t full_static_trigger_mask
         = UINT64_C(1) << 63U;
@@ -1324,7 +1398,7 @@ struct Process {
     std::vector<DebugLocal> debug_locals;
     std::vector<DebugStringLocal> debug_string_locals;
     std::vector<DebugContainerLocal> debug_container_locals;
-    std::vector<ContainerType> container_register_types;
+    CopyOnWriteVector<ContainerType> container_register_types;
     std::vector<Sensitivity> static_sensitivity;
     /// Callback-free statement ranges which may be skipped by a compiled
     /// executor when none of their exact static sensitivities triggered the
@@ -1338,7 +1412,7 @@ struct Process {
         friend bool operator==(
             const StaticTriggerRegion&, const StaticTriggerRegion&) = default;
     };
-    std::vector<StaticTriggerRegion> static_trigger_regions;
+    CopyOnWriteVector<StaticTriggerRegion> static_trigger_regions;
     OperationList operations;
     /// Static packed regions driven by this process. Dynamic or whole-object
     /// targets retain one `whole` region for conservative ownership.
@@ -1363,7 +1437,7 @@ struct Process {
     bool switch_active_high { true };
     bool switch_bidirectional { };
     bool switch_resistive { };
-    std::vector<ValueKind> register_value_kinds;
+    CopyOnWriteVector<ValueKind> register_value_kinds;
     bool initialize { true };
     // Clocking input samplers execute after ordinary updates and before
     // program/reactive code observes the sampled values.
@@ -1381,6 +1455,9 @@ struct Process {
     // and queued exactly once when ordinary simulation terminates.
     bool final { };
     ExpressionProfileList expression_profiles;
+    ProcessSchedulingDomain scheduling_domain {
+        ProcessSchedulingDomain::generic
+    };
 };
 
 /// Replace candidate's expanded operation stream with representative's
@@ -1479,25 +1556,6 @@ struct ProcessCohortResumeEntry {
     std::uint8_t* active { };
 };
 
-/// One member of a certified pure wave. The shared execution context and
-/// deferred update commit belong to the whole wave rather than each member.
-struct PureWaveResumeEntry {
-    ProcessId process { };
-    ProcessExecutor* executor { };
-    InstructionIndex start_instruction { };
-    bool* queued { };
-    bool* waiting_on_static { };
-    ProcessStatus* status { };
-};
-
-/// A successful whole-task prefix and whether its deferred updates were
-/// staged as one ordered batch. The runtime flushes each member in order when
-/// staging declines; a disengaged result always precedes all mutation.
-struct PureWaveCompletion {
-    std::size_t completed_tasks { };
-    bool updates_staged { };
-};
-
 /// One-call view of state shared by every context in a cohort assembled by
 /// the interpreter. The view is valid only during the resume call; alternate
 /// executors may ignore it and use the ordinary cohort entry contract.
@@ -1528,6 +1586,12 @@ struct FusedStaticCohortCandidate {
     std::vector<SignalId> private_outputs;
     std::vector<SignalId> boundary_outputs;
     bool projected { };
+    /// The current executor uses a general masked kernel with every member
+    /// selected. The application may set this after validating its mapping.
+    bool masked_all_active { };
+    /// Graph-time proof that the process bodies can use masked compilation.
+    bool masked_all_active_eligible { };
+    std::vector<std::uint64_t> masked_all_active_words;
 };
 
 struct FusedStaticCounters {
@@ -1536,10 +1600,13 @@ struct FusedStaticCounters {
     std::uint64_t represented_members { };
     std::uint64_t owner_stage_calls_avoided { };
     std::uint64_t aggregate_signals_staged { };
+    std::uint64_t masked_all_active_invocations { };
+    std::uint64_t generic_update_commit_tickets { };
     std::uint64_t fallbacks { };
     std::uint64_t fork_events { };
     std::uint64_t fork_plans_invalidated { };
     std::uint64_t fork_plans_surviving_after_last { };
+    std::uint64_t observation_invalidations { };
 };
 
 /// Exact VHDL projected write retained with its original elaborated signal.
@@ -1561,11 +1628,19 @@ public:
     virtual ~FusedStaticCohortExecutor() = default;
     [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
     resume(const ProcessCohortNativeContext& context) = 0;
+    /// Optional general masked entry. Its word span is supplied only after the
+    /// runtime has found the complete static cohort ready. The default keeps
+    /// the existing checked process path available.
+    [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
+    resume_masked_all_active(const ProcessCohortNativeContext&,
+        std::span<const std::uint64_t>)
+    {
+        return std::nullopt;
+    }
 };
 
-/// Post-elaboration graph cut for original singleton static tasks. Each
-/// member keeps its own sensitivity and process/driver identity; a compiled
-/// kernel may execute any ordered active subset in one native call.
+/// Retained source-compatibility metadata for the retired masked-region route.
+/// Current interpreters do not publish masked-region candidates.
 struct FusedMaskedRegionCandidate {
     std::size_t region_id { };
     std::vector<ProcessId> members;
@@ -1619,39 +1694,6 @@ public:
         std::span<const std::uint64_t> activation_words) = 0;
 };
 
-enum class PureWavePreparedShape : std::uint8_t {
-    logic4_bit_and,
-    reducer31,
-    reduction7,
-    wide_copy6,
-};
-
-/// Executor-owned, stable member view for one certified pure-wave shape.
-/// The runtime borrows this record only while its exact executor owns it.
-/// Invalidation clears valid and changes generation before releasing the
-/// compiler view; process and update_batch stay intact through fatal cleanup
-/// or an ordered member-local update fallback.
-struct PureWavePreparedMember {
-    ProcessId process { };
-    ProcessExecutor* executor { };
-    const void* owner { };
-    const void* domain { };
-    const void* compiler_view { };
-    ProcessUpdateSlotBatch update_batch;
-    SignalId and_lhs { };
-    SignalId and_rhs { };
-    InstructionIndex resume_instruction { };
-    std::uint64_t owner_epoch { };
-    std::uint64_t generation { };
-    std::uint64_t compiler_generation { };
-    PureWavePreparedShape shape { };
-    bool valid { };
-    /// Cold-certified against update_batch. Invalidation clears this pointer
-    /// before releasing its executor-owned value; hot staging trusts the
-    /// published record and rechecks only live ownership and phase state.
-    const PreparedOwnedUpdateSlot* prepared_owned_update_slot { };
-};
-
 enum class ExecutionPointKind : std::uint8_t {
     statement,
     call,
@@ -1681,6 +1723,61 @@ struct ExecutionPoint {
         std::string execution_language_standard = { },
         std::string execution_compatibility_profile = { });
 };
+
+using ProcessSignalRemap
+    = std::vector<std::pair<SignalId, SignalId>>;
+
+/// Exact registered-program contract for an alternate executor that claims
+/// its signal accesses match a compiled SimIR body. It covers signal effects
+/// from every executor entrypoint, including resume, redirect, fork cloning,
+/// and cohort preparation. It does not certify execution semantics; it only
+/// lets the region graph reuse the body's enumerated signal accesses. The
+/// executor remains responsible for honoring all other scheduler and
+/// publication contracts.
+class ProcessExecutorProgramBinding {
+public:
+    ProcessExecutorProgramBinding() = default;
+    ProcessExecutorProgramBinding(const Process& registered_program,
+        const Process& generated_program,
+        ProcessId executor_generated_process,
+        std::shared_ptr<const ProcessSignalRemap> signal_remap = { });
+
+    [[nodiscard]] bool matches_registered_program(
+        ProcessId process, const Process& program) const noexcept;
+    /// A fork clone may keep the same executor binding while the interpreter
+    /// assigns its child a new ProcessId. Compare the child's operation
+    /// identity separately; the caller must also compare parent and child
+    /// bindings so the generated body and signal remap remain unchanged.
+    [[nodiscard]] bool matches_forked_program(
+        ProcessId process, const Process& program) const noexcept;
+    [[nodiscard]] bool same_execution_binding(
+        const ProcessExecutorProgramBinding& other) const noexcept;
+    [[nodiscard]] bool valid() const noexcept;
+
+private:
+    friend class ProcessProgramView;
+
+    ProcessId registered_process_ { };
+    const void* registered_body_ { };
+    std::uint64_t registered_revision_ { };
+    ProcessId generated_process_ { };
+    ProcessId generated_program_id_ { };
+    const void* generated_body_ { };
+    std::uint64_t generated_revision_ { };
+    std::shared_ptr<const ProcessSignalRemap> signal_remap_;
+};
+
+/// Caller-owned trust declaration for a deferred executor factory. The access
+/// binding describes the exact registered/generated programs and remap. The
+/// callback flag promises that ready/take neither observes nor mutates signal
+/// state; the kernel flag separately promises that the installed executor is
+/// semantically replaceable by its certified region-activation kernel.
+struct DeferredProcessExecutorContract {
+    std::optional<ProcessExecutorProgramBinding> expected_access;
+    bool callbacks_observation_safe { };
+    bool expected_region_kernel_equivalent { };
+};
+
 class ProcessExecutor {
 public:
     static constexpr auto native_register_width = std::numeric_limits<std::size_t>::max();
@@ -1717,61 +1814,13 @@ public:
         return 0U;
     }
 
-    /// The interpreter constructs every entry's context from the same owner
-    /// before offering this call. The default keeps alternate executors on
-    /// their established fully checked path.
-    [[nodiscard]] virtual std::size_t resume_cohort_with_native_context(
-        std::span<ProcessCohortResumeEntry> entries,
-        const ProcessCohortNativeContext&)
-    {
-        return resume_cohort(entries);
-    }
-
-    /// Prepare one warm member without executing it or touching scheduler or
-    /// update state. The default leaves unsupported executors on the ordinary
-    /// process/cohort path. owner_epoch belongs to the exact interpreter owner
-    /// in native_context and must be captured by any returned record. The
-    /// executor owns the record and must invalidate it before an ordinary
-    /// resume or another mutation changes its certified frame or storage.
-    [[nodiscard]] virtual const PureWavePreparedMember*
-    prepare_pure_wave_member(
-        const PureWaveResumeEntry&,
-        ProcessExecutionContext&,
-        const ProcessCohortNativeContext&,
-        std::uint64_t)
-    {
-        return nullptr;
-    }
-
-    /// Execute a complete ordered task prefix using previously prepared
-    /// members. A disengaged result declines before any mutation; after
-    /// execution starts, exceptions are fatal and never trigger generic replay.
-    /// A successful state-aware executor clears queued and sets waiting and
-    /// status for each completed member, leaving the unexecuted suffix intact.
-    [[nodiscard]] virtual std::optional<PureWaveCompletion>
-    try_resume_prepared_pure_wave(
-        std::span<const PureWavePreparedMember* const>,
-        std::span<const std::size_t> task_ends,
-        ProcessExecutionContext&,
-        const ProcessCohortNativeContext&)
-    {
-        static_cast<void>(task_ends);
-        return std::nullopt;
-    }
-
-    /// Complete a member's deferred writes after whole-wave batch staging
-    /// declines. Called only after the pure wave has executed; failures are
-    /// fatal and never trigger a generic replay.
-    virtual void flush_pure_wave_updates(ProcessExecutionContext&)
-    {
-        throw std::logic_error { "executor cannot flush pure-wave updates" };
-    }
-
-    /// Resume the selected members of a stable region. Each entry supplies a
-    /// persistent active byte; returning zero declines region execution.
-    [[nodiscard]] virtual std::size_t resume_region(
-        std::span<ProcessCohortResumeEntry>,
-        std::span<const std::size_t>)
+    /// Execute a scheduler-contiguous SV Active prefix. Every member retains
+    /// its original ordered publications; no aggregate update or hidden-state
+    /// shortcut is permitted. The executor must manage each accepted member's
+    /// queued/waiting/status state, and report failures without replaying it.
+    /// A throw is allowed only before accepting any entry.
+    [[nodiscard]] virtual std::size_t resume_ordered_cohort(
+        std::span<ProcessCohortResumeEntry>)
     {
         return 0U;
     }
@@ -1875,6 +1924,114 @@ public:
         }
         write_container_register(id, *value);
     }
+
+    /// Non-null only when this executor was built for the exact registered
+    /// SimIR body/remap it executes. Arbitrary executors stay opaque by
+    /// default, regardless of their cohort scheduling domain.
+    [[nodiscard]] virtual const ProcessExecutorProgramBinding*
+    program_access_binding() const noexcept
+    {
+        return nullptr;
+    }
+
+    /// Opt in only when replacing this executor's operation execution with
+    /// the interpreter's certified region-activation kernel preserves its
+    /// observable execution semantics, including register/frame results and
+    /// any private state observable by a later executor entrypoint. Access
+    /// binding alone is insufficient.
+    [[nodiscard]] virtual bool region_kernel_equivalent() const noexcept
+    {
+        return false;
+    }
+
+    /// Opt in only when this executor has no process-register values that a
+    /// region activation must copy back at a static wait boundary. This is a
+    /// separate promise from region_kernel_equivalent(): the latter permits
+    /// region replacement only when executor-visible state remains equivalent,
+    /// while this narrower promise allows the runtime to omit native
+    /// completion staging after validating the member's bindings and boundary.
+    [[nodiscard]] virtual bool
+    region_kernel_completion_has_no_persistent_registers() const noexcept
+    {
+        return false;
+    }
+
+    /// A statically validated activation-kernel register mapping. Entries are
+    /// in source-register order and activation IDs are strictly increasing.
+    /// `defined` is true only when the source body assigns the register on
+    /// every admitted activation; false entries preserve prior state.
+    struct RegionRegisterBinding {
+        RegisterId source_register { };
+        RegisterId activation_register { };
+        bool defined { };
+        std::uint32_t width { };
+        ValueKind value_kind { ValueKind::logic4 };
+
+        bool operator==(const RegionRegisterBinding&) const = default;
+    };
+
+    /// Prepared copyback owns no semantic state until commit. Destroying it
+    /// cancels it. A non-null stable identity names the executor-owned storage
+    /// that commit mutates; an activation must decline duplicate identities.
+    class PreparedRegionCompletion {
+    public:
+        virtual ~PreparedRegionCompletion() = default;
+
+        [[nodiscard]] virtual const void* storage_identity() const noexcept = 0;
+        virtual void commit() noexcept = 0;
+    };
+
+    /// Prepare a no-throw synchronization of the executed activation's
+    /// defined packed registers into this executor's persistent frame. The
+    /// executor must validate process identity, exact frame boundary, ABI and
+    /// plane extents, register IDs, widths, and value kinds before returning a
+    /// plan. Returning null declines the optimized activation. The source and
+    /// activation spans must remain alive and unchanged until commit or plan
+    /// destruction. Preparation may invalidate performance-only bindings but
+    /// must not change register values or initialized state.
+    [[nodiscard]] virtual std::unique_ptr<PreparedRegionCompletion>
+    prepare_region_completion(
+        ProcessId,
+        InstructionIndex,
+        InstructionIndex,
+        std::span<const RegionRegisterBinding>,
+        std::span<const PackedLogic4>)
+    {
+        return { };
+    }
+
+    /// Allocation-free split-phase completion used only by a native region
+    /// route. The caller preflights before entering the backend, stages the
+    /// returned activation values only after successful execution, and either
+    /// commits or cancels synchronously. Other executor implementations keep
+    /// the conservative default and use the public prepared-completion API.
+    [[nodiscard]] virtual bool prepare_region_completion_native(
+        ProcessId, InstructionIndex, InstructionIndex,
+        std::span<const RegionRegisterBinding>, std::size_t,
+        const void**) noexcept
+    {
+        return false;
+    }
+    [[nodiscard]] virtual bool stage_region_completion_native(
+        std::span<const PackedLogic4>) noexcept
+    {
+        return false;
+    }
+    virtual void commit_region_completion_native() noexcept { }
+    virtual void cancel_region_completion_native() noexcept { }
+};
+
+/// Optional read-only certificate for an executor already parked at the exact
+/// static-wait completion boundary expected by a native region. The default
+/// ProcessExecutor contract remains opaque; unsupported executors do not opt in.
+class RegionKernelParkedExecutor {
+public:
+    virtual ~RegionKernelParkedExecutor() = default;
+
+    [[nodiscard]] virtual bool region_kernel_completion_is_parked_native(
+        ProcessId, InstructionIndex, InstructionIndex,
+        std::span<const ProcessExecutor::RegionRegisterBinding>,
+        std::size_t activation_register_count) const noexcept = 0;
 };
 
 class InterpreterError : public std::runtime_error {
@@ -1919,6 +2076,9 @@ private:
 };
 
 /// Small reference interpreter for differential testing of generated code.
+struct NativeRegionAllocationTestAccess;
+struct SystemCBridgeTestAccess;
+
 class Interpreter {
 public:
     using SignalChangeHook = std::function<void(SignalId, const PackedLogic4&, SimulationTick)>;
@@ -1946,6 +2106,8 @@ public:
     /// any signal alias have been committed.
     using ContainerObjectChangeHook
         = std::function<void(ContainerObjectId, SimulationTick)>;
+    using ContainerElementChangeHook = std::function<void(
+        ContainerObjectId, std::size_t, const PackedLogic4&, SimulationTick)>;
     using ExecutionPointHook = std::function<void(Scheduler&, const ExecutionPoint&)>;
     using OutputHook = std::function<void(
         ProcessId,
@@ -2037,6 +2199,14 @@ public:
     [[nodiscard]] ContainerObjectId add_container_object(
         ContainerObject object);
     void add_container_signal_alias(ContainerSignalAlias alias);
+    void add_container_element_signal_alias(
+        ContainerElementSignalAlias alias);
+    void add_container_aggregate_signal_alias(
+        ContainerAggregateSignalAlias alias);
+    /// Reserve contiguous hot records before the first process registration.
+    /// Additional processes use stable overflow storage; existing records are
+    /// never relocated. This is an optional setup hint, not a process limit.
+    void reserve_process_capacity(std::size_t capacity);
     [[nodiscard]] ProcessId add_process(Process process);
     /// Register and validate one process topology without retaining its
     /// program or allocating its execution frame. The interpreter becomes a
@@ -2082,6 +2252,13 @@ public:
     /// start and is used by SystemVerilog $timeformat/%t services.
     void set_time_resolution_femtoseconds(std::uint64_t femtoseconds);
 
+    /// Install the application-owned optional region compiler before start.
+    /// The provider is called only during the initial snapshot build; later
+    /// quiet-point snapshots can reuse only exact matches from the runtime's
+    /// persistent backend pool.
+    void set_region_kernel_backend_provider(
+        std::shared_ptr<RegionKernelBackendProvider> provider);
+
     /// Replace one process's reference evaluator with an alternate executor.
     ///
     /// The interpreter remains the sole scheduler and signal store. Installation
@@ -2098,6 +2275,13 @@ public:
         ProcessId process,
         std::function<bool()> ready,
         std::function<std::unique_ptr<ProcessExecutor>()> take);
+    /// The explicit contract enables only the capabilities the caller
+    /// promises. The default overload keeps arbitrary factories conservative.
+    void set_deferred_process_executor(
+        ProcessId process,
+        std::function<bool()> ready,
+        std::function<std::unique_ptr<ProcessExecutor>()> take,
+        DeferredProcessExecutorContract contract);
 
     /// Discard an installed or deferred alternate executor before start so the
     /// reference interpreter resumes ownership of the process. Returns false
@@ -2119,15 +2303,19 @@ public:
     /// cohort IDs reject; declined activations use their original process path.
     void install_fused_static_cohort(
         std::size_t cohort_id,
-        std::unique_ptr<FusedStaticCohortExecutor> executor);
+        std::unique_ptr<FusedStaticCohortExecutor> executor,
+        bool use_masked_all_active = false);
+    /// Compatibility query for the retired route; always returns an empty list.
     [[nodiscard]] std::vector<FusedMaskedRegionCandidate>
     fused_masked_region_candidates() const;
+    /// Compatibility counters for the retired route; all fields remain zero.
     [[nodiscard]] FusedMaskedRegionCounters
     fused_masked_region_counters() const noexcept;
+    /// Retained configuration entry point. It preserves the binding-window
+    /// error behavior but has no masked route to configure.
     void set_fused_masked_region_counters_enabled(bool enabled);
-    /// The mandatory write ranges come from validation of the same synthetic
-    /// body bound by executor, in candidate member order. The runtime checks
-    /// them against every original owner before accepting the binding.
+    /// Retained source-compatible entry point. Since no masked region IDs are
+    /// published, every call throws `invalid fused masked region binding`.
     void install_fused_masked_region(
         std::size_t region_id,
         std::vector<std::vector<Process::DriverRegion>> mandatory_writes,
@@ -2162,19 +2350,46 @@ public:
     void schedule_signal_after(SignalId signal, PackedLogic4 value,
         SimulationTick delay, StableOrder order = 0);
 
+    /// After start(), materialize a signal's current/previous/original-driver
+    /// and pending state before installing a late observer. Only dependent
+    /// graph kernels are demoted. This does not publish pending transactions
+    /// early or advance simulation. May throw on allocation failure; demoted
+    /// certificates remain invalid and the operation may be retried. Before
+    /// start, initial state is already public; the caller must expose its new
+    /// registration to the startup observation inventory before calling start.
+    void prepare_signal_observation(SignalId signal);
+
+    /// Return a live reference; its backing remains on public storage because
+    /// callers may retain it beyond this call.
     [[nodiscard]] const PackedLogic4& signal_value(SignalId signal) const;
+    /// Return a value snapshot without retaining an observation reference.
+    [[nodiscard]] PackedLogic4 signal_value_snapshot(SignalId signal) const;
     /// Return the underlying effective driven value without applying a force.
     /// This keeps public driver state distinct from the visible signal value.
+    /// The returned reference pins its backing on public storage.
     [[nodiscard]] const PackedLogic4& stored_signal_value(
+        SignalId signal) const;
+    /// Return an underlying-value snapshot without retaining a reference.
+    [[nodiscard]] PackedLogic4 stored_signal_value_snapshot(
         SignalId signal) const;
     [[nodiscard]] const std::string&
     string_object_value(StringObjectId object) const;
     void deposit_string_object(
         StringObjectId object, std::string_view value);
+    /// Return the current stored container value by reference. Its backing and
+    /// element storage remain stable, and aliased signal values refresh before
+    /// current-change observers run. Use the snapshot getter when a detached
+    /// value copy is preferable.
     [[nodiscard]] const ContainerValue&
     container_object_value(ContainerObjectId object) const;
+    /// Return a container snapshot without pinning aliased signals.
+    [[nodiscard]] ContainerValue container_object_value_snapshot(
+        ContainerObjectId object) const;
     void deposit_container_object(
         ContainerObjectId object, ContainerValue value);
+    void deposit_container_object_element(
+        ContainerObjectId object, std::size_t ordinal,
+        PackedLogic4 value);
     /// Return one process-owned driver slot. For an unresolved signal this is
     /// the single underlying driven value.
     [[nodiscard]] PackedLogic4 driver_value(
@@ -2188,9 +2403,8 @@ public:
     /// Return the immutable SimIR program owned by a static design process.
     /// The reference remains valid for the lifetime of this interpreter.
     [[nodiscard]] const Process& process_program(ProcessId process) const;
-    /// Return a private, graph-certified copy when a fixed container read can
-    /// be compiled as a packed signal extract. Ordinary fallback always uses
-    /// process_program() and its unchanged container semantics.
+    /// Compatibility accessor for the retired masked-member specialization.
+    /// It returns the original registered process program.
     [[nodiscard]] const Process& fused_masked_member_program(
         ProcessId process) const;
     /// Return the next SimIR instruction for a scheduler-owned process.
@@ -2231,9 +2445,20 @@ public:
     void set_driver_change_hook(DriverChangeHook hook);
     void set_event_trigger_hook(EventTriggerHook hook);
     void set_container_object_change_hook(ContainerObjectChangeHook hook);
+    void set_container_element_change_hook(ContainerElementChangeHook hook);
 #include "fsim/runtime/simir_scalar_interpreter.hpp"
     void set_execution_point_hook(ExecutionPointHook hook);
     void set_output_hook(OutputHook hook);
+    /// Installs a sink for already-formatted text. A trusted sink may consume
+    /// the supplied text and metadata without observing signal state. Before
+    /// inspecting or mutating interpreter state, it must call
+    /// prepare_output_callback_observation(). Unlike set_output_hook(), this
+    /// skips the implicit signal-observation barrier before each callback.
+    void set_trusted_text_output_hook(OutputHook hook);
+    /// Prepare the complete signal-observation barrier before code that may
+    /// inspect interpreter state, including code reached from a trusted text
+    /// sink.
+    void prepare_output_callback_observation();
     void set_report_hook(ReportHook hook);
     void set_coverage_sample_hook(CoverageSampleHook hook);
     void set_coverage_query_hook(CoverageQueryHook hook);
@@ -2282,6 +2507,10 @@ public:
 private:
     [[nodiscard]] ProcessId
     add_process_impl(const Process& process, Process* owned_process);
+    friend struct OwnedDriverDemotionTestAccess;
+    friend struct NativeRegionAllocationTestAccess;
+    friend struct SystemCBridgeTestAccess;
+    friend class InterpreterProgramAccess;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -1,0 +1,5 @@
+REQUEST triggered=0
+INACTIVE_REQUEST triggered=0
+WAKE triggered=1
+INACTIVE triggered=1
+NEXT_TIME triggered=0

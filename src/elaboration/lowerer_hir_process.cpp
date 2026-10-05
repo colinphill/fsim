@@ -2,7 +2,10 @@
 #include "lowerer_driver_regions.hpp"
 #include "lowerer_internal.hpp"
 
+#include <algorithm>
 #include <array>
+#include <limits>
+#include <tuple>
 
 namespace fsim::elaboration {
 namespace {
@@ -210,14 +213,71 @@ void Lowerer::report(
         std::move(code), std::move(message), std::move(span) });
 }
 
+bool Lowerer::signal_binding_can_emit_write(
+    const HirRuntimeBinding& binding) const noexcept
+{
+    if (binding.kind == HirRuntimeBindingKind::local) {
+        return binding.local.has_value();
+    }
+    if (!binding.signal || !read_only_signals_.contains(*binding.signal)) {
+        return binding.signal.has_value();
+    }
+    return binding.vhdl_port;
+}
+
+bool Lowerer::signal_binding_is_writable(
+    const HirRuntimeBinding& binding) const noexcept
+{
+    if (!binding.signal
+        || (binding.vhdl_port
+            && binding.vhdl_direction
+                == semantic::vhdl::Direction::input)) {
+        return false;
+    }
+    if (!read_only_signals_.contains(*binding.signal)) {
+        return true;
+    }
+    return binding.vhdl_port
+        && (binding.vhdl_direction == semantic::vhdl::Direction::output
+            || binding.vhdl_direction == semantic::vhdl::Direction::inout
+            || binding.vhdl_direction == semantic::vhdl::Direction::buffer);
+}
+
+void Lowerer::record_readonly_signal_write(const SignalId signal)
+{
+    if (!read_only_signals_.contains(signal)
+        || process_.operations.empty()) {
+        return;
+    }
+    // A read-only exception belongs to exactly this appended operation.
+    readonly_signal_write_operations_.insert_or_assign(
+        process_.operations.size() - 1U, signal);
+}
+
+void Lowerer::record_readonly_vhdl_output_write(
+    const HirRuntimeBinding& binding)
+{
+    if (!binding.signal
+        || !read_only_signals_.contains(*binding.signal)
+        || !signal_binding_is_writable(binding)) {
+        return;
+    }
+    record_readonly_signal_write(*binding.signal);
+}
+
 void Lowerer::validate_read_only_signal_writes(
-    const frontend::SourceSpan& source,
-    const std::optional<SignalId> permitted_signal)
+    const frontend::SourceSpan& source)
 {
     std::set<SignalId> reported;
-    const auto check = [&](const SignalId signal) {
+    const auto check = [&](
+        const SignalId signal, const std::size_t operation_index) {
+        const auto authorized_write
+            = readonly_signal_write_operations_.find(operation_index);
+        const bool permitted_write
+            = authorized_write != readonly_signal_write_operations_.end()
+            && authorized_write->second == signal;
         if (read_only_signals_.contains(signal)
-            && (!permitted_signal || signal != *permitted_signal)
+            && !permitted_write
             && reported.insert(signal).second) {
             report(
                 "FSIM-ELAB-SVIFACE-006",
@@ -226,7 +286,9 @@ void Lowerer::validate_read_only_signal_writes(
                 source);
         }
     };
-    for (const auto& operation : process_.operations) {
+    for (std::size_t operation_index { };
+        operation_index < process_.operations.size(); ++operation_index) {
+        const auto& operation = process_.operations[operation_index];
         fsim::runtime::simir::visit_operation(
             [&](const auto& candidate) {
                 using Operation = std::decay_t<decltype(candidate)>;
@@ -244,8 +306,23 @@ void Lowerer::validate_read_only_signal_writes(
                     || std::is_same_v<Operation, WriteProjectedSlice>
                     || std::is_same_v<
                         Operation, WriteProjectedWaveformSlice>
+                    || std::is_same_v<Operation, WriteBlockingDynamicSlice>
+                    || std::is_same_v<Operation, WriteUpdateDynamicSlice>
+                    || std::is_same_v<Operation, WriteAfterDynamicSlice>
+                    || std::is_same_v<Operation, WriteInertialDynamicSlice>
+                    || std::is_same_v<Operation, WriteProjectedDynamicSlice>
+                    || std::is_same_v<
+                        Operation, WriteProjectedWaveformDynamicSlice>
+                    || std::is_same_v<
+                        Operation, WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<
+                        Operation, WriteUpdateDynamicPartSlice>
+                    || std::is_same_v<Operation, WriteAfterDynamicPartSlice>
+                    || std::is_same_v<
+                        Operation, WriteInertialDynamicPartSlice>
+                    || std::is_same_v<Operation, ReleaseSignalSlice>
                     || std::is_same_v<Operation, ForceSignalSlice>) {
-                    check(candidate.signal);
+                    check(candidate.signal, operation_index);
                 }
             },
             operation);
@@ -389,6 +466,15 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
                 *declaration, process_scope, false);
             if (binding && binding->signal) {
                 dependencies.push_back(*binding->signal);
+            }
+        }
+        if (const auto container = hir_container_object_binding(current);
+            container && !container->local) {
+            for (const auto& alias :
+                design_.container_element_signal_aliases_) {
+                if (alias.object == container->object && alias.readable) {
+                    dependencies.push_back(alias.signal);
+                }
             }
         }
         const auto record = specialized_hir_unit_ != nullptr
@@ -1252,6 +1338,74 @@ std::optional<Process> Lowerer::lower_hir_process(
             std::optional<SignalId> signal;
             if (sensitivity.expression
                 && sensitivity.expression->valid()) {
+                if (sensitivity.edge == semantic::sv::EdgeKind::any) {
+                    if (const auto selected = hir_static_signal_sensitivity(
+                            *sensitivity.expression, input.scope)) {
+                        // A constant selected element/bit subscribes to its
+                        // exact leaf SignalId and normalized bit range.
+                        description.sensitivities.push_back(*selected);
+                        continue;
+                    }
+                    const auto sensitivity_expression
+                        = specialized_hir_unit_->find_expression(
+                            *sensitivity.expression);
+                    const bool direct_name
+                        = sensitivity_expression
+                        && sensitivity_expression->systemverilog != nullptr
+                        && sensitivity_expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::name;
+                    if (direct_name) {
+                        if (const auto container
+                            = hir_container_object_binding(
+                                *sensitivity.expression)) {
+                            bool has_element_alias = false;
+                            for (const auto& alias
+                                : design_.container_element_signal_aliases_) {
+                                if (alias.object == container->object
+                                    && alias.readable) {
+                                    description.sensitivities.push_back({
+                                        alias.signal,
+                                        runtime::simir::EdgeKind::any });
+                                    has_element_alias = true;
+                                }
+                            }
+                            if (has_element_alias) {
+                                continue;
+                            }
+                        }
+                    }
+                    if (const auto element = hir_container_element_binding(
+                            *sensitivity.expression)) {
+                        bool has_element_alias = false;
+                        for (const auto& alias
+                            : design_.container_element_signal_aliases_) {
+                            if (alias.object == element->object
+                                && alias.readable) {
+                                description.sensitivities.push_back({
+                                    alias.signal,
+                                    runtime::simir::EdgeKind::any });
+                                has_element_alias = true;
+                            }
+                        }
+                        if (has_element_alias) {
+                            // Dynamic indices depend on the full element set
+                            // plus any scalar signals used to compute the
+                            // index. Constant element selects were handled by
+                            // hir_static_signal_sensitivity above.
+                            for (const auto index : element->indices) {
+                                for (const auto dependency
+                                    : hir_signal_dependencies(
+                                        index, input.scope)) {
+                                    description.sensitivities.push_back({
+                                        dependency,
+                                        runtime::simir::EdgeKind::any });
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+
                 const auto declaration = hir_referenced_declaration(
                     *sensitivity.expression);
                 const auto binding = declaration
@@ -1273,10 +1427,24 @@ std::optional<Process> Lowerer::lower_hir_process(
                     }
                     const auto width = hir_expression_width(
                         *sensitivity.expression, input.scope);
-                    if (!width || *width == 0U || *width > 64U
+                    const auto container_element
+                        = hir_container_element_binding(
+                            *sensitivity.expression);
+                    const bool element_backed
+                        = container_element
+                        && std::ranges::any_of(
+                            design_.container_element_signal_aliases_,
+                            [&](const auto& alias) {
+                                return alias.object
+                                        == container_element->object
+                                    && alias.readable;
+                            });
+                    if (!width || *width == 0U
+                        || *width > std::numeric_limits<std::uint32_t>::max()
                         || (sensitivity.edge
                                 != semantic::sv::EdgeKind::any
-                            && *width != 1U)) {
+                            && *width != 1U
+                            && !element_backed)) {
                         return std::nullopt;
                     }
                     auto dependencies = hir_signal_dependencies(
@@ -1287,6 +1455,10 @@ std::optional<Process> Lowerer::lower_hir_process(
                     description.event_expression
                         = *sensitivity.expression;
                     description.event_edge = edge_kind(sensitivity.edge);
+                    description.event_expression_scalar_edge
+                        = element_backed
+                        && sensitivity.edge
+                            != semantic::sv::EdgeKind::any;
                     for (const auto dependency : dependencies) {
                         description.sensitivities.push_back({
                             dependency,
@@ -1417,6 +1589,171 @@ std::optional<SignalId> Lowerer::hir_concurrent_port_signal(
         declaration, semantic::ScopeId { }, false);
     return binding && binding->kind == HirRuntimeBindingKind::signal
         ? binding->signal : std::nullopt;
+}
+
+std::optional<std::vector<SystemVerilogTemplateElementSignalBinding>>
+resolve_systemverilog_template_element_signals(
+    const semantic::DeclarationId declaration,
+    const semantic::SpecializedHirOverlay& overlay,
+    const ContainerDeclarationBindings& bindings,
+    const std::span<const ContainerObjectInfo> object_info,
+    const std::span<const ContainerObject> objects,
+    const std::span<const ContainerElementSignalAlias> element_aliases,
+    const std::span<const ContainerAggregateSignalAlias> aggregate_aliases,
+    const std::span<const SignalInfo> signal_info,
+    const std::span<const Signal> signals)
+{
+    const auto declaration_binding = bindings.find(declaration.value());
+    if (declaration_binding == bindings.end()) {
+        return std::nullopt;
+    }
+    if (declaration_binding->second.overlay != &overlay) {
+        return std::nullopt;
+    }
+    const auto object_id = declaration_binding->second.object;
+    if (object_id >= objects.size()) {
+        return std::nullopt;
+    }
+    const auto info = std::ranges::find_if(
+        object_info,
+        [&](const ContainerObjectInfo& candidate) {
+            return candidate.id == object_id;
+        });
+    if (info == object_info.end()) {
+        return std::nullopt;
+    }
+    const auto& object = objects[object_id];
+    const auto& type = info->type;
+    if (info->is_port || info->slice_alias || object.slice_alias
+        || object.name != info->name
+        || object.initial_value.type != type
+        || !type.fixed || type.two_state || type.queue
+        || type.associative || type.string_indices
+        || type.dimensions.empty()
+        || type.element_kind != ContainerElementKind::Packed
+        || type.element_width == 0U || !type.element_types.empty()
+        || object.initial_value.elements.empty()
+        || std::ranges::none_of(
+            element_aliases,
+            [&](const ContainerElementSignalAlias& alias) {
+                return alias.object == object_id;
+            })
+        || std::ranges::none_of(
+            aggregate_aliases,
+            [&](const ContainerAggregateSignalAlias& alias) {
+                return alias.object == object_id && alias.readable;
+            })) {
+        return std::nullopt;
+    }
+
+    const auto& dimension = type.dimensions.front();
+    if (type.index_left != dimension.first
+        || type.index_right != dimension.second) {
+        return std::nullopt;
+    }
+    const auto bridge_width = runtime::simir::container_signal_bridge_width(type);
+    if (!bridge_width || *bridge_width % type.element_width != 0U
+        || *bridge_width / type.element_width != object.initial_value.elements.size()
+        || object.initial_value.elements.size()
+            > std::numeric_limits<std::uint32_t>::max()) {
+        return std::nullopt;
+    }
+
+    std::vector<std::optional<SystemVerilogTemplateElementSignalBinding>>
+        by_ordinal(object.initial_value.elements.size());
+    std::vector<bool> seen_signals(signal_info.size(), false);
+    for (const auto& alias : element_aliases) {
+        if (alias.object != object_id) {
+            continue;
+        }
+        if (alias.ordinal >= by_ordinal.size()
+            || by_ordinal[alias.ordinal]
+            || alias.signal >= signals.size()
+            || alias.signal >= signal_info.size()
+            || (!alias.readable && !alias.writable)
+            || seen_signals[alias.signal]) {
+            return std::nullopt;
+        }
+        auto remaining = static_cast<std::uint64_t>(alias.ordinal);
+        std::string suffix;
+        for (auto dimension_it = type.dimensions.rbegin();
+            dimension_it != type.dimensions.rend(); ++dimension_it) {
+            const auto [left, right] = *dimension_it;
+            const auto extent = static_cast<std::uint64_t>(left >= right
+                ? static_cast<std::int64_t>(left) - right
+                : static_cast<std::int64_t>(right) - left) + 1U;
+            const auto position = remaining % extent;
+            remaining /= extent;
+            const auto source_index = static_cast<std::int64_t>(left)
+                + (left >= right ? -static_cast<std::int64_t>(position)
+                                 : static_cast<std::int64_t>(position));
+            suffix = "[" + std::to_string(source_index) + "]" + suffix;
+        }
+        if (remaining != 0U) {
+            return std::nullopt;
+        }
+        const auto expected_name = info->name + suffix;
+        const auto& element_info = signal_info[alias.signal];
+        const auto& signal = signals[alias.signal];
+        if (element_info.id != alias.signal
+            || element_info.name != expected_name
+            || signal.name != expected_name
+            || element_info.width != type.element_width
+            || element_info.source_domain != frontend::ValueDomain::Logic4
+            || element_info.is_signed != type.signed_elements
+            || element_info.systemverilog_scalar
+                != frontend::SystemVerilogScalarKind::None
+            || element_info.vhdl_array || element_info.vhdl_access
+            || element_info.vhdl_physical
+            || !element_info.vhdl_mode_view_bindings.empty()
+            || signal.value_kind != ValueKind::logic4
+            || signal.initial_value.width() != type.element_width
+            || signal.initial_value.is_logic9()) {
+            return std::nullopt;
+        }
+        by_ordinal[alias.ordinal]
+            = SystemVerilogTemplateElementSignalBinding {
+                  type,
+                  alias.ordinal,
+                  alias.signal,
+                  alias.readable,
+                  alias.writable,
+                  declaration_binding->second.read_only,
+              };
+        seen_signals[alias.signal] = true;
+    }
+
+    std::vector<SystemVerilogTemplateElementSignalBinding> result;
+    result.reserve(by_ordinal.size());
+    for (const auto& element : by_ordinal) {
+        if (!element) {
+            return std::nullopt;
+        }
+        result.push_back(*element);
+    }
+    return result;
+}
+
+std::vector<Lowerer::HirConcurrentContainerElementSignal>
+Lowerer::hir_concurrent_container_element_signals(
+    const semantic::DeclarationId declaration) const
+{
+    if (container_declaration_bindings_ == nullptr
+        || specialized_hir_unit_ == nullptr) {
+        return { };
+    }
+    const auto resolved = resolve_systemverilog_template_element_signals(
+        declaration,
+        specialized_hir_unit_->specialization(),
+        *container_declaration_bindings_,
+        design_.container_object_info_,
+        design_.container_objects_,
+        design_.container_element_signal_aliases_,
+        design_.container_aggregate_signal_aliases_,
+        design_.signal_info_,
+        design_.signals_);
+    return resolved.value_or(
+        std::vector<HirConcurrentContainerElementSignal> { });
 }
 
 bool Lowerer::has_generated_processes() const noexcept
@@ -1708,8 +2045,8 @@ bool Lowerer::lower_hir_output_actual_write(
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, hir_process_scope_, true)
         : std::nullopt;
-    if (!expression || !binding || !binding->signal
-        || read_only_signals_.contains(*binding->signal)) {
+    if (!expression || !binding
+        || !signal_binding_is_writable(*binding)) {
         return false;
     }
 
@@ -1801,12 +2138,25 @@ bool Lowerer::lower_hir_output_actual_write(
             *binding->signal,
             source,
             static_cast<std::uint32_t>(constant_selection->offset),
+            process_.scheduling_domain
+                    == ProcessSchedulingDomain::systemverilog
+                ? SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic,
         });
+        record_readonly_vhdl_output_write(*binding);
         return true;
     }
     if (!selected) {
         process_.operations.emplace_back(
-            WriteUpdate { *binding->signal, source });
+            WriteUpdate {
+                *binding->signal,
+                source,
+                process_.scheduling_domain
+                        == ProcessSchedulingDomain::systemverilog
+                    ? SignalUpdateDomain::systemverilog_active
+                    : SignalUpdateDomain::generic,
+            });
+        record_readonly_vhdl_output_write(*binding);
         return true;
     }
     const auto source_width = member_selection
@@ -1822,7 +2172,15 @@ bool Lowerer::lower_hir_output_actual_write(
     }
     if (index) {
         process_.operations.emplace_back(WriteUpdateDynamicSlice {
-            *binding->signal, source, *dynamic });
+            *binding->signal,
+            source,
+            *dynamic,
+            process_.scheduling_domain
+                    == ProcessSchedulingDomain::systemverilog
+                ? SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic,
+        });
+        record_readonly_vhdl_output_write(*binding);
         return true;
     }
     if (!dynamic_part_width) {
@@ -1840,7 +2198,12 @@ bool Lowerer::lower_hir_output_actual_write(
             selection_operation == "+:",
             dynamic->left >= dynamic->right,
         },
+        process_.scheduling_domain
+                == ProcessSchedulingDomain::systemverilog
+            ? SignalUpdateDomain::systemverilog_active
+            : SignalUpdateDomain::generic,
     });
+    record_readonly_vhdl_output_write(*binding);
     return true;
 }
 
@@ -1887,8 +2250,14 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     procedural_continuous_assignments_.clear();
     procedural_continuous_assignment_by_statement_.clear();
     procedural_continuous_assignments_by_target_.clear();
-    process_.id = static_cast<ProcessId>(design_.processes_.size());
+    readonly_signal_write_operations_.clear();
+    process_.id = static_cast<ProcessId>(design_.process_count());
     hir_process_scope_ = description.scope;
+    process_.scheduling_domain
+        = (language == frontend::Language::SystemVerilog2017
+            || language == frontend::Language::Verilog2005)
+        ? ProcessSchedulingDomain::systemverilog
+        : ProcessSchedulingDomain::generic;
     process_kind_ = description.kind;
     process_.program_owner = systemverilog_program_owner_;
     process_.name = std::string { hierarchy } + "."
@@ -1924,9 +2293,13 @@ std::optional<Process> Lowerer::lower_hir_process_body(
 
     std::optional<RegisterId> event_baseline;
     if (description.event_expression) {
-        const auto width = hir_expression_width(
+        const auto expression_width = hir_expression_width(
             *description.event_expression, hir_process_scope_);
-        if (!width || *width == 0U || *width > 64U) {
+        const auto width = description.event_expression_scalar_edge
+            ? std::optional<std::size_t> { 1U }
+            : expression_width;
+        if (!width || *width == 0U
+            || *width > std::numeric_limits<std::uint32_t>::max()) {
             process_ = { };
             return std::nullopt;
         }
@@ -2064,7 +2437,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
             1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ReadSignal {
             active, *description.procedural_assignment_active });
-        implicit_signal_dependencies_.push_back(
+        record_implicit_signal_dependency(
             *description.procedural_assignment_active);
         const auto branch = static_cast<InstructionIndex>(
             process_.operations.size());
@@ -2151,14 +2524,21 @@ std::optional<Process> Lowerer::lower_hir_process_body(
             });
         }
         process_.operations.emplace_back(WriteUpdate {
-            destination, *value });
+            destination,
+            *value,
+            process_.scheduling_domain
+                == ProcessSchedulingDomain::systemverilog
+                ? SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic,
+        });
+        record_readonly_signal_write(destination);
     } else if (description.output_actual) {
         const auto source = *description.output_actual_source;
         const auto& signal = design_.signal_info_[source];
         const auto value = allocate_register(
             signal.width, signal.source_domain);
         process_.operations.emplace_back(ReadSignal { value, source });
-        implicit_signal_dependencies_.push_back(source);
+        record_implicit_signal_dependency(source);
         if (!lower_hir_output_actual_write(
                 *description.output_actual, value)) {
             process_ = { };
@@ -2308,6 +2688,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                     *delay,
                     ProjectedDelayMode::inertial,
                 });
+                record_readonly_vhdl_output_write(*binding);
             }
             const auto end = static_cast<InstructionIndex>(
                 process_.operations.size());
@@ -2440,8 +2821,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     }
     if (description.wildcard_sensitivity) {
         for (const auto dependency : implicit_signal_dependencies_) {
-            process_.static_sensitivity.push_back(
-                { dependency, runtime::simir::EdgeKind::any });
+            process_.static_sensitivity.push_back(dependency);
         }
         if (description.require_wildcard_dependency
             && !description.always_comb_or_latch
@@ -2453,6 +2833,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                 hir_source_span(description.source));
         }
     }
+    runtime::simir::normalize_sensitivities(process_.static_sensitivity);
     std::ranges::sort(
         process_.static_sensitivity,
         {},
@@ -2462,13 +2843,28 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                 ? std::string_view {
                       design_.signal_info_[sensitivity.signal].name }
                 : std::string_view { };
-            return std::pair {
+            return std::tuple {
                 name,
                 static_cast<std::uint8_t>(sensitivity.edge),
+                sensitivity.offset,
+                sensitivity.width,
             };
         });
     auto duplicate = std::ranges::unique(process_.static_sensitivity);
     process_.static_sensitivity.erase(duplicate.begin(), duplicate.end());
+    const auto shift_readonly_output_writes
+        = [&](const std::size_t position, const std::size_t count) {
+              if (count == 0U) {
+                  return;
+              }
+              std::map<std::size_t, SignalId> shifted;
+              for (const auto& [index, signal] :
+                   readonly_signal_write_operations_) {
+                  shifted.emplace(
+                      index >= position ? index + count : index, signal);
+              }
+              readonly_signal_write_operations_.swap(shifted);
+          };
     const auto waits_before_first_execution
         = description.wait_before_first_execution
         || (language != frontend::Language::Vhdl2008
@@ -2478,6 +2874,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         for (auto& operation : process_.operations) {
             relocate_instruction_targets(operation, resume_entry);
         }
+        shift_readonly_output_writes(resume_entry, 1U);
         process_.operations.insert(
             process_.operations.cbegin() + resume_entry,
             WaitSensitivity { });
@@ -2525,6 +2922,8 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                 static_cast<InstructionIndex>(callable_body_begin));
         }
     }
+    const auto termination_count = process_termination.size();
+    shift_readonly_output_writes(callable_body_begin, termination_count);
     process_.operations.insert(
         process_.operations.cbegin()
             + static_cast<std::ptrdiff_t>(callable_body_begin),
@@ -2549,9 +2948,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
             "transitively called wait statement",
             hir_source_span(description.source));
     }
-    validate_read_only_signal_writes(
-        hir_source_span(description.source),
-        description.input_actual_destination);
+    validate_read_only_signal_writes(hir_source_span(description.source));
     process_.register_count = next_register_;
     process_.string_register_count = next_string_register_;
     process_.container_register_count = next_container_register_;

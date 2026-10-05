@@ -1002,6 +1002,12 @@ void Lowerer::set_specialized_hir_unit(
     }
 }
 
+void Lowerer::set_hir_container_declaration_bindings(
+    const ContainerDeclarationBindings* const bindings) noexcept
+{
+    container_declaration_bindings_ = bindings;
+}
+
 void Lowerer::set_systemverilog_interface_handles(
     const std::unordered_map<std::string, std::uint64_t>* const handles)
     noexcept
@@ -1701,7 +1707,16 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
             }
         }
     }
-    if (const auto selected = hir_referenced_declaration(expression_id)) {
+    auto selected = hir_referenced_declaration(expression_id);
+    if (!selected && expression->systemverilog != nullptr) {
+        // Selecting an unpacked element preserves its declared packed range;
+        // it does not acquire the default [width-1:0] expression range.
+        if (const auto element = hir_container_element_binding(expression_id);
+            element && element->selected_type == element->type) {
+            selected = element->declaration;
+        }
+    }
+    if (selected) {
         const auto declaration = specialized_hir_unit_->find_declaration(
             *selected);
         if (!declaration) {
@@ -3347,6 +3362,11 @@ Lowerer::hir_runtime_binding(
     } else {
         const auto& source = *declaration->vhdl;
         result.name = source.name;
+        result.vhdl_port
+            = source.form == semantic::vhdl::DeclarationForm::port;
+        if (result.vhdl_port) {
+            result.vhdl_direction = source.direction;
+        }
         const auto loop_parameter = source.form
                 == semantic::vhdl::DeclarationForm::constant
             && source.scope.valid()
@@ -3791,7 +3811,7 @@ Lowerer::hir_container_element_binding(
         }
         selected_type = &selected_type->element_types.front();
     }
-    return HirContainerElementBinding {
+    HirContainerElementBinding binding {
         object->declaration,
         object->name,
         object->object,
@@ -3804,13 +3824,452 @@ Lowerer::hir_container_element_binding(
                                  : frontend::ValueDomain::Logic4,
         selected_type->signed_elements,
         object->read_only,
+        std::nullopt,
+    };
+    binding.runtime_read_profile
+        = hir_sv_runtime_container_read_profile(binding);
+    return binding;
+}
+
+std::optional<Lowerer::HirContainerElementBinding::RuntimeReadProfile>
+Lowerer::hir_sv_runtime_container_read_profile(
+    const HirContainerElementBinding& element) const
+{
+    using Profile = HirContainerElementBinding::RuntimeReadProfile;
+    using ElementKind = runtime::simir::ContainerElementKind;
+    using TypeForm = semantic::sv::TypeForm;
+    using DeclarationForm = semantic::sv::DeclarationForm;
+
+    if (process_.scheduling_domain
+            != ProcessSchedulingDomain::systemverilog
+        || specialized_hir_unit_ == nullptr || element.type == nullptr
+        || element.indices.empty()) {
+        return std::nullopt;
+    }
+
+    const auto* runtime_container = element.type;
+    const semantic::sv::TypeReference* source_leaf { };
+    std::optional<semantic::sv::TypeReference> retained_source_leaf;
+    semantic::ScopeId source_scope;
+    if (element.declaration.valid()) {
+        const auto declaration
+            = specialized_hir_unit_->find_declaration(element.declaration);
+        if (!declaration || declaration->systemverilog == nullptr
+            || !declaration->systemverilog->type) {
+            return std::nullopt;
+        }
+        source_scope = declaration->systemverilog->scope;
+        const semantic::CompiledDesignResolver resolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        };
+        // Runtime ContainerType intentionally compresses ordinary source
+        // leaves. Walk the retained HIR type tree by the same index levels
+        // so defaults for typedefs and nested containers use the exact leaf.
+        auto source_container = resolver.effective_systemverilog_type(
+            *declaration->systemverilog->type, source_scope);
+        if (!source_container) {
+            return std::nullopt;
+        }
+
+        std::size_t consumed_indices { };
+        while (true) {
+            if (runtime_container == nullptr
+                || !source_container->container_form
+                || source_container->container_element_types.size() > 1U) {
+                return std::nullopt;
+            }
+            const auto runtime_dimensions = runtime_container->fixed
+                ? runtime_container->dimensions.size() : 1U;
+            const auto source_dimensions
+                = *source_container->container_form == TypeForm::static_array
+                ? source_container->unpacked_dimensions.size() : 1U;
+            if (runtime_dimensions == 0U
+                || runtime_dimensions != source_dimensions
+                || consumed_indices > element.indices.size()
+                || runtime_dimensions
+                    > element.indices.size() - consumed_indices) {
+                return std::nullopt;
+            }
+            consumed_indices += runtime_dimensions;
+            // An absent child entry is the HIR shorthand for a direct leaf;
+            // nested containers retain their child explicitly.
+            auto source_element = source_container->container_element_types
+                    .empty()
+                ? *source_container
+                : source_container->container_element_types.front();
+            if (source_container->container_element_types.empty()) {
+                if (consumed_indices != element.indices.size()) {
+                    return std::nullopt;
+                }
+                source_element.container_form.reset();
+                source_element.queue_maximum.reset();
+                source_element.associative_index.reset();
+                source_element.unpacked_dimensions.clear();
+                source_element.container_element_types.clear();
+            }
+            auto effective_element = resolver.effective_systemverilog_type(
+                source_element, source_scope);
+            if (!effective_element) {
+                return std::nullopt;
+            }
+            if (consumed_indices == element.indices.size()) {
+                if (element.selected_type != nullptr
+                    && element.selected_type != runtime_container) {
+                    return std::nullopt;
+                }
+                retained_source_leaf = std::move(*effective_element);
+                source_leaf = &*retained_source_leaf;
+                break;
+            }
+            if (runtime_container->element_kind != ElementKind::Container
+                || runtime_container->element_types.size() != 1U) {
+                return std::nullopt;
+            }
+            const auto& runtime_element
+                = runtime_container->element_types.front();
+            if (runtime_element.element_kind != ElementKind::Container) {
+                return std::nullopt;
+            }
+            runtime_container = &runtime_element;
+            source_container = std::move(effective_element);
+        }
+    }
+
+    const auto* runtime_leaf = element.selected_type != nullptr
+        ? element.selected_type : runtime_container;
+    if (runtime_leaf == nullptr
+        || runtime_leaf->element_width == 0U
+        || element.width != runtime_leaf->element_width) {
+        return std::nullopt;
+    }
+    if (source_leaf != nullptr
+        && runtime_leaf->element_kind == ElementKind::Packed) {
+        const auto source_width = hir_systemverilog_type_width(*source_leaf);
+        if (!source_width || *source_width != runtime_leaf->element_width) {
+            return std::nullopt;
+        }
+    }
+
+    if (runtime_leaf->element_kind == ElementKind::Scalar) {
+        switch (runtime_leaf->scalar_kind) {
+        case frontend::SystemVerilogScalarKind::ShortReal:
+        case frontend::SystemVerilogScalarKind::Real:
+        case frontend::SystemVerilogScalarKind::Realtime:
+        case frontend::SystemVerilogScalarKind::Chandle:
+            return Profile { element.domain, false };
+        case frontend::SystemVerilogScalarKind::Time: {
+            if (source_leaf != nullptr) {
+                const semantic::CompiledDesignResolver resolver {
+                    *specialized_hir_unit_, hir_generic_binding_frames_
+                };
+                std::unordered_set<std::uint32_t> visiting_time_types;
+                const auto is_time_type = [&](const auto& self,
+                                              const semantic::sv::TypeReference& input,
+                                              const semantic::ScopeId use_scope)
+                    -> bool {
+                    const auto reference
+                        = resolver.effective_systemverilog_type(
+                              input, use_scope).value_or(input);
+                    if (reference.target.spelling == "time") {
+                        return true;
+                    }
+                    if (!reference.target.target.valid()
+                        || !visiting_time_types.insert(
+                            reference.target.target.value()).second) {
+                        return false;
+                    }
+                    const auto definition
+                        = specialized_hir_unit_->find_type(
+                            reference.target.target);
+                    bool result { };
+                    if (definition
+                        && definition->systemverilog != nullptr) {
+                        const auto type_declaration
+                            = specialized_hir_unit_->find_declaration(
+                                definition->systemverilog->declaration);
+                        const auto declaration_form = type_declaration
+                                && type_declaration->systemverilog != nullptr
+                            ? type_declaration->systemverilog->form
+                            : DeclarationForm::variable;
+                        const auto follows_base
+                            = definition->systemverilog->form
+                                    == TypeForm::alias
+                                || definition->systemverilog->form
+                                    == TypeForm::type_parameter
+                                || declaration_form
+                                    == DeclarationForm::typedef_declaration
+                                || declaration_form
+                                    == DeclarationForm::type_parameter
+                                || declaration_form
+                                    == DeclarationForm::nettype_declaration;
+                        if (!follows_base) {
+                            visiting_time_types.erase(
+                                reference.target.target.value());
+                            return false;
+                        }
+                        const auto type_scope = type_declaration
+                                && type_declaration->systemverilog != nullptr
+                            ? type_declaration->systemverilog->scope
+                            : use_scope;
+                        result = self(
+                            self, definition->systemverilog->base,
+                            type_scope);
+                    }
+                    visiting_time_types.erase(
+                        reference.target.target.value());
+                    return result;
+                };
+                if (!is_time_type(is_time_type, *source_leaf, source_scope)) {
+                    return std::nullopt;
+                }
+            }
+            // The ordinary container profile currently marks scalar storage
+            // two-state, but a missing Time element defaults to all X. Keep
+            // that domain correction local to this guarded read.
+            return Profile { frontend::ValueDomain::Logic4, true };
+        }
+        case frontend::SystemVerilogScalarKind::None:
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+    if (runtime_leaf->element_kind != ElementKind::Packed) {
+        return std::nullopt;
+    }
+
+    if (source_leaf == nullptr) {
+        if (!element.declaration.valid()
+            && runtime_leaf->element_nominal_type.empty()
+            && runtime_leaf->element_types.empty()) {
+            return Profile {
+                runtime_leaf->two_state
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4,
+                !runtime_leaf->two_state,
+            };
+        }
+        return std::nullopt;
+    }
+
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    std::unordered_set<std::uint32_t> visiting;
+    const auto builtin_four_state = [](const std::string_view spelling)
+        -> std::optional<bool> {
+        const auto descriptor
+            = frontend::systemverilog_integral_type_descriptor(spelling);
+        if (!descriptor) {
+            return std::nullopt;
+        }
+        if (descriptor->domain == frontend::ValueDomain::Logic4) {
+            return true;
+        }
+        if (descriptor->domain == frontend::ValueDomain::Bit2) {
+            return false;
+        }
+        return std::nullopt;
+    };
+    const auto four_state = [&](const auto& self,
+                                const semantic::sv::TypeReference& input,
+                                const semantic::ScopeId use_scope)
+        -> std::optional<bool> {
+        auto reference = resolver.effective_systemverilog_type(
+            input, use_scope).value_or(input);
+        if (reference.container_form) {
+            return std::nullopt;
+        }
+        const auto spelling = std::string_view {
+            reference.target.spelling
+        };
+        if (spelling == "time") {
+            return true;
+        }
+        if (reference.target.target.valid()) {
+            const auto type_id = reference.target.target;
+            if (!visiting.insert(type_id.value()).second) {
+                return std::nullopt;
+            }
+            const auto definition
+                = specialized_hir_unit_->find_type(type_id);
+            std::optional<bool> result;
+            if (definition && definition->systemverilog != nullptr) {
+                const auto& type = *definition->systemverilog;
+                const auto type_declaration
+                    = specialized_hir_unit_->find_declaration(
+                        type.declaration);
+                const auto type_scope = type_declaration
+                        && type_declaration->systemverilog != nullptr
+                    ? type_declaration->systemverilog->scope
+                    : use_scope;
+                switch (type.form) {
+                case TypeForm::enumeration:
+                    // The default follows the enum base type, not its first
+                    // declared literal.
+                    result = self(self, type.base, type_scope);
+                    break;
+                case TypeForm::alias:
+                case TypeForm::type_parameter:
+                    result = self(self, type.base, type_scope);
+                    break;
+                case TypeForm::packed_integral:
+                    // Use the frontend's single authoritative builtin-domain
+                    // table even when HIR carries a synthetic typedef.
+                    if (const auto builtin
+                        = builtin_four_state(spelling)) {
+                        result = *builtin;
+                    } else if (type_declaration
+                        && type_declaration->systemverilog != nullptr
+                        && (type_declaration->systemverilog->form
+                                == DeclarationForm::typedef_declaration
+                            || type_declaration->systemverilog->form
+                                == DeclarationForm::type_parameter
+                            || type_declaration->systemverilog->form
+                                == DeclarationForm::nettype_declaration)) {
+                        result = self(
+                            self, type.base,
+                            type_declaration->systemverilog->scope);
+                    } else {
+                        result = reference.four_state;
+                    }
+                    break;
+                case TypeForm::packed_structure:
+                case TypeForm::packed_union: {
+                    if (type.members.empty()) {
+                        break;
+                    }
+                    // Packed aggregates are one packed integral value. Their
+                    // default domain is four-state when any member is.
+                    bool aggregate_four_state { };
+                    bool complete = true;
+                    for (const auto& member : type.members) {
+                        const auto member_four_state
+                            = self(self, member.type, type_scope);
+                        if (!member_four_state) {
+                            complete = false;
+                            break;
+                        }
+                        aggregate_four_state
+                            = aggregate_four_state || *member_four_state;
+                    }
+                    if (complete) {
+                        result = aggregate_four_state;
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+            }
+            visiting.erase(type_id.value());
+            return result;
+        }
+
+        // Resolve builtin spelling before value_form: an enum base can
+        // retain the outer enum's form while naming a primitive type.
+        if (const auto builtin = builtin_four_state(spelling)) {
+            return builtin;
+        }
+        if (reference.value_form
+            && *reference.value_form != TypeForm::packed_integral) {
+            return std::nullopt;
+        }
+        if (reference.value_form == TypeForm::packed_integral) {
+            return reference.four_state;
+        }
+        return std::nullopt;
+    };
+    const auto leaf_four_state
+        = four_state(four_state, *source_leaf, source_scope);
+    if (!leaf_four_state) {
+        return std::nullopt;
+    }
+    return Profile {
+        *leaf_four_state
+            ? frontend::ValueDomain::Logic4
+            : frontend::ValueDomain::Bit2,
+        *leaf_four_state,
     };
 }
 
-std::optional<Lowerer::HirStaticContainerSignalExtract>
-Lowerer::hir_static_container_signal_extract(
+std::optional<Lowerer::HirStaticContainerIndex>
+Lowerer::hir_static_container_index(
     const HirContainerElementBinding& element) const
 {
+    if (specialized_hir_unit_ == nullptr || element.type == nullptr
+        || element.type->dimensions.empty()
+        || element.indices.size() != element.type->dimensions.size()) {
+        return std::nullopt;
+    }
+    std::uint64_t count = 1U;
+    std::uint64_t ordinal { };
+    std::string suffix;
+    for (std::size_t position = 0U; position < element.indices.size(); ++position) {
+        const auto [dimension_left, dimension_right]
+            = element.type->dimensions[position];
+        const auto left = static_cast<std::int64_t>(dimension_left);
+        const auto right = static_cast<std::int64_t>(dimension_right);
+        const auto index_id = element.indices[position];
+        const auto expression = specialized_hir_unit_->find_expression(index_id);
+        // Every coordinate must be a pure, known constant. A dynamic or
+        // unknown coordinate retains the ordinary aggregate dependency.
+        if (!expression || expression->systemverilog == nullptr
+            || hir_expression_is_residual(index_id)
+            || has_runtime_systemverilog_call(*specialized_hir_unit_, index_id)) {
+            return std::nullopt;
+        }
+        const auto constant = hir_constant_integer(index_id);
+        const auto width = hir_expression_width(index_id, hir_process_scope_);
+        if (!constant || !width || *width == 0U || *width > 64U) {
+            return std::nullopt;
+        }
+        auto index = *constant;
+        const bool signed_index = hir_expression_signed(index_id);
+        if (*width < 64U) {
+            const auto mask = (std::uint64_t { 1U } << *width) - 1U;
+            const auto bits = static_cast<std::uint64_t>(index) & mask;
+            const auto sign_bit = std::uint64_t { 1U } << (*width - 1U);
+            if (signed_index && (bits & sign_bit) != 0U) {
+                const auto magnitude = (std::uint64_t { 1U } << *width) - bits;
+                index = -static_cast<std::int64_t>(magnitude);
+            } else {
+                index = static_cast<std::int64_t>(bits);
+            }
+        } else if (!signed_index && index < 0) {
+            // The signed evaluator cannot represent an unsigned value above
+            // INT64_MAX; do not reinterpret it as a negative coordinate.
+            return std::nullopt;
+        }
+        if (index < std::numeric_limits<std::int32_t>::min()
+            || index > std::numeric_limits<std::int32_t>::max()
+            || index < std::min(left, right) || index > std::max(left, right)) {
+            return std::nullopt;
+        }
+        const auto extent = static_cast<std::uint64_t>(
+            left >= right ? left - right : right - left) + 1U;
+        if (extent > std::numeric_limits<std::uint32_t>::max()
+            || count > std::numeric_limits<std::uint32_t>::max() / extent) {
+            return std::nullopt;
+        }
+        const auto coordinate = static_cast<std::uint64_t>(
+            left >= right ? left - index : index - left);
+        ordinal = ordinal * extent + coordinate;
+        count *= extent;
+        suffix += "[" + std::to_string(index) + "]";
+    }
+    return HirStaticContainerIndex {
+        static_cast<std::uint32_t>(ordinal),
+        static_cast<std::uint32_t>(count), std::move(suffix) };
+}
+
+std::optional<Lowerer::HirStaticContainerSignalExtract>
+Lowerer::hir_static_element_signal_extract(
+    const HirContainerElementBinding& element) const
+{
+    if (std::ranges::none_of(design_.container_element_signal_aliases_,
+            [&](const auto& alias) { return alias.object == element.object; })) {
+        return std::nullopt;
+    }
     using ElementKind = runtime::simir::ContainerElementKind;
     if (specialized_hir_unit_ == nullptr
         || specialized_hir_unit_->language()
@@ -3818,13 +4277,125 @@ Lowerer::hir_static_container_signal_extract(
         || element.local
         || element.type == nullptr
         || element.selected_type != element.type
-        || element.indices.size() != 1U) {
+        || element.indices.size() != element.type->dimensions.size()) {
         return std::nullopt;
     }
 
     const auto& type = *element.type;
     if (!type.fixed || type.queue || type.associative
-        || type.string_indices || type.dimensions.size() != 1U
+        || type.string_indices || type.dimensions.empty()
+        || !type.element_types.empty()
+        || type.element_kind != ElementKind::Packed
+        || type.element_width == 0U
+        || type.element_width
+            > std::numeric_limits<std::uint32_t>::max()
+        || element.width != type.element_width
+        || type.two_state
+        || element.domain != frontend::ValueDomain::Logic4
+        || element.signed_value != type.signed_elements) {
+        return std::nullopt;
+    }
+
+    const auto& dimension = type.dimensions.front();
+    if (type.index_left != dimension.first
+        || type.index_right != dimension.second
+        || element.object >= design_.container_objects_.size()) {
+        return std::nullopt;
+    }
+
+    const auto selected_index = hir_static_container_index(element);
+    const auto& object = design_.container_objects_[element.object];
+    if (!selected_index
+        || selected_index->count != object.initial_value.elements.size()) {
+        return std::nullopt;
+    }
+    const auto ordinal = selected_index->ordinal;
+    const auto object_info = std::ranges::find_if(
+        design_.container_object_info_,
+        [&](const ContainerObjectInfo& candidate) {
+            return candidate.id == element.object;
+        });
+    if (object.slice_alias
+        || object.initial_value.type != type
+        || object_info == design_.container_object_info_.end()
+        || object_info->is_port
+        || object_info->slice_alias
+        || object_info->type != type) {
+        return std::nullopt;
+    }
+
+    const runtime::simir::ContainerElementSignalAlias* alias { };
+    for (const auto& candidate : design_.container_element_signal_aliases_) {
+        if (candidate.object != element.object
+            || candidate.ordinal != static_cast<std::uint32_t>(ordinal)) {
+            continue;
+        }
+        if (alias != nullptr || !candidate.readable) {
+            return std::nullopt;
+        }
+        alias = &candidate;
+    }
+    if (alias == nullptr
+        || std::ranges::any_of(
+            design_.container_signal_aliases_,
+            [&](const runtime::simir::ContainerSignalAlias& candidate) {
+                return candidate.object == element.object;
+            })) {
+        return std::nullopt;
+    }
+
+    const auto signal_index = static_cast<std::size_t>(alias->signal);
+    if (signal_index >= design_.signal_info_.size()
+        || signal_index >= design_.signals_.size()) {
+        return std::nullopt;
+    }
+    const auto& signal_info = design_.signal_info_[signal_index];
+    const auto& signal = design_.signals_[signal_index];
+    const auto expected_name = object_info->name + selected_index->suffix;
+    if (signal_info.id != alias->signal
+        || signal_info.name != expected_name
+        || signal_info.vhdl_array != nullptr
+        || signal_info.vhdl_access != nullptr
+        || signal_info.vhdl_physical != nullptr
+        || !signal_info.vhdl_mode_view_bindings.empty()
+        || signal_info.source_domain != frontend::ValueDomain::Logic4
+        || signal_info.is_signed != type.signed_elements
+        || signal_info.width != type.element_width
+        || signal.initial_value.width() != type.element_width
+        || signal.initial_value.is_logic9()) {
+        return std::nullopt;
+    }
+
+    return HirStaticContainerSignalExtract {
+        alias->signal,
+        static_cast<std::uint32_t>(element.width),
+        0U,
+        static_cast<std::uint32_t>(element.width),
+        frontend::ValueDomain::Logic4,
+    };
+}
+
+std::optional<Lowerer::HirStaticContainerSignalExtract>
+Lowerer::hir_static_container_signal_extract(
+    const HirContainerElementBinding& element) const
+{
+    if (const auto leaf = hir_static_element_signal_extract(element)) {
+        return leaf;
+    }
+    using ElementKind = runtime::simir::ContainerElementKind;
+    if (specialized_hir_unit_ == nullptr
+        || specialized_hir_unit_->language()
+            != semantic::Language::system_verilog
+        || element.local
+        || element.type == nullptr
+        || element.selected_type != element.type
+        || element.indices.size() != element.type->dimensions.size()) {
+        return std::nullopt;
+    }
+
+    const auto& type = *element.type;
+    if (!type.fixed || type.queue || type.associative
+        || type.string_indices || type.dimensions.empty()
         || !type.element_types.empty()
         || type.element_kind != ElementKind::Packed
         || type.element_width == 0U
@@ -3842,35 +4413,11 @@ Lowerer::hir_static_container_signal_extract(
         return std::nullopt;
     }
 
-    const auto left = static_cast<std::int64_t>(dimension.first);
-    const auto right = static_cast<std::int64_t>(dimension.second);
-    const auto index_id = element.indices.front();
-    const auto index_expression
-        = specialized_hir_unit_->find_expression(index_id);
-    if (!index_expression || index_expression->systemverilog == nullptr) {
+    const auto selected_index = hir_static_container_index(element);
+    if (!selected_index) {
         return std::nullopt;
     }
-    const auto& index_source = *index_expression->systemverilog;
-    if (index_source.kind != semantic::sv::ExpressionKind::name
-        || index_source.text.empty()
-        || !index_source.operands.empty()
-        || hir_referenced_declaration(index_id)
-        || !systemverilog_genvar_identity(
-            *specialized_hir_unit_, index_source.scope, index_source.text)) {
-        return std::nullopt;
-    }
-    const auto index = hir_constant_integer(index_id);
-    const auto low = std::min(left, right);
-    const auto high = std::max(left, right);
-    if (!index
-        || *index < std::numeric_limits<std::int32_t>::min()
-        || *index > std::numeric_limits<std::int32_t>::max()
-        || *index < low || *index > high) {
-        return std::nullopt;
-    }
-
-    const auto extent = static_cast<std::uint64_t>(
-        left >= right ? left - right : right - left) + 1U;
+    const auto extent = static_cast<std::uint64_t>(selected_index->count);
     const auto element_width = static_cast<std::uint64_t>(
         type.element_width);
     const auto maximum_width = static_cast<std::uint64_t>(
@@ -3885,11 +4432,7 @@ Lowerer::hir_static_container_signal_extract(
             std::numeric_limits<std::size_t>::max())) {
         return std::nullopt;
     }
-    const auto ordinal = left >= right ? left - *index : *index - left;
-    if (ordinal < 0
-        || static_cast<std::uint64_t>(ordinal) >= extent) {
-        return std::nullopt;
-    }
+    const auto ordinal = selected_index->ordinal;
     const auto consumed_width
         = (static_cast<std::uint64_t>(ordinal) + 1U) * element_width;
     if (consumed_width > expected_backing_width) {
@@ -3903,6 +4446,7 @@ Lowerer::hir_static_container_signal_extract(
             return candidate.id == element.object;
         });
     if (object.slice_alias
+        || object.initial_value.elements.size() != selected_index->count
         || object.initial_value.type != type
         || object_info == design_.container_object_info_.end()
         || object_info->is_port
@@ -4057,6 +4601,100 @@ Lowerer::hir_container_aggregate_selection(
     return HirContainerAggregateSelection {
         std::move(*element), std::move(members), *current
     };
+}
+
+bool Lowerer::hir_sv_dynamic_aggregate_member_read_supported(
+    const HirContainerAggregateSelection& selection) const
+{
+    using TypeForm = semantic::sv::TypeForm;
+
+    const auto& element = selection.element;
+    if (process_.scheduling_domain
+            != ProcessSchedulingDomain::systemverilog
+        || specialized_hir_unit_ == nullptr
+        || !element.declaration.valid() || element.type == nullptr
+        || element.type->fixed || element.type->queue
+        || element.type->associative || element.type->string_indices
+        || element.type->element_kind
+            != runtime::simir::ContainerElementKind::Aggregate
+        || element.indices.size() != 1U || selection.members.empty()
+        || selection.leaf.element_width == 0U
+        || selection.leaf.scalar_kind
+            != frontend::SystemVerilogScalarKind::None
+        || (selection.leaf.element_kind
+                != runtime::simir::ContainerElementKind::Packed
+            && selection.leaf.element_kind
+                != runtime::simir::ContainerElementKind::Scalar)) {
+        return false;
+    }
+
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(element.declaration);
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->type) {
+        return false;
+    }
+    const auto source_scope = declaration->systemverilog->scope;
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    auto source_container = resolver.effective_systemverilog_type(
+        *declaration->systemverilog->type, source_scope);
+    if (!source_container
+        || source_container->container_form != TypeForm::dynamic_array
+        || source_container->container_element_types.size() > 1U) {
+        return false;
+    }
+    auto source_element_type = source_container->container_element_types
+            .empty()
+        ? *source_container
+        : source_container->container_element_types.front();
+    if (source_container->container_element_types.empty()) {
+        source_element_type.container_form.reset();
+        source_element_type.queue_maximum.reset();
+        source_element_type.associative_index.reset();
+        source_element_type.unpacked_dimensions.clear();
+        source_element_type.container_element_types.clear();
+    }
+    auto source_member_type = resolver.effective_systemverilog_type(
+        source_element_type, source_scope);
+    if (!source_member_type) {
+        return false;
+    }
+
+    // Do not synthesize a member default when the source declares an explicit
+    // struct-member initializer: Table 7-1 delegates that value to 7.2.2.
+    for (const auto member_index : selection.members) {
+        if (!source_member_type->target.target.valid()) {
+            return false;
+        }
+        const auto definition = specialized_hir_unit_->find_type(
+            source_member_type->target.target);
+        if (!definition || definition->systemverilog == nullptr
+            || definition->systemverilog->form
+                != TypeForm::unpacked_structure
+            || member_index >= definition->systemverilog->members.size()) {
+            return false;
+        }
+        const auto& member
+            = definition->systemverilog->members[member_index];
+        if (member.initializer) {
+            return false;
+        }
+        const auto type_declaration
+            = specialized_hir_unit_->find_declaration(
+                definition->systemverilog->declaration);
+        const auto type_scope = type_declaration
+                && type_declaration->systemverilog != nullptr
+            ? type_declaration->systemverilog->scope
+            : source_scope;
+        source_member_type = resolver.effective_systemverilog_type(
+            member.type, type_scope);
+        if (!source_member_type) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::optional<Lowerer::HirPackedContainerAggregateProfile>

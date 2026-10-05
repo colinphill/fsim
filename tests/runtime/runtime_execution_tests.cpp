@@ -17,7 +17,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace fsim::tests::runtime {
 
@@ -1212,6 +1214,87 @@ void test_simir_postponed_process_ordering()
             && coverage_samples == 1
             && coverage_queries == 2,
         "coverage sample and both query boundaries must execute exactly once");
+
+    {
+        Interpreter re_nba_runtime;
+        const auto signal = re_nba_runtime.add_signal(
+            { "program.re_nba", PackedLogic4::from_msb_string("0") });
+        Process program;
+        program.id = 0U;
+        program.name = "program_re_nba_origin";
+        program.scheduling_domain
+            = ProcessSchedulingDomain::systemverilog;
+        program.reactive = true;
+        program.register_count = 1U;
+        program.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+            WriteAfter {
+                signal, 0U, 1U,
+                SignalUpdateDomain::systemverilog_nba },
+            WaitFor { 1U },
+            Display { "reactive", true },
+            WaitFor { 0U },
+            Display { "re-inactive", true },
+            Halt { },
+        };
+        (void)re_nba_runtime.add_process(std::move(program));
+
+        struct Observation {
+            std::string text;
+            std::string value;
+            SchedulerPhase phase { SchedulerPhase::active };
+            bool operator==(const Observation&) const = default;
+        };
+        struct Change {
+            SimulationTick time { };
+            std::string value;
+            SchedulerPhase phase { SchedulerPhase::active };
+            bool operator==(const Change&) const = default;
+        };
+        std::vector<Observation> observations;
+        std::vector<Change> changes;
+        re_nba_runtime.set_output_hook(
+            [&](const ProcessId,
+                const std::string_view text,
+                const bool,
+                const SimulationTick,
+                const std::uint64_t) {
+                observations.push_back({
+                    std::string { text },
+                    re_nba_runtime.signal_value(signal).to_msb_string(),
+                    re_nba_runtime.scheduler().current_phase().value_or(
+                        SchedulerPhase::active),
+                });
+            });
+        re_nba_runtime.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4& value,
+                const SimulationTick time) {
+                if (changed != signal) {
+                    return;
+                }
+                changes.push_back({
+                    time,
+                    value.to_msb_string(),
+                    re_nba_runtime.scheduler().current_phase().value_or(
+                        SchedulerPhase::active),
+                });
+            });
+
+        require(
+            re_nba_runtime.run().status == RunStatus::completed
+                && observations
+                    == std::vector<Observation> {
+                        { "reactive", "0", SchedulerPhase::reactive },
+                        { "re-inactive", "0", SchedulerPhase::re_inactive },
+                    }
+                && changes
+                    == std::vector<Change> {
+                        { 1U, "1", SchedulerPhase::re_update },
+                    },
+            "a program's delayed NBA remains pending through Reactive and "
+            "Re-Inactive before publishing in Re-NBA");
+    }
 }
 
 void test_simir_design_stop_identity()
@@ -2205,6 +2288,7 @@ void test_simir_alternate_executor_validated_logic9_std_logic_batch()
         blocking_after_native,
         same_value_before_blocking,
         same_value_after_staged,
+        malformed_raw_batch,
         forced_fallback,
         force_after_native,
         second_driver_fallback,
@@ -2289,6 +2373,31 @@ void test_simir_alternate_executor_validated_logic9_std_logic_batch()
                 context.write_blocking(output_,
                     PackedLogic4::from_logic9_msb_string("000000010"));
                 break;
+            case Mode::malformed_raw_batch: {
+                constexpr std::array<std::uint8_t, 9U> codes {
+                    9U, 10U, 11U, 12U, 13U, 14U, 15U, 2U, 8U
+                };
+                std::array<std::uint64_t, 4U> planes { };
+                for (std::size_t bit = 0; bit < codes.size(); ++bit) {
+                    for (std::size_t plane = 0; plane < planes.size(); ++plane) {
+                        if (((codes[bit] >> plane) & 1U) != 0U) {
+                            planes[plane] |= std::uint64_t { 1 } << bit;
+                        }
+                    }
+                }
+                std::uint64_t mask = UINT64_C(0x1ff);
+                const ProcessLogic9UpdateSlotView slot {
+                    output_, 9U, planes.data(), &mask
+                };
+                const ProcessLogic9UpdateBatch batch {
+                    process_, std::span { &slot, 1U }
+                };
+                probe_->consumed
+                    = context.write_validated_logic9_update_batch(batch);
+                require(probe_->consumed && mask == 0U,
+                    "malformed Logic9 batch should be consumed after normalization");
+                break;
+            }
             case Mode::forced_fallback:
             case Mode::second_driver_fallback:
                 probe_->rejected_with_mask = !stage(0x1ffU, target);
@@ -2320,6 +2429,7 @@ void test_simir_alternate_executor_validated_logic9_std_logic_batch()
              Mode::blocking_after_native,
              Mode::same_value_before_blocking,
              Mode::same_value_after_staged,
+             Mode::malformed_raw_batch,
              Mode::forced_fallback, Mode::force_after_native,
              Mode::second_driver_fallback,
              Mode::dynamic_observer,
@@ -2426,6 +2536,12 @@ void test_simir_alternate_executor_validated_logic9_std_logic_batch()
         } else if (mode == Mode::same_value_after_staged) {
             require(value == "000000001",
                 "staged same-value mask must survive later blocking write");
+        } else if (mode == Mode::malformed_raw_batch) {
+            if (value != "-0XXXXXXX") {
+                throw std::runtime_error(
+                    "checked Logic9 batch ingress produced '" + value
+                    + "' instead of '-0XXXXXXX'");
+            }
         } else if (mode != Mode::second_driver_fallback) {
             require(value == "UX01ZWLH-",
                 "Logic9 batch must preserve all nine states and ordering");
@@ -2493,18 +2609,28 @@ void test_simir_alternate_executor_zero_delay_and_frame()
     using namespace fsim::runtime::simir;
 
     const auto make_process =
-        [](const SignalId active_output, const SignalId inactive_output) {
+        [](const SignalId active_output,
+            const SignalId inactive_output,
+            const ProcessSchedulingDomain domain
+                = ProcessSchedulingDomain::generic,
+            const bool external_wait = false) {
             Process process;
             process.id = 0;
             process.name = "zero_delay_frame";
             process.register_count = 1;
-            process.operations = {
-                LoadConstant { 0, PackedLogic4::from_msb_string("1") },
-                WriteBlocking { active_output, 0 },
-                WaitFor { 0 },
-                WriteBlocking { inactive_output, 0 },
-                Halt { },
-            };
+            process.scheduling_domain = domain;
+            if (external_wait) {
+                process.operations = { WaitFor { 0 }, Halt { } };
+            } else {
+                process.operations = {
+                    LoadConstant {
+                        0, PackedLogic4::from_msb_string("1") },
+                    WriteBlocking { active_output, 0 },
+                    WaitFor { 0 },
+                    WriteBlocking { inactive_output, 0 },
+                    Halt { },
+                };
+            }
             return process;
         };
 
@@ -2518,6 +2644,7 @@ void test_simir_alternate_executor_zero_delay_and_frame()
     (void)reference.add_process(
         make_process(reference_active, reference_inactive));
     std::vector<Change> reference_changes;
+    std::vector<std::uint64_t> reference_deltas;
     reference.set_signal_change_hook(
         [&](const SignalId signal,
             const PackedLogic4& value,
@@ -2526,6 +2653,7 @@ void test_simir_alternate_executor_zero_delay_and_frame()
             require(phase.has_value(), "reference change must occur in a phase");
             reference_changes.emplace_back(
                 signal, std::pair { *phase, value.to_msb_string() });
+            reference_deltas.push_back(reference.scheduler().delta());
         });
     const auto reference_result = reference.run();
 
@@ -2549,18 +2677,25 @@ void test_simir_alternate_executor_zero_delay_and_frame()
             const auto phase = scheduler_.current_phase();
             require(phase.has_value(), "alternate resume must occur in a phase");
             phases.push_back(*phase);
+            deltas.push_back(scheduler_.delta());
             if (start == 0) {
                 frame_register_ = PackedLogic4::from_msb_string("1");
                 context.write_blocking(active_output_, frame_register_);
-                return { 2, 3 };
+                ProcessResumeResult result { 0, 1 };
+                result.external.kind = ExternalSuspendKind::wait_for;
+                result.external.delay = 0;
+                return result;
             }
-            require(start == 3, "zero-delay executor resumed at the wrong PC");
+            require(start == 1, "zero-delay executor resumed at the wrong PC");
             context.write_blocking(inactive_output_, frame_register_);
-            return { 4, 5 };
+            ProcessResumeResult result { 1, 2 };
+            result.external.kind = ExternalSuspendKind::halt;
+            return result;
         }
 
         std::vector<InstructionIndex> starts;
         std::vector<SchedulerPhase> phases;
+        std::vector<std::uint64_t> deltas;
 
     private:
         Scheduler& scheduler_;
@@ -2575,13 +2710,16 @@ void test_simir_alternate_executor_zero_delay_and_frame()
     const auto alternate_inactive = alternate.add_signal(
         { "top.inactive_output", PackedLogic4::from_msb_string("0") });
     const auto alternate_process = alternate.add_process(
-        make_process(alternate_active, alternate_inactive));
+        make_process(
+            alternate_active, alternate_inactive,
+            ProcessSchedulingDomain::generic, true));
     auto executor = std::make_unique<ZeroDelayExecutor>(
         alternate.scheduler(), alternate_active, alternate_inactive);
     auto* const executor_probe = executor.get();
     alternate.set_process_executor(
         alternate_process, std::move(executor));
     std::vector<Change> alternate_changes;
+    std::vector<std::uint64_t> alternate_deltas;
     alternate.set_signal_change_hook(
         [&](const SignalId signal,
             const PackedLogic4& value,
@@ -2590,16 +2728,18 @@ void test_simir_alternate_executor_zero_delay_and_frame()
             require(phase.has_value(), "alternate change must occur in a phase");
             alternate_changes.emplace_back(
                 signal, std::pair { *phase, value.to_msb_string() });
+            alternate_deltas.push_back(alternate.scheduler().delta());
         });
     const auto alternate_result = alternate.run();
 
     const std::vector<Change> expected_changes = {
         { reference_active, { SchedulerPhase::active, "1" } },
-        { reference_inactive, { SchedulerPhase::inactive, "1" } },
+        { reference_inactive, { SchedulerPhase::active, "1" } },
     };
     require(
-        reference_changes == expected_changes,
-        "WaitFor{0} must resume the interpreter in the inactive phase");
+        reference_changes == expected_changes
+            && reference_deltas == std::vector<std::uint64_t> { 0U, 1U },
+        "generic WaitFor{0} must resume in the next generic delta");
     require(
         reference_result.status == RunStatus::completed
             && reference_result.time == 0
@@ -2609,16 +2749,178 @@ void test_simir_alternate_executor_zero_delay_and_frame()
             && alternate_result.delta == reference_result.delta
             && alternate_result.callbacks_executed
                 == reference_result.callbacks_executed
-            && alternate_changes == reference_changes,
+            && alternate_changes == reference_changes
+            && alternate_deltas == reference_deltas,
         "alternate WaitFor{0} behavior must match the interpreter");
     require(
         executor_probe->starts
-                == std::vector<InstructionIndex> { 0, 3 }
+                == std::vector<InstructionIndex> { 0, 1 }
             && executor_probe->phases
                 == std::vector<SchedulerPhase> {
-                    SchedulerPhase::active, SchedulerPhase::inactive }
+                    SchedulerPhase::active, SchedulerPhase::active }
+            && executor_probe->deltas
+                == std::vector<std::uint64_t> { 0U, 1U }
             && alternate.signal_value(alternate_inactive) == reference.signal_value(reference_inactive),
         "alternate frame state and resume PC must persist across WaitFor{0}");
+
+    Interpreter sv_reference;
+    const auto sv_reference_active = sv_reference.add_signal(
+        { "top.sv_active_output", PackedLogic4::from_msb_string("0") });
+    const auto sv_reference_inactive = sv_reference.add_signal(
+        { "top.sv_inactive_output", PackedLogic4::from_msb_string("0") });
+    (void)sv_reference.add_process(make_process(
+        sv_reference_active, sv_reference_inactive,
+        ProcessSchedulingDomain::systemverilog));
+    std::vector<Change> sv_reference_changes;
+    sv_reference.set_signal_change_hook(
+        [&](const SignalId signal,
+            const PackedLogic4& value,
+            const SimulationTick) {
+            const auto phase = sv_reference.scheduler().current_phase();
+            require(phase.has_value(), "SV reference change must occur in a phase");
+            sv_reference_changes.emplace_back(
+                signal, std::pair { *phase, value.to_msb_string() });
+        });
+    const auto sv_reference_result = sv_reference.run();
+
+    Interpreter sv_alternate;
+    const auto sv_alternate_active = sv_alternate.add_signal(
+        { "top.sv_active_output", PackedLogic4::from_msb_string("0") });
+    const auto sv_alternate_inactive = sv_alternate.add_signal(
+        { "top.sv_inactive_output", PackedLogic4::from_msb_string("0") });
+    const auto sv_alternate_process = sv_alternate.add_process(make_process(
+        sv_alternate_active, sv_alternate_inactive,
+        ProcessSchedulingDomain::systemverilog, true));
+    auto sv_executor = std::make_unique<ZeroDelayExecutor>(
+        sv_alternate.scheduler(), sv_alternate_active,
+        sv_alternate_inactive);
+    auto* const sv_executor_probe = sv_executor.get();
+    sv_alternate.set_process_executor(
+        sv_alternate_process, std::move(sv_executor));
+    std::vector<Change> sv_alternate_changes;
+    sv_alternate.set_signal_change_hook(
+        [&](const SignalId signal,
+            const PackedLogic4& value,
+            const SimulationTick) {
+            const auto phase = sv_alternate.scheduler().current_phase();
+            require(phase.has_value(), "SV alternate change must occur in a phase");
+            sv_alternate_changes.emplace_back(
+                signal, std::pair { *phase, value.to_msb_string() });
+        });
+    const auto sv_alternate_result = sv_alternate.run();
+    const std::vector<Change> expected_sv_changes = {
+        { sv_reference_active, { SchedulerPhase::active, "1" } },
+        { sv_reference_inactive, { SchedulerPhase::inactive, "1" } },
+    };
+    require(
+        sv_reference_changes == expected_sv_changes
+            && sv_alternate_changes == sv_reference_changes
+            && sv_reference_result.status == RunStatus::completed
+            && sv_alternate_result.status == sv_reference_result.status
+            && sv_alternate_result.time == sv_reference_result.time
+            && sv_executor_probe->starts
+                == std::vector<InstructionIndex> { 0U, 1U }
+            && sv_executor_probe->phases
+                == std::vector<SchedulerPhase> {
+                    SchedulerPhase::active, SchedulerPhase::inactive }
+            && sv_executor_probe->deltas
+                == std::vector<std::uint64_t> { 0U, 0U },
+        "SV WaitFor{0} must resume in Inactive for interpreter and external executors");
+}
+
+void test_simir_static_sensitivity_domain_cohorts()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    struct Dispatch {
+        ProcessId process { };
+        SchedulerPhase phase { SchedulerPhase::active };
+        std::uint64_t delta { };
+        std::uint64_t systemverilog_round { };
+    };
+
+    Interpreter interpreter;
+    const auto trigger = interpreter.add_signal(
+        { "top.domain_trigger", PackedLogic4::from_msb_string("0") });
+
+    Process generic;
+    generic.id = 0;
+    generic.name = "generic_static_observer";
+    generic.static_sensitivity = { { trigger, EdgeKind::any } };
+    generic.operations = {
+        WaitSensitivity { },
+        Display { "generic observer", true },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    const auto generic_id = interpreter.add_process(std::move(generic));
+
+    Process systemverilog;
+    systemverilog.id = 1;
+    systemverilog.name = "systemverilog_static_observer";
+    systemverilog.scheduling_domain
+        = ProcessSchedulingDomain::systemverilog;
+    systemverilog.static_sensitivity = { { trigger, EdgeKind::any } };
+    systemverilog.operations = {
+        WaitSensitivity { },
+        Display { "systemverilog observer", true },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    const auto systemverilog_id
+        = interpreter.add_process(std::move(systemverilog));
+
+    Process driver;
+    driver.id = 2;
+    driver.name = "domain_trigger_driver";
+    driver.register_count = 1U;
+    driver.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+        WaitFor { 1U },
+        WriteBlocking { trigger, 0U },
+        Halt { },
+    };
+    (void)interpreter.add_process(std::move(driver));
+
+    std::vector<Dispatch> dispatches;
+    interpreter.set_output_hook(
+        [&](const ProcessId process,
+            const std::string_view,
+            const bool,
+            const SimulationTick,
+            const std::uint64_t) {
+            const auto phase = interpreter.scheduler().current_phase();
+            require(phase.has_value(),
+                "static domain observer must run in a scheduler phase");
+            dispatches.push_back({
+                process,
+                *phase,
+                interpreter.scheduler().delta(),
+                interpreter.scheduler().systemverilog_round(),
+            });
+        });
+
+    const auto result = interpreter.run();
+    const auto generic_dispatch = std::ranges::find(
+        dispatches, generic_id, &Dispatch::process);
+    const auto systemverilog_dispatch = std::ranges::find(
+        dispatches, systemverilog_id, &Dispatch::process);
+    require(
+        result.status == RunStatus::completed
+            && dispatches.size() == 2U
+            && generic_dispatch != dispatches.end()
+            && systemverilog_dispatch != dispatches.end(),
+        "same-sensitivity processes in different domains both wake");
+    require(
+        generic_dispatch->phase == SchedulerPhase::active
+            && generic_dispatch->delta > 0U
+            && generic_dispatch->systemverilog_round == 0U,
+        "generic static observer retains the generic next-delta route");
+    require(
+        systemverilog_dispatch->phase == SchedulerPhase::active
+            && systemverilog_dispatch->systemverilog_round > 0U,
+        "SystemVerilog static observer enters an SV scheduler round");
 }
 
 void test_simir_alternate_executor_cpp_exception_containment()
@@ -2705,6 +3007,24 @@ void test_simir_native_signal_dependency_masks()
 #else
             if (::setenv(name_.c_str(), value, 1) != 0) {
                 throw std::runtime_error("failed to set profile environment");
+            }
+#endif
+        }
+
+        explicit ScopedEnvironment(const char* name)
+            : name_ { name }
+        {
+            if (const auto* previous = std::getenv(name_.c_str())) {
+                had_previous_ = true;
+                previous_ = previous;
+            }
+#if defined(_WIN32)
+            if (::_putenv_s(name_.c_str(), "") != 0) {
+                throw std::runtime_error("failed to unset test environment");
+            }
+#else
+            if (::unsetenv(name_.c_str()) != 0) {
+                throw std::runtime_error("failed to unset test environment");
             }
 #endif
         }
@@ -2886,11 +3206,179 @@ void test_simir_native_signal_dependency_masks()
                     == "1",
             "sampled, path, timing, and monitor dependencies retain checked updates");
     }
+    const auto profile_counter = [](const std::string_view profile,
+                                     const std::string_view name) {
+        const auto key = std::string { name } + '=';
+        const auto position = profile.find(key);
+        require(position != std::string_view::npos,
+            "native publication profile counter is present");
+        const auto value_start = position + key.size();
+        const auto value_end = profile.find_first_of(" \n", value_start);
+        return static_cast<std::uint64_t>(std::stoull(std::string {
+            profile.substr(value_start, value_end - value_start) }));
+    };
+
     const auto summary = profile_output.str();
+    const auto native_line_start
+        = summary.find("fsim-profile: native-phase ");
+    require(native_line_start != std::string::npos,
+        "native publication profile line is present");
+    const auto native_line_end = summary.find('\n', native_line_start);
+    const auto initial_native_line = std::string_view { summary }.substr(
+        native_line_start, native_line_end - native_line_start);
     require(
         summary.find("published=1") != std::string::npos
-            && summary.find("rejected_structure=4") != std::string::npos,
-        "only the unrelated signal publishes while dependent signals fall back");
+            && summary.find("rejected_structure=4") != std::string::npos
+            && profile_counter(initial_native_line,
+                   "shape_certificate_hits") > 0U
+            && profile_counter(initial_native_line,
+                   "shape_certificate_misses") > 0U,
+        "one certified signal publishes while dependent signals fall back");
+
+    enum class MutationCase : std::uint8_t {
+        late_observer,
+        deposit,
+        force,
+        multiple_writers,
+    };
+    struct MutationResult {
+        RunStatus status { RunStatus::completed };
+        SimulationTick time { };
+        std::uint64_t delta { };
+        std::string visible;
+        std::string after_release;
+        std::uint64_t publications { };
+    };
+    class SingleWordWriter final : public ProcessExecutor {
+    public:
+        SingleWordWriter(const SignalId signal, const Logic4Word value)
+            : signal_ { signal }
+            , value_ { value }
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext& context,
+            const InstructionIndex start) override
+        {
+            require(start == 0U, "publication witness starts at zero");
+            const ProcessUpdateWord update {
+                signal_, value_, 0U, false
+            };
+            context.write_validated_update_words(
+                std::span { &update, 1U });
+            ProcessResumeResult result { 0U, 1U };
+            result.external.kind = ExternalSuspendKind::halt;
+            return result;
+        }
+
+    private:
+        SignalId signal_ { };
+        Logic4Word value_ { };
+    };
+
+    const auto run_mutation_case = [&](const MutationCase mutation,
+                                       const bool disable_direct_commit) {
+        const auto profile_begin = profile_output.str().size();
+        std::unique_ptr<Interpreter> owned_interpreter;
+        if (disable_direct_commit) {
+            ScopedEnvironment direct_commit_environment {
+                "FSIM_DISABLE_DIRECT_WORD_COMMIT", "1"
+            };
+            owned_interpreter = std::make_unique<Interpreter>();
+        } else {
+            ScopedEnvironment direct_commit_environment {
+                "FSIM_DISABLE_DIRECT_WORD_COMMIT"
+            };
+            owned_interpreter = std::make_unique<Interpreter>();
+        }
+        auto& simulation = *owned_interpreter;
+        const auto output = simulation.add_signal({
+            "publication.runtime_mutation",
+            PackedLogic4::from_msb_string("0"),
+            ResolutionKind::sv_wire
+        });
+        const auto add_writer = [&](const ProcessId id,
+                                    const char* name,
+                                    const Logic4Word value) {
+            Process process;
+            process.id = id;
+            process.name = name;
+            process.operations = { Halt { } };
+            process.driver_regions.push_back({ output, 0U, 0U, true });
+            const auto process_id = simulation.add_process(
+                std::move(process));
+            simulation.set_process_executor(process_id,
+                std::make_unique<SingleWordWriter>(output, value));
+        };
+        add_writer(0U, "publication.writer", Logic4Word { 1U, 0U, 0U });
+        if (mutation == MutationCase::multiple_writers) {
+            add_writer(1U, "publication.second_writer",
+                Logic4Word { 1U, 1U, 0U });
+        }
+
+        simulation.start();
+        if (mutation == MutationCase::late_observer) {
+            const auto& retained = simulation.signal_value(output);
+            (void)retained;
+        } else if (mutation == MutationCase::deposit) {
+            simulation.deposit_signal(
+                output, PackedLogic4::from_msb_string("1"));
+        } else if (mutation == MutationCase::force) {
+            simulation.force_signal(
+                output, PackedLogic4::from_msb_string("1"));
+        }
+
+        const auto run = simulation.run();
+        MutationResult result;
+        result.status = run.status;
+        result.time = run.time;
+        result.delta = run.delta;
+        result.visible = simulation.signal_value_snapshot(output)
+                             .to_msb_string();
+        if (mutation == MutationCase::force) {
+            simulation.release_signal(output);
+            result.after_release = simulation.signal_value_snapshot(output)
+                                       .to_msb_string();
+        }
+        owned_interpreter.reset();
+
+        const auto profile_all = profile_output.str();
+        const auto profile = std::string_view { profile_all }.substr(
+            profile_begin);
+        const auto line_start = profile.find("fsim-profile: native-phase ");
+        require(line_start != std::string_view::npos,
+            "mutation witness emits its native publication profile");
+        const auto line_end = profile.find('\n', line_start);
+        const auto native_line = profile.substr(
+            line_start, line_end - line_start);
+        result.publications = profile_counter(native_line, "published");
+        return result;
+    };
+
+    for (const auto mutation : {
+             MutationCase::late_observer,
+             MutationCase::deposit,
+             MutationCase::force,
+             MutationCase::multiple_writers }) {
+        const auto direct = run_mutation_case(mutation, false);
+        const auto checked = run_mutation_case(mutation, true);
+        require(direct.status == checked.status
+                && direct.time == checked.time
+                && direct.delta == checked.delta
+                && direct.visible == checked.visible
+                && direct.after_release == checked.after_release,
+            "cached publication shape preserves runtime mutation semantics");
+        if (mutation == MutationCase::late_observer) {
+            require(direct.publications == 0U,
+                "late observation uses checked publication");
+        }
+        if (mutation == MutationCase::force
+            || mutation == MutationCase::multiple_writers) {
+            require(direct.publications == 0U,
+                "force and ambiguous writer ownership use checked publication");
+        }
+    }
 }
 
 

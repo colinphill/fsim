@@ -416,6 +416,7 @@ decltype(auto) visit_operation(
 /// non-const access materializes the instance-specific program.
 struct Process;
 struct Signal;
+namespace operation_list_detail { struct ShareAccess; }
 
 class OperationList {
 public:
@@ -496,9 +497,9 @@ public:
     OperationList(std::initializer_list<Operation> operations);
     OperationList(const Storage& operations);
     OperationList(Storage&& operations);
-    OperationList(const OperationList&) noexcept = default;
+    OperationList(const OperationList&) = default;
     OperationList(OperationList&&) noexcept = default;
-    OperationList& operator=(const OperationList&) noexcept = default;
+    OperationList& operator=(const OperationList&) = default;
     OperationList& operator=(OperationList&&) noexcept = default;
     OperationList& operator=(std::initializer_list<Operation> operations);
     OperationList& operator=(const Storage& operations);
@@ -522,6 +523,24 @@ public:
     [[nodiscard]] Operation& back();
     [[nodiscard]] const Operation* data() const noexcept;
     [[nodiscard]] Operation* data();
+
+    /// Return the in-memory identity of the immutable program body. The
+    /// pointer is only suitable for grouping objects that are alive at the
+    /// same time; archives must assign their own deterministic identifiers.
+    [[nodiscard]] const void* body_identity() const noexcept;
+
+    /// Revision of the executable body and per-instance access metadata.
+    /// A saturated revision is not suitable for an execution binding.
+    [[nodiscard]] std::uint64_t access_revision() const noexcept
+    {
+        return access_revision_;
+    }
+
+    /// Return the sorted instruction overrides that expand this instance
+    /// from its shared body. Signal and debug-scope remaps are materialized
+    /// only for instructions that actually reference a remapped value.
+    [[nodiscard]] std::vector<std::pair<size_type, Operation>>
+    instance_operation_overrides() const;
 
     [[nodiscard]] const_iterator begin() const noexcept;
     [[nodiscard]] const_iterator end() const noexcept;
@@ -613,6 +632,7 @@ private:
 
     [[nodiscard]] const Storage& storage() const noexcept;
     [[nodiscard]] Storage& mutable_storage();
+    void advance_access_revision() noexcept;
     void reset(Storage operations);
     void apply_instance_fields(Operation& operation, size_type index) const;
 
@@ -625,7 +645,9 @@ private:
     std::vector<CoverageHitOverride> coverage_hit_overrides_;
     std::vector<DebugScopeOverride> debug_scope_overrides_;
     std::uint64_t operation_override_filter_ { };
+    std::uint64_t access_revision_ { };
 
     friend bool share_process_operations(
         const Process&, Process&, std::span<const Signal>, Storage*);
+    friend struct operation_list_detail::ShareAccess;
 };

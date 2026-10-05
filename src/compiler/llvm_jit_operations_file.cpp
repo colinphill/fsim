@@ -24,8 +24,8 @@ FileOperationLowerer::FileOperationLowerer(
     llvm::Value* context_pointer_value,
     const std::uint32_t process_value,
     const std::uint32_t instruction_value,
-    llvm::StructType* runtime_type,
-    llvm::Value* runtime_argument,
+    llvm::StructType* services_type,
+    llvm::Value* services_argument,
     std::function<void(
         llvm::Value*,
         JitGeneratedRuntimeErrorReason,
@@ -43,11 +43,20 @@ FileOperationLowerer::FileOperationLowerer(
       runtime_error_if(std::move(runtime_error_if_value)),
       branch_to_next(std::move(branch_to_next_value)) {
   auto* pointer = llvm::PointerType::getUnqual(context);
-  for (unsigned index = 0; index < callbacks.size(); ++index) {
-    callbacks[index] = builder.CreateLoad(
-        pointer,
-        builder.CreateStructGEP(
-            runtime_type, runtime_argument, 56U + index),
+  constexpr std::array service_fields {
+      JitServiceField::file_open,
+      JitServiceField::file_close,
+      JitServiceField::file_write,
+      JitServiceField::file_read_line,
+      JitServiceField::file_end_of_file,
+      JitServiceField::file_error
+  };
+  for (std::size_t index = 0; index < callbacks.size(); ++index) {
+    callbacks[index] = load_jit_service_callback(
+        builder,
+        services_type,
+        services_argument,
+        service_fields[index],
         "file.callback." + std::to_string(index));
   }
   callback_types = {
@@ -64,9 +73,11 @@ FileOperationLowerer::FileOperationLowerer(
       llvm::FunctionType::get(
           i32, {pointer, i32, i32, i64, i64, pointer}, false),
   };
-  generic_callback = builder.CreateLoad(
-      pointer,
-      builder.CreateStructGEP(runtime_type, runtime_argument, 62U),
+  generic_callback = load_jit_service_callback(
+      builder,
+      services_type,
+      services_argument,
+      JitServiceField::container_operation,
       "file.generic.callback");
   generic_callback_type = llvm::FunctionType::get(
       i32,

@@ -2,6 +2,8 @@
 #include "llvm_jit_lowering_internal.hpp"
 
 #include <llvm/IR/Constants.h>
+
+#include <array>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Module.h>
 
@@ -26,8 +28,8 @@ StringOperationLowerer::StringOperationLowerer(
     llvm::Value* context_pointer_value,
     const std::uint32_t process_value,
     const std::uint32_t instruction_value,
-    llvm::StructType* runtime_type,
-    llvm::Value* runtime_argument,
+    llvm::StructType* services_type,
+    llvm::Value* services_argument,
     std::function<void(
         llvm::Value*,
         JitGeneratedRuntimeErrorReason,
@@ -45,11 +47,24 @@ StringOperationLowerer::StringOperationLowerer(
       runtime_error_if(std::move(runtime_error_if_value)),
       branch_to_next(std::move(branch_to_next_value)) {
   auto* pointer = llvm::PointerType::getUnqual(context);
-  for (unsigned index = 0; index < callbacks.size(); ++index) {
-    callbacks[index] = builder.CreateLoad(
-        pointer,
-        builder.CreateStructGEP(
-            runtime_type, runtime_argument, 46U + index),
+  constexpr std::array service_fields {
+      JitServiceField::load_string,
+      JitServiceField::copy_string,
+      JitServiceField::read_string_object,
+      JitServiceField::write_string_object,
+      JitServiceField::concatenate_strings,
+      JitServiceField::compare_strings,
+      JitServiceField::string_length,
+      JitServiceField::string_index,
+      JitServiceField::string_replace_byte,
+      JitServiceField::write_string_output
+  };
+  for (std::size_t index = 0; index < callbacks.size(); ++index) {
+    callbacks[index] = load_jit_service_callback(
+        builder,
+        services_type,
+        services_argument,
+        service_fields[index],
         "string.callback." + std::to_string(index));
   }
   callback_types = {

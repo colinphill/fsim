@@ -1,12 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_operation_list_sharing.hpp"
 
 #include <array>
+#include <atomic>
 #include <mutex>
 
 namespace fsim::runtime::simir {
 
 namespace {
+
+std::uint64_t next_operation_list_access_revision() noexcept
+{
+    static std::atomic_uint64_t next { 1U };
+    auto candidate = next.load(std::memory_order_relaxed);
+    for (;;) {
+        if (candidate == std::numeric_limits<std::uint64_t>::max()) {
+            return candidate;
+        }
+        if (next.compare_exchange_weak(candidate, candidate + 1U,
+                std::memory_order_relaxed, std::memory_order_relaxed)) {
+            return candidate;
+        }
+    }
+}
 
 struct InternedStringBucket {
     std::mutex mutex;
@@ -36,6 +53,75 @@ ExecutionPoint::ExecutionPoint(const ProcessId execution_process,
     , language_standard(std::move(execution_language_standard))
     , compatibility_profile(std::move(execution_compatibility_profile))
 {
+}
+
+ProcessExecutorProgramBinding::ProcessExecutorProgramBinding(
+    const Process& registered_program,
+    const Process& generated_program,
+    const ProcessId executor_generated_process,
+    std::shared_ptr<const ProcessSignalRemap> signal_remap)
+    : registered_process_(registered_program.id)
+    , registered_body_(registered_program.operations.body_identity())
+    , registered_revision_(registered_program.operations.access_revision())
+    , generated_process_(executor_generated_process)
+    , generated_program_id_(generated_program.id)
+    , generated_body_(generated_program.operations.body_identity())
+    , generated_revision_(generated_program.operations.access_revision())
+    , signal_remap_(std::move(signal_remap))
+{
+}
+
+bool ProcessExecutorProgramBinding::matches_registered_program(
+    const ProcessId process, const Process& program) const noexcept
+{
+    return valid() && process == registered_process_
+        && program.id == registered_process_
+        && program.operations.body_identity() == registered_body_
+        && program.operations.access_revision() == registered_revision_;
+}
+
+bool ProcessExecutorProgramBinding::matches_forked_program(
+    const ProcessId process, const Process& program) const noexcept
+{
+    if (!valid() || program.id != process
+        || program.operations.body_identity() != registered_body_
+        || program.operations.access_revision() != registered_revision_) {
+        return false;
+    }
+    return true;
+}
+
+bool ProcessExecutorProgramBinding::same_execution_binding(
+    const ProcessExecutorProgramBinding& other) const noexcept
+{
+    if (!valid() || !other.valid()
+        || registered_process_ != other.registered_process_
+        || registered_body_ != other.registered_body_
+        || registered_revision_ != other.registered_revision_
+        || generated_process_ != other.generated_process_
+        || generated_program_id_ != other.generated_program_id_
+        || generated_body_ != other.generated_body_
+        || generated_revision_ != other.generated_revision_) {
+        return false;
+    }
+    if (!signal_remap_) {
+        return !other.signal_remap_ || other.signal_remap_->empty();
+    }
+    if (!other.signal_remap_) {
+        return signal_remap_->empty();
+    }
+    return *signal_remap_ == *other.signal_remap_;
+}
+
+bool ProcessExecutorProgramBinding::valid() const noexcept
+{
+    constexpr auto invalid_revision
+        = std::numeric_limits<std::uint64_t>::max();
+    return registered_body_ != nullptr && generated_body_ != nullptr
+        && registered_revision_ != 0U && generated_revision_ != 0U
+        && registered_revision_ != invalid_revision
+        && generated_revision_ != invalid_revision
+        && generated_process_ == generated_program_id_;
 }
 
 std::shared_ptr<const std::string> InternedString::intern(std::string value)
@@ -145,21 +231,25 @@ const Override* find_override(
 OperationList::OperationList()
     : storage_(std::make_shared<Storage>())
 {
+    advance_access_revision();
 }
 
 OperationList::OperationList(std::initializer_list<Operation> operations)
     : storage_(std::make_shared<Storage>(operations))
 {
+    advance_access_revision();
 }
 
 OperationList::OperationList(const Storage& operations)
     : storage_(std::make_shared<Storage>(operations))
 {
+    advance_access_revision();
 }
 
 OperationList::OperationList(Storage&& operations)
     : storage_(std::make_shared<Storage>(std::move(operations)))
 {
+    advance_access_revision();
 }
 
 OperationList& OperationList::operator=(
@@ -198,6 +288,12 @@ void OperationList::reset(Storage operations)
     coverage_hit_overrides_.clear();
     debug_scope_overrides_.clear();
     operation_override_filter_ = 0;
+    advance_access_revision();
+}
+
+void OperationList::advance_access_revision() noexcept
+{
+    access_revision_ = next_operation_list_access_revision();
 }
 
 OperationList::Storage& OperationList::mutable_storage()
@@ -217,6 +313,8 @@ OperationList::Storage& OperationList::mutable_storage()
             expanded.push_back(this->expanded(index));
         }
         reset(std::move(expanded));
+    } else {
+        advance_access_revision();
     }
     return *storage_;
 }
@@ -250,6 +348,77 @@ const Operation& OperationList::back() const { return at(size() - 1U); }
 Operation& OperationList::back() { return mutable_storage().back(); }
 const Operation* OperationList::data() const noexcept { return storage().data(); }
 Operation* OperationList::data() { return mutable_storage().data(); }
+const void* OperationList::body_identity() const noexcept
+{
+    return storage_.get();
+}
+
+std::vector<std::pair<OperationList::size_type, Operation>>
+OperationList::instance_operation_overrides() const
+{
+    std::vector<size_type> indices;
+    indices.reserve(debug_overrides_.size() + assert_overrides_.size()
+        + container_object_overrides_.size() + operation_overrides_.size()
+        + coverage_hit_overrides_.size());
+    const auto add_overrides = [&indices](const auto& overrides) {
+        for (const auto& override : overrides) {
+            indices.push_back(override.instruction);
+        }
+    };
+    add_overrides(debug_overrides_);
+    add_overrides(assert_overrides_);
+    add_overrides(container_object_overrides_);
+    add_overrides(operation_overrides_);
+    add_overrides(coverage_hit_overrides_);
+
+    if (!signal_remap_.empty() || !debug_scope_overrides_.empty()) {
+        for (size_type index = 0; index < size(); ++index) {
+            bool affected = false;
+            visit_operation(
+                [&](const auto& operation) {
+                    using Type = std::decay_t<decltype(operation)>;
+                    const auto is_remapped = [this](const SignalId signal_id) {
+                        return signal(signal_id) != signal_id;
+                    };
+                    if constexpr (std::is_same_v<Type, ReadSignal>) {
+                        affected = is_remapped(operation.signal)
+                            || (operation.clock
+                                && is_remapped(*operation.clock))
+                            || (operation.gate
+                                && is_remapped(*operation.gate));
+                    } else if constexpr (
+                        std::is_same_v<Type, WriteBlocking>
+                        || std::is_same_v<Type, WriteUpdate>
+                        || std::is_same_v<Type, WriteProjected>
+                        || std::is_same_v<Type, WriteBlockingSlice>
+                        || std::is_same_v<Type, WriteUpdateSlice>
+                        || std::is_same_v<Type, WriteProjectedSlice>
+                        || std::is_same_v<
+                            Type, WriteUpdateDynamicPartSlice>) {
+                        affected = is_remapped(operation.signal);
+                    } else if constexpr (std::is_same_v<Type, DebugPoint>) {
+                        affected = debug_scope(operation.scope)
+                            != operation.scope;
+                    }
+                },
+                storage()[index]);
+            if (affected) {
+                indices.push_back(index);
+            }
+        }
+    }
+
+    std::ranges::sort(indices);
+    const auto unique_end = std::ranges::unique(indices).begin();
+    indices.erase(unique_end, indices.end());
+
+    std::vector<std::pair<size_type, Operation>> result;
+    result.reserve(indices.size());
+    for (const auto index : indices) {
+        result.emplace_back(index, expanded(index));
+    }
+    return result;
+}
 OperationList::const_iterator OperationList::begin() const noexcept { return { this, 0U }; }
 OperationList::const_iterator OperationList::end() const noexcept { return { this, size() }; }
 OperationList::const_iterator OperationList::cbegin() const noexcept { return begin(); }
@@ -282,6 +451,7 @@ void OperationList::replace(const size_type index, Operation operation)
     }
     operation_override_filter_
         |= UINT64_C(1) << (index & 63U);
+    advance_access_revision();
 }
 
 SignalId OperationList::signal(const SignalId canonical) const noexcept
@@ -386,25 +556,74 @@ OperationList::signal_remap() const noexcept
     return signal_remap_;
 }
 
-bool share_process_operations(
-    const Process& representative,
-    Process& candidate,
-    const std::span<const Signal> signals,
+bool operation_list_detail::ShareAccess::shareable(
+    const OperationList& operations)
+{
+    return std::ranges::all_of(
+        operations,
+        [](const Operation& operation) {
+            bool shareable = false;
+            visit_operation(
+                [&](const auto& value) {
+                    using Type = std::decay_t<decltype(value)>;
+                    shareable = std::is_same_v<Type, DebugPoint>
+                        || std::is_same_v<Type, ReadSignal>
+                        || std::is_same_v<Type, WriteBlocking>
+                        || std::is_same_v<Type, WriteUpdate>
+                        || std::is_same_v<Type, WriteBlockingSlice>
+                        || std::is_same_v<Type, WriteUpdateSlice>
+                        || std::is_same_v<
+                            Type, WriteUpdateDynamicPartSlice>
+                        || std::is_same_v<Type, CopyRegister>
+                        || std::is_same_v<Type, IntegerCheck>
+                        || std::is_same_v<Type, LoadConstant>
+                        || std::is_same_v<Type, DynamicInsert>
+                        || std::is_same_v<Type, DynamicPartSelect>
+                        || std::is_same_v<Type, IntegerBinary>
+                        || std::is_same_v<Type, DynamicExtract>
+                        || std::is_same_v<Type, ReadContainerObject>
+                        || std::is_same_v<Type, ContainerRead>
+                        || std::is_same_v<Type, WriteProjected>
+                        || std::is_same_v<Type, WriteProjectedSlice>
+                        || std::is_same_v<Type, WaitSensitivity>
+                        || std::is_same_v<Type, CallableFramePop>
+                        || std::is_same_v<Type, CallableFramePush>
+                        || std::is_same_v<Type, Call>
+                        || std::is_same_v<Type, Jump>
+                        || std::is_same_v<Type, Halt>
+                        || std::is_same_v<Type, Binary>
+                        || std::is_same_v<Type, Assert>
+                        || std::is_same_v<Type, Report>
+                        || std::is_same_v<Type, UnaryNot>
+                        || std::is_same_v<Type, LogicalNot>
+                        || std::is_same_v<Type, LogicalBinary>
+                        || std::is_same_v<Type, Reduction>
+                        || std::is_same_v<Type, Shift>
+                        || std::is_same_v<Type, Concatenate>
+                        || std::is_same_v<Type, ConditionalSelect>
+                        || std::is_same_v<Type, Branch>
+                        || std::is_same_v<Type, Insert>
+                        || std::is_same_v<Type, Return>
+                        || std::is_same_v<Type, Extract>
+                        || std::is_same_v<Type, CodeCoverageHit>
+                        || std::is_same_v<Type, CoverageControl>
+                        || std::is_same_v<Type, CoverageAccess>;
+                },
+                operation);
+            return shareable;
+        });
+}
+
+template<typename SignalRecord>
+bool operation_list_detail::ShareAccess::share_impl(
+    const OperationList& representative, OperationList& candidate,
+    const std::span<const SignalRecord> signals,
     OperationList::Storage* const recycled_operations)
 {
-    if (representative.operations.size() != candidate.operations.size()
-        || representative.register_count != candidate.register_count
-        || representative.register_value_kinds
-            != candidate.register_value_kinds
-        || representative.string_register_count
-            != candidate.string_register_count
-        || representative.container_register_count
-            != candidate.container_register_count
-        || representative.container_register_types
-            != candidate.container_register_types) {
+    if (representative.size() != candidate.size()
+        || !shareable(representative) || !shareable(candidate)) {
         return false;
     }
-
     std::map<SignalId, SignalId> assigned;
     const auto map_signal = [&](const SignalId source,
                                 const SignalId target) {
@@ -426,16 +645,27 @@ bool share_process_operations(
     std::vector<OperationList::CoverageHitOverride> coverage_hit_overrides;
     std::vector<OperationList::DebugScopeOverride> debug_scope_overrides;
     for (std::size_t index = 0;
-         index < representative.operations.size(); ++index) {
+         index < representative.size(); ++index) {
         bool compatible = true;
         visit_operation(
             [&](const auto& left) {
                 using Type = std::decay_t<decltype(left)>;
                 const auto* right = operation_get_if<Type>(
-                    &candidate.operations[index]);
+                    &candidate[index]);
                 if (right == nullptr) {
                     compatible = false;
                     return;
+                }
+                if constexpr (requires { left.domain; right->domain; }) {
+                    using Domain
+                        = std::remove_cvref_t<decltype(left.domain)>;
+                    if constexpr (std::is_same_v<
+                                      Domain, SignalUpdateDomain>) {
+                        if (left.domain != right->domain) {
+                            compatible = false;
+                            return;
+                        }
+                    }
                 }
                 if constexpr (std::is_same_v<Type, DebugPoint>) {
                     if (left.kind != right->kind
@@ -478,7 +708,7 @@ bool share_process_operations(
                             || left.gate != right->gate)) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate.operations[index] });
+                                candidate[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteProjected>) {
@@ -490,7 +720,7 @@ bool share_process_operations(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate.operations[index] });
+                                candidate[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteProjectedSlice>) {
@@ -503,7 +733,7 @@ bool share_process_operations(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate.operations[index] });
+                                candidate[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteBlocking>
@@ -513,7 +743,7 @@ bool share_process_operations(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate.operations[index] });
+                                candidate[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteBlockingSlice>
@@ -524,7 +754,7 @@ bool share_process_operations(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate.operations[index] });
+                                candidate[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteUpdateDynamicPartSlice>) {
@@ -534,7 +764,7 @@ bool share_process_operations(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate.operations[index] });
+                                candidate[index] });
                     }
                 } else if constexpr (std::is_same_v<Type, LoadConstant>) {
                     compatible = left.destination == right->destination
@@ -614,6 +844,8 @@ bool share_process_operations(
                         && left.stack.capacity == right->stack.capacity;
                 } else if constexpr (std::is_same_v<Type, Jump>) {
                     compatible = left.target == right->target;
+                } else if constexpr (std::is_same_v<Type, Halt>) {
+                    compatible = left.program_exit == right->program_exit;
                 } else if constexpr (std::is_same_v<Type, Assert>) {
                     compatible = left.condition == right->condition
                         && left.severity == right->severity;
@@ -675,7 +907,7 @@ bool share_process_operations(
                     compatible = left.point == right->point
                         && left.metric == right->metric;
                     const auto right_counter
-                        = candidate.operations.code_coverage_counter(
+                        = candidate.code_coverage_counter(
                             index, right->counter);
                     if (compatible && left.counter != right_counter) {
                         coverage_hit_overrides.push_back(
@@ -709,97 +941,152 @@ bool share_process_operations(
                     compatible = false;
                 }
             },
-            representative.operations[index]);
+            representative[index]);
         if (!compatible) {
             return false;
         }
     }
 
     if (recycled_operations != nullptr
-        && candidate.operations.storage_
-        && candidate.operations.storage_.use_count() == 1) {
+        && candidate.storage_
+        && candidate.storage_.use_count() == 1) {
         *recycled_operations
-            = std::move(*candidate.operations.storage_);
+            = std::move(*candidate.storage_);
     }
-    candidate.operations.storage_ = representative.operations.storage_;
-    candidate.operations.signal_remap_.clear();
-    candidate.operations.debug_overrides_ = std::move(debug_overrides);
-    candidate.operations.assert_overrides_ = std::move(assert_overrides);
-    candidate.operations.container_object_overrides_
+    candidate.storage_ = representative.storage_;
+    candidate.signal_remap_.clear();
+    candidate.debug_overrides_ = std::move(debug_overrides);
+    candidate.assert_overrides_ = std::move(assert_overrides);
+    candidate.container_object_overrides_
         = std::move(container_object_overrides);
-    candidate.operations.operation_overrides_
+    candidate.operation_overrides_
         = std::move(operation_overrides);
-    candidate.operations.coverage_hit_overrides_
+    candidate.coverage_hit_overrides_
         = std::move(coverage_hit_overrides);
-    candidate.operations.debug_scope_overrides_
+    candidate.debug_scope_overrides_
         = std::move(debug_scope_overrides);
-    candidate.operations.operation_override_filter_ = 0;
-    for (const auto& override : candidate.operations.operation_overrides_) {
-        candidate.operations.operation_override_filter_
+    candidate.operation_override_filter_ = 0;
+    for (const auto& override : candidate.operation_overrides_) {
+        candidate.operation_override_filter_
             |= UINT64_C(1) << (override.instruction & 63U);
     }
-    if (representative.expression_profiles
+    candidate.advance_access_revision();
+    return true;
+}
+
+bool operation_list_detail::ShareAccess::share(
+    const OperationList& representative, OperationList& candidate,
+    const std::span<const Signal> signals,
+    OperationList::Storage* const recycled_operations)
+{
+    return share_impl(
+        representative, candidate, signals, recycled_operations);
+}
+
+bool operation_list_detail::ShareAccess::share(
+    const OperationList& representative, OperationList& candidate,
+    const std::span<const SignalHot> signals,
+    OperationList::Storage* const recycled_operations)
+{
+    return share_impl(
+        representative, candidate, signals, recycled_operations);
+}
+
+bool share_process_operations(
+    const Process& representative,
+    Process& candidate,
+    const std::span<const Signal> signals,
+    OperationList::Storage* const recycled_operations)
+{
+    const ProcessProgramView representative_view { representative };
+    return process_program_detail::share_operations(
+        representative_view, candidate, signals, recycled_operations);
+}
+
+bool process_program_detail::operation_list_shareable(
+    const OperationList& operations)
+{
+    return operation_list_detail::ShareAccess::shareable(operations);
+}
+
+bool process_program_detail::share_operations(
+    const ProcessProgramView& representative,
+    Process& candidate,
+    const std::span<const Signal> signals,
+    OperationList::Storage* const recycled_operations)
+{
+    if (!representative.valid()
+        || representative.operations().size() != candidate.operations.size()
+        || representative.scheduling_domain()
+            != candidate.scheduling_domain
+        || representative.register_count() != candidate.register_count
+        || representative.register_value_kinds()
+            != candidate.register_value_kinds
+        || representative.string_register_count()
+            != candidate.string_register_count
+        || representative.container_register_count()
+            != candidate.container_register_count
+        || representative.container_register_types()
+            != candidate.container_register_types) {
+        return false;
+    }
+    if (!operation_list_detail::ShareAccess::share(
+            representative.operations(), candidate.operations, signals,
+            recycled_operations)) {
+        return false;
+    }
+    if (representative.expression_profiles()
         == candidate.expression_profiles) {
         candidate.expression_profiles.share_from(
-            representative.expression_profiles);
+            representative.expression_profiles());
+    }
+    if (process_layout_detail::ProcessLayoutAccess::can_share(
+            candidate.register_value_kinds,
+            representative.register_value_kinds())) {
+        process_layout_detail::ProcessLayoutAccess::share(
+            candidate.register_value_kinds,
+            representative.register_value_kinds());
+    }
+    if (process_layout_detail::ProcessLayoutAccess::can_share(
+            candidate.container_register_types,
+            representative.container_register_types())) {
+        process_layout_detail::ProcessLayoutAccess::share(
+            candidate.container_register_types,
+            representative.container_register_types());
+    }
+    if (candidate.static_trigger_regions
+            == representative.static_trigger_regions()
+        && process_layout_detail::ProcessLayoutAccess::can_share(
+            candidate.static_trigger_regions,
+            representative.static_trigger_regions())) {
+        process_layout_detail::ProcessLayoutAccess::share(
+            candidate.static_trigger_regions,
+            representative.static_trigger_regions());
     }
     return true;
 }
 
+bool process_program_detail::share_operations(
+    const ProcessProgramView& representative,
+    const ProcessProgramTemplate& candidate_common,
+    ProcessInstanceProgram& candidate,
+    const std::span<const Signal> signals,
+    OperationList::Storage* const recycled_operations)
+{
+    if (!representative.valid()
+        || !candidate_common.matches(representative)
+        || representative.operations().size() != candidate.operations.size()) {
+        return false;
+    }
+    return operation_list_detail::ShareAccess::share(
+        representative.operations(), candidate.operations, signals,
+        recycled_operations);
+}
+
 bool process_operations_shareable(const Process& process)
 {
-    return std::ranges::all_of(
-        process.operations,
-        [](const Operation& operation) {
-            bool shareable = false;
-            visit_operation(
-                [&](const auto& value) {
-                    using Type = std::decay_t<decltype(value)>;
-                    shareable = std::is_same_v<Type, DebugPoint>
-                        || std::is_same_v<Type, ReadSignal>
-                        || std::is_same_v<Type, WriteBlocking>
-                        || std::is_same_v<Type, WriteUpdate>
-                        || std::is_same_v<Type, WriteBlockingSlice>
-                        || std::is_same_v<Type, WriteUpdateSlice>
-                        || std::is_same_v<
-                            Type, WriteUpdateDynamicPartSlice>
-                        || std::is_same_v<Type, CopyRegister>
-                        || std::is_same_v<Type, IntegerCheck>
-                        || std::is_same_v<Type, LoadConstant>
-                        || std::is_same_v<Type, DynamicInsert>
-                        || std::is_same_v<Type, DynamicPartSelect>
-                        || std::is_same_v<Type, IntegerBinary>
-                        || std::is_same_v<Type, DynamicExtract>
-                        || std::is_same_v<Type, ReadContainerObject>
-                        || std::is_same_v<Type, ContainerRead>
-                        || std::is_same_v<Type, WriteProjected>
-                        || std::is_same_v<Type, WriteProjectedSlice>
-                        || std::is_same_v<Type, WaitSensitivity>
-                        || std::is_same_v<Type, CallableFramePop>
-                        || std::is_same_v<Type, CallableFramePush>
-                        || std::is_same_v<Type, Call>
-                        || std::is_same_v<Type, Jump>
-                        || std::is_same_v<Type, Binary>
-                        || std::is_same_v<Type, Assert>
-                        || std::is_same_v<Type, Report>
-                        || std::is_same_v<Type, UnaryNot>
-                        || std::is_same_v<Type, LogicalNot>
-                        || std::is_same_v<Type, LogicalBinary>
-                        || std::is_same_v<Type, Reduction>
-                        || std::is_same_v<Type, Shift>
-                        || std::is_same_v<Type, Concatenate>
-                        || std::is_same_v<Type, ConditionalSelect>
-                        || std::is_same_v<Type, Branch>
-                        || std::is_same_v<Type, Insert>
-                        || std::is_same_v<Type, Return>
-                        || std::is_same_v<Type, Extract>
-                        || std::is_same_v<Type, CodeCoverageHit>
-                        || std::is_same_v<Type, CoverageControl>
-                        || std::is_same_v<Type, CoverageAccess>;
-                },
-                operation);
-            return shareable;
-        });
+    return operation_list_detail::ShareAccess::shareable(
+        process.operations);
 }
 
 std::optional<SimulationTick> transition_delay(

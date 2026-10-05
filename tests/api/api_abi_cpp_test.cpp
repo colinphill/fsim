@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_abi_contract.h"
+#include "fsim/compiler/jit_runtime.h"
+#include "fsim/compiler/jit_runtime_v2.h"
+#include "fsim/runtime/simir_region_frontier_v2.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory.hpp"
 
@@ -19,6 +22,15 @@ extern "C" int fsim_api_abi_c_probe(void);
 static_assert(std::is_same_v<fsim_session_t, std::uint64_t>);
 static_assert(std::is_same_v<fsim_object_t, std::uint64_t>);
 static_assert(std::is_same_v<fsim_time_t, std::uint64_t>);
+static_assert(FSIM_JIT_RUNTIME_ABI_VERSION_V1 == UINT32_C(1));
+static_assert(FSIM_JIT_RUNTIME_ABI_VERSION_V2 == UINT32_C(2));
+static_assert(fsim::runtime::simir::kRegionFrontierAbiVersionV2 == 2U);
+static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
+static_assert(std::is_standard_layout_v<fsim_jit_runtime_instance_v2>);
+static_assert(std::is_same_v<
+    decltype(fsim_jit_services_v2::write_update),
+    void (*)(void*, std::uint32_t, std::uint64_t, std::uint64_t,
+        std::uint32_t)>);
 static_assert(std::is_standard_layout_v<fsim_string_view_t>);
 static_assert(std::is_trivially_copyable_v<fsim_string_view_t>);
 static_assert(std::is_standard_layout_v<fsim_session_options_t>);

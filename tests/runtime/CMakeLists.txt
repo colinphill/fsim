@@ -7,12 +7,21 @@ add_executable(
   fsim_runtime_tests
   runtime_tests.cpp
   runtime_value_tests.cpp
+  runtime_sensitivity_range_tests.cpp
+  runtime_region_graph_tests.cpp
+  runtime_a4_signal_state_tests.cpp
+  runtime_process_storage_tests.cpp
+  runtime_executor_provenance_tests.cpp
+  runtime_systemverilog_wave_tests.cpp
+  runtime_scheduler_trace_tests.cpp
+  runtime_scheduler_sv_tests.cpp
   runtime_private_region_scheduler_tests.cpp
   runtime_private_region_tests.cpp
   runtime_fused_masked_frontier_tests.cpp
   runtime_fused_masked_terminal_tests.cpp
   runtime_fused_static_cohort_test.cpp
   runtime_fused_projected_cohort_test.cpp
+  runtime_generic_update_region_tests.cpp
   runtime_value_primitives_tests.cpp
   runtime_dpi_tests.cpp
   runtime_dpi_abi_c_test.c
@@ -44,6 +53,7 @@ add_executable(
   runtime_vpi_write_tests.cpp
   runtime_vpi_time_tests.cpp
   runtime_vpi_callback_tests.cpp
+  runtime_vpi_observation_preparation_tests.cpp
   runtime_vpi_checkpoint_tests.cpp
   runtime_vpi_reference_plugin_tests.cpp
   runtime_vpi_control_tests.cpp
@@ -56,10 +66,14 @@ add_executable(
   runtime_execution_tests.cpp
   runtime_execution_services_tests.cpp
   runtime_execution_lifecycle.cpp
-  runtime_execution_pure_wave_tests.cpp
   runtime_synchronization_tests.cpp
   runtime_file_tests.cpp
   runtime_container_tests.cpp
+  runtime_element_alias_observation_tests.cpp
+  runtime_aggregate_proxy_native_tests.cpp
+  runtime_element_alias_direct_read_tests.cpp
+  runtime_aggregate_proxy_driver_family_tests.cpp
+  runtime_aggregate_proxy_driver_registration_tests.cpp
   runtime_class_heap_tests.cpp
   runtime_uvm_object_policy_tests.cpp
   runtime_uvm_packer_tests.cpp
@@ -171,6 +185,316 @@ add_dependencies(
   fsim_vpi_reference_cpp_plugin)
 fsim_configure_test(fsim_runtime_tests)
 add_test(NAME fsim.runtime COMMAND fsim_runtime_tests)
+add_test(
+  NAME fsim.runtime.generic_update_region
+  COMMAND fsim_runtime_tests generic_update_region)
+set_tests_properties(
+  fsim.runtime.generic_update_region
+  PROPERTIES LABELS "fast;runtime;region;generic-update;systemverilog;windows;linux")
+add_executable(
+  fsim_runtime_generic_update_allocation_failure_tests
+  runtime_generic_update_region_tests.cpp
+  runtime_generic_update_allocation_failure_main.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_compile_definitions(
+  fsim_runtime_generic_update_allocation_failure_tests
+  PRIVATE FSIM_RUNTIME_GENERIC_UPDATE_ALLOCATION_FAILURE_TESTS=1)
+target_link_libraries(
+  fsim_runtime_generic_update_allocation_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_generic_update_allocation_failure_tests)
+add_test(
+  NAME fsim.runtime.generic_update_region_allocation_failure
+  COMMAND fsim_runtime_generic_update_allocation_failure_tests)
+set_tests_properties(
+  fsim.runtime.generic_update_region_allocation_failure
+  PROPERTIES
+    LABELS
+      "fast;runtime;region;generic-update;allocation;failure;windows;linux")
+add_test(
+  NAME fsim.runtime.a4_signal_state
+  COMMAND fsim_runtime_tests a4_signal_state)
+set_tests_properties(
+  fsim.runtime.a4_signal_state
+  PROPERTIES LABELS "fast;runtime;region-graph;planes;fanout;windows;linux")
+add_executable(
+  fsim_runtime_packed_inline_tests
+  runtime_packed_inline_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(fsim_runtime_packed_inline_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_packed_inline_tests)
+add_test(NAME fsim.runtime.packed_inline COMMAND fsim_runtime_packed_inline_tests)
+set_tests_properties(
+  fsim.runtime.packed_inline
+  PROPERTIES LABELS "fast;runtime;wide;logic9;allocation;failure;windows;linux")
+add_executable(
+  fsim_runtime_scheduler_group_batch_failure_tests
+  runtime_scheduler_group_batch_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_scheduler_group_batch_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_scheduler_group_batch_failure_tests)
+add_test(
+  NAME fsim.runtime.scheduler_group_batch_failure
+  COMMAND fsim_runtime_scheduler_group_batch_failure_tests)
+set_tests_properties(
+  fsim.runtime.scheduler_group_batch_failure
+  PROPERTIES
+    LABELS
+      "fast;runtime;systemverilog;scheduler;allocation;failure;windows;linux")
+add_executable(
+  fsim_runtime_scheduler_generic_compact_ticket_tests
+  runtime_scheduler_generic_compact_ticket_tests.cpp)
+target_link_libraries(
+  fsim_runtime_scheduler_generic_compact_ticket_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_scheduler_generic_compact_ticket_tests)
+add_test(
+  NAME fsim.runtime.scheduler_generic_compact_ticket
+  COMMAND fsim_runtime_scheduler_generic_compact_ticket_tests)
+set_tests_properties(
+  fsim.runtime.scheduler_generic_compact_ticket
+  PROPERTIES
+    LABELS "fast;runtime;scheduler;generic;compact-ticket;failure;windows;linux")
+add_executable(
+  fsim_runtime_scheduler_generic_compact_ticket_failure_tests
+  runtime_scheduler_generic_compact_ticket_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_scheduler_generic_compact_ticket_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_scheduler_generic_compact_ticket_failure_tests)
+add_test(
+  NAME fsim.runtime.scheduler_generic_compact_ticket_allocation_failure
+  COMMAND fsim_runtime_scheduler_generic_compact_ticket_failure_tests)
+set_tests_properties(
+  fsim.runtime.scheduler_generic_compact_ticket_allocation_failure
+  PROPERTIES
+    LABELS "fast;runtime;scheduler;generic;allocation;failure;windows;linux")
+add_executable(
+  fsim_runtime_a4_logic9_slot_allocation_tests
+  runtime_a4_logic9_slot_allocation_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_a4_logic9_slot_allocation_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_a4_logic9_slot_allocation_tests)
+add_test(
+  NAME fsim.runtime.a4_logic9_slot_allocation
+  COMMAND fsim_runtime_a4_logic9_slot_allocation_tests)
+set_tests_properties(
+  fsim.runtime.a4_logic9_slot_allocation
+  PROPERTIES LABELS "fast;runtime;region-graph;logic9;allocation;windows;linux")
+add_executable(
+  fsim_runtime_a4_wide_slot_ownership_tests
+  runtime_a4_wide_slot_ownership_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_a4_wide_slot_ownership_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_a4_wide_slot_ownership_tests)
+add_test(
+  NAME fsim.runtime.a4_wide_slot_ownership
+  COMMAND fsim_runtime_a4_wide_slot_ownership_tests)
+set_tests_properties(
+  fsim.runtime.a4_wide_slot_ownership
+  PROPERTIES LABELS "fast;runtime;region-graph;planes;wide;logic9;allocation;failure;windows;linux")
+add_executable(
+  fsim_runtime_a4_checked_rebase_publication_tests
+  runtime_a4_checked_rebase_publication_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_a4_checked_rebase_publication_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_a4_checked_rebase_publication_tests)
+add_test(
+  NAME fsim.runtime.a4_checked_rebase_publication
+  COMMAND fsim_runtime_a4_checked_rebase_publication_tests)
+set_tests_properties(
+  fsim.runtime.a4_checked_rebase_publication
+  PROPERTIES LABELS "fast;runtime;a4;planes;logic9;allocation;failure;windows;linux")
+add_executable(
+  fsim_runtime_region_graph_observation_tests
+  runtime_region_graph_observation_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_region_graph_observation_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_region_graph_observation_tests)
+add_test(
+  NAME fsim.runtime.region_graph_observation_invalidation
+  COMMAND fsim_runtime_region_graph_observation_tests)
+set_tests_properties(
+  fsim.runtime.region_graph_observation_invalidation
+  PROPERTIES LABELS "fast;runtime;region-graph;allocation;failure;windows;linux")
+add_executable(
+  fsim_runtime_region_activation_failure_tests
+  runtime_region_activation_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_region_activation_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_region_activation_failure_tests)
+add_test(
+  NAME fsim.runtime.region_activation_copy_failure
+  COMMAND fsim_runtime_region_activation_failure_tests)
+set_tests_properties(
+  fsim.runtime.region_activation_copy_failure
+  PROPERTIES LABELS "fast;runtime;region-graph;activation;allocation;failure;windows;linux")
+add_test(
+  NAME fsim.runtime.executor_provenance_contract
+  COMMAND fsim_runtime_tests executor_provenance_contract)
+set_tests_properties(
+  fsim.runtime.executor_provenance_contract
+  PROPERTIES LABELS "fast;runtime;provenance;callbacks;negative;windows;linux")
+add_test(
+  NAME fsim.runtime.aggregate_proxy_sampled_data
+  COMMAND
+    fsim_runtime_tests aggregate_proxy_sampled_data_matches_packed_reference
+)
+set_tests_properties(
+  fsim.runtime.aggregate_proxy_sampled_data
+  PROPERTIES
+    LABELS "fast;runtime;sampled;aggregate-alias;systemverilog;windows;linux"
+)
+add_test(
+  NAME fsim.runtime.aggregate_proxy_leaf_write_differential
+  COMMAND fsim_runtime_tests aggregate_proxy_leaf_write_differential)
+set_tests_properties(
+  fsim.runtime.aggregate_proxy_leaf_write_differential
+  PROPERTIES LABELS "fast;runtime;transactions;aggregate-alias;systemverilog;windows;linux")
+add_test(
+  NAME fsim.runtime.aggregate_proxy_driver_family
+  COMMAND fsim_runtime_tests aggregate_proxy_driver_family)
+set_tests_properties(
+  fsim.runtime.aggregate_proxy_driver_family
+  PROPERTIES LABELS "fast;runtime;systemverilog;drivers;aggregate-alias;windows;linux")
+add_executable(
+  fsim_runtime_aggregate_proxy_driver_family_failure_tests
+  runtime_aggregate_proxy_driver_family_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_aggregate_proxy_driver_family_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_aggregate_proxy_driver_family_failure_tests)
+add_test(
+  NAME fsim.runtime.aggregate_proxy_driver_family_failure
+  COMMAND fsim_runtime_aggregate_proxy_driver_family_failure_tests)
+set_tests_properties(
+  fsim.runtime.aggregate_proxy_driver_family_failure
+  PROPERTIES
+    LABELS "fast;runtime;allocation;failure;drivers;aggregate-alias;windows;linux")
+add_test(
+  NAME fsim.runtime.aggregate_proxy_driver_region_registration
+  COMMAND fsim_runtime_tests aggregate_proxy_driver_region_registration)
+set_tests_properties(
+  fsim.runtime.aggregate_proxy_driver_region_registration
+  PROPERTIES LABELS "fast;runtime;systemverilog;drivers;aggregate-alias;windows;linux")
+add_executable(
+  fsim_runtime_aggregate_alias_allocation_failure_tests
+  runtime_aggregate_alias_allocation_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_aggregate_alias_allocation_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_aggregate_alias_allocation_failure_tests)
+add_test(
+  NAME fsim.runtime.aggregate_alias_allocation_failure
+  COMMAND fsim_runtime_aggregate_alias_allocation_failure_tests)
+set_tests_properties(
+  fsim.runtime.aggregate_alias_allocation_failure
+  PROPERTIES
+    LABELS "fast;runtime;allocation;failure;interpreter;windows;linux")
+add_executable(
+  fsim_runtime_aggregate_alias_force_failure_tests
+  runtime_aggregate_alias_force_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_aggregate_alias_force_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_aggregate_alias_force_failure_tests)
+add_test(
+  NAME fsim.runtime.aggregate_alias_force_failure
+  COMMAND fsim_runtime_aggregate_alias_force_failure_tests)
+set_tests_properties(
+  fsim.runtime.aggregate_alias_force_failure
+  PROPERTIES
+    LABELS "fast;runtime;allocation;failure;interpreter;force;aggregate-alias;windows;linux")
+add_executable(
+  fsim_runtime_fused_staging_failure_tests
+  runtime_fused_staging_failure_tests.cpp
+  runtime_fused_staging_prefix_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_fused_staging_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_fused_staging_failure_tests)
+add_test(
+  NAME fsim.runtime.fused_staging_failure
+  COMMAND fsim_runtime_fused_staging_failure_tests)
+set_tests_properties(
+  fsim.runtime.fused_staging_failure
+  PROPERTIES
+    LABELS "fast;runtime;fused;allocation;failure;interpreter;windows;linux")
+add_executable(
+  fsim_runtime_prepared_output_failure_tests
+  runtime_prepared_output_failure_main.cpp
+  runtime_systemverilog_wave_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_compile_definitions(
+  fsim_runtime_prepared_output_failure_tests
+  PRIVATE FSIM_RUNTIME_PREPARED_OUTPUT_FAILURE_TESTS=1)
+target_link_libraries(
+  fsim_runtime_prepared_output_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_prepared_output_failure_tests)
+add_test(
+  NAME fsim.runtime.prepared_output_failure_retry
+  COMMAND fsim_runtime_prepared_output_failure_tests)
+set_tests_properties(
+  fsim.runtime.prepared_output_failure_retry
+  PROPERTIES LABELS "fast;runtime;systemverilog;prepared-output;allocation;failure;retry;windows;linux")
+add_executable(
+  fsim_runtime_owned_driver_demote_failure_tests
+  runtime_owned_driver_demote_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_owned_driver_demote_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_owned_driver_demote_failure_tests)
+add_test(
+  NAME fsim.runtime.owned_driver_demote_failure
+  COMMAND fsim_runtime_owned_driver_demote_failure_tests)
+set_tests_properties(
+  fsim.runtime.owned_driver_demote_failure
+  PROPERTIES LABELS "fast;runtime;allocation;failure;interpreter;windows;linux")
+add_executable(
+  fsim_runtime_callback_observation_failure_tests
+  runtime_callback_observation_failure_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_callback_observation_failure_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_callback_observation_failure_tests)
+add_test(
+  NAME fsim.runtime.callback_observation_failure
+  COMMAND fsim_runtime_callback_observation_failure_tests)
+set_tests_properties(
+  fsim.runtime.callback_observation_failure
+  PROPERTIES LABELS "fast;runtime;allocation;failure;callbacks;windows;linux")
+add_executable(
+  fsim_runtime_systemverilog_publication_pool_tests
+  runtime_systemverilog_publication_pool_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_systemverilog_publication_pool_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_systemverilog_publication_pool_tests)
+add_test(
+  NAME fsim.runtime.systemverilog_publication_pool
+  COMMAND fsim_runtime_systemverilog_publication_pool_tests)
+set_tests_properties(
+  fsim.runtime.systemverilog_publication_pool
+  PROPERTIES
+    LABELS
+      "fast;runtime;systemverilog;allocation;failure;interpreter;windows;linux")
+add_executable(
+  fsim_runtime_systemverilog_publication_allocation_tests
+  runtime_systemverilog_publication_allocation_tests.cpp
+  runtime_fused_staging_failure_support.cpp)
+target_link_libraries(
+  fsim_runtime_systemverilog_publication_allocation_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_systemverilog_publication_allocation_tests)
+add_test(
+  NAME fsim.runtime.systemverilog_publication_allocation
+  COMMAND fsim_runtime_systemverilog_publication_allocation_tests)
+set_tests_properties(
+  fsim.runtime.systemverilog_publication_allocation
+  PROPERTIES LABELS "fast;runtime;systemverilog;allocation;interpreter;windows;linux")
 add_test(
   NAME fsim.runtime.vpi_reference_plugins
   COMMAND fsim_runtime_tests vpi_reference_plugins)
@@ -866,6 +1190,21 @@ set_tests_properties(
   PROPERTIES LABELS "fast;runtime;fst;change;positive;negative;determinism;resource"
 )
 
+add_executable(
+  fsim_runtime_constant_driver_bank_tests
+  runtime_constant_driver_bank_tests.cpp)
+target_link_libraries(
+  fsim_runtime_constant_driver_bank_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_constant_driver_bank_tests)
+add_test(
+  NAME fsim.runtime.constant_driver_startup_bank
+  COMMAND fsim_runtime_constant_driver_bank_tests)
+set_tests_properties(
+  fsim.runtime.constant_driver_startup_bank
+  PROPERTIES
+    LABELS
+    "fast;runtime;systemverilog;constant-driver;startup;positive;negative;windows;linux")
+
 add_executable(fsim_fst_reader_tests fst_reader_tests.cpp)
 target_link_libraries(fsim_fst_reader_tests PRIVATE fsim_runtime)
 fsim_configure_test(fsim_fst_reader_tests)
@@ -877,3 +1216,53 @@ set_tests_properties(
     LABELS
     "fast;runtime;fst;reader;value;positive;negative;equivalence;determinism;compression;metadata;alias;lifecycle;resource"
 )
+
+# Native-frontier runtime adapter/binder witnesses are separate executables so
+# they can use the same friend access types without ODR collisions.
+add_executable(
+  fsim_runtime_native_frontier_adapter_tests
+  runtime_native_frontier_adapter_tests.cpp)
+target_link_libraries(
+  fsim_runtime_native_frontier_adapter_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_native_frontier_adapter_tests)
+add_test(
+  NAME fsim.runtime.native_frontier_adapter_sync
+  COMMAND fsim_runtime_native_frontier_adapter_tests)
+set_tests_properties(
+  fsim.runtime.native_frontier_adapter_sync
+  PROPERTIES LABELS "fast;runtime;region-graph;frontier;adapter;windows;linux")
+
+add_executable(
+  fsim_runtime_native_frontier_wide_sync_tests
+  runtime_native_frontier_wide_sync_tests.cpp)
+target_link_libraries(
+  fsim_runtime_native_frontier_wide_sync_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_native_frontier_wide_sync_tests)
+add_test(
+  NAME fsim.runtime.native_frontier_wide_sync
+  COMMAND fsim_runtime_native_frontier_wide_sync_tests)
+set_tests_properties(
+  fsim.runtime.native_frontier_wide_sync
+  PROPERTIES
+  LABELS "fast;runtime;region-graph;frontier;wide;observation;windows;linux")
+
+# The generated-entry boundary tests require the LLVM application provider.
+if(TARGET fsim_llvm)
+  add_executable(
+    fsim_runtime_native_frontier_boundary_tests
+    runtime_native_frontier_boundary_tests.cpp
+    runtime_fused_staging_failure_support.cpp)
+  fsim_configure_test(fsim_runtime_native_frontier_boundary_tests)
+  target_link_libraries(
+    fsim_runtime_native_frontier_boundary_tests
+    PRIVATE fsim_application fsim_llvm)
+  add_test(
+    NAME fsim.runtime.native-frontier.boundary
+    COMMAND fsim_runtime_native_frontier_boundary_tests)
+  set_tests_properties(
+    fsim.runtime.native-frontier.boundary
+    PROPERTIES LABELS
+      "fast;runtime;region;native-frontier;boundary;binder;llvm;a4;failure")
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/runtime_native_frontier_logic9_sync_tests.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/runtime_a2_role_journal_tests.cmake")

@@ -2,12 +2,18 @@
 #include "hierarchy_builder_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <algorithm>
 #include <cstdlib>
+#include <exception>
+#include <limits>
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <ranges>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -121,18 +127,1855 @@ bool compiled_resolver_returns_first(
 
 } // namespace
 
+HierarchyBuilder::ElementNetRewriteCensus
+HierarchyBuilder::rewrite_eligible_element_net_families()
+{
+    ElementNetRewriteCensus census;
+
+    struct ElementNetFamily {
+        ContainerObjectId object { };
+        SignalId proxy { };
+        std::uint32_t element_width { };
+        std::uint32_t element_count { };
+        std::int32_t declared_left { };
+        std::int32_t declared_right { };
+        std::size_t dimension_count { };
+        bool readable { };
+        bool writable { };
+        std::vector<std::string> leaf_names;
+        std::vector<std::string> leaf_suffixes;
+        std::vector<PackedLogic4> initial_elements;
+        std::vector<SignalId> leaves;
+    };
+
+    // Reuse declaration indexes once. Besides avoiding repeated full scans,
+    // this lets every candidate fail before any signal or alias is appended.
+    std::unordered_map<ContainerObjectId, const ContainerSignalAlias*>
+        alias_by_object;
+    std::unordered_set<ContainerObjectId> duplicate_alias_objects;
+    std::unordered_map<SignalId, ContainerObjectId> first_object_by_signal;
+    std::unordered_set<SignalId> duplicate_alias_signals;
+    for (const auto& alias : design_.container_signal_aliases_) {
+        if (!alias_by_object.emplace(alias.object, &alias).second) {
+            duplicate_alias_objects.insert(alias.object);
+        }
+        const auto [signal_position, signal_inserted]
+            = first_object_by_signal.emplace(alias.signal, alias.object);
+        if (!signal_inserted && signal_position->second != alias.object) {
+            duplicate_alias_signals.insert(alias.signal);
+        }
+    }
+    std::unordered_set<ContainerObjectId> already_aggregated_objects;
+    for (const auto& alias : design_.container_aggregate_signal_aliases_) {
+        already_aggregated_objects.insert(alias.object);
+    }
+    std::unordered_set<ContainerObjectId> existing_element_objects;
+    for (const auto& alias : design_.container_element_signal_aliases_) {
+        existing_element_objects.insert(alias.object);
+    }
+    std::unordered_map<SignalId, std::vector<std::string>> names_by_signal;
+    names_by_signal.reserve(design_.signal_by_name_.size());
+    for (const auto& [name, signal] : design_.signal_by_name_) {
+        names_by_signal[signal].push_back(name);
+    }
+    for (auto& [signal, names] : names_by_signal) {
+        (void)signal;
+        std::ranges::sort(names);
+    }
+
+    // Terminal-level switch and timing objects need their original signal
+    // identity. Exclude only the families they actually mention.
+    std::unordered_set<SignalId> unsupported_terminal_signals;
+    for (std::size_t process_index = 0U;
+        process_index < design_.process_count(); ++process_index) {
+        const auto process = design_.process_view(process_index);
+        if (process.switch_source()) {
+            unsupported_terminal_signals.insert(*process.switch_source());
+        }
+        if (process.switch_target()) {
+            unsupported_terminal_signals.insert(*process.switch_target());
+        }
+        if (process.switch_control()) {
+            unsupported_terminal_signals.insert(*process.switch_control());
+        }
+    }
+    const auto record_path_terminals = [&](
+        const ModulePathExpression& expression) {
+        for (const auto& node : expression.nodes) {
+            if (node.operation == ModulePathExpressionOperator::terminal) {
+                unsupported_terminal_signals.insert(node.terminal.signal);
+            }
+        }
+    };
+    for (const auto& path : design_.verilog_specify_paths_) {
+        for (const auto& terminal : path.sources) {
+            unsupported_terminal_signals.insert(terminal.signal);
+        }
+        for (const auto& terminal : path.destinations) {
+            unsupported_terminal_signals.insert(terminal.signal);
+        }
+        record_path_terminals(path.condition_program);
+        record_path_terminals(path.data_source_program);
+    }
+    for (const auto& check : design_.verilog_timing_checks_) {
+        unsupported_terminal_signals.insert(check.reference.terminal.signal);
+        if (check.data) {
+            unsupported_terminal_signals.insert(check.data->terminal.signal);
+        }
+        if (check.notifier) {
+            unsupported_terminal_signals.insert(*check.notifier);
+        }
+        if (check.delayed_reference) {
+            unsupported_terminal_signals.insert(
+                check.delayed_reference->signal);
+        }
+        if (check.delayed_data) {
+            unsupported_terminal_signals.insert(check.delayed_data->signal);
+        }
+        for (const auto& node : check.reference.condition.nodes) {
+            if (node.operation == ModulePathExpressionOperator::terminal) {
+                unsupported_terminal_signals.insert(node.terminal.signal);
+            }
+        }
+        if (check.data) {
+            for (const auto& node : check.data->condition.nodes) {
+                if (node.operation
+                    == ModulePathExpressionOperator::terminal) {
+                    unsupported_terminal_signals.insert(node.terminal.signal);
+                }
+            }
+        }
+    }
+
+    std::vector<ElementNetFamily> families;
+    families.reserve(design_.container_object_info_.size());
+    std::unordered_set<std::string> planned_leaf_names;
+    for (const auto& object_info : design_.container_object_info_) {
+        const auto object_id = object_info.id;
+        if (object_id >= design_.container_objects_.size()
+            || object_info.is_port || object_info.slice_alias
+            || duplicate_alias_objects.contains(object_id)
+            || already_aggregated_objects.contains(object_id)
+            || existing_element_objects.contains(object_id)) {
+            continue;
+        }
+
+        const auto& type = object_info.type;
+        if (!type.fixed || type.queue || type.associative
+            || type.string_indices || type.two_state
+            || type.element_kind != ContainerElementKind::Packed
+            || type.element_width == 0U
+            || type.scalar_kind != frontend::SystemVerilogScalarKind::None
+            || type.dimensions.empty()
+            || !type.element_types.empty()
+            || !type.element_nominal_type.empty()) {
+            continue;
+        }
+
+        const auto alias_position = alias_by_object.find(object_id);
+        if (alias_position == alias_by_object.end()) {
+            continue;
+        }
+        const auto& alias = *alias_position->second;
+        if (!alias.readable || !alias.writable) {
+            continue;
+        }
+
+        std::uint64_t count64 = 1U;
+        bool count_overflow { };
+        for (const auto& [left, right] : type.dimensions) {
+            const auto extent = static_cast<std::uint64_t>(
+                left >= right
+                    ? static_cast<std::int64_t>(left) - right
+                    : static_cast<std::int64_t>(right) - left) + 1U;
+            if (extent > std::numeric_limits<std::uint32_t>::max()
+                || count64 > std::numeric_limits<std::uint32_t>::max()
+                    / extent) {
+                count_overflow = true;
+                break;
+            }
+            count64 *= extent;
+        }
+        if (count_overflow) {
+            continue;
+        }
+        const auto total_width64 = count64 * type.element_width;
+        if (total_width64 > std::numeric_limits<std::uint32_t>::max()
+            || total_width64
+                > maximum_container_storage_bytes * 8U) {
+            continue;
+        }
+
+        const auto& object = design_.container_objects_[object_id];
+        if (object.slice_alias || object.initial_value.type != type
+            || object.initial_value.elements.size() != count64
+            || !object.initial_value.string_elements.empty()
+            || !object.initial_value.nested_elements.empty()) {
+            continue;
+        }
+        const auto proxy = alias.signal;
+        if (proxy >= design_.signal_info_.size()
+            || proxy >= design_.signals_.size()
+            || duplicate_alias_signals.contains(proxy)) {
+            continue;
+        }
+        const auto& proxy_info = design_.signal_info_[proxy];
+        const auto& proxy_signal = design_.signals_[proxy];
+        if ((proxy_info.systemverilog_net_type != "wire"
+                && proxy_info.systemverilog_net_type != "tri")
+            || proxy_info.source_domain != frontend::ValueDomain::Logic4
+            || proxy_info.is_port
+            || proxy_info.vhdl_array != nullptr
+            || proxy_info.vhdl_access != nullptr
+            || proxy_info.vhdl_physical != nullptr
+            || !proxy_info.vhdl_mode_view_bindings.empty()
+            || proxy_info.width != total_width64
+            || proxy_signal.initial_value.width() != total_width64
+            || proxy_signal.initial_value.is_logic9()
+            || proxy_signal.value_kind != ValueKind::logic4
+            || proxy_signal.charge_strength
+            || proxy_signal.charge_decay
+            || proxy_signal.implicit_driver) {
+            continue;
+        }
+        record_lowering_census(census.shape_qualified_families);
+        record_lowering_census(
+            census.shape_qualified_leaves,
+            static_cast<std::size_t>(count64));
+        if (unsupported_terminal_signals.contains(proxy)) {
+            record_lowering_census(
+                census.terminal_fallback_families);
+            record_lowering_census(
+                census.terminal_fallback_leaves,
+                static_cast<std::size_t>(count64));
+            continue;
+        }
+        if (resolver_by_signal_.contains(proxy)) {
+            record_lowering_census(
+                census.resolver_fallback_families);
+            continue;
+        }
+
+        ElementNetFamily family;
+        family.object = object_id;
+        family.proxy = proxy;
+        family.element_width = type.element_width;
+        family.element_count = static_cast<std::uint32_t>(count64);
+        family.declared_left = type.dimensions.front().first;
+        family.declared_right = type.dimensions.front().second;
+        family.dimension_count = type.dimensions.size();
+        family.readable = alias.readable;
+        family.writable = alias.writable;
+        family.leaf_names.reserve(family.element_count);
+        family.leaf_suffixes.reserve(family.element_count);
+        family.initial_elements.reserve(family.element_count);
+
+        bool valid_initial_cache_shape = true;
+        bool invalid_initial_cache_shape = false;
+        bool ordinal_out_of_range = false;
+        bool name_collision = false;
+        std::unordered_set<std::string> local_leaf_names;
+        std::vector<std::string> newly_planned_leaf_names;
+        const auto add_leaf_name = [&](std::string leaf_name) {
+            if (!local_leaf_names.insert(leaf_name).second) {
+                return;
+            }
+            if (const auto existing
+                = design_.signal_by_name_.find(leaf_name);
+                existing != design_.signal_by_name_.end()
+                && existing->second != proxy) {
+                name_collision = true;
+            }
+            if (planned_leaf_names.insert(leaf_name).second) {
+                newly_planned_leaf_names.push_back(std::move(leaf_name));
+            } else {
+                name_collision = true;
+            }
+        };
+        for (std::uint32_t ordinal = 0U;
+            ordinal < family.element_count;
+            ++ordinal) {
+            // ContainerValue uses row-major declared order: the last
+            // unpacked dimension varies fastest, regardless of direction.
+            auto remaining = static_cast<std::uint64_t>(ordinal);
+            auto stride = count64;
+            std::string suffix;
+            for (const auto& [left, right] : type.dimensions) {
+                const auto extent = static_cast<std::uint64_t>(
+                    left >= right
+                        ? static_cast<std::int64_t>(left) - right
+                        : static_cast<std::int64_t>(right) - left) + 1U;
+                stride /= extent;
+                const auto position = remaining / stride;
+                remaining %= stride;
+                const auto source_index = static_cast<std::int64_t>(left)
+                    + (left >= right
+                            ? -static_cast<std::int64_t>(position)
+                            : static_cast<std::int64_t>(position));
+                if (source_index < std::numeric_limits<std::int32_t>::min()
+                    || source_index > std::numeric_limits<std::int32_t>::max()) {
+                    valid_initial_cache_shape = false;
+                    ordinal_out_of_range = true;
+                    break;
+                }
+                suffix += "[" + std::to_string(source_index) + "]";
+            }
+            if (!valid_initial_cache_shape) {
+                break;
+            }
+
+            const auto offset
+                = (static_cast<std::size_t>(family.element_count)
+                    - static_cast<std::size_t>(ordinal) - 1U)
+                * static_cast<std::size_t>(family.element_width);
+            const auto& cached_element
+                = object.initial_value.elements[ordinal];
+            if (cached_element.width() != family.element_width
+                || cached_element.is_logic9()) {
+                valid_initial_cache_shape = false;
+                invalid_initial_cache_shape = true;
+                break;
+            }
+            // The readable aggregate proxy is authoritative for current leaf
+            // values. Its container cache can still hold default X values
+            // while an undriven wire proxy begins at Z.
+            auto initial = proxy_signal.initial_value.extract_bits(
+                offset, family.element_width);
+
+            const auto canonical_name = object_info.name + suffix;
+            const auto names = names_by_signal.find(proxy);
+            add_leaf_name(canonical_name);
+            if (names != names_by_signal.end()) {
+                for (const auto& public_name : names->second) {
+                    add_leaf_name(public_name + suffix);
+                }
+            }
+            family.leaf_names.push_back(canonical_name);
+            family.leaf_suffixes.push_back(std::move(suffix));
+            family.initial_elements.push_back(std::move(initial));
+        }
+        if (!valid_initial_cache_shape || name_collision) {
+            if (invalid_initial_cache_shape) {
+                record_lowering_census(
+                    census.invalid_initial_cache_shape_fallback_families);
+            }
+            if (ordinal_out_of_range) {
+                record_lowering_census(
+                    census.ordinal_range_fallback_families);
+            }
+            if (name_collision) {
+                record_lowering_census(
+                    census.name_collision_fallback_families);
+            }
+            for (const auto& name : newly_planned_leaf_names) {
+                planned_leaf_names.erase(name);
+            }
+            continue;
+        }
+        families.push_back(std::move(family));
+        record_lowering_census(census.candidate_families);
+        record_lowering_census(
+            census.candidate_leaves, families.back().element_count);
+    }
+
+    if (families.empty()) {
+        return census;
+    }
+
+    // VHDL projected writes carry transaction semantics that still target the
+    // original aggregate signal. Until aggregate projection publication is
+    // certified against physical element aliases, keep only the referenced
+    // proxy family on its retained representation. Inspect expanded operation
+    // bindings so shared process templates are checked against their actual
+    // signal IDs rather than their canonical body IDs. Do this only after a
+    // candidate family exists so ordinary designs pay no process-scan cost.
+    std::unordered_set<SignalId> candidate_proxies;
+    candidate_proxies.reserve(families.size());
+    for (const auto& family : families) {
+        candidate_proxies.insert(family.proxy);
+    }
+    std::unordered_set<SignalId> projected_write_signals;
+    for (std::size_t process_index = 0U;
+        process_index < design_.process_count(); ++process_index) {
+        const auto process = design_.process_view(process_index);
+        const auto& process_operations = process.operations();
+        for (std::size_t index = 0U;
+            index < process_operations.size();
+            ++index) {
+            const auto& shared = process_operations[index];
+            const bool is_projected_write
+                = operation_holds<WriteProjected>(shared)
+                || operation_holds<WriteProjectedWaveform>(shared)
+                || operation_holds<WriteProjectedSlice>(shared)
+                || operation_holds<WriteProjectedWaveformSlice>(shared)
+                || operation_holds<WriteProjectedDynamicSlice>(shared)
+                || operation_holds<
+                    WriteProjectedWaveformDynamicSlice>(shared);
+            if (!is_projected_write) {
+                continue;
+            }
+            const auto operation = process_operations.expanded(index);
+            visit_operation(
+                [&](const auto& value) {
+                    using Type = std::decay_t<decltype(value)>;
+                    if constexpr (
+                        std::is_same_v<Type, WriteProjected>
+                        || std::is_same_v<Type, WriteProjectedWaveform>
+                        || std::is_same_v<Type, WriteProjectedSlice>
+                        || std::is_same_v<
+                            Type, WriteProjectedWaveformSlice>
+                        || std::is_same_v<
+                            Type, WriteProjectedDynamicSlice>
+                        || std::is_same_v<
+                            Type, WriteProjectedWaveformDynamicSlice>) {
+                        if (candidate_proxies.contains(value.signal)) {
+                            projected_write_signals.insert(value.signal);
+                            record_lowering_census(
+                                census.projected_write_operations);
+                        }
+                    }
+                },
+                operation);
+        }
+    }
+    std::erase_if(
+        families,
+        [&](const ElementNetFamily& family) {
+            if (!projected_write_signals.contains(family.proxy)) {
+                return false;
+            }
+            record_lowering_census(
+                census.projected_fallback_families);
+            record_lowering_census(
+                census.projected_fallback_leaves,
+                family.element_count);
+            return true;
+        });
+    if (lowering_census_enabled_) {
+        census.eligible_families = families.size();
+        for (const auto& family : families) {
+            census.eligible_leaves += family.element_count;
+        }
+    }
+    if (families.empty()) {
+        return census;
+    }
+
+    const auto signal_capacity = static_cast<std::uint64_t>(
+        std::numeric_limits<SignalId>::max());
+    std::uint64_t required_signal_count { };
+    for (const auto& family : families) {
+        required_signal_count += family.element_count;
+    }
+    if (static_cast<std::uint64_t>(design_.signals_.size())
+            + required_signal_count
+        > signal_capacity) {
+        if (lowering_census_enabled_) {
+            census.capacity_fallback_families = families.size();
+            for (const auto& family : families) {
+                census.capacity_fallback_leaves += family.element_count;
+            }
+        }
+        return census;
+    }
+
+    for (auto& family : families) {
+        family.leaves.reserve(family.element_count);
+        const auto proxy_info = design_.signal_info_[family.proxy];
+        const auto proxy_signal = design_.signals_[family.proxy];
+        const auto names = names_by_signal.find(family.proxy);
+        for (std::uint32_t ordinal = 0U;
+            ordinal < family.element_count;
+            ++ordinal) {
+            const auto leaf_id = static_cast<SignalId>(
+                design_.signals_.size());
+            const auto& suffix = family.leaf_suffixes[ordinal];
+            const auto& leaf_name = family.leaf_names[ordinal];
+            auto leaf_info = proxy_info;
+            leaf_info.id = leaf_id;
+            leaf_info.name = leaf_name;
+            leaf_info.width = family.element_width;
+            leaf_info.is_port = false;
+            leaf_info.direction = frontend::PortDirection::Unknown;
+            auto leaf_signal = proxy_signal;
+            leaf_signal.name = leaf_name;
+            leaf_signal.initial_value = family.initial_elements[ordinal];
+            // Hierarchy validation replaces this staging value with the
+            // declared net type's real resolution kind before design freeze.
+            leaf_signal.resolution = ResolutionKind::none;
+            design_.signal_info_.push_back(std::move(leaf_info));
+            design_.signals_.push_back(std::move(leaf_signal));
+            family.leaves.push_back(leaf_id);
+            design_.container_element_signal_aliases_.push_back(
+                ContainerElementSignalAlias {
+                    family.object,
+                    ordinal,
+                    leaf_id,
+                    family.readable,
+                    family.writable,
+                });
+
+            design_.signal_by_name_.insert_or_assign(leaf_name, leaf_id);
+            if (names != names_by_signal.end()) {
+                for (const auto& public_name : names->second) {
+                    design_.signal_by_name_.insert_or_assign(
+                        public_name + suffix, leaf_id);
+                }
+            }
+        }
+    }
+
+    std::unordered_map<SignalId, std::size_t> family_by_proxy;
+    family_by_proxy.reserve(families.size());
+    std::unordered_map<ContainerObjectId, std::size_t> family_by_object;
+    family_by_object.reserve(families.size());
+    std::unordered_set<ContainerObjectId> family_objects;
+    family_objects.reserve(families.size());
+    for (std::size_t index = 0U; index < families.size(); ++index) {
+        const auto& family = families[index];
+        family_by_proxy.emplace(family.proxy, index);
+        family_by_object.emplace(family.object, index);
+        family_objects.insert(family.object);
+        design_.container_aggregate_signal_aliases_.push_back(
+            ContainerAggregateSignalAlias {
+                family.object,
+                family.proxy,
+                family.readable,
+                family.writable,
+            });
+    }
+    std::erase_if(
+        design_.container_signal_aliases_,
+        [&](const ContainerSignalAlias& alias) {
+            return family_objects.contains(alias.object);
+        });
+    if (lowering_census_enabled_) {
+        census.physical_families = families.size();
+        census.physical_leaves = static_cast<std::size_t>(
+            required_signal_count);
+    }
+
+    const auto map_leaf_interval = [&](const SignalId proxy,
+                                       const std::uint32_t offset,
+                                       const std::uint32_t width)
+        -> std::optional<std::pair<SignalId, std::uint32_t>> {
+        const auto family_index = family_by_proxy.find(proxy);
+        if (family_index == family_by_proxy.end() || width == 0U) {
+            return std::nullopt;
+        }
+        const auto& family = families[family_index->second];
+        const auto end = static_cast<std::uint64_t>(offset) + width;
+        const auto total_width
+            = static_cast<std::uint64_t>(family.element_width)
+            * family.element_count;
+        if (end > total_width) {
+            return std::nullopt;
+        }
+        const auto first_lane = offset / family.element_width;
+        const auto last_lane = static_cast<std::uint32_t>(
+            (end - 1U) / family.element_width);
+        if (first_lane != last_lane
+            || first_lane >= family.element_count) {
+            return std::nullopt;
+        }
+        const auto ordinal = family.element_count - first_lane - 1U;
+        return std::pair {
+            family.leaves[ordinal],
+            offset % family.element_width,
+        };
+    };
+
+    if (lowering_census_enabled_) {
+        for (std::size_t process_index = 0U;
+            process_index < design_.process_count(); ++process_index) {
+            const auto process = design_.process_view(process_index);
+            for (const auto& sensitivity : process.static_sensitivity()) {
+                if (!family_by_proxy.contains(sensitivity.signal)) {
+                    continue;
+                }
+                ++census.proxy_sensitivity_entries;
+                if (!map_leaf_interval(
+                        sensitivity.signal,
+                        sensitivity.offset,
+                        sensitivity.width)) {
+                    ++census.sensitivity_range_fallbacks;
+                }
+            }
+        }
+    }
+
+    const auto register_use_is_known = [](
+        const Operation& operation,
+        const RegisterId register_id) {
+        bool known = false;
+        bool used = false;
+        visit_operation(
+            [&](const auto& value) {
+                using Type = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Type, LoadConstant>
+                    || std::is_same_v<Type, ReadSignal>
+                    || std::is_same_v<Type, ReadSimulationTime>
+                    || std::is_same_v<Type, SignalEvent>
+                    || std::is_same_v<Type, SignalLastValue>
+                    || std::is_same_v<Type, SignalLastEvent>
+                    || std::is_same_v<Type, SignalActive>
+                    || std::is_same_v<Type, SignalLastActive>
+                    || std::is_same_v<Type, SignalDriving>
+                    || std::is_same_v<Type, SignalDrivingValue>
+                    || std::is_same_v<Type, EventTriggered>) {
+                    known = true;
+                    used = value.destination == register_id;
+                } else if constexpr (std::is_same_v<Type, Extract>) {
+                    known = true;
+                    used = value.source == register_id
+                        || value.destination == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, CopyRegister>
+                    || std::is_same_v<Type, ConvertToTwoState>
+                    || std::is_same_v<Type, UnaryNot>
+                    || std::is_same_v<Type, LogicalNot>
+                    || std::is_same_v<Type, Reduction>
+                    || std::is_same_v<Type, CountOnes>
+                    || std::is_same_v<Type, CountBits>
+                    || std::is_same_v<Type, DynamicExtract>
+                    || std::is_same_v<Type, DynamicPartSelect>
+                    || std::is_same_v<Type, IntegerUnary>) {
+                    known = true;
+                    used = value.source == register_id
+                        || value.destination == register_id;
+                    if constexpr (
+                        std::is_same_v<Type, DynamicExtract>) {
+                        used = used
+                            || value.selection.index == register_id;
+                    } else if constexpr (
+                        std::is_same_v<Type, DynamicPartSelect>) {
+                        used = used || value.base == register_id;
+                    }
+                } else if constexpr (
+                    std::is_same_v<Type, Shift>) {
+                    known = true;
+                    used = value.value == register_id
+                        || value.amount == register_id
+                        || value.destination == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, LogicalBinary>
+                    || std::is_same_v<Type, Binary>
+                    || std::is_same_v<Type, IntegerBinary>) {
+                    known = true;
+                    used = value.lhs == register_id
+                        || value.rhs == register_id
+                        || value.destination == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, ConditionalSelect>) {
+                    known = true;
+                    used = value.condition == register_id
+                        || value.when_true == register_id
+                        || value.when_false == register_id
+                        || value.destination == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, Concatenate>) {
+                    known = true;
+                    used = value.destination == register_id
+                        || std::ranges::find(
+                            value.operands, register_id)
+                            != value.operands.end();
+                } else if constexpr (std::is_same_v<Type, Insert>) {
+                    known = true;
+                    used = value.target == register_id
+                        || value.source == register_id
+                        || value.destination == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, DynamicInsert>
+                    || std::is_same_v<Type, DynamicPartInsert>) {
+                    known = true;
+                    used = value.target == register_id
+                        || value.source == register_id
+                        || value.destination == register_id;
+                    if constexpr (std::is_same_v<Type, DynamicInsert>) {
+                        used = used
+                            || value.selection.index == register_id;
+                    } else {
+                        used = used || value.selection.base == register_id;
+                    }
+                } else if constexpr (
+                    std::is_same_v<Type, WriteBlocking>
+                    || std::is_same_v<Type, WriteUpdate>
+                    || std::is_same_v<Type, WriteAfter>
+                    || std::is_same_v<Type, WriteInertial>
+                    || std::is_same_v<Type, WriteProjected>
+                    || std::is_same_v<Type, WriteBlockingSlice>
+                    || std::is_same_v<Type, WriteUpdateSlice>
+                    || std::is_same_v<Type, WriteAfterSlice>
+                    || std::is_same_v<Type, WriteInertialSlice>
+                    || std::is_same_v<Type, WriteProjectedSlice>
+                    || std::is_same_v<Type, WriteBlockingDynamicSlice>
+                    || std::is_same_v<Type, WriteUpdateDynamicSlice>
+                    || std::is_same_v<Type, WriteAfterDynamicSlice>
+                    || std::is_same_v<Type,
+                        WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<Type, WriteUpdateDynamicPartSlice>
+                    || std::is_same_v<Type, WriteAfterDynamicPartSlice>
+                    || std::is_same_v<Type, WriteInertialDynamicSlice>
+                    || std::is_same_v<Type,
+                        WriteInertialDynamicPartSlice>
+                    || std::is_same_v<Type, WriteProjectedDynamicSlice>) {
+                    known = true;
+                    used = value.source == register_id;
+                    if constexpr (
+                        std::is_same_v<Type, WriteBlockingDynamicSlice>
+                        || std::is_same_v<Type, WriteUpdateDynamicSlice>
+                        || std::is_same_v<Type, WriteAfterDynamicSlice>
+                        || std::is_same_v<Type, WriteInertialDynamicSlice>
+                        || std::is_same_v<Type, WriteProjectedDynamicSlice>) {
+                        used = used || value.selection.index == register_id;
+                    } else if constexpr (
+                        std::is_same_v<Type,
+                            WriteBlockingDynamicPartSlice>
+                        || std::is_same_v<Type,
+                            WriteUpdateDynamicPartSlice>
+                        || std::is_same_v<Type,
+                            WriteAfterDynamicPartSlice>
+                        || std::is_same_v<Type,
+                            WriteInertialDynamicPartSlice>) {
+                        used = used || value.selection.base == register_id;
+                    }
+                } else if constexpr (
+                    std::is_same_v<Type, WriteContainerObjectElement>) {
+                    known = true;
+                    used = value.index == register_id
+                        || value.source == register_id;
+                    if (value.dynamic_part) {
+                        used = used
+                            || value.dynamic_part->base == register_id;
+                    }
+                } else if constexpr (std::is_same_v<Type, WaitFor>) {
+                    known = true;
+                    used = value.source && *value.source == register_id;
+                } else if constexpr (std::is_same_v<Type, Assert>) {
+                    known = true;
+                    used = value.condition == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, Branch>) {
+                    known = true;
+                    used = value.condition == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, WaitOn>) {
+                    known = true;
+                    used = value.timeout_result
+                        && *value.timeout_result == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, WaitOrder>) {
+                    known = true;
+                    used = value.result == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, Pause>
+                    || std::is_same_v<Type, Stop>) {
+                    known = true;
+                    used = value.status
+                        && *value.status == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, Jump>
+                    || std::is_same_v<Type, Halt>
+                    || std::is_same_v<Type, DebugPoint>
+                    || std::is_same_v<Type, WaitSensitivity>
+                    || std::is_same_v<Type, WaitForever>
+                    || std::is_same_v<Type, WaitRegion>
+                    || std::is_same_v<Type, WaitPla>) {
+                    known = true;
+                }
+            },
+            operation);
+        return known && !used;
+    };
+
+    const auto width_effects_are_known = [&](const Operation& operation) {
+        if (register_use_is_known(
+                operation, std::numeric_limits<RegisterId>::max())) {
+            return true;
+        }
+        bool known = false;
+        visit_operation(
+            [&](const auto& value) {
+                using Type = std::decay_t<decltype(value)>;
+                if constexpr (
+                    std::is_same_v<Type, StochasticQueueOperation>
+                    || std::is_same_v<Type, PlaEvaluate>
+                    || std::is_same_v<Type, VhdlAssertApi>
+                    || std::is_same_v<Type, RandomDistribution>
+                    || std::is_same_v<Type, ScopeRandomize>
+                    || std::is_same_v<Type, Call>
+                    || std::is_same_v<Type, Return>
+                    || std::is_same_v<Type, TraverseContainer>
+                    || std::is_same_v<Type, FileOpen>
+                    || std::is_same_v<Type, FileClose>
+                    || std::is_same_v<Type, FileReadLine>
+                    || std::is_same_v<Type, FileErrorStatus>
+                    || std::is_same_v<Type, FileScan>
+                    || std::is_same_v<Type, FileBinaryRead>
+                    || std::is_same_v<Type, ClassMethodCall>
+                    || std::is_same_v<Type, ClassStaticMethodCall>) {
+                    known = true;
+                }
+            },
+            operation);
+        return known;
+    };
+
+    const auto exact_register_widths = [&](
+        const Process& process,
+        const std::vector<Operation>& operations) {
+        struct WidthState {
+            std::optional<std::uint32_t> width;
+            bool invalid { };
+        };
+        struct CopyRule {
+            RegisterId destination { };
+            RegisterId source { };
+        };
+        std::vector<WidthState> states(process.register_count);
+        std::vector<CopyRule> copy_rules;
+        bool has_out_of_range_register_definition = false;
+        bool has_unsupported_width_operation = false;
+        const auto invalidate = [&](const RegisterId id) {
+            if (id < states.size()) {
+                states[id].invalid = true;
+            } else {
+                has_out_of_range_register_definition = true;
+            }
+        };
+        const auto offer = [&](const RegisterId id,
+                               const std::uint32_t width) {
+            if (id >= states.size()) {
+                has_out_of_range_register_definition = true;
+                return;
+            }
+            auto& state = states[id];
+            if (width == 0U) {
+                state.invalid = true;
+                return;
+            }
+            if (state.width && *state.width != width) {
+                state.invalid = true;
+            } else {
+                state.width = width;
+            }
+        };
+        const auto account_call_stack = [&](const CallStack& stack) {
+            if (stack.capacity == 0U) {
+                return;
+            }
+            offer(stack.pointer, 32U);
+            const auto begin = static_cast<std::uint64_t>(stack.entries);
+            const auto end = begin + stack.capacity;
+            if (begin >= states.size() || end > states.size()) {
+                has_out_of_range_register_definition = true;
+                return;
+            }
+            for (auto entry = begin; entry < end; ++entry) {
+                offer(static_cast<RegisterId>(entry), 32U);
+            }
+        };
+        const auto invalidate_class_packed_actuals = [&](
+            const auto& actuals, const auto& kinds) {
+            for (std::size_t index = 0U;
+                index < actuals.size();
+                ++index) {
+                if (kinds.empty() || index >= kinds.size()
+                    || kinds[index] != 1U) {
+                    invalidate(actuals[index]);
+                }
+            }
+        };
+
+        for (const auto& operation : operations) {
+            if (!width_effects_are_known(operation)) {
+                has_unsupported_width_operation = true;
+            }
+            visit_operation(
+                [&](const auto& value) {
+                    using Type = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<Type, LoadConstant>) {
+                        if (value.value.width()
+                            <= std::numeric_limits<std::uint32_t>::max()) {
+                            offer(value.destination,
+                                static_cast<std::uint32_t>(
+                                    value.value.width()));
+                        } else {
+                            invalidate(value.destination);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, ReadSignal>) {
+                        if (value.signal < design_.signal_info_.size()
+                            && design_.signal_info_[value.signal].width
+                                <= std::numeric_limits<std::uint32_t>::max()) {
+                            offer(value.destination,
+                                static_cast<std::uint32_t>(
+                                    design_.signal_info_[value.signal].width));
+                        } else {
+                            invalidate(value.destination);
+                        }
+                    } else if constexpr (std::is_same_v<Type, Extract>) {
+                        offer(value.destination, value.width);
+                    } else if constexpr (
+                        std::is_same_v<Type, CopyRegister>
+                        || std::is_same_v<Type, ConvertToTwoState>
+                        || std::is_same_v<Type, UnaryNot>) {
+                        copy_rules.push_back(
+                            { value.destination, value.source });
+                    } else if constexpr (
+                        std::is_same_v<Type, DynamicExtract>) {
+                        offer(value.destination, 1U);
+                    } else if constexpr (
+                        std::is_same_v<Type, DynamicPartSelect>) {
+                        offer(value.destination, value.width);
+                    } else if constexpr (
+                        std::is_same_v<Type, ReadSimulationTime>) {
+                        offer(value.destination, 64U);
+                    } else if constexpr (std::is_same_v<Type, SignalEvent>
+                        || std::is_same_v<Type, SignalActive>
+                        || std::is_same_v<Type, SignalDriving>
+                        || std::is_same_v<Type, EventTriggered>) {
+                        offer(value.destination, 1U);
+                    } else if constexpr (
+                        std::is_same_v<Type, SignalLastEvent>
+                        || std::is_same_v<Type, SignalLastActive>) {
+                        offer(value.destination, 64U);
+                    } else if constexpr (
+                        std::is_same_v<Type, SignalLastValue>
+                        || std::is_same_v<Type, SignalDrivingValue>) {
+                        if (value.signal < design_.signal_info_.size()
+                            && design_.signal_info_[value.signal].width
+                                <= std::numeric_limits<std::uint32_t>::max()) {
+                            offer(value.destination,
+                                static_cast<std::uint32_t>(
+                                    design_.signal_info_[value.signal].width));
+                        } else {
+                            invalidate(value.destination);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, LogicalNot>
+                        || std::is_same_v<Type, LogicalBinary>
+                        || std::is_same_v<Type, Reduction>) {
+                        offer(value.destination, 1U);
+                    } else if constexpr (
+                        std::is_same_v<Type, CountOnes>
+                        || std::is_same_v<Type, CountBits>) {
+                        offer(value.destination, 32U);
+                    } else if constexpr (
+                        std::is_same_v<Type, Concatenate>) {
+                        offer(value.destination, value.width);
+                    } else if constexpr (std::is_same_v<Type, WaitOrder>) {
+                        offer(value.result, 1U);
+                    } else if constexpr (std::is_same_v<Type, WaitOn>) {
+                        if (value.timeout_result) {
+                            offer(*value.timeout_result, 1U);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, StochasticQueueOperation>) {
+                        offer(value.status, 32U);
+                        if (value.kind != StochasticQueueKind::initialize) {
+                            // A missing queue writes every present optional
+                            // output before dispatching the kind-specific
+                            // path. For add, job/information are read on
+                            // success but become 32-bit defs on a miss.
+                            if (value.job_id) {
+                                offer(*value.job_id, 32U);
+                            }
+                            if (value.information_id) {
+                                offer(*value.information_id, 32U);
+                            }
+                            if (value.statistic_value) {
+                                offer(*value.statistic_value, 32U);
+                            }
+                            if (value.result) {
+                                offer(*value.result, 32U);
+                            }
+                        }
+                    } else if constexpr (std::is_same_v<Type, PlaEvaluate>) {
+                        offer(value.output, value.output_width);
+                    } else if constexpr (
+                        std::is_same_v<Type, VhdlAssertApi>) {
+                        if (value.destination) {
+                            if (value.kind == VhdlAssertApiKind::get_count) {
+                                offer(*value.destination, 64U);
+                            } else if (
+                                value.kind
+                                == VhdlAssertApiKind::get_read_severity) {
+                                offer(*value.destination, 2U);
+                            } else if (
+                                value.kind == VhdlAssertApiKind::is_failed
+                                || value.kind
+                                    == VhdlAssertApiKind::get_enable) {
+                                offer(*value.destination, 1U);
+                            } else {
+                                invalidate(*value.destination);
+                            }
+                        }
+                        if (value.valid) {
+                            if (value.kind == VhdlAssertApiKind::set_format) {
+                                offer(*value.valid, 1U);
+                            } else {
+                                invalidate(*value.valid);
+                            }
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, RandomDistribution>) {
+                        offer(value.destination, 32U);
+                        offer(value.seed, 32U);
+                    } else if constexpr (
+                        std::is_same_v<Type, ScopeRandomize>) {
+                        offer(value.destination, 32U);
+                        for (const auto& target : value.targets) {
+                            offer(target.target, target.width);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, Call>
+                        || std::is_same_v<Type, Return>) {
+                        account_call_stack(value.stack);
+                    } else if constexpr (
+                        std::is_same_v<Type, TraverseContainer>) {
+                        offer(value.destination, 32U);
+                        if (!value.string_index) {
+                            invalidate(value.index);
+                        }
+                    } else if constexpr (std::is_same_v<Type, FileOpen>) {
+                        offer(value.destination, 32U);
+                        if (value.status) {
+                            offer(*value.status, 2U);
+                        }
+                    } else if constexpr (std::is_same_v<Type, FileClose>) {
+                        if (value.clear_handle) {
+                            offer(value.handle, 32U);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, FileReadLine>) {
+                        offer(value.destination, 32U);
+                        if (value.target_kind
+                            == FileTextTargetKind::packed_register) {
+                            offer(value.target, value.target_width);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, FileErrorStatus>) {
+                        offer(value.destination, 32U);
+                        if (value.target_kind
+                            == FileTextTargetKind::packed_register) {
+                            offer(value.target, value.target_width);
+                        }
+                    } else if constexpr (std::is_same_v<Type, FileScan>) {
+                        offer(value.destination, 32U);
+                        if (value.success) {
+                            offer(*value.success, 1U);
+                        }
+                        for (const auto& conversion : value.conversions) {
+                            if (conversion.target.kind
+                                == InputScanTargetKind::packed_register) {
+                                offer(
+                                    conversion.target.id,
+                                    conversion.target.width);
+                            }
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, FileBinaryRead>) {
+                        offer(value.destination, 32U);
+                        if (value.target_kind
+                            == FileBinaryTargetKind::packed_register) {
+                            offer(value.target, value.width);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, ClassMethodCall>) {
+                        invalidate(value.destination);
+                        invalidate_class_packed_actuals(
+                            value.actuals, value.actual_kinds);
+                    } else if constexpr (
+                        std::is_same_v<Type, ClassStaticMethodCall>) {
+                        invalidate(value.destination);
+                        invalidate_class_packed_actuals(
+                            value.actuals, value.actual_kinds);
+                    } else {
+                        if constexpr (requires { value.destination; }) {
+                            using Destination
+                                = std::remove_cvref_t<
+                                    decltype(value.destination)>;
+                            if constexpr (std::is_same_v<
+                                              Destination, RegisterId>) {
+                                invalidate(value.destination);
+                            } else if constexpr (std::is_same_v<
+                                                     Destination,
+                                                     std::optional<RegisterId>>) {
+                                if (value.destination) {
+                                    invalidate(*value.destination);
+                                }
+                            }
+                        }
+                        if constexpr (requires { value.result; }) {
+                            using Result
+                                = std::remove_cvref_t<decltype(value.result)>;
+                            if constexpr (std::is_same_v<
+                                              Result, RegisterId>) {
+                                invalidate(value.result);
+                            } else if constexpr (std::is_same_v<
+                                                     Result,
+                                                     std::optional<RegisterId>>) {
+                                if (value.result) {
+                                    invalidate(*value.result);
+                                }
+                            }
+                        }
+                        if constexpr (requires { value.timeout_result; }) {
+                            if (value.timeout_result) {
+                                invalidate(*value.timeout_result);
+                            }
+                        }
+                    }
+                },
+                operation);
+        }
+
+        for (std::size_t pass = 0U; pass < states.size(); ++pass) {
+            bool changed = false;
+            for (const auto& rule : copy_rules) {
+                if (rule.destination >= states.size()) {
+                    has_out_of_range_register_definition = true;
+                    continue;
+                }
+                auto& destination = states[rule.destination];
+                if (rule.source >= states.size()) {
+                    if (!destination.invalid) {
+                        destination.invalid = true;
+                        changed = true;
+                    }
+                    continue;
+                }
+                const auto& source = states[rule.source];
+                if (source.invalid) {
+                    if (!destination.invalid) {
+                        destination.invalid = true;
+                        changed = true;
+                    }
+                    continue;
+                }
+                if (!source.width) {
+                    continue;
+                }
+                if (!destination.width) {
+                    if (destination.invalid) {
+                        continue;
+                    }
+                    destination.width = source.width;
+                    changed = true;
+                } else if (*destination.width != *source.width
+                    && !destination.invalid) {
+                    destination.invalid = true;
+                    changed = true;
+                }
+            }
+            if (!changed) {
+                break;
+            }
+        }
+        for (std::size_t pass = 0U; pass < states.size(); ++pass) {
+            bool changed = false;
+            for (const auto& rule : copy_rules) {
+                if (rule.destination >= states.size()) {
+                    has_out_of_range_register_definition = true;
+                    continue;
+                }
+                const bool source_invalid
+                    = rule.source >= states.size()
+                    || states[rule.source].invalid
+                    || !states[rule.source].width;
+                auto& destination = states[rule.destination];
+                if (source_invalid && !destination.invalid) {
+                    destination.invalid = true;
+                    changed = true;
+                }
+            }
+            if (!changed) {
+                break;
+            }
+        }
+        std::vector<std::optional<std::uint32_t>> result(states.size());
+        if (has_unsupported_width_operation) {
+            return result;
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            if (!has_out_of_range_register_definition
+                && !states[index].invalid) {
+                result[index] = states[index].width;
+            }
+        }
+        return result;
+    };
+
+    std::vector<bool> family_has_leaf_write;
+    if (lowering_census_enabled_) {
+        family_has_leaf_write.resize(families.size(), false);
+    }
+
+    for (std::size_t process_index = 0U;
+        process_index < design_.process_count(); ++process_index) {
+        const auto process_view = design_.process_view(process_index);
+        const auto& process_operations = process_view.operations();
+        bool has_candidate_operation = false;
+        for (std::size_t index = 0U;
+            index < process_operations.size();
+            ++index) {
+            const auto& operation = process_operations[index];
+            visit_operation(
+                [&](const auto& value) {
+                    using Type = std::decay_t<decltype(value)>;
+                    if constexpr (requires { value.signal; }) {
+                        using Signal = std::remove_cvref_t<
+                            decltype(value.signal)>;
+                        if constexpr (std::is_same_v<Signal, SignalId>) {
+                            const auto signal
+                                = process_operations.signal(value.signal);
+                            has_candidate_operation
+                                = has_candidate_operation
+                                || family_by_proxy.contains(signal);
+                        }
+                    }
+                    if constexpr (std::is_same_v<
+                                      Type,
+                                      WriteContainerObjectElement>) {
+                        has_candidate_operation
+                            = has_candidate_operation
+                            || family_by_object.contains(value.object);
+                    }
+                },
+                operation);
+            if (has_candidate_operation) {
+                break;
+            }
+        }
+        if (!has_candidate_operation) {
+            has_candidate_operation = std::ranges::any_of(
+                process_view.static_sensitivity(),
+                [&](const Sensitivity& sensitivity) {
+                    return family_by_proxy.contains(sensitivity.signal)
+                        && sensitivity.width != 0U;
+                });
+        }
+        if (!has_candidate_operation) {
+            continue;
+        }
+
+        auto process = process_view.materialize();
+
+        // Keep each sensitivity slot in place: static-trigger region masks
+        // address this vector by index. Whole-array and cross-element ranges
+        // remain on the proxy; an exact interval wholly inside one element
+        // can follow that element's physical signal.
+        for (auto& sensitivity : process.static_sensitivity) {
+            const auto mapped = map_leaf_interval(
+                sensitivity.signal, sensitivity.offset, sensitivity.width);
+            if (mapped) {
+                sensitivity.signal = mapped->first;
+                sensitivity.offset = mapped->second;
+                record_lowering_census(
+                    census.leaf_sensitivity_rewrites);
+            }
+        }
+
+        std::vector<Operation> operations;
+        operations.reserve(process.operations.size());
+        for (std::size_t index = 0U;
+            index < process.operations.size();
+            ++index) {
+            operations.push_back(process.operations.expanded(index));
+        }
+        const auto register_widths
+            = exact_register_widths(process, operations);
+        const auto register_value_kinds
+            = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+                process.register_value_kinds);
+        const auto register_is_logic4 = [&](const RegisterId id) {
+            return id < register_value_kinds.size()
+                && register_value_kinds[id] == ValueKind::logic4;
+        };
+        std::vector<bool> operation_changed(operations.size(), false);
+        bool may_write_from_observed_or_postponed = process.observed
+            || process.postponed || process.final;
+
+        // A constant immediately before an element write is sufficient only
+        // when every control-flow entry to that write passes through it.
+        // SimIR calls, fork entries, and block exits can otherwise jump over
+        // the apparent definition while preserving the operation positions.
+        std::vector<bool> has_direct_entry(operations.size(), false);
+        const auto mark_direct_entry = [&](const std::size_t target) {
+            if (target < has_direct_entry.size()) {
+                has_direct_entry[target] = true;
+            }
+        };
+        for (const auto& operation : operations) {
+            visit_operation(
+                [&](const auto& value) {
+                    using Type = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<Type, Jump>) {
+                        mark_direct_entry(value.target);
+                    } else if constexpr (std::is_same_v<Type, Call>) {
+                        mark_direct_entry(value.target);
+                        mark_direct_entry(value.return_target);
+                    } else if constexpr (std::is_same_v<Type, Branch>) {
+                        mark_direct_entry(value.when_true);
+                        mark_direct_entry(value.when_false);
+                    } else if constexpr (std::is_same_v<Type, Fork>) {
+                        for (const auto branch : value.branches) {
+                            mark_direct_entry(branch);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, DisableBlock>) {
+                        mark_direct_entry(value.end);
+                    } else if constexpr (
+                        std::is_same_v<Type, WaitRegion>) {
+                        may_write_from_observed_or_postponed
+                            = may_write_from_observed_or_postponed
+                            || value.phase == runtime::SchedulerPhase::observed
+                            || value.phase == runtime::SchedulerPhase::postponed;
+                    }
+                },
+                operation);
+        }
+
+        for (std::size_t index = 0U;
+            index < operations.size();
+            ++index) {
+            auto* read = operation_get_if<ReadSignal>(&operations[index]);
+            if (read == nullptr
+                || !family_by_proxy.contains(read->signal)) {
+                continue;
+            }
+            record_lowering_census(census.proxy_read_operations);
+
+            if (index + 1U >= operations.size()) {
+                record_lowering_census(
+                    census.read_no_extract_fallbacks);
+                continue;
+            }
+            auto* extract
+                = operation_get_if<Extract>(&operations[index + 1U]);
+            if (extract == nullptr || extract->source != read->destination) {
+                record_lowering_census(
+                    census.read_no_extract_fallbacks);
+                continue;
+            }
+            if (read->kind != SignalReadKind::current
+                || read->clock || read->gate
+                || extract->destination == read->destination) {
+                record_lowering_census(
+                    census.read_context_or_use_fallbacks);
+                continue;
+            }
+            if (read->signal >= design_.signal_info_.size()
+                || read->destination >= register_widths.size()
+                || !register_is_logic4(read->destination)
+                || !register_widths[read->destination]
+                || *register_widths[read->destination]
+                    != design_.signal_info_[read->signal].width) {
+                record_lowering_census(census.read_width_fallbacks);
+                continue;
+            }
+            if (has_direct_entry[index + 1U]
+                || std::ranges::any_of(
+                    process.debug_locals,
+                    [&](const DebugLocal& local) {
+                        return local.register_id == read->destination;
+                    })) {
+                record_lowering_census(
+                    census.read_context_or_use_fallbacks);
+                continue;
+            }
+
+            bool has_only_known_uses = true;
+            for (std::size_t other = 0U;
+                other < operations.size();
+                ++other) {
+                if (other == index || other == index + 1U) {
+                    continue;
+                }
+                if (!register_use_is_known(
+                        operations[other], read->destination)) {
+                    has_only_known_uses = false;
+                    break;
+                }
+            }
+            if (!has_only_known_uses) {
+                record_lowering_census(
+                    census.read_context_or_use_fallbacks);
+                continue;
+            }
+
+            if (const auto mapped = map_leaf_interval(
+                    read->signal, extract->offset, extract->width)) {
+                read->signal = mapped->first;
+                extract->offset = mapped->second;
+                operation_changed[index] = true;
+                operation_changed[index + 1U] = true;
+                record_lowering_census(census.leaf_read_rewrites);
+            } else {
+                record_lowering_census(census.read_range_fallbacks);
+            }
+        }
+
+        auto remapped_regions = process.driver_regions;
+        bool region_changed = false;
+        for (std::size_t index = 0U;
+            index < operations.size();
+            ++index) {
+            auto* write
+                = operation_get_if<WriteContainerObjectElement>(
+                    &operations[index]);
+            if (write == nullptr) {
+                continue;
+            }
+            const auto family_position
+                = family_by_object.find(write->object);
+            if (family_position == family_by_object.end()) {
+                continue;
+            }
+            record_lowering_census(
+                census.proxy_element_write_operations);
+            // Retain checked container execution for multidimensional
+            // element writes. Their linear indices may be computed from
+            // several registers even when the source indices are constants.
+            if (write->linear_index || write->dynamic_part
+                || families[family_position->second].dimension_count != 1U) {
+                record_lowering_census(
+                    census.element_write_dynamic_fallbacks);
+                continue;
+            }
+            if (write->transaction_signal) {
+                record_lowering_census(
+                    census.element_write_transaction_fallbacks);
+                continue;
+            }
+            const auto* index_literal = index == 0U
+                ? nullptr
+                : operation_get_if<LoadConstant>(
+                    &operations[index - 1U]);
+            if (index_literal == nullptr
+                || index_literal->destination != write->index) {
+                record_lowering_census(
+                    census.element_write_index_fallbacks);
+                continue;
+            }
+            if (has_direct_entry[index]
+                || (!write->nonblocking
+                    && may_write_from_observed_or_postponed)) {
+                record_lowering_census(
+                    census.element_write_context_fallbacks);
+                continue;
+            }
+            if (write->source >= register_widths.size()
+                || !register_is_logic4(write->source)
+                || !register_widths[write->source]) {
+                record_lowering_census(
+                    census.element_write_width_fallbacks);
+                continue;
+            }
+            const auto& family = families[family_position->second];
+            if (*register_widths[write->source] != family.element_width) {
+                record_lowering_census(
+                    census.element_write_width_fallbacks);
+                continue;
+            }
+
+            std::optional<std::int64_t> logical_index;
+            if (write->signed_index) {
+                if (const auto value
+                    = index_literal->value.known_signed_value()) {
+                    logical_index = *value;
+                }
+            } else {
+                if (const auto value
+                    = index_literal->value.known_unsigned_value();
+                    value
+                    && *value
+                        <= static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int32_t>::max())) {
+                    logical_index = static_cast<std::int64_t>(*value);
+                }
+            }
+            if (!logical_index) {
+                record_lowering_census(
+                    census.element_write_index_fallbacks);
+                continue;
+            }
+            const auto low = std::min(
+                static_cast<std::int64_t>(family.declared_left),
+                static_cast<std::int64_t>(family.declared_right));
+            const auto high = std::max(
+                static_cast<std::int64_t>(family.declared_left),
+                static_cast<std::int64_t>(family.declared_right));
+            if (*logical_index < low || *logical_index > high) {
+                record_lowering_census(
+                    census.element_write_index_fallbacks);
+                continue;
+            }
+            const auto ordinal = family.declared_left
+                    >= family.declared_right
+                ? static_cast<std::int64_t>(family.declared_left)
+                    - *logical_index
+                : *logical_index
+                    - static_cast<std::int64_t>(family.declared_left);
+            if (ordinal < 0
+                || static_cast<std::uint64_t>(ordinal)
+                    >= family.element_count) {
+                record_lowering_census(
+                    census.element_write_index_fallbacks);
+                continue;
+            }
+            const auto leaf = family.leaves[
+                static_cast<std::size_t>(ordinal)];
+            if (write->nonblocking) {
+                const auto domain
+                    = process.scheduling_domain
+                        == ProcessSchedulingDomain::systemverilog
+                    ? SignalUpdateDomain::systemverilog_nba
+                    : SignalUpdateDomain::generic;
+                operations[index] = WriteUpdate {
+                    leaf, write->source, domain
+                };
+            } else {
+                operations[index] = WriteBlocking {
+                    leaf, write->source
+                };
+            }
+            operation_changed[index] = true;
+            record_lowering_census(
+                census.leaf_element_write_rewrites);
+            if (lowering_census_enabled_) {
+                family_has_leaf_write[family_position->second] = true;
+            }
+            if (std::ranges::none_of(
+                    remapped_regions,
+                    [&](const Process::DriverRegion& region) {
+                        return region.signal == leaf
+                            && region.offset == 0U
+                            && region.width == 0U
+                            && region.whole;
+                    })) {
+                remapped_regions.push_back(Process::DriverRegion {
+                    leaf, 0U, 0U, true
+                });
+                region_changed = true;
+            }
+        }
+
+        std::size_t region_cursor { };
+        const auto consume_region = [&](const SignalId signal,
+                                        const std::uint32_t offset)
+            -> std::optional<std::size_t> {
+            while (region_cursor < remapped_regions.size()) {
+                const auto& region = remapped_regions[region_cursor];
+                if (!region.whole
+                    && region.signal == signal
+                    && region.offset == offset) {
+                    return region_cursor++;
+                }
+                ++region_cursor;
+            }
+            return std::nullopt;
+        };
+        for (std::size_t index = 0U;
+            index < operations.size();
+            ++index) {
+            auto remap_static_slice = [&](auto& value,
+                                          const bool eligible) {
+                const auto family_position
+                    = family_by_proxy.find(value.signal);
+                const auto region_index
+                    = consume_region(value.signal, value.offset);
+                if (!eligible
+                    || family_position == family_by_proxy.end()) {
+                    return;
+                }
+                record_lowering_census(
+                    census.proxy_slice_write_operations);
+                if (!region_index) {
+                    record_lowering_census(
+                        census.slice_write_region_fallbacks);
+                    return;
+                }
+                const auto& region = remapped_regions[*region_index];
+                if (region.width == 0U
+                    || value.source >= register_widths.size()
+                    || !register_widths[value.source]
+                    || *register_widths[value.source] != region.width) {
+                    record_lowering_census(
+                        census.slice_write_width_fallbacks);
+                    return;
+                }
+                const auto mapped = map_leaf_interval(
+                    value.signal, value.offset, region.width);
+                if (!mapped) {
+                    record_lowering_census(
+                        census.slice_write_range_fallbacks);
+                    return;
+                }
+                value.signal = mapped->first;
+                value.offset = mapped->second;
+                remapped_regions[*region_index].signal = mapped->first;
+                remapped_regions[*region_index].offset = mapped->second;
+                operation_changed[index] = true;
+                region_changed = true;
+                record_lowering_census(
+                    census.leaf_slice_write_rewrites);
+                if (lowering_census_enabled_) {
+                    family_has_leaf_write[family_position->second] = true;
+                }
+            };
+
+            visit_operation(
+                [&](auto& value) {
+                    using Type = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<Type, WriteBlockingSlice>
+                        || std::is_same_v<Type, WriteUpdateSlice>
+                        || std::is_same_v<Type, WriteAfterSlice>
+                        || std::is_same_v<Type, WriteInertialSlice>) {
+                        remap_static_slice(value, true);
+                    } else if constexpr (
+                        std::is_same_v<Type, WriteProjectedSlice>) {
+                        remap_static_slice(value, false);
+                    } else if constexpr (std::is_same_v<
+                                             Type,
+                                             WriteProjectedWaveformSlice>) {
+                        // Projected VHDL writes keep their aggregate route,
+                        // but consume the corresponding region so later
+                        // ordinary slices still match the right owner.
+                        (void)consume_region(value.signal, value.offset);
+                    }
+                },
+                operations[index]);
+        }
+
+        for (std::size_t index = 0U;
+            index < operation_changed.size();
+            ++index) {
+            if (operation_changed[index]) {
+                process.operations.replace(
+                    index, std::move(operations[index]));
+            }
+        }
+        if (region_changed) {
+            process.driver_regions = std::move(remapped_regions);
+        }
+        design_.replace_process_record(process_index, std::move(process));
+    }
+    if (lowering_census_enabled_) {
+        for (const bool has_leaf_write : family_has_leaf_write) {
+            if (has_leaf_write) {
+                ++census.physical_families_with_leaf_writes;
+            } else {
+                ++census.physical_alias_only_families;
+            }
+        }
+    }
+    return census;
+}
 void HierarchyBuilder::finish()
 {
-    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+    if (lowering_census_enabled_) {
         std::cerr << "fsim-profile: concurrent-process-template"
+                  << " occurrences="
+                  << vhdl_concurrent_template_occurrences_
                   << " misses=" << concurrent_template_misses_
                   << " hits=" << concurrent_template_hits_
                   << " rejected=" << concurrent_template_rejections_
+                  << " lowerer_calls="
+                  << vhdl_concurrent_template_occurrences_
+                      - concurrent_template_hits_
                   << " lowered_cpu_ns="
                   << concurrent_template_lower_cpu_ns_
                   << '\n';
+        std::cerr << "fsim-profile: vhdl-process-template"
+                  << " occurrences=" << vhdl_process_template_occurrences_
+                  << " lowerer_calls=" << vhdl_process_lower_requests_
+                  << " hits=" << vhdl_process_template_hits_
+                  << " misses=" << vhdl_process_template_misses_
+                  << " rejected=" << vhdl_process_template_rejections_
+                  << " lowered_cpu_ns=" << vhdl_process_template_lower_cpu_ns_
+                  << '\n';
+        std::cerr << "fsim-profile: systemverilog-concurrent-process-template"
+                  << " occurrences="
+                  << systemverilog_concurrent_occurrences_
+                  << " top_occurrences="
+                  << systemverilog_concurrent_occurrences_
+                      - systemverilog_generated_concurrent_occurrences_
+                  << " generated_occurrences="
+                  << systemverilog_generated_concurrent_occurrences_
+                  << " misses="
+                  << systemverilog_concurrent_template_misses_
+                  << " hits=" << systemverilog_concurrent_template_hits_
+                  << " rejected="
+                  << systemverilog_concurrent_template_rejections_
+                  << " lowered="
+                  << systemverilog_concurrent_templates_lowered_
+                  << " replayed="
+                  << systemverilog_concurrent_templates_replayed_
+                  << " top_replayed="
+                  << systemverilog_concurrent_templates_replayed_
+                      - systemverilog_generated_concurrent_replays_
+                  << " generated_replayed="
+                  << systemverilog_generated_concurrent_replays_
+                  << " lowerer_calls="
+                  << systemverilog_concurrent_occurrences_
+                      - systemverilog_concurrent_templates_replayed_
+                  << " top_lowerer_calls="
+                  << systemverilog_concurrent_occurrences_
+                      - systemverilog_generated_concurrent_occurrences_
+                      - (systemverilog_concurrent_templates_replayed_
+                          - systemverilog_generated_concurrent_replays_)
+                  << " generated_lowerer_calls="
+                  << systemverilog_generated_concurrent_occurrences_
+                      - systemverilog_generated_concurrent_replays_
+                  << '\n';
+        std::cerr << "fsim-profile: systemverilog-generated-process-template"
+                  << " occurrences="
+                  << systemverilog_generated_process_occurrences_
+                  << " lowerer_calls="
+                  << systemverilog_generated_process_lower_requests_
+                  << " cached_programs="
+                  << systemverilog_generated_process_templates_lowered_
+                  << " replays="
+                  << systemverilog_generated_process_template_replays_
+                  << " rejected="
+                  << systemverilog_generated_process_template_rejections_
+                  << '\n';
+        std::cerr << "fsim-profile: systemverilog-ordinary-process-template"
+                  << " occurrences="
+                  << systemverilog_ordinary_process_template_occurrences_
+                  << " lowerer_calls="
+                  << systemverilog_ordinary_process_template_lower_requests_
+                  << " cached_programs="
+                  << systemverilog_ordinary_process_templates_lowered_
+                  << " replays="
+                  << systemverilog_ordinary_process_template_replays_
+                  << " rejected="
+                  << systemverilog_ordinary_process_template_rejections_
+                  << '\n';
+        std::cerr << "fsim-profile: hir-process-lowering-census"
+                  << " uncached_vhdl_process_occurrences="
+                  << vhdl_process_lower_requests_
+                  << " uncached_vhdl_generated_process_occurrences="
+                  << vhdl_generated_process_lower_requests_
+                  << " vhdl_lowerer_generated_processes="
+                  << vhdl_lowerer_generated_processes_
+                  << " uncached_systemverilog_process_occurrences="
+                  << systemverilog_process_lower_requests_
+                  << " uncached_systemverilog_generated_process_occurrences="
+                  << systemverilog_generated_process_lower_requests_
+                  << " systemverilog_clocking_process_occurrences="
+                  << systemverilog_clocking_process_occurrences_
+                  << " systemverilog_lowerer_generated_processes="
+                  << systemverilog_lowerer_generated_processes_
+                  << " uncached_vhdl_generated_input_actual_occurrences="
+                  << vhdl_generated_input_actual_occurrences_
+                  << " uncached_vhdl_port_input_actual_occurrences="
+                  << vhdl_port_input_actual_occurrences_
+                  << " uncached_vhdl_port_output_actual_occurrences="
+                  << vhdl_port_output_actual_occurrences_
+                  << " uncached_vhdl_generated_concurrent_occurrences="
+                  << vhdl_generated_concurrent_occurrences_
+                  << '\n';
+    }
+    const auto element_net_census
+        = rewrite_eligible_element_net_families();
+    if (lowering_census_enabled_) {
+        std::cerr << "fsim-profile: element-net-family-census"
+                  << " shape_families="
+                  << element_net_census.shape_qualified_families
+                  << " shape_leaves="
+                  << element_net_census.shape_qualified_leaves
+                  << " invalid_initial_cache_shape_fallback_families="
+                  << element_net_census
+                         .invalid_initial_cache_shape_fallback_families
+                  << " resolver_fallback_families="
+                  << element_net_census.resolver_fallback_families
+                  << " ordinal_range_fallback_families="
+                  << element_net_census.ordinal_range_fallback_families
+                  << " name_collision_fallback_families="
+                  << element_net_census.name_collision_fallback_families
+                  << " candidates="
+                  << element_net_census.candidate_families
+                  << " candidate_leaves="
+                  << element_net_census.candidate_leaves
+                  << " terminal_fallback_families="
+                  << element_net_census.terminal_fallback_families
+                  << " terminal_fallback_leaves="
+                  << element_net_census.terminal_fallback_leaves
+                  << " projected_write_operations="
+                  << element_net_census.projected_write_operations
+                  << " projected_fallback_families="
+                  << element_net_census.projected_fallback_families
+                  << " projected_fallback_leaves="
+                  << element_net_census.projected_fallback_leaves
+                  << " eligible_families="
+                  << element_net_census.eligible_families
+                  << " eligible_leaves="
+                  << element_net_census.eligible_leaves
+                  << " capacity_fallback_families="
+                  << element_net_census.capacity_fallback_families
+                  << " capacity_fallback_leaves="
+                  << element_net_census.capacity_fallback_leaves
+                  << " physical_families="
+                  << element_net_census.physical_families
+                  << " physical_leaves="
+                  << element_net_census.physical_leaves
+                  << " families_with_leaf_writes="
+                  << element_net_census.physical_families_with_leaf_writes
+                  << " alias_only_families="
+                  << element_net_census.physical_alias_only_families
+                  << '\n';
+        std::cerr << "fsim-profile: element-net-read-census"
+                  << " proxy_reads="
+                  << element_net_census.proxy_read_operations
+                  << " leaf_read_rewrites="
+                  << element_net_census.leaf_read_rewrites
+                  << " no_extract_fallbacks="
+                  << element_net_census.read_no_extract_fallbacks
+                  << " width_fallbacks="
+                  << element_net_census.read_width_fallbacks
+                  << " context_or_use_fallbacks="
+                  << element_net_census.read_context_or_use_fallbacks
+                  << " range_fallbacks="
+                  << element_net_census.read_range_fallbacks
+                  << " proxy_sensitivities="
+                  << element_net_census.proxy_sensitivity_entries
+                  << " sensitivity_rewrites="
+                  << element_net_census.leaf_sensitivity_rewrites
+                  << " sensitivity_range_fallbacks="
+                  << element_net_census.sensitivity_range_fallbacks
+                  << '\n';
+        std::cerr << "fsim-profile: element-net-write-census"
+                  << " proxy_element_writes="
+                  << element_net_census.proxy_element_write_operations
+                  << " leaf_element_write_rewrites="
+                  << element_net_census.leaf_element_write_rewrites
+                  << " dynamic_fallbacks="
+                  << element_net_census.element_write_dynamic_fallbacks
+                  << " transaction_fallbacks="
+                  << element_net_census.element_write_transaction_fallbacks
+                  << " index_fallbacks="
+                  << element_net_census.element_write_index_fallbacks
+                  << " width_fallbacks="
+                  << element_net_census.element_write_width_fallbacks
+                  << " context_fallbacks="
+                  << element_net_census.element_write_context_fallbacks
+                  << " proxy_slice_writes="
+                  << element_net_census.proxy_slice_write_operations
+                  << " leaf_slice_write_rewrites="
+                  << element_net_census.leaf_slice_write_rewrites
+                  << " slice_region_fallbacks="
+                  << element_net_census.slice_write_region_fallbacks
+                  << " slice_width_fallbacks="
+                  << element_net_census.slice_write_width_fallbacks
+                  << " slice_range_fallbacks="
+                  << element_net_census.slice_write_range_fallbacks
+                  << '\n';
     }
     validate_process_drivers();
+    design_.finalize_process_rows();
     std::stable_sort(
         design_.systemc_objects_.begin(),
         design_.systemc_objects_.end(),
@@ -179,6 +2022,16 @@ void HierarchyBuilder::finish()
     }
     diagnostics_ = std::move(unique_diagnostics);
     design_.freeze_hierarchy_paths();
+    if (diagnostics_.empty()) {
+        try {
+            design_.finalize_signal_driver_inventory();
+        } catch (const std::exception& error) {
+            report("FSIM-ELAB-DRIVER-001",
+                "could not construct immutable signal-driver inventory: "
+                    + std::string { error.what() },
+                { });
+        }
+    }
 }
 
 ResolutionKind HierarchyBuilder::native_resolution(
@@ -395,12 +2248,34 @@ void HierarchyBuilder::validate_process_drivers()
         bool continuous { };
         bool event_controlled { };
     };
-    std::unordered_map<ContainerObjectId, SignalId> writable_container_signals;
+    std::unordered_map<ContainerObjectId, std::vector<SignalId>>
+        writable_container_signals;
     std::unordered_map<SignalId, bool> variable_container_signals;
     for (const auto& alias : design_.container_signal_aliases_) {
         if (alias.writable) {
-            writable_container_signals.insert_or_assign(
-                alias.object, alias.signal);
+            writable_container_signals[alias.object].push_back(alias.signal);
+            if (alias.signal < design_.signal_info_.size()
+                && design_.signal_info_[alias.signal]
+                       .systemverilog_net_type.empty()) {
+                variable_container_signals.insert_or_assign(
+                    alias.signal, true);
+            }
+        }
+    }
+    for (const auto& alias : design_.container_element_signal_aliases_) {
+        if (alias.writable) {
+            writable_container_signals[alias.object].push_back(alias.signal);
+            if (alias.signal < design_.signal_info_.size()
+                && design_.signal_info_[alias.signal]
+                       .systemverilog_net_type.empty()) {
+                variable_container_signals.insert_or_assign(
+                    alias.signal, true);
+            }
+        }
+    }
+    for (const auto& alias : design_.container_aggregate_signal_aliases_) {
+        if (alias.writable) {
+            writable_container_signals[alias.object].push_back(alias.signal);
             if (alias.signal < design_.signal_info_.size()
                 && design_.signal_info_[alias.signal]
                        .systemverilog_net_type.empty()) {
@@ -421,26 +2296,28 @@ void HierarchyBuilder::validate_process_drivers()
             + right.width;
         return left.offset < right_end && right.offset < left_end;
     };
-    const auto process_leaf = [](const Process& process) {
-        return std::string_view { process.name }.substr(
-            process.name.find_last_of('.') + 1U);
+    const auto process_leaf = [](const ProcessProgramView& process) {
+        const auto& name = process.name();
+        return std::string_view { name }.substr(
+            name.find_last_of('.') + 1U);
     };
-    const auto is_continuous_process = [&](const Process& process) {
+    const auto is_continuous_process = [&](const ProcessProgramView& process) {
         const auto leaf = process_leaf(process);
-        return leaf.starts_with("concurrent_")
-            || leaf.starts_with("continuous_fused_");
+        return leaf.starts_with("concurrent_");
     };
     std::unordered_set<SignalId> continuous_signals;
-    for (const auto& process : design_.processes_) {
-        if (process.name.find("$declaration_initializer_")
+    for (std::size_t process_index = 0U;
+        process_index < design_.process_count(); ++process_index) {
+        const auto process = design_.process_view(process_index);
+        if (process.name().find("$declaration_initializer_")
                 != std::string::npos
             || !is_continuous_process(process)) {
             continue;
         }
-        for (const auto& region : process.driver_regions) {
+        for (const auto& region : process.driver_regions()) {
             continuous_signals.insert(region.signal);
         }
-        for (const auto& operation : process.operations) {
+        for (const auto& operation : process.operations()) {
             visit_operation(
                 [&](const auto& value) {
                     using OperationType
@@ -450,10 +2327,12 @@ void HierarchyBuilder::validate_process_drivers()
                             OperationType, WriteContainerObject>
                         || std::is_same_v<
                             OperationType, WriteContainerObjectElement>) {
-                        const auto alias
+                        const auto aliases
                             = writable_container_signals.find(value.object);
-                        if (alias != writable_container_signals.end()) {
-                            continuous_signals.insert(alias->second);
+                        if (aliases != writable_container_signals.end()) {
+                            continuous_signals.insert(
+                                aliases->second.begin(),
+                                aliases->second.end());
                         }
                     }
                 },
@@ -461,40 +2340,44 @@ void HierarchyBuilder::validate_process_drivers()
         }
     }
     std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
-    for (const auto& process : design_.processes_) {
-        if (process.name.find("$declaration_initializer_")
+    for (std::size_t process_index = 0U;
+        process_index < design_.process_count(); ++process_index) {
+        const auto process = design_.process_view(process_index);
+        if (process.name().find("$declaration_initializer_")
             != std::string::npos) {
             continue;
         }
         std::map<SignalId, std::vector<DriverRegion>> process_outputs;
-        for (const auto& region : process.driver_regions) {
+        for (const auto& region : process.driver_regions()) {
             process_outputs[region.signal].push_back(region);
         }
         const auto record_container_object_write =
             [&](const ContainerObjectId object) {
-                const auto alias = writable_container_signals.find(object);
-                if (alias == writable_container_signals.end()) {
+                const auto aliases = writable_container_signals.find(object);
+                if (aliases == writable_container_signals.end()) {
                     return;
                 }
-                if (variable_container_signals.contains(alias->second)
-                    && !continuous_signals.contains(alias->second)) {
-                    // Procedural-only variable arrays retain their legacy
-                    // multiple-writer semantics. Audit the conservative
-                    // whole-array claim only when a continuous process also
-                    // drives the alias-backed signal.
-                    return;
-                }
-                auto& regions = process_outputs[alias->second];
-                if (std::ranges::none_of(
-                        regions,
-                        [](const DriverRegion& region) {
-                            return region.whole;
-                        })) {
-                    regions.push_back(DriverRegion {
-                        alias->second, 0U, 0U, true });
+                for (const auto signal : aliases->second) {
+                    if (variable_container_signals.contains(signal)
+                        && !continuous_signals.contains(signal)) {
+                        // Procedural-only variable arrays retain their legacy
+                        // multiple-writer semantics. Audit the conservative
+                        // whole-array claim only when a continuous process
+                        // also drives the corresponding signal.
+                        continue;
+                    }
+                    auto& regions = process_outputs[signal];
+                    if (std::ranges::none_of(
+                            regions,
+                            [](const DriverRegion& region) {
+                                return region.whole;
+                            })) {
+                        regions.push_back(DriverRegion {
+                            signal, 0U, 0U, true });
+                    }
                 }
             };
-        for (const auto& operation : process.operations) {
+        for (const auto& operation : process.operations()) {
             visit_operation(
                 [&](const auto& value) {
                     using OperationType
@@ -512,20 +2395,9 @@ void HierarchyBuilder::validate_process_drivers()
         for (auto& [signal, regions] : process_outputs) {
             const bool continuous = is_continuous_process(process);
             const bool event_controlled
-                = !process.static_sensitivity.empty();
-            if (process_leaf(process).starts_with("continuous_fused_")) {
-                // Fusion combines independently elaborated continuous
-                // assignments into one process. Keep their regions separate
-                // here so an overlapping pair remains a multiple-driver
-                // error after fusion.
-                for (const auto& region : regions) {
-                    drivers[signal].push_back(ProcessDriver {
-                        { region }, continuous, event_controlled });
-                }
-            } else {
-                drivers[signal].push_back(ProcessDriver {
-                    std::move(regions), continuous, event_controlled });
-            }
+                = !process.static_sensitivity().empty();
+            drivers[signal].push_back(ProcessDriver {
+                std::move(regions), continuous, event_controlled });
         }
     }
     for (SignalId signal = 0;

@@ -2,8 +2,10 @@
 #include "llvm_jit_lowering_internal.hpp"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -42,6 +44,83 @@ using runtime::simir::ValueKind;
     return packed_low_mask(context, width, width);
 }
 
+[[nodiscard]] llvm::Value* lower_power(
+    llvm::IRBuilder<>& builder,
+    llvm::Value* base,
+    llvm::Value* exponent,
+    llvm::ConstantInt* mask,
+    llvm::ConstantInt* zero,
+    llvm::ConstantInt* one,
+    const std::uint32_t width)
+{
+    constexpr std::uint32_t runtime_loop_min_width = 128U;
+    if (width < runtime_loop_min_width) {
+        llvm::Value* powered = one;
+        llvm::Value* factor = base;
+        for (std::uint32_t bit = 0; bit < width; ++bit) {
+            auto* selected = builder.CreateICmpNE(
+                builder.CreateAnd(
+                    builder.CreateLShr(
+                        exponent,
+                        packed_constant(builder.getContext(), width, bit)),
+                    one),
+                zero);
+            powered = builder.CreateSelect(
+                selected,
+                builder.CreateAnd(
+                    builder.CreateMul(powered, factor), mask),
+                powered);
+            if (bit + 1U < width) {
+                factor = builder.CreateAnd(
+                    builder.CreateMul(factor, factor), mask);
+            }
+        }
+        return powered;
+    }
+
+    auto* const preheader = builder.GetInsertBlock();
+    auto* const function = preheader->getParent();
+    auto& context = builder.getContext();
+    auto* const header = llvm::BasicBlock::Create(
+        context, "power.loop.header", function);
+    auto* const body = llvm::BasicBlock::Create(
+        context, "power.loop.body", function);
+    auto* const exit = llvm::BasicBlock::Create(
+        context, "power.loop.exit", function);
+    builder.CreateBr(header);
+
+    builder.SetInsertPoint(header);
+    auto* const remaining = builder.CreatePHI(
+        exponent->getType(), 2U, "power.loop.remaining");
+    remaining->addIncoming(exponent, preheader);
+    auto* const powered = builder.CreatePHI(
+        base->getType(), 2U, "power.loop.result");
+    powered->addIncoming(one, preheader);
+    auto* const factor = builder.CreatePHI(
+        base->getType(), 2U, "power.loop.factor");
+    factor->addIncoming(base, preheader);
+    builder.CreateCondBr(
+        builder.CreateICmpNE(remaining, zero), body, exit);
+
+    builder.SetInsertPoint(body);
+    auto* const selected = builder.CreateICmpNE(
+        builder.CreateAnd(remaining, one), zero);
+    auto* const multiplied = builder.CreateAnd(
+        builder.CreateMul(powered, factor), mask);
+    auto* const next_powered = builder.CreateSelect(
+        selected, multiplied, powered);
+    auto* const next_factor = builder.CreateAnd(
+        builder.CreateMul(factor, factor), mask);
+    auto* const next_remaining = builder.CreateLShr(remaining, one);
+    builder.CreateBr(header);
+    remaining->addIncoming(next_remaining, body);
+    powered->addIncoming(next_powered, body);
+    factor->addIncoming(next_factor, body);
+
+    builder.SetInsertPoint(exit);
+    return powered;
+}
+
 [[nodiscard]] llvm::ConstantInt* packed_low_mask(
     llvm::LLVMContext& context,
     const std::uint32_t storage_width,
@@ -51,6 +130,40 @@ using runtime::simir::ValueKind;
     const auto integer_width = std::max(storage_width, 64U);
     return llvm::ConstantInt::get(
         context, llvm::APInt::getLowBitsSet(integer_width, active_width));
+}
+
+[[nodiscard]] EncodedValue canonicalize_logic9_value(
+    llvm::IRBuilder<>& builder,
+    EncodedValue value)
+{
+    if (value.kind != ValueKind::logic9) {
+        return value;
+    }
+
+    auto& context = builder.getContext();
+    auto* const mask = packed_mask(context, value.width);
+    auto* const zero = packed_constant(context, value.width, 0U);
+    auto* plane0 = builder.CreateAnd(value.aval, mask);
+    auto* plane1 = builder.CreateAnd(value.bval, mask);
+    auto* plane2 = value.logic9_plane2 == nullptr
+        ? zero
+        : builder.CreateAnd(value.logic9_plane2, mask);
+    auto* plane3 = value.logic9_plane3 == nullptr
+        ? zero
+        : builder.CreateAnd(value.logic9_plane3, mask);
+
+    // Ordinals 9..15 are reserved and read as X by the runtime. Their raw
+    // plane representation must not leak into generated Logic9 operations.
+    auto* const reserved = builder.CreateAnd(
+        plane3, builder.CreateOr(plane0, builder.CreateOr(plane1, plane2)));
+    return {
+        builder.CreateAnd(builder.CreateOr(plane0, reserved), mask),
+        builder.CreateAnd(plane1, builder.CreateNot(reserved)),
+        value.width,
+        builder.CreateAnd(plane2, builder.CreateNot(reserved)),
+        builder.CreateAnd(plane3, builder.CreateNot(reserved)),
+        ValueKind::logic9
+    };
 }
 
 [[nodiscard]] ShiftOperator reverse_shift(
@@ -97,7 +210,9 @@ load_register(llvm::IRBuilder<>& builder,
     auto* bval_pointer = register_slot_pointer(
         builder, i64, slot.bval_base, slot.word_offset,
         "register.bval.pointer");
-    auto* integer = packed_integer_type(builder.getContext(), slot.width);
+    auto* integer = packed_integer_type(context, slot.width);
+    auto* storage_integer = packed_integer_type(
+        context, ((slot.width + 63U) / 64U) * 64U);
     llvm::Value* zero = llvm::ConstantInt::get(integer, 0);
     const auto forwarded_plane = [&](const std::size_t plane,
                                      llvm::Value* pointer,
@@ -107,12 +222,16 @@ load_register(llvm::IRBuilder<>& builder,
             ++slot.constant_planes->forwarded_loads;
             return slot.constant_planes->published[plane];
         }
-        auto* loaded = builder.CreateLoad(integer, pointer, name);
+        // Slots and stores use whole words. Loading the same storage type
+        // keeps local slots promotable and discards padding only afterwards.
+        auto* loaded = builder.CreateLoad(storage_integer, pointer, name);
         loaded->setAlignment(llvm::Align { 8 });
-        return loaded;
+        return builder.CreateTruncOrBitCast(loaded, integer);
     };
     auto* aval = forwarded_plane(0, aval_pointer, "register.aval");
-    auto* bval = forwarded_plane(1, bval_pointer, "register.bval");
+    auto* bval = slot.known_logic4
+        ? llvm::ConstantInt::get(integer, 0)
+        : forwarded_plane(1, bval_pointer, "register.bval");
     llvm::Value* logic9_plane2 = zero;
     llvm::Value* logic9_plane3 = zero;
     if (slot.kind == ValueKind::logic9) {
@@ -129,14 +248,16 @@ load_register(llvm::IRBuilder<>& builder,
         logic9_plane2 = plane2;
         logic9_plane3 = plane3;
     }
-    return {
-        aval,
-        bval,
-        slot.width,
-        logic9_plane2,
-        logic9_plane3,
-        slot.kind,
-    };
+    return canonicalize_logic9_value(
+        builder,
+        EncodedValue {
+            aval,
+            bval,
+            slot.width,
+            logic9_plane2,
+            logic9_plane3,
+            slot.kind,
+        });
 }
 
 [[nodiscard]] EncodedValue coerce_value_kind(
@@ -171,42 +292,20 @@ load_register(llvm::IRBuilder<>& builder,
         ValueKind::logic9};
   }
 
-  const auto state_mask =
-      [&](const std::uint8_t state) -> llvm::Value* {
-        llvm::Value* selected = mask;
-        const std::array planes{
-            value.aval,
-            value.bval,
-            value.logic9_plane2,
-            value.logic9_plane3};
-        for (std::size_t plane = 0; plane < planes.size(); ++plane) {
-          const auto bit = ((state >> plane) & 1U) != 0;
-          selected = builder.CreateAnd(
-              selected,
-              bit ? planes[plane]
-                  : builder.CreateNot(planes[plane]));
-        }
-        return builder.CreateAnd(selected, mask);
-      };
-  const auto zero_state = builder.CreateOr(
-      state_mask(static_cast<std::uint8_t>(Logic9::zero)),
-      state_mask(static_cast<std::uint8_t>(Logic9::l)));
-  const auto one_state = builder.CreateOr(
-      state_mask(static_cast<std::uint8_t>(Logic9::one)),
-      state_mask(static_cast<std::uint8_t>(Logic9::h)));
-  const auto z_state =
-      state_mask(static_cast<std::uint8_t>(Logic9::z));
-  auto* known = builder.CreateOr(zero_state, one_state);
-  auto* x_state = builder.CreateAnd(
-      builder.CreateNot(builder.CreateOr(known, z_state)), mask);
-  return {
-      builder.CreateOr(one_state, x_state),
-      builder.CreateOr(z_state, x_state),
-      value.width,
-      zero,
-      zero,
-      ValueKind::logic4
-  };
+  // With the ordinal Logic9 encoding, p1 identifies 0/1/L/H, while p3
+  // identifies '-' and every reserved code. Reserved codes still map to X;
+  // these expressions do not assume they are unreachable.
+  auto* aval = builder.CreateAnd(
+      builder.CreateOr(
+          builder.CreateOr(value.aval, value.logic9_plane3),
+          builder.CreateNot(builder.CreateOr(
+              value.bval, value.logic9_plane2))),
+      mask);
+  auto* bval = builder.CreateAnd(
+      builder.CreateOr(value.logic9_plane3, builder.CreateNot(value.bval)),
+      mask);
+  return { aval, bval, value.width, zero, zero, ValueKind::logic4 };
+
 }
 
 [[nodiscard]] llvm::Value* logic9_state_mask(
@@ -231,32 +330,25 @@ load_register(llvm::IRBuilder<>& builder,
     return selected;
 }
 
-[[nodiscard]] EncodedValue map_logic9_unary(
+[[nodiscard]] EncodedValue lower_logic9_not(
     llvm::IRBuilder<>& builder,
-    const EncodedValue& value,
-    const std::array<Logic9, 9>& table)
+    const EncodedValue& value)
 {
+    auto* mask = packed_mask(builder.getContext(), value.width);
     auto* zero = packed_constant(builder.getContext(), value.width, 0);
-    std::array<llvm::Value*, 4> result {
-        zero, zero, zero, zero
-    };
-    for (std::uint8_t state = 0; state < table.size(); ++state) {
-        auto* selected = logic9_state_mask(builder, value, state);
-        const auto encoded = static_cast<std::uint8_t>(table[state]);
-        for (std::size_t plane = 0; plane < result.size(); ++plane) {
-            if (((encoded >> plane) & 1U) != 0) {
-                result[plane] = builder.CreateOr(result[plane], selected);
-            }
-        }
-    }
-    return {
-        result[0],
-        result[1],
-        value.width,
-        result[2],
-        result[3],
-        ValueKind::logic9
-    };
+    // 0/1/L/H have p1 set and p3 clear. U is the all-zero encoding;
+    // every other non-known state (including reserved codes) produces X.
+    auto* known = builder.CreateAnd(
+        value.bval, builder.CreateNot(value.logic9_plane3));
+    auto* non_u = builder.CreateOr(
+        builder.CreateOr(value.aval, value.bval),
+        builder.CreateOr(value.logic9_plane2, value.logic9_plane3));
+    auto* plane0 = builder.CreateAnd(
+        builder.CreateAnd(non_u,
+            builder.CreateNot(builder.CreateAnd(known, value.aval))),
+        mask);
+    auto* plane1 = builder.CreateAnd(known, mask);
+    return { plane0, plane1, value.width, zero, zero, ValueKind::logic9 };
 }
 
 [[nodiscard]] EncodedValue lower_logic9_binary(
@@ -348,6 +440,7 @@ void store_register(llvm::IRBuilder<>& builder,
         builder, i64, slot.bval_base, slot.word_offset,
         "register.bval.pointer");
     value = coerce_value_kind(builder, value, slot.kind);
+    value = canonicalize_logic9_value(builder, value);
     if (slot.constant_planes != nullptr
         && slot.constant_planes->active) {
         auto& forwarding = *slot.constant_planes;
@@ -386,6 +479,13 @@ void store_register(llvm::IRBuilder<>& builder,
     auto* bval = builder.CreateStore(value.bval, bval_pointer);
     aval->setAlignment(llvm::Align { 8 });
     bval->setAlignment(llvm::Align { 8 });
+    const auto mark_safe_frame_store = [&](llvm::StoreInst* const store) {
+        store->setMetadata(
+            context.getMDKindID(kTieredSafeFrameStoreMetadata),
+            llvm::MDNode::get(context, llvm::ArrayRef<llvm::Metadata*> { }));
+    };
+    mark_safe_frame_store(aval);
+    mark_safe_frame_store(bval);
     if (slot.kind == ValueKind::logic9) {
         auto* plane2_pointer = register_slot_pointer(
             builder, i64, slot.logic9_plane2_base, slot.word_offset,
@@ -399,16 +499,19 @@ void store_register(llvm::IRBuilder<>& builder,
             value.logic9_plane3, plane3_pointer);
         logic9_plane2->setAlignment(llvm::Align { 8 });
         logic9_plane3->setAlignment(llvm::Align { 8 });
+        mark_safe_frame_store(logic9_plane2);
+        mark_safe_frame_store(logic9_plane3);
     }
     if (slot.initialized_base != nullptr) {
         auto* initialized_pointer = register_slot_pointer(
             builder, llvm::Type::getInt8Ty(context),
             slot.initialized_base, slot.index,
             "register.initialized.pointer");
-        builder.CreateStore(
+        auto* const initialized_store = builder.CreateStore(
             llvm::ConstantInt::get(
                 llvm::Type::getInt8Ty(context), 1),
             initialized_pointer);
+        mark_safe_frame_store(initialized_store);
     }
 }
 
@@ -513,42 +616,46 @@ void store_register(llvm::IRBuilder<>& builder,
     auto* one = packed_constant(context, lhs.width, 1);
     switch (operation) {
     case BinaryOperator::bit_and: {
-        auto* lhs_zero = builder.CreateAnd(builder.CreateNot(lhs.aval),
-            builder.CreateNot(lhs.bval));
-        auto* rhs_zero = builder.CreateAnd(builder.CreateNot(rhs.aval),
-            builder.CreateNot(rhs.bval));
-        auto* known_zero = builder.CreateOr(lhs_zero, rhs_zero);
-        auto* lhs_one = builder.CreateAnd(lhs.aval, builder.CreateNot(lhs.bval));
-        auto* rhs_one = builder.CreateAnd(rhs.aval, builder.CreateNot(rhs.bval));
-        auto* known_one = builder.CreateAnd(lhs_one, rhs_one);
-        auto* unknown = builder.CreateAnd(builder.CreateNot(
-                                              builder.CreateOr(known_zero, known_one)),
-            mask);
-        return { builder.CreateAnd(builder.CreateNot(known_zero), mask),
-            unknown, lhs.width };
+        auto* const lhs_aval = builder.CreateAnd(lhs.aval, mask);
+        auto* const lhs_bval = builder.CreateAnd(lhs.bval, mask);
+        auto* const rhs_aval = builder.CreateAnd(rhs.aval, mask);
+        auto* const rhs_bval = builder.CreateAnd(rhs.bval, mask);
+        auto* const possible_lhs
+            = builder.CreateOr(lhs_aval, lhs_bval);
+        auto* const possible_rhs
+            = builder.CreateOr(rhs_aval, rhs_bval);
+        auto* const aval = builder.CreateAnd(possible_lhs, possible_rhs);
+        auto* const bval = builder.CreateAnd(
+            aval, builder.CreateOr(lhs_bval, rhs_bval));
+        return { aval, bval, lhs.width };
     }
     case BinaryOperator::bit_or: {
-        auto* lhs_one = builder.CreateAnd(lhs.aval, builder.CreateNot(lhs.bval));
-        auto* rhs_one = builder.CreateAnd(rhs.aval, builder.CreateNot(rhs.bval));
-        auto* known_one = builder.CreateOr(lhs_one, rhs_one);
-        auto* lhs_zero = builder.CreateAnd(builder.CreateNot(lhs.aval),
-            builder.CreateNot(lhs.bval));
-        auto* rhs_zero = builder.CreateAnd(builder.CreateNot(rhs.aval),
-            builder.CreateNot(rhs.bval));
-        auto* known_zero = builder.CreateAnd(lhs_zero, rhs_zero);
-        auto* unknown = builder.CreateAnd(builder.CreateNot(
-                                              builder.CreateOr(known_zero, known_one)),
-            mask);
-        return { builder.CreateAnd(builder.CreateNot(known_zero), mask),
-            unknown, lhs.width };
+        auto* const lhs_aval = builder.CreateAnd(lhs.aval, mask);
+        auto* const lhs_bval = builder.CreateAnd(lhs.bval, mask);
+        auto* const rhs_aval = builder.CreateAnd(rhs.aval, mask);
+        auto* const rhs_bval = builder.CreateAnd(rhs.bval, mask);
+        auto* const aval = builder.CreateOr(
+            builder.CreateOr(lhs_aval, lhs_bval),
+            builder.CreateOr(rhs_aval, rhs_bval));
+        auto* const lhs_one = builder.CreateAnd(
+            lhs_aval, builder.CreateNot(lhs_bval));
+        auto* const rhs_one = builder.CreateAnd(
+            rhs_aval, builder.CreateNot(rhs_bval));
+        auto* const known_one = builder.CreateOr(lhs_one, rhs_one);
+        auto* const bval = builder.CreateAnd(
+            aval, builder.CreateNot(known_one));
+        return { aval, bval, lhs.width };
     }
     case BinaryOperator::bit_xor: {
-        auto* known = builder.CreateAnd(builder.CreateNot(
-                                            builder.CreateOr(lhs.bval, rhs.bval)),
-            mask);
-        auto* unknown = builder.CreateAnd(builder.CreateNot(known), mask);
-        auto* known_value = builder.CreateAnd(builder.CreateXor(lhs.aval, rhs.aval), known);
-        return { builder.CreateOr(known_value, unknown), unknown, lhs.width };
+        auto* const lhs_aval = builder.CreateAnd(lhs.aval, mask);
+        auto* const lhs_bval = builder.CreateAnd(lhs.bval, mask);
+        auto* const rhs_aval = builder.CreateAnd(rhs.aval, mask);
+        auto* const rhs_bval = builder.CreateAnd(rhs.bval, mask);
+        auto* const unknown = builder.CreateAnd(
+            builder.CreateOr(lhs_bval, rhs_bval), mask);
+        auto* const aval = builder.CreateOr(
+            builder.CreateXor(lhs_aval, rhs_aval), unknown);
+        return { aval, unknown, lhs.width };
     }
     case BinaryOperator::add_unsigned:
     case BinaryOperator::add_signed: {
@@ -609,25 +716,8 @@ void store_register(llvm::IRBuilder<>& builder,
         } else if (
             operation == BinaryOperator::power_unsigned
             || operation == BinaryOperator::power_signed) {
-            llvm::Value* powered = one;
-            llvm::Value* factor = left;
-            for (std::uint32_t bit = 0; bit < lhs.width; ++bit) {
-                auto* selected = builder.CreateICmpNE(
-                    builder.CreateAnd(
-                        builder.CreateLShr(
-                            right, packed_constant(context, lhs.width, bit)),
-                        one),
-                    zero);
-                powered = builder.CreateSelect(
-                    selected,
-                    builder.CreateAnd(
-                        builder.CreateMul(powered, factor), mask),
-                    powered);
-                if (bit + 1U < lhs.width) {
-                    factor = builder.CreateAnd(
-                        builder.CreateMul(factor, factor), mask);
-                }
-            }
+            auto* powered = lower_power(
+                builder, left, right, mask, zero, one, lhs.width);
             if (operation == BinaryOperator::power_signed) {
                 auto* sign_bit = builder.CreateShl(
                     one, packed_constant(context, lhs.width, lhs.width - 1U));

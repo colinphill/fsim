@@ -120,7 +120,7 @@ bool Lowerer::lower_hir_synchronization_statement(
                 ? SignalReadKind::sampled
                 : SignalReadKind::current,
         });
-        implicit_signal_dependencies_.push_back(*binding->signal);
+        record_implicit_signal_dependency(*binding->signal);
         return value;
     }();
     const auto arguments_valid = std::ranges::all_of(

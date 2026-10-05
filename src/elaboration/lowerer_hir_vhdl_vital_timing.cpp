@@ -411,7 +411,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             return std::nullopt;
         }
         if (delay == 0U) {
-            implicit_signal_dependencies_.push_back(*binding->signal);
+            record_implicit_signal_dependency(*binding->signal);
             return binding->signal;
         }
         const auto delayed = vhdl_implicit_signal_attribute(

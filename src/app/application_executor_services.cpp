@@ -8,6 +8,8 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <limits>
 
 namespace fsim::app::application_detail {
 
@@ -95,17 +97,17 @@ void LlvmProcessExecutor::write_report(
     }
     try {
         if (state.context == nullptr
-            || state.process == nullptr
+            || !state.process.valid()
             || state.generated_process != process
-            || instruction >= state.process->operations.size()) {
+            || instruction >= state.process.operations().size()) {
             throw std::logic_error {
                 "invalid generated report callback"
             };
         }
         const auto* report = fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (report != nullptr) {
-            if (state.process->language_standard == "2019") {
+            if (state.process.language_standard() == "2019") {
                 state.context->vhdl_report(
                     instruction, report->message, report->severity,
                     report->source, true);
@@ -128,7 +130,7 @@ void LlvmProcessExecutor::write_report(
             return;
         }
         const auto* string_report = fsim::runtime::simir::operation_get_if<runtime::simir::StringReport>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (string_report != nullptr) {
             const auto encoded = state.executor->read_register(
                 string_report->severity, 2);
@@ -147,7 +149,7 @@ void LlvmProcessExecutor::write_report(
                 runtime::simir::AssertionSeverity>(ordinal);
             const auto message = state.executor->read_string_register(
                 string_report->message);
-            if (state.process->language_standard == "2019") {
+            if (state.process.language_standard() == "2019") {
                 state.context->vhdl_report(
                     instruction, message, severity,
                     string_report->source, string_report->standalone);
@@ -175,7 +177,7 @@ void LlvmProcessExecutor::write_report(
             return;
         }
         const auto* assertion = fsim::runtime::simir::operation_get_if<runtime::simir::Assert>(
-            &state.process->operations[instruction]);
+            &state.process.operations()[instruction]);
         if (assertion == nullptr
             || assertion->severity
                 == runtime::simir::AssertionSeverity::failure) {
@@ -187,7 +189,7 @@ void LlvmProcessExecutor::write_report(
         const auto message = assertion->message.empty()
             ? std::string_view { "assertion failed" }
             : std::string_view { assertion->message };
-        if (state.process->language_standard == "2019") {
+        if (state.process.language_standard() == "2019") {
             state.context->vhdl_report(
                 instruction, message, assertion->severity,
                 assertion->source, false);
@@ -312,9 +314,10 @@ LlvmProcessExecutor::mutable_container_register_value(
 void LlvmProcessExecutor::alias_container_register(
     const runtime::simir::ContainerRegisterId destination,
     const runtime::simir::ContainerObjectId object,
-    const runtime::simir::ProcessExecutionContext& context)
+    const runtime::simir::ProcessExecutionContext& context,
+    const bool type_already_checked)
 {
-    if (!context.container_object_has_type(
+    if (!type_already_checked && !context.container_object_has_type(
             object, container_registers_.at(destination)->type)) {
         throw compiler::LlvmJitError {
             "compiled process container-object type mismatch"
@@ -387,14 +390,14 @@ LlvmProcessExecutor::callback_operation(
     const std::uint32_t process,
     const std::uint32_t instruction)
 {
-    if (state.process == nullptr
+    if (!state.process.valid()
         || process != state.generated_process
-        || instruction >= state.process->operations.size()) {
+        || instruction >= state.process.operations().size()) {
         throw compiler::LlvmJitError {
             "compiled file callback metadata is out of range"
         };
     }
-    return state.process->operations[instruction];
+    return state.process.operations()[instruction];
 }
 
 std::uint32_t LlvmProcessExecutor::file_open(
@@ -731,10 +734,48 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
     std::uint64_t* result_bval,
     const std::uint32_t word_count) noexcept
 {
+    return container_read_packed_impl(
+        context, process, instruction, container, flags,
+        index_aval, index_bval, result_aval, result_bval, word_count, false);
+}
+
+std::uint32_t LlvmProcessExecutor::container_read_packed_index64(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    std::uint64_t* result_aval,
+    std::uint64_t* result_bval,
+    const std::uint32_t word_count) noexcept
+{
+    return container_read_packed_impl(
+        context, process, instruction, container, flags,
+        index_aval, index_bval, result_aval, result_bval, word_count, true);
+}
+
+std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t container,
+    const std::uint32_t flags,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    std::uint64_t* result_aval,
+    std::uint64_t* result_bval,
+    const std::uint32_t word_count,
+    const bool index64) noexcept
+{
     auto& state = *static_cast<CallbackState*>(context);
     auto& profile = container_callback_profile();
     if (profile.enabled) {
         ++profile.read_words;
+        if (index64) {
+            ++profile.read_index64_callbacks;
+        }
         profile.read_packed_elements += word_count > 1U ? 1U : 0U;
     }
     if (state.failure) {
@@ -749,6 +790,8 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
             };
         }
         const auto fused_object_distance = flags >> 8U;
+        const bool fused_object_single_use = (flags & 4U) != 0U;
+        const runtime::simir::ContainerValue* borrowed_object { };
         if (fused_object_distance != 0U) {
             if (instruction < fused_object_distance) {
                 throw compiler::LlvmJitError {
@@ -767,8 +810,48 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
                     "fused container-object read metadata is inconsistent"
                 };
             }
-            state.executor->alias_container_register(
-                container, read_object->object, *state.context);
+            const auto& destination
+                = *state.executor->container_registers_.at(container);
+            const bool packed_element = !destination.type.associative
+                && (destination.type.element_kind
+                        == runtime::simir::ContainerElementKind::Packed
+                    || destination.type.element_kind
+                        == runtime::simir::ContainerElementKind::Scalar);
+            const bool can_borrow = fused_object_single_use
+                && destination.type.element_width <= 64U
+                && packed_element
+                && state.executor->container_object_aliases_.at(container)
+                    == invalid_container_object
+                && state.executor->active_container_object_aliases_.empty();
+            if (can_borrow) {
+                if (!state.context->container_object_has_type(
+                        read_object->object, destination.type)) {
+                    throw compiler::LlvmJitError {
+                        "compiled process container-object type mismatch"
+                    };
+                }
+                borrowed_object
+                    = state.context->borrow_container_object(
+                        read_object->object);
+                if (borrowed_object != nullptr
+                    && borrowed_object->type != destination.type) {
+                    throw compiler::LlvmJitError {
+                        "compiled process could not materialize a container-object alias"
+                    };
+                }
+            }
+            if (borrowed_object == nullptr) {
+                state.executor->alias_container_register(
+                    container, read_object->object, *state.context,
+                    can_borrow);
+                // This callback stands in for ReadContainerObject plus the
+                // following fused ContainerRead. Keep the container register
+                // as the source-language snapshot for any later uses.
+                state.executor->materialize_container_object_aliases(
+                    *state.context);
+            } else if (profile.enabled) {
+                ++profile.fused_object_borrow_reads;
+            }
         }
         const auto& source = *state.executor->container_registers_.at(container);
         const auto expected_words = static_cast<std::uint32_t>(
@@ -810,8 +893,10 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
         }
         std::size_t selected { };
         if (source.type.fixed && !linear_index) {
-            const auto sought = static_cast<std::int32_t>(
-                static_cast<std::uint32_t>(index_aval));
+            const auto sought = index64
+                ? std::bit_cast<std::int64_t>(index_aval)
+                : static_cast<std::int64_t>(static_cast<std::int32_t>(
+                      static_cast<std::uint32_t>(index_aval)));
             const auto low = std::min(
                 source.type.index_left, source.type.index_right);
             const auto high = std::max(
@@ -823,11 +908,13 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
             selected = static_cast<std::size_t>(
                 source.type.index_left >= source.type.index_right
                     ? static_cast<std::int64_t>(source.type.index_left) - sought
-                    : static_cast<std::int64_t>(sought) - source.type.index_left);
+                    : sought - static_cast<std::int64_t>(source.type.index_left));
         } else {
-            if (signed_index
-                && static_cast<std::int32_t>(
-                       static_cast<std::uint32_t>(index_aval)) < 0) {
+            const auto signed_index_value = index64
+                ? std::bit_cast<std::int64_t>(index_aval)
+                : static_cast<std::int64_t>(static_cast<std::int32_t>(
+                      static_cast<std::uint32_t>(index_aval)));
+            if (signed_index && signed_index_value < 0) {
                 if (source.type.fixed) {
                     publish_default();
                     return 0;
@@ -837,7 +924,40 @@ std::uint32_t LlvmProcessExecutor::container_read_packed(
                     "container index cannot be negative"
                 };
             }
-            selected = static_cast<std::size_t>(index_aval);
+            if (index64) {
+                const auto selected_value = signed_index
+                    ? static_cast<std::uint64_t>(signed_index_value)
+                    : index_aval;
+                if (selected_value
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::size_t>::max())) {
+                    if (source.type.fixed) {
+                        publish_default();
+                        return 0;
+                    }
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "container index is too large"
+                    };
+                }
+                selected = static_cast<std::size_t>(selected_value);
+            } else {
+                selected = static_cast<std::size_t>(index_aval);
+            }
+        }
+        if (borrowed_object != nullptr) {
+            if (selected >= borrowed_object->elements.size()) {
+                if (source.type.fixed) {
+                    publish_default();
+                    return 0;
+                }
+                throw runtime::simir::InterpreterError {
+                    process, instruction,
+                    "container index is out of range"
+                };
+            }
+            publish(borrowed_object->elements[selected]);
+            return 0;
         }
         if (const auto alias
                 = state.executor->container_object_aliases_.at(container);
@@ -1055,7 +1175,7 @@ void LlvmProcessExecutor::force_signal_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {
@@ -1125,7 +1245,7 @@ void LlvmProcessExecutor::force_driver_signal_slice_logic9(
     const std::uint32_t signal,
     const std::uint32_t offset,
     const std::uint32_t width,
-    const fsim_jit_logic9_word_v1* value) noexcept
+    const fsim_jit_logic9_word_v2* value) noexcept
 {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure) {

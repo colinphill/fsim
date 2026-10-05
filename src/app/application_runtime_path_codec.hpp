@@ -5,15 +5,24 @@
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 
+#include "../elaboration/elaborated_design_process_access.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <istream>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
 
 namespace fsim::app::runtime_path_codec {
+
+struct DecodedRuntimeProgramState {
+    elaboration::ElaboratedDesignState state;
+    std::shared_ptr<const
+        elaboration::detail::RuntimeProcessProgramTable> process_rows;
+};
 
 inline constexpr std::uint64_t kMaximumPayloadBytes
     = 1024ULL * 1024U * 1024U;
@@ -27,6 +36,13 @@ inline constexpr std::size_t kMaximumDecodeAllocationBytes
 /// writes references into that externally owned canonical table.
 [[nodiscard]] std::optional<std::string> serialize_runtime_path_state(
     const elaboration::ElaboratedDesignState& state,
+    const semantic::HierarchyPathTable* external_paths,
+    diagnostic::Engine& diagnostics);
+
+/// Serialize an ElaboratedDesign directly from its process row sidecar when
+/// present. This keeps a decoded design row-backed across artifact writes.
+[[nodiscard]] std::optional<std::string> serialize_runtime_design_state(
+    const elaboration::ElaboratedDesign& design,
     const semantic::HierarchyPathTable* external_paths,
     diagnostic::Engine& diagnostics);
 
@@ -52,9 +68,26 @@ deserialize_runtime_path_state(
     const semantic::HierarchyPathTable* external_paths,
     diagnostic::Engine& diagnostics);
 
+/// Decode the schema-72 runtime form without constructing public Process
+/// facades. The artifact loader validates and installs these rows directly.
+[[nodiscard]] std::optional<DecodedRuntimeProgramState>
+deserialize_runtime_program_state(
+    std::string_view bytes,
+    std::string source_name,
+    const semantic::HierarchyPathTable* external_paths,
+    diagnostic::Engine& diagnostics);
+
 /// Bounded streaming counterpart of deserialize_runtime_path_state().
 [[nodiscard]] std::optional<elaboration::ElaboratedDesignState>
 deserialize_runtime_path_state(
+    std::istream& input,
+    std::uint64_t size,
+    std::string source_name,
+    const semantic::HierarchyPathTable* external_paths,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::optional<DecodedRuntimeProgramState>
+deserialize_runtime_program_state(
     std::istream& input,
     std::uint64_t size,
     std::string source_name,

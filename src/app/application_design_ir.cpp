@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "../elaboration/elaborated_design_process_access.hpp"
 
 #include <cstdlib>
 
@@ -1172,8 +1173,13 @@ class DesignIrBuilder final {
     for (const auto& process : elaborated_.systemc_processes()) {
       systemc_processes.insert(process.process);
     }
+    const auto runtime_process_count = elaborated_.process_count();
+    const auto runtime_process = [&](const std::size_t index) {
+      return elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+          elaborated_, index);
+    };
     std::vector<std::optional<di::SpecializationId>>
-        specialization_by_process(elaborated_.processes().size());
+        specialization_by_process(runtime_process_count);
     for (std::size_t specialization_index = 0;
          specialization_index < hdl_specialization_count_;
          ++specialization_index) {
@@ -1183,52 +1189,56 @@ class DesignIrBuilder final {
           elaborated_.specializations()[specialization_index].processes;
       for (std::size_t process_index = 0;
            process_index < runtime_processes.size(); ++process_index) {
-        const auto runtime_process = static_cast<std::size_t>(
+        const auto runtime_process_index = static_cast<std::size_t>(
             runtime_processes[process_index]);
-        if (runtime_process >= specialization_by_process.size()) {
+        if (runtime_process_index >= specialization_by_process.size()) {
           continue;
         }
-        specialization_by_process[runtime_process] = specialization;
+        specialization_by_process[runtime_process_index] = specialization;
       }
     }
-    for (std::size_t index = 0; index < elaborated_.processes().size(); ++index) {
-      const auto& input = elaborated_.processes()[index];
-      const auto runtime_index = static_cast<std::size_t>(input.id);
+    for (std::size_t index = 0; index < runtime_process_count; ++index) {
+      const auto input = runtime_process(index);
+      if (!input.valid()) {
+        continue;
+      }
+      const auto runtime_id = input.id();
+      const auto runtime_index = static_cast<std::size_t>(runtime_id);
       const auto specialization =
           runtime_index < specialization_by_process.size()
               && specialization_by_process[runtime_index]
           ? *specialization_by_process[runtime_index]
-          : process_specialization(input.id, input.name);
-      const auto source_id = source_process(specialization, input.id);
+          : process_specialization(runtime_id, input.name());
+      const auto source_id = source_process(specialization, runtime_id);
       const auto id = di::ProcessOccurrenceId::from_index(
           static_cast<std::uint32_t>(result_.processes().size()));
       di::ProcessOccurrence output;
       output.id = id;
       output.specialization = specialization;
       output.source_process = source_id;
-      output.name = input.name;
-      output.runtime_index = input.id;
-      output.initialize = input.initialize;
-      output.observed = input.observed;
-      output.reactive = input.reactive;
-      output.final = input.final;
+      output.name = input.name();
+      output.runtime_index = runtime_id;
+      output.initialize = input.initialize();
+      output.observed = input.observed();
+      output.reactive = input.reactive();
+      output.final = input.final();
       if (source_id) {
         output.source = model_.process_identities()[source_id->value()].source;
       } else {
         const auto named = std::ranges::find_if(
             elaborated_.systemc_objects(), [&](const auto& object) {
-              return object.process && *object.process == input.id;
+              return object.process && *object.process == runtime_id;
             });
         if (named != elaborated_.systemc_objects().end()) {
           output.source = source(named->source);
         }
       }
       result_.mutable_processes().push_back(std::move(output));
-      process_by_runtime_[input.id] = id;
+      process_by_runtime_[runtime_id] = id;
       result_.mutable_specializations()[specialization.value()]
           .processes.push_back(id);
       auto& stored = result_.mutable_processes().back();
-      for (const auto& sensitivity : input.static_sensitivity) {
+      for (const auto& sensitivity : input.static_sensitivity()) {
         const auto object = signal_object(sensitivity.signal);
         if (!object) {
           continue;
@@ -1239,10 +1249,10 @@ class DesignIrBuilder final {
             sensitivity_id, id, *object, edge(sensitivity.edge)});
         stored.sensitivities.push_back(sensitivity_id);
       }
-      if (input.switch_bidirectional) {
+      if (input.switch_bidirectional()) {
         continue;
       }
-      for (const auto& region : input.driver_regions) {
+      for (const auto& region : input.driver_regions()) {
         const auto object = signal_object(region.signal);
         if (!object) {
           continue;
@@ -1252,9 +1262,9 @@ class DesignIrBuilder final {
         const auto transaction_id = di::TransactionId::from_index(
             static_cast<std::uint32_t>(result_.transactions().size()));
         auto transaction_kind = di::TransactionKind::procedural;
-        if (boundary_processes.contains(input.id)) {
+        if (boundary_processes.contains(runtime_id)) {
           transaction_kind = di::TransactionKind::boundary_adapter;
-        } else if (systemc_processes.contains(input.id)) {
+        } else if (systemc_processes.contains(runtime_id)) {
           transaction_kind = di::TransactionKind::systemc_update;
         } else if (!source_id) {
           transaction_kind = di::TransactionKind::continuous;
@@ -1459,6 +1469,11 @@ bool valid_runtime_projection(
     const semantic::design::DesignIr& design,
     const elaboration::ElaboratedDesign& runtime,
     const RuntimePathViews& runtime_paths) {
+  const auto runtime_process_count = runtime.process_count();
+  const auto runtime_process = [&](const std::size_t index) {
+    return elaboration::detail::ElaboratedDesignProcessAccess::process_view(
+        runtime, index);
+  };
   using ObjectKind = semantic::design::ObjectKind;
   using BoundaryKind = semantic::design::BoundaryKind;
   const bool trace_projection
@@ -1491,7 +1506,7 @@ bool valid_runtime_projection(
             return specialization.language != semantic::Language::systemc;
           }));
   if (hdl_specialization_count != runtime.specializations().size()
-      || design.processes().size() != runtime.processes().size()
+      || design.processes().size() != runtime_process_count
       || design.conversions().size()
           != runtime.boundary_conversions().size()) {
     if (trace_projection) {
@@ -1500,7 +1515,7 @@ bool valid_runtime_projection(
                 << " runtime_specializations="
                 << runtime.specializations().size()
                 << " design_processes=" << design.processes().size()
-                << " runtime_processes=" << runtime.processes().size()
+                << " runtime_processes=" << runtime_process_count
                 << " design_conversions=" << design.conversions().size()
                 << " runtime_conversions="
                 << runtime.boundary_conversions().size() << '\n';
@@ -1597,10 +1612,10 @@ bool valid_runtime_projection(
     }
   }
   std::vector<const semantic::design::ProcessOccurrence*>
-      projected_processes(runtime.processes().size(), nullptr);
-  std::vector<std::size_t> process_matches(runtime.processes().size());
+      projected_processes(runtime_process_count, nullptr);
+  std::vector<std::size_t> process_matches(runtime_process_count);
   for (const auto& process : design.processes()) {
-    if (process.runtime_index >= runtime.processes().size()) {
+    if (process.runtime_index >= runtime_process_count) {
       continue;
     }
     projected_processes[process.runtime_index] = &process;
@@ -1618,14 +1633,16 @@ bool valid_runtime_projection(
       process_has_transaction[transaction.process.value()] = true;
     }
   }
-  for (std::size_t index = 0; index < runtime.processes().size(); ++index) {
+  for (std::size_t index = 0; index < runtime_process_count; ++index) {
     const auto* projected = projected_processes[index];
+    const auto runtime_program = runtime_process(index);
     if (projected == nullptr || process_matches[index] != 1
-        || projected->name != runtime.processes()[index].name
-        || projected->initialize != runtime.processes()[index].initialize
-        || projected->observed != runtime.processes()[index].observed
-        || projected->reactive != runtime.processes()[index].reactive
-        || projected->final != runtime.processes()[index].final) {
+        || !runtime_program.valid()
+        || projected->name != runtime_program.name()
+        || projected->initialize != runtime_program.initialize()
+        || projected->observed != runtime_program.observed()
+        || projected->reactive != runtime_program.reactive()
+        || projected->final != runtime_program.final()) {
       if (trace_projection) {
         std::cerr << "[fsim-design-ir] process_index=" << index
                   << " projected=" << (projected != nullptr)
@@ -1633,12 +1650,15 @@ bool valid_runtime_projection(
         if (projected != nullptr) {
           std::cerr << " projected_name=" << projected->name;
         }
-        std::cerr << " runtime_name=" << runtime.processes()[index].name
+        if (runtime_program.valid()) {
+          std::cerr << " runtime_name=" << runtime_program.name();
+        }
+        std::cerr
                   << '\n';
       }
       return reject("process-identity");
     }
-    if (runtime.processes()[index].switch_bidirectional
+    if (runtime_program.switch_bidirectional()
         && (!projected->drivers.empty()
             || !projected->transactions.empty()
             || (projected->id.value() < process_has_driver.size()

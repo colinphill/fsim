@@ -23,6 +23,12 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& module = state.module;
     [[maybe_unused]] auto&& symbol = state.symbol;
     [[maybe_unused]] auto&& process = state.process;
+    const auto container_register_types
+        = runtime::simir::process_layout_detail::ProcessLayoutAccess::view(
+            process.container_register_types);
+    const std::span<const runtime::simir::ContainerType> container_types {
+        container_register_types.data(), container_register_types.size()
+    };
     [[maybe_unused]] auto&& signal_widths = state.signal_widths;
     [[maybe_unused]] auto&& signal_value_kinds = state.signal_value_kinds;
     [[maybe_unused]] auto&& direct_read_signals = state.direct_read_signals;
@@ -35,11 +41,13 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& i64 = state.i64;
     [[maybe_unused]] auto&& pointer = state.pointer;
     [[maybe_unused]] auto&& runtime_type = state.runtime_type;
+    [[maybe_unused]] auto&& services_type = state.services_type;
     [[maybe_unused]] auto&& direct_update_slot_type = state.direct_update_slot_type;
     [[maybe_unused]] auto&& frame_type = state.frame_type;
     [[maybe_unused]] auto&& function = state.function;
     [[maybe_unused]] auto&& builder = state.builder;
     [[maybe_unused]] auto&& runtime_argument = state.runtime_argument;
+    [[maybe_unused]] auto&& services_argument = state.services_argument;
     [[maybe_unused]] auto&& frame_argument = state.frame_argument;
     [[maybe_unused]] auto&& context_pointer = state.context_pointer;
     [[maybe_unused]] auto&& read_callback = state.read_callback;
@@ -132,9 +140,11 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& write_formatted_logic9_callback = state.write_formatted_logic9_callback;
     [[maybe_unused]] auto&& read_type = state.read_type;
     [[maybe_unused]] auto&& write_type = state.write_type;
+    [[maybe_unused]] auto&& write_update_type = state.write_update_type;
     [[maybe_unused]] auto&& assert_type = state.assert_type;
     [[maybe_unused]] auto&& write_after_type = state.write_after_type;
     [[maybe_unused]] auto&& write_slice_type = state.write_slice_type;
+    [[maybe_unused]] auto&& write_update_slice_type = state.write_update_slice_type;
     [[maybe_unused]] auto&& write_after_slice_type = state.write_after_slice_type;
     [[maybe_unused]] auto&& release_slice_type = state.release_slice_type;
     [[maybe_unused]] auto&& write_inertial_type = state.write_inertial_type;
@@ -165,8 +175,10 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& random_value_type = state.random_value_type;
     [[maybe_unused]] auto&& read_logic9_type = state.read_logic9_type;
     [[maybe_unused]] auto&& write_logic9_type = state.write_logic9_type;
+    [[maybe_unused]] auto&& write_update_logic9_type = state.write_update_logic9_type;
     [[maybe_unused]] auto&& write_after_logic9_type = state.write_after_logic9_type;
     [[maybe_unused]] auto&& write_slice_logic9_type = state.write_slice_logic9_type;
+    [[maybe_unused]] auto&& write_update_slice_logic9_type = state.write_update_slice_logic9_type;
     [[maybe_unused]] auto&& write_after_slice_logic9_type = state.write_after_slice_logic9_type;
     [[maybe_unused]] auto&& write_inertial_logic9_type = state.write_inertial_logic9_type;
     [[maybe_unused]] auto&& write_inertial_slice_logic9_type = state.write_inertial_slice_logic9_type;
@@ -188,6 +200,9 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& logic9_word_slot = state.logic9_word_slot;
     [[maybe_unused]] auto&& container_result_aval_slot = state.container_result_aval_slot;
     [[maybe_unused]] auto&& container_result_bval_slot = state.container_result_bval_slot;
+    [[maybe_unused]] auto&& wide_callback_scratch = state.wide_callback_scratch;
+    [[maybe_unused]] auto&& wide_callback_scratch_word_stride
+        = state.wide_callback_scratch_word_stride;
     [[maybe_unused]] auto&& store_logic9_word = state.store_logic9_word;
     [[maybe_unused]] auto&& load_logic9_word = state.load_logic9_word;
     [[maybe_unused]] auto&& return_result = state.return_result;
@@ -196,6 +211,8 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& constant_part_select_sources = state.constant_part_select_sources;
     [[maybe_unused]] auto&& dynamic_part_signal_sources = state.dynamic_part_signal_sources;
     [[maybe_unused]] auto&& fused_container_object_reads = state.fused_container_object_reads;
+    [[maybe_unused]] auto&& fused_container_object_single_use_reads
+        = state.fused_container_object_single_use_reads;
     [[maybe_unused]] auto&& instruction_blocks = state.instruction_blocks;
     [[maybe_unused]] auto&& instruction_regions = state.instruction_regions;
     [[maybe_unused]] auto&& static_trigger_region_entries = state.static_trigger_region_entries;
@@ -218,6 +235,8 @@ void lower_suffix_operation(
     [[maybe_unused]] auto&& emit_dynamic_after_slice = operation_context.emit_dynamic_after_slice;
     [[maybe_unused]] auto&& emit_dynamic_inertial_slice = operation_context.emit_dynamic_inertial_slice;
     [[maybe_unused]] auto&& emit_dynamic_projected_slice = operation_context.emit_dynamic_projected_slice;
+    [[maybe_unused]] auto&& callback_signal_id
+        = operation_context.callback_signal_id;
     [[maybe_unused]] auto&& value_lowerer = operation_context.value_lowerer;
     [[maybe_unused]] auto&& signal_lowerer = operation_context.signal_lowerer;
     [[maybe_unused]] auto&& output_lowerer = operation_context.output_lowerer;
@@ -234,7 +253,8 @@ void lower_suffix_operation(
                             load_register(
                                 builder, registers, operation.source),
                             ValueKind::logic4);
-                        if (std::ranges::find(
+                        if (operation.domain == SignalUpdateDomain::generic
+                            && std::ranges::find(
                                 direct_update_signals, operation.signal)
                             != direct_update_signals.end()) {
                             if (!signal_lowerer.begin_direct_update(
@@ -252,8 +272,9 @@ void lower_suffix_operation(
                             operation.signal,
                             operation.source,
                             operation.offset,
-                            FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE,
-                            0);
+                            FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_SLICE_V2,
+                            0,
+                            operation.domain);
                         return;
                     }
                     signal_lowerer.lower(operation);
@@ -263,8 +284,9 @@ void lower_suffix_operation(
                             operation.signal,
                             operation.source,
                             operation.offset,
-                            FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_SLICE,
-                            operation.delay);
+                            FSIM_JIT_PACKED_SIGNAL_WRITE_AFTER_SLICE_V2,
+                            operation.delay,
+                            operation.domain);
                         return;
                     }
                     signal_lowerer.lower(operation);
@@ -299,8 +321,7 @@ void lower_suffix_operation(
                             write_inertial_slice_logic9_type,
                             write_inertial_slice_logic9_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(
-                                    i32, operation.signal),
+                                callback_signal_id(operation.signal),
                                 llvm::ConstantInt::get(
                                     i32, operation.offset),
                                 llvm::ConstantInt::get(i32, source.width),
@@ -310,7 +331,11 @@ void lower_suffix_operation(
                                 constant_i64(
                                     context, operation.delays.fall),
                                 constant_i64(
-                                    context, operation.delays.turnoff) });
+                                    context, operation.delays.turnoff),
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        operation.domain)) });
                         branch_to_next();
                         return;
                     }
@@ -318,8 +343,7 @@ void lower_suffix_operation(
                         write_inertial_slice_type,
                         write_inertial_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             llvm::ConstantInt::get(
                                 i32, operation.offset),
                             llvm::ConstantInt::get(
@@ -329,7 +353,11 @@ void lower_suffix_operation(
                             constant_i64(context, operation.delays.rise),
                             constant_i64(context, operation.delays.fall),
                             constant_i64(
-                                context, operation.delays.turnoff) });
+                                context, operation.delays.turnoff),
+                            llvm::ConstantInt::get(
+                                i32,
+                                static_cast<std::uint32_t>(
+                                    operation.domain)) });
                     branch_to_next();
                 } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
                     if (signal_widths[operation.signal] > 64) {
@@ -360,8 +388,7 @@ void lower_suffix_operation(
                             write_projected_slice_logic9_type,
                             write_projected_slice_logic9_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(
-                                    i32, operation.signal),
+                                callback_signal_id(operation.signal),
                                 llvm::ConstantInt::get(
                                     i32, operation.offset),
                                 llvm::ConstantInt::get(i32, source.width),
@@ -381,8 +408,7 @@ void lower_suffix_operation(
                         write_projected_slice_type,
                         write_projected_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             llvm::ConstantInt::get(
                                 i32, operation.offset),
                             llvm::ConstantInt::get(
@@ -452,8 +478,7 @@ void lower_suffix_operation(
                             write_projected_waveform_slice_logic9_type,
                             write_projected_waveform_slice_logic9_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(
-                                    i32, operation.signal),
+                                callback_signal_id(operation.signal),
                                 llvm::ConstantInt::get(
                                     i32, operation.offset),
                                 llvm::ConstantInt::get(i32, first.width),
@@ -506,7 +531,7 @@ void lower_suffix_operation(
                         write_projected_waveform_slice_type,
                         write_projected_waveform_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             llvm::ConstantInt::get(i32, operation.offset),
                             llvm::ConstantInt::get(i32, first.width),
                             storage,
@@ -530,7 +555,8 @@ void lower_suffix_operation(
                         operation.source,
                         dynamic_offset_i32(operation.selection),
                         write_blocking_slice_callback,
-                        write_blocking_slice_logic9_callback);
+                        write_blocking_slice_logic9_callback,
+                        std::nullopt);
                 } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicSlice>) {
                     if (signal_widths[operation.signal] > 64) {
                         auto* offset = dynamic_offset_i32(operation.selection);
@@ -539,7 +565,8 @@ void lower_suffix_operation(
                             load_register(
                                 builder, registers, operation.source),
                             ValueKind::logic4);
-                        if (std::ranges::find(
+                        if (operation.domain == SignalUpdateDomain::generic
+                            && std::ranges::find(
                                 direct_update_signals, operation.signal)
                             != direct_update_signals.end()) {
                             if (!signal_lowerer.begin_direct_update(
@@ -558,15 +585,17 @@ void lower_suffix_operation(
                         return;
                     }
                     auto* offset = dynamic_offset_i32(operation.selection);
-                    if (std::ranges::find(
-                            direct_update_signals, operation.signal)
-                        == direct_update_signals.end()) {
+                    if (operation.domain != SignalUpdateDomain::generic
+                        || std::ranges::find(
+                               direct_update_signals, operation.signal)
+                            == direct_update_signals.end()) {
                         emit_dynamic_slice(
                             operation.signal,
                             operation.source,
                             offset,
                             write_update_slice_callback,
-                            write_update_slice_logic9_callback);
+                            write_update_slice_logic9_callback,
+                            operation.domain);
                     } else {
                         const auto source = coerce_value_kind(
                             builder,
@@ -585,15 +614,18 @@ void lower_suffix_operation(
                             return;
                         }
                         builder.CreateCall(
-                            write_slice_type,
+                            write_update_slice_type,
                             write_update_slice_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(
-                                    i32, operation.signal),
+                                callback_signal_id(operation.signal),
                                 offset,
                                 llvm::ConstantInt::get(i32, source.width),
                                 source.aval,
-                                source.bval });
+                                source.bval,
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        operation.domain)) });
                         branch_to_next();
                     }
                 } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
@@ -616,6 +648,7 @@ void lower_suffix_operation(
                         operation.selection,
                         write_blocking_slice_callback,
                         write_blocking_slice_logic9_callback,
+                        std::nullopt,
                         std::nullopt);
                 } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicPartSlice>) {
                     if (signal_widths[operation.signal] > 64
@@ -643,7 +676,9 @@ void lower_suffix_operation(
                                 write_block,
                                 instruction_blocks[index + 1]);
                             builder.SetInsertPoint(write_block);
-                            if (std::ranges::find(
+                            if (operation.domain
+                                    == SignalUpdateDomain::generic
+                                && std::ranges::find(
                                     direct_update_signals,
                                     operation.signal)
                                 != direct_update_signals.end()) {
@@ -664,16 +699,18 @@ void lower_suffix_operation(
                         execute_exact_signal();
                         return;
                     }
-                    if (std::ranges::find(
-                            direct_update_signals, operation.signal)
-                        == direct_update_signals.end()) {
+                    if (operation.domain != SignalUpdateDomain::generic
+                        || std::ranges::find(
+                               direct_update_signals, operation.signal)
+                            == direct_update_signals.end()) {
                         emit_dynamic_part_slice(
                             operation.signal,
                             operation.source,
                             operation.selection,
                             write_update_slice_callback,
                             write_update_slice_logic9_callback,
-                            std::nullopt);
+                            std::nullopt,
+                            operation.domain);
                     } else {
                         const auto write = lower_dynamic_part_write(
                             builder,
@@ -707,15 +744,18 @@ void lower_suffix_operation(
                             return;
                         }
                         builder.CreateCall(
-                            write_slice_type,
+                            write_update_slice_type,
                             write_update_slice_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(
-                                    i32, operation.signal),
+                                callback_signal_id(operation.signal),
                                 write.offset,
                                 write.width,
                                 write.value.aval,
-                                write.value.bval });
+                                write.value.bval,
+                                llvm::ConstantInt::get(
+                                    i32,
+                                    static_cast<std::uint32_t>(
+                                        operation.domain)) });
                         branch_to_next();
                     }
                 } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicPartSlice>) {
@@ -730,7 +770,8 @@ void lower_suffix_operation(
                         operation.selection,
                         write_after_slice_callback,
                         write_after_slice_logic9_callback,
-                        operation.delay);
+                        operation.delay,
+                        operation.domain);
                 } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
                     if (signal_widths[operation.signal] > 64) {
                         execute_exact_signal();
@@ -808,8 +849,7 @@ void lower_suffix_operation(
                             write_projected_waveform_slice_logic9_type,
                             write_projected_waveform_slice_logic9_callback,
                             { context_pointer,
-                                llvm::ConstantInt::get(
-                                    i32, operation.signal),
+                                callback_signal_id(operation.signal),
                                 offset,
                                 llvm::ConstantInt::get(
                                     i32, first.width),
@@ -869,8 +909,7 @@ void lower_suffix_operation(
                         write_projected_waveform_slice_type,
                         write_projected_waveform_slice_callback,
                         { context_pointer,
-                            llvm::ConstantInt::get(
-                                i32, operation.signal),
+                            callback_signal_id(operation.signal),
                             offset,
                             llvm::ConstantInt::get(i32, first.width),
                             storage,
@@ -918,10 +957,10 @@ void lower_suffix_operation(
                                 constant_i64(context, message.size()),
                             });
                         return_result(
-                            FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
+                            FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED_V2,
                             instruction,
                             0,
-                            FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
+                            FSIM_JIT_FRAME_STATE_ASSERTION_FAILED_V2,
                             instruction);
                     } else {
                         builder.CreateCall(
@@ -944,7 +983,7 @@ void lower_suffix_operation(
                         builder.CreateAnd(
                             runtime_flags,
                             llvm::ConstantInt::get(
-                                i32, FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS)),
+                                i32, FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS_V2)),
                         llvm::ConstantInt::get(i32, 0));
                     auto* enabled_block = llvm::BasicBlock::Create(
                         context,
@@ -955,17 +994,17 @@ void lower_suffix_operation(
                         instruction_blocks[index + 1]);
                     builder.SetInsertPoint(enabled_block);
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_DEBUG_POINT_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Display>) {
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
                     if (registers[operation.source].width > 64U) {
                         return_result(
-                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                             instruction,
                             0,
-                            FSIM_JIT_FRAME_STATE_READY,
+                            FSIM_JIT_FRAME_STATE_READY_V2,
                             next_instruction);
                         return;
                     }
@@ -1004,95 +1043,95 @@ void lower_suffix_operation(
                 } else if constexpr (
                     std::is_same_v<OperationType, TimeFormatControl>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, PlusArgSelect>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, SystemCommand>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, VcdControl>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType,
                         CoverageDatabaseControl>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, StochasticQueueOperation>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, PlaEvaluate>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, CoverageSample>) {
                     execute_native_service_callback(
                         sample_coverage_callback, "coverage.sample");
                 } else if constexpr (std::is_same_v<OperationType, CoverageQuery>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, VhdlPslApi>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, VhdlAssertApi>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageControl>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageAccess>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, CodeCoverageHit>) {
@@ -1149,18 +1188,18 @@ void lower_suffix_operation(
                 } else if constexpr (
                     std::is_same_v<OperationType, RandomDistribution>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, ScopeRandomize>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, VhdlEnvironmentTime>
@@ -1177,10 +1216,10 @@ void lower_suffix_operation(
                     || std::is_same_v<OperationType,
                         VhdlReflectionApi>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
                     output_lowerer.lower(operation);
@@ -1202,10 +1241,10 @@ void lower_suffix_operation(
                     control_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, WaitRegion>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
                     output_lowerer.lower(operation);
@@ -1213,27 +1252,27 @@ void lower_suffix_operation(
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, WaitPla>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, WaitOrder>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, EventTriggered>) {
                     execute_native_service_callback(
                         event_triggered_callback, "event.triggered");
                 } else if constexpr (std::is_same_v<OperationType, EventAlias>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
                     operation_group_contains_v<OperationType, ClassOperationGroup>) {
@@ -1247,44 +1286,44 @@ void lower_suffix_operation(
                             "class.property");
                     } else {
                         return_result(
-                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                            FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                             instruction,
                             0,
-                            FSIM_JIT_FRAME_STATE_READY,
+                            FSIM_JIT_FRAME_STATE_READY_V2,
                             next_instruction);
                     }
                 } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, WaitForever>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_WAIT_FOREVER, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_WAIT_FOREVER_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Yield>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_YIELDED_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Fork>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_FORK, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_FORK_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, ForkEnd>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_FORK_END, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_FORK_END_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, WaitFork>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_WAIT_FORK, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_WAIT_FORK_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, DisableFork>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_DISABLE_FORK, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_DISABLE_FORK_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, DisableBlock>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, ProcessSelf>
                     || std::is_same_v<OperationType, ProcessStatusQuery>
@@ -1304,29 +1343,29 @@ void lower_suffix_operation(
                     || std::is_same_v<OperationType, SemaphoreGet>
                     || std::is_same_v<OperationType, SemaphorePut>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
                         0,
-                        FSIM_JIT_FRAME_STATE_READY,
+                        FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Pause>) {
                     if (operation.status) {
                         synchronize_uses_to_frame();
                     }
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_PAUSED, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_PAUSED_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_READY_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Stop>) {
                     if (operation.status) {
                         synchronize_uses_to_frame();
                     }
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_STOPPED, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_STOPPED, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_STOPPED_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_STOPPED_V2, next_instruction);
                 } else if constexpr (std::is_same_v<OperationType, Halt>) {
                     return_result(
-                        FSIM_JIT_RESUME_STATUS_COMPLETED, instruction, 0,
-                        FSIM_JIT_FRAME_STATE_COMPLETED, next_instruction);
+                        FSIM_JIT_RESUME_STATUS_COMPLETED_V2, instruction, 0,
+                        FSIM_JIT_FRAME_STATE_COMPLETED_V2, next_instruction);
                 } else if constexpr (
                     std::is_same_v<OperationType, LoadConstant>
                     || std::is_same_v<OperationType, WriteProjectedWaveform>
@@ -1384,8 +1423,8 @@ void lower_suffix_operation(
                             context_pointer,
                             process.id,
                             instruction,
-                            runtime_type,
-                            runtime_argument,
+                            services_type,
+                            services_argument,
                             runtime_error_if,
                             branch_to_next
                         };
@@ -1404,8 +1443,8 @@ void lower_suffix_operation(
                             context_pointer,
                             process.id,
                             instruction,
-                            runtime_type,
-                            runtime_argument,
+                            services_type,
+                            services_argument,
                             runtime_error_if,
                             branch_to_next
                         };
@@ -1425,12 +1464,15 @@ void lower_suffix_operation(
                             context_pointer,
                             process.id,
                             instruction,
-                            runtime_type,
-                            runtime_argument,
-                            process.container_register_types,
+                            services_type,
+                            services_argument,
+                            container_types,
                             container_result_aval_slot,
                             container_result_bval_slot,
+                            wide_callback_scratch,
+                            wide_callback_scratch_word_stride,
                             fused_container_object_reads[index],
+                            fused_container_object_single_use_reads[index],
                             runtime_error_if,
                             branch_to_next
                         };

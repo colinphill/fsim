@@ -41,6 +41,7 @@ namespace {
 
 bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
     std::vector<VhdlHirMaterialization>& materializations,
+    const semantic::vhdl::Unit& entity,
     const semantic::vhdl::Unit& architecture,
     StringMap& string_objects,
     ReadOnlyStringSet& read_only_strings,
@@ -52,13 +53,17 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
     const auto append_generated_processes = [&](
                                                 Lowerer& source,
                                                 const semantic::vhdl::Unit& owner) {
-        for (auto& generated : source.take_generated_processes()) {
+        auto generated_processes = source.take_generated_processes();
+        record_lowering_census(
+            vhdl_lowerer_generated_processes_,
+            generated_processes.size());
+        for (auto& generated : generated_processes) {
             generated.language_standard = owner.standard;
             generated.compatibility_profile
                 = owner.compatibility_profile;
             canonicalize_process_operations(generated);
             specialization.processes.push_back(generated.id);
-            design_.processes_.push_back(std::move(generated));
+            design_.append_process_record(std::move(generated));
         }
     };
     const auto report_unspecified_inference = [&](Lowerer& source,
@@ -98,6 +103,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
         }
         for (const auto& adapter :
             materialization.block_input_adapters) {
+            record_lowering_census(
+                vhdl_generated_input_actual_occurrences_);
             auto lowered = generated_lowerer.lower_hir_input_actual(
                 adapter.expression,
                 adapter.destination,
@@ -118,7 +125,7 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 = architecture.compatibility_profile;
             canonicalize_process_operations(*lowered);
             specialization.processes.push_back(lowered->id);
-            design_.processes_.push_back(std::move(*lowered));
+            design_.append_process_record(std::move(*lowered));
             append_generated_processes(generated_lowerer, architecture);
         }
         for (const auto statement_id :
@@ -134,6 +141,7 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     generated_lowerer, statement_id)) {
                 return false;
             }
+            record_lowering_census(vhdl_generated_concurrent_occurrences_);
             auto lowered = generated_lowerer
                                .lower_hir_concurrent_statement(
                                    statement_id,
@@ -157,7 +165,7 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 = architecture.compatibility_profile;
             canonicalize_process_operations(*lowered);
             specialization.processes.push_back(lowered->id);
-            design_.processes_.push_back(std::move(*lowered));
+            design_.append_process_record(std::move(*lowered));
             append_generated_processes(generated_lowerer, architecture);
         }
         for (const auto process_id :
@@ -172,10 +180,23 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     generated_lowerer, process_id)) {
                 return false;
             }
-            auto lowered = generated_lowerer.lower_hir_process(
-                process_id,
-                frontend::Language::Vhdl2008,
-                materialization.path);
+            record_lowering_census(vhdl_generated_process_lower_requests_);
+            std::vector<semantic::DeclarationId> signal_declarations;
+            signal_declarations.reserve(
+                architecture.declarations.size()
+                + materialization.signal_declarations.size());
+            signal_declarations.insert(signal_declarations.end(),
+                architecture.declarations.begin(),
+                architecture.declarations.end());
+            signal_declarations.insert(signal_declarations.end(),
+                materialization.signal_declarations.begin(),
+                materialization.signal_declarations.end());
+            auto lowered = lower_cached_vhdl_occurrence(
+                entity, architecture, materialization.specialization,
+                generated_lowerer, semantic::StatementId { },
+                materialization.path, concurrent_order++, process_id,
+                materialization.generate_relative_discriminator,
+                signal_declarations);
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
                     "compiled generated VHDL process could not be "
@@ -183,18 +204,35 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     compiled_source_span(*compiled_, process_source));
                 return false;
             }
-            if (process && process->vhdl != nullptr
-                && process->vhdl->name == "<process>") {
-                lowered->name = materialization.path;
+            const bool anonymous_process = process
+                && process->vhdl != nullptr
+                && process->vhdl->name == "<process>";
+            if (lowered->instance) {
+                auto& instance = *lowered->instance;
+                if (anonymous_process) {
+                    instance.name = materialization.path;
+                }
+                canonicalize_process_operations(
+                    lowered->common, instance);
+                specialization.processes.push_back(instance.id);
+                specialization.semantic_processes.emplace_back(
+                    instance.id, process_id);
+                design_.append_process_instance_record(
+                    std::move(lowered->common), std::move(instance));
+            } else {
+                auto& process_instance = *lowered->process;
+                if (anonymous_process) {
+                    process_instance.name = materialization.path;
+                }
+                process_instance.language_standard = architecture.standard;
+                process_instance.compatibility_profile
+                    = architecture.compatibility_profile;
+                canonicalize_process_operations(process_instance);
+                specialization.processes.push_back(process_instance.id);
+                specialization.semantic_processes.emplace_back(
+                    process_instance.id, process_id);
+                design_.append_process_record(std::move(process_instance));
             }
-            lowered->language_standard = architecture.standard;
-            lowered->compatibility_profile
-                = architecture.compatibility_profile;
-            canonicalize_process_operations(*lowered);
-            specialization.processes.push_back(lowered->id);
-            specialization.semantic_processes.emplace_back(
-                lowered->id, process_id);
-            design_.processes_.push_back(std::move(*lowered));
             append_generated_processes(generated_lowerer, architecture);
         }
     }

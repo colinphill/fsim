@@ -38,10 +38,15 @@ using runtime::simir::ValueKind;
 void ValueOperationLowerer::lower(
     const DynamicExtract& operation) {
   const auto destination_kind = registers[operation.destination].kind;
-  const auto source = coerce_value_kind(
-      builder,
-      load_register(builder, registers, operation.source),
-      destination_kind);
+  const auto& source_slot = registers[operation.source];
+  const bool wide_source = source_slot.width > 64U
+      && source_slot.constant_planes == nullptr;
+  const auto source = wide_source
+      ? EncodedValue { }
+      : coerce_value_kind(
+            builder,
+            load_register(builder, registers, operation.source),
+            destination_kind);
   const auto index = coerce_value_kind(
       builder,
       load_register(builder, registers, operation.selection.index),
@@ -76,14 +81,40 @@ void ValueOperationLowerer::lower(
   }
   auto* right = llvm::ConstantInt::getSigned(
       i64, operation.selection.right);
-  auto* offset = builder.CreateSelect(
-      builder.CreateICmpSGE(selected, right),
-      builder.CreateSub(selected, right),
-      builder.CreateSub(right, selected));
+  auto* offset = operation.selection.left >= operation.selection.right
+      ? builder.CreateSub(selected, right)
+      : builder.CreateSub(right, selected);
   offset = builder.CreateAdd(
       offset, constant_i64(context, operation.selection.base_offset));
   auto* safe_offset = builder.CreateSelect(
       valid, offset, constant_i64(context, 0));
+  if (wide_source) {
+    auto source_bit = canonicalize_logic9_value(
+        builder,
+        load_wide_register_bit(
+            builder, context, registers, operation.source, safe_offset));
+    source_bit = coerce_value_kind(
+        builder, source_bit, destination_kind);
+    const auto select_or_invalid = [&](llvm::Value* value,
+                                       const std::uint64_t invalid) {
+      return builder.CreateSelect(valid, value, constant_i64(context, invalid));
+    };
+    store_register(
+        builder,
+        registers,
+        operation.destination,
+        EncodedValue {
+            select_or_invalid(source_bit.aval, 1U),
+            select_or_invalid(
+                source_bit.bval,
+                destination_kind == ValueKind::logic4 ? 1U : 0U),
+            1U,
+            select_or_invalid(source_bit.logic9_plane2, 0U),
+            select_or_invalid(source_bit.logic9_plane3, 0U),
+            destination_kind });
+    branch_to_next();
+    return;
+  }
   auto* shift = builder.CreateZExtOrTrunc(
       safe_offset, packed_integer_type(context, source.width));
   const auto extract = [&](llvm::Value* value,
@@ -140,7 +171,7 @@ void ValueOperationLowerer::lower(
         read_signal_dynamic_part_type,
         read_signal_dynamic_part_callback,
         { context_pointer,
-            llvm::ConstantInt::get(i32, *dynamic_part_signal_source),
+            callback_signal_id(*dynamic_part_signal_source),
             llvm::ConstantInt::get(
                 i32, registers[operation.source].width),
             base.aval,
@@ -163,16 +194,29 @@ void ValueOperationLowerer::lower(
               logic9_word_slot,
               llvm::ConstantInt::get(i32, plane)));
     };
+    llvm::Value* aval = load_plane(0U);
+    llvm::Value* bval = load_plane(1U);
+    llvm::Value* plane2 = load_plane(2U);
+    llvm::Value* plane3 = load_plane(3U);
+    const auto invalid = builder.CreateAnd(
+        plane3,
+        builder.CreateOr(plane2, builder.CreateOr(bval, aval)));
+    const auto valid = builder.CreateNot(invalid);
+    aval = builder.CreateOr(aval, invalid);
+    bval = builder.CreateAnd(bval, valid);
+    plane2 = builder.CreateAnd(plane2, valid);
+    plane3 = builder.CreateAnd(plane3, valid);
+    const auto mask = constant_i64(context, width_mask(operation.width));
     store_register(
         builder,
         registers,
         operation.destination,
         EncodedValue {
-            load_plane(0),
-            load_plane(1),
+            builder.CreateAnd(aval, mask),
+            builder.CreateAnd(bval, mask),
             operation.width,
-            load_plane(2),
-            load_plane(3),
+            builder.CreateAnd(plane2, mask),
+            builder.CreateAnd(plane3, mask),
             registers[operation.source].kind });
     branch_to_next();
     return;
@@ -375,10 +419,9 @@ void ValueOperationLowerer::lower(
         auto* valid = builder.CreateAnd(
             builder.CreateNot(base_unknown), in_range);
         auto* right = llvm::ConstantInt::getSigned(i64, operation.right);
-        auto* offset = builder.CreateSelect(
-            builder.CreateICmpSGE(selected, right),
-            builder.CreateSub(selected, right),
-            builder.CreateSub(right, selected));
+        auto* offset = operation.left >= operation.right
+            ? builder.CreateSub(selected, right)
+            : builder.CreateSub(right, selected);
         offset = builder.CreateAdd(
             offset, constant_i64(context, operation.base_offset));
         auto* safe_offset = builder.CreateSelect(
@@ -437,6 +480,18 @@ void ValueOperationLowerer::lower(
     branch_to_next();
     return;
   }
+  if (const auto interval = lower_dynamic_part_select_interval(
+          builder,
+          context,
+          i32,
+          i64,
+          registers,
+          operation)) {
+    store_register(
+        builder, registers, operation.destination, *interval);
+    branch_to_next();
+    return;
+  }
   const auto source = load_register(
       builder, registers, operation.source);
   const auto base = coerce_value_kind(
@@ -483,10 +538,9 @@ void ValueOperationLowerer::lower(
         builder.CreateNot(base_unknown), in_range);
     auto* right = llvm::ConstantInt::getSigned(
         i64, operation.right);
-    auto* offset = builder.CreateSelect(
-        builder.CreateICmpSGE(selected, right),
-        builder.CreateSub(selected, right),
-        builder.CreateSub(right, selected));
+    auto* offset = operation.left >= operation.right
+        ? builder.CreateSub(selected, right)
+        : builder.CreateSub(right, selected);
     offset = builder.CreateAdd(
         offset, constant_i64(context, operation.base_offset));
     auto* safe_offset = builder.CreateSelect(
@@ -615,6 +669,79 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const DynamicInsert& operation) {
+  const auto& target_slot = registers[operation.target];
+  const auto& destination_slot = registers[operation.destination];
+  const bool use_word_update = target_slot.width > 64U
+      && destination_slot.width == target_slot.width
+      && target_slot.constant_planes == nullptr
+      && destination_slot.constant_planes == nullptr;
+  if (use_word_update) {
+    const auto destination_kind = destination_slot.kind;
+    const auto source = coerce_value_kind(
+        builder,
+        load_register(builder, registers, operation.source),
+        destination_kind);
+    const auto index = coerce_value_kind(
+        builder,
+        load_register(
+            builder, registers, operation.selection.index),
+        ValueKind::logic4);
+    auto* const unknown = builder.CreateICmpNE(
+        builder.CreateAnd(
+            index.bval,
+            constant_i64(
+                context,
+                std::numeric_limits<std::uint32_t>::max())),
+        constant_i64(context, 0U));
+    auto* const selected = builder.CreateSExt(
+        builder.CreateTrunc(index.aval, i32), i64);
+    auto* const lower = llvm::ConstantInt::getSigned(
+        i64,
+        std::min(
+            operation.selection.left,
+            operation.selection.right));
+    auto* const upper = llvm::ConstantInt::getSigned(
+        i64,
+        std::max(
+            operation.selection.left,
+            operation.selection.right));
+    auto* const valid = builder.CreateAnd(
+        builder.CreateNot(unknown),
+        builder.CreateAnd(
+            builder.CreateICmpSGE(selected, lower),
+            builder.CreateICmpSLE(selected, upper)));
+    if (operation.selection.strict) {
+      runtime_error_if(
+          unknown,
+          JitGeneratedRuntimeErrorReason::dynamic_index_unknown,
+          "dynamic.insert.index.unknown");
+      runtime_error_if(
+          builder.CreateNot(valid),
+          JitGeneratedRuntimeErrorReason::dynamic_index_range,
+          "dynamic.insert.index.range");
+    }
+    auto* const right = llvm::ConstantInt::getSigned(
+        i64, operation.selection.right);
+    auto* offset = operation.selection.left >= operation.selection.right
+        ? builder.CreateSub(selected, right)
+        : builder.CreateSub(right, selected);
+    offset = builder.CreateAdd(
+        offset,
+        constant_i64(context, operation.selection.base_offset));
+    auto* const safe_offset = builder.CreateSelect(
+        valid, offset, constant_i64(context, 0U));
+    store_wide_dynamic_insert_words(
+        builder,
+        context,
+        registers,
+        operation.destination,
+        operation.target,
+        source,
+        valid,
+        safe_offset);
+    branch_to_next();
+    return;
+  }
               const auto destination_kind =
                   registers[operation.destination].kind;
               const auto target = coerce_value_kind(
@@ -668,10 +795,9 @@ void ValueOperationLowerer::lower(
               }
               auto* right = llvm::ConstantInt::getSigned(
                   i64, operation.selection.right);
-              auto* offset = builder.CreateSelect(
-                  builder.CreateICmpSGE(selected, right),
-                  builder.CreateSub(selected, right),
-                  builder.CreateSub(right, selected));
+              auto* offset = operation.selection.left >= operation.selection.right
+                  ? builder.CreateSub(selected, right)
+                  : builder.CreateSub(right, selected);
               offset = builder.CreateAdd(
                   offset,
                   constant_i64(context, operation.selection.base_offset));
@@ -729,6 +855,18 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const DynamicPartInsert& operation) {
+  if (const auto interval = lower_dynamic_part_insert_interval(
+          builder,
+          context,
+          i32,
+          i64,
+          registers,
+          operation)) {
+    store_register(
+        builder, registers, operation.destination, *interval);
+    branch_to_next();
+    return;
+  }
   const auto destination_kind =
       registers[operation.destination].kind;
   const auto target = coerce_value_kind(
@@ -789,10 +927,9 @@ void ValueOperationLowerer::lower(
             builder.CreateICmpSLE(selected, upper)));
     auto* right = llvm::ConstantInt::getSigned(
         i64, operation.selection.right);
-    auto* offset = builder.CreateSelect(
-        builder.CreateICmpSGE(selected, right),
-        builder.CreateSub(selected, right),
-        builder.CreateSub(right, selected));
+    auto* offset = operation.selection.left >= operation.selection.right
+        ? builder.CreateSub(selected, right)
+        : builder.CreateSub(right, selected);
     offset = builder.CreateAdd(
         offset,
         constant_i64(context, operation.selection.base_offset));
@@ -913,6 +1050,57 @@ void ValueOperationLowerer::lower(
 
 void ValueOperationLowerer::lower(
     const Binary& operation) {
+              if (registers[operation.destination].known_logic4) {
+                const auto lhs = load_register(
+                    builder, registers, operation.lhs);
+                const auto rhs = load_register(
+                    builder, registers, operation.rhs);
+                auto* const mask = packed_mask(context, lhs.width);
+                llvm::Value* aval = nullptr;
+                auto result_width = lhs.width;
+                switch (operation.operation) {
+                case BinaryOperator::bit_and:
+                  aval = builder.CreateAnd(lhs.aval, rhs.aval);
+                  break;
+                case BinaryOperator::bit_or:
+                  aval = builder.CreateOr(lhs.aval, rhs.aval);
+                  break;
+                case BinaryOperator::bit_xor:
+                  aval = builder.CreateXor(lhs.aval, rhs.aval);
+                  break;
+                case BinaryOperator::case_equal: {
+                  auto* const mismatch = builder.CreateAnd(
+                      builder.CreateXor(lhs.aval, rhs.aval), mask);
+                  auto* const equal = builder.CreateICmpEQ(mismatch,
+                      packed_constant(context, lhs.width, 0U));
+                  aval = builder.CreateZExt(equal, i64);
+                  result_width = 1U;
+                  break;
+                }
+                default:
+                  throw LlvmJitError(
+                      "known Logic4 region binary operation is unsupported");
+                }
+                auto* const zero = packed_constant(context, result_width, 0U);
+                store_register(
+                    builder, registers, operation.destination,
+                    EncodedValue {
+                        builder.CreateAnd(
+                            aval, packed_mask(context, result_width)),
+                        zero, result_width, zero, zero, ValueKind::logic4 });
+                branch_to_next();
+                return;
+              }
+              if (try_lower_wide_bitwise_binary(
+                      builder,
+                      registers,
+                      operation.operation,
+                      operation.destination,
+                      operation.lhs,
+                      operation.rhs)) {
+                branch_to_next();
+                return;
+              }
               auto lhs =
                   load_register(builder, registers, operation.lhs);
               auto rhs =
@@ -1066,42 +1254,20 @@ void ValueOperationLowerer::lower(
                   width == 64U
                       ? std::numeric_limits<std::int64_t>::min()
                       : std::numeric_limits<std::int32_t>::min());
-              auto* maximum = llvm::ConstantInt::getSigned(
-                  i64,
-                  width == 64U
-                      ? std::numeric_limits<std::int64_t>::max()
-                      : std::numeric_limits<std::int32_t>::max());
               const auto checked_arithmetic = [&] (
                   const llvm::Intrinsic::ID intrinsic,
                   llvm::Value* left_value,
                   llvm::Value* right_value,
                   llvm::Value* active,
                   const std::string_view label) {
-                llvm::Value* value = nullptr;
-                llvm::Value* overflow = nullptr;
-                if (width == 64U) {
-                  auto* pair = builder.CreateIntrinsic(
-                      intrinsic, {i64}, {left_value, right_value});
-                  value = builder.CreateExtractValue(pair, 0U);
-                  overflow = builder.CreateExtractValue(pair, 1U);
-                } else {
-                  switch (intrinsic) {
-                  case llvm::Intrinsic::sadd_with_overflow:
-                    value = builder.CreateAdd(left_value, right_value);
-                    break;
-                  case llvm::Intrinsic::ssub_with_overflow:
-                    value = builder.CreateSub(left_value, right_value);
-                    break;
-                  case llvm::Intrinsic::smul_with_overflow:
-                    value = builder.CreateMul(left_value, right_value);
-                    break;
-                  default:
-                    llvm_unreachable("unknown integer arithmetic intrinsic");
-                  }
-                  overflow = builder.CreateOr(
-                      builder.CreateICmpSLT(value, minimum),
-                      builder.CreateICmpSGT(value, maximum));
-                }
+                auto* arithmetic_type = width == 64U ? i64 : i32;
+                auto* pair = builder.CreateIntrinsic(intrinsic,
+                    { arithmetic_type },
+                    { builder.CreateTruncOrBitCast(left_value, arithmetic_type),
+                        builder.CreateTruncOrBitCast(right_value, arithmetic_type) });
+                auto* value = builder.CreateSExtOrTrunc(
+                    builder.CreateExtractValue(pair, 0U), i64);
+                auto* overflow = builder.CreateExtractValue(pair, 1U);
                 if (active != nullptr) {
                   overflow = builder.CreateAnd(active, overflow);
                 }

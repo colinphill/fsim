@@ -93,24 +93,25 @@ Simulation::Impl::fallback_standard_coverage_database()
     });
     std::set<std::uint32_t> emitted_counters;
     for (const auto& process_info : built.design_ir.processes()) {
-        const auto& process = interpreter->process_program(
-            process_info.runtime_index);
+        const auto process =
+            runtime::simir::InterpreterProgramAccess::view(
+                *interpreter, process_info.runtime_index);
         support::Sha256 identity_hasher;
         identity_hasher.update("fsim-v3-code-coverage-process");
-        identity_hasher.update(process.name);
+        identity_hasher.update(process.name());
         coverage_hash_u64(
             identity_hasher, process_info.runtime_index);
         const auto instance_identity = coverage_identity_from_digest(
             identity_hasher.finish());
         for (std::size_t instruction = 0U;
-            instruction < process.operations.size(); ++instruction) {
+            instruction < process.operations().size(); ++instruction) {
             const auto* hit = runtime::simir::operation_get_if<
                 runtime::simir::CodeCoverageHit>(
-                &process.operations[instruction]);
+                &process.operations()[instruction]);
             if (hit == nullptr) {
                 continue;
             }
-            const auto counter = process.operations.code_coverage_counter(
+            const auto counter = process.operations().code_coverage_counter(
                 instruction, hit->counter);
             if (counter.value >= counters.size()
                 || !emitted_counters.insert(counter.value).second) {
@@ -385,21 +386,22 @@ Simulation::Impl::select_standard_coverage(
             if (!std::ranges::binary_search(result.instances, path)) {
                 continue;
             }
-            const auto& process = interpreter->process_program(
-                occurrence.runtime_index);
+            const auto process =
+                runtime::simir::InterpreterProgramAccess::view(
+                    *interpreter, occurrence.runtime_index);
             bool has_statement { };
             for (std::size_t instruction = 0U;
-                instruction < process.operations.size(); ++instruction) {
+                instruction < process.operations().size(); ++instruction) {
                 const auto* hit = runtime::simir::operation_get_if<
                     runtime::simir::CodeCoverageHit>(
-                    &process.operations[instruction]);
+                    &process.operations()[instruction]);
                 if (hit == nullptr
                     || hit->metric
                         != runtime::CodeCoverageMetric::Statement) {
                     continue;
                 }
                 result.counters.push_back(
-                    process.operations.code_coverage_counter(
+                    process.operations().code_coverage_counter(
                         instruction, hit->counter));
                 has_statement = true;
             }

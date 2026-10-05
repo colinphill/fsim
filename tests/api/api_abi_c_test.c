@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_abi_contract.h"
+#include "fsim/compiler/jit_runtime.h"
+#include "fsim/compiler/jit_runtime_v2.h"
 
 #include <assert.h>
 #include <stddef.h>
@@ -11,6 +13,28 @@
 #define FSIM_C_TYPE(actual, expected) \
     _Static_assert(                   \
         _Generic((actual)0, expected: 1, default: 0), #actual " changed")
+
+_Static_assert(
+    FSIM_JIT_RUNTIME_ABI_VERSION_V1 == UINT32_C(1),
+    "legacy JIT runtime version changed");
+_Static_assert(
+    FSIM_JIT_RUNTIME_ABI_VERSION_V2 == UINT32_C(2),
+    "JIT runtime version 2 changed");
+_Static_assert(
+    _Generic(
+        ((fsim_jit_services_v2*)0)->write_update,
+        void (*)(void*, uint32_t, uint64_t, uint64_t, uint32_t): 1,
+        default: 0),
+    "JIT update callback v2 signature changed");
+_Static_assert(
+    _Generic(
+        ((fsim_jit_services_v2*)0)->write_signal_packed,
+        uint32_t (*)(
+            void*, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t,
+            const uint64_t*, const uint64_t*, const uint64_t*,
+            const uint64_t*, uint32_t): 1,
+        default: 0),
+    "JIT packed-write callback v2 signature changed");
 
 FSIM_C_SIGNATURE(fsim_get_api_version, uint32_t (*)(void));
 FSIM_C_SIGNATURE(fsim_status_string, const char* (*)(fsim_status_t));

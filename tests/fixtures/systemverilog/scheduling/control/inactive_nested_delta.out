@@ -1,0 +1,2 @@
+INACTIVE race=accepted
+failure[FSIM-HDL-REPORT]: continuous assignment did not settle before nested Inactive

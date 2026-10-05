@@ -319,26 +319,29 @@ void apply_udp_output_profile(
         if (const auto* write_update
             = operation_get_if<WriteUpdate>(&operation)) {
             operation = WriteInertial {
-                write_update->signal, write_update->source, *delays
+                write_update->signal, write_update->source, *delays,
+                write_update->domain,
             };
         } else if (const auto* write_slice
             = operation_get_if<WriteUpdateSlice>(&operation)) {
             operation = WriteInertialSlice {
                 write_slice->signal, write_slice->source,
-                write_slice->offset, *delays
+                write_slice->offset, *delays, write_slice->domain
             };
         } else if (const auto* write_dynamic_slice
             = operation_get_if<WriteUpdateDynamicSlice>(&operation)) {
             operation = WriteInertialDynamicSlice {
                 write_dynamic_slice->signal, write_dynamic_slice->source,
-                write_dynamic_slice->selection, *delays
+                write_dynamic_slice->selection, *delays,
+                write_dynamic_slice->domain
             };
         } else if (const auto* write_dynamic_part_slice
             = operation_get_if<WriteUpdateDynamicPartSlice>(&operation)) {
             operation = WriteInertialDynamicPartSlice {
                 write_dynamic_part_slice->signal,
                 write_dynamic_part_slice->source,
-                write_dynamic_part_slice->selection, *delays
+                write_dynamic_part_slice->selection, *delays,
+                write_dynamic_part_slice->domain
             };
         }
     }
@@ -361,12 +364,14 @@ public:
         , initialized_(initialized)
     {
         process_.id = static_cast<runtime::simir::ProcessId>(
-            design.processes().size());
+            design.process_count());
         process_.name = std::move(path) + (declaration.sequential
                 ? ".$udp_state"
                 : ".$udp");
         process_.language_standard = declaration.standard;
         process_.compatibility_profile = declaration.compatibility_profile;
+        process_.scheduling_domain
+            = runtime::simir::ProcessSchedulingDomain::systemverilog;
         for (const auto signal : inputs_) {
             process_.static_sensitivity.push_back({
                 signal, runtime::simir::EdgeKind::any
@@ -1037,7 +1042,7 @@ bool HierarchyBuilder::instantiate_compiled_udp(
     const auto append_process = [&](runtime::simir::Process process) {
         canonicalize_process_operations(process);
         profile.processes.push_back(process.id);
-        design_.processes_.push_back(std::move(process));
+        design_.append_process_record(std::move(process));
     };
     const auto append_manual_input = [&](
         const SelectedArrayTerminal actual,
@@ -1045,10 +1050,12 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         const std::size_t order) {
         runtime::simir::Process process;
         process.id = static_cast<runtime::simir::ProcessId>(
-            design_.processes_.size());
+            design_.process_count());
         process.name = path + ".$udp_input_" + std::to_string(order);
         process.language_standard = declaration.standard;
         process.compatibility_profile = declaration.compatibility_profile;
+        process.scheduling_domain
+            = runtime::simir::ProcessSchedulingDomain::systemverilog;
         process.static_sensitivity.push_back({
             actual.signal, runtime::simir::EdgeKind::any
         });
@@ -1071,7 +1078,9 @@ bool HierarchyBuilder::instantiate_compiled_udp(
             });
         }
         process.operations.emplace_back(runtime::simir::WriteUpdate {
-            destination, value
+            destination,
+            value,
+            runtime::simir::SignalUpdateDomain::systemverilog_active,
         });
         process.operations.emplace_back(
             runtime::simir::WaitSensitivity { });
@@ -1086,10 +1095,12 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         const SelectedArrayTerminal actual) {
         runtime::simir::Process process;
         process.id = static_cast<runtime::simir::ProcessId>(
-            design_.processes_.size());
+            design_.process_count());
         process.name = path + ".$udp_output";
         process.language_standard = declaration.standard;
         process.compatibility_profile = declaration.compatibility_profile;
+        process.scheduling_domain
+            = runtime::simir::ProcessSchedulingDomain::systemverilog;
         process.static_sensitivity.push_back({
             value, runtime::simir::EdgeKind::any
         });
@@ -1098,11 +1109,13 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         });
         if (actual.selected) {
             process.operations.emplace_back(runtime::simir::WriteUpdateSlice {
-                actual.signal, 0U, actual.offset
+                actual.signal, 0U, actual.offset,
+                runtime::simir::SignalUpdateDomain::systemverilog_active,
             });
         } else {
             process.operations.emplace_back(runtime::simir::WriteUpdate {
-                actual.signal, 0U
+                actual.signal, 0U,
+                runtime::simir::SignalUpdateDomain::systemverilog_active,
             });
         }
         process.operations.emplace_back(

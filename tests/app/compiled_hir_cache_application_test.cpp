@@ -11,6 +11,7 @@
 #include "fsim/support/sha256.hpp"
 
 #include "../../src/app/application_internal.hpp"
+#include "../../src/app/application_compiled_hir_cache_revision.hpp"
 #include "../../src/app/application_design_artifact_codec_internal.hpp"
 
 #include <algorithm>
@@ -3081,16 +3082,22 @@ int main()
 
     static_assert(
         fsim::app::application_detail::compiled_hir_cache_producer_revision
-        > 0U);
+        == 9U);
     fsim::compiler::CacheKeyBuilder current_producer;
     fsim::app::application_detail::add_compiled_hir_cache_key_identity(
         current_producer);
+    fsim::compiler::CacheKeyBuilder explicit_current_producer;
+    fsim::app::application_detail::add_compiled_hir_cache_key_identity(
+        explicit_current_producer,
+        fsim::app::application_detail::compiled_hir_cache_producer_revision);
     fsim::compiler::CacheKeyBuilder previous_producer;
     fsim::app::application_detail::add_compiled_hir_cache_key_identity(
         previous_producer,
         fsim::app::application_detail::compiled_hir_cache_producer_revision
             - 1U);
-    assert(current_producer.finish() != previous_producer.finish());
+    const auto current_producer_key = current_producer.finish();
+    assert(current_producer_key == explicit_current_producer.finish());
+    assert(current_producer_key != previous_producer.finish());
 
     auto direct = mixed_config(
         first_directory, temporary.path / "direct-cache", 1);

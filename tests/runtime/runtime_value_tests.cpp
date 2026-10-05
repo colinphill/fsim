@@ -125,14 +125,16 @@ public:
           fsim::runtime::simir::ProcessExecutionContext&,
           std::size_t)> after_stage = {},
       bool use_prepared_staging = false,
-      std::optional<std::uint32_t> mutate_mask_bit = std::nullopt)
+      std::optional<std::uint32_t> mutate_mask_bit = std::nullopt,
+      bool corrupt_certificate_owner = false)
       : signal_{signal}
       , process_{process}
       , width_{width}
       , segments_{std::move(segments)}
       , values_{std::move(values)}
       , after_stage_{std::move(after_stage)}
-      , use_prepared_staging_{use_prepared_staging}
+      , use_prevalidated_staging_{use_prepared_staging}
+      , corrupt_certificate_owner_{corrupt_certificate_owner}
       , mutate_mask_bit_{mutate_mask_bit} {
     if (segments_.size() != values_.size() || values_.empty()
         || width_ == 0U || width_ > 128U) {
@@ -176,10 +178,10 @@ public:
           offset <= width_ && segment_width != 0U
               && segment_width <= width_ - offset,
           "owned-span slot segment is inside its target");
-      storage[index].active = use_prepared_staging_ ? 0U : 1U;
+      storage[index].active = use_prevalidated_staging_ ? 0U : 1U;
       std::copy_n(value_aval.begin(), word_count, storage[index].aval.begin());
       std::copy_n(value_bval.begin(), word_count, storage[index].bval.begin());
-      if (!use_prepared_staging_) {
+      if (!use_prevalidated_staging_) {
         for (std::uint32_t bit = offset;
              bit < offset + segment_width; ++bit) {
           storage[index].mask[bit / 64U] |= UINT64_C(1) << (bit % 64U);
@@ -194,13 +196,13 @@ public:
     const auto active_mask
         = (UINT64_C(1) << segments.size()) - UINT64_C(1);
     std::array<std::uint64_t, 1U> active_words{
-        use_prepared_staging_ ? 0U : active_mask};
-    const ProcessUpdateSlotBatch batch{
+        use_prevalidated_staging_ ? 0U : active_mask};
+    ProcessUpdateSlotBatch batch{
         process_,
         std::span<const ProcessUpdateSlotView>{
             slots.data(), segments.size()},
         active_words};
-    if (use_prepared_staging_) {
+    if (use_prevalidated_staging_) {
       auto prepared_slot = context.prepare_owned_update_slot(batch);
       ++prepared_prepare_calls_;
       prepared_certificate_results_.push_back(prepared_slot.has_value());
@@ -220,17 +222,17 @@ public:
         storage[0U].bval[bit / 64U] &= ~(UINT64_C(1) << (bit % 64U));
       }
       active_words[0U] = active_mask;
-      PureWavePreparedMember prepared_member;
-      prepared_member.process = process_;
-      prepared_member.update_batch = batch;
-      prepared_member.prepared_owned_update_slot = prepared_slot
-          ? &*prepared_slot : nullptr;
-      const std::array<const PureWavePreparedMember*, 1U> members {
-          &prepared_member
-      };
+      auto published_certificate = prepared_slot;
+      if (corrupt_certificate_owner_ && next_phase_ == 0U
+          && published_certificate) {
+        published_certificate->owner = nullptr;
+      }
+      batch.owned_slot_certificate
+          = published_certificate ? &*published_certificate : nullptr;
+      const std::array batches{batch};
       require(
-          context.write_validated_prepared_update_slot_batches(members),
-          "prepared owned slot batch is accepted by the runtime path");
+          context.write_validated_update_slot_batches(batches),
+          "certified owned slot batch is accepted by the generic runtime path");
       ++prepared_stage_calls_;
       prepared_buffers_consumed_ = prepared_buffers_consumed_
           && active_words[0U] == 0U
@@ -293,7 +295,8 @@ private:
   std::function<void(
       fsim::runtime::simir::ProcessExecutionContext&,
       std::size_t)> after_stage_;
-  bool use_prepared_staging_ { };
+  bool use_prevalidated_staging_ { };
+  bool corrupt_certificate_owner_ { };
   std::optional<std::uint32_t> mutate_mask_bit_;
   std::size_t prepared_prepare_calls_ { };
   std::size_t prepared_stage_calls_ { };
@@ -1226,6 +1229,45 @@ void test_simir() {
           "SimIR update/delay behavior");
 }
 
+void test_public_value_reference_snapshot_contract()
+{
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto signal = interpreter.add_signal({
+      "top.reference", PackedLogic4::from_msb_string("0")
+  });
+  const auto& current_reference = interpreter.signal_value(signal);
+  const auto& stored_reference = interpreter.stored_signal_value(signal);
+  const auto current_snapshot = interpreter.signal_value_snapshot(signal);
+  const auto stored_snapshot
+      = interpreter.stored_signal_value_snapshot(signal);
+
+  const auto object = interpreter.add_container_object({
+      "top.words",
+      ContainerValue { ContainerType { },
+          { PackedLogic4::from_msb_string("0") }, { } },
+      std::nullopt
+  });
+  const auto& container_reference
+      = interpreter.container_object_value(object);
+  const auto container_snapshot
+      = interpreter.container_object_value_snapshot(object);
+
+  interpreter.deposit_signal(signal, PackedLogic4::from_msb_string("1"));
+  interpreter.deposit_container_object_element(
+      object, 0U, PackedLogic4::from_msb_string("1"));
+  require(current_reference.to_msb_string() == "1"
+          && stored_reference.to_msb_string() == "1"
+          && current_snapshot.to_msb_string() == "0"
+          && stored_snapshot.to_msb_string() == "0",
+      "public signal references remain live while snapshot APIs return values");
+  require(container_reference.elements[0U].to_msb_string() == "1"
+          && container_snapshot.elements[0U].to_msb_string() == "0",
+      "public container references remain live while snapshots are independent");
+}
+
 void test_simir_permanent_wait() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1683,7 +1725,133 @@ void test_owned_span_native_updates() {
   }
 }
 
-void test_owned_span_prepared_native_updates() {
+void test_wide_malformed_owned_certificate_falls_back() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  constexpr std::uint32_t width = 129U;
+  const std::array<std::uint64_t, 3U> aval {
+      UINT64_C(0x0123456789abcdef), UINT64_C(0x55), UINT64_C(1)
+  };
+  const std::array<std::uint64_t, 3U> bval {
+      UINT64_C(0x8), UINT64_C(0), UINT64_C(0)
+  };
+  const std::array<std::uint64_t, 3U> mask {
+      UINT64_MAX, UINT64_MAX, UINT64_C(1)
+  };
+
+  struct Outcome {
+    RunStatus status { };
+    std::string current;
+    std::string stored;
+    std::string driver;
+  };
+  const auto run_case = [&](const bool attach_malformed_certificate) {
+    Interpreter interpreter;
+    const auto target = interpreter.add_signal({
+        "top.malformed_wide_owned_certificate",
+        PackedLogic4 { width, Logic4::z }, ResolutionKind::sv_wire
+    });
+    const auto trigger = interpreter.add_signal({
+        "top.malformed_wide_owned_certificate_trigger",
+        PackedLogic4::from_msb_string("0")
+    });
+
+    Process process;
+    process.id = 0U;
+    process.name = "malformed_wide_owned_certificate_writer";
+    process.static_sensitivity.push_back({ trigger, EdgeKind::any });
+    process.driver_regions.push_back({ target, 0U, width, false });
+    process.operations = { WaitSensitivity { }, Halt { } };
+    process.initialize = false;
+    const auto process_id = interpreter.add_process(std::move(process));
+
+    class WideBatchExecutor final : public ProcessExecutor {
+    public:
+      WideBatchExecutor(const ProcessId process, const SignalId signal,
+          const std::uint32_t width,
+          const bool malformed, const std::array<std::uint64_t, 3U>& aval,
+          const std::array<std::uint64_t, 3U>& bval,
+          const std::array<std::uint64_t, 3U>& mask)
+          : process_ { process }
+          , signal_ { signal }
+          , width_ { width }
+          , malformed_ { malformed }
+          , aval_ { aval }
+          , bval_ { bval }
+          , mask_ { mask }
+      {
+      }
+
+      [[nodiscard]] ProcessResumeResult resume(
+          ProcessExecutionContext& context,
+          const InstructionIndex start) override
+      {
+        require(start == 0U, "wide malformed-certificate writer starts at its wait");
+        std::uint32_t active = 1U;
+        const ProcessUpdateSlotView slot {
+            signal_, width_, 3U, &active, aval_.data(), bval_.data(), mask_.data()
+        };
+        std::array<std::uint64_t, 1U> active_words { UINT64_C(1) };
+        ProcessUpdateSlotBatch batch { process_, { &slot, 1U }, active_words };
+        PreparedOwnedUpdateSlot forged;
+        if (malformed_) {
+          forged.owner = context.direct_update_domain();
+          forged.process = process_;
+          forged.signal = signal_;
+          forged.width = width_;
+          forged.word_count = 3U;
+          forged.own_masks = { UINT64_MAX, UINT64_MAX };
+          batch.owned_slot_certificate = &forged;
+        }
+        const std::array batches { batch };
+        require(context.write_validated_update_slot_batches(batches),
+            "wide slot batch is accepted through checked staging");
+        ProcessResumeResult result { 0U, 1U };
+        result.external.kind = ExternalSuspendKind::halt;
+        return result;
+      }
+
+    private:
+      ProcessId process_ { };
+      SignalId signal_ { };
+      std::uint32_t width_ { };
+      bool malformed_ { };
+      std::array<std::uint64_t, 3U> aval_ { };
+      std::array<std::uint64_t, 3U> bval_ { };
+      std::array<std::uint64_t, 3U> mask_ { };
+    };
+
+    interpreter.set_process_executor(process_id,
+        std::make_unique<WideBatchExecutor>(process_id, target,
+            width, attach_malformed_certificate, aval, bval, mask));
+    interpreter.schedule_signal_at(trigger,
+        PackedLogic4::from_msb_string("1"), 1U, 0U);
+    const auto result = interpreter.run();
+    return Outcome {
+        result.status,
+        interpreter.signal_value(target).to_msb_string(),
+        interpreter.stored_signal_value(target).to_msb_string(),
+        interpreter.driver_value(process_id, target).to_msb_string()
+    };
+  };
+
+  const auto malformed = run_case(true);
+  const auto checked = run_case(false);
+  const auto expected = PackedLogic4::from_word_planes(width, aval, bval)
+      .to_msb_string();
+  require(malformed.status == RunStatus::completed
+          && malformed.current == expected && malformed.stored == expected
+          && malformed.driver == expected,
+      "a forged three-word certificate falls back without truncating the wide owner update");
+  require(malformed.status == checked.status
+          && malformed.current == checked.current
+          && malformed.stored == checked.stored
+          && malformed.driver == checked.driver,
+      "malformed wide certificate staging matches the checked batch route");
+}
+
+void test_owned_span_certified_batch_staging() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
 
@@ -1711,7 +1879,8 @@ void test_owned_span_prepared_native_updates() {
   final_value.insert_bits(PackedLogic4 { 15U, Logic4::x }, 105U);
   const auto final_write = final_value.to_msb_string();
 
-  const auto run_case = [&](const bool prepared, const bool mutate_outside) {
+  const auto run_case = [&](const bool prepared, const bool mutate_outside,
+                            const bool corrupt_certificate_owner) {
     Interpreter interpreter;
     const auto target = interpreter.add_signal({
         "top.prepared_owned_span",
@@ -1766,7 +1935,8 @@ void test_owned_span_prepared_native_updates() {
         },
         std::function<void(ProcessExecutionContext&, std::size_t)> { },
         prepared, mutate_outside ? std::optional<std::uint32_t> { 0U }
-                                 : std::nullopt);
+                                 : std::nullopt,
+        corrupt_certificate_owner);
     auto* const executor_view = executor.get();
     interpreter.set_process_executor(high_id, std::move(executor));
 
@@ -1796,8 +1966,8 @@ void test_owned_span_prepared_native_updates() {
     return snapshot;
   };
 
-  const auto prepared = run_case(true, false);
-  const auto ordinary = run_case(false, false);
+  const auto prepared = run_case(true, false, false);
+  const auto ordinary = run_case(false, false, false);
   const auto initial = std::string(width, 'Z');
   const auto expected_final = PackedLogic4::from_msb_string(final_write)
       .to_msb_string();
@@ -1805,14 +1975,14 @@ void test_owned_span_prepared_native_updates() {
           && prepared.stage_calls == 3U
           && prepared.certificate_results
               == std::vector<bool> { true, true, true },
-      "each prepared activation must obtain its cold owned-slot certificate");
+      "each certified activation obtains its cold owned-slot proof");
   require(prepared.buffers_consumed,
-      "prepared staging consumes slot activity, masks, and active bitmap");
+      "certified generic staging consumes slot activity, masks, and active bitmap");
   require(prepared.drivers
               == std::vector<std::string> { initial, expected_final }
           && prepared.resolved == expected_final
           && prepared.stored == expected_final,
-      "prepared staging preserves disjoint wide driver slices");
+      "certified generic staging preserves disjoint wide driver slices");
   require(prepared.stored_change_times
               == std::vector<SimulationTick> { 1U, 3U },
       "the repeated same-value slot is consumed without a duplicate change");
@@ -1820,10 +1990,21 @@ void test_owned_span_prepared_native_updates() {
           && prepared.resolved == ordinary.resolved
           && prepared.stored == ordinary.stored
           && prepared.stored_change_times == ordinary.stored_change_times,
-      "prepared owned-slot staging matches ordinary validated staging");
+      "certified generic staging matches ordinary validated staging");
 
-  const auto demoted = run_case(true, true);
-  const auto demoted_ordinary = run_case(false, true);
+  const auto mismatched_certificate = run_case(true, false, true);
+  require(mismatched_certificate.certificate_results
+              == std::vector<bool> { true, true, true }
+          && mismatched_certificate.buffers_consumed
+          && mismatched_certificate.drivers == ordinary.drivers
+          && mismatched_certificate.resolved == ordinary.resolved
+          && mismatched_certificate.stored == ordinary.stored
+          && mismatched_certificate.stored_change_times
+              == ordinary.stored_change_times,
+      "a certificate with the wrong owner falls back before validated batch staging");
+
+  const auto demoted = run_case(true, true, false);
+  const auto demoted_ordinary = run_case(false, true, false);
   auto demoted_final = PackedLogic4::from_msb_string(final_write);
   demoted_final.insert_bits(PackedLogic4 { 1U, Logic4::one }, 0U);
   const auto demoted_high = demoted_final.to_msb_string();
@@ -2369,6 +2550,160 @@ void test_resolved_driver_slots() {
       interpreter.signal_value(standard_logic).to_msb_string() == "0",
       "the supported std_logic 0/1/X/Z subset uses standard resolution");
 
+  const auto verify_partial_standard_logic = [](
+      const std::string& name,
+      const std::uint32_t width,
+      const std::uint32_t first_offset,
+      const std::string& first_value,
+      const std::uint32_t second_offset,
+      const std::string& second_value,
+      const bool logic9) {
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    const auto initial_char = logic9 ? 'U' : 'X';
+    auto initial = logic9
+        ? PackedLogic4::from_logic9_msb_string(
+              std::string(width, initial_char))
+        : PackedLogic4::from_msb_string(
+              std::string(width, initial_char));
+    Interpreter partial;
+    const auto target = partial.add_signal(Signal {
+        name, std::move(initial), ResolutionKind::std_logic,
+        logic9 ? ValueKind::logic9 : ValueKind::logic4});
+    const auto pack = [logic9](const std::string& value) {
+      return logic9 ? PackedLogic4::from_logic9_msb_string(value)
+                    : PackedLogic4::from_msb_string(value);
+    };
+    const auto place = [width](
+        std::string base,
+        const std::uint32_t offset,
+        const std::string& value) {
+      base.replace(
+          width - offset - static_cast<std::uint32_t>(value.size()),
+          value.size(), value);
+      return base;
+    };
+    Process first;
+    first.id = 0U;
+    first.name = name + "_first";
+    first.register_count = 1U;
+    first.register_value_kinds = {
+        logic9 ? ValueKind::logic9 : ValueKind::logic4};
+    first.driver_regions = {
+        {target, first_offset,
+            static_cast<std::uint32_t>(first_value.size()), false}};
+    first.operations = {
+        LoadConstant { 0U, pack(first_value) },
+        WriteAfterSlice { target, 0U, first_offset, 1U },
+        Halt { }};
+    const auto first_id = partial.add_process(std::move(first));
+    const auto expected_first_registered_raw = place(
+        std::string(width, 'Z'), first_offset,
+        std::string(first_value.size(), initial_char));
+    const auto first_registered_raw = partial.driver_value(first_id, target);
+    require(
+        first_registered_raw.to_msb_string() == expected_first_registered_raw
+            && first_registered_raw.is_logic9() == logic9,
+        "partial std_logic registration keeps Z padding and declared value kind");
+
+    Process second;
+    second.id = 1U;
+    second.name = name + "_second";
+    second.register_count = 1U;
+    second.register_value_kinds = {
+        logic9 ? ValueKind::logic9 : ValueKind::logic4};
+    second.driver_regions = {
+        {target, second_offset,
+            static_cast<std::uint32_t>(second_value.size()), false}};
+    second.operations = {
+        LoadConstant { 0U, pack(second_value) },
+        WriteAfterSlice { target, 0U, second_offset, 2U },
+        Halt { }};
+    const auto second_id = partial.add_process(std::move(second));
+    const auto expected_second_registered_raw = place(
+        std::string(width, 'Z'), second_offset,
+        std::string(second_value.size(), initial_char));
+    const auto second_registered_raw = partial.driver_value(second_id, target);
+    require(
+        second_registered_raw.to_msb_string() == expected_second_registered_raw
+            && second_registered_raw.is_logic9() == logic9,
+        "each partial std_logic owner registers only its declared region");
+
+    struct PartialChange {
+      std::string value;
+      SimulationTick time { };
+      bool logic9 { };
+    };
+    std::vector<PartialChange> changes;
+    partial.set_signal_change_hook(
+        [&](const SignalId changed,
+            const PackedLogic4& value,
+            const SimulationTick time) {
+          if (changed == target) {
+            changes.push_back(
+                {value.to_msb_string(), time, value.is_logic9()});
+          }
+        });
+
+    const auto result = partial.run();
+    const auto expected_after_first = place(
+        std::string(width, initial_char), first_offset, first_value);
+    const auto expected_final = place(
+        expected_after_first, second_offset, second_value);
+    auto expected_first_raw = place(
+        std::string(width, 'Z'), first_offset,
+        std::string(first_value.size(), initial_char));
+    auto expected_second_raw = place(
+        std::string(width, 'Z'), second_offset,
+        std::string(second_value.size(), initial_char));
+    expected_first_raw = place(
+        std::move(expected_first_raw), first_offset, first_value);
+    expected_second_raw = place(
+        std::move(expected_second_raw), second_offset, second_value);
+    const auto expected_changes = std::vector<PartialChange> {
+        {expected_after_first, 1U, logic9},
+        {expected_final, 2U, logic9}};
+
+    require(
+        result.status == RunStatus::completed && result.time == 2U,
+        "partial std_logic drivers complete their ordered transactions");
+    require(
+        partial.signal_value(target).to_msb_string() == expected_final
+            && partial.stored_signal_value(target).to_msb_string()
+                == expected_final
+            && partial.signal_value(target).is_logic9() == logic9
+            && partial.stored_signal_value(target).is_logic9() == logic9,
+        "partial std_logic resolution preserves the declared value kind");
+    require(
+        partial.driver_value(first_id, target).to_msb_string()
+                == expected_first_raw
+            && partial.driver_value(second_id, target).to_msb_string()
+                == expected_second_raw
+            && partial.driver_value(first_id, target).is_logic9() == logic9
+            && partial.driver_value(second_id, target).is_logic9() == logic9,
+        "partial std_logic owners retain independent values and Z padding");
+    require(
+        changes.size() == expected_changes.size()
+            && std::ranges::equal(changes, expected_changes,
+                [](const PartialChange& actual,
+                   const PartialChange& expected) {
+                  return actual.value == expected.value
+                      && actual.time == expected.time
+                      && actual.logic9 == expected.logic9;
+                }),
+        "partial std_logic writes publish only the two expected changes");
+  };
+  verify_partial_standard_logic(
+      "top.std_logic_partial_17", 17U, 0U, "10100101", 8U,
+      "010101010", false);
+  verify_partial_standard_logic(
+      "top.std_logic_partial_65", 65U, 0U, std::string(63U, '1'), 63U,
+      "01", false);
+  verify_partial_standard_logic(
+      "top.logic9_std_logic_partial_17", 17U, 0U, "HL-UXZ01", 8U,
+      "WLH-01UXZ", true);
+
   const auto whole_changes =
       [&] {
         std::vector<std::pair<std::string, SimulationTick>> observed;
@@ -2902,7 +3237,8 @@ void test_resolved_driver_slots() {
   test_mixed_signal_id_alignment();
   test_force_release_word_boundary();
   test_owned_span_native_updates();
-  test_owned_span_prepared_native_updates();
+  test_wide_malformed_owned_certificate_falls_back();
+  test_owned_span_certified_batch_staging();
   test_owned_span_pending_transitions();
   test_disjoint_driver_update_order_baseline();
 }
@@ -3224,8 +3560,59 @@ void test_simir_expressions_and_edges() {
           && sampled.signal_value(second_past).to_msb_string() == "1",
       "historical reads retain their target and positive-clock dependencies");
   require(
-      sampled.signal_value(gated_past).to_msb_string() == "1",
-      "a low sampled gate suppresses history updates for sparse signal IDs");
+      sampled.signal_value(gated_past).to_msb_string() == "0",
+      "a false current gate selects the prior gate-true sample");
+
+  Interpreter skipped_sample;
+  const auto skipped_data = skipped_sample.add_signal({
+      "top.skipped_sample_data", PackedLogic4::from_msb_string("1") });
+  const auto skipped_clock = skipped_sample.add_signal({
+      "top.skipped_sample_clock", PackedLogic4::from_msb_string("0") });
+  const auto skipped_result = skipped_sample.add_signal({
+      "top.skipped_sample_result", PackedLogic4::from_msb_string("x") });
+  Process skipped_reader;
+  skipped_reader.id = 0U;
+  skipped_reader.name = "systemverilog_skipped_sample_reader";
+  skipped_reader.register_count = 2U;
+  skipped_reader.scheduling_domain
+      = ProcessSchedulingDomain::systemverilog;
+  skipped_reader.reactive = true;
+  skipped_reader.static_sensitivity.push_back(
+      { skipped_clock, EdgeKind::posedge });
+  skipped_reader.operations = {
+      WaitSensitivity { },
+      ReadSignal { 0U, skipped_data },
+      Branch { 0U, 3U, 6U },
+      ReadSignal {
+          1U,
+          skipped_data,
+          SignalReadKind::past,
+          1U,
+          skipped_clock,
+          SampledClockEdge::positive,
+          std::nullopt },
+      WriteBlocking { skipped_result, 1U },
+      Halt { },
+      Jump { 0U }
+  };
+  (void)skipped_sample.add_process(std::move(skipped_reader));
+  skipped_sample.schedule_signal_at(
+      skipped_data, PackedLogic4::from_msb_string("0"), 0U, 0U);
+  skipped_sample.schedule_signal_at(
+      skipped_clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
+  skipped_sample.schedule_signal_at(
+      skipped_clock, PackedLogic4::from_msb_string("0"), 2U, 0U);
+  skipped_sample.schedule_signal_at(
+      skipped_data, PackedLogic4::from_msb_string("1"), 2U, 0U);
+  skipped_sample.schedule_signal_at(
+      skipped_clock, PackedLogic4::from_msb_string("1"), 3U, 0U);
+  const auto skipped_result_status = skipped_sample.run();
+  require(
+      skipped_result_status.status == RunStatus::completed,
+      "a conditional sampled reader completes after its second clock edge");
+  require(
+      skipped_sample.signal_value(skipped_result).to_msb_string() == "0",
+      "a skipped first read still captures the earlier sampled-value tick");
 }
 
 void test_simir_noninitializing_static_process() {
@@ -3593,11 +3980,19 @@ void test_simir_large_cohort_scratch_reuse() {
   public:
     LargeExecutor(
         ProcessId id, std::vector<std::size_t>& counts,
-        std::size_t& cohort_calls)
+        std::size_t& cohort_calls,
+        ProcessExecutorProgramBinding access_binding)
         : id_ { id }
         , counts_ { counts }
         , cohort_calls_ { cohort_calls }
+        , access_binding_ { std::move(access_binding) }
     {
+    }
+
+    [[nodiscard]] const ProcessExecutorProgramBinding*
+    program_access_binding() const noexcept override
+    {
+      return &access_binding_;
     }
 
     [[nodiscard]] ProcessResumeResult resume(
@@ -3632,6 +4027,7 @@ void test_simir_large_cohort_scratch_reuse() {
     ProcessId id_ { };
     std::vector<std::size_t>& counts_;
     std::size_t& cohort_calls_;
+    ProcessExecutorProgramBinding access_binding_;
   };
 
   for (std::size_t index = 0U; index < member_count; ++index) {
@@ -3643,9 +4039,11 @@ void test_simir_large_cohort_scratch_reuse() {
     member.operations = { WaitSensitivity { }, Jump { 0U } };
     member.initialize = false;
     const auto added = interpreter.add_process(std::move(member));
+    const auto& registered = interpreter.process_program(added);
     interpreter.set_process_executor(
         added, std::make_unique<LargeExecutor>(
-            id, resume_counts, cohort_calls));
+            id, resume_counts, cohort_calls,
+            ProcessExecutorProgramBinding { registered, registered, added }));
   }
   interpreter.schedule_signal_at(
       clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
@@ -3706,19 +4104,29 @@ void test_simir_static_sensitivity_cohort() {
   } probe;
   class CohortExecutor final : public ProcessExecutor {
   public:
-    CohortExecutor(const SignalId observed, CohortProbe& probe)
+    CohortExecutor(
+        const SignalId observed, CohortProbe& probe,
+        ProcessExecutorProgramBinding access_binding)
         : observed_(observed)
         , probe_(probe)
+        , access_binding_ { std::move(access_binding) }
     {
+    }
+
+    [[nodiscard]] const ProcessExecutorProgramBinding*
+    program_access_binding() const noexcept override
+    {
+      return &access_binding_;
     }
 
     [[nodiscard]] ProcessResumeResult resume(
         ProcessExecutionContext& context,
         const InstructionIndex start) override
     {
-      require(start == 0U, "cohort executor starts at its static wait body");
+      require(start == 0U || start == 3U,
+          "cohort executor starts at entry or the static wait backedge");
       context.write_blocking_word(observed_, Logic4Word { 1U, 1U, 0U });
-      ProcessResumeResult result { 0U, 1U };
+      ProcessResumeResult result { 2U, 3U };
       result.external.kind = ExternalSuspendKind::wait_sensitivity;
       return result;
     }
@@ -3743,6 +4151,7 @@ void test_simir_static_sensitivity_cohort() {
   private:
     SignalId observed_ { };
     CohortProbe& probe_;
+    ProcessExecutorProgramBinding access_binding_;
   };
 
   Interpreter mixed;
@@ -3760,22 +4169,19 @@ void test_simir_static_sensitivity_cohort() {
     process.static_sensitivity.push_back(
         {mixed_clock, EdgeKind::posedge});
     process.operations = {
+        LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+        WriteBlocking { mixed_observed[index], 0U },
         WaitSensitivity { },
         Jump { 0U },
     };
-    if (index == 2U) {
-      process.operations = {
-          LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
-          WriteBlocking { mixed_observed[index], 0U },
-          WaitSensitivity { },
-          Jump { 0U },
-      };
-    }
     process.initialize = false;
     const auto id = mixed.add_process(std::move(process));
     if (index != 2U) {
+      const auto& registered = mixed.process_program(id);
       mixed.set_process_executor(id,
-          std::make_unique<CohortExecutor>(mixed_observed[index], probe));
+          std::make_unique<CohortExecutor>(
+              mixed_observed[index], probe,
+              ProcessExecutorProgramBinding { registered, registered, id }));
     }
   }
   mixed.schedule_signal_at(
@@ -3911,16 +4317,25 @@ void test_simir_static_sensitivity_cohort() {
   public:
     explicit ForkedFanoutExecutor(
         ForkedFanoutProbe& probe,
+        ProcessExecutorProgramBinding access_binding,
         const std::optional<InstructionIndex> branch = std::nullopt)
         : probe_(probe)
+        , access_binding_ { std::move(access_binding) }
         , branch_(branch)
     {
+    }
+
+    [[nodiscard]] const ProcessExecutorProgramBinding*
+    program_access_binding() const noexcept override
+    {
+      return &access_binding_;
     }
 
     [[nodiscard]] std::unique_ptr<ProcessExecutor> fork_clone(
         const InstructionIndex branch) override
     {
-      return std::make_unique<ForkedFanoutExecutor>(probe_, branch);
+      return std::make_unique<ForkedFanoutExecutor>(
+          probe_, access_binding_, branch);
     }
 
     [[nodiscard]] ProcessResumeResult resume(
@@ -3955,6 +4370,7 @@ void test_simir_static_sensitivity_cohort() {
 
   private:
     ForkedFanoutProbe& probe_;
+    ProcessExecutorProgramBinding access_binding_;
     std::optional<InstructionIndex> branch_;
   };
 
@@ -3991,7 +4407,10 @@ void test_simir_static_sensitivity_cohort() {
       std::move(fork_parent));
   forked_fanout.set_process_executor(
       fork_parent_id,
-      std::make_unique<ForkedFanoutExecutor>(forked_fanout_probe));
+      std::make_unique<ForkedFanoutExecutor>(forked_fanout_probe,
+          ProcessExecutorProgramBinding {
+              forked_fanout.process_program(fork_parent_id),
+              forked_fanout.process_program(fork_parent_id), fork_parent_id }));
   forked_fanout.schedule_signal_at(
       forked_clock, PackedLogic4::from_msb_string("1"), 1U, 0U);
   forked_fanout.schedule_signal_at(

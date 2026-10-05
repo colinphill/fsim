@@ -165,6 +165,10 @@ struct Services {
   Handler library_objects;
   Handler library_delete_object;
   Handler library_delete;
+  // Used only by the executable's no-stream CLI entry point. Stream-injected
+  // callers always use run/simulate, preserving their callback semantics.
+  Handler stdio_run { };
+  Handler stdio_simulate { };
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(

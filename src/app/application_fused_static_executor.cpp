@@ -2,6 +2,7 @@
 #include "application_fused_static_executor.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <ranges>
 #include <stdexcept>
@@ -12,8 +13,7 @@ namespace fsim::app {
 namespace {
 
 class LlvmFusedStaticExecutor final
-    : public runtime::simir::FusedStaticCohortExecutor
-    , public runtime::simir::FusedMaskedRegionExecutor {
+    : public runtime::simir::FusedStaticCohortExecutor {
 public:
     LlvmFusedStaticExecutor(
         compiler::LlvmJit& jit,
@@ -22,7 +22,9 @@ public:
         const std::span<const std::uint32_t> canonical_widths,
         const std::span<const runtime::simir::SignalId> output_order,
         const std::span<const runtime::simir::ValueKind> canonical_kinds,
-        const bool projected)
+        const bool projected,
+        const bool require_direct_reads,
+        const std::size_t all_active_member_count)
         : jit_(jit)
         , binding_(jit.bind(handle))
         , layout_(jit.frame_layout(binding_))
@@ -30,6 +32,7 @@ public:
         , canonical_widths_(canonical_widths.begin(), canonical_widths.end())
         , canonical_kinds_(canonical_kinds.begin(), canonical_kinds.end())
         , projected_(projected)
+        , require_direct_reads_(require_direct_reads)
     {
         if ((!projected_ && layout_.direct_update_signals.empty())
             || actual_signals_.size() != canonical_widths_.size()
@@ -39,6 +42,33 @@ public:
                 && canonical_kinds_.size() != actual_signals_.size())) {
             throw std::logic_error {
                 "fused native kernel has no direct aggregate slots"
+            };
+        }
+        if (all_active_member_count
+            > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::logic_error {
+                "fused static member count exceeds the activation ABI"
+            };
+        }
+        const auto active_word_count = all_active_member_count / 64U
+            + (all_active_member_count % 64U != 0U ? 1U : 0U);
+        if (active_word_count
+            > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::logic_error {
+                "fused static activation bitmap exceeds the runtime ABI"
+            };
+        }
+        all_active_activation_words_.assign(
+            active_word_count, std::numeric_limits<std::uint64_t>::max());
+        const auto last_word_bits = all_active_member_count % 64U;
+        if (last_word_bits != 0U) {
+            all_active_activation_words_.back()
+                = (UINT64_C(1) << last_word_bits) - 1U;
+        }
+        if (projected_ && all_active_member_count != 0U
+            && all_active_member_count != output_order.size()) {
+            throw std::logic_error {
+                "fused projected member and output counts differ"
             };
         }
         register_aval_.resize(layout_.register_word_count);
@@ -53,6 +83,7 @@ public:
             register_logic9_plane2_, register_logic9_plane3_);
 
         direct_read_signals_.reserve(layout_.direct_read_signals.size());
+        direct_read_bindings_.reserve(layout_.direct_read_signals.size());
         for (const auto signal : layout_.direct_read_signals) {
             if (signal >= actual_signals_.size()) {
                 throw std::logic_error {
@@ -60,6 +91,10 @@ public:
                 };
             }
             direct_read_signals_.push_back(actual_signals_[signal]);
+            direct_read_bindings_.push_back({ actual_signals_[signal],
+                canonical_widths_[signal], canonical_kinds_.empty()
+                    ? runtime::simir::ValueKind::logic4
+                    : canonical_kinds_[signal] });
         }
         slots_.resize(layout_.direct_update_signals.size());
         active_words_.resize((slots_.size() + 63U) / 64U);
@@ -158,11 +193,15 @@ public:
     std::optional<runtime::simir::FusedStaticCohortResume>
     resume(const runtime::simir::ProcessCohortNativeContext& context) override
     {
-        return resume_impl(context, { });
+        // This route follows the runtime's exact all-members-ready check. The
+        // masked kernel still requires its own member-gate bitmap.
+        return resume_impl(context,
+            std::span<const std::uint64_t> { all_active_activation_words_ });
     }
 
     std::optional<runtime::simir::FusedStaticCohortResume>
-    resume(const runtime::simir::ProcessCohortNativeContext& context,
+    resume_masked_all_active(
+        const runtime::simir::ProcessCohortNativeContext& context,
         const std::span<const std::uint64_t> activation_words) override
     {
         if (activation_words.empty()
@@ -274,194 +313,268 @@ private:
         unexpected_callback_ = false;
         unexpected_callback_name_ = nullptr;
 
-        fsim_jit_runtime_v1 runtime { };
-        runtime.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
-        runtime.struct_size = sizeof(runtime);
-        runtime.context = this;
-        runtime.read_signal = [](void* owner, std::uint32_t,
-                                  std::uint64_t* bval) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            self.unexpected_callback_ = true;
-            self.unexpected_callback_name_ = "read_signal";
-            *bval = 0U;
-            return UINT64_C(0);
-        };
-        runtime.write_signal = [](void* owner, std::uint32_t,
-                                   std::uint64_t, std::uint64_t) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            self.unexpected_callback_ = true;
-            self.unexpected_callback_name_ = "write_signal_or_update";
-        };
-        runtime.assert_failed = [](void* owner, std::uint32_t,
-                                    std::uint32_t, const char*, std::uint64_t) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            self.unexpected_callback_ = true;
-            self.unexpected_callback_name_ = "assert_failed";
-        };
-        runtime.write_update = runtime.write_signal;
-        runtime.write_update_slice = [](void* owner, std::uint32_t,
-                                        std::uint32_t, std::uint32_t,
-                                        std::uint64_t, std::uint64_t) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            self.unexpected_callback_ = true;
-            self.unexpected_callback_name_ = "write_update_slice";
-        };
-        runtime.write_projected = [](void* owner,
-                                      const std::uint32_t signal,
-                                      const std::uint64_t aval,
-                                      const std::uint64_t bval,
-                                      const std::uint64_t delay,
-                                      const std::uint64_t rejection,
-                                      const std::uint32_t mode) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            try {
-                if (delay != 0U || rejection != 0U
-                    || mode != FSIM_JIT_PROJECTED_INERTIAL
-                    || signal >= self.canonical_widths_.size()
-                    || self.canonical_widths_[signal] > 64U) {
-                    throw std::logic_error { "unsupported fused projected callback" };
+        static const fsim_jit_services_v2 fused_services = [] {
+            fsim_jit_services_v2 services { };
+            services.abi_version = FSIM_JIT_SERVICES_ABI_VERSION_V2;
+            services.struct_size = static_cast<std::uint32_t>(sizeof(services));
+            services.read_signal = [](void* owner, std::uint32_t,
+                                      std::uint64_t* bval) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                self.unexpected_callback_ = true;
+                self.unexpected_callback_name_ = "read_signal";
+                *bval = 0U;
+                return UINT64_C(0);
+            };
+            services.write_signal = [](void* owner, std::uint32_t,
+                                       std::uint64_t, std::uint64_t) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                self.unexpected_callback_ = true;
+                self.unexpected_callback_name_ = "write_signal_or_update";
+            };
+            services.assert_failed = [](void* owner, std::uint32_t,
+                                        std::uint32_t, const char*, std::uint64_t) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                self.unexpected_callback_ = true;
+                self.unexpected_callback_name_ = "assert_failed";
+            };
+            services.write_update = [](void* owner, const std::uint32_t signal,
+                                       const std::uint64_t aval,
+                                       const std::uint64_t bval,
+                                       const std::uint32_t update_domain) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                if (update_domain
+                    != FSIM_JIT_SIGNAL_UPDATE_DOMAIN_GENERIC_V2) {
+                    self.unexpected_callback_ = true;
+                    self.unexpected_callback_name_ = "write_update_domain";
+                    return;
                 }
-                self.record_projected(signal,
-                    runtime::PackedLogic4::from_aval_bval(
-                        self.canonical_widths_[signal], aval, bval));
-            } catch (...) {
+                static_cast<void>(signal);
+                static_cast<void>(aval);
+                static_cast<void>(bval);
                 self.unexpected_callback_ = true;
-                self.unexpected_callback_name_ = "write_projected";
-            }
-        };
-        runtime.read_signal_packed = [](void* owner,
-                                        const std::uint32_t canonical,
-                                        const std::uint32_t width,
-                                        std::uint64_t* aval,
-                                        std::uint64_t* bval,
-                                        std::uint64_t* plane2,
-                                        std::uint64_t* plane3) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            const auto* current = self.active_context_;
-            const bool logic9 = canonical < self.canonical_kinds_.size()
-                && self.canonical_kinds_[canonical]
-                    == runtime::simir::ValueKind::logic9;
-            if (current == nullptr
-                || canonical >= self.actual_signals_.size()
-                || width != self.canonical_widths_[canonical]
-                || width <= 64U || aval == nullptr || bval == nullptr
-                || (plane2 != nullptr) != logic9
-                || (plane3 != nullptr) != logic9) {
+                self.unexpected_callback_name_ = "write_signal_or_update";
+            };
+            services.write_update_slice = [](void* owner, std::uint32_t,
+                                            std::uint32_t, std::uint32_t,
+                                            std::uint64_t, std::uint64_t,
+                                            const std::uint32_t update_domain) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
                 self.unexpected_callback_ = true;
-                self.unexpected_callback_name_ = "read_signal_packed";
-                return UINT32_C(1);
-            }
-            const auto actual = self.actual_signals_[canonical];
-            const auto offset = current->wide_signal_offsets[actual];
-            const auto words = (width + 63U) / 64U;
-            std::ranges::copy_n(current->wide_signal_aval.data() + offset,
-                words, aval);
-            std::ranges::copy_n(current->wide_signal_bval.data() + offset,
-                words, bval);
-            if (logic9) {
-                std::ranges::copy_n(
-                    current->wide_signal_logic9_plane2.data() + offset,
-                    words, plane2);
-                std::ranges::copy_n(
-                    current->wide_signal_logic9_plane3.data() + offset,
-                    words, plane3);
-            }
-            return UINT32_C(0);
-        };
-        runtime.write_signal_packed = [](void* owner,
-                                         const std::uint32_t signal,
-                                         const std::uint32_t offset,
-                                         const std::uint32_t width,
-                                         const std::uint32_t mode,
-                                         const std::uint64_t delay,
-                                         const std::uint64_t* aval,
-                                         const std::uint64_t* bval,
-                                         const std::uint64_t* plane2,
-                                         const std::uint64_t* plane3) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            try {
-                const bool logic9 = signal < self.canonical_kinds_.size()
-                    && self.canonical_kinds_[signal]
+                self.unexpected_callback_name_ = update_domain
+                        == FSIM_JIT_SIGNAL_UPDATE_DOMAIN_GENERIC_V2
+                    ? "write_update_slice" : "write_update_slice_domain";
+            };
+            services.write_projected = [](void* owner,
+                                          const std::uint32_t signal,
+                                          const std::uint64_t aval,
+                                          const std::uint64_t bval,
+                                          const std::uint64_t delay,
+                                          const std::uint64_t rejection,
+                                          const std::uint32_t mode) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                try {
+                    if (delay != 0U || rejection != 0U
+                        || mode != FSIM_JIT_PROJECTED_INERTIAL_V2
+                        || signal >= self.canonical_widths_.size()
+                        || self.canonical_widths_[signal] > 64U) {
+                        throw std::logic_error { "unsupported fused projected callback" };
+                    }
+                    self.record_projected(signal,
+                        runtime::PackedLogic4::from_aval_bval(
+                            self.canonical_widths_[signal], aval, bval));
+                } catch (...) {
+                    self.unexpected_callback_ = true;
+                    self.unexpected_callback_name_ = "write_projected";
+                }
+            };
+            services.read_signal_packed = [](void* owner,
+                                            const std::uint32_t canonical,
+                                            const std::uint32_t width,
+                                            std::uint64_t* aval,
+                                            std::uint64_t* bval,
+                                            std::uint64_t* plane2,
+                                            std::uint64_t* plane3) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                const auto* current = self.active_context_;
+                const bool logic9 = canonical < self.canonical_kinds_.size()
+                    && self.canonical_kinds_[canonical]
                         == runtime::simir::ValueKind::logic9;
-                if (signal >= self.canonical_widths_.size()
-                    || width != self.canonical_widths_[signal]
-                    || offset != 0U || delay != 0U
-                    || mode != FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE
-                    || aval == nullptr || bval == nullptr
-                    || !self.projected_
+                if (current == nullptr
+                    || canonical >= self.actual_signals_.size()
+                    || width != self.canonical_widths_[canonical]
+                    || width <= 64U || aval == nullptr || bval == nullptr
                     || (plane2 != nullptr) != logic9
                     || (plane3 != nullptr) != logic9) {
-                    throw std::logic_error { "unsupported fused packed write" };
+                    self.unexpected_callback_ = true;
+                    self.unexpected_callback_name_ = "read_signal_packed";
+                    return UINT32_C(1);
                 }
+                const auto actual = self.actual_signals_[canonical];
+                const auto offset = current->wide_signal_offsets[actual];
                 const auto words = (width + 63U) / 64U;
-                self.record_projected(signal,
-                    logic9
-                        ? runtime::PackedLogic4::from_logic9_word_planes(
-                            width, { aval, words }, { bval, words },
-                            { plane2, words }, { plane3, words })
-                        : runtime::PackedLogic4::from_word_planes(width,
-                            { aval, words }, { bval, words }));
-                return UINT32_C(0);
-            } catch (...) {
-                self.unexpected_callback_ = true;
-                self.unexpected_callback_name_ = "write_signal_packed";
-                return UINT32_C(1);
-            }
-        };
-        const auto reject_logic9 = [](void* owner, auto...) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            self.unexpected_callback_ = true;
-            self.unexpected_callback_name_ = "other_logic9";
-        };
-        runtime.read_signal_logic9 = [](void* owner, std::uint32_t,
-                                         fsim_jit_logic9_word_v1* value) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            self.unexpected_callback_ = true;
-            self.unexpected_callback_name_ = "read_signal_logic9";
-            if (value != nullptr) {
-                *value = { };
-            }
-        };
-        runtime.write_signal_logic9 = reject_logic9;
-        runtime.write_update_logic9 = reject_logic9;
-        runtime.write_after_logic9 = reject_logic9;
-        runtime.write_signal_slice_logic9 = reject_logic9;
-        runtime.write_update_slice_logic9 = reject_logic9;
-        runtime.write_after_slice_logic9 = reject_logic9;
-        runtime.signal_last_value_logic9 = reject_logic9;
-        runtime.write_inertial_logic9 = reject_logic9;
-        runtime.write_inertial_slice_logic9 = reject_logic9;
-        runtime.write_projected_logic9 = [](void* owner,
-                                             const std::uint32_t signal,
-                                             const fsim_jit_logic9_word_v1* value,
-                                             const std::uint64_t delay,
-                                             const std::uint64_t rejection,
-                                             const std::uint32_t mode) {
-            auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
-            try {
-                if (value == nullptr || delay != 0U || rejection != 0U
-                    || mode != FSIM_JIT_PROJECTED_INERTIAL
-                    || signal >= self.canonical_widths_.size()
-                    || self.canonical_widths_[signal] > 64U) {
-                    throw std::logic_error {
-                        "unsupported fused Logic9 projected callback"
-                    };
+                std::ranges::copy_n(current->wide_signal_aval.data() + offset,
+                    words, aval);
+                std::ranges::copy_n(current->wide_signal_bval.data() + offset,
+                    words, bval);
+                if (logic9) {
+                    std::ranges::copy_n(
+                        current->wide_signal_logic9_plane2.data() + offset,
+                        words, plane2);
+                    std::ranges::copy_n(
+                        current->wide_signal_logic9_plane3.data() + offset,
+                        words, plane3);
                 }
-                self.record_projected(signal,
-                    runtime::PackedLogic4::from_logic9_word({
-                        self.canonical_widths_[signal],
-                        { value->planes[0], value->planes[1],
-                            value->planes[2], value->planes[3] }
-                    }));
-            } catch (...) {
+                return UINT32_C(0);
+            };
+            services.write_signal_packed = [](void* owner,
+                                             const std::uint32_t signal,
+                                             const std::uint32_t offset,
+                                             const std::uint32_t width,
+                                             const std::uint32_t mode,
+                                             const std::uint64_t delay,
+                                             const std::uint64_t* aval,
+                                             const std::uint64_t* bval,
+                                             const std::uint64_t* plane2,
+                                             const std::uint64_t* plane3,
+                                             const std::uint32_t update_domain) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                try {
+                    if (update_domain
+                        != FSIM_JIT_SIGNAL_UPDATE_DOMAIN_GENERIC_V2) {
+                        throw std::logic_error {
+                            "fused packed writes require the generic update domain" };
+                    }
+                    const bool logic9 = signal < self.canonical_kinds_.size()
+                        && self.canonical_kinds_[signal]
+                            == runtime::simir::ValueKind::logic9;
+                    if (signal >= self.canonical_widths_.size()
+                        || self.canonical_kinds_.size()
+                            != self.canonical_widths_.size()
+                        || width != self.canonical_widths_[signal]
+                        || offset != 0U || delay != 0U
+                        || mode != FSIM_JIT_PACKED_SIGNAL_WRITE_UPDATE_V2
+                        || aval == nullptr || bval == nullptr
+                        || !self.projected_
+                        || (plane2 != nullptr) != logic9
+                        || (plane3 != nullptr) != logic9) {
+                        throw std::logic_error { "unsupported fused packed write" };
+                    }
+                    const auto words
+                        = (static_cast<std::size_t>(width) + 63U) / 64U;
+                    self.record_projected(signal,
+                        logic9
+                            ? runtime::PackedLogic4::from_logic9_word_planes(
+                                width, { aval, words }, { bval, words },
+                                { plane2, words }, { plane3, words })
+                            : runtime::PackedLogic4::from_word_planes(width,
+                                { aval, words }, { bval, words }));
+                    return UINT32_C(0);
+                } catch (...) {
+                    self.unexpected_callback_ = true;
+                    self.unexpected_callback_name_ = "write_signal_packed";
+                    return UINT32_C(1);
+                }
+            };
+            services.write_projected_signal_packed = [](
+                void* owner,
+                const std::uint32_t signal,
+                const std::uint32_t width,
+                const std::uint64_t* aval,
+                const std::uint64_t* bval,
+                const std::uint64_t* plane2,
+                const std::uint64_t* plane3) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                try {
+                    const bool logic9 = signal < self.canonical_kinds_.size()
+                        && self.canonical_kinds_[signal]
+                            == runtime::simir::ValueKind::logic9;
+                    if (signal >= self.canonical_widths_.size()
+                        || width != self.canonical_widths_[signal]
+                        || width <= 64U || aval == nullptr || bval == nullptr
+                        || !self.projected_
+                        || (plane2 != nullptr) != logic9
+                        || (plane3 != nullptr) != logic9) {
+                        throw std::logic_error {
+                            "unsupported fused wide projected write" };
+                    }
+                    const auto words
+                        = (static_cast<std::size_t>(width) + 63U) / 64U;
+                    auto value = logic9
+                        ? runtime::PackedLogic4::from_logic9_word_planes(
+                              width, { aval, words }, { bval, words },
+                              { plane2, words }, { plane3, words })
+                        : runtime::PackedLogic4::from_word_planes(
+                              width, { aval, words }, { bval, words });
+                    self.record_projected(signal, std::move(value));
+                    return UINT32_C(0);
+                } catch (...) {
+                    self.unexpected_callback_ = true;
+                    self.unexpected_callback_name_
+                        = "write_projected_signal_packed";
+                    return UINT32_C(1);
+                }
+            };
+            const auto reject_logic9 = [](void* owner, auto...) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
                 self.unexpected_callback_ = true;
-                self.unexpected_callback_name_ = "write_projected_logic9";
-            }
-        };
-        runtime.write_projected_slice_logic9 = reject_logic9;
-        runtime.write_projected_waveform_logic9 = reject_logic9;
-        runtime.write_projected_waveform_slice_logic9 = reject_logic9;
-        runtime.write_formatted_logic9 = reject_logic9;
+                self.unexpected_callback_name_ = "other_logic9";
+            };
+            services.read_signal_logic9 = [](void* owner, std::uint32_t,
+                                             fsim_jit_logic9_word_v2* value) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                self.unexpected_callback_ = true;
+                self.unexpected_callback_name_ = "read_signal_logic9";
+                if (value != nullptr) {
+                    *value = { };
+                }
+            };
+            services.write_signal_logic9 = reject_logic9;
+            services.write_update_logic9 = reject_logic9;
+            services.write_after_logic9 = reject_logic9;
+            services.write_signal_slice_logic9 = reject_logic9;
+            services.write_update_slice_logic9 = reject_logic9;
+            services.write_after_slice_logic9 = reject_logic9;
+            services.signal_last_value_logic9 = reject_logic9;
+            services.write_inertial_logic9 = reject_logic9;
+            services.write_inertial_slice_logic9 = reject_logic9;
+            services.write_projected_logic9 = [](void* owner,
+                                                 const std::uint32_t signal,
+                                                 const fsim_jit_logic9_word_v2* value,
+                                                 const std::uint64_t delay,
+                                                 const std::uint64_t rejection,
+                                                 const std::uint32_t mode) {
+                auto& self = *static_cast<LlvmFusedStaticExecutor*>(owner);
+                try {
+                    if (value == nullptr || delay != 0U || rejection != 0U
+                        || mode != FSIM_JIT_PROJECTED_INERTIAL_V2
+                        || signal >= self.canonical_widths_.size()
+                        || self.canonical_widths_[signal] > 64U) {
+                        throw std::logic_error {
+                            "unsupported fused Logic9 projected callback"
+                        };
+                    }
+                    self.record_projected(signal,
+                        runtime::PackedLogic4::from_logic9_word({
+                            self.canonical_widths_[signal],
+                            { value->planes[0], value->planes[1],
+                                value->planes[2], value->planes[3] }
+                        }));
+                } catch (...) {
+                    self.unexpected_callback_ = true;
+                    self.unexpected_callback_name_ = "write_projected_logic9";
+                }
+            };
+            services.write_projected_slice_logic9 = reject_logic9;
+            services.write_projected_waveform_logic9 = reject_logic9;
+            services.write_projected_waveform_slice_logic9 = reject_logic9;
+            services.write_formatted_logic9 = reject_logic9;
+            return services;
+        }();
+        auto& runtime = runtime_;
+        runtime.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V2;
+        runtime.struct_size = static_cast<std::uint32_t>(sizeof(runtime));
+        runtime.services = &fused_services;
+        runtime.context = this;
         runtime.direct_signal_aval = context.signal_aval.data();
         runtime.direct_signal_bval = context.signal_bval.data();
         runtime.direct_signal_count = static_cast<std::uint32_t>(
@@ -502,13 +615,38 @@ private:
         runtime.fused_activation_word_count
             = static_cast<std::uint32_t>(activation_words.size());
 
-        fsim_jit_resume_result_v1 result { };
-        result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
+        auto& result = result_;
+        result = { };
+        result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V2;
         result.struct_size = sizeof(result);
         active_context_ = &context;
         compiler::JitResumeStatus status;
         try {
-            status = jit_.resume(binding_, runtime, frame_, result);
+            if (require_direct_reads_) {
+                auto resumed = direct_read_lease_
+                    ? jit_.resume_required_direct_read_prevalidated(
+                        *direct_read_lease_, binding_, runtime, frame_, result)
+                    : std::nullopt;
+                if (!resumed) {
+                    // A changed context revokes the old lease before entry.
+                    // Revalidate the complete mapping before using new planes.
+                    direct_read_lease_
+                        = jit_.bind_mapped_required_direct_read_prevalidated(
+                            binding_, runtime, frame_, result,
+                            direct_read_bindings_);
+                    if (direct_read_lease_) {
+                        resumed = jit_.resume_required_direct_read_prevalidated(
+                            *direct_read_lease_, binding_, runtime, frame_, result);
+                    }
+                }
+                if (!resumed) {
+                    active_context_ = nullptr;
+                    return std::nullopt;
+                }
+                status = *resumed;
+            } else {
+                status = jit_.resume(binding_, runtime, frame_, result);
+            }
         } catch (...) {
             active_context_ = nullptr;
             throw;
@@ -607,14 +745,18 @@ private:
     std::vector<runtime::simir::SignalId> actual_signals_;
     std::vector<std::uint32_t> canonical_widths_;
     std::vector<runtime::simir::ValueKind> canonical_kinds_;
-    fsim_jit_frame_v1 frame_ { };
+    fsim_jit_frame_v2 frame_ { };
+    fsim_jit_runtime_instance_v2 runtime_ { };
+    fsim_jit_resume_result_v2 result_ { };
+    std::optional<compiler::JitRequiredDirectReadLease> direct_read_lease_;
+    std::vector<compiler::JitDirectReadInstanceBinding> direct_read_bindings_;
     std::vector<std::uint64_t> register_aval_;
     std::vector<std::uint64_t> register_bval_;
     std::vector<std::uint8_t> register_initialized_;
     std::vector<std::uint64_t> register_logic9_plane2_;
     std::vector<std::uint64_t> register_logic9_plane3_;
     std::vector<std::uint32_t> direct_read_signals_;
-    std::vector<fsim_jit_update_slot_v1> slots_;
+    std::vector<fsim_jit_update_slot_v2> slots_;
     std::vector<std::uint64_t> active_words_;
     std::vector<std::uint64_t> wide_aval_;
     std::vector<std::uint64_t> wide_bval_;
@@ -625,7 +767,9 @@ private:
     std::vector<runtime::simir::FusedStaticProjectedWrite> projected_writes_;
     std::vector<runtime::simir::FusedStaticProjectedWrite> projected_selected_;
     std::vector<std::uint8_t> projected_seen_;
+    std::vector<std::uint64_t> all_active_activation_words_;
     bool projected_ { };
+    bool require_direct_reads_ { };
     bool unexpected_callback_ { };
     const char* unexpected_callback_name_ { };
     const runtime::simir::ProcessCohortNativeContext* active_context_ { };
@@ -641,26 +785,14 @@ make_fused_static_executor(
     const std::span<const std::uint32_t> canonical_widths,
     const std::span<const runtime::simir::SignalId> output_order,
     const std::span<const runtime::simir::ValueKind> canonical_kinds,
-    const bool projected)
+    const bool projected,
+    const bool require_direct_reads,
+    const std::size_t all_active_member_count)
 {
     return std::make_unique<LlvmFusedStaticExecutor>(
         jit, handle, actual_signals, canonical_widths, output_order,
-        canonical_kinds, projected);
-}
-
-std::unique_ptr<runtime::simir::FusedMaskedRegionExecutor>
-make_fused_masked_region_executor(
-    compiler::LlvmJit& jit,
-    const compiler::JitProcessHandle handle,
-    const std::span<const runtime::simir::SignalId> actual_signals,
-    const std::span<const std::uint32_t> canonical_widths,
-    const std::span<const runtime::simir::SignalId> output_order,
-    const std::span<const runtime::simir::ValueKind> canonical_kinds,
-    const bool projected)
-{
-    return std::make_unique<LlvmFusedStaticExecutor>(
-        jit, handle, actual_signals, canonical_widths, output_order,
-        canonical_kinds, projected);
+        canonical_kinds, projected, require_direct_reads,
+        all_active_member_count);
 }
 
 } // namespace fsim::app

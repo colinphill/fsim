@@ -13,6 +13,7 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <future>
 #include <iostream>
@@ -288,7 +289,6 @@ runtime::RunResult Simulation::run(
         impl_->interpreter->start();
         impl_->refresh_observation_hooks();
         impl_->bind_fused_static_cohorts();
-        impl_->bind_fused_masked_regions();
 #endif
         const auto interpreter_begin = profile_phase_split
             ? std::chrono::steady_clock::now()
@@ -340,6 +340,10 @@ runtime::RunResult Simulation::run(
                       << counts.owner_stage_calls_avoided
                       << " aggregate_slots_staged="
                       << counts.aggregate_signals_staged
+                      << " masked_all_active_invocations="
+                      << counts.masked_all_active_invocations
+                      << " static_observation_invalidations="
+                      << counts.observation_invalidations
                       << " fallbacks=" << counts.fallbacks << '\n';
             std::cerr << "fsim fused-static fork summary: events="
                       << counts.fork_events
@@ -726,7 +730,34 @@ void Simulation::set_vcd_control_hook(VcdControlHook hook)
 
 void Simulation::set_output_hook(OutputHook hook)
 {
+    if (impl_->trusted_builtin_stdout_output) {
+        // Revoke the text-only contract before installing a caller-provided
+        // callback. The runtime setter prepares its replacement before commit.
+        impl_->interpreter->set_output_hook(impl_->interpreter_output_hook);
+        impl_->trusted_builtin_stdout_output = false;
+    }
     impl_->output_hook = std::move(hook);
+}
+
+void Simulation::set_builtin_stdout_output()
+{
+    OutputHook stdout_sink = [](
+        const runtime::simir::ProcessId,
+        const std::string_view text,
+        const bool newline,
+        const SimulationTick,
+        const std::uint64_t) {
+        if (!text.empty()) {
+            (void)std::fwrite(text.data(), 1U, text.size(), stdout);
+        }
+        if (newline) {
+            (void)std::fputc('\n', stdout);
+        }
+    };
+    impl_->interpreter->set_trusted_text_output_hook(
+        impl_->interpreter_output_hook);
+    impl_->output_hook = std::move(stdout_sink);
+    impl_->trusted_builtin_stdout_output = true;
 }
 
 void Simulation::set_report_hook(ReportHook hook)

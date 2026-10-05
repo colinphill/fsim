@@ -191,6 +191,60 @@ namespace {
             : frontend::PortDirection::Unknown;
     }
 
+    std::string_view explicit_systemverilog_net_type(
+        const semantic::sv::TypeReference& type) noexcept
+    {
+        auto* current = &type;
+        while (true) {
+            if (!current->systemverilog_net_type.empty()) {
+                return current->systemverilog_net_type;
+            }
+            const auto spelling
+                = std::string_view { current->target.spelling };
+            if (spelling == "wire" || spelling == "tri"
+                || spelling == "tri0" || spelling == "tri1"
+                || spelling == "wand" || spelling == "triand"
+                || spelling == "wor" || spelling == "trior"
+                || spelling == "trireg" || spelling == "uwire"
+                || spelling == "supply0" || spelling == "supply1") {
+                return spelling;
+            }
+            if (current->container_element_types.size() != 1U) {
+                return { };
+            }
+            current = &current->container_element_types.front();
+        }
+    }
+
+    bool is_simple_variable_output_port(
+        const semantic::sv::Declaration& declaration,
+        const semantic::sv::TypeReference& effective_type) noexcept
+    {
+        if (!declaration.type
+            || declaration.type->value_form
+                != semantic::sv::TypeForm::packed_integral
+            || effective_type.value_form
+                != semantic::sv::TypeForm::packed_integral
+            || declaration.type->virtual_interface
+            || effective_type.virtual_interface
+            || declaration.type->container_form
+            || effective_type.container_form
+            || !declaration.type->unpacked_dimensions.empty()
+            || !effective_type.unpacked_dimensions.empty()
+            || !declaration.type->systemverilog_resolution_function.empty()
+            || !effective_type.systemverilog_resolution_function.empty()
+            || !explicit_systemverilog_net_type(*declaration.type).empty()
+            || !explicit_systemverilog_net_type(effective_type).empty()) {
+            return false;
+        }
+        return compiled_systemverilog_scalar_kind(
+                   declaration.type->target.spelling)
+                == frontend::SystemVerilogScalarKind::None
+            && compiled_systemverilog_scalar_kind(
+                   effective_type.target.spelling)
+                == frontend::SystemVerilogScalarKind::None;
+    }
+
 } // namespace
 
 bool HierarchyBuilder::bind_compiled_systemverilog_ports(
@@ -779,6 +833,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
         }
         const auto actual = working_signals.find(actual_name);
         std::optional<SignalId> actual_signal;
+        std::optional<SignalId> variable_output_actual_net;
         if (actual != working_signals.end()) {
             actual_signal = actual->second;
         } else if (interface_path) {
@@ -825,6 +880,78 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 design_.signal_by_name_.insert_or_assign(
                     full_name, id);
                 actual_signal = id;
+            }
+        }
+        const auto actual_expression = binding.expression
+            ? working_specialization.find_expression(
+                  *binding.expression)
+            : std::nullopt;
+        const bool direct_name_actual
+            = actual_expression
+            && actual_expression->systemverilog != nullptr
+            && actual_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::name;
+        if (direction == frontend::PortDirection::Output
+            && direct_name_actual && actual_signal
+            && formal_declaration.type
+            && *actual_signal < design_.signal_info_.size()
+            && *actual_signal < design_.signals_.size()) {
+            const semantic::CompiledDesignResolver type_resolver {
+                *child_interface_specialization
+            };
+            const auto effective_type
+                = type_resolver.underlying_systemverilog_type(
+                                   *formal_declaration.type,
+                                   formal_declaration.scope)
+                      .value_or(*formal_declaration.type);
+            const auto& actual_info
+                = design_.signal_info_[*actual_signal];
+            const auto actual_native_resolution
+                = native_resolution(actual_info);
+            const auto registered_user_nettype
+                = systemverilog_resolution_kinds_.contains(
+                    actual_info.systemverilog_net_type);
+            const auto actual_explicit_resolution
+                = actual_info.systemverilog_net_type.empty()
+                || actual_native_resolution != ResolutionKind::none
+                || !registered_user_nettype
+                ? std::optional<ResolutionKind> { }
+                : explicit_resolution(*actual_signal);
+            const auto supported_user_resolved_net
+                = actual_explicit_resolution
+                && *actual_explicit_resolution
+                    == ResolutionKind::sv_user_first;
+            // The unresolved uwire form remains single-driver checked by
+            // validate_process_drivers(); it does not acquire a resolver.
+            const auto single_driver_uwire
+                = actual_info.systemverilog_net_type == "uwire";
+            const auto formal_width
+                = hierarchy_sv_type_layout_detail::
+                    systemverilog_declaration_width(
+                        *child_interface_specialization,
+                        formal_declaration);
+            const auto formal_domain
+                = formal_declaration.type->four_state
+                        || effective_type.four_state
+                    ? frontend::ValueDomain::Logic4
+                    : frontend::ValueDomain::Bit2;
+            if (is_simple_variable_output_port(
+                    formal_declaration, effective_type)
+                && (actual_native_resolution != ResolutionKind::none
+                    || supported_user_resolved_net
+                    || single_driver_uwire)
+                && !actual_info.systemverilog_net_type.empty()
+                && formal_width && *formal_width != 0U
+                && *formal_width == actual_info.width
+                && (formal_domain == actual_info.source_domain
+                    || (formal_domain == frontend::ValueDomain::Bit2
+                        && actual_info.source_domain
+                            == frontend::ValueDomain::Logic4))) {
+                // An output variable has its own initialized state. The
+                // implicit port connection drives the resolved actual; it
+                // does not alias the variable's storage onto that net.
+                variable_output_actual_net = *actual_signal;
+                actual_signal.reset();
             }
         }
         if (!actual_signal && binding.expression
@@ -895,15 +1022,37 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 }
                 info.declaration_span = compiled_source_span(
                     *compiled_, binding.source);
+                auto initial_value = PackedLogic4(
+                    *width,
+                    domain == frontend::ValueDomain::Logic4
+                        ? Logic4::x
+                        : Logic4::zero);
+                if (variable_output_actual_net
+                    && formal_declaration.initializer) {
+                    const auto initial
+                        = child_interface_specialization
+                              ->evaluate_integral_expression(
+                                  *formal_declaration.initializer);
+                    if (!initial || *width > 64U) {
+                        report(
+                            "FSIM-ELAB-HIR-001",
+                            "compiled initializer for '"
+                                + formal_declaration.name
+                                + "' is not a bounded integral value",
+                            compiled_source_span(
+                                *compiled_, formal_declaration.source));
+                        return false;
+                    }
+                    initial_value = PackedLogic4::from_aval_bval(
+                        *width,
+                        static_cast<std::uint64_t>(*initial),
+                        0U);
+                }
                 design_.signal_info_.push_back(std::move(info));
                 design_.signals_.push_back(
                     runtime::simir::Signal {
                         adapter_name,
-                        PackedLogic4(
-                            *width,
-                            domain == frontend::ValueDomain::Logic4
-                                ? Logic4::x
-                                : Logic4::zero),
+                        std::move(initial_value),
                         ResolutionKind::none,
                         value_kind(domain),
                         std::nullopt,
@@ -938,7 +1087,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     canonicalize_process_operations(*lowered);
                     child_boundary_processes.push_back(
                         lowered->id);
-                    design_.processes_.push_back(
+                    design_.append_process_record(
                         std::move(*lowered));
                     return true;
                 };
@@ -1025,7 +1174,15 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             }
         }
         const auto parent_signal = working_signals.find(actual_name);
-        if ((direction == frontend::PortDirection::Output
+        if (variable_output_actual_net
+            && parent_signal != working_signals.end()
+            && parent_signal->second == *variable_output_actual_net) {
+            note_boundary_driver(
+                *variable_output_actual_net,
+                external_binding,
+                child_path + "." + formal_declaration.name,
+                compiled_source_span(*compiled_, binding.source));
+        } else if ((direction == frontend::PortDirection::Output
                 || direction == frontend::PortDirection::Inout)
             && parent_signal != working_signals.end()
             && parent_signal->second == *actual_signal) {

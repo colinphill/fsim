@@ -104,8 +104,8 @@ std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
     diagnostic::Engine& diagnostics)
 {
-    return runtime_path_codec::serialize_runtime_path_state(
-        design.state(), nullptr, diagnostics);
+    return runtime_path_codec::serialize_runtime_design_state(
+        design, nullptr, diagnostics);
 }
 
 std::optional<std::string> serialize_runtime_state(
@@ -113,16 +113,16 @@ std::optional<std::string> serialize_runtime_state(
     const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics)
 {
-    return runtime_path_codec::serialize_runtime_path_state(
-        design.state(), &paths, diagnostics);
+    return runtime_path_codec::serialize_runtime_design_state(
+        design, &paths, diagnostics);
 }
 
 std::optional<std::string> serialize_runtime_state(
     elaboration::ElaboratedDesign&& design,
     diagnostic::Engine& diagnostics)
 {
-    return runtime_path_codec::serialize_runtime_path_state(
-        std::move(design).state(), nullptr, diagnostics);
+    return runtime_path_codec::serialize_runtime_design_state(
+        design, nullptr, diagnostics);
 }
 
 std::optional<std::string> serialize_runtime_state(
@@ -130,8 +130,8 @@ std::optional<std::string> serialize_runtime_state(
     const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics)
 {
-    return runtime_path_codec::serialize_runtime_path_state(
-        std::move(design).state(), &paths, diagnostics);
+    return runtime_path_codec::serialize_runtime_design_state(
+        design, &paths, diagnostics);
 }
 
 std::optional<std::string> runtime_state_checksum(
@@ -175,12 +175,13 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     std::string source_name,
     diagnostic::Engine& diagnostics)
 {
-    auto state = runtime_path_codec::deserialize_runtime_path_state(
+    auto state = runtime_path_codec::deserialize_runtime_program_state(
         bytes, std::move(source_name), nullptr, diagnostics);
     if (!state) {
         return std::nullopt;
     }
-    auto design = elaboration::ElaboratedDesign::from_state(std::move(*state));
+    auto design = elaboration::detail::ElaboratedDesignProcessAccess::from_state(
+        std::move(state->state), std::move(state->process_rows), true);
     if (!design) {
         diagnostics.error(
             std::string { kCode },
@@ -196,13 +197,13 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics)
 {
-    auto state = runtime_path_codec::deserialize_runtime_path_state(
+    auto state = runtime_path_codec::deserialize_runtime_program_state(
         bytes, std::move(source_name), &paths, diagnostics);
     if (!state) {
         return std::nullopt;
     }
-    auto design = elaboration::ElaboratedDesign::from_state(
-        std::move(*state));
+    auto design = elaboration::detail::ElaboratedDesignProcessAccess::from_state(
+        std::move(state->state), std::move(state->process_rows), true);
     if (!design) {
         diagnostics.error(std::string { kCode },
             "runtime state is structurally invalid");
@@ -216,12 +217,13 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     std::string source_name,
     diagnostic::Engine& diagnostics)
 {
-    auto state = runtime_path_codec::deserialize_runtime_path_state(
+    auto state = runtime_path_codec::deserialize_runtime_program_state(
         input, size, std::move(source_name), nullptr, diagnostics);
     if (!state) {
         return std::nullopt;
     }
-    auto design = elaboration::ElaboratedDesign::from_state(std::move(*state));
+    auto design = elaboration::detail::ElaboratedDesignProcessAccess::from_state(
+        std::move(state->state), std::move(state->process_rows), true);
     if (!design) {
         diagnostics.error(
             std::string { kCode },
@@ -238,13 +240,13 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     const semantic::HierarchyPathTable& paths,
     diagnostic::Engine& diagnostics)
 {
-    auto state = runtime_path_codec::deserialize_runtime_path_state(
+    auto state = runtime_path_codec::deserialize_runtime_program_state(
         input, size, std::move(source_name), &paths, diagnostics);
     if (!state) {
         return std::nullopt;
     }
-    auto design = elaboration::ElaboratedDesign::from_state(
-        std::move(*state));
+    auto design = elaboration::detail::ElaboratedDesignProcessAccess::from_state(
+        std::move(state->state), std::move(state->process_rows), true);
     if (!design) {
         diagnostics.error(std::string { kCode },
             "runtime state is structurally invalid");
